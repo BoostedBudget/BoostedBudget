@@ -91,6 +91,17 @@ func (m *MockRetentionProfileRepository) ClearMarkersOnEligibleStatus(ctx contex
 	return args.Int(0), args.Error(1)
 }
 
+// GetUsersWithMalformedTierOverride is Issue #1453's monitoring query, called by
+// monitorMalformedTierOverrides at Step 0c of every Work() pass — see RetentionProfileRepository's
+// doc comment.
+func (m *MockRetentionProfileRepository) GetUsersWithMalformedTierOverride(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
 // GetUsersNeedingPlaidDisconnectRepair, GetUserByID (Issue #1413 round-7 grace-window repair
 // path) back the Work() Step 0b repair pass added alongside the retention-clock repair (Step 0)
 // and notice/deletion steps.
@@ -293,6 +304,7 @@ func TestRetentionCleanupCheck_RepairsRetentionClock(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -337,6 +349,7 @@ func TestRetentionCleanupCheck_RepairSkipsCompedUser(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -382,6 +395,7 @@ func TestRetentionCleanupCheck_RepairFailure_NonFatal_ContinuesToNoticesAndDelet
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -424,6 +438,7 @@ func TestRetentionCleanupCheck_RepairSkip_PreconditionLostSinceQuery(t *testing.
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -464,6 +479,7 @@ func TestRetentionCleanupCheck_RepairsPlaidDisconnect(t *testing.T) {
 	users := []*domain.User{user}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -509,6 +525,7 @@ func TestRetentionCleanupCheck_PlaidRepair_StampsMissingMarkersBeforeCandidateQu
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -589,6 +606,7 @@ func TestRetentionCleanupCheck_PlaidRepair_StampMissingMarkersFailure_NonFatal(t
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -640,6 +658,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearsCompletedMarkersAfterStampBefor
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -699,6 +718,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearCompletedMarkersFailure_NonFatal
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -749,6 +769,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearsMarkersOnEligibleStatusAfterCle
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -803,6 +824,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearMarkersOnEligibleStatusFailure_N
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -839,6 +861,186 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearMarkersOnEligibleStatusFailure_N
 	assert.Contains(t, logBuf.String(), "level=ERROR", "a ClearMarkersOnEligibleStatus failure must be logged at Error, not Warn")
 }
 
+// ─── Issue #1453: monitorMalformedTierOverrides — the malformed manual_tier_override monitoring
+// pass (Step 0c) ─────────────────────────────────────────────────────────────────────────────────
+
+// TestRetentionCleanupCheck_MonitorMalformedTierOverride_ReportsCountAndLogsAffectedUsers proves
+// Work() calls GetUsersWithMalformedTierOverride on every pass and, when it finds malformed rows,
+// sets the MalformedManualTierOverrideCount gauge and logs an Error naming the affected user IDs —
+// this is a monitoring signal an operator must be able to see, not silent bookkeeping.
+func TestRetentionCleanupCheck_MonitorMalformedTierOverride_ReportsCountAndLogsAffectedUsers(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	malformedUser := &domain.User{ID: "user-malformed-override"}
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", ctx).Return(0, nil)
+	mockRepo.On("ClearCompletedPlaidCleanupMarkers", ctx).Return(0, nil)
+	mockRepo.On("ClearMarkersOnEligibleStatus", ctx).Return(0, nil)
+	mockRepo.On("GetUsersWithMalformedTierOverride", ctx).Return([]*domain.User{malformedUser}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          logger,
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	mockRepo.AssertCalled(t, "GetUsersWithMalformedTierOverride", ctx)
+	assert.Equal(t, float64(1), testutil.ToFloat64(observability.MalformedManualTierOverrideCount),
+		"the gauge must report the current malformed-row count")
+	assert.Contains(t, logBuf.String(), "level=ERROR", "a non-zero malformed count must be logged at Error — this should be impossible post-migration-000127")
+	assert.Contains(t, logBuf.String(), "user-malformed-override", "the affected user IDs must be named in the log line, not just a bare count")
+}
+
+// TestRetentionCleanupCheck_MonitorMalformedTierOverride_ZeroFound_SetsGaugeToZeroNoErrorLog proves
+// the healthy steady state: zero malformed rows sets the gauge to 0 (not left stale from a PRIOR
+// pass's non-zero reading) and logs nothing at Error.
+func TestRetentionCleanupCheck_MonitorMalformedTierOverride_ZeroFound_SetsGaugeToZeroNoErrorLog(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", ctx).Return(0, nil)
+	mockRepo.On("ClearCompletedPlaidCleanupMarkers", ctx).Return(0, nil)
+	mockRepo.On("ClearMarkersOnEligibleStatus", ctx).Return(0, nil)
+	mockRepo.On("GetUsersWithMalformedTierOverride", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          logger,
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	// Prime the gauge non-zero first, modeling a PRIOR pass that found malformed rows, so this test
+	// actually proves the gauge is reset to 0 rather than merely never having been touched.
+	observability.MalformedManualTierOverrideCount.Set(3)
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	assert.Equal(t, float64(0), testutil.ToFloat64(observability.MalformedManualTierOverrideCount),
+		"zero malformed rows this pass must reset the gauge to 0, not leave a stale non-zero reading from a prior pass")
+	assert.NotContains(t, logBuf.String(), "level=ERROR", "zero malformed rows must not log at Error")
+}
+
+// TestRetentionCleanupCheck_MonitorMalformedTierOverride_NoValidatorConfigured_SkipsQuietly proves
+// the (nil, nil) "unknown" contract is handled distinctly from "zero found": no gauge update at
+// all, a Warn (not Error) log line, and the rest of the job still runs normally.
+func TestRetentionCleanupCheck_MonitorMalformedTierOverride_NoValidatorConfigured_SkipsQuietly(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", ctx).Return(0, nil)
+	mockRepo.On("ClearCompletedPlaidCleanupMarkers", ctx).Return(0, nil)
+	mockRepo.On("ClearMarkersOnEligibleStatus", ctx).Return(0, nil)
+	mockRepo.On("GetUsersWithMalformedTierOverride", ctx).Return(nil, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          logger,
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err, "a missing validator must not fail the job — every other step still runs")
+
+	mockRepo.AssertCalled(t, "GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod)
+	assert.Contains(t, logBuf.String(), "level=WARN", "no validator configured must log at Warn, distinct from the Error level a genuine malformed row gets")
+	assert.NotContains(t, logBuf.String(), "level=ERROR")
+}
+
+// TestRetentionCleanupCheck_MonitorMalformedTierOverrideFailure_NonFatal proves a query failure is
+// logged (Error level) but does NOT fail the job — mirrors every other Step 0/0b non-fatal proof in
+// this file. This step makes no write, so there is nothing to retry synchronously; the next
+// scheduled pass tries again.
+func TestRetentionCleanupCheck_MonitorMalformedTierOverrideFailure_NonFatal(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", ctx).Return(0, nil)
+	mockRepo.On("ClearCompletedPlaidCleanupMarkers", ctx).Return(0, nil)
+	mockRepo.On("ClearMarkersOnEligibleStatus", ctx).Return(0, nil)
+	mockRepo.On("GetUsersWithMalformedTierOverride", ctx).Return(nil, errors.New("db: connection reset"))
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          logger,
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err, "a malformed-override query failure must not fail the job — it is naturally retried on the next scheduled pass")
+
+	mockRepo.AssertCalled(t, "GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod)
+	assert.Contains(t, logBuf.String(), "level=ERROR", "a query failure must be logged at Error")
+	assert.Contains(t, logBuf.String(), "failed to check for malformed manual_tier_override rows")
+}
+
 // TestRetentionCleanupCheck_PlaidRepair_QueriesWithConfiguredGracePeriod proves
 // repairPlaidDisconnects passes the round-7 grace constant through to the query, not an
 // unconstrained/zero value — the grace window is the entire mechanism that turns "resubscribed
@@ -847,6 +1049,7 @@ func TestRetentionCleanupCheck_PlaidRepair_QueriesWithConfiguredGracePeriod(t *t
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -892,6 +1095,7 @@ func TestRetentionCleanupCheck_PlaidRepair_RecheckWiredToGetUserByID(t *testing.
 	users := []*domain.User{candidate}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -955,6 +1159,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsCompedUser(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1011,6 +1216,7 @@ func TestRetentionCleanupCheck_PlaidRepairProceedsForLapsedComp(t *testing.T) {
 	users := []*domain.User{user}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1059,6 +1265,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfResubscribedSinceQuery(t *testi
 	currentUser := &domain.User{ID: "user-resubscribed", Email: "resubscribed@example.com", SubscriptionStatus: "active"}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1119,6 +1326,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfCompedSinceQuery(t *testing.T) 
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1185,6 +1393,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfDeletionRequestedSinceQuery(t *
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1234,6 +1443,7 @@ func TestRetentionCleanupCheck_PlaidRepairFailure_NonFatal_ContinuesToNoticesAnd
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1289,6 +1499,7 @@ func TestRetentionCleanupCheck_PlaidRepairFailure_IncrementsUserFailureCounter(t
 	repairUser := &domain.User{ID: "user-plaid-repair-fail-counter", Email: "plaidrepairfailcounter@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1332,6 +1543,7 @@ func TestRetentionCleanupCheck_PlaidRepairPreCheckFailure_IncrementsUserFailureC
 	repairUser := &domain.User{ID: "user-plaid-precheck-fail", Email: "plaidprecheckfail@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1374,6 +1586,7 @@ func TestRetentionCleanupCheck_PlaidRepairSuccess_DoesNotIncrementUserFailureCou
 	user := &domain.User{ID: "user-plaid-repair-success-counter", Email: "plaidrepairsuccesscounter@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1445,6 +1658,7 @@ func TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_MarkerLeftSetAndNotCoun
 	user := &domain.User{ID: "user-aborted-mid-run", Email: "abortedmidrun@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1521,6 +1735,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearFailure_RetriesThenSucceeds(t *t
 	user := &domain.User{ID: userID, Email: "clearretrysucceeds@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1577,6 +1792,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearFailure_ExhaustsRetries_NotSilen
 	user := &domain.User{ID: userID, Email: "clearretryexhausted@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1648,6 +1864,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearRetry_ContextCanceled_AbortsWith
 	user := &domain.User{ID: userID, Email: "clearretryctxcanceled@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -1698,6 +1915,7 @@ func TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_JoinedError(t *testing.
 	user := &domain.User{ID: "user-aborted-wrapped", Email: "abortedwrapped@example.com", SubscriptionStatus: "cancelled", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1752,6 +1970,7 @@ func TestRetentionCleanupCheck_PlaidRepairNilCleanup_SkipsRepairPass_JobStillSuc
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -1825,6 +2044,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfTransitionedToPastDueSinceQuery
 	currentUser := &domain.User{ID: "user-now-pastdue", Email: "nowpastdue@example.com", SubscriptionStatus: "past_due"}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1883,6 +2103,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfMarkerReplacedByNewEpisodeSince
 	currentUser := &domain.User{ID: "user-marker-replaced", Email: "markerreplaced@example.com", SubscriptionStatus: "cancelled", PlaidCleanupPendingAt: &freshMarker}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1928,6 +2149,7 @@ func TestRetentionCleanupCheck_30dNotice_SentToUsers(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -1969,6 +2191,7 @@ func TestRetentionCleanupCheck_7dNotice_SentToUsers(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2007,6 +2230,7 @@ func TestRetentionCleanupCheck_AutoDeletion_ExecutedForExpiredUsers(t *testing.T
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2042,6 +2266,7 @@ func TestRetentionCleanupCheck_DeletionError_ContinuesProcessing(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2070,6 +2295,7 @@ func TestRetentionCleanupCheck_NoUsers_NoOp(t *testing.T) {
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2102,6 +2328,7 @@ func TestRetentionCleanupCheck_EmailServiceNil_SkipsSending(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2289,6 +2516,7 @@ func TestRetentionCleanupCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
 // TestNewRetentionCleanupCheckWorker_DefaultLogger tests that nil logger uses default.
 func TestNewRetentionCleanupCheckWorker_DefaultLogger(t *testing.T) {
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2332,6 +2560,7 @@ func TestRetentionCleanupCheck_NilDeletionService_SkipsAutoDeleteButRepairStepsS
 	plaidRepairUser := &domain.User{ID: "user-needs-plaid-repair-nodeletion", Email: "plaidrepairnodeletion@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &plaidPendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2386,6 +2615,7 @@ func TestRetentionCleanupCheck_CompedUser_NotDeleted(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2424,6 +2654,7 @@ func TestRetentionCleanupCheck_CompedUser_No30dNotice(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2461,6 +2692,7 @@ func TestRetentionCleanupCheck_CompedUser_No7dNotice(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2516,6 +2748,7 @@ func TestRetentionCleanupCheck_LapsedComp_30dNotice_ReachesAuthoritativeReVerify
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2579,6 +2812,7 @@ func TestRetentionCleanupCheck_ExpiredOverride_NotDeleted(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2613,6 +2847,7 @@ func TestRetentionCleanupCheck_NonComped_DeletedNormally(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2657,6 +2892,7 @@ func TestRetentionCleanupCheck_30dClaimLost_NoEmailSent(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2693,6 +2929,7 @@ func TestRetentionCleanupCheck_7dClaimLost_NoEmailSent(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2731,6 +2968,7 @@ func TestRetentionCleanupCheck_30dClaimError_ContinuesProcessing(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2782,6 +3020,7 @@ func TestRetentionCleanupCheck_30dIneligibleAfterClaim_ReleasesClaim_SkipsSend(t
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2825,6 +3064,7 @@ func TestRetentionCleanupCheck_30dSendFails_ReleasesClaim_NextRunRetries(t *test
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2894,6 +3134,7 @@ func TestRetentionCleanupCheck_7dSendFails_ReleasesClaim_NextRunRetries(t *testi
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -2955,6 +3196,7 @@ func TestRetentionCleanupCheck_30dSendSucceeds_OrderingProof(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -3010,6 +3252,7 @@ func TestRetentionCleanupCheck_30dCompleteReturnsFalse_LoggedAtError(t *testing.
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -3058,6 +3301,7 @@ func TestRetentionCleanupCheck_30dCompleteReturnsFalse_LoggedAtError(t *testing.
 // TestNewRetentionCleanupCheckWorker_DefaultRetentionMonths tests that 0 months uses default (6).
 func TestNewRetentionCleanupCheckWorker_DefaultRetentionMonths(t *testing.T) {
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -3083,6 +3327,7 @@ func TestRetentionCleanupCheck_Success_RecordsHeartbeat(t *testing.T) {
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -3119,6 +3364,7 @@ func TestRetentionCleanupCheck_DeletionFailure_HeartbeatNotAdvanced(t *testing.T
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -3167,6 +3413,7 @@ func TestRetentionCleanupCheck_ProcessRetentionNotices_NilRetentionExpiresAt_Ret
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()

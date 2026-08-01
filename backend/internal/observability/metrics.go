@@ -230,6 +230,30 @@ var (
 		Help: "Total repairPlaidDisconnects passes that skipped the Plaid-disconnect repair pass because no Plaid cleanup service was configured. Expected non-zero in QA/E2E; any non-zero rate in production is a configuration defect.",
 	})
 
+	// MalformedManualTierOverrideCount is Issue #1453's monitoring gauge: the number of users, as of
+	// the MOST RECENT RetentionCleanupCheckWorker pass, whose manual_tier_override is non-empty but
+	// does not name a currently-configured tier (config/subscription_tiers.yaml). Migration 000127
+	// backfilled every such row to NULL as a one-time cleanup; this gauge exists to catch a FUTURE
+	// writer reintroducing the class — a legacy row, a direct SQL write, or a write made while
+	// tierConfig was nil, all of which admin_user_service.go's write-time validation
+	// (SetOverrideTierValidator / tierConfig.GetTier) cannot see, since none of them go through it.
+	//
+	// A gauge, not a counter: this reports the CURRENT outstanding count each pass observes (via
+	// profileRepository.GetUsersWithMalformedTierOverride), not a cumulative total of every row ever
+	// seen malformed across all passes — the natural fit for "how many are broken right now",
+	// mirroring GetOutstandingPlaidCleanupStats' own gauge-shaped backlog metric
+	// (job_health_repository.go) rather than the counter shape PlaidCleanupBackstopFailuresTotal
+	// above uses for "how many failures have ever happened".
+	//
+	// Expected to read 0 in every healthy environment, always — unlike
+	// PlaidCleanupServiceNotConfiguredTotal above, there is no legitimate QA/E2E exception: a
+	// malformed override should never exist anywhere post-000127. Alert on ANY sustained non-zero
+	// value.
+	MalformedManualTierOverrideCount = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "malformed_manual_tier_override_count",
+		Help: "Current number of users whose manual_tier_override does not name a configured tier (config/subscription_tiers.yaml). Should always be 0 post-migration-000127; any sustained non-zero value means a writer bypassed write-time validation.",
+	})
+
 	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.
 	// Issue #659: Plaid Investments
 	InvestmentHoldingsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{
