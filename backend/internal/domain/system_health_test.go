@@ -95,6 +95,21 @@ func TestDeadLetterMetrics_Validation(t *testing.T) {
 	assert.Equal(t, int64(12), metrics.OldestJobAgeHours)
 }
 
+// TestJobBacklogMetrics_Validation covers the three DB-derived backlog gauges surfaced on
+// /admin/health (Issue #1458) — structurally identical to DeadLetterMetrics above, mirroring the
+// same Paddle-metrics precedent (#762/#761).
+func TestJobBacklogMetrics_Validation(t *testing.T) {
+	metrics := JobBacklogMetrics{
+		PlaidCleanupOutstandingUsers:                    3,
+		PlaidCleanupOldestOutstandingSeconds:            7200,
+		ManualTierOverrideOldestUnclearedExpiredSeconds: 3600,
+	}
+
+	assert.Equal(t, int64(3), metrics.PlaidCleanupOutstandingUsers)
+	assert.Equal(t, int64(7200), metrics.PlaidCleanupOldestOutstandingSeconds)
+	assert.Equal(t, int64(3600), metrics.ManualTierOverrideOldestUnclearedExpiredSeconds)
+}
+
 func TestSystemHealthResponse_Timestamp(t *testing.T) {
 	now := time.Now()
 	response := SystemHealthResponse{

@@ -408,15 +408,20 @@ func main() {
 		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)                                // Issue #639: Admin user management
 		systemHealthRepo := repository.NewSystemHealthRepository(db)                                          // Issue #640: System health monitoring
 		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)                                        // Issue #640: Dead letter queue metrics
-		securityRepo := repository.NewSecurityRepository(db)                                                  // Issue #659: Plaid Investments
-		holdingRepo := repository.NewHoldingRepository(db)                                                    // Issue #659: Plaid Investments
-		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)                                // Issue #659: Plaid Investments
-		portfolioSnapshotRepo := repository.NewPortfolioSnapshotRepository(db)                                // Issue #138: Portfolio snapshots
-		investmentAnalyticsRepo := repository.NewInvestmentAnalyticsRepository(db)                            // Issue #138: Investment analytics
-		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)                                    // Issue #910: Plaid Liabilities
-		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)                // Issue #910: Plaid Liabilities
-		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor)          // Issue #910: Plaid Liabilities
-		merchantRepo := repository.NewMerchantRepository(db)                                                  // Issue #1163: Merchant batch-upsert
+		// Issue #1458: a second, bound JobHealthRepository instance for systemHealthService below —
+		// distinct from the one constructed inline at startJobHealthMetricsCollector's call site
+		// above, which is unbound (passed directly as an argument, never stored) and so can't be
+		// reused here.
+		jobHealthRepoForHealth := repository.NewJobHealthRepository(db)
+		securityRepo := repository.NewSecurityRepository(db)                                         // Issue #659: Plaid Investments
+		holdingRepo := repository.NewHoldingRepository(db)                                           // Issue #659: Plaid Investments
+		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)                       // Issue #659: Plaid Investments
+		portfolioSnapshotRepo := repository.NewPortfolioSnapshotRepository(db)                       // Issue #138: Portfolio snapshots
+		investmentAnalyticsRepo := repository.NewInvestmentAnalyticsRepository(db)                   // Issue #138: Investment analytics
+		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)                           // Issue #910: Plaid Liabilities
+		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)       // Issue #910: Plaid Liabilities
+		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor) // Issue #910: Plaid Liabilities
+		merchantRepo := repository.NewMerchantRepository(db)                                         // Issue #1163: Merchant batch-upsert
 		// NewWorkClaimsOutcomeRepository (not NewWorkClaimsRepository): the subscription-cancellation
 		// webhook needs the wider WorkClaimsOutcomeRepository view (#1413 round-3 finding H3, see
 		// SubscriptionWebhookWorker.SetWorkClaimsRepo). Every other consumer below still declares its
@@ -1477,6 +1482,7 @@ func main() {
 			deadLetterJobRepo,
 			&dbPoolAdapter{db},
 			cfg.PlaidEnv,
+			jobHealthRepoForHealth, // Issue #1458: backs the 3 backlog gauges on /admin/health
 		)
 
 		// Issue #633: Dead letter queue admin service

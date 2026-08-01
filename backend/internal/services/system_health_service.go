@@ -8,7 +8,6 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
-
 // SystemHealthRepository defines methods for retrieving system health metrics
 type SystemHealthRepository interface {
 	GetRiverJobStats(ctx context.Context, queue string) (*domain.QueueMetrics, error)
@@ -52,6 +51,11 @@ type systemHealthService struct {
 	deadLetterRepo DeadLetterJobRepository
 	pool           DatabasePool
 	plaidEnv       string
+	// jobHealthRepo backs the three DB-derived Plaid-cleanup/manual-tier-override backlog gauges
+	// (Issue #1458) — see repository.JobHealthRepository's own doc comment for why these queries
+	// are never duplicated here. Optional/nil-safe: an unwired jobHealthRepo (e.g. an older test
+	// construction of this struct) degrades to zero-value JobBacklogMetrics rather than panicking.
+	jobHealthRepo repository.JobHealthRepository
 }
 
 // NewSystemHealthService creates a new system health service
@@ -60,12 +64,14 @@ func NewSystemHealthService(
 	deadLetterRepo DeadLetterJobRepository,
 	pool DatabasePool,
 	plaidEnv string,
+	jobHealthRepo repository.JobHealthRepository,
 ) SystemHealthService {
 	return &systemHealthService{
 		healthRepo:     healthRepo,
 		deadLetterRepo: deadLetterRepo,
 		pool:           pool,
 		plaidEnv:       plaidEnv,
+		jobHealthRepo:  jobHealthRepo,
 	}
 }
 
@@ -117,6 +123,14 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		response.PaddleStatus = domain.PaddleStatusMetrics{}
 	} else {
 		response.PaddleStatus = *paddleMetrics
+	}
+
+	// Get job backlog metrics (Issue #1458)
+	jobBacklogMetrics, err := s.getJobBacklogMetrics(ctx)
+	if err != nil {
+		response.JobBacklog = domain.JobBacklogMetrics{}
+	} else {
+		response.JobBacklog = *jobBacklogMetrics
 	}
 
 	// Calculate overall status
@@ -252,6 +266,34 @@ func (s *systemHealthService) getPaddleMetrics(ctx context.Context) (*domain.Pad
 		FailedWebhooks24h:     failed,
 		TotalWebhooks24h:      total,
 		LastReconciliationAt:  lastRun,
+	}, nil
+}
+
+// getJobBacklogMetrics retrieves the three DB-derived backlog gauges (Issue #1458) via
+// repository.JobHealthRepository — deliberately the SAME interface (and underlying queries) the
+// retention-cleanup repair job and the manual-tier-override expiry worker use, never duplicated
+// SQL. Nil-safe: an unwired jobHealthRepo returns zero values rather than erroring, matching every
+// other optional-dependency convention in this service (checkClerk/checkPlaid are placeholders;
+// a missing jobHealthRepo simply means this gauge isn't wired yet, not a health-check failure).
+func (s *systemHealthService) getJobBacklogMetrics(ctx context.Context) (*domain.JobBacklogMetrics, error) {
+	if s.jobHealthRepo == nil {
+		return &domain.JobBacklogMetrics{}, nil
+	}
+
+	outstandingUsers, oldestOutstanding, err := s.jobHealthRepo.GetOutstandingPlaidCleanupStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	oldestUnclearedExpired, err := s.jobHealthRepo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &domain.JobBacklogMetrics{
+		PlaidCleanupOutstandingUsers:                    int64(outstandingUsers),
+		PlaidCleanupOldestOutstandingSeconds:            int64(oldestOutstanding.Seconds()),
+		ManualTierOverrideOldestUnclearedExpiredSeconds: int64(oldestUnclearedExpired.Seconds()),
 	}, nil
 }
 

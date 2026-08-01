@@ -81,6 +81,22 @@ func (m *MockDeadLetterJobRepository) GetOldestJobAge(ctx context.Context) (int6
 	return args.Get(0).(int64), args.Error(1)
 }
 
+// MockJobHealthRepository mocks repository.JobHealthRepository — the two backlog gauge queries
+// backing SystemHealthResponse.JobBacklog (Issue #1458).
+type MockJobHealthRepository struct {
+	mock.Mock
+}
+
+func (m *MockJobHealthRepository) GetOldestUnclearedExpiredManualTierOverrideAge(ctx context.Context) (time.Duration, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(time.Duration), args.Error(1)
+}
+
+func (m *MockJobHealthRepository) GetOutstandingPlaidCleanupStats(ctx context.Context) (int, time.Duration, error) {
+	args := m.Called(ctx)
+	return args.Int(0), args.Get(1).(time.Duration), args.Error(2)
+}
+
 // Mock pool for database checks
 type MockPool struct {
 	mock.Mock
@@ -512,4 +528,86 @@ func TestGetSystemHealth_PaddleMetricsError_UsesZeroValues(t *testing.T) {
 	assert.Equal(t, int64(0), result.PaddleStatus.TotalWebhooks24h)
 
 	mockHealthRepo.AssertExpectations(t)
+}
+
+// TestGetSystemHealth_JobBacklogMetricsPopulated proves the three DB-derived backlog gauges
+// (Issue #1458) are populated from repository.JobHealthRepository — the same queries the
+// retention-cleanup repair job and the manual-tier-override expiry worker use, never
+// duplicated SQL.
+func TestGetSystemHealth_JobBacklogMetricsPopulated(t *testing.T) {
+	mockHealthRepo := new(MockSystemHealthRepository)
+	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+	mockPool := new(MockPool)
+	mockJobHealthRepo := new(MockJobHealthRepository)
+
+	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
+	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(3, 2*time.Hour, nil)
+	mockJobHealthRepo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(90*time.Minute, nil)
+
+	service := &systemHealthService{
+		healthRepo:     mockHealthRepo,
+		deadLetterRepo: mockDeadLetterRepo,
+		pool:           mockPool,
+		jobHealthRepo:  mockJobHealthRepo,
+	}
+
+	result, err := service.GetSystemHealth(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), result.JobBacklog.PlaidCleanupOutstandingUsers)
+	assert.Equal(t, int64(2*60*60), result.JobBacklog.PlaidCleanupOldestOutstandingSeconds)
+	assert.Equal(t, int64(90*60), result.JobBacklog.ManualTierOverrideOldestUnclearedExpiredSeconds)
+
+	mockJobHealthRepo.AssertExpectations(t)
+}
+
+// TestGetSystemHealth_JobBacklogMetrics_NilRepo_ZeroValues proves an unwired jobHealthRepo (nil)
+// degrades to zero values rather than panicking — mirrors every other optional-dependency
+// nil-safety convention in this codebase (e.g. SubscriptionService.overrideTierValidator).
+func TestGetSystemHealth_JobBacklogMetrics_NilRepo_ZeroValues(t *testing.T) {
+	mockHealthRepo := new(MockSystemHealthRepository)
+	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+	mockPool := new(MockPool)
+
+	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
+
+	service := &systemHealthService{
+		healthRepo:     mockHealthRepo,
+		deadLetterRepo: mockDeadLetterRepo,
+		pool:           mockPool,
+		// jobHealthRepo intentionally left nil.
+	}
+
+	result, err := service.GetSystemHealth(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.JobBacklogMetrics{}, result.JobBacklog)
+}
+
+// TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues mirrors
+// TestGetSystemHealth_PaddleMetricsError_UsesZeroValues's "partial data over none" convention —
+// a job-health query failure must not fail the whole /admin/health response.
+func TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues(t *testing.T) {
+	mockHealthRepo := new(MockSystemHealthRepository)
+	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+	mockPool := new(MockPool)
+	mockJobHealthRepo := new(MockJobHealthRepository)
+
+	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
+	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), errors.New("db error"))
+
+	service := &systemHealthService{
+		healthRepo:     mockHealthRepo,
+		deadLetterRepo: mockDeadLetterRepo,
+		pool:           mockPool,
+		jobHealthRepo:  mockJobHealthRepo,
+	}
+
+	result, err := service.GetSystemHealth(context.Background())
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, domain.JobBacklogMetrics{}, result.JobBacklog)
+
+	mockJobHealthRepo.AssertExpectations(t)
 }

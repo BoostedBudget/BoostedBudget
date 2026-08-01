@@ -3,9 +3,22 @@ import { useGetSystemHealth } from '@boostedbudget/api-client/endpoints/admin/ad
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent';
 import { ANALYTICS_EVENTS } from '../../../shared/analytics';
 import { SummaryCard } from '@/features/admin';
-import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle } from 'lucide-react';
+import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle, Users, Timer } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
+
+// Issue #1458: formats a backlog gauge's age (seconds) as a short human string for the Job
+// Backlog SummaryCard grid — mirrors the Paddle Status section's "Avg Duration" precedent
+// (`${Math.round(ms / 1000)}s`) one level up in granularity, since these ages are backlog-scale
+// (potentially hours) rather than single-request-scale (milliseconds).
+const formatBacklogAge = (seconds: number): string => {
+  if (seconds <= 0) return '0s';
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${Math.round(seconds)}s`;
+};
 
 const statusToVariant = (status: string): 'success' | 'warning' | 'error' => {
   if (status === 'up' || status === 'healthy') return 'success';
@@ -178,6 +191,38 @@ export function HealthDashboardPage() {
             }
             icon={<RefreshCw size={24} />}
             status={data.paddle_status.last_reconciliation_at ? 'success' : 'warning'}
+          />
+        </div>
+      </section>
+
+      {/* Job Backlog Section (Issue #1458) — the 3 DB-derived Plaid-cleanup/manual-tier-override
+          backlog gauges PR #1443 introduced. Copies the Paddle Status SummaryCard grid above (the
+          ticket that scoped this section originally cited a Dead Letter Queue SummaryCard to copy,
+          but DLQ actually renders as the conditional alert banner above, not a SummaryCard — this
+          section follows Paddle Status instead). The other four metrics #1443 added (three
+          lifetime Prometheus counters plus the in-process JobLastSuccessTimestamp heartbeat)
+          deliberately stay Prometheus-only — see domain.JobBacklogMetrics's doc comment (backend)
+          for why. */}
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Job Backlog</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
+          <SummaryCard
+            title="Plaid Cleanup Outstanding Users"
+            value={data.job_backlog.plaid_cleanup_outstanding_users.toString()}
+            icon={<Users size={24} />}
+            status={data.job_backlog.plaid_cleanup_outstanding_users > 0 ? 'warning' : 'success'}
+          />
+          <SummaryCard
+            title="Plaid Cleanup Oldest Outstanding"
+            value={formatBacklogAge(data.job_backlog.plaid_cleanup_oldest_outstanding_seconds)}
+            icon={<Clock size={24} />}
+            status={data.job_backlog.plaid_cleanup_oldest_outstanding_seconds > 0 ? 'warning' : 'success'}
+          />
+          <SummaryCard
+            title="Manual Override Oldest Uncleared Expired"
+            value={formatBacklogAge(data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds)}
+            icon={<Timer size={24} />}
+            status={data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds > 0 ? 'warning' : 'success'}
           />
         </div>
       </section>
