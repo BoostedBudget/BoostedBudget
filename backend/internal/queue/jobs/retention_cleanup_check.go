@@ -1525,17 +1525,24 @@ func RetentionCleanupCheckInsertOpts() *river.InsertOpts {
 // state: "anytime a process quits or a new leader is elected, the whole process starts over
 // without regard for the state of the last scheduler." Concretely (river v0.38.0
 // internal/maintenance/periodic_job_enqueuer.go:409-414), nextRunAt is restored from persisted
-// state only when PeriodicJobOpts.ID is set — this job (like all 14 in main.go) leaves ID
-// unset — so nextRunAt is always recomputed as ScheduleFunc(now), i.e. now+24h. :424-426 skips
-// the catch-up insert entirely when RunOnStart is false. Since this repo deploys several times
-// a day, every deploy or leader election pushes the target time forward another 24h before it
-// is ever reached: RunOnStart: false let this daily job be enqueued zero times, ever.
+// state only when PeriodicJobOpts.ID is set — at the time this comment was first written,
+// this job (like all 14 in main.go) left ID unset, so nextRunAt was always recomputed as
+// ScheduleFunc(now), i.e. now+24h. Issue #1448 fixed that for all 14 (see
+// RetentionCleanupCheckPeriodicOpts below). :424-426 skips the catch-up insert entirely when
+// RunOnStart is false. Since this repo deploys several times a day, every deploy or leader
+// election used to push the target time forward another 24h before it was ever reached:
+// RunOnStart: false let this daily job be enqueued zero times, ever.
 //
 // RunOnStart: true is only safe here because RetentionCleanupCheckUniqueOpts()'s ByPeriod/
 // ByState dedup — carried into the InsertOpts this job's periodic registration in main.go
 // builds — prevents a start-of-process catch-up run from double-firing alongside an
 // already-scheduled run. The two are only safe together: do not flip this to true for a job
 // whose InsertOpts lacks an equivalent UniqueOpts.
+//
+// Issue #1448: ID is now set (Kind()'s own "retention_cleanup_check" string) so River
+// restores nextRunAt across restarts/leader elections instead of recomputing now+interval
+// every time — this function's own doc history previously said this job "leaves ID unset"
+// like all 14 in main.go; that is no longer true for this job, or for the other 13.
 func RetentionCleanupCheckPeriodicOpts() *river.PeriodicJobOpts {
-	return &river.PeriodicJobOpts{RunOnStart: true}
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: RetentionCleanupCheckArgs{}.Kind()}
 }

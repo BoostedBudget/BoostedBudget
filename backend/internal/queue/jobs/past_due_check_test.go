@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
@@ -151,4 +152,54 @@ func TestPastDueCheckWorker_Work_ProcessErrorContinues(t *testing.T) {
 
 	require.NoError(t, err)
 	mockSvc.AssertNumberOfCalls(t, "ProcessPastDueUser", 2)
+}
+
+func TestPastDueCheckUniqueOpts(t *testing.T) {
+	opts := PastDueCheckUniqueOpts()
+
+	assert.False(t, opts.ByArgs)
+	assert.Equal(t, 1*time.Hour, opts.ByPeriod)
+	assert.Contains(t, opts.ByState, queue.JobStateAvailable)
+	assert.Contains(t, opts.ByState, queue.JobStateScheduled)
+	assert.Contains(t, opts.ByState, queue.JobStateRunning)
+	assert.Contains(t, opts.ByState, queue.JobStateRetryable)
+	assert.Contains(t, opts.ByState, queue.JobStatePending)
+}
+
+// ─── Issue #1448: this job shipped RunOnStart: true with NO dedup guarantee at all. ──────
+
+func TestPastDueCheckInsertOpts_Queue(t *testing.T) {
+	opts := PastDueCheckInsertOpts()
+	require.NotNil(t, opts)
+	assert.Equal(t, "low", opts.Queue)
+}
+
+func TestPastDueCheckInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := PastDueCheckInsertOpts()
+	want := PastDueCheckUniqueOpts()
+
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
+	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
+	require.NotEmpty(t, opts.UniqueOpts.ByState,
+		"main.go's periodic registration previously carried NO UniqueOpts at all for this "+
+			"job despite RunOnStart: true (Issue #1448)")
+}
+
+func TestPastDueCheckPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := PastDueCheckPeriodicOpts()
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart)
+}
+
+func TestPastDueCheckPeriodicOpts_ID(t *testing.T) {
+	opts := PastDueCheckPeriodicOpts()
+	assert.Equal(t, "past_due_check", opts.ID)
+}
+
+func TestPastDueCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	opts := PastDueCheckPeriodicOpts()
+	require.True(t, opts.RunOnStart)
+
+	unique := PastDueCheckUniqueOpts()
+	require.NotEmpty(t, unique.ByState)
 }

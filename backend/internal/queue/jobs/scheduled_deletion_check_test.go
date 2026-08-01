@@ -230,6 +230,49 @@ func TestScheduledDeletionCheckUniqueOpts(t *testing.T) {
 	assert.Contains(t, opts.ByState, queue.JobStatePending)
 }
 
+// ─── Issue #1448: this job shipped RunOnStart: true with NO dedup guarantee at all — the
+// worst instance found on this branch. These tests prove the dedup is now actually wired
+// into what main.go's periodic registration ships. ──────────────────────────────────────
+
+func TestScheduledDeletionCheckInsertOpts_Queue(t *testing.T) {
+	opts := ScheduledDeletionCheckInsertOpts()
+	require.NotNil(t, opts)
+	assert.Equal(t, "low", opts.Queue)
+}
+
+func TestScheduledDeletionCheckInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := ScheduledDeletionCheckInsertOpts()
+	want := ScheduledDeletionCheckUniqueOpts()
+
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
+	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
+	require.NotEmpty(t, opts.UniqueOpts.ByState,
+		"main.go's periodic registration previously carried NO UniqueOpts at all for this "+
+			"job despite RunOnStart: true (Issue #1448's worst-instance finding)")
+}
+
+func TestScheduledDeletionCheckPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := ScheduledDeletionCheckPeriodicOpts()
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart)
+}
+
+func TestScheduledDeletionCheckPeriodicOpts_ID(t *testing.T) {
+	opts := ScheduledDeletionCheckPeriodicOpts()
+	assert.Equal(t, "scheduled_deletion_check", opts.ID,
+		"a non-empty, stable ID is required for River to restore nextRunAt across restarts/"+
+			"leader elections (Issue #1448)")
+}
+
+func TestScheduledDeletionCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	opts := ScheduledDeletionCheckPeriodicOpts()
+	require.True(t, opts.RunOnStart, "this pairing guarantee only matters when RunOnStart is true")
+
+	unique := ScheduledDeletionCheckUniqueOpts()
+	require.NotEmpty(t, unique.ByState,
+		"RunOnStart: true's catch-up insert is only safe when deduped by a non-empty ByState constraint")
+}
+
 func TestNewScheduledDeletionCheckWorker_DefaultLogger(t *testing.T) {
 	mockRepo := new(MockProfileRepository)
 	mockQueue := new(MockJobQueue)

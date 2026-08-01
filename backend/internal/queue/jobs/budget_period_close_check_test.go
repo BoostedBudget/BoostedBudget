@@ -1184,3 +1184,54 @@ func TestWorkAt_FallsBackToUTCWhenTimezoneNil(t *testing.T) {
 	mockQueue.AssertExpectations(t)
 	periodEventsRepo.AssertExpectations(t)
 }
+
+func TestBudgetPeriodCloseCheckUniqueOpts(t *testing.T) {
+	opts := BudgetPeriodCloseCheckUniqueOpts()
+
+	assert.False(t, opts.ByArgs)
+	assert.Equal(t, 24*time.Hour, opts.ByPeriod)
+	assert.Contains(t, opts.ByState, queue.JobStateAvailable)
+	assert.Contains(t, opts.ByState, queue.JobStateScheduled)
+	assert.Contains(t, opts.ByState, queue.JobStateRunning)
+	assert.Contains(t, opts.ByState, queue.JobStateRetryable)
+	assert.Contains(t, opts.ByState, queue.JobStatePending)
+}
+
+// ─── Issue #1448: BudgetPeriodCloseCheckUniqueOpts existed but was never wired — main.go
+// relied solely on this job's DB-level exactly-once marker, and RunOnStart was false with no
+// ID set. ──────────────────────────────────────────────────────────────────────────────────
+
+func TestBudgetPeriodCloseCheckInsertOpts_Queue(t *testing.T) {
+	opts := BudgetPeriodCloseCheckInsertOpts()
+	require.NotNil(t, opts)
+	assert.Equal(t, "low", opts.Queue)
+}
+
+func TestBudgetPeriodCloseCheckInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := BudgetPeriodCloseCheckInsertOpts()
+	want := BudgetPeriodCloseCheckUniqueOpts()
+
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
+	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
+	require.NotEmpty(t, opts.UniqueOpts.ByState,
+		"main.go's periodic registration must carry BudgetPeriodCloseCheckUniqueOpts' dedup (Issue #1448)")
+}
+
+func TestBudgetPeriodCloseCheckPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := BudgetPeriodCloseCheckPeriodicOpts()
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart)
+}
+
+func TestBudgetPeriodCloseCheckPeriodicOpts_ID(t *testing.T) {
+	opts := BudgetPeriodCloseCheckPeriodicOpts()
+	assert.Equal(t, "budget_period_close_check", opts.ID)
+}
+
+func TestBudgetPeriodCloseCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	opts := BudgetPeriodCloseCheckPeriodicOpts()
+	require.True(t, opts.RunOnStart)
+
+	unique := BudgetPeriodCloseCheckUniqueOpts()
+	require.NotEmpty(t, unique.ByState)
+}

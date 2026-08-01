@@ -676,3 +676,40 @@ func TestItemCleanupCheckWorker_Work_WithAccountsUsesGracePeriod(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)
 }
+
+// ─── Issue #1448: ItemCleanupCheckUniqueOpts existed but was never wired. ────────────────
+
+func TestItemCleanupCheckInsertOpts_Queue(t *testing.T) {
+	opts := ItemCleanupCheckInsertOpts()
+	require.NotNil(t, opts)
+	assert.Equal(t, "low", opts.Queue)
+}
+
+func TestItemCleanupCheckInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := ItemCleanupCheckInsertOpts()
+	want := ItemCleanupCheckUniqueOpts()
+
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
+	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
+	require.NotEmpty(t, opts.UniqueOpts.ByState,
+		"main.go's periodic registration must carry ItemCleanupCheckUniqueOpts' dedup (Issue #1448)")
+}
+
+func TestItemCleanupCheckPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := ItemCleanupCheckPeriodicOpts()
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart)
+}
+
+func TestItemCleanupCheckPeriodicOpts_ID(t *testing.T) {
+	opts := ItemCleanupCheckPeriodicOpts()
+	assert.Equal(t, "item_cleanup_check", opts.ID)
+}
+
+func TestItemCleanupCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	opts := ItemCleanupCheckPeriodicOpts()
+	require.True(t, opts.RunOnStart)
+
+	unique := ItemCleanupCheckUniqueOpts()
+	require.NotEmpty(t, unique.ByState)
+}

@@ -104,12 +104,8 @@ func TestIssue972ProductionWiringNoDrift(t *testing.T) {
 			"humaTransferSuggestionHandler.SetAnalytics must be called so PostHog fires on confirm-match success (Issue #972 C4 / Phase E)",
 		},
 
-		// Savings stats snapshot periodic job must carry UniqueOpts (B1 fix).
-		// Guards against silent duplicate snapshot creation during retry storms.
-		{
-			"river.UniqueOpts{",
-			"SavingsStatsArgs periodic job must have UniqueOpts for queue-level dedup (Issue #972 B1)",
-		},
+		// Savings stats snapshot periodic job dedup (B1 fix) — see
+		// TestIssue972SavingsStatsPeriodicJobCarriesUniqueOpts below, not this text scan.
 	}
 
 	var failures []string
@@ -124,5 +120,42 @@ func TestIssue972ProductionWiringNoDrift(t *testing.T) {
 			"Each missing call is a production misconfiguration invisible to unit tests.\n"+
 			"Add the missing call to cmd/server/main.go or update this test if the wiring changed.",
 			len(failures), strings.Join(failures, "\n"))
+	}
+}
+
+// TestIssue972SavingsStatsPeriodicJobCarriesUniqueOpts replaces the substring check this file
+// used to run against main.go — `strings.Contains(src, "river.UniqueOpts{")` — which the
+// Issue #1448 review (Codex, this branch) flagged as vacuous: it passed as long as ANY single
+// periodic job anywhere in main.go carried a `river.UniqueOpts{` literal, so it would have
+// kept passing even if SavingsStatsArgs' OWN dedup were dropped entirely. It also stopped
+// working by construction once Issue #1448's buildPeriodicJobSpecs extraction
+// (periodic_jobs.go) moved every periodic job's UniqueOpts construction out of main.go
+// entirely (into internal/queue/jobs' own *InsertOpts() helpers).
+//
+// This test asserts the real value SavingsStats' periodic registration ships, not a text
+// anchor: a future change that dropped SavingsStatsUniqueOpts()'s ByPeriod (or stopped
+// wiring it into the periodic registration) fails THIS test specifically, unlike the
+// substring scan it replaces.
+func TestIssue972SavingsStatsPeriodicJobCarriesUniqueOpts(t *testing.T) {
+	specs := buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps())
+
+	var found *periodicJobSpec
+	for i := range specs {
+		if specs[i].name == "savings stats snapshot" {
+			found = &specs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("no periodic job spec named \"savings stats snapshot\" returned by buildPeriodicJobSpecs")
+	}
+
+	_, insertOpts := found.build()
+	if insertOpts == nil {
+		t.Fatal("savings stats snapshot: build() returned nil InsertOpts")
+	}
+	if insertOpts.UniqueOpts.ByPeriod <= 0 {
+		t.Errorf("savings stats snapshot: InsertOpts must carry a non-zero ByPeriod for queue-level "+
+			"dedup (Issue #972 B1) — got %v", insertOpts.UniqueOpts.ByPeriod)
 	}
 }

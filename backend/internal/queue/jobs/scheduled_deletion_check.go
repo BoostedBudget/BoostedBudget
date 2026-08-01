@@ -187,3 +187,28 @@ func ScheduledDeletionCheckUniqueOpts() *queue.UniqueOpts {
 		},
 	}
 }
+
+// ScheduledDeletionCheckInsertOpts returns the *river.InsertOpts this job's periodic
+// registration in main.go must use — Queue: "low" plus the uniqueness options from
+// ScheduledDeletionCheckUniqueOpts(), converted to river's UniqueOpts type.
+//
+// Issue #1448: main.go's periodic registration previously built a bare
+// &river.InsertOpts{Queue: "low"} and never called ScheduledDeletionCheckUniqueOpts() at
+// all — even though its PeriodicJobOpts already set RunOnStart: true. RunOnStart without a
+// paired dedup guarantee is exactly the combination this package's retention/manual-tier
+// override helpers document as unsafe: a start-of-process catch-up insert can double-fire
+// alongside an already-scheduled run, re-running an account-deletion sweep on every
+// restart or leader election.
+func ScheduledDeletionCheckInsertOpts() *river.InsertOpts {
+	return riverInsertOptsFromUnique(queue.QueueLow, ScheduledDeletionCheckUniqueOpts())
+}
+
+// ScheduledDeletionCheckPeriodicOpts returns the *river.PeriodicJobOpts this job's periodic
+// registration in main.go must use. RunOnStart: true is only safe because
+// ScheduledDeletionCheckInsertOpts() above always carries ScheduledDeletionCheckUniqueOpts()'s
+// dedup. ID is set so River restores nextRunAt across restarts/leader elections instead of
+// recomputing now+interval every time (river@v0.38.0
+// internal/maintenance/periodic_job_enqueuer.go:409-414) — Issue #1448.
+func ScheduledDeletionCheckPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: ScheduledDeletionCheckArgs{}.Kind()}
+}
