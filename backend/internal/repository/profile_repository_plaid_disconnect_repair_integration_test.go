@@ -74,16 +74,23 @@ func seedLinkedItem(t *testing.T, pool *pgxpool.Pool, userID, itemID, status str
 	require.NoError(t, err)
 }
 
-// seedLinkedItemNullStatus inserts a linked_items row with status = NULL — linked_items.status is
-// nullable (migration 000013 added it with no NOT NULL constraint), so a row inserted without an
-// explicit status (or predating the 'active' default) can genuinely have a NULL status while still
-// being fully "live". Issue #1413 round-7 finding (Codex review): a bare
-// `status NOT IN ('disconnected', 'replaced')` evaluates to SQL's UNKNOWN (not TRUE) for a NULL
-// status, silently excluding this row — exactly the leak GetUsersNeedingPlaidDisconnectRepair
-// exists to prevent. See TestPlaidDisconnectRepair_Integration_NullStatusItemIsLive.
-func seedLinkedItemNullStatus(t *testing.T, pool *pgxpool.Pool, userID, itemID string) {
+// seedLinkedItemNullStatus inserts a linked_items row with status = NULL — linked_items.status was
+// nullable (migration 000013 added it with no NOT NULL constraint) until migration 000124 (Issue
+// #1444) added that constraint, so a row inserted without an explicit status (or predating the
+// 'active' default) could genuinely have a NULL status while still being fully "live". Issue #1413
+// round-7 finding (Codex review): a bare `status NOT IN ('disconnected', 'replaced')` evaluates to
+// SQL's UNKNOWN (not TRUE) for a NULL status, silently excluding this row — exactly the leak
+// GetUsersNeedingPlaidDisconnectRepair exists to prevent. See
+// TestPlaidDisconnectRepair_Integration_NullStatusItemIsLive.
+//
+// Takes the DB interface (not *pgxpool.Pool) so callers can pass a pgx.Tx: since migration 000124,
+// a genuinely NULL status can no longer be constructed against the real schema at all — the only
+// way to exercise this scenario is to transactionally DROP NOT NULL first (see
+// TestPlaidDisconnectRepair_Integration_NullStatusItemIsLive), which requires every statement in
+// the test, including this seed, to run against that same uncommitted transaction.
+func seedLinkedItemNullStatus(t *testing.T, db DB, userID, itemID string) {
 	t.Helper()
-	_, err := pool.Exec(context.Background(), `
+	_, err := db.Exec(context.Background(), `
 		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted, status)
 		VALUES (gen_random_uuid(), $1, $2, 'enc-test-token', NULL)
 	`, userID, itemID)
@@ -108,9 +115,12 @@ func setRetentionStartedAt(t *testing.T, pool *pgxpool.Pool, userID string, star
 // Issue #1413 round-10 grace-window anchor GetUsersNeedingPlaidDisconnectRepair now uses
 // EXCLUSIVELY (see this file's header comment). CreateUserTx never sets this column, so every
 // fixture in this file that needs to control the grace window sets it explicitly.
-func setPlaidCleanupPendingAt(t *testing.T, pool *pgxpool.Pool, userID string, pendingAt time.Time) {
+//
+// Takes the DB interface (not *pgxpool.Pool) so it can also be used inside a transaction — see
+// seedLinkedItemNullStatus's doc comment for why that matters post-#1444.
+func setPlaidCleanupPendingAt(t *testing.T, db DB, userID string, pendingAt time.Time) {
 	t.Helper()
-	_, err := pool.Exec(context.Background(), "UPDATE users SET plaid_cleanup_pending_at = $1 WHERE id = $2", pendingAt, userID)
+	_, err := db.Exec(context.Background(), "UPDATE users SET plaid_cleanup_pending_at = $1 WHERE id = $2", pendingAt, userID)
 	require.NoError(t, err)
 }
 
@@ -160,11 +170,27 @@ func TestPlaidDisconnectRepair_Integration_FindsCancelledUserWithLiveItem(t *tes
 // Falsifiability: reverting the predicate to `linked_items.status NOT IN ('disconnected',
 // 'replaced')` (dropping the `IS NULL OR` clause) makes this test fail — the NULL-status item
 // would never be found.
+//
+// Since migration 000124 (Issue #1444), linked_items.status is NOT NULL — a genuinely NULL status
+// can no longer be constructed against the real schema at all, in any migrated database. This test
+// therefore runs its own transaction that transactionally DROPs the NOT NULL constraint first
+// (rolled back, never committed, at the very end — the real schema is never permanently altered)
+// so the scenario this test exists to guard can still be exercised. The application-level rule this
+// asserts (a NULL status counts as live) remains correct defensive code even though the column can
+// no longer produce one organically — see liveLinkedItemExistsClause's own doc comment.
 func TestPlaidDisconnectRepair_Integration_NullStatusItemIsLive(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
 	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	_, err = tx.Exec(ctx, "ALTER TABLE linked_items ALTER COLUMN status DROP NOT NULL")
+	require.NoError(t, err)
+
+	repo := NewProfileRepository(tx, enc)
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	user := &domain.User{
@@ -175,17 +201,10 @@ func TestPlaidDisconnectRepair_Integration_NullStatusItemIsLive(t *testing.T) {
 		PrimaryRegion:      "iad",
 		IsActive:           true,
 	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
 	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
-		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
-	})
 
-	seedLinkedItemNullStatus(t, pool, user.ID, "item-nullstatus-"+suffix)
-	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-testGracePeriod-time.Hour)) // past grace
+	seedLinkedItemNullStatus(t, tx, user.ID, "item-nullstatus-"+suffix)
+	setPlaidCleanupPendingAt(t, tx, user.ID, time.Now().Add(-testGracePeriod-time.Hour)) // past grace
 
 	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, testGracePeriod)
 	require.NoError(t, err)

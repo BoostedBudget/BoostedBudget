@@ -865,6 +865,15 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	var accounts []domain.Account
 	for rows.Next() {
 		var account domain.Account
+		// Issue #1444 (Site A): l.institution_name and l.status are both nullable columns in
+		// linked_items (see domain.Account.InstitutionName/LinkedItemStatus's own "From
+		// linked_items JOIN (optional)" comments) but were scanned directly into bare
+		// (non-pointer) string fields — "cannot scan NULL into *string". The LEFT JOIN itself
+		// can never miss (accounts.linked_item_id is UUID NOT NULL with an FK), but the joined
+		// row's own column values can genuinely be NULL, so both must scan through *string
+		// intermediates. A NULL status normalizes to "active" via normalizeLinkedItemStatus (the
+		// established rule elsewhere in this package); a NULL institution_name surfaces as "".
+		var institutionNameRaw, linkedItemStatusRaw *string
 		err := rows.Scan(
 			&account.ID, &account.LinkedItemID, &account.UserID, &account.PlaidAccountID,
 			&account.Name, &account.OfficialName, &account.Type, &account.Subtype, &account.Mask,
@@ -872,11 +881,15 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 			&account.DisplayOrder, &account.IsHidden,
 			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID,
-			&account.CreatedAt, &account.UpdatedAt, &account.InstitutionName, &account.LinkedItemStatus,
+			&account.CreatedAt, &account.UpdatedAt, &institutionNameRaw, &linkedItemStatusRaw,
 		)
 		if err != nil {
 			return nil, err
 		}
+		if institutionNameRaw != nil {
+			account.InstitutionName = *institutionNameRaw
+		}
+		account.LinkedItemStatus = string(normalizeLinkedItemStatus(linkedItemStatusRaw))
 		if err := r.decryptAccountPIIFields(&account); err != nil {
 			return nil, err
 		}
@@ -1030,11 +1043,18 @@ func (r *accountRepository) CheckFingerprintOwnership(ctx context.Context, finge
 		LIMIT 1
 	`
 
+	// Issue #1444 (Site B): li.status is nullable (linked_items.status) and was scanned directly
+	// into ownership.ItemStatus, a bare domain.LinkedItemStatus (string) field — "cannot scan
+	// NULL into *string". Scan into a *string intermediate and normalize through
+	// normalizeLinkedItemStatus (the established NULL-means-active rule) instead. This backs the
+	// Issue #1010 cross-user Plaid-item uniqueness gate (account_service.go's LinkAccounts) —
+	// security-relevant, so a NULL status must not silently fail the scan.
 	var ownership FingerprintOwnership
+	var statusRaw *string
 	err := r.db.QueryRow(ctx, query, fingerprintBlindIdx, excludeUserID).Scan(
 		&ownership.UserID,
 		&ownership.LinkedItemID,
-		&ownership.ItemStatus,
+		&statusRaw,
 		&ownership.StatusChangedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1043,6 +1063,7 @@ func (r *accountRepository) CheckFingerprintOwnership(ctx context.Context, finge
 	if err != nil {
 		return nil, err
 	}
+	ownership.ItemStatus = normalizeLinkedItemStatus(statusRaw)
 	return &ownership, nil
 }
 

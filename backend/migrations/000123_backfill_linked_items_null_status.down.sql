@@ -1,0 +1,9 @@
+-- Down migration: intentional no-op (data preservation) — mirrors 000121's down migration.
+--
+-- We do NOT null out status for rows this migration backfilled, because there is no way to
+-- distinguish a row that was genuinely NULL before this migration ran from one that was already
+-- 'active' all along — the WHERE clause that selected them (status IS NULL) is, by construction,
+-- no longer true for any of them after the up migration runs. Reverting to NULL would also
+-- immediately violate 000124's NOT NULL constraint if that migration has already been applied.
+--
+-- No-op: intentionally no executable statement below this line.
