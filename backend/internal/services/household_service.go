@@ -1218,6 +1218,19 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	// households row, so this can only ever put AcceptInvite in a one-directional wait
 	// against unrelated single-lock writers (profile updates, Paddle webhooks) — never a
 	// cycle.
+	//
+	// Round-3 correction (Issue #1440 follow-up, Codex review, Finding 7): this claim was FALSE for
+	// one path from the moment DeleteUserCascade's household-owner guard (Issue #1440 Critical
+	// finding, round 2) shipped, until it was fixed: that method locked the user row FIRST (its
+	// eligibility recheck), then only touched the household row implicitly via its cascading
+	// `DELETE FROM users` — the exact inverted order this comment already warned against, and a
+	// genuine, empirically-reproduced deadlock (SQLSTATE 40P01) against THIS method's own step (4)
+	// above. profile_repository.go's DeleteUserCascade now locks any household the target owns
+	// FIRST (`FOR NO KEY UPDATE`, before its own user-row eligibility recheck), restoring this
+	// invariant — see that method's own doc comment for the fix and
+	// TestDeleteUserCascade_Integration_LockOrderMatchesAcceptInvite_NoDeadlockWithConcurrentAcceptInvite
+	// (profile_repository_household_lock_order_integration_test.go) for the empirical proof, both
+	// that the pre-fix order deadlocked against this exact lock sequence and that the fix closes it.
 	owner, cerr := s.lockAndGetUser(ctx, tx, ownerUserID)
 	if cerr != nil {
 		return nil, cerr
