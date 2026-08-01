@@ -181,7 +181,8 @@ type ProfileRepository interface {
 	// leaving the user to be picked up by whichever flow's own schedule next applies to them.
 	//
 	// Also refuses to proceed while any of the user's linked_items rows still need Plaid-side
-	// cleanup (status <> 'disconnected') — Issue #1413 round-4 Critical finding C2: deleting the
+	// cleanup (uncleanedLinkedItemExistsClause — status IS NULL OR status NOT IN ('disconnected',
+	// 'replaced'), Issue #1444) — Issue #1413 round-4 Critical finding C2: deleting the
 	// local linked_items rows (Step 3 below) while any remain un-cleaned would orphan a live,
 	// still-billing Plaid access token with no local record it ever existed. See
 	// plaid_item_cleanup_service.go's cleanupItems for the companion fix (re-reading the item
@@ -1203,11 +1204,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// already as narrow as this branch makes it) — but this check must not make that window any
 	// WIDER by proceeding while a KNOWN un-cleaned item still exists.
 	var uncleanedItemsExist bool
-	err = tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM linked_items WHERE user_id = $1 AND status <> 'disconnected'
-		)
-	`, userID).Scan(&uncleanedItemsExist)
+	err = tx.QueryRow(ctx, `SELECT `+uncleanedLinkedItemExistsClause, userID).Scan(&uncleanedItemsExist)
 	if err != nil {
 		return false, fmt.Errorf("DeleteUserCascade: un-cleaned Plaid item check: %w", err)
 	}
@@ -2636,6 +2633,25 @@ func (r *profileRepository) StampMissingPlaidCleanupMarkers(ctx context.Context)
 const anyLinkedItemExistsClause = `EXISTS (
 	SELECT 1 FROM linked_items
 	WHERE linked_items.user_id = users.id
+)`
+
+// uncleanedLinkedItemExistsClause is DeleteUserCascade's guard predicate for "this user still has
+// a linked_items row that needs Plaid-side cleanup" — Issue #1444 (Site C): the prior spelling
+// (`status <> 'disconnected'`) was a fourth, independently-worded copy of this same "is this item
+// live" question, and it was wrong in two ways. First, NULL-unsafe: SQL's three-valued logic makes
+// `NULL <> 'disconnected'` evaluate to UNKNOWN, not TRUE, so a genuinely NULL-status row (schema-
+// legal — linked_items.status has no NOT NULL constraint) was silently excluded from the EXISTS
+// check, letting DeleteUserCascade proceed past its own guard and hard-delete the only local
+// pointer to what may still be a live, billing Plaid access token. Second, it diverged from the
+// rest of this file's "live" definition by treating 'replaced' items as still-uncleaned, when
+// isLiveLinkedItemStatus/liveLinkedItemExistsClause already establish that a 'replaced' item (Issue
+// #171 re-link) no longer needs Plaid-side cleanup. This clause reuses that SAME "live" status list
+// — NOT 'disconnected' or 'replaced', NULL treated as active — parameterized on $1 (a plain
+// user_id) rather than correlated against `users.id` like liveLinkedItemExistsClause/
+// anyLinkedItemExistsClause, because DeleteUserCascade's guard query is not already joined to
+// `users`.
+const uncleanedLinkedItemExistsClause = `EXISTS (
+	SELECT 1 FROM linked_items WHERE user_id = $1 AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))
 )`
 
 // ClearCompletedPlaidCleanupMarkers is StampMissingPlaidCleanupMarkers's symmetric counterpart —

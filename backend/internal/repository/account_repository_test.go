@@ -945,7 +945,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), nil,
 			&order0, false,
 			nil, "active", nil, nil,
-			now, now, "Chase", "active",
+			now, now, strPtr("Chase"), strPtr("active"),
 		).
 		AddRow(
 			uuid.New().String(), uuid.New().String(), userID, "acc-2",
@@ -954,7 +954,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			nil, nil, nil, nil,
 			&order1, false,
 			nil, "active", nil, nil,
-			now, now, "Chase", "active",
+			now, now, strPtr("Chase"), strPtr("active"),
 		)
 
 	// Note: This query excludes hidden accounts (AND a.is_hidden = FALSE)
@@ -1018,7 +1018,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			nil, nil, nil, nil,
 			&order0, false,
 			nil, "active", nil, nil,
-			now, now, "Chase", "active",
+			now, now, strPtr("Chase"), strPtr("active"),
 		).
 		AddRow(
 			uuid.New().String(), uuid.New().String(), userID, "acc-2",
@@ -1027,7 +1027,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			strPtr("Closed Account"), nil, nil, nil,
 			nil, true, // This one is hidden
 			nil, "active", nil, nil,
-			now, now, "Bank of America", "active",
+			now, now, strPtr("Bank of America"), strPtr("active"),
 		)
 
 	// Note: This query includes hidden accounts (no is_hidden filter)
@@ -1431,7 +1431,7 @@ func TestAccountRepository_CheckFingerprintOwnership_ReturnsOwner(t *testing.T) 
 	now := time.Now().Add(-30 * 24 * time.Hour) // 30 days ago
 
 	rows := pgxmock.NewRows([]string{"user_id", "linked_item_id", "status", "status_changed_at"}).
-		AddRow(ownerUserID, linkedItemID, "active", &now)
+		AddRow(ownerUserID, linkedItemID, strPtr("active"), &now)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT a.user_id, a.linked_item_id, li.status, li.status_changed_at
@@ -1477,6 +1477,44 @@ func TestAccountRepository_CheckFingerprintOwnership_NotFound(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Nil(t, ownership)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_CheckFingerprintOwnership_NullItemStatus_NoError is a regression test for
+// Issue #1444 (Site B): li.status is scanned into FingerprintOwnership.ItemStatus, typed
+// domain.LinkedItemStatus (a bare string type, not a pointer) — see linked_items.status's
+// nullable column. Live caller: account_service.go's LinkAccounts cross-user uniqueness gate
+// (Issue #1010) — a NULL status here must not fail the scan, since the row it came from is the
+// security-relevant "does someone else already own this fingerprint" check.
+func TestAccountRepository_CheckFingerprintOwnership_NullItemStatus_NoError(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	fingerprint := "test-fingerprint-blind-idx"
+	requestingUserID := uuid.New().String()
+	ownerUserID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{"user_id", "linked_item_id", "status", "status_changed_at"}).
+		AddRow(ownerUserID, linkedItemID, nil, nil)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT a.user_id, a.linked_item_id, li.status, li.status_changed_at
+		FROM accounts a
+		JOIN linked_items li ON a.linked_item_id = li.id
+		WHERE (a.persistent_account_id_blind_idx = $1 OR a.fallback_fingerprint_blind_idx = $1)
+		  AND a.status = 'active'
+		  AND a.user_id != $2
+		LIMIT 1
+	`)).WithArgs(fingerprint, requestingUserID).WillReturnRows(rows)
+
+	ownership, err := repo.CheckFingerprintOwnership(ctx, fingerprint, requestingUserID)
+
+	require.NoError(t, err, "a NULL li.status must not fail the scan")
+	require.NotNil(t, ownership)
+	assert.Equal(t, ownerUserID, ownership.UserID)
+	assert.Equal(t, domain.LinkedItemStatusActive, ownership.ItemStatus, "a NULL linked_item status must be treated as active, per normalizeLinkedItemStatus's established rule")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1701,7 +1739,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 			nil, nil, nil, nil,
 			&order0, false,
 			nil, "active", nil, nil,
-			now, now, "Chase", "active",
+			now, now, strPtr("Chase"), strPtr("active"),
 		).
 		AddRow(
 			uuid.New().String(), uuid.New().String(), userID, "acc-replaced",
@@ -1710,7 +1748,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 			nil, nil, nil, nil,
 			nil, false,
 			nil, "replaced", &replacedAt, nil,
-			now, now, "Chase", "active",
+			now, now, strPtr("Chase"), strPtr("active"),
 		)
 	// Note: expired account is NOT included in the mock result rows.
 	// The SQL query with IN ('active', 'replaced') ensures it never reaches the scanner.
@@ -1739,5 +1777,71 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 	statuses := []string{string(accounts[0].Status), string(accounts[1].Status)}
 	assert.Contains(t, statuses, "active")
 	assert.Contains(t, statuses, "replaced")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoinColumns_NoError is a
+// regression test for Issue #1444 (Site A): l.institution_name and l.status are both nullable
+// columns in linked_items (see domain.Account.InstitutionName / LinkedItemStatus's own "From
+// linked_items JOIN (optional)" comments), scanned via a LEFT JOIN into bare (non-pointer) Go
+// string fields. Although the LEFT JOIN itself can never miss a row (accounts.linked_item_id is
+// UUID NOT NULL with an FK — migrations/000007_create_accounts_table.up.sql), a genuinely NULL
+// l.status value is reachable in production today (rows created before migration 000013's
+// 'active' default existed) and a NULL l.institution_name is schema-legal
+// (migrations/000006_create_linked_items_table.up.sql: institution_name VARCHAR(255), no NOT
+// NULL). Before the #1444 fix, rows.Scan into &account.InstitutionName / &account.LinkedItemStatus
+// fails outright when either column is NULL, since neither Go field is a pointer or
+// sql.NullString.
+func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoinColumns_NoError(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	now := time.Now()
+	order0 := 0
+
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"nickname", "custom_color", "custom_icon", "custom_emoji",
+		"display_order", "is_hidden",
+		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"created_at", "updated_at", "institution_name", "linked_item_status",
+	}).
+		AddRow(
+			uuid.New().String(), uuid.New().String(), userID, "acc-null-join",
+			"Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
+			nil, nil, "USD",
+			nil, nil, nil, nil,
+			&order0, false,
+			nil, "active", nil, nil,
+			now, now, nil, nil, // l.institution_name = NULL, l.status = NULL
+		)
+
+	expectedQuery := `
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       a.current_balance, a.available_balance, a.currency_code,
+		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
+		       a.display_order, a.is_hidden,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.created_at, a.updated_at, l.institution_name, l.status
+		FROM accounts a
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		WHERE a.user_id = $1 AND a.status = 'active' AND a.is_hidden = FALSE ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC
+	`
+
+	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	accounts, err := repo.GetAccountsWithInstitutionFiltered(ctx, userID, AccountFilterOptions{IncludeHidden: false})
+
+	require.NoError(t, err, "a NULL l.institution_name/l.status must not fail the scan")
+	require.Len(t, accounts, 1)
+	assert.Equal(t, "", accounts[0].InstitutionName, "NULL institution_name should surface as the empty string")
+	assert.Equal(t, "active", accounts[0].LinkedItemStatus, "a NULL linked_item status must be treated as active, per normalizeLinkedItemStatus's established rule")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

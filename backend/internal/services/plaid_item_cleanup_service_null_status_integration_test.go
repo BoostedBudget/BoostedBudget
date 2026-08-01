@@ -48,13 +48,28 @@ import (
 // Falsifiability: reverting GetActiveItemsByUserID/MarkItemsDisconnected to a bare
 // `status NOT IN ('disconnected', 'replaced')` predicate makes this test fail — the fake Plaid
 // collaborator is never called (0, not 1) and the item's status stays NULL, not 'disconnected'.
+//
+// Since migration 000124 (Issue #1444), linked_items.status is NOT NULL — a genuinely NULL status
+// can no longer be constructed against the real schema at all, in any migrated database. This test
+// therefore runs its own transaction that transactionally DROPs the NOT NULL constraint first
+// (rolled back, never committed, at the very end — the real schema is never permanently altered),
+// with every repository constructed against that same transaction so the service under test sees
+// the uncommitted NULL-status row.
 func TestPlaidCleanupService_Integration_NullStatusItem_ActuallyDisconnectedAndMarked(t *testing.T) {
 	pool := setupHouseholdServiceIntegrationDB(t)
 	ctx := context.Background()
 	enc := newTestFieldEncryptor(t)
-	profileRepo := repository.NewProfileRepository(pool, enc)
-	linkedItemRepo := repository.NewLinkedItemRepository(pool, enc)
-	claimsRepo := repository.NewWorkClaimsRepository(pool)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	_, err = tx.Exec(ctx, "ALTER TABLE linked_items ALTER COLUMN status DROP NOT NULL")
+	require.NoError(t, err)
+
+	profileRepo := repository.NewProfileRepository(tx, enc)
+	linkedItemRepo := repository.NewLinkedItemRepository(tx, enc)
+	claimsRepo := repository.NewWorkClaimsRepository(tx)
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	user := &domain.User{
@@ -65,15 +80,7 @@ func TestPlaidCleanupService_Integration_NullStatusItem_ActuallyDisconnectedAndM
 		PrimaryRegion:      "iad",
 		IsActive:           true,
 	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
 	require.NoError(t, profileRepo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
-		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
-		_, _ = pool.Exec(ctx, "DELETE FROM work_claims WHERE resource_type = $1 AND resource_id = $2", repository.ResourceTypeUser, user.ID)
-	})
 
 	item := &domain.LinkedItem{
 		UserID:      user.ID,
@@ -83,8 +90,10 @@ func TestPlaidCleanupService_Integration_NullStatusItem_ActuallyDisconnectedAndM
 	}
 	require.NoError(t, linkedItemRepo.Create(ctx, item))
 	// Force NULL status directly — simulates a row that predates migration 000013's 'active'
-	// default (linked_items.status is nullable; no NOT NULL constraint exists on it).
-	_, err = pool.Exec(ctx, `UPDATE linked_items SET status = NULL WHERE id = $1`, item.ID)
+	// default (linked_items.status was nullable prior to migration 000124/Issue #1444; the NOT
+	// NULL constraint was transactionally dropped above so this remains possible within this
+	// test's own transaction).
+	_, err = tx.Exec(ctx, `UPDATE linked_items SET status = NULL WHERE id = $1`, item.ID)
 	require.NoError(t, err)
 
 	fakePlaid := &countingPlaidCollaborator{}

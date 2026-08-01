@@ -208,7 +208,8 @@ func TestDeleteUserCascade_Integration_OwnGDPRRequestStillOutstanding_DeletedDes
 
 // TestDeleteUserCascade_Integration_UncleanedPlaidItemRemains_NotDeleted proves C1's companion
 // finding C2: DeleteUserCascade must refuse to run while any linked_items row still needs
-// Plaid-side cleanup (status <> 'disconnected') — deleting the local row would orphan a live,
+// Plaid-side cleanup (uncleanedLinkedItemExistsClause — status IS NULL OR status NOT IN
+// ('disconnected', 'replaced'), Issue #1444) — deleting the local row would orphan a live,
 // still-billing Plaid access token with no local record it ever existed.
 func TestDeleteUserCascade_Integration_UncleanedPlaidItemRemains_NotDeleted(t *testing.T) {
 	pool := connectTestDB(t)
@@ -241,6 +242,111 @@ func TestDeleteUserCascade_Integration_UncleanedPlaidItemRemains_NotDeleted(t *t
 	var itemCount int
 	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM linked_items WHERE id = $1", item.ID).Scan(&itemCount))
 	assert.Equal(t, 1, itemCount, "the linked_items row — the only pointer to the live Plaid token — must survive the aborted cascade")
+}
+
+// TestDeleteUserCascade_Integration_NullStatusLinkedItemRemains_NotDeleted is Issue #1444 Site
+// C's RED test: the un-cleaned-Plaid-item guard's original predicate (`status <> 'disconnected'`)
+// is NULL-unsafe — SQL's three-valued logic makes `NULL <> 'disconnected'` evaluate to UNKNOWN,
+// not TRUE, so a linked_items row with a genuinely NULL status was silently excluded from the
+// EXISTS check and uncleanedItemsExist came back false, letting the cascade proceed past its own
+// guard and hard-delete the local pointer to what may still be a live, billing Plaid access
+// token. This is NOT a scan panic (uncleanedItemsExist is a bool, not the status column itself)
+// — it is a pure logic bug, silently WRONG rather than erroring. A NULL status must count as
+// "active"/un-cleaned, per the same rule normalizeLinkedItemStatus and liveLinkedItemExistsClause
+// already establish elsewhere in this file.
+//
+// Since migration 000124 (Issue #1444) added a NOT NULL constraint to linked_items.status, a
+// genuinely NULL status can no longer be constructed against a fully migrated database at all.
+// This test therefore runs entirely inside its own transaction, which transactionally DROPs that
+// constraint first (rolled back with everything else — the real schema is never permanently
+// altered) — it cannot reuse createDeleteCascadeFixtureUser (which creates its user via a separate,
+// committed transaction against pool directly, invisible to this test's own transaction).
+func TestDeleteUserCascade_Integration_NullStatusLinkedItemRemains_NotDeleted(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+	_, err = tx.Exec(ctx, "ALTER TABLE linked_items ALTER COLUMN status DROP NOT NULL")
+	require.NoError(t, err)
+
+	repo := NewProfileRepository(tx, enc)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_delcasc_" + suffix,
+		Email:              "delcasc-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+
+	// Genuinely NULL status — bypasses linkedItemRepo.Create (which omits `status` from its
+	// column list and always gets the 'active' column default) via raw SQL, exactly as the
+	// coordinator's brief requires for an honest RED: a NULL status is unreachable through any
+	// production write path today, but was schema-legal and known to occur on rows created before
+	// migration 000013's 'active' default existed (and before 000124's NOT NULL, dropped above for
+	// the duration of this transaction only).
+	itemID := "plaid-item-null-status-" + suffix
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted, status)
+		VALUES (gen_random_uuid(), $1, $2, 'enc-test-token', NULL)
+	`, user.ID, itemID)
+	require.NoError(t, err)
+
+	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	require.NoError(t, err, "an aborted cascade is a normal outcome, not an error")
+	assert.False(t, deleted, "a NULL-status linked item must count as un-cleaned and block the cascade")
+
+	var isDeleted bool
+	require.NoError(t, tx.QueryRow(ctx, "SELECT is_deleted FROM users WHERE id = $1", user.ID).Scan(&isDeleted))
+	assert.False(t, isDeleted, "the user must NOT have been deleted")
+
+	var itemCount int
+	require.NoError(t, tx.QueryRow(ctx, "SELECT COUNT(*) FROM linked_items WHERE user_id = $1", user.ID).Scan(&itemCount))
+	assert.Equal(t, 1, itemCount, "the NULL-status linked_items row must survive the aborted cascade")
+}
+
+// TestDeleteUserCascade_Integration_ReplacedStatusLinkedItemDoesNotBlock_Deletes is the
+// companion control case for the #1444 Site C fix: a 'replaced' linked item (superseded by a
+// re-link — Issue #171) does not need further Plaid-side cleanup — see
+// isLiveLinkedItemStatus/liveLinkedItemExistsClause's established "NOT 'disconnected' or
+// 'replaced'" definition of "still live" — so it must not block the cascade either, aligning
+// this guard's predicate with the rest of the file (liveLinkedItemExistsClause,
+// anyLinkedItemExistsClause) instead of the prior narrower spelling that only excluded
+// 'disconnected'.
+func TestDeleteUserCascade_Integration_ReplacedStatusLinkedItemDoesNotBlock_Deletes(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := createDeleteCascadeFixtureUser(t, ctx, pool, repo, suffix, nil, nil, nil)
+
+	item := &domain.LinkedItem{
+		UserID:      user.ID,
+		ItemID:      "plaid-item-replaced-" + suffix,
+		AccessToken: "access-token-" + suffix,
+		Provider:    "plaid",
+	}
+	require.NoError(t, linkedItemRepo.Create(ctx, item))
+	now := time.Now()
+	_, err := pool.Exec(ctx, `UPDATE linked_items SET status = 'replaced', replaced_at = $1 WHERE id = $2`, now, item.ID)
+	require.NoError(t, err)
+
+	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	require.NoError(t, err)
+	assert.True(t, deleted, "a 'replaced' linked item does not need Plaid cleanup and must not block the cascade")
+
+	var isDeleted bool
+	require.NoError(t, pool.QueryRow(ctx, "SELECT is_deleted FROM users WHERE id = $1", user.ID).Scan(&isDeleted))
+	assert.True(t, isDeleted)
 }
 
 // TestDeleteUserCascade_Integration_AllItemsDisconnected_Deletes is the C2 control case: once
