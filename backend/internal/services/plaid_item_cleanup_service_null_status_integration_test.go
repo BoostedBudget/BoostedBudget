@@ -49,7 +49,7 @@ import (
 // `status NOT IN ('disconnected', 'replaced')` predicate makes this test fail — the fake Plaid
 // collaborator is never called (0, not 1) and the item's status stays NULL, not 'disconnected'.
 //
-// Since migration 000124 (Issue #1444), linked_items.status is NOT NULL — a genuinely NULL status
+// Since migration 000126 (Issue #1444), linked_items.status is NOT NULL — a genuinely NULL status
 // can no longer be constructed against the real schema at all, in any migrated database. This test
 // therefore runs its own transaction that transactionally DROPs the NOT NULL constraint first
 // (rolled back, never committed, at the very end — the real schema is never permanently altered),
@@ -90,7 +90,7 @@ func TestPlaidCleanupService_Integration_NullStatusItem_ActuallyDisconnectedAndM
 	}
 	require.NoError(t, linkedItemRepo.Create(ctx, item))
 	// Force NULL status directly — simulates a row that predates migration 000013's 'active'
-	// default (linked_items.status was nullable prior to migration 000124/Issue #1444; the NOT
+	// default (linked_items.status was nullable prior to migration 000126/Issue #1444; the NOT
 	// NULL constraint was transactionally dropped above so this remains possible within this
 	// test's own transaction).
 	_, err = tx.Exec(ctx, `UPDATE linked_items SET status = NULL WHERE id = $1`, item.ID)

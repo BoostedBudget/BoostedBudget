@@ -255,7 +255,7 @@ func TestDeleteUserCascade_Integration_UncleanedPlaidItemRemains_NotDeleted(t *t
 // "active"/un-cleaned, per the same rule normalizeLinkedItemStatus and liveLinkedItemExistsClause
 // already establish elsewhere in this file.
 //
-// Since migration 000124 (Issue #1444) added a NOT NULL constraint to linked_items.status, a
+// Since migration 000126 (Issue #1444) added a NOT NULL constraint to linked_items.status, a
 // genuinely NULL status can no longer be constructed against a fully migrated database at all.
 // This test therefore runs entirely inside its own transaction, which transactionally DROPs that
 // constraint first (rolled back with everything else — the real schema is never permanently
@@ -289,7 +289,7 @@ func TestDeleteUserCascade_Integration_NullStatusLinkedItemRemains_NotDeleted(t 
 	// column list and always gets the 'active' column default) via raw SQL, exactly as the
 	// coordinator's brief requires for an honest RED: a NULL status is unreachable through any
 	// production write path today, but was schema-legal and known to occur on rows created before
-	// migration 000013's 'active' default existed (and before 000124's NOT NULL, dropped above for
+	// migration 000013's 'active' default existed (and before 000126's NOT NULL, dropped above for
 	// the duration of this transaction only).
 	itemID := "plaid-item-null-status-" + suffix
 	_, err = tx.Exec(ctx, `

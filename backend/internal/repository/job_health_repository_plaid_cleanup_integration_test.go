@@ -208,7 +208,7 @@ func TestJobHealthRepository_Integration_MarkedUserWithLiveItemAndLiveComp_Still
 // ` with the bare `linked_items.status NOT IN ('disconnected', 'replaced')` form makes this test
 // fail — SQL's three-valued logic evaluates `NULL NOT IN (...)` as UNKNOWN, not TRUE, so the
 // EXISTS subquery no longer matches this row and the marked user silently vanishes from the count.
-// Since migration 000124 (Issue #1444), linked_items.status is NOT NULL — a genuinely NULL status
+// Since migration 000126 (Issue #1444), linked_items.status is NOT NULL — a genuinely NULL status
 // can no longer be constructed against the real schema at all. This test therefore runs its own
 // transaction that transactionally DROPs the NOT NULL constraint first (rolled back, never
 // committed — the real schema is never permanently altered) so the scenario this test exists to
