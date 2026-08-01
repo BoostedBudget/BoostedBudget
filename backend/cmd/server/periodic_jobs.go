@@ -1,0 +1,275 @@
+package main
+
+// Issue #1448: periodic River job registration, extracted out of main()'s ~300-line inline
+// block so it can be unit-tested directly.
+//
+// river.PeriodicJob's own fields (constructorFunc, opts, scheduleFunc) are unexported —
+// nothing outside package river can inspect what a *river.PeriodicJob actually carries. Every
+// job here is therefore built as a periodicJobSpec first (a plain, fully-inspectable
+// intermediate value) and only converted to river's opaque type at the very end, in
+// buildPeriodicJobs. This is what lets periodic_jobs_test.go assert the Issue #1448 invariant
+// — every registration has RunOnStart: true, a non-empty PeriodicJobOpts.ID, and a real dedup
+// guarantee — against real values instead of scanning main.go as text.
+import (
+	"log/slog"
+	"time"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
+	"github.com/riverqueue/river"
+)
+
+// periodicJobsDeps holds the (nil-guarded) workers whose periodic registration
+// buildPeriodicJobSpecs configures. A nil field omits that job's spec entirely, matching this
+// package's existing nil-guard convention for optional subsystems (e.g. Plaid-specific
+// workers that are nil when Plaid isn't configured).
+type periodicJobsDeps struct {
+	scheduledDeletionCheckWorker        *jobs.ScheduledDeletionCheckWorker
+	itemCleanupCheckWorker              *jobs.ItemCleanupCheckWorker
+	trialExpirationCheckWorker          *jobs.TrialExpirationCheckWorker
+	pastDueCheckWorker                  *jobs.PastDueCheckWorker
+	paddleReconciliationWorker          *jobs.PaddleReconciliationWorker
+	retentionCleanupCheckWorker         *jobs.RetentionCleanupCheckWorker
+	manualTierOverrideExpiryCheckWorker *jobs.ManualTierOverrideExpiryCheckWorker
+	householdMemberCleanupCheckWorker   *jobs.HouseholdMemberCleanupCheckWorker
+	householdOverCapacityCheckWorker    *jobs.HouseholdOverCapacityCheckWorker
+	dlqCleanupCheckWorker               *jobs.DLQCleanupCheckWorker
+	budgetPeriodCloseCheckWorker        *jobs.BudgetPeriodCloseCheckWorker
+	savingsStatsWorker                  *jobs.SavingsStatsWorker
+	portfolioSnapshotWorker             *jobs.PortfolioSnapshotWorker
+}
+
+// periodicJobSpec is an intermediate representation of a periodic job registration, captured
+// BEFORE conversion to river's opaque *river.PeriodicJob. See this file's package doc comment
+// for why the extraction exists.
+type periodicJobSpec struct {
+	// name identifies the job in test failure messages (human-readable, not River's Kind()).
+	name string
+	// logMessage is the exact startup log line main.go historically emitted for this job —
+	// preserved so operators see the same "<job> periodic job configured (<cadence>)" line.
+	logMessage string
+	interval   time.Duration
+	build      func() (river.JobArgs, *river.InsertOpts)
+	opts       *river.PeriodicJobOpts
+}
+
+// toPeriodicJob converts this spec to the *river.PeriodicJob river.Config.PeriodicJobs
+// actually requires.
+func (s periodicJobSpec) toPeriodicJob() *river.PeriodicJob {
+	return river.NewPeriodicJob(river.PeriodicInterval(s.interval), s.build, s.opts)
+}
+
+// buildPeriodicJobSpecs returns the periodicJobSpec for every periodic job that should be
+// registered given the (nil-guarded) workers in deps, plus the always-on idempotency cleanup
+// job (constructed unconditionally, matching main.go's pre-existing behavior — its worker is
+// built after periodic jobs are configured, but the periodic registration only needs its Args
+// type and Insert/PeriodicOpts, not the worker instance itself).
+//
+// Issue #1448: every spec here MUST carry RunOnStart: true, a non-empty PeriodicJobOpts.ID,
+// and a real dedup guarantee (UniqueOpts, or — for BudgetPeriodCloseCheck — its own
+// documented DB-level exactly-once marker, which BudgetPeriodCloseCheckInsertOpts also now
+// backs with UniqueOpts as defense in depth). TestBuildPeriodicJobSpecs_AllHaveRunOnStartDedupAndID
+// (periodic_jobs_test.go) enforces this for every entry this function returns.
+func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
+	var specs []periodicJobSpec
+
+	// Issue #930 / #1450: Scheduled deletion check (hourly).
+	if deps.scheduledDeletionCheckWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "scheduled deletion check",
+			logMessage: "Scheduled deletion check periodic job configured (hourly)",
+			interval:   1 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.ScheduledDeletionCheckArgs{TriggerSource: "periodic"}, jobs.ScheduledDeletionCheckInsertOpts()
+			},
+			opts: jobs.ScheduledDeletionCheckPeriodicOpts(),
+		})
+	}
+
+	// Issue #668: Item cleanup check (daily) — Plaid-specific, nil-guarded.
+	if deps.itemCleanupCheckWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "item cleanup check",
+			logMessage: "Item cleanup check periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.ItemCleanupCheckArgs{TriggerSource: "periodic"}, jobs.ItemCleanupCheckInsertOpts()
+			},
+			opts: jobs.ItemCleanupCheckPeriodicOpts(),
+		})
+	}
+
+	// Issue #679, #680: Trial expiration check (daily).
+	if deps.trialExpirationCheckWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "trial expiration check",
+			logMessage: "Trial expiration check periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.TrialExpirationCheckArgs{TriggerSource: "periodic"}, jobs.TrialExpirationCheckInsertOpts()
+			},
+			opts: jobs.TrialExpirationCheckPeriodicOpts(),
+		})
+	}
+
+	// Issue #898: Past-due check (daily) — disconnects Plaid at 14d and auto-cancels at 21d.
+	if deps.pastDueCheckWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "past-due check",
+			logMessage: "Past-due check periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.PastDueCheckArgs{TriggerSource: "periodic"}, jobs.PastDueCheckInsertOpts()
+			},
+			opts: jobs.PastDueCheckPeriodicOpts(),
+		})
+	}
+
+	// Issue #762: Paddle reconciliation check (daily).
+	if deps.paddleReconciliationWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "paddle reconciliation",
+			logMessage: "Paddle reconciliation periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.PaddleReconciliationArgs{TriggerSource: "periodic"}, jobs.PaddleReconciliationInsertOpts()
+			},
+			opts: jobs.PaddleReconciliationPeriodicOpts(),
+		})
+	}
+
+	// Issue #930 / #1413: Retention cleanup check (daily) — the only place that runs
+	// retention-clock repair, the 30-day/7-day GDPR pre-deletion notices,
+	// deleteExpiredAccounts, and the Plaid-disconnect repair pass.
+	if deps.retentionCleanupCheckWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "retention cleanup check",
+			logMessage: "Retention cleanup check periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.RetentionCleanupCheckArgs{TriggerSource: "periodic"}, jobs.RetentionCleanupCheckInsertOpts()
+			},
+			opts: jobs.RetentionCleanupCheckPeriodicOpts(),
+		})
+	}
+
+	// Issue #1413 (Task 9): Manual tier override expiry check (daily).
+	if deps.manualTierOverrideExpiryCheckWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "manual tier override expiry check",
+			logMessage: "Manual tier override expiry check periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"}, jobs.ManualTierOverrideExpiryCheckInsertOpts()
+			},
+			opts: jobs.ManualTierOverrideExpiryCheckPeriodicOpts(),
+		})
+	}
+
+	// Issue #1371 — Phase 7 (Task 2): Household member cleanup check (daily).
+	if deps.householdMemberCleanupCheckWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "household member cleanup check",
+			logMessage: "Household member cleanup check periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.HouseholdMemberCleanupCheckArgs{TriggerSource: "periodic"}, jobs.HouseholdMemberCleanupCheckInsertOpts()
+			},
+			opts: jobs.HouseholdMemberCleanupCheckPeriodicOpts(),
+		})
+	}
+
+	// Issue #1371 — Phase 7 (Task 6): Household over-capacity check (daily).
+	if deps.householdOverCapacityCheckWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "household over-capacity check",
+			logMessage: "Household over-capacity check periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"}, jobs.HouseholdOverCapacityCheckInsertOpts()
+			},
+			opts: jobs.HouseholdOverCapacityCheckPeriodicOpts(),
+		})
+	}
+
+	// Issue #633: DLQ cleanup check (daily).
+	if deps.dlqCleanupCheckWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "DLQ cleanup check",
+			logMessage: "DLQ cleanup check periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.DLQCleanupCheckArgs{TriggerSource: "periodic"}, jobs.DLQCleanupInsertOpts()
+			},
+			opts: jobs.DLQCleanupPeriodicOpts(),
+		})
+	}
+
+	// Issue #972: Budget period close check (daily) — detects closed budget periods and fires events.
+	if deps.budgetPeriodCloseCheckWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "budget period close check",
+			logMessage: "Budget period close check periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.BudgetPeriodCloseCheckArgs{TriggerSource: "periodic"}, jobs.BudgetPeriodCloseCheckInsertOpts()
+			},
+			opts: jobs.BudgetPeriodCloseCheckPeriodicOpts(),
+		})
+	}
+
+	// Issue #972: Savings stats snapshot (daily) — aggregate completed transfer amounts.
+	if deps.savingsStatsWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "savings stats snapshot",
+			logMessage: "Savings stats snapshot periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.SavingsStatsArgs{TriggerSource: "periodic"}, jobs.SavingsStatsInsertOpts()
+			},
+			opts: jobs.SavingsStatsPeriodicOpts(),
+		})
+	}
+
+	// Issue #138: Portfolio snapshot (daily) — per-user holdings aggregate upsert.
+	if deps.portfolioSnapshotWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "portfolio snapshot",
+			logMessage: "Portfolio snapshot periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.PortfolioSnapshotArgs{TriggerSource: "periodic"}, jobs.PortfolioSnapshotInsertOpts()
+			},
+			opts: jobs.PortfolioSnapshotPeriodicOpts(),
+		})
+	}
+
+	// Issue #1087 R4-7: Idempotency keys cleanup (daily — deletes expired rows). Unconditional
+	// — its worker is constructed after periodic jobs are configured (see main()), but the
+	// periodic registration itself needs only the Args type and Insert/PeriodicOpts.
+	specs = append(specs, periodicJobSpec{
+		name:       "idempotency cleanup",
+		logMessage: "Idempotency cleanup periodic job configured (daily)",
+		interval:   24 * time.Hour,
+		build: func() (river.JobArgs, *river.InsertOpts) {
+			return jobs.IdempotencyCleanupArgs{TriggerSource: "periodic"}, jobs.IdempotencyCleanupInsertOpts()
+		},
+		opts: jobs.IdempotencyCleanupPeriodicOpts(),
+	})
+
+	return specs
+}
+
+// buildPeriodicJobs converts every spec buildPeriodicJobSpecs returns to river's
+// *river.PeriodicJob, logging each one's configuration the same way main.go historically did
+// inline, and returns the slice for riverConfig.PeriodicJobs.
+func buildPeriodicJobs(deps periodicJobsDeps, logger *slog.Logger) []*river.PeriodicJob {
+	specs := buildPeriodicJobSpecs(deps)
+	periodicJobs := make([]*river.PeriodicJob, 0, len(specs))
+	for _, s := range specs {
+		periodicJobs = append(periodicJobs, s.toPeriodicJob())
+		if logger != nil {
+			logger.Info(s.logMessage)
+		}
+	}
+	return periodicJobs
+}

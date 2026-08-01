@@ -317,3 +317,23 @@ func ItemCleanupCheckUniqueOpts() *queue.UniqueOpts {
 		},
 	}
 }
+
+// ItemCleanupCheckInsertOpts returns the *river.InsertOpts this job's periodic registration
+// in main.go must use — Queue: "low" plus the uniqueness options from
+// ItemCleanupCheckUniqueOpts(), converted to river's UniqueOpts type.
+//
+// Issue #1448: ItemCleanupCheckUniqueOpts() existed but was never called by main.go's
+// periodic registration.
+func ItemCleanupCheckInsertOpts() *river.InsertOpts {
+	return riverInsertOptsFromUnique(queue.QueueLow, ItemCleanupCheckUniqueOpts())
+}
+
+// ItemCleanupCheckPeriodicOpts returns the *river.PeriodicJobOpts this job's periodic
+// registration in main.go must use. RunOnStart: true is only safe because
+// ItemCleanupCheckInsertOpts() above always carries ItemCleanupCheckUniqueOpts()'s dedup —
+// previously this job used RunOnStart: false, meaning it could be enqueued zero times ever
+// on a deploy cadence faster than its interval (Issue #1448). ID is set so River restores
+// nextRunAt across restarts/leader elections instead of recomputing now+interval every time.
+func ItemCleanupCheckPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: ItemCleanupCheckArgs{}.Kind()}
+}

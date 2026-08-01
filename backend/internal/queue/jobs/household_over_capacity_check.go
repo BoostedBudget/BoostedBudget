@@ -597,3 +597,26 @@ func HouseholdOverCapacityCheckUniqueOpts() *queue.UniqueOpts {
 		},
 	}
 }
+
+// HouseholdOverCapacityCheckInsertOpts returns the *river.InsertOpts this job's periodic
+// registration in main.go must use — Queue: "low" plus the uniqueness options from
+// HouseholdOverCapacityCheckUniqueOpts(), converted to river's UniqueOpts type.
+//
+// Issue #1448 (following on from issue1371_wiring_drift_test.go's Round 8 finding):
+// main.go previously hand-duplicated this UniqueOpts shape as an inline river.UniqueOpts{}
+// literal instead of calling this package's own helper, so nothing enforced the two stay in
+// sync. main.go now calls this function directly.
+func HouseholdOverCapacityCheckInsertOpts() *river.InsertOpts {
+	return riverInsertOptsFromUnique(queue.QueueLow, HouseholdOverCapacityCheckUniqueOpts())
+}
+
+// HouseholdOverCapacityCheckPeriodicOpts returns the *river.PeriodicJobOpts this job's
+// periodic registration in main.go must use. RunOnStart: true is only safe because
+// HouseholdOverCapacityCheckInsertOpts() above always carries
+// HouseholdOverCapacityCheckUniqueOpts()'s dedup — previously this job used
+// RunOnStart: false, meaning it could be enqueued zero times ever on a deploy cadence
+// faster than its interval (Issue #1448). ID is set so River restores nextRunAt across
+// restarts/leader elections instead of recomputing now+interval every time.
+func HouseholdOverCapacityCheckPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: HouseholdOverCapacityCheckArgs{}.Kind()}
+}

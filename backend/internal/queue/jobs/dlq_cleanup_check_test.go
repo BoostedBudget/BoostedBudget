@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
@@ -104,4 +106,53 @@ func TestDLQCleanupCheckWorker_DefaultRetentionDays(t *testing.T) {
 
 	require.NoError(t, err)
 	repo.AssertExpectations(t)
+}
+
+func TestDLQCleanupUniqueOpts(t *testing.T) {
+	opts := DLQCleanupUniqueOpts()
+
+	assert.False(t, opts.ByArgs)
+	assert.Equal(t, 23*time.Hour, opts.ByPeriod)
+	assert.Contains(t, opts.ByState, queue.JobStateAvailable)
+	assert.Contains(t, opts.ByState, queue.JobStateScheduled)
+	assert.Contains(t, opts.ByState, queue.JobStateRunning)
+	assert.Contains(t, opts.ByState, queue.JobStateRetryable)
+	assert.Contains(t, opts.ByState, queue.JobStatePending)
+}
+
+// ─── Issue #1448: DLQCleanupUniqueOpts existed but was never wired. ──────────────────────
+
+func TestDLQCleanupInsertOpts_Queue(t *testing.T) {
+	opts := DLQCleanupInsertOpts()
+	require.NotNil(t, opts)
+	assert.Equal(t, "low", opts.Queue)
+}
+
+func TestDLQCleanupInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := DLQCleanupInsertOpts()
+	want := DLQCleanupUniqueOpts()
+
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
+	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
+	require.NotEmpty(t, opts.UniqueOpts.ByState,
+		"main.go's periodic registration must carry DLQCleanupUniqueOpts' dedup (Issue #1448)")
+}
+
+func TestDLQCleanupPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := DLQCleanupPeriodicOpts()
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart)
+}
+
+func TestDLQCleanupPeriodicOpts_ID(t *testing.T) {
+	opts := DLQCleanupPeriodicOpts()
+	assert.Equal(t, "dlq_cleanup_check", opts.ID)
+}
+
+func TestDLQCleanupPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	opts := DLQCleanupPeriodicOpts()
+	require.True(t, opts.RunOnStart)
+
+	unique := DLQCleanupUniqueOpts()
+	require.NotEmpty(t, unique.ByState)
 }

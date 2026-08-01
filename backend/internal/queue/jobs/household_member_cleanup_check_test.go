@@ -210,3 +210,40 @@ func TestNewHouseholdMemberCleanupCheckWorker_DefaultLogger(t *testing.T) {
 
 	assert.NotNil(t, worker.logger)
 }
+
+// ─── Issue #1448: main.go hand-duplicated this UniqueOpts shape instead of calling the
+// helper, and RunOnStart was false with no ID set. ────────────────────────────────────────
+
+func TestHouseholdMemberCleanupCheckInsertOpts_Queue(t *testing.T) {
+	opts := HouseholdMemberCleanupCheckInsertOpts()
+	require.NotNil(t, opts)
+	assert.Equal(t, "low", opts.Queue)
+}
+
+func TestHouseholdMemberCleanupCheckInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := HouseholdMemberCleanupCheckInsertOpts()
+	want := HouseholdMemberCleanupCheckUniqueOpts()
+
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
+	assert.Zero(t, opts.UniqueOpts.ByPeriod)
+	require.NotEmpty(t, opts.UniqueOpts.ByState)
+}
+
+func TestHouseholdMemberCleanupCheckPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := HouseholdMemberCleanupCheckPeriodicOpts()
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart)
+}
+
+func TestHouseholdMemberCleanupCheckPeriodicOpts_ID(t *testing.T) {
+	opts := HouseholdMemberCleanupCheckPeriodicOpts()
+	assert.Equal(t, "household_member_cleanup_check", opts.ID)
+}
+
+func TestHouseholdMemberCleanupCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	opts := HouseholdMemberCleanupCheckPeriodicOpts()
+	require.True(t, opts.RunOnStart)
+
+	unique := HouseholdMemberCleanupCheckUniqueOpts()
+	require.NotEmpty(t, unique.ByState)
+}

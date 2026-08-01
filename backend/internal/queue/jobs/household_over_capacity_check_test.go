@@ -1522,3 +1522,40 @@ func TestNewHouseholdOverCapacityCheckWorker_DefaultLogger(t *testing.T) {
 
 	assert.NotNil(t, worker.logger)
 }
+
+// ─── Issue #1448: main.go hand-duplicated this UniqueOpts shape instead of calling the
+// helper, and RunOnStart was false with no ID set. ────────────────────────────────────────
+
+func TestHouseholdOverCapacityCheckInsertOpts_Queue(t *testing.T) {
+	opts := HouseholdOverCapacityCheckInsertOpts()
+	require.NotNil(t, opts)
+	assert.Equal(t, "low", opts.Queue)
+}
+
+func TestHouseholdOverCapacityCheckInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := HouseholdOverCapacityCheckInsertOpts()
+	want := HouseholdOverCapacityCheckUniqueOpts()
+
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
+	assert.Zero(t, opts.UniqueOpts.ByPeriod)
+	require.NotEmpty(t, opts.UniqueOpts.ByState)
+}
+
+func TestHouseholdOverCapacityCheckPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := HouseholdOverCapacityCheckPeriodicOpts()
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart)
+}
+
+func TestHouseholdOverCapacityCheckPeriodicOpts_ID(t *testing.T) {
+	opts := HouseholdOverCapacityCheckPeriodicOpts()
+	assert.Equal(t, "household_over_capacity_check", opts.ID)
+}
+
+func TestHouseholdOverCapacityCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	opts := HouseholdOverCapacityCheckPeriodicOpts()
+	require.True(t, opts.RunOnStart)
+
+	unique := HouseholdOverCapacityCheckUniqueOpts()
+	require.NotEmpty(t, unique.ByState)
+}

@@ -595,3 +595,40 @@ func TestNormalizePaddleStatus_SDKConstantGuard(t *testing.T) {
 	assert.Equal(t, "canceled", string(paddle.SubscriptionStatusCanceled),
 		"Paddle SDK SubscriptionStatusCanceled constant value changed — update NormalizeSubscriptionStatus")
 }
+
+// ─── Issue #1448: PaddleReconciliationUniqueOpts existed but was never wired. ────────────
+
+func TestPaddleReconciliationInsertOpts_Queue(t *testing.T) {
+	opts := PaddleReconciliationInsertOpts()
+	require.NotNil(t, opts)
+	assert.Equal(t, "low", opts.Queue)
+}
+
+func TestPaddleReconciliationInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := PaddleReconciliationInsertOpts()
+	want := PaddleReconciliationUniqueOpts()
+
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
+	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
+	require.NotEmpty(t, opts.UniqueOpts.ByState,
+		"main.go's periodic registration must carry PaddleReconciliationUniqueOpts' dedup (Issue #1448)")
+}
+
+func TestPaddleReconciliationPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := PaddleReconciliationPeriodicOpts()
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart)
+}
+
+func TestPaddleReconciliationPeriodicOpts_ID(t *testing.T) {
+	opts := PaddleReconciliationPeriodicOpts()
+	assert.Equal(t, "paddle_reconciliation", opts.ID)
+}
+
+func TestPaddleReconciliationPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	opts := PaddleReconciliationPeriodicOpts()
+	require.True(t, opts.RunOnStart)
+
+	unique := PaddleReconciliationUniqueOpts()
+	require.NotEmpty(t, unique.ByState)
+}

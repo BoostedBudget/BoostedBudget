@@ -125,3 +125,26 @@ func PastDueCheckUniqueOpts() *queue.UniqueOpts {
 		},
 	}
 }
+
+// PastDueCheckInsertOpts returns the *river.InsertOpts this job's periodic registration in
+// main.go must use — Queue: "low" plus the uniqueness options from PastDueCheckUniqueOpts(),
+// converted to river's UniqueOpts type.
+//
+// Issue #1448: main.go's periodic registration previously built a bare
+// &river.InsertOpts{Queue: "low"} and never called PastDueCheckUniqueOpts() at all — even
+// though its PeriodicJobOpts already set RunOnStart: true, the unsafe
+// RunOnStart-without-dedup combination this package's retention/manual-tier helpers document
+// explicitly. This job disconnects Plaid at 14 days past due and auto-cancels at 21 —
+// duplicate runs risk re-processing the same user twice in one pass.
+func PastDueCheckInsertOpts() *river.InsertOpts {
+	return riverInsertOptsFromUnique(queue.QueueLow, PastDueCheckUniqueOpts())
+}
+
+// PastDueCheckPeriodicOpts returns the *river.PeriodicJobOpts this job's periodic
+// registration in main.go must use. RunOnStart: true is only safe because
+// PastDueCheckInsertOpts() above always carries PastDueCheckUniqueOpts()'s dedup. ID is set
+// so River restores nextRunAt across restarts/leader elections instead of recomputing
+// now+interval every time — Issue #1448.
+func PastDueCheckPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: PastDueCheckArgs{}.Kind()}
+}

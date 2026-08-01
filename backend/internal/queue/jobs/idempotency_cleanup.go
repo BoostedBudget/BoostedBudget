@@ -7,7 +7,9 @@ package jobs
 import (
 	"context"
 	"log/slog"
+	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/riverqueue/river"
 )
 
@@ -71,4 +73,43 @@ func (w *IdempotencyCleanupWorker) Work(ctx context.Context, job *river.Job[Idem
 		slog.Int64("rows_deleted", deleted),
 	)
 	return nil
+}
+
+// IdempotencyCleanupUniqueOpts returns the recommended uniqueness options.
+// Only one cleanup job should run at a time — this job is naturally idempotent (delete WHERE
+// expires_at < NOW() is a no-op the second time), but dedup still avoids duplicate lock
+// contention / wasted table scans from an overlapping run.
+//
+// Issue #1448: this helper did not exist at all — main.go's periodic registration carried
+// no dedup and RunOnStart: false, so this daily job could be enqueued zero times ever on a
+// deploy cadence faster than its interval.
+func IdempotencyCleanupUniqueOpts() *queue.UniqueOpts {
+	return &queue.UniqueOpts{
+		ByArgs: false, // All cleanup jobs are equivalent
+		// 23 hours — avoids overlap on daily schedule
+		ByPeriod: 23 * time.Hour,
+		ByState: []queue.JobState{
+			queue.JobStateAvailable,
+			queue.JobStateScheduled,
+			queue.JobStateRunning,
+			queue.JobStateRetryable,
+			queue.JobStatePending,
+		},
+	}
+}
+
+// IdempotencyCleanupInsertOpts returns the *river.InsertOpts this job's periodic
+// registration in main.go must use — Queue: "low" plus the uniqueness options from
+// IdempotencyCleanupUniqueOpts(), converted to river's UniqueOpts type.
+func IdempotencyCleanupInsertOpts() *river.InsertOpts {
+	return riverInsertOptsFromUnique(queue.QueueLow, IdempotencyCleanupUniqueOpts())
+}
+
+// IdempotencyCleanupPeriodicOpts returns the *river.PeriodicJobOpts this job's periodic
+// registration in main.go must use. RunOnStart: true is safe both because this job is
+// naturally idempotent AND because IdempotencyCleanupInsertOpts() above carries
+// IdempotencyCleanupUniqueOpts()'s dedup. ID is set so River restores nextRunAt across
+// restarts/leader elections instead of recomputing now+interval every time (Issue #1448).
+func IdempotencyCleanupPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: IdempotencyCleanupArgs{}.Kind()}
 }

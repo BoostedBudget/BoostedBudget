@@ -2493,6 +2493,17 @@ func TestRetentionCleanupCheckPeriodicOpts_RunOnStart(t *testing.T) {
 			"and Plaid-disconnect repair (Issue #1413 P0)")
 }
 
+// TestRetentionCleanupCheckPeriodicOpts_ID is the RED test for Issue #1448: proves ID is
+// set (and non-empty) so River restores nextRunAt across restarts/leader elections instead
+// of recomputing now+interval every time — the missing half of Issue #1413 P0's fix that
+// #1448 completes.
+func TestRetentionCleanupCheckPeriodicOpts_ID(t *testing.T) {
+	opts := RetentionCleanupCheckPeriodicOpts()
+
+	require.NotNil(t, opts)
+	assert.Equal(t, "retention_cleanup_check", opts.ID)
+}
+
 // TestRetentionCleanupCheckPeriodicOpts_PairedWithUniqueOpts proves RunOnStart: true is only
 // safe here because RetentionCleanupCheckUniqueOpts()'s dedup exists alongside it — the two
 // are only safe together. A future edit that weakens UniqueOpts to a zero value (no ByPeriod,

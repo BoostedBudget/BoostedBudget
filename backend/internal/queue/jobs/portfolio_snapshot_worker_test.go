@@ -218,3 +218,46 @@ func TestPortfolioSnapshotWorker_Work_UpsertError(t *testing.T) {
 	holdingRepo.AssertExpectations(t)
 	snapshotRepo.AssertExpectations(t)
 }
+
+// ─── Issue #1448: main.go's periodic registration had this dedup only as an inline
+// literal, with no named helper, RunOnStart: false, and no ID. ────────────────────────────
+
+func TestPortfolioSnapshotUniqueOpts(t *testing.T) {
+	opts := PortfolioSnapshotUniqueOpts()
+
+	assert.Equal(t, 24*time.Hour, opts.ByPeriod)
+	assert.False(t, opts.ByArgs)
+	assert.Empty(t, opts.ByState)
+}
+
+func TestPortfolioSnapshotInsertOpts_Queue(t *testing.T) {
+	opts := PortfolioSnapshotInsertOpts()
+	require.NotNil(t, opts)
+	assert.Equal(t, "low", opts.Queue)
+}
+
+func TestPortfolioSnapshotInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := PortfolioSnapshotInsertOpts()
+	want := PortfolioSnapshotUniqueOpts()
+
+	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
+}
+
+func TestPortfolioSnapshotPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := PortfolioSnapshotPeriodicOpts()
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart)
+}
+
+func TestPortfolioSnapshotPeriodicOpts_ID(t *testing.T) {
+	opts := PortfolioSnapshotPeriodicOpts()
+	assert.Equal(t, "portfolio_snapshot", opts.ID)
+}
+
+func TestPortfolioSnapshotPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	opts := PortfolioSnapshotPeriodicOpts()
+	require.True(t, opts.RunOnStart)
+
+	unique := PortfolioSnapshotUniqueOpts()
+	require.NotZero(t, unique.ByPeriod)
+}
