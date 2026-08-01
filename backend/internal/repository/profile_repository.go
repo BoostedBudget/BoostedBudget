@@ -1092,10 +1092,28 @@ func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([
 	return r.queryUsers(ctx, query, time.Now())
 }
 
-// DeleteUserCascade performs application-level cascade deletion of all user data, guarded by a
-// re-verification of eligibility INSIDE this same transaction — see the interface doc comment
-// for the full Issue #1413 round-4 C1/C2 rationale. This implements the 10-step deletion process
-// to maintain audit trail.
+// DeleteUserCascade performs a REAL hard delete of the users row, guarded by a re-verification of
+// eligibility INSIDE this same transaction — see the interface doc comment for the full Issue
+// #1413 round-4 C1/C2 rationale, unchanged by this method's Issue #1440 rewrite.
+//
+// Issue #1440: this used to explicitly DELETE five tables (boosts, transactions, linked_items,
+// accounts, notifications) and then SOFT-delete the users row (SET is_deleted = TRUE). Because
+// the users row survived, NOT ONE of the schema's foreign keys into users ever fired — the five
+// explicit DELETEs merely duplicated five of the (as of this writing) 37 ON DELETE CASCADE
+// relationships into users in Go, by hand, and the other 32 user-scoped tables silently retained
+// personal data after every "completed" GDPR deletion. This is also how the bug that opened this
+// issue shipped in the first place: three of the original explicit DELETEs named tables
+// (recurring_patterns, user_preferences, user_sessions) that never existed in any migration —
+// aspirational leftovers from this method's very first draft (commit cffde2b7, written against a
+// pre-Clerk/pre-Paddle placeholder schema) — so the whole transaction aborted and every real
+// GDPR deletion failed silently. See TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned
+// for the regression test this shipped without: it seeds a row in every user-scoped table this
+// schema has and asserts every one is gone, instead of checking a hard-coded handful.
+//
+// The fix: stop duplicating the FK graph in Go. Redact audit-log PII (see the dedicated block
+// below), then issue one real `DELETE FROM users`, and let the schema's foreign keys do the
+// erasure — the single source of truth for which tables are user-scoped, incapable of silently
+// drifting out of sync with the Go code the way the five explicit DELETEs did.
 func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	// Start a transaction for atomicity
 	tx, err := r.db.Begin(ctx)
@@ -1168,91 +1186,60 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return false, nil
 	}
 
-	now := time.Now()
-
-	// Step 1: Delete all boosts
-	_, err = tx.Exec(ctx, `DELETE FROM boosts WHERE user_id = $1`, userID)
+	// Redact audit-log PII BEFORE the hard delete below. audit_logs.user_id (the ACTING admin —
+	// see admin_user_repository.go:390-393's doc comment: "audit_logs.user_id -> the ACTING
+	// ADMIN; resource_id -> the TARGET") already gets nulled for free by its own ON DELETE SET
+	// NULL FK once the DELETE below runs. But audit_logs.resource_id — the column that actually
+	// names the SUBJECT of an admin action, e.g. a tier-override target — is a bare UUID column
+	// with NO foreign key at all (migration 000003:17): it would otherwise keep pointing at this
+	// user's id, WITH its PII-bearing `changes` payload intact, forever. Redact the payload for
+	// BOTH columns here — resource_id is the one this actually matters for; user_id is belt-and-
+	// braces given the FK already handles it, and harmless to include if that FK is ever changed.
+	// Per the product decision: redact the payload, KEEP the row — this preserves the tamper-
+	// evident audit trail GDPR itself expects while removing the personal data it carries.
+	//
+	// Must run in THIS transaction, before the DELETE below (the SET NULL FK fires as part of
+	// that DELETE — after it, `user_id = $1` would no longer match anything, only `resource_id`
+	// still would). Deliberately a single flat UPDATE with no extra row-locking: it only touches
+	// audit_logs rows, so it cannot widen the users-row lock this transaction already holds from
+	// the eligibility recheck above (FOR UPDATE) — see StampMissingPlaidCleanupMarkers's ROUND 23
+	// doc comment (~line 2440) for the cross-user deadlock class (SQLSTATE 40P01, an audit-log
+	// INSERT's FK check requesting FOR KEY SHARE on a row already held FOR UPDATE elsewhere) that
+	// widening a lock window here would risk.
+	_, err = tx.Exec(ctx, `UPDATE audit_logs SET changes = NULL WHERE resource_id = $1 OR user_id = $1`, userID)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("DeleteUserCascade: redact audit log PII: %w", err)
 	}
 
-	// Step 2: Delete all transactions
-	_, err = tx.Exec(ctx, `DELETE FROM transactions WHERE user_id = $1`, userID)
+	// Hard-delete the user row. 37 foreign keys into users are ON DELETE CASCADE, 2 are ON
+	// DELETE SET NULL (audit_logs.user_id, household_invites.accepted_user_id), and ZERO are
+	// RESTRICT/NO ACTION (verified against the live schema for Issue #1440) — so this statement
+	// cannot fail on a referential-integrity violation, and every user-scoped table is cleaned up
+	// by the schema itself rather than by an incomplete, hand-maintained list of DELETEs in Go.
+	//
+	// Cross-user CASCADE consequences (columns other than user_id: households.owner_user_id,
+	// household_invites.inviter_user_id, referrals.referrer_id/referred_id,
+	// subscription_entitlements.payer_user_id) were audited for Issue #1440:
+	//   - households.owner_user_id: DeletionService.RequestDeletion already blocks a household
+	//     owner with active non-owner members (domain.ErrHouseholdHasActiveMembers, Issue #1367
+	//     Phase 3) before deletion_requested_at is ever set — so only a sole-member owner can
+	//     reach this method, and cascading that household away is harmless. Still true as of this
+	//     writing (requestDeletionTransactional, deletion_service.go).
+	//   - subscription_entitlements.payer_user_id: verified SAFE. The composite FK
+	//     fk_subscription_entitlements_payer_is_owner (migration 000112) makes payer_user_id
+	//     EQUAL the household's owner_user_id by construction — the database will not allow a
+	//     payer who isn't the owner — so this column is fully covered by the SAME owner guard as
+	//     households.owner_user_id above; there is no reachable case where a payer is deleted out
+	//     from under members who are not also covered by that guard.
+	ct, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("DeleteUserCascade: delete user: %w", err)
 	}
-
-	// Step 3: Delete all linked items (bank connections)
-	// NOTE: This does NOT call Plaid /item/remove - that's handled by DeletionService
-	// before calling this method to stop Plaid billing
-	_, err = tx.Exec(ctx, `DELETE FROM linked_items WHERE user_id = $1`, userID)
-	if err != nil {
-		return false, err
-	}
-
-	// Step 4: Delete all accounts
-	_, err = tx.Exec(ctx, `DELETE FROM accounts WHERE user_id = $1`, userID)
-	if err != nil {
-		return false, err
-	}
-
-	// Steps 5/6/8/9 (recurring_patterns, user_preferences, an audit_logs.metadata anonymization
-	// UPDATE, user_sessions) were removed here as an incidental fix while adding this task's
-	// C1/C2 real-DB integration coverage: none of recurring_patterns/user_preferences/
-	// user_sessions exist in this schema (no migration ever creates them — the first two appear
-	// to predate a later redesign, and user_sessions predates the Clerk-JWT auth model, which
-	// keeps no server-side session table), and audit_logs has never had a metadata column —
-	// migration 000053 converted its former JSONB `changes` column to encrypted TEXT, and no
-	// migration ever added `metadata`. Every one of these four statements unconditionally
-	// errored, meaning DeleteUserCascade — and therefore every real ExecuteDeletion call — has
-	// never been able to run to completion against this schema. This was invisible before
-	// because no real-database integration test previously exercised this method end-to-end
-	// (only pgxmock, which matches query text and cannot catch a table/column that doesn't
-	// exist). Out of scope for #1413's concurrency findings — properly redacting PII from the
-	// now-encrypted audit_logs.changes column is a separate design decision this fix does not
-	// make — but leaving these in place would have made this task's own required "ordinary
-	// eligible user still deletes" regression coverage impossible to satisfy honestly. Worth its
-	// own follow-up issue: audit-log PII redaction on deletion is a real GDPR gap, just not one
-	// this task can respond to by inventing a redaction scheme unilaterally.
-
-	// Step 7: Delete all notifications
-	_, err = tx.Exec(ctx, `DELETE FROM notifications WHERE user_id = $1`, userID)
-	if err != nil {
-		return false, err
-	}
-
-	// Step 10: Mark user as deleted — encrypt the tombstone values and clear blind indexes
-	deletedEmail := fmt.Sprintf("deleted_%s@deleted.local", userID)
-	deletedClerkUserID := fmt.Sprintf("deleted_%s", userID)
-
-	encryptedDeletedEmail, err := r.enc.EncryptString(deletedEmail)
-	if err != nil {
-		return false, fmt.Errorf("failed to encrypt deleted email: %w", err)
-	}
-
-	encryptedDeletedClerkUserID, err := r.enc.EncryptString(deletedClerkUserID)
-	if err != nil {
-		return false, fmt.Errorf("failed to encrypt deleted clerk_user_id: %w", err)
-	}
-
-	_, err = tx.Exec(ctx, `
-		UPDATE users
-		SET is_deleted = TRUE,
-		    is_active = FALSE,
-		    email = $1,
-		    clerk_user_id = $2,
-		    paddle_customer_id = NULL,
-		    paddle_subscription_id = NULL,
-		    email_blind_idx = NULL,
-		    clerk_user_id_blind_idx = NULL,
-		    paddle_subscription_id_blind_idx = NULL,
-		    deletion_requested_at = NULL,
-		    deletion_scheduled_at = NULL,
-		    updated_at = $3
-		WHERE id = $4
-	`, encryptedDeletedEmail, encryptedDeletedClerkUserID, now, userID)
-	if err != nil {
-		return false, err
+	if ct.RowsAffected() == 0 {
+		// Unreachable in practice — the eligibility recheck above already confirmed this row
+		// exists, under a FOR UPDATE lock held for the remainder of this transaction. Defensive,
+		// not an expected outcome.
+		return false, nil
 	}
 
 	// Commit the transaction
