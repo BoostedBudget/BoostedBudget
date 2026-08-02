@@ -172,13 +172,93 @@ jobs:
             exit 1
           fi
 
-          COOKIE_COUNT=$(grep -o '"name"' "$AUTH_FILE" | wc -l | tr -d ' ')
+          # Defect fix: `grep -o '"name"' | wc -l` counts ANY JSON "name" key anywhere in the
+          # file, not just cookies. Playwright storage state is shaped
+          # {"cookies":[...],"origins":[{"origin":"...","localStorage":[{"name":...,"value":...}]}]}
+          # — so a file with "cookies":[] plus a single localStorage entry (which also has a
+          # "name" key) passed this check reporting a non-zero count, i.e. false confidence
+          # with zero actual cookies. Parse the `cookies` array itself instead.
+          #
+          # jq is not used here: grepping this workflow (and the rest of .github/workflows/)
+          # turned up no existing `jq` usage and no setup step installs it, so its presence on
+          # this self-hosted macOS runner is unverified. python3 ships with macOS, so we use
+          # it instead of assuming jq is there.
+          COOKIE_COUNT=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1])).get('cookies', [])))" "$AUTH_FILE")
           if [ "$COOKIE_COUNT" -eq 0 ]; then
             echo "::error::${AUTH_FILE} has zero cookies — a Clerk session was never actually established."
             exit 1
           fi
 
           echo "E2E auth session verified: ${COOKIE_COUNT} cookies in ${AUTH_FILE}"
+
+      # Issue #1437 (defect b): the auth guard above only proves *a* session was obtained — it
+      # says nothing about how many tests actually ran. #1437's real failure mode was a total
+      # runtime break where every *.auth.spec.ts test silently skipped while CI stayed green;
+      # a skip-count ceiling catches that shape of failure even when the auth guard above
+      # passes cleanly.
+      #
+      # Ceiling derivation (measured 2026-08-02): `cd apps/web && bunx playwright test --list
+      # --reporter=json` enumerates 415 tests across all projects, of which 119 are
+      # statically-known skips (test.describe.skip, test.fixme(title, fn), and test.skip(cond)
+      # called directly in a describe body — e.g. security-headers.noauth.spec.ts's NGINX_ENV
+      # gate). That count does NOT include test.skip() calls made dynamically inside a test
+      # body, which only evaluate at runtime. Grepping e2e/ found 3 such tests — all in
+      # household-invite.auth.spec.ts, household-share-exclusion.auth.spec.ts, and
+      # household-infra-smoke.auth.spec.ts — gated on TEST_CLERK_EMAIL_2, which this workflow's
+      # `env:` blocks never set. So a healthy CI run's real skipped count is ~119 + 3 = 122, not
+      # 119. Ceiling set to 150: modest headroom over the measured 122, but far below the ~400
+      # tests that would show as skipped under a #1437-style total breakage. If this trips on an
+      # otherwise-green run, re-measure with the command above (and re-check whether any
+      # dynamic, env-gated test.skip() calls changed) before raising it — don't just bump the
+      # number.
+      # Reads playwright-config's already-configured `json` reporter
+      # (playwright.config.ts: ['json', { outputFile: 'playwright-report/results.json' }])
+      # rather than grepping the `list` reporter's stdout. Structured output is immune to ANSI
+      # colour codes and to Playwright changing its human-readable summary wording, and — the
+      # reason it matters here — it lets this guard FAIL CLOSED. A stdout grep that stops
+      # matching yields an empty string, which defaults to 0 and makes the guard silently
+      # report "verified"; that is the same false-confidence shape as the cookie-count defect
+      # fixed in the step above, and it would sit inside the very guard meant to catch it.
+      - name: Guard — E2E skipped-test count must not exceed ceiling
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: |
+          RESULTS="playwright-report/results.json"
+          if [ ! -s "$RESULTS" ]; then
+            echo "::error::${RESULTS} is missing or empty — the json reporter should always emit it, so this guard cannot verify anything. Do not delete this check; fix the reporter."
+            exit 1
+          fi
+
+          python3 - "$RESULTS" 150 <<'PY'
+          import json, sys
+
+          path, ceiling = sys.argv[1], int(sys.argv[2])
+          try:
+              stats = json.load(open(path)).get("stats")
+          except (ValueError, OSError) as exc:
+              print(f"::error::could not parse {path}: {exc}")
+              sys.exit(1)
+
+          if not isinstance(stats, dict) or "skipped" not in stats:
+              print(f"::error::{path} has no stats.skipped — Playwright's JSON reporter shape changed, so this guard can no longer verify anything. Fix the guard rather than deleting it.")
+              sys.exit(1)
+
+          skipped = stats["skipped"]
+          executed = stats.get("expected", 0) + stats.get("unexpected", 0) + stats.get("flaky", 0)
+
+          # The #1437 shape directly: a run where essentially nothing executed. Checked
+          # separately from the ceiling because a suite that skips everything and a suite that
+          # skips nothing-but-runs-nothing both need to be red, and only one of them trips a
+          # skip ceiling.
+          if executed == 0:
+              print(f"::error::Playwright executed 0 tests ({skipped} skipped). This is exactly the failure mode that let the #1437 P0 reach staging while CI stayed green.")
+              sys.exit(1)
+
+          if skipped > ceiling:
+              print(f"::error::{skipped} E2E tests skipped, exceeding the ceiling of {ceiling} ({executed} executed). Investigate before assuming this is fine — see the ceiling-derivation comment above.")
+              sys.exit(1)
+
+          print(f"E2E skipped-test count verified: {skipped} skipped, {executed} executed (ceiling {ceiling})")
+          PY
 
       - name: Upload E2E test results
         id: upload-playwright-report
@@ -581,12 +661,18 @@ jobs:
         # (and therefore build cache contents) differ. Sharing one key would race on
         # save and each job would poison the other's cache. GOCACHE itself stays
         # job-local (see step above) — only its contents are persisted across runs.
+        #
+        # Primary key includes github.sha (#1446 follow-up, G4): see the "Save Go build
+        # cache" step below for why. restore-keys still falls back to the most recent
+        # cache for this go.sum (any commit), then to the most recent cache for this Go
+        # version (any go.sum), so a brand-new commit still gets a warm cache.
         id: cache-go-build
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
           restore-keys: |
+            gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}-
             gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-
             gocache-backend-test-${{ runner.os }}-
 
@@ -654,11 +740,27 @@ jobs:
           key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
 
       - name: Save Go build cache
-        if: always() && steps.cache-go-build.outputs.cache-hit != 'true'
+        # G4 fix: the old guard (`if: ... && steps.cache-go-build.outputs.cache-hit != 'true'`)
+        # was wrong. `cache-hit` is true ONLY on an exact primary-key match — and since the old
+        # key was scoped to just go.sum (which rarely changes while source changes on every
+        # commit), the first successful save for a given go.sum made every later run on that
+        # same go.sum hit exactly and skip this save, forever. The cache silently froze at
+        # whatever was compiled on that first run and never absorbed newly-compiled first-party
+        # packages from later commits — most of the intended speedup was lost with the job still
+        # reporting a "warm" cache.
+        #
+        # The key above now includes github.sha, so each commit's run gets its own cache entry
+        # and this step actually saves every time. `continue-on-error: true` guards the one
+        # collision that can still happen: actions/cache/save fails outright if its exact key
+        # already exists, which happens on a re-run of the SAME commit (retried job, manual
+        # re-run). That failure is expected and harmless — the prior save from this commit is
+        # still valid — so it must not redden the job.
+        if: always()
+        continue-on-error: true
         uses: actions/cache/save@v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
 
       - name: Final workspace cleanup
         if: always()
@@ -724,12 +826,18 @@ jobs:
         # above) — only its contents are persisted across runs. This is the #1446 fix:
         # the "Run integration tests" step below is compile-bound (see timeout-minutes
         # comment), and a warm GOCACHE should cut most of that time.
+        #
+        # Primary key includes github.sha (G4 follow-up): see the "Save Go build cache"
+        # step below for why. restore-keys still falls back to the most recent cache for
+        # this go.sum (any commit), then to the most recent cache for this Go version
+        # (any go.sum), so a brand-new commit still gets a warm cache.
         id: cache-go-build
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
           restore-keys: |
+            gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}-
             gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-
             gocache-backend-integration-${{ runner.os }}-
 
@@ -854,11 +962,27 @@ jobs:
           go test $PKGS -tags integration -p 1 -timeout 10m -v
 
       - name: Save Go build cache
-        if: always() && steps.cache-go-build.outputs.cache-hit != 'true'
+        # G4 fix: the old guard (`if: ... && steps.cache-go-build.outputs.cache-hit != 'true'`)
+        # was wrong. `cache-hit` is true ONLY on an exact primary-key match — and since the old
+        # key was scoped to just go.sum (which rarely changes while source changes on every
+        # commit), the first successful save for a given go.sum made every later run on that
+        # same go.sum hit exactly and skip this save, forever. The cache silently froze at
+        # whatever was compiled on that first run and never absorbed newly-compiled first-party
+        # packages from later commits — defeating the #1446 fix this cache exists for, on the
+        # one job (compile-bound, see timeout-minutes comment) that most needs it warm.
+        #
+        # The key above now includes github.sha, so each commit's run gets its own cache entry
+        # and this step actually saves every time. `continue-on-error: true` guards the one
+        # collision that can still happen: actions/cache/save fails outright if its exact key
+        # already exists, which happens on a re-run of the SAME commit (retried job, manual
+        # re-run). That failure is expected and harmless — the prior save from this commit is
+        # still valid — so it must not redden the job.
+        if: always()
+        continue-on-error: true
         uses: actions/cache/save@v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
 
       - name: Cleanup PostgreSQL container
         if: always()
