@@ -653,6 +653,27 @@ func TestDeleteUserCascade_Integration_HouseholdOwnerWithClosedFormerMemberEntit
 	assertUserRowGone(t, ctx, pool, owner.ID)
 	assertUserRowExists(t, ctx, pool, formerMember.ID)
 
+	// G15 (ratified intent, NOT a bug — see docs/decisions/2026-08-01-gdpr-erasure-hard-delete.md,
+	// Decision 10): subscription_entitlements carries CASCADE FKs on BOTH user_id and
+	// payer_user_id (migration 000108). Deleting the household owner — who is payer_user_id on this
+	// row — CASCADEs away this closed former-member's entitlement even though the member themselves
+	// (user_id) survives untouched (asserted just above). Migration 000108:82-83 already rejected
+	// SET NULL as the alternative, verbatim: "CASCADE avoids a logical contradiction — the
+	// source='household' CHECK requires payer_user_id IS NOT NULL, so SET NULL would violate the
+	// constraint on deletion" — and that CHECK (chk_subscription_entitlements_source_shape,
+	// migration 000108:40-43) is still in place, so SET NULL is not merely undesirable here, it is
+	// schema-illegal. This is consistent with (not an exception to) audit_logs' redact-and-keep
+	// policy: audit_logs records a FACT that stays true after redaction, whereas this entitlement
+	// records a live RELATIONSHIP ("entitled because THIS payer currently pays") whose central claim
+	// becomes false the instant the payer is gone — its own CHECK forbids a null payer for exactly
+	// that reason. Prior to this test, the cascade's actual effect on this row was never queried in
+	// either direction; this is the first regression coverage that pins it as destroyed.
+	var formerMemberEntitlementCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM subscription_entitlements WHERE user_id = $1", formerMember.ID,
+	).Scan(&formerMemberEntitlementCount))
+	assert.Equal(t, 0, formerMemberEntitlementCount, "ratified intent (migration 000108:82-83): the former member's entitlement must CASCADE away with its payer (the deleted household owner), even though the member's own users row survives")
+
 	var householdCount int
 	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM households WHERE id = $1", householdID).Scan(&householdCount))
 	assert.Equal(t, 0, householdCount, "the household must cascade away along with its sole currently-active owner")
@@ -1311,6 +1332,21 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		INSERT INTO subscription_entitlements (user_id, source, tier, status, household_id, payer_user_id)
 		VALUES ($1, 'household', 'premium', 'active', $2, $3)`, target.ID, householdH1, target.ID)
 
+	// G9: otherA's OWN, entirely unrelated subscription_entitlements row — own_subscription, no
+	// household, no reference to target whatsoever (not even via householdH2, which otherA merely
+	// owns). Distinct from the household-owner-is-payer scenario above (and from Task G15's
+	// TestDeleteUserCascade_Integration_HouseholdOwnerWithClosedFormerMemberEntitlement_Deletes,
+	// where the deleted user IS the payer and CASCADE deliberately removes the row): here otherA's
+	// row has zero relationship to target, so nothing about target's deletion should ever be able to
+	// touch it. Before this test, no assertion anywhere in this suite checked that an unrelated
+	// user's subscription_entitlements row survives a successful cascade — every guard used
+	// assertUserRowExists, which only checks the `users` table.
+	var otherAEntitlementID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO subscription_entitlements (user_id, source, tier, status)
+		VALUES ($1, 'own_subscription', 'premium', 'active') RETURNING id`, otherA.ID,
+	).Scan(&otherAEntitlementID))
+
 	// referrals: one row tests referred_id (target was referred by otherA), one tests
 	// referrer_id (target referred otherB) — uq_referrals_referred forces distinct referred_id
 	// values, hence two different counterpart users.
@@ -1468,6 +1504,13 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 	assertUserRowGone(t, ctx, pool, target.ID)
 	assertUserRowExists(t, ctx, pool, otherA.ID)
 	assertUserRowExists(t, ctx, pool, otherB.ID)
+
+	// G9: otherA's own, entirely unrelated subscription_entitlements row (no reference to target at
+	// all) must survive target's deletion untouched — assertUserRowExists above only proves otherA's
+	// `users` row survives, nothing about their other data.
+	var otherAEntitlementCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM subscription_entitlements WHERE id = $1", otherAEntitlementID).Scan(&otherAEntitlementCount))
+	assert.Equal(t, 1, otherAEntitlementCount, "G9: otherA's own unrelated subscription_entitlements row must survive target's deletion untouched")
 
 	// Iterate the LIVE (dynamically queried) FK list, not the hard-coded one above, so this loop
 	// itself never needs editing when a table is added; only the seed data above and
