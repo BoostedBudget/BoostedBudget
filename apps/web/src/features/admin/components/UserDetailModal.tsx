@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge'
 import type { BadgeProps } from '@/components/ui/badge'
 import { Loader2, User, Calendar, MapPin, CreditCard, Link2, Zap, Receipt, PiggyBank, Shield } from 'lucide-react'
 import type { AdminUserDetail } from '@boostedbudget/api-client/models'
+import { resolveServerSnapshotTime } from '@/shared/dates'
 import { useRegions } from '../../../shared/hooks/useRegions'
 import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
 import { KNOWN_TIER_NAMES } from '../lib/knownTiers'
@@ -77,8 +78,7 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
   // AdminSubscriptionDetailOutputBody.as_of. Falls back to the browser clock only when `user`
   // hasn't loaded yet or `as_of` is absent/unparseable (e.g. an older cached response) —
   // display-only, must never crash the modal.
-  const asOfMs = user?.as_of ? new Date(user.as_of).getTime() : NaN
-  const now = Number.isNaN(asOfMs) ? new Date() : new Date(asOfMs)
+  const now = resolveServerSnapshotTime(user?.as_of)
 
   // Whether a manual tier override is currently live for this user. Must NOT be derived from
   // `effective_status` — that field answers "does this user currently have write access", which

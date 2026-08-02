@@ -29,6 +29,7 @@ import { UserDetailModal } from './UserDetailModal'
 import { SubscriptionOverrideModal } from './SubscriptionOverrideModal'
 import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
+import { resolveServerSnapshotTime } from '@/shared/dates'
 import { getSubscriptionPresentation } from '../../subscription/lib/subscriptionPresentation'
 import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
 import { KNOWN_TIER_NAMES } from '../lib/knownTiers'
@@ -156,8 +157,7 @@ export function UsersPage() {
   // back to the browser clock only while `data` hasn't loaded yet or `as_of` is absent/
   // unparseable (e.g. an older cached response) — mirrors the identical fallback in
   // SubscriptionOverrideModal.tsx.
-  const asOfMs = data?.as_of ? new Date(data.as_of).getTime() : NaN
-  const now = Number.isNaN(asOfMs) ? new Date() : new Date(asOfMs)
+  const now = resolveServerSnapshotTime(data?.as_of)
 
   const { sizing, onSizingChange, columnVisibility, onColumnVisibilityChange } = useTablePreferences(
     'admin-users',
