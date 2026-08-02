@@ -86,9 +86,19 @@ run_psql() {
 # Also filters pg_dump 15.14+ security tokens (CVE-2025-8714):
 #   - \restrict and \unrestrict with random keys (change on each dump)
 #   - Filtering is safe and standard practice (Rails, GitLab, etc.)
+# PG_DUMP lets a caller substitute the pg_dump binary. pg_dump REFUSES to dump a server whose major
+# version is newer than its own, so the client must be >= the server. Where the host has no matching
+# client, point this at the server container's own binary, e.g.
+#   PG_DUMP="$PWD/scripts/pg_dump-via-docker" ./scripts/test-migrations.sh
+# CI does exactly that (see the migration-tests job) because the runner's newest client is older than
+# the postgres:17 container it starts. psql is deliberately NOT indirected: it tolerates a
+# newer server for the queries used here, and one call site passes `-f <host path>` which a
+# containerised psql could not read.
+PG_DUMP="${PG_DUMP:-pg_dump}"
+
 get_schema_hash() {
     # Capture pg_dump output, filtering out security tokens
-    local dump=$(pg_dump "$DATABASE_URL" --schema-only --no-owner --no-privileges \
+    local dump=$("$PG_DUMP" "$DATABASE_URL" --schema-only --no-owner --no-privileges \
         --schema=public 2>/dev/null \
         | grep -v '^\\restrict ' \
         | grep -v '^\\unrestrict ')
@@ -104,8 +114,9 @@ get_schema_hash() {
     if [ -z "$dump" ]; then
         echo "❌ get_schema_hash: pg_dump produced NO output — it failed to connect or read the schema." >&2
         echo "   This is not an empty schema (pg_dump emits a header even with zero objects); it is a" >&2
-        echo "   pg_dump failure. Re-run the command without 2>/dev/null to see the real error. A" >&2
-        echo "   common cause is a DATABASE_URL missing '?sslmode=disable'." >&2
+        echo "   pg_dump failure. Re-run without 2>/dev/null to see the real error. Common causes:" >&2
+        echo "     - a DATABASE_URL missing '?sslmode=disable'" >&2
+        echo "     - pg_dump older than the server (it refuses; see check_pg_dump_version below)" >&2
         exit 1
     fi
 
@@ -890,6 +901,31 @@ main() {
         log_error "Cannot connect to database: $DATABASE_URL"
         exit 1
     fi
+
+    # pg_dump must be at least the server's major version — it REFUSES to dump a newer server.
+    # Checked here, up front, because the failure is otherwise invisible: pg_dump writes its error to
+    # stderr (discarded in get_schema_hash) and produces no stdout, so the idempotency and rollback
+    # suites would hash an empty string TWICE and report "schema unchanged" / "schema identical"
+    # having compared nothing. That is exactly what happened, undetected, both locally (client 14
+    # vs server 15) and in CI (client 15 vs the postgres:17 container the job starts) until the
+    # empty-dump guard in get_schema_hash caught it.
+    if ! command -v "$PG_DUMP" &> /dev/null && [ ! -x "$PG_DUMP" ]; then
+        log_error "pg_dump not found: $PG_DUMP"
+        exit 1
+    fi
+    local client_major
+    client_major=$("$PG_DUMP" --version | grep -oE '[0-9]+' | head -1)
+    local server_major
+    server_major=$(psql "$DATABASE_URL" -tAc 'SHOW server_version' 2>/dev/null | grep -oE '^[0-9]+')
+    if [ -n "$client_major" ] && [ -n "$server_major" ] && [ "$client_major" -lt "$server_major" ]; then
+        log_error "pg_dump ${client_major} is older than the server (${server_major}); pg_dump refuses this and the schema-identity suites would silently verify nothing."
+        log_error "Fix either way:"
+        log_error "  - install a client >= ${server_major} (e.g. brew install postgresql@${server_major}), or"
+        log_error "  - set PG_DUMP to the server container's own binary:"
+        log_error "      PG_DUMP=\"\$PWD/scripts/pg_dump-via-docker\" $0"
+        exit 1
+    fi
+    log_info "pg_dump ${client_major:-?} vs server ${server_major:-?} — compatible"
 
     log_success "Prerequisites checked"
 

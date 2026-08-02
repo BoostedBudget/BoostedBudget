@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# pg_dump-via-docker — run pg_dump from INSIDE the running Postgres container.
+#
+# Why this exists: pg_dump refuses to dump a server whose major version is newer than its own. This
+# repo's CI starts a `postgres:17` container on a self-hosted macOS runner whose newest available
+# client is 15, so the host's pg_dump can never dump it. Using the server container's own binary
+# makes the version match true by construction, needs nothing installed on the host, and keeps
+# working if the server image is bumped again.
+#
+# That mattered more than a normal tooling annoyance: because scripts/test-migrations.sh discarded
+# pg_dump's stderr and hashed its (empty) stdout, a version mismatch made the idempotency and
+# up->down->up schema-identity suites compare an empty string with itself and report PASSED. Those
+# two assertions were silently verifying nothing, locally and in CI, until an empty-dump guard
+# caught it.
+#
+# Usage:
+#   PG_DUMP="$PWD/scripts/pg_dump-via-docker" ./scripts/test-migrations.sh
+#
+# Container selection:
+#   PG_DUMP_CONTAINER=<name>   explicit, preferred in CI where the name is known
+#   otherwise                  auto-detect a single running container built from a postgres image
+#
+# The DATABASE_URL passed through by the caller keeps working unchanged: it points at
+# localhost:5432, which inside the server's own container is that same server.
+
+set -euo pipefail
+
+container="${PG_DUMP_CONTAINER:-}"
+
+if [ -z "$container" ]; then
+    # Match on the image rather than the name: CI names its container test-postgres-<run_id> while
+    # docker-compose uses a project-derived name, and neither is predictable from here.
+    #
+    # Deliberately avoids `mapfile`/`readarray` — macOS ships bash 3.2, where they do not exist, and
+    # both this repo's developers and its CI runner are macOS. (Learned the hard way: the first
+    # version of this script used mapfile and died with "command not found".)
+    candidates=$(docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null \
+        | awk '$2 ~ /postgres/ { print $1 }' || true)
+
+    count=$(printf '%s\n' "$candidates" | grep -c . || true)
+
+    if [ "$count" -eq 0 ]; then
+        echo "pg_dump-via-docker: no running Postgres container found." >&2
+        echo "  Start one (make dev, or the CI job's container step), or set PG_DUMP_CONTAINER=<name>." >&2
+        echo "  Note: if your local Postgres is a native install (Homebrew, Postgres.app) rather than" >&2
+        echo "  a container, this shim does not apply — install a pg_dump >= your server's major" >&2
+        echo "  version instead." >&2
+        exit 1
+    fi
+    if [ "$count" -gt 1 ]; then
+        echo "pg_dump-via-docker: multiple Postgres containers running:" >&2
+        printf '    %s\n' $candidates >&2
+        echo "  Set PG_DUMP_CONTAINER=<name> to disambiguate — guessing could dump the wrong database." >&2
+        exit 1
+    fi
+    container=$(printf '%s\n' "$candidates" | grep . | head -1)
+fi
+
+# -i (not -it): stdout must stay a clean pipe for the caller to hash. A TTY would inject control
+# characters and silently change the hash, which is the class of bug this whole shim exists to stop.
+exec docker exec -i "$container" pg_dump "$@"
