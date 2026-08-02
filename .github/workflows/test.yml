@@ -197,20 +197,23 @@ jobs:
       # a skip-count ceiling catches that shape of failure even when the auth guard above
       # passes cleanly.
       #
-      # Ceiling derivation (measured 2026-08-02): `cd apps/web && bunx playwright test --list
-      # --reporter=json` enumerates 415 tests across all projects, of which 119 are
-      # statically-known skips (test.describe.skip, test.fixme(title, fn), and test.skip(cond)
-      # called directly in a describe body — e.g. security-headers.noauth.spec.ts's NGINX_ENV
-      # gate). That count does NOT include test.skip() calls made dynamically inside a test
-      # body, which only evaluate at runtime. Grepping e2e/ found 3 such tests — all in
-      # household-invite.auth.spec.ts, household-share-exclusion.auth.spec.ts, and
-      # household-infra-smoke.auth.spec.ts — gated on TEST_CLERK_EMAIL_2, which this workflow's
-      # `env:` blocks never set. So a healthy CI run's real skipped count is ~119 + 3 = 122, not
-      # 119. Ceiling set to 150: modest headroom over the measured 122, but far below the ~400
-      # tests that would show as skipped under a #1437-style total breakage. If this trips on an
-      # otherwise-green run, re-measure with the command above (and re-check whether any
-      # dynamic, env-gated test.skip() calls changed) before raising it — don't just bump the
-      # number.
+      # Ceiling derivation. MEASURED FROM A REAL FULL RUN, 2026-08-02: 281 passed, 0 failed,
+      # 134 skipped, 2 flaky (stats.skipped = 134, executed = 283 in results.json). Ceiling 150
+      # — 16 of headroom over 134, and far below the ~400 that would show as skipped under a
+      # #1437-style total breakage.
+      #
+      # Do NOT re-derive this from `playwright test --list`. That was tried first and gave 122
+      # (119 statically-known skips — test.describe.skip, test.fixme(title, fn), describe-body
+      # test.skip(cond) — plus 3 tests that call test.skip() dynamically on TEST_CLERK_EMAIL_2,
+      # which this workflow never sets). The real number is 134, so the static approach
+      # undercounts by 12: --list cannot see runtime skip decisions, and enumerating the
+      # dynamic ones by grep missed some. A ceiling set from 122 would have looked comfortable
+      # while sitting only a few tests above the true baseline.
+      #
+      # If this trips on an otherwise-green run, re-measure the same way — a full local run via
+      # `bash scripts/run-e2e-with-ports.sh`, then read stats.skipped from
+      # playwright-report/results.json — and work out whether the rise is a real regression
+      # before raising the number. Bumping it without that is how this guard becomes decorative.
       # Reads playwright-config's already-configured `json` reporter
       # (playwright.config.ts: ['json', { outputFile: 'playwright-report/results.json' }])
       # rather than grepping the `list` reporter's stdout. Structured output is immune to ANSI
