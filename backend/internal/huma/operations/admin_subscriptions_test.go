@@ -29,16 +29,16 @@ type MockAdminUserService struct {
 	mock.Mock
 }
 
-func (m *MockAdminUserService) ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int) (*domain.AdminUserListResponse, error) {
-	args := m.Called(ctx, filters, page, pageSize)
+func (m *MockAdminUserService) ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int, now time.Time) (*domain.AdminUserListResponse, error) {
+	args := m.Called(ctx, filters, page, pageSize, now)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.AdminUserListResponse), args.Error(1)
 }
 
-func (m *MockAdminUserService) GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error) {
-	args := m.Called(ctx, userID)
+func (m *MockAdminUserService) GetUserDetail(ctx context.Context, userID string, now time.Time) (*domain.AdminUserDetail, error) {
+	args := m.Called(ctx, userID, now)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -251,7 +251,7 @@ func TestGetUserSubscription_Success(t *testing.T) {
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "free",
@@ -302,7 +302,7 @@ func TestGetUserSubscription_ReturnsEffectiveStatus(t *testing.T) {
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",
@@ -339,7 +339,7 @@ func TestGetUserSubscription_EffectiveStatus_NoOverride_MirrorsRawStatus(t *test
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",
@@ -379,7 +379,7 @@ func TestGetUserSubscription_IncludesDeletionFields_WhenPending(t *testing.T) {
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                  targetUserID,
 			SubscriptionTier:    "premium",
@@ -428,7 +428,7 @@ func TestGetUserSubscription_OmitsDeletionFields_WhenNoPendingDeletion(t *testin
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",
@@ -468,7 +468,7 @@ func TestGetUserSubscription_IncludesHouseholdActiveMemberCount(t *testing.T) {
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "household_4",
@@ -504,7 +504,7 @@ func TestGetUserSubscription_HouseholdActiveMemberCount_ZeroForNonOwner(t *testi
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",
@@ -542,7 +542,7 @@ func TestGetUserSubscription_HouseholdActiveMemberCountError_Returns500(t *testi
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",
@@ -575,7 +575,7 @@ func TestGetUserSubscription_IncludesAsOf(t *testing.T) {
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",
@@ -719,7 +719,7 @@ func TestGetUserSubscription_MalformedOverride_FallsBackToRawTier_NotServerError
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",
@@ -766,7 +766,7 @@ func TestGetUserSubscription_ValidOverride_ResolvesToOverrideTier(t *testing.T) 
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",

@@ -390,8 +390,9 @@ func (h *AdminHandler) ListUsers(ctx context.Context, input *ListUsersInput) (*L
 		SortDir: input.SortDir,
 	}
 
-	// Get users from service
-	response, err := h.adminUserService.ListUsers(ctx, filters, input.Page, input.PageSize)
+	// Get users from service, computed from the SAME instant (asOf) that will be reported below —
+	// never a fresh clock read inside the service (Codex review finding on Issue #1462/#1413).
+	response, err := h.adminUserService.ListUsers(ctx, filters, input.Page, input.PageSize, asOf)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to list users: %w", err))
 	}
@@ -423,8 +424,10 @@ func (h *AdminHandler) GetUserDetail(ctx context.Context, input *GetUserDetailIn
 		return nil, huma.Error503ServiceUnavailable("Admin user service not configured")
 	}
 
-	// Get user detail from service
-	detail, err := h.adminUserService.GetUserDetail(ctx, input.UserID)
+	// Get user detail from service, computed from the SAME instant (asOf) that will be reported
+	// below — never a fresh clock read inside the service (Codex review finding on Issue
+	// #1462/#1413).
+	detail, err := h.adminUserService.GetUserDetail(ctx, input.UserID, asOf)
 	if err != nil {
 		if err == services.ErrAdminUserNotFound {
 			return nil, huma.Error404NotFound("User not found")

@@ -179,7 +179,10 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 	// latest) the instant EffectiveTier/EffectiveStatus below started being computed from.
 	asOf := time.Now()
 
-	detail, err := h.adminUserService.GetUserDetail(ctx, input.UserID)
+	// Pass asOf through so EffectiveStatus (enrichAdminUser, inside GetUserDetail) is derived from
+	// the identical instant reported below as `as_of` — not a second, independent time.Now() read
+	// (Codex review finding on Issue #1462/#1413).
+	detail, err := h.adminUserService.GetUserDetail(ctx, input.UserID, asOf)
 	if err != nil {
 		if errors.Is(err, services.ErrAdminUserNotFound) {
 			return nil, huma.Error404NotFound("user not found")

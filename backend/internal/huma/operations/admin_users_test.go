@@ -22,16 +22,16 @@ type mockAdminUserService struct {
 	mock.Mock
 }
 
-func (m *mockAdminUserService) ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int) (*domain.AdminUserListResponse, error) {
-	args := m.Called(ctx, filters, page, pageSize)
+func (m *mockAdminUserService) ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int, now time.Time) (*domain.AdminUserListResponse, error) {
+	args := m.Called(ctx, filters, page, pageSize, now)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.AdminUserListResponse), args.Error(1)
 }
 
-func (m *mockAdminUserService) GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error) {
-	args := m.Called(ctx, userID)
+func (m *mockAdminUserService) GetUserDetail(ctx context.Context, userID string, now time.Time) (*domain.AdminUserDetail, error) {
+	args := m.Called(ctx, userID, now)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -116,7 +116,7 @@ func TestListUsers_Success(t *testing.T) {
 		HasMore:    false,
 	}
 
-	mockService.On("ListUsers", ctx, domain.AdminUserFilters{}, 1, 20).Return(expectedResponse, nil)
+	mockService.On("ListUsers", ctx, domain.AdminUserFilters{}, 1, 20, mock.Anything).Return(expectedResponse, nil)
 
 	input := &ListUsersInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -168,7 +168,7 @@ func TestListUsers_WithSearch(t *testing.T) {
 	}
 
 	expectedFilters := domain.AdminUserFilters{Search: "test@"}
-	mockService.On("ListUsers", ctx, expectedFilters, 1, 20).Return(expectedResponse, nil)
+	mockService.On("ListUsers", ctx, expectedFilters, 1, 20, mock.Anything).Return(expectedResponse, nil)
 
 	input := &ListUsersInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -209,7 +209,7 @@ func TestListUsers_WithTierFilter(t *testing.T) {
 	}
 
 	expectedFilters := domain.AdminUserFilters{Tier: "premium"}
-	mockService.On("ListUsers", ctx, expectedFilters, 1, 20).Return(expectedResponse, nil)
+	mockService.On("ListUsers", ctx, expectedFilters, 1, 20, mock.Anything).Return(expectedResponse, nil)
 
 	input := &ListUsersInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -239,7 +239,7 @@ func TestListUsers_ServiceError(t *testing.T) {
 
 	ctx := context.Background()
 
-	mockService.On("ListUsers", ctx, domain.AdminUserFilters{}, 1, 20).Return(nil, errors.New("database error"))
+	mockService.On("ListUsers", ctx, domain.AdminUserFilters{}, 1, 20, mock.Anything).Return(nil, errors.New("database error"))
 
 	input := &ListUsersInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -312,7 +312,7 @@ func TestGetUserDetail_Success(t *testing.T) {
 		BudgetsCount:      4,
 	}
 
-	mockService.On("GetUserDetail", ctx, userID).Return(expectedDetail, nil)
+	mockService.On("GetUserDetail", ctx, userID, mock.Anything).Return(expectedDetail, nil)
 
 	input := &GetUserDetailInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -351,7 +351,7 @@ func TestGetUserDetail_IncludesAsOf(t *testing.T) {
 			ID: userID,
 		},
 	}
-	mockService.On("GetUserDetail", ctx, userID).Return(expectedDetail, nil)
+	mockService.On("GetUserDetail", ctx, userID, mock.Anything).Return(expectedDetail, nil)
 
 	input := &GetUserDetailInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -382,7 +382,7 @@ func TestGetUserDetail_NotFound(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	mockService.On("GetUserDetail", ctx, userID).Return(nil, services.ErrAdminUserNotFound)
+	mockService.On("GetUserDetail", ctx, userID, mock.Anything).Return(nil, services.ErrAdminUserNotFound)
 
 	input := &GetUserDetailInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -409,7 +409,7 @@ func TestGetUserDetail_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	mockService.On("GetUserDetail", ctx, userID).Return(nil, errors.New("database error"))
+	mockService.On("GetUserDetail", ctx, userID, mock.Anything).Return(nil, errors.New("database error"))
 
 	input := &GetUserDetailInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -498,7 +498,7 @@ func TestListUsers_IncludesAsOf(t *testing.T) {
 		Page:       1,
 		PageSize:   20,
 	}
-	mockService.On("ListUsers", ctx, domain.AdminUserFilters{}, 1, 20).Return(expectedResponse, nil)
+	mockService.On("ListUsers", ctx, domain.AdminUserFilters{}, 1, 20, mock.Anything).Return(expectedResponse, nil)
 
 	input := &ListUsersInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -530,7 +530,7 @@ func TestListUsers_SearchExactlyThreeChars_Succeeds(t *testing.T) {
 	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
 	ctx := context.Background()
 
-	mockService.On("ListUsers", ctx, domain.AdminUserFilters{Search: "abc"}, 1, 20).
+	mockService.On("ListUsers", ctx, domain.AdminUserFilters{Search: "abc"}, 1, 20, mock.Anything).
 		Return(&domain.AdminUserListResponse{Users: []domain.AdminUserListItem{}, TotalCount: 0, Page: 1, PageSize: 20, TotalPages: 0}, nil)
 
 	input := &ListUsersInput{

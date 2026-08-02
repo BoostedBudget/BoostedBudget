@@ -405,8 +405,28 @@ func (u *User) ComputeEffectiveStatus() string {
 //
 // hasOverride is false whenever there is no CURRENTLY ACTIVE override (none set, or expired); in
 // that case status is simply the raw SubscriptionStatus and overrideValue is "".
+//
+// Delegates to EffectiveStatusWithActiveOverrideAt(time.Now()) — see that method's doc comment
+// for why a caller assembling a response around a single already-captured snapshot instant (e.g.
+// an `as_of` field) MUST call the -At variant with that instant instead of this method, which
+// reads its own fresh clock.
 func (u *User) EffectiveStatusWithActiveOverride() (status string, overrideValue string, hasOverride bool) {
-	now := time.Now()
+	return u.EffectiveStatusWithActiveOverrideAt(time.Now())
+}
+
+// EffectiveStatusWithActiveOverrideAt is the -At twin of EffectiveStatusWithActiveOverride,
+// evaluated against the given instant instead of an internal time.Now() read.
+//
+// Added for Codex round-N review of Issue #1462/#1413: a caller that has already captured a
+// snapshot instant (e.g. an admin handler's `asOf := time.Now()`, echoed back to the client as
+// `as_of`) must derive EVERY value in that same response — including EffectiveStatus — from that
+// identical instant. Calling the no-arg EffectiveStatusWithActiveOverride() instead would read a
+// SECOND, independent time.Now(), so a request whose processing crosses the override's expiry
+// boundary between the two reads would return an `as_of` and an `effective_status` describing two
+// different moments — the exact "two clocks describing one user" defect #1462 was meant to fix,
+// reintroduced one layer up. See TestAdminUserService_GetUserDetail_EffectiveStatus_DerivedFromPassedInstant_NotLaterClockRead
+// (admin_user_service_test.go) for the regression test.
+func (u *User) EffectiveStatusWithActiveOverrideAt(now time.Time) (status string, overrideValue string, hasOverride bool) {
 	if u.hasActiveManualOverrideAt(now) {
 		return string(SubscriptionStatusActive), *u.ManualTierOverride, true
 	}

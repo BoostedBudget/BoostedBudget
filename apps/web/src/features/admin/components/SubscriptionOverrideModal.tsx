@@ -33,7 +33,7 @@ import {
     Layers,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { formatRelativeTime, resolveServerSnapshotTime } from '@/shared/dates'
+import { formatRelativeTime, resolveServerSnapshotTime, isParsableDate } from '@/shared/dates'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { getSubscriptionPresentation } from '@/features/subscription/lib/subscriptionPresentation'
@@ -286,7 +286,16 @@ function SubscriptionOverrideForm({
     // compares `sub.as_of` against the REAL current wall clock via formatRelativeTime, so it grows
     // ("2m ago" -> "5m ago") even while `now`/the rest of this render stays pinned to the frozen
     // snapshot.
-    const snapshotAgeLabel = sub?.as_of ? formatRelativeTime(sub.as_of) : null
+    //
+    // Codex adversarial review finding (recurrence of the round-9 Part 3 "Invalid Date" defect,
+    // this time on `as_of` rather than `manual_tier_ends_at`): `resolveServerSnapshotTime` above
+    // already fails closed on a malformed-but-truthy `as_of` (falls back to the browser clock for
+    // `now`'s own liveness arithmetic), but this label used to check only truthiness and hand the
+    // raw string straight to `formatRelativeTime`, which has no such guard and renders the literal
+    // string "Invalid Date" for an unparseable one. `isParsableDate` reuses the exact same parse
+    // check `resolveServerSnapshotTime` uses, rather than duplicating it, so the two can never
+    // disagree about what counts as "unparseable".
+    const snapshotAgeLabel = sub?.as_of && isParsableDate(sub.as_of) ? formatRelativeTime(sub.as_of) : null
     // Round 8 / Task MC: this used to be inline `sub?.manual_tier_ends_at && new Date(...) <
     // new Date()` — a naive comparison that never consults tier validity AND fails OPEN on an
     // unparseable date, because `NaN < anything` is always `false`, so a malformed
@@ -434,10 +443,12 @@ function SubscriptionOverrideForm({
                                         anchored to `sub.as_of` and never refreshes on a timer (5-minute
                                         staleTime, refetchOnWindowFocus off), so this is the only signal
                                         that the "Effective" status above may no longer reflect the
-                                        server's current answer. */}
+                                        server's current answer. Guarded by isParsableDate for the same
+                                        reason snapshotAgeLabel above is — a malformed-but-truthy as_of
+                                        must not render "Invalid Date" in this title either. */}
                                     <span
                                         className="inline-flex items-center gap-1 text-muted-foreground/70"
-                                        title={sub.as_of ? `Snapshot captured ${new Date(sub.as_of).toLocaleString()}` : undefined}
+                                        title={sub.as_of && isParsableDate(sub.as_of) ? `Snapshot captured ${new Date(sub.as_of).toLocaleString()}` : undefined}
                                     >
                                         <Clock size={12} />
                                         Snapshot: {snapshotAgeLabel ?? '—'}

@@ -42,11 +42,14 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
 // retentionNotice30dBoundaryQuery and retentionNotice7dBoundaryQuery are verbatim copies of the
@@ -64,7 +67,7 @@ const (
 // `retention_expires_at - INTERVAL '<n> days'` sites Issue #1461's sweep missed.
 //
 // anchor = 2026-03-10 12:00:00 UTC, two days after the 2026-03-08 America/New_York spring-forward
-// transition (01:00 EST -> 03:00 EDT, i.e. 07:00 UTC — confirmed against a live Postgres 17
+// transition (02:00 EST -> 03:00 EDT, i.e. 07:00 UTC — confirmed against a live Postgres 17
 // instance before writing this test). Subtracting either 7 or 30 calendar days from the anchor
 // crosses back over that same transition into EST.
 //
@@ -141,4 +144,102 @@ func TestRetentionNoticeBoundary_Integration_CrossesDSTBoundary(t *testing.T) {
 				"expected exactly a 1-hour drift (one DST transition's worth) between sessions")
 		})
 	}
+}
+
+// TestRetentionNoticeBoundary_Integration_ProductionAppliesConfiguredWindow is the companion to
+// TestRetentionNoticeBoundary_Integration_CrossesDSTBoundary above (Codex review finding: that
+// test runs COPIED SQL constants — retentionNotice30dBoundaryQuery/7dBoundaryQuery — as a bare
+// SELECT, never the real repository methods, so it proves PostgreSQL's interval arithmetic behaves
+// a certain way in the abstract but would stay green even if
+// IsRetentionNotice30dEligibleForOccurrence/7d or GetUsersNeedingRetention30dNotice/7dNotice
+// (profile_repository.go ~:2056, :2084, :2224, :2252) stopped using that arithmetic at all).
+//
+// This test closes that gap by driving the REAL production methods — both the per-occurrence
+// re-check pair and the set-based candidate-query pair the retention_cleanup_check job actually
+// calls — against seeded retention_expires_at values straddling each method's own eligibility
+// boundary (retention_expires_at - window <= NOW()), proving production genuinely applies a
+// ~30-day / ~7-day window, in the right direction, through the real code path.
+//
+// Residual — be honest about what this pair (this test + the DST test above) does and does not
+// cover, together:
+//   - The DST test proves the arithmetic is session-time-zone-sensitive, and that
+//     database.NewPool's UTC pin (pgx.go) makes it deterministic.
+//   - THIS test proves production genuinely applies a 30d/7d window at all, in the right
+//     direction, via the real repository methods.
+//   - NEITHER, alone or together, proves production is immune to someone silently swapping
+//     `INTERVAL '30 days'` for the equivalent-LOOKING but FIXED-DURATION `INTERVAL '720 hours'`
+//     (or `'7 days'` for `'168 hours'`): hours are exact and session-independent, so away from an
+//     actual DST transition the two forms produce the identical instant, and this test's
+//     five-minute boundary margin — run on whatever day CI happens to execute it — cannot
+//     distinguish "calendar days, UTC-pinned" from "exact hours" unless a real transition happens
+//     to fall inside the probed window (which, on almost every day of the year, it does not).
+//     Only TestRetentionNoticeBoundary_Integration_CrossesDSTBoundary (which deliberately anchors
+//     ON a real 2026 transition) can catch that specific substitution, and only for session
+//     configurations where the substitution would actually change the result. Both tests are
+//     needed; neither is redundant with the other.
+func TestRetentionNoticeBoundary_Integration_ProductionAppliesConfiguredWindow(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	// Comfortably larger than any plausible test/DB round-trip latency, small relative to the
+	// 7-day/30-day windows being probed — "just past"/"just short of" the boundary, not merely
+	// "somewhere inside/outside" like the coarser (25d/45d/10d) fixtures elsewhere in this package.
+	const margin = 5 * time.Minute
+
+	tests := []struct {
+		name       string
+		window     time.Duration
+		eligibleFn func(ctx context.Context, userID string, expected time.Time) (bool, error)
+		listFn     func(ctx context.Context) ([]*domain.User, error)
+	}{
+		{"30d", 30 * 24 * time.Hour, repo.IsRetentionNotice30dEligibleForOccurrence, repo.GetUsersNeedingRetention30dNotice},
+		{"7d", 7 * 24 * time.Hour, repo.IsRetentionNotice7dEligibleForOccurrence, repo.GetUsersNeedingRetention7dNotice},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Just PAST the boundary: retention_expires_at - window is slightly BEFORE now, so the
+			// window has already opened -> eligible.
+			eligibleExpiresAt := time.Now().Add(tt.window - margin).Truncate(time.Microsecond)
+			eligibleUser := createRetentionNoticeFixtureUser(t, ctx, pool, repo,
+				fmt.Sprintf("boundeligible_%s_%d", tt.name, time.Now().UnixNano()),
+				retentionNoticeFixtureOpts{retentionExpiresAt: &eligibleExpiresAt})
+
+			// Just SHORT of the boundary: retention_expires_at - window is slightly AFTER now, so
+			// the window has not opened yet -> not eligible.
+			notYetExpiresAt := time.Now().Add(tt.window + margin).Truncate(time.Microsecond)
+			notYetUser := createRetentionNoticeFixtureUser(t, ctx, pool, repo,
+				fmt.Sprintf("boundnotyet_%s_%d", tt.name, time.Now().UnixNano()),
+				retentionNoticeFixtureOpts{retentionExpiresAt: &notYetExpiresAt})
+
+			eligible, err := tt.eligibleFn(ctx, eligibleUser.ID, eligibleExpiresAt)
+			require.NoError(t, err)
+			assert.True(t, eligible, "%s: retention_expires_at - window just PAST NOW() must already be eligible", tt.name)
+
+			notYetEligible, err := tt.eligibleFn(ctx, notYetUser.ID, notYetExpiresAt)
+			require.NoError(t, err)
+			assert.False(t, notYetEligible, "%s: retention_expires_at - window just SHORT of NOW() must not be eligible yet", tt.name)
+
+			// Same proof through the set-based candidate query retention_cleanup_check.go actually
+			// calls — not just the per-occurrence re-check above.
+			listed, err := tt.listFn(ctx)
+			require.NoError(t, err)
+			assert.True(t, containsUserID(listed, eligibleUser.ID),
+				"%s: the set-based candidate query must include a user whose window has just opened", tt.name)
+			assert.False(t, containsUserID(listed, notYetUser.ID),
+				"%s: the set-based candidate query must NOT include a user whose window has not opened yet", tt.name)
+		})
+	}
+}
+
+// containsUserID reports whether users contains a user with the given ID.
+func containsUserID(users []*domain.User, id string) bool {
+	for _, u := range users {
+		if u.ID == id {
+			return true
+		}
+	}
+	return false
 }
