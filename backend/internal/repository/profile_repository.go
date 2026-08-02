@@ -2041,6 +2041,17 @@ func (r *profileRepository) SetRetentionNotice7dSent(ctx context.Context, userID
 // never-warn — see processRetentionNotices' doc comment), but the same discipline applies: the
 // eligibility check must validate the discriminator it claimed.
 func (r *profileRepository) IsRetentionNotice30dEligibleForOccurrence(ctx context.Context, userID string, expectedRetentionExpiresAt time.Time) (bool, error) {
+	// retention_expires_at - INTERVAL '30 days' below is calendar-day arithmetic on a timestamptz —
+	// the same session-time-zone hazard class as make_interval(months => N) above (Issue #1461):
+	// an interval's CALENDAR components (years/months/weeks/days) are evaluated in the SESSION time
+	// zone, preserving local wall-clock time across the subtraction rather than moving the absolute
+	// instant by an exact duration; its FIXED-DURATION components (hours/mins/secs) are exact and
+	// session-independent, so this is not equivalent to INTERVAL '720 hours' once a DST boundary
+	// sits between the two ends. This boundary is deterministic in production only because
+	// database.NewPool (pgx.go) pins every pooled connection's session TimeZone to UTC — a
+	// connection that reached this query from outside that pool would shift the 30-day pre-deletion
+	// notice window by the local DST offset. See
+	// TestRetentionNoticeBoundary_Integration_CrossesDSTBoundary.
 	var eligible bool
 	err := r.db.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -2065,6 +2076,10 @@ func (r *profileRepository) IsRetentionNotice30dEligibleForOccurrence(ctx contex
 // IsRetentionNotice7dEligibleForOccurrence is IsRetentionNotice30dEligibleForOccurrence's 7-day
 // sibling. See that method's doc for the full rationale.
 func (r *profileRepository) IsRetentionNotice7dEligibleForOccurrence(ctx context.Context, userID string, expectedRetentionExpiresAt time.Time) (bool, error) {
+	// retention_expires_at - INTERVAL '7 days' below is the same session-TZ-dependent calendar-day
+	// arithmetic as IsRetentionNotice30dEligibleForOccurrence's INTERVAL '30 days' above — see that
+	// method's comment for the full explanation and why the UTC pool pin (pgx.go) is what makes it
+	// safe today.
 	var eligible bool
 	err := r.db.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -2200,6 +2215,12 @@ const noManualOverrideAtAllPredicate = `
 
 // GetUsersNeedingRetention30dNotice returns users whose retention_expires_at is within 30 days
 // and who have not yet received a 30-day pre-deletion warning (#930).
+//
+// retention_expires_at - INTERVAL '30 days' in the WHERE clause below is the same
+// session-TZ-dependent calendar-day arithmetic as
+// IsRetentionNotice30dEligibleForOccurrence's identical expression (see that method's comment for
+// the full explanation) — deterministic only because database.NewPool (pgx.go) pins the session
+// TimeZone to UTC.
 func (r *profileRepository) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) {
 	query := userSelectQuery + `
 		WHERE retention_expires_at IS NOT NULL
@@ -2224,6 +2245,10 @@ func (r *profileRepository) GetUsersNeedingRetention30dNotice(ctx context.Contex
 
 // GetUsersNeedingRetention7dNotice returns users whose retention_expires_at is within 7 days
 // and who have not yet received a 7-day pre-deletion warning (#930).
+//
+// retention_expires_at - INTERVAL '7 days' below is the same session-TZ-dependent calendar-day
+// arithmetic as GetUsersNeedingRetention30dNotice's INTERVAL '30 days' above — see
+// IsRetentionNotice30dEligibleForOccurrence's comment for the full explanation.
 func (r *profileRepository) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
 	query := userSelectQuery + `
 		WHERE retention_expires_at IS NOT NULL
