@@ -2,8 +2,23 @@ version: '3.9'
 
 services:
   # PostgreSQL Database (QA)
+  #
+  # Pinned to 17 to match local development, CI's containers, and squawk's --pg-version=17. QA was
+  # the last environment left on 15, which meant QA validated the application against a different
+  # major version than everywhere else.
+  #
+  # ⚠️ THIS BUMP DESTROYS THE EXISTING QA DATABASE. A PostgreSQL 15 data directory cannot be read by
+  # a 17 server — the container will refuse to start with "database files are incompatible with
+  # server" — and `pull_policy: always` means the new image is fetched on the next deploy. The QA
+  # volume must be recreated and re-seeded as part of rolling this out:
+  #
+  #     docker compose -f docker-compose.qa.yml down -v
+  #     docker compose -f docker-compose.qa.yml up -d
+  #     # then re-apply migrations and re-run the QA data populator
+  #
+  # This is deliberate and coordinated, not incidental to a code change — see docs/MAC_MINI_QA_SETUP.md.
   postgres:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     pull_policy: always  # Always pull latest patches
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     environment:

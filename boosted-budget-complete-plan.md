@@ -92,7 +92,7 @@ Backend:
   Language: Go 1.21+
   Framework: Echo/Gin with Clerk middleware
   API Spec: OpenAPI 3.1
-  Database: PostgreSQL 15 + Redis 7
+  Database: PostgreSQL 17 + Redis 7
   Message Queue: RabbitMQ (rule processing)
   
 Frontend:
@@ -850,7 +850,7 @@ version: '3.9'
 services:
   # PostgreSQL Database (Single region for MVP)
   postgres:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     environment:
       POSTGRES_DB: boostedbudget
       POSTGRES_USER: devuser
