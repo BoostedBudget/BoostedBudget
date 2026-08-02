@@ -33,6 +33,7 @@ import { resolveServerSnapshotTime } from '@/shared/dates'
 import { getSubscriptionPresentation } from '../../subscription/lib/subscriptionPresentation'
 import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
 import { KNOWN_TIER_NAMES } from '../lib/knownTiers'
+import { SnapshotAgeLabel } from './SnapshotAgeLabel'
 
 const TIER_OPTIONS = [
   { value: '', label: 'All Tiers' },
@@ -338,6 +339,12 @@ export function UsersPage() {
           <p className="text-sm text-muted-foreground m-0">
             View and manage users. Click a row to see details, or use Override to set a manual subscription tier.
           </p>
+          {/* Issue #1462 follow-up G2 / R3-10: this page's Tier/Comped/Override Status columns
+              anchor their liveness arithmetic to `now` (above), a FROZEN read of `data.as_of` that
+              never refreshes on a timer. Discloses that snapshot's age so an admin who leaves this
+              page open can tell it's grown stale, mirroring SubscriptionOverrideModal's identical
+              disclosure for the same server-anchored-`now` hazard. */}
+          <SnapshotAgeLabel asOf={data?.as_of} className="text-xs" />
         </div>
       </header>
 

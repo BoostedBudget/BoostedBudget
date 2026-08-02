@@ -22,6 +22,7 @@ import { resolveServerSnapshotTime } from '@/shared/dates'
 import { useRegions } from '../../../shared/hooks/useRegions'
 import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
 import { KNOWN_TIER_NAMES } from '../lib/knownTiers'
+import { SnapshotAgeLabel } from './SnapshotAgeLabel'
 
 export interface UserDetailModalProps {
   /** User detail data */
@@ -156,6 +157,12 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
                           </Badge>
                         )}
                       </span>
+                      {/* Issue #1462 follow-up G2 / R3-10: hasLiveOverride/overrideStatus above are
+                          anchored to `now`, a FROZEN read of `user.as_of` that never refreshes on a
+                          timer. Discloses that snapshot's age so an admin who leaves this modal open
+                          can tell the Comped/status badges above may no longer reflect the server's
+                          current answer — mirrors SubscriptionOverrideModal's identical disclosure. */}
+                      <SnapshotAgeLabel asOf={user.as_of} className="text-[0.7rem]" />
                     </div>
                   </div>
 

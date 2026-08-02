@@ -338,4 +338,54 @@ describe('UserDetailModal', () => {
       expect(screen.getByText(/household \(2\)/i)).toBeInTheDocument()
     })
   })
+
+  // Issue #1462 follow-up G2 / R3-10: hasLiveOverride/overrideStatus anchor their liveness
+  // arithmetic to `now`, a FROZEN read of `user.as_of` (never refreshed on a timer) — this modal
+  // had no disclosure of that staleness, unlike SubscriptionOverrideModal's identical
+  // `SnapshotAgeLabel`. Mirrors SubscriptionOverrideModal.test.tsx's "Snapshot age label" block.
+  describe('Snapshot age label (Issue #1462 G3 / R3-10)', () => {
+    it("renders the snapshot's age when user.as_of is present", () => {
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+
+      render(
+        <UserDetailModal
+          user={{ ...mockUser, as_of: fiveMinutesAgo }}
+          loading={false}
+          open={true}
+          onClose={mockOnClose}
+        />
+      )
+
+      expect(screen.getByText(/snapshot:\s*\d+m ago/i)).toBeInTheDocument()
+    })
+
+    it('degrades to a placeholder rather than crashing when user.as_of is absent (e.g. an older cached response)', () => {
+      render(
+        <UserDetailModal
+          user={mockUser} // no as_of field
+          loading={false}
+          open={true}
+          onClose={mockOnClose}
+        />
+      )
+
+      expect(screen.getByText(/snapshot:\s*—/i)).toBeInTheDocument()
+      expect(screen.queryByText(/\bago\b/i)).not.toBeInTheDocument()
+    })
+
+    it('never renders the literal string "Invalid Date" for a malformed (present but unparseable) user.as_of', () => {
+      render(
+        <UserDetailModal
+          user={{ ...mockUser, as_of: 'not-a-real-date' }}
+          loading={false}
+          open={true}
+          onClose={mockOnClose}
+        />
+      )
+
+      const snapshotEl = screen.getByText(/snapshot:\s*—/i)
+      expect(snapshotEl).toBeInTheDocument()
+      expect(document.body.textContent ?? '').not.toMatch(/invalid date/i)
+    })
+  })
 })

@@ -33,7 +33,7 @@ import {
     Layers,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { formatRelativeTime, resolveServerSnapshotTime, isParsableDate } from '@/shared/dates'
+import { resolveServerSnapshotTime } from '@/shared/dates'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { getSubscriptionPresentation } from '@/features/subscription/lib/subscriptionPresentation'
@@ -42,6 +42,7 @@ import type { AdminSubscriptionTierInputBodyTier } from '@boostedbudget/api-clie
 import { useAdminSubscriptionDetail, useUpdateUserTier, useRemoveUserTierOverride } from '../hooks/useAdminSubscription'
 import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
 import { KNOWN_TIER_NAMES } from '../lib/knownTiers'
+import { SnapshotAgeLabel } from './SnapshotAgeLabel'
 
 /** The fixed type-to-confirm literal for removing an override — never PII like the user's
  * email, same rationale as DisbandHouseholdDialog's `CONFIRM_TEXT = 'DISBAND'`. */
@@ -281,21 +282,16 @@ function SubscriptionOverrideForm({
     // happened to open, then grows arbitrarily stale the longer an admin leaves it open. For an
     // override expiring in the next few minutes, this modal would otherwise keep asserting
     // "Manual override active" with total confidence off a snapshot that may already be minutes
-    // old. `snapshotAgeLabel` (rendered next to the effective-status badge below) is what makes
+    // old. `<SnapshotAgeLabel>` (rendered next to the effective-status badge below) is what makes
     // that honest — it does NOT use `now` above (which is trusted-but-possibly-stale); it
     // compares `sub.as_of` against the REAL current wall clock via formatRelativeTime, so it grows
     // ("2m ago" -> "5m ago") even while `now`/the rest of this render stays pinned to the frozen
-    // snapshot.
-    //
-    // Codex adversarial review finding (recurrence of the round-9 Part 3 "Invalid Date" defect,
-    // this time on `as_of` rather than `manual_tier_ends_at`): `resolveServerSnapshotTime` above
-    // already fails closed on a malformed-but-truthy `as_of` (falls back to the browser clock for
-    // `now`'s own liveness arithmetic), but this label used to check only truthiness and hand the
-    // raw string straight to `formatRelativeTime`, which has no such guard and renders the literal
-    // string "Invalid Date" for an unparseable one. `isParsableDate` reuses the exact same parse
-    // check `resolveServerSnapshotTime` uses, rather than duplicating it, so the two can never
-    // disagree about what counts as "unparseable".
-    const snapshotAgeLabel = sub?.as_of && isParsableDate(sub.as_of) ? formatRelativeTime(sub.as_of) : null
+    // snapshot. Extracted to a shared component (R3-10) so UsersPage and UserDetailModal — which
+    // anchor the identical `resolveServerSnapshotTime` liveness arithmetic to their own `as_of`
+    // fields but had no disclosure of their own — can reuse it instead of a third copy of this
+    // JSX; `SnapshotAgeLabel` itself carries the isParsableDate guard that used to live here
+    // (Codex adversarial review finding, recurrence of the round-9 Part 3 "Invalid Date" defect,
+    // this time on `as_of` rather than `manual_tier_ends_at`).
     // Round 8 / Task MC: this used to be inline `sub?.manual_tier_ends_at && new Date(...) <
     // new Date()` — a naive comparison that never consults tier validity AND fails OPEN on an
     // unparseable date, because `NaN < anything` is always `false`, so a malformed
@@ -443,16 +439,8 @@ function SubscriptionOverrideForm({
                                         anchored to `sub.as_of` and never refreshes on a timer (5-minute
                                         staleTime, refetchOnWindowFocus off), so this is the only signal
                                         that the "Effective" status above may no longer reflect the
-                                        server's current answer. Guarded by isParsableDate for the same
-                                        reason snapshotAgeLabel above is — a malformed-but-truthy as_of
-                                        must not render "Invalid Date" in this title either. */}
-                                    <span
-                                        className="inline-flex items-center gap-1 text-muted-foreground/70"
-                                        title={sub.as_of && isParsableDate(sub.as_of) ? `Snapshot captured ${new Date(sub.as_of).toLocaleString()}` : undefined}
-                                    >
-                                        <Clock size={12} />
-                                        Snapshot: {snapshotAgeLabel ?? '—'}
-                                    </span>
+                                        server's current answer. */}
+                                    <SnapshotAgeLabel asOf={sub.as_of} />
                                 </div>
 
                                 {showOverrideChip && (
