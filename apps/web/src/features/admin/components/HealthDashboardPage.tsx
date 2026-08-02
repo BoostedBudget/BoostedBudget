@@ -76,7 +76,15 @@ export function HealthDashboardPage() {
   // zero-valued numeric fields, so this flag is the ONLY signal the Job Backlog cards below have
   // for telling them apart. Falsy (false or, for an older cached/mocked response, undefined) reads
   // as unavailable — the fail-closed default, never a falsely-confident green zero.
-  const jobBacklogAvailable = data.job_backlog.available;
+  //
+  // R3-7: `job_backlog` itself (not just `.available`) can be absent — a rolling deploy hitting an
+  // older API response, or a partial mock — in which case an unguarded `data.job_backlog.available`
+  // throws a TypeError and blanks the ENTIRE dashboard, the opposite of this field's fail-closed
+  // intent. Optional-chaining here is the only guard needed: every read of `data.job_backlog.*`
+  // below is already gated behind this `jobBacklogAvailable` boolean via `? :` short-circuiting
+  // (e.g. `jobBacklogAvailable ? data.job_backlog.x : 'Unavailable'`), so once this flag safely
+  // resolves to `undefined` (falsy) for a missing `job_backlog`, none of those reads are reached.
+  const jobBacklogAvailable = data.job_backlog?.available;
 
   return (
     <div className="p-8 max-w-[1400px] mx-auto max-md:p-4">

@@ -537,6 +537,53 @@ describe('UsersPage', () => {
     })
   })
 
+  // Issue #1462 follow-up G2 / R3-10: the Tier/Comped/Override Status columns anchor their
+  // liveness arithmetic to `now`, a FROZEN read of `data.as_of` (never refreshed on a timer) —
+  // this page had no disclosure of that staleness, unlike SubscriptionOverrideModal's identical
+  // `SnapshotAgeLabel`. Mirrors SubscriptionOverrideModal.test.tsx's "Snapshot age label" block.
+  describe('Snapshot age label (Issue #1462 G3 / R3-10)', () => {
+    it("renders the snapshot's age when data.as_of is present", () => {
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, as_of: fiveMinutesAgo },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      // Bucketed by formatRelativeTime (minutes, not an exact value).
+      expect(screen.getByText(/snapshot:\s*\d+m ago/i)).toBeInTheDocument()
+    })
+
+    it('degrades to a placeholder rather than crashing when data.as_of is absent (e.g. an older cached response)', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: mockListResponse, // no as_of field
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.getByText(/snapshot:\s*—/i)).toBeInTheDocument()
+      expect(screen.queryByText(/\bago\b/i)).not.toBeInTheDocument()
+    })
+
+    it('never renders the literal string "Invalid Date" for a malformed (present but unparseable) data.as_of', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, as_of: 'not-a-real-date' },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      const snapshotEl = screen.getByText(/snapshot:\s*—/i)
+      expect(snapshotEl).toBeInTheDocument()
+      expect(document.body.textContent ?? '').not.toMatch(/invalid date/i)
+    })
+  })
+
   describe('Status column regression', () => {
     it('still renders the raw subscription_status text', () => {
       mockUseListAdminUsers.mockReturnValue({

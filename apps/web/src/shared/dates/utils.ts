@@ -76,23 +76,46 @@ export function inferPreset(
 }
 
 /**
- * Reports whether a server-supplied date string parses to a valid Date.
+ * The RFC3339 date-time separator prefix: a 4-digit year, 2-digit month, 2-digit day, and the
+ * literal 'T' that introduces the time-of-day component.
+ *
+ * Required in addition to a `parseISO` validity check because `parseISO` is deliberately lenient
+ * about ISO 8601 *precision* — it happily accepts partial forms (a bare year `'2026'`, a
+ * year-month `'2026-08'`, a date-only `'2026-08-02'`, even a week-date `'2026-W31'`), defaulting
+ * the missing time-of-day to midnight rather than rejecting them. The wire `as_of` field this
+ * guards is OpenAPI `format: date-time` — always a full RFC3339 instant — so any of those
+ * partial forms reaching here is itself a malformed value, not a legitimately-terser one. Also
+ * rejects plain non-ISO garbage a bare `new Date(x)` parse would otherwise silently accept as a
+ * real calendar date (e.g. `'0'` -> year 2000, `'2026'` -> Jan 1 2026, `'08/02/2026'` ->
+ * locale-dependent) with no "Invalid Date" tell to reveal the mistake.
+ */
+const RFC3339_DATE_TIME_PREFIX = /^\d{4}-\d{2}-\d{2}T/
+
+/**
+ * Reports whether a server-supplied date string is a valid, full-precision RFC3339 date-time.
  *
  * This is the exact parse check resolveServerSnapshotTime (below) uses to decide when to
  * fall back to the browser clock, extracted so callers that need to guard a DIFFERENT
  * computation — not resolve a fallback Date, just decide whether it's safe to format one at
- * all — can reuse the identical rule instead of duplicating
- * `Number.isNaN(new Date(x).getTime())` at each call site. A malformed but truthy `as_of`
- * (present on the wire, not just absent) previously reached `formatRelativeTime`/
- * `toLocaleString` unguarded in SubscriptionOverrideModal.tsx and rendered the literal string
- * "Invalid Date" — a recurrence of the same defect shape resolveServerSnapshotTime itself
- * already guards against.
+ * all — can reuse the identical rule instead of duplicating the same two checks at each call
+ * site. A malformed but truthy `as_of` (present on the wire, not just absent) previously reached
+ * `formatRelativeTime`/`toLocaleString` unguarded in SubscriptionOverrideModal.tsx and rendered
+ * the literal string "Invalid Date" — a recurrence of the same defect shape
+ * resolveServerSnapshotTime itself already guards against.
+ *
+ * ISO-strict by design (see RFC3339_DATE_TIME_PREFIX above): a bare `new Date(x)` parse — the
+ * prior implementation — accepts numeric-but-malformed strings like `'0'`, `'1'`, or `'2026'` as
+ * real calendar dates (years 2000, 2001, and 2026 respectively), which silently anchored
+ * resolveServerSnapshotTime's callers (UsersPage, UserDetailModal, SubscriptionOverrideModal
+ * override-liveness arithmetic) to a bogus instant with no "Invalid Date" tell — strictly worse
+ * than the browser-clock fallback this helper exists to provide.
  *
  * @param dateStr - a date string from the server, or null/undefined if the field is absent.
  */
 export function isParsableDate(dateStr: string | null | undefined): boolean {
   if (!dateStr) return false
-  return !Number.isNaN(new Date(dateStr).getTime())
+  if (!RFC3339_DATE_TIME_PREFIX.test(dateStr)) return false
+  return !Number.isNaN(parseISO(dateStr).getTime())
 }
 
 /**
@@ -104,10 +127,11 @@ export function isParsableDate(dateStr: string | null | undefined): boolean {
  * browser/server clock skew from causing disagreement about whether an override
  * is live near expiry boundaries.
  *
- * @param asOfString - ISO date string from the server (e.g., data.as_of, user.as_of)
+ * @param asOfString - RFC3339 date-time string from the server (e.g., data.as_of, user.as_of)
  * @returns A Date object anchored to the server's snapshot, or the current browser time
- *          if parsing fails or the field is absent/unparseable.
+ *          if parsing fails or the field is absent/unparseable/not a full-precision RFC3339
+ *          date-time (see isParsableDate's ISO-strict rule above).
  */
 export function resolveServerSnapshotTime(asOfString: string | null | undefined): Date {
-  return isParsableDate(asOfString) ? new Date(asOfString as string) : new Date()
+  return isParsableDate(asOfString) ? parseISO(asOfString as string) : new Date()
 }

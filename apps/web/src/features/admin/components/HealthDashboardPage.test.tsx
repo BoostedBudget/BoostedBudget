@@ -380,5 +380,36 @@ describe('HealthDashboardPage', () => {
 
       expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('Unavailable')
     })
+
+    // Defect R3-7: a rolling deploy against an older API response, or a partial mock, can omit
+    // `job_backlog` ENTIRELY (not just its nested `available` field, covered above). An unguarded
+    // `data.job_backlog.available` throws a TypeError on that shape and blanks the WHOLE
+    // dashboard — the opposite of the fail-closed "degrade to Unavailable" intent this section
+    // exists for. Must degrade exactly like the missing-`available` case above, not crash.
+    it('degrades to "Unavailable" (not a crash) when `job_backlog` itself is entirely absent', async () => {
+      const healthDataWithoutJobBacklog: Record<string, unknown> = { ...mockHealthData }
+      delete healthDataWithoutJobBacklog.job_backlog
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: healthDataWithoutJobBacklog,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/System Health/i)).toBeInTheDocument()
+      })
+
+      await waitFor(() => {
+        expect(screen.getByText('Plaid Cleanup Outstanding Users')).toBeInTheDocument()
+      })
+
+      expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('Unavailable')
+      expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('Unavailable')
+      expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('Unavailable')
+    })
   })
 })

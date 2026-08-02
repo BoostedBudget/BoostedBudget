@@ -1,5 +1,13 @@
 import { describe, test, expect, beforeAll, afterAll, setSystemTime } from 'bun:test'
-import { inferPreset, formatDateForAPI, historyDateKey, formatHistoryLabel, calendarDateRange } from './utils'
+import {
+  inferPreset,
+  formatDateForAPI,
+  historyDateKey,
+  formatHistoryLabel,
+  calendarDateRange,
+  isParsableDate,
+  resolveServerSnapshotTime,
+} from './utils'
 
 // Tests ensure TZ-safe history helpers (Bug C regression, Issue #1173).
 // historyDateKey and formatHistoryLabel must produce UTC calendar dates regardless
@@ -137,5 +145,68 @@ describe('calendarDateRange', () => {
   test('works correctly across year boundary', () => {
     const range = calendarDateRange('2023-12-30T00:00:00Z', '2024-01-02T00:00:00Z')
     expect(range).toEqual(['2023-12-30', '2023-12-31', '2024-01-01', '2024-01-02'])
+  })
+})
+
+// Defect R3-4: a malformed-but-numeric `as_of` (e.g. '0', '1', '2026') is accepted by a bare
+// `new Date(x)` parse check — JS Date happily interprets these as years 2000/2001/2026 rather
+// than rejecting them — so isParsableDate previously judged them "parsable" and
+// resolveServerSnapshotTime silently anchored ALL override-liveness arithmetic in the admin
+// surfaces to that bogus instant, with no "Invalid Date" tell to reveal it. That is strictly
+// worse than the browser-clock fallback this helper exists to provide. The wire `as_of` field is
+// OpenAPI `format: date-time` — always a full RFC3339 instant — so the fix is ISO-strict: only a
+// string with the RFC3339 date-time shape (a literal 'T' separating the date and time parts) that
+// also parses to a valid instant counts as parsable; anything else, however numeric-looking,
+// fails closed to the browser clock.
+describe('isParsableDate', () => {
+  test.each([
+    ['0', false],
+    ['1', false],
+    ['2026', false],
+    ['08/02/2026', false],
+    ['', false],
+    ['   ', false],
+    ['Invalid Date', false],
+    ['not-a-real-date', false],
+    [null, false],
+    [undefined, false],
+    ['2026-08-02T14:30:00Z', true],
+  ] as const)('isParsableDate(%p) -> %p', (input, expected) => {
+    expect(isParsableDate(input)).toBe(expected)
+  })
+})
+
+describe('resolveServerSnapshotTime', () => {
+  const frozenNow = new Date('2026-08-02T18:00:00.000Z')
+
+  beforeAll(() => {
+    setSystemTime(frozenNow)
+  })
+  afterAll(() => {
+    setSystemTime()
+  })
+
+  test('anchors to the parsed instant for a valid RFC3339 as_of', () => {
+    const result = resolveServerSnapshotTime('2026-01-15T09:00:00Z')
+    expect(result.toISOString()).toBe('2026-01-15T09:00:00.000Z')
+  })
+
+  // None of these malformed-but-truthy values may anchor liveness arithmetic to a bogus instant
+  // (the year-2000 hazard above) — every one must fail closed to the current (frozen) browser
+  // clock instead.
+  test.each([
+    ['0'],
+    ['1'],
+    ['2026'],
+    ['08/02/2026'],
+    [''],
+    ['   '],
+    ['Invalid Date'],
+    ['not-a-real-date'],
+    [null],
+    [undefined],
+  ] as const)('falls back to the browser clock, never a bogus anchor, for %p', (input) => {
+    const result = resolveServerSnapshotTime(input)
+    expect(result.getTime()).toBe(frozenNow.getTime())
   })
 })
