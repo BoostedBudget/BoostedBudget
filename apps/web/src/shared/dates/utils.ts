@@ -76,6 +76,26 @@ export function inferPreset(
 }
 
 /**
+ * Reports whether a server-supplied date string parses to a valid Date.
+ *
+ * This is the exact parse check resolveServerSnapshotTime (below) uses to decide when to
+ * fall back to the browser clock, extracted so callers that need to guard a DIFFERENT
+ * computation — not resolve a fallback Date, just decide whether it's safe to format one at
+ * all — can reuse the identical rule instead of duplicating
+ * `Number.isNaN(new Date(x).getTime())` at each call site. A malformed but truthy `as_of`
+ * (present on the wire, not just absent) previously reached `formatRelativeTime`/
+ * `toLocaleString` unguarded in SubscriptionOverrideModal.tsx and rendered the literal string
+ * "Invalid Date" — a recurrence of the same defect shape resolveServerSnapshotTime itself
+ * already guards against.
+ *
+ * @param dateStr - a date string from the server, or null/undefined if the field is absent.
+ */
+export function isParsableDate(dateStr: string | null | undefined): boolean {
+  if (!dateStr) return false
+  return !Number.isNaN(new Date(dateStr).getTime())
+}
+
+/**
  * Resolves a server snapshot time from an `as_of` field.
  *
  * Used by admin components (UsersPage, UserDetailModal, SubscriptionOverrideModal)
@@ -89,9 +109,5 @@ export function inferPreset(
  *          if parsing fails or the field is absent/unparseable.
  */
 export function resolveServerSnapshotTime(asOfString: string | null | undefined): Date {
-  if (!asOfString) {
-    return new Date()
-  }
-  const asOfMs = new Date(asOfString).getTime()
-  return Number.isNaN(asOfMs) ? new Date() : new Date(asOfMs)
+  return isParsableDate(asOfString) ? new Date(asOfString as string) : new Date()
 }

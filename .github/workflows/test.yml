@@ -665,17 +665,24 @@ jobs:
         # save and each job would poison the other's cache. GOCACHE itself stays
         # job-local (see step above) — only its contents are persisted across runs.
         #
-        # Primary key includes github.sha (#1446 follow-up, G4): see the "Save Go build
-        # cache" step below for why. restore-keys still falls back to the most recent
-        # cache for this go.sum (any commit), then to the most recent cache for this Go
-        # version (any go.sum), so a brand-new commit still gets a warm cache.
+        # Primary key is a Go SOURCE hash, not github.sha (#1446 follow-up G4 used
+        # github.sha; this is the Codex review fix for that): keying on the commit SHA
+        # made EVERY commit — including doc-only or workflow-only ones, which cannot
+        # change compiled output — mint a brand-new cache entry. Under GitHub's 10GB
+        # per-repository cache cap, that churn can evict a still-warm entry and silently
+        # turn a later, genuinely-unrelated build cold. hashFiles('backend/**/*.go',
+        # '**/go.sum') changes only when Go source or dependencies actually change, which
+        # is what #1446 originally asked for ("GOCACHE keyed by go.sum + a source hash").
+        # restore-keys still falls back to the most recent cache for this Go version (any
+        # source hash), then to the most recent cache for this OS at all, so a commit that
+        # DOES change Go source still gets a warm (if imperfect) starting cache rather than
+        # a fully cold one.
         id: cache-go-build
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
+          key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', '**/go.sum') }}
           restore-keys: |
-            gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}-
             gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-
             gocache-backend-test-${{ runner.os }}-
 
@@ -752,18 +759,26 @@ jobs:
         # packages from later commits — most of the intended speedup was lost with the job still
         # reporting a "warm" cache.
         #
-        # The key above now includes github.sha, so each commit's run gets its own cache entry
-        # and this step actually saves every time. `continue-on-error: true` guards the one
-        # collision that can still happen: actions/cache/save fails outright if its exact key
-        # already exists, which happens on a re-run of the SAME commit (retried job, manual
-        # re-run). That failure is expected and harmless — the prior save from this commit is
-        # still valid — so it must not redden the job.
+        # The key above is now a Go source hash (hashFiles('backend/**/*.go', '**/go.sum')),
+        # not github.sha — see the "Restore Go build cache" step above for why the earlier
+        # github.sha-keyed version (#1446 follow-up G4) was itself a bug: it minted a new cache
+        # entry on EVERY commit, including ones that cannot change compiled output, and could
+        # evict warm entries under GitHub's per-repository cache cap. This save step now only
+        # produces a genuinely new entry when Go source or go.sum actually changed.
+        # `continue-on-error: true` guards the one collision that can still happen:
+        # actions/cache/save fails outright if its exact key already exists — expected on a
+        # re-run of the SAME commit (retried job, manual re-run), or now also on a second commit
+        # that changes non-Go files only (same source hash as the prior save). That failure is
+        # harmless — the prior save is still valid — so it must not redden the job; a failure
+        # here still surfaces as a workflow warning annotation (not a job failure), so a
+        # PERSISTENT save failure (e.g. a real quota/network problem, not just a key collision)
+        # remains visible rather than being fully silent.
         if: always()
         continue-on-error: true
         uses: actions/cache/save@v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
+          key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', '**/go.sum') }}
 
       - name: Final workspace cleanup
         if: always()
@@ -830,17 +845,21 @@ jobs:
         # the "Run integration tests" step below is compile-bound (see timeout-minutes
         # comment), and a warm GOCACHE should cut most of that time.
         #
-        # Primary key includes github.sha (G4 follow-up): see the "Save Go build cache"
-        # step below for why. restore-keys still falls back to the most recent cache for
-        # this go.sum (any commit), then to the most recent cache for this Go version
-        # (any go.sum), so a brand-new commit still gets a warm cache.
+        # Primary key is a Go SOURCE hash, not github.sha (G4 follow-up used github.sha;
+        # this is the Codex review fix for that — see the "Save Go build cache" step
+        # below for the full rationale, identical to backend-test's above): keying on
+        # the commit SHA minted a brand-new cache entry on every commit, including
+        # doc-only/workflow-only ones that cannot change compiled output, risking
+        # eviction of a still-warm entry under GitHub's 10GB per-repository cache cap.
+        # restore-keys still falls back to the most recent cache for this Go version
+        # (any source hash), then to the most recent cache for this OS at all, so a
+        # commit that DOES change Go source still gets a warm (if imperfect) cache.
         id: cache-go-build
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
+          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', '**/go.sum') }}
           restore-keys: |
-            gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}-
             gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-
             gocache-backend-integration-${{ runner.os }}-
 
@@ -974,18 +993,23 @@ jobs:
         # packages from later commits — defeating the #1446 fix this cache exists for, on the
         # one job (compile-bound, see timeout-minutes comment) that most needs it warm.
         #
-        # The key above now includes github.sha, so each commit's run gets its own cache entry
-        # and this step actually saves every time. `continue-on-error: true` guards the one
-        # collision that can still happen: actions/cache/save fails outright if its exact key
-        # already exists, which happens on a re-run of the SAME commit (retried job, manual
-        # re-run). That failure is expected and harmless — the prior save from this commit is
-        # still valid — so it must not redden the job.
+        # The key above is now a Go source hash (hashFiles('backend/**/*.go', '**/go.sum')),
+        # not github.sha — see backend-test's "Save Go build cache" step above for the full
+        # rationale: keying on github.sha (G4 follow-up) minted a new cache entry on every
+        # commit, including ones that cannot change compiled output, risking eviction of a
+        # still-warm entry under GitHub's per-repository cache cap. `continue-on-error: true`
+        # guards the one collision that can still happen: actions/cache/save fails outright if
+        # its exact key already exists — expected on a re-run of the SAME commit (retried job,
+        # manual re-run), or now also a second commit with an identical source hash (non-Go
+        # files only). That failure is harmless — the prior save is still valid — so it must not
+        # redden the job; it still surfaces as a workflow warning annotation (not a job
+        # failure), so a PERSISTENT save failure remains visible rather than being fully silent.
         if: always()
         continue-on-error: true
         uses: actions/cache/save@v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
+          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', '**/go.sum') }}
 
       - name: Cleanup PostgreSQL container
         if: always()

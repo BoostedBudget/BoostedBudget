@@ -1259,5 +1259,33 @@ describe('SubscriptionOverrideModal', () => {
             expect(screen.getByText(/snapshot:\s*—/i)).toBeInTheDocument()
             expect(screen.queryByText(/ago/i)).not.toBeInTheDocument()
         })
+
+        // Codex adversarial review finding (recurrence of the round-9 Part 3 "Invalid Date"
+        // defect, this time on `as_of` rather than `manual_tier_ends_at`): unlike the "absent"
+        // case above, a MALFORMED-but-truthy `as_of` used to reach `formatRelativeTime` (the
+        // label) and `new Date(...).toLocaleString()` (the title) with no parse guard at all —
+        // both render the literal string "Invalid Date" for an unparseable input.
+        // `resolveServerSnapshotTime` already failed closed for `now`'s own liveness arithmetic,
+        // but that only protects the chip/badge — this label and title are a separate code path
+        // that had no equivalent guard until this fix.
+        it('never renders the literal string "Invalid Date" for a malformed (present but unparseable) as_of', () => {
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: { ...SUB_DETAIL, as_of: 'not-a-real-date' },
+            })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            // Degrades to the same em-dash placeholder as the "absent" case, in both the visible
+            // label and the title attribute — never the literal string "Invalid Date" in either.
+            const snapshotEl = screen.getByText(/snapshot:\s*—/i)
+            expect(snapshotEl).toBeInTheDocument()
+            expect(document.body.textContent ?? '').not.toMatch(/invalid date/i)
+            const titledAncestor = snapshotEl.closest('[title]')
+            expect(titledAncestor?.getAttribute('title') ?? '').not.toMatch(/invalid date/i)
+        })
     })
 })
