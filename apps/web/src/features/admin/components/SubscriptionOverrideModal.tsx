@@ -33,7 +33,7 @@ import {
     Layers,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { formatRelativeTime } from '@/shared/dates'
+import { formatRelativeTime, resolveServerSnapshotTime } from '@/shared/dates'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { getSubscriptionPresentation } from '@/features/subscription/lib/subscriptionPresentation'
@@ -272,8 +272,7 @@ function SubscriptionOverrideForm({
     // so SubscriptionOverrideModal.test.tsx's "Single `now` threaded through override-status
     // calls" block was updated to pin the NEW invariant (anchored to `sub.as_of`, not
     // `new Date()`) rather than the old one.
-    const asOfMs = sub?.as_of ? new Date(sub.as_of).getTime() : NaN
-    const now = Number.isNaN(asOfMs) ? new Date() : new Date(asOfMs)
+    const now = resolveServerSnapshotTime(sub?.as_of)
     // Issue #1462 option 3 was conjunctive — anchor to the server's clock AND label the
     // snapshot's age explicitly. Only the first half shipped originally: anchoring `now` to
     // `sub.as_of` trades bounded client/server clock skew for a DIFFERENT hazard — this query has

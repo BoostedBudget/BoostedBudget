@@ -74,3 +74,24 @@ export function inferPreset(
 
   return 'custom'
 }
+
+/**
+ * Resolves a server snapshot time from an `as_of` field.
+ *
+ * Used by admin components (UsersPage, UserDetailModal, SubscriptionOverrideModal)
+ * to anchor override-liveness arithmetic to the server's snapshot instant
+ * (Issue #1462 follow-up G2) instead of the browser's clock. This prevents
+ * browser/server clock skew from causing disagreement about whether an override
+ * is live near expiry boundaries.
+ *
+ * @param asOfString - ISO date string from the server (e.g., data.as_of, user.as_of)
+ * @returns A Date object anchored to the server's snapshot, or the current browser time
+ *          if parsing fails or the field is absent/unparseable.
+ */
+export function resolveServerSnapshotTime(asOfString: string | null | undefined): Date {
+  if (!asOfString) {
+    return new Date()
+  }
+  const asOfMs = new Date(asOfString).getTime()
+  return Number.isNaN(asOfMs) ? new Date() : new Date(asOfMs)
+}
