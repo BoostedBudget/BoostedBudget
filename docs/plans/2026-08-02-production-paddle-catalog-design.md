@@ -37,7 +37,9 @@ Tests will load the production file explicitly and verify that all five tiers ha
 - Query the live catalog before creation and reuse an exact existing product or price if one appears.
 - Create products and their dependent prices in one bounded Paddle operation where practical.
 - Re-read the complete live catalog after creation and reconcile every amount, currency, cycle, tax mode, status, and product relationship.
-- Do not configure a production webhook or deploy production secrets as part of this change; those remain explicit acceptance items in #746 that require the production endpoint and deployment environment.
+- Set `PADDLE_ENVIRONMENT=production` in Fly configuration and `VITE_PADDLE_ENV=production` in the production frontend build so both applications select the live Paddle environment.
+- Install the production API key and webhook secret as Fly secrets, and install the live client token as a GitHub `production` environment secret.
+- The production notification destination is configured for all 12 events handled by the backend. Because the production API is offline during setup, defer delivery simulation and log verification until the first production deployment.
 
 ## Delivery
 
