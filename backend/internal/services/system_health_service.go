@@ -294,6 +294,21 @@ func (s *systemHealthService) getJobBacklogMetrics(ctx context.Context) (*domain
 		return nil, err
 	}
 
+	// Batch R4 Task 4 (Issue #1458 coverage gap): if this SECOND query fails, outstandingUsers/
+	// oldestOutstanding from the FIRST query above are deliberately DISCARDED rather than
+	// returned as a partial JobBacklogMetrics — the caller (getSystemHealth) treats any non-nil
+	// error here as "no data, unavailable" and zero-values the whole struct (Available stays
+	// false, its Go zero value). This is a deliberate choice, not an oversight: JobBacklogMetrics
+	// has a single `Available` flag covering all three numeric fields together (see its own doc
+	// comment on why — one bool, not three `*int64`s), so there is no wire-visible way to mark
+	// "the Plaid-cleanup pair is verified but the override-age gauge is unknown" independently.
+	// Splitting Available per-field would ripple into HealthDashboardPage.tsx's rendering and the
+	// generated TypeScript client for a partial-data case with no operator-facing upside — an
+	// admin looking at /admin/health during a query failure needs to know SOMETHING is currently
+	// unverifiable, not which fraction of it. Discarding good data alongside the failed query
+	// keeps that single signal simple and matches every other getX() helper in this service
+	// (getPaddleMetrics, getDeadLetterMetrics): one query error zero-values the whole metrics
+	// struct for that section, never a partially-populated one.
 	oldestUnclearedExpired, err := s.jobHealthRepo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
 	if err != nil {
 		return nil, err

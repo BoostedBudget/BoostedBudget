@@ -184,3 +184,56 @@ func TestSetRetentionDates_Integration_PreservesAbsoluteDeadlineAcrossDSTBoundar
 			"July(EDT) DST boundary — got %v, want %v; a divergence here means NewPool's session "+
 			"TimeZone pin is missing or not reaching this pool", actual, want)
 }
+
+// TestSetRetentionDates_Integration_PreservesAbsoluteDeadlineAcrossFallBackDSTBoundary is the
+// fall-back (EDT->EST) counterpart to
+// TestSetRetentionDates_Integration_PreservesAbsoluteDeadlineAcrossDSTBoundary above. Issue
+// #1461 suggestion 3 asked for DST coverage "across a spring-forward/fall-back boundary", but
+// both tests that existed before this one — the spring-forward test above (January EST -> July
+// EDT) and TestRetentionNoticeBoundary_Integration_CrossesDSTBoundary
+// (profile_repository_retention_notice_boundary_integration_test.go, anchored on the 2026-03-08
+// spring-forward transition) — only exercise the EST->EDT direction; a search of this codebase
+// for any EDT->EST anchor found none.
+//
+// America/New_York falls back from EDT to EST at 2026-11-01 02:00:00 EDT (clocks set back to
+// 01:00:00 EST), i.e. 2026-11-01 06:00:00 UTC — confirmed against a live Postgres 17 instance
+// before writing this test (with the session TimeZone set to America/New_York,
+// `SELECT '2026-11-01 05:59:00+00'::timestamptz` renders as 2026-11-01 01:59:00-04 (EDT), and
+// `SELECT '2026-11-01 06:00:00+00'::timestamptz` renders as 2026-11-01 01:00:00-05 (EST)), not
+// assumed from documentation alone. The anchor below (May,
+// EDT) plus 6 calendar months lands in November (EST), crossing that boundary in the OPPOSITE
+// direction from the existing spring-forward test — and, unlike that test, this direction is one
+// where an unpinned America/New_York session's wall-clock-preserving arithmetic lands an hour
+// LATER than the UTC-computed instant (verified directly against this host's Postgres: with the
+// session's own ambient TimeZone, `'2026-05-15 16:00:00+00'::timestamptz + make_interval(months
+// => 6)` returns 2026-11-15 17:00:00 UTC, not the 16:00:00 UTC this test asserts below).
+//
+// Falsified the same way as the spring-forward test above: removing
+// RuntimeParams["TimeZone"] = "UTC" from database.buildPoolConfig (internal/database/pgx.go) and
+// confirming this test goes RED.
+func TestSetRetentionDates_Integration_PreservesAbsoluteDeadlineAcrossFallBackDSTBoundary(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	// 2026-05-15 12:00:00-04 (EDT) — expressed as its UTC instant so the literal is unambiguous.
+	anchor := time.Date(2026, 5, 15, 16, 0, 0, 0, time.UTC)
+	const retentionMonths = 6
+
+	// The EXACT expression shape SetRetentionDates/RemoveUserTierOverride use in production:
+	// <timestamptz> + make_interval(months => N), relying entirely on whatever session TimeZone
+	// this pool's connections carry — no inline AT TIME ZONE here.
+	var actual time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT $1::timestamptz + make_interval(months => $2::int)`, anchor, retentionMonths,
+	).Scan(&actual))
+	actual = actual.UTC()
+
+	// The intended absolute deadline: 6 calendar months added in UTC, with no DST reinterpretation
+	// at all — May (EDT, -04) and November (EST, -05) must not matter.
+	want := time.Date(2026, 11, 15, 16, 0, 0, 0, time.UTC)
+	assert.True(t, want.Equal(actual),
+		"retention_expires_at-shaped arithmetic (clock_timestamp() + make_interval(months => N)) "+
+			"on connectTestDB's pool must preserve the absolute deadline across the May(EDT)->"+
+			"November(EST) fall-back DST boundary — got %v, want %v; a divergence here means "+
+			"NewPool's session TimeZone pin is missing or not reaching this pool", actual, want)
+}

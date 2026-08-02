@@ -452,8 +452,30 @@ func (u *User) EffectiveStatusWithActiveOverrideAt(now time.Time) (status string
 //
 // hasOverride is false whenever there is no CURRENTLY ACTIVE override (none set, or expired); in
 // that case tier is simply the raw SubscriptionTier and overrideValue is "".
+//
+// Delegates to EffectiveTierWithActiveOverrideAt(time.Now()) — see that method's doc comment for
+// why a caller assembling a response around a single already-captured snapshot instant (e.g. an
+// `as_of` field) MUST call the -At variant with that instant instead of this method, which reads
+// its own fresh clock.
 func (u *User) EffectiveTierWithActiveOverride() (tier string, overrideValue string, hasOverride bool) {
-	now := time.Now()
+	return u.EffectiveTierWithActiveOverrideAt(time.Now())
+}
+
+// EffectiveTierWithActiveOverrideAt is the -At twin of EffectiveTierWithActiveOverride,
+// evaluated against the given instant instead of an internal time.Now() read.
+//
+// Added for Issue #1466 (a #1462 residual, found by Codex adversarial review of PR #1465's
+// gap-fix commits): PR #1465 threaded a caller-captured instant through the STATUS axis
+// (EffectiveStatusWithActiveOverrideAt) but left the TIER axis reading its own time.Now() — so a
+// caller assembling a response around a single snapshot instant (e.g. an admin handler's
+// `asOf := time.Now()`, echoed back to the client as `as_of`) could still return an
+// `effective_tier` computed at a LATER instant than the one `as_of`/`effective_status` describe,
+// if the override's expiry boundary fell between the handler's asOf capture and this call — the
+// exact "two clocks describing one user" defect #1462/#1465 fixed on the status axis,
+// reintroduced on the tier axis. See
+// TestGetUserSubscription_EffectiveTier_DerivedFromAsOf_NotLaterClockRead
+// (admin_subscriptions_test.go) for the regression test.
+func (u *User) EffectiveTierWithActiveOverrideAt(now time.Time) (tier string, overrideValue string, hasOverride bool) {
 	if u.hasActiveManualOverrideAt(now) {
 		return *u.ManualTierOverride, *u.ManualTierOverride, true
 	}

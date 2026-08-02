@@ -98,16 +98,29 @@ func TestDeadLetterMetrics_Validation(t *testing.T) {
 // TestJobBacklogMetrics_Validation covers the three DB-derived backlog gauges surfaced on
 // /admin/health (Issue #1458) — structurally identical to DeadLetterMetrics above, mirroring the
 // same Paddle-metrics precedent (#762/#761).
+//
+// Batch R4 Task 4: before this fix, this test was a tautology — it assigned three literals to a
+// struct and asserted the exact same three literals back, which cannot fail short of the Go
+// compiler being broken, and never touched Available at all. Strengthened to actually exercise
+// Available's documented fail-closed contract (see JobBacklogMetrics.Available's own doc comment,
+// system_health.go): the zero value must read as "unavailable" (never a falsely-confident
+// "available, verified zero"), and an explicitly-set true must read back as true.
 func TestJobBacklogMetrics_Validation(t *testing.T) {
+	var zeroValue JobBacklogMetrics
+	assert.False(t, zeroValue.Available,
+		"Available must default to false (the Go zero value) — any code path that forgets to explicitly report success must read as unavailable, never as a falsely-confident verified zero")
+
 	metrics := JobBacklogMetrics{
 		PlaidCleanupOutstandingUsers:                    3,
 		PlaidCleanupOldestOutstandingSeconds:            7200,
 		ManualTierOverrideOldestUnclearedExpiredSeconds: 3600,
+		Available: true,
 	}
 
 	assert.Equal(t, int64(3), metrics.PlaidCleanupOutstandingUsers)
 	assert.Equal(t, int64(7200), metrics.PlaidCleanupOldestOutstandingSeconds)
 	assert.Equal(t, int64(3600), metrics.ManualTierOverrideOldestUnclearedExpiredSeconds)
+	assert.True(t, metrics.Available, "Available must be true when a query has genuinely verified the backlog (possibly a real zero)")
 }
 
 func TestSystemHealthResponse_Timestamp(t *testing.T) {

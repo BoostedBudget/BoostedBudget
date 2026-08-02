@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -108,10 +109,27 @@ func (s *HouseholdEntitlementService) SetOverrideTierValidator(validator func(ti
 // owner-read-only fallback below composes with it for free, since ComputeEffectiveTier()
 // already resolves the override) — see the sibling
 // TestResolveEffectiveEntitlement_MemberManualOverride_AppliesWhenOwnerLapses.
+//
+// Batch R4 Task 3 (found reviewing Issue #1466's neighborhood): a single time.Now() read, `now`
+// below, now backs EVERY override-liveness check in this method — the "own" branch's tier+status
+// pair immediately below, AND the household-owner branch's status+tier pair further down (which
+// already shared one read via EffectiveStatusWithActiveOverride/ownerHasOverride reuse, before
+// this fix, but via ITS OWN independent time.Now() call, not this one). Before this fix, the "own"
+// branch was the one place in this method that did NOT follow that pattern: Tier was computed via
+// effectiveTierName (internally reading time.Now() through EffectiveTierWithActiveOverride) and
+// Status via user.ComputeEffectiveStatus() (a SECOND, independent time.Now() read) — the same "two
+// clocks, one user" defect class Issue #1462/#1466 fixed on the admin subscription-detail
+// response, just with a narrower (two sequential local calls, not two calls with real I/O between
+// them) window here. Fixed for consistency with the owner branch's own established pattern, and
+// because the -At variants added for #1466 (domain.User.EffectiveStatusWithActiveOverrideAt/
+// EffectiveTierWithActiveOverrideAt) make sharing a single instant free.
 func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Context, user *domain.User) (domain.EffectiveEntitlement, error) {
+	now := time.Now()
+
+	ownStatus, _, _ := user.EffectiveStatusWithActiveOverrideAt(now)
 	own := domain.EffectiveEntitlement{
-		Tier:   s.effectiveTierName(ctx, user),
-		Status: user.ComputeEffectiveStatus(),
+		Tier:   s.effectiveTierNameAt(ctx, user, now),
+		Status: ownStatus,
 		Source: domain.EntitlementSourceOwn,
 	}
 
@@ -142,8 +160,10 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Co
 	// denial here would be indistinguishable from the original bypass from the member's point
 	// of view. EffectiveStatusWithActiveOverride is a single shared clock read, so this check
 	// and the Status field returned below can never disagree about whether the override was
-	// live.
-	ownerStatus, ownerOverrideValue, ownerHasOverride := owner.EffectiveStatusWithActiveOverride()
+	// live. Uses the SAME `now` the "own" branch above already captured (Batch R4 Task 3) rather
+	// than a second, independent time.Now() read — so this method now reads the clock exactly
+	// once no matter which branch it takes.
+	ownerStatus, ownerOverrideValue, ownerHasOverride := owner.EffectiveStatusWithActiveOverrideAt(now)
 	if ownerHasOverride && s.overrideTierValidator != nil && !s.overrideTierValidator(ownerOverrideValue) {
 		slog.WarnContext(ctx, "rejecting household owner's manual tier override: value does not name a configured tier",
 			"owner_id", owner.ID, "manual_tier_override", ownerOverrideValue)
@@ -170,9 +190,10 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Co
 	// reach owner.ComputeEffectiveTier() unvalidated here — matching enrichUserProfile's
 	// identical asymmetry before its own fix (profile.go) — and flow straight into the
 	// caller's tierConfig.GetTier() as an unrecognized name (GetEntitlementSummary,
-	// SubscriptionService.GetEffectiveSubscription). effectiveTierName reuses the same
-	// ownerOverrideValue/ownerHasOverride computed above rather than re-deriving them (and
-	// re-reading time.Now()) via a second EffectiveTierWithActiveOverride call.
+	// SubscriptionService.GetEffectiveSubscription). This inlines the identical check against the
+	// ownerOverrideValue/ownerHasOverride already computed above rather than calling
+	// effectiveTierNameAt a second time — avoiding a redundant call, not a redundant time.Now()
+	// read (both reads in this method now share the single `now` captured at the top).
 	ownerTier := owner.SubscriptionTier
 	if ownerHasOverride {
 		ownerTier = ownerOverrideValue
@@ -186,15 +207,17 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Co
 	}, nil
 }
 
-// effectiveTierName returns user's effective tier name, validating an active manual override
-// against the injected overrideTierValidator (see SetOverrideTierValidator) and falling back to
-// the raw SubscriptionTier when it names no configured tier (Issue #1413 — the tier axis of the
-// malformed-override rule, this task). Used for the "own" (solo/no-household-row) branch of
-// ResolveEffectiveEntitlement; the household-owner branch inlines the identical check against
-// its own already-computed ownerOverrideValue/ownerHasOverride (see the status-axis check just
-// above it) rather than calling this a second time, to avoid a redundant time.Now() read.
-func (s *HouseholdEntitlementService) effectiveTierName(ctx context.Context, user *domain.User) string {
-	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverride()
+// effectiveTierNameAt returns user's effective tier name AS OF `now`, validating an active manual
+// override against the injected overrideTierValidator (see SetOverrideTierValidator) and falling
+// back to the raw SubscriptionTier when it names no configured tier (Issue #1413 — the tier axis
+// of the malformed-override rule, this task). Used for the "own" (solo/no-household-row) branch
+// of ResolveEffectiveEntitlement, sharing the SAME `now` that branch already captures for its
+// Status line beside it (Batch R4 Task 3 — Issue #1466 follow-up) rather than reading its own
+// fresh clock. The household-owner branch inlines the identical check against its own
+// already-computed ownerOverrideValue/ownerHasOverride (see the status-axis check just above it)
+// rather than calling this a second time, to avoid a redundant call.
+func (s *HouseholdEntitlementService) effectiveTierNameAt(ctx context.Context, user *domain.User, now time.Time) string {
+	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverrideAt(now)
 	if hasOverride && s.overrideTierValidator != nil && !s.overrideTierValidator(overrideValue) {
 		slog.WarnContext(ctx, "rejecting manual tier override on tier axis: value does not name a configured tier",
 			"user_id", user.ID, "manual_tier_override", overrideValue)
