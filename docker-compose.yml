@@ -2,8 +2,25 @@ version: '3.9'
 
 services:
   # PostgreSQL Database (Single region for MVP: us-east-1)
+  #
+  # Pinned to 17 to match CI and production. This was `postgres:15-alpine` while CI's migration job
+  # ran `postgres:17` and squawk lints with `--pg-version=17` — so local development validated
+  # migrations and SQL behaviour against a different major version than they actually run on.
+  #
+  # ⚠️ UPGRADING AN EXISTING CHECKOUT DESTROYS YOUR LOCAL DEV DATABASE. A PostgreSQL 15 data
+  # directory cannot be read by a 17 server; the container will refuse to start with "database files
+  # are incompatible with server". Recreate the volume:
+  #
+  #     docker compose down -v && make dev && make migrate-up
+  #
+  # Local dev data is disposable (fixtures and the QA populator rebuild it), so this is the intended
+  # path rather than an in-place pg_upgrade.
+  #
+  # Note for scripts/test-migrations.sh: pg_dump refuses to dump a server newer than itself, so a
+  # host client older than 17 will not work. Either install one (brew install postgresql@17) or set
+  # PG_DUMP="$PWD/scripts/pg_dump-via-docker" to use this container's own binary.
   postgres:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     container_name: boostedbudget-db
     environment:
       POSTGRES_DB: boostedbudget

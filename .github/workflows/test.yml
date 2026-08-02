@@ -1240,12 +1240,25 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: squawk migrations/*.sql --pg-version=17
 
+      # PG_DUMP points at the server container's own pg_dump. The "Configure PostgreSQL client tools"
+      # step above resolves the newest client available on this self-hosted runner, which is 15 —
+      # older than the postgres:17 container this job starts. pg_dump REFUSES to dump a newer server,
+      # so the host client can never work here.
+      #
+      # That was not merely inconvenient: test-migrations.sh discarded pg_dump's stderr and hashed
+      # its empty stdout, so the idempotency and up->down->up schema-identity suites compared an
+      # empty string with itself and reported PASSED. This job has therefore been green while
+      # verifying nothing about schema identity — on every run before this commit. The script now
+      # fails closed on both an unchecked `migrate` exit code and an empty dump, and checks
+      # client-vs-server major versions up front, so a future mismatch is loud rather than silent.
       - name: Run comprehensive migration tests
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
+          PG_DUMP: ${{ env.UNIQUE_WORKSPACE }}/scripts/pg_dump-via-docker
+          PG_DUMP_CONTAINER: test-postgres-${{ github.run_id }}
         run: |
           cd ${{ env.UNIQUE_WORKSPACE }}
-          chmod +x scripts/test-migrations.sh
+          chmod +x scripts/test-migrations.sh scripts/pg_dump-via-docker
           ./scripts/test-migrations.sh
 
       - name: Upload performance benchmarks
