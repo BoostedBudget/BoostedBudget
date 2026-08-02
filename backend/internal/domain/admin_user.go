@@ -37,6 +37,13 @@ type AdminUserDetail struct {
 	AdminUserListItem
 	TransactionsCount int `json:"transactions_count"`
 	BudgetsCount      int `json:"budgets_count"`
+	// AsOf is the server instant EffectiveStatus (on the embedded AdminUserListItem) was computed
+	// from (Issue #1462 follow-up G2) — lets UserDetailModal.tsx anchor its own
+	// isOverrideActive/getOverrideStatus liveness arithmetic to this snapshot instant instead of
+	// the browser's clock, exactly like AdminSubscriptionDetailOutputBody.AsOf already does for
+	// SubscriptionOverrideModal. Lives on the response (this struct), not on AdminUserListItem
+	// itself — there is one server instant for the whole detail view, not one per embedded item.
+	AsOf time.Time `json:"as_of"`
 }
 
 // AdminUserFilters contains filter parameters for the admin user list.
@@ -58,4 +65,12 @@ type AdminUserListResponse struct {
 	PageSize   int                 `json:"page_size"`
 	TotalPages int                 `json:"total_pages"`
 	HasMore    bool                `json:"has_more"`
+	// AsOf is the single server instant every row's EffectiveStatus on this page was computed
+	// from (Issue #1462 follow-up G2) — a page-level snapshot, not a per-row one:
+	// UsersPage.tsx's hasLiveOverride/getOverrideStatus calls (one per row) all anchor to this
+	// ONE instant so they cannot disagree with each other, or with the server, due to
+	// browser/server clock skew or request latency near an expiry boundary. Deliberately not
+	// added to AdminUserListItem — that would be one field per row for a value that is identical
+	// across the whole response.
+	AsOf time.Time `json:"as_of"`
 }

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/danielgtaylor/huma/v2"
@@ -363,6 +364,12 @@ func (h *AdminHandler) CheckRole(ctx context.Context, input *CheckRoleInput) (*C
 //   - 500: Internal server error
 //   - 503: Admin user service not configured
 func (h *AdminHandler) ListUsers(ctx context.Context, input *ListUsersInput) (*ListUsersOutput, error) {
+	// Issue #1462 follow-up G2: captured before the rest of this handler's work, mirroring
+	// GetUserSubscription's `as_of` capture in admin_subscriptions.go — a single server instant
+	// for the WHOLE page, so UsersPage.tsx can anchor every row's isOverrideActive/
+	// getOverrideStatus liveness check to one shared, trusted clock instead of the browser's.
+	asOf := time.Now()
+
 	// Check if admin user service is configured
 	if h.adminUserService == nil {
 		return nil, huma.Error503ServiceUnavailable("Admin user service not configured")
@@ -388,6 +395,7 @@ func (h *AdminHandler) ListUsers(ctx context.Context, input *ListUsersInput) (*L
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to list users: %w", err))
 	}
+	response.AsOf = asOf
 
 	return &ListUsersOutput{Body: response}, nil
 }
@@ -404,6 +412,12 @@ func (h *AdminHandler) ListUsers(ctx context.Context, input *ListUsersInput) (*L
 //   - 500: Internal server error
 //   - 503: Admin user service not configured
 func (h *AdminHandler) GetUserDetail(ctx context.Context, input *GetUserDetailInput) (*GetUserDetailOutput, error) {
+	// Issue #1462 follow-up G2: captured before the rest of this handler's work, mirroring
+	// GetUserSubscription's `as_of` capture in admin_subscriptions.go — lets UserDetailModal.tsx
+	// anchor its own isOverrideActive/getOverrideStatus liveness check to this server instant
+	// instead of the browser's clock.
+	asOf := time.Now()
+
 	// Check if admin user service is configured
 	if h.adminUserService == nil {
 		return nil, huma.Error503ServiceUnavailable("Admin user service not configured")
@@ -417,6 +431,7 @@ func (h *AdminHandler) GetUserDetail(ctx context.Context, input *GetUserDetailIn
 		}
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get user detail: %w", err))
 	}
+	detail.AsOf = asOf
 
 	return &GetUserDetailOutput{Body: detail}, nil
 }

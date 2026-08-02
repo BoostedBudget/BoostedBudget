@@ -33,6 +33,7 @@ import {
     Layers,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { formatRelativeTime } from '@/shared/dates'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { getSubscriptionPresentation } from '@/features/subscription/lib/subscriptionPresentation'
@@ -273,6 +274,20 @@ function SubscriptionOverrideForm({
     // `new Date()`) rather than the old one.
     const asOfMs = sub?.as_of ? new Date(sub.as_of).getTime() : NaN
     const now = Number.isNaN(asOfMs) ? new Date() : new Date(asOfMs)
+    // Issue #1462 option 3 was conjunctive — anchor to the server's clock AND label the
+    // snapshot's age explicitly. Only the first half shipped originally: anchoring `now` to
+    // `sub.as_of` trades bounded client/server clock skew for a DIFFERENT hazard — this query has
+    // `staleTime: 5 * 60 * 1000` and `refetchOnWindowFocus: false` (main.tsx), so nothing
+    // refreshes an open modal on a timer and `as_of` freezes at whatever instant the modal
+    // happened to open, then grows arbitrarily stale the longer an admin leaves it open. For an
+    // override expiring in the next few minutes, this modal would otherwise keep asserting
+    // "Manual override active" with total confidence off a snapshot that may already be minutes
+    // old. `snapshotAgeLabel` (rendered next to the effective-status badge below) is what makes
+    // that honest — it does NOT use `now` above (which is trusted-but-possibly-stale); it
+    // compares `sub.as_of` against the REAL current wall clock via formatRelativeTime, so it grows
+    // ("2m ago" -> "5m ago") even while `now`/the rest of this render stays pinned to the frozen
+    // snapshot.
+    const snapshotAgeLabel = sub?.as_of ? formatRelativeTime(sub.as_of) : null
     // Round 8 / Task MC: this used to be inline `sub?.manual_tier_ends_at && new Date(...) <
     // new Date()` — a naive comparison that never consults tier validity AND fails OPEN on an
     // unparseable date, because `NaN < anything` is always `false`, so a malformed
@@ -415,6 +430,18 @@ function SubscriptionOverrideForm({
                                         >
                                             {presentation.badgeLabel}
                                         </Badge>
+                                    </span>
+                                    {/* Issue #1462: labels how stale this snapshot is — `now` above is
+                                        anchored to `sub.as_of` and never refreshes on a timer (5-minute
+                                        staleTime, refetchOnWindowFocus off), so this is the only signal
+                                        that the "Effective" status above may no longer reflect the
+                                        server's current answer. */}
+                                    <span
+                                        className="inline-flex items-center gap-1 text-muted-foreground/70"
+                                        title={sub.as_of ? `Snapshot captured ${new Date(sub.as_of).toLocaleString()}` : undefined}
+                                    >
+                                        <Clock size={12} />
+                                        Snapshot: {snapshotAgeLabel ?? '—'}
                                     </span>
                                 </div>
 

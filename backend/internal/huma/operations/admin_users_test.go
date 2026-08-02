@@ -333,6 +333,46 @@ func TestGetUserDetail_Success(t *testing.T) {
 	mockService.AssertExpectations(t)
 }
 
+// TestGetUserDetail_IncludesAsOf proves the response carries an `as_of` timestamp (Issue #1462
+// follow-up G2) — the server instant EffectiveStatus (on the embedded AdminUserListItem) was
+// computed from, which UserDetailModal.tsx anchors its own isOverrideActive/getOverrideStatus
+// calls to instead of the browser's clock. Mirrors TestGetUserSubscription_IncludesAsOf in
+// admin_subscriptions_test.go.
+func TestGetUserDetail_IncludesAsOf(t *testing.T) {
+	mockService := new(mockAdminUserService)
+	cfg := &config.Config{Environment: "qa"}
+	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	expectedDetail := &domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID: userID,
+		},
+	}
+	mockService.On("GetUserDetail", ctx, userID).Return(expectedDetail, nil)
+
+	input := &GetUserDetailInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+		UserID: userID,
+	}
+
+	before := time.Now()
+	output, err := handler.GetUserDetail(ctx, input)
+	after := time.Now()
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.False(t, output.Body.AsOf.IsZero(), "as_of must always be populated")
+	assert.False(t, output.Body.AsOf.Before(before.Add(-time.Second)), "as_of must be captured at request time, not a fixed/zero value")
+	assert.False(t, output.Body.AsOf.After(after.Add(time.Second)), "as_of must be captured at request time, not a fixed/zero value")
+	mockService.AssertExpectations(t)
+}
+
 // TestGetUserDetail_NotFound tests 404 when user not found
 func TestGetUserDetail_NotFound(t *testing.T) {
 	mockService := new(mockAdminUserService)
@@ -440,6 +480,47 @@ func TestListUsers_SearchTooShort_Returns400(t *testing.T) {
 			assert.Contains(t, err.Error(), "search must be at least 3 characters")
 		})
 	}
+}
+
+// TestListUsers_IncludesAsOf proves the response carries an `as_of` timestamp (Issue #1462
+// follow-up G2) — a single server instant for the whole page that UsersPage.tsx anchors its
+// per-row isOverrideActive/getOverrideStatus calls to, instead of the browser's clock. Mirrors
+// TestGetUserSubscription_IncludesAsOf in admin_subscriptions_test.go.
+func TestListUsers_IncludesAsOf(t *testing.T) {
+	mockService := new(mockAdminUserService)
+	cfg := &config.Config{Environment: "qa"}
+	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+
+	ctx := context.Background()
+	expectedResponse := &domain.AdminUserListResponse{
+		Users:      []domain.AdminUserListItem{},
+		TotalCount: 0,
+		Page:       1,
+		PageSize:   20,
+	}
+	mockService.On("ListUsers", ctx, domain.AdminUserFilters{}, 1, 20).Return(expectedResponse, nil)
+
+	input := &ListUsersInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+		PagePaginationInput: inputs.PagePaginationInput{
+			Page:     1,
+			PageSize: 20,
+		},
+	}
+
+	before := time.Now()
+	output, err := handler.ListUsers(ctx, input)
+	after := time.Now()
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.False(t, output.Body.AsOf.IsZero(), "as_of must always be populated")
+	assert.False(t, output.Body.AsOf.Before(before.Add(-time.Second)), "as_of must be captured at request time, not a fixed/zero value")
+	assert.False(t, output.Body.AsOf.After(after.Add(time.Second)), "as_of must be captured at request time, not a fixed/zero value")
+	mockService.AssertExpectations(t)
 }
 
 // TestListUsers_SearchExactlyThreeChars_Succeeds verifies that exactly 3 characters passes.

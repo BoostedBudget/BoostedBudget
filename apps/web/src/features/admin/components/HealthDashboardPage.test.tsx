@@ -70,10 +70,14 @@ const mockHealthData = {
     reconciliation_discrepancies: 0,
   },
   // Issue #1458: the 3 DB-derived Plaid-cleanup/manual-tier-override backlog gauges.
+  // Issue #1458 follow-up G16: `available: true` here represents a SUCCESSFUL query that
+  // legitimately found zero backlog — a verified zero, not an unknown. See the "unavailable" test
+  // below for the failed-query case this fixture is deliberately NOT exercising.
   job_backlog: {
     plaid_cleanup_outstanding_users: 0,
     plaid_cleanup_oldest_outstanding_seconds: 0,
     manual_tier_override_oldest_uncleared_expired_seconds: 0,
+    available: true,
   },
 }
 
@@ -269,6 +273,7 @@ describe('HealthDashboardPage', () => {
             plaid_cleanup_outstanding_users: 42,
             plaid_cleanup_oldest_outstanding_seconds: 7500,
             manual_tier_override_oldest_uncleared_expired_seconds: 5400,
+            available: true,
           },
         },
         isLoading: false,
@@ -292,7 +297,7 @@ describe('HealthDashboardPage', () => {
 
     it('should render zero-state values without crashing when there is no backlog', async () => {
       mockUseGetSystemHealth.mockReturnValue({
-        data: mockHealthData, // job_backlog all zeros
+        data: mockHealthData, // job_backlog all zeros, available: true (a verified zero)
         isLoading: false,
         error: null,
         refetch: () => {},
@@ -307,6 +312,73 @@ describe('HealthDashboardPage', () => {
       expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('0')
       expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('0s')
       expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('0s')
+    })
+
+    // Issue #1458 follow-up G16: before this fix, a FAILED backlog query and a genuinely EMPTY
+    // backlog were both represented by the identical zero-valued fields, so this section rendered
+    // a confident green "0" in both cases — indistinguishable, and wrong exactly when the operator
+    // most needed to know the gauge could not currently be trusted.
+    it('should render an "Unavailable" warning state, not a green zero, when the backlog query failed', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          job_backlog: {
+            plaid_cleanup_outstanding_users: 0,
+            plaid_cleanup_oldest_outstanding_seconds: 0,
+            manual_tier_override_oldest_uncleared_expired_seconds: 0,
+            available: false,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Plaid Cleanup Outstanding Users')).toBeInTheDocument()
+      })
+
+      // Every card in the section must read "Unavailable" (not the numeric "0" a real empty
+      // backlog would show, and not a green success accent).
+      expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('Unavailable')
+      expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('Unavailable')
+      expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('Unavailable')
+
+      // Confirms the cards are NOT rendered with the 'success' (green) accent StatCard maps
+      // status='success' to — the whole point being fixed here is that "unavailable" must never
+      // read as a healthy/confident state.
+      const outstandingUsersCard = screen.getByText('Plaid Cleanup Outstanding Users').closest('[data-slot="card"]')
+      expect(outstandingUsersCard).not.toBeNull()
+      expect(outstandingUsersCard?.className ?? '').not.toMatch(/success/i)
+    })
+
+    // Same "unknown != zero" signal, but for a client with an OLDER cached response predating
+    // this field's addition — `available` is simply absent (undefined), not explicitly `false`.
+    // Must degrade the same fail-closed way, not accidentally read as available.
+    it('treats a missing `available` field (older cached response) the same as unavailable', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          job_backlog: {
+            plaid_cleanup_outstanding_users: 0,
+            plaid_cleanup_oldest_outstanding_seconds: 0,
+            manual_tier_override_oldest_uncleared_expired_seconds: 0,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Plaid Cleanup Outstanding Users')).toBeInTheDocument()
+      })
+
+      expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('Unavailable')
     })
   })
 })

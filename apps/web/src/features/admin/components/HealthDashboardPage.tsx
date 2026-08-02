@@ -71,6 +71,13 @@ export function HealthDashboardPage() {
     return null;
   }
 
+  // Issue #1458 follow-up G16: `available` distinguishes "queried successfully" (possibly a real
+  // zero backlog) from "the underlying query failed" — both currently read as the identical
+  // zero-valued numeric fields, so this flag is the ONLY signal the Job Backlog cards below have
+  // for telling them apart. Falsy (false or, for an older cached/mocked response, undefined) reads
+  // as unavailable — the fail-closed default, never a falsely-confident green zero.
+  const jobBacklogAvailable = data.job_backlog.available;
+
   return (
     <div className="p-8 max-w-[1400px] mx-auto max-md:p-4">
       <header className="flex justify-between items-center mb-8 flex-wrap gap-4 max-md:flex-col max-md:items-start">
@@ -202,27 +209,37 @@ export function HealthDashboardPage() {
           section follows Paddle Status instead). The other four metrics #1443 added (three
           lifetime Prometheus counters plus the in-process JobLastSuccessTimestamp heartbeat)
           deliberately stay Prometheus-only — see domain.JobBacklogMetrics's doc comment (backend)
-          for why. */}
+          for why.
+
+          Follow-up G16: `jobBacklogAvailable` (below) distinguishes a query that legitimately
+          found a real zero backlog from one that FAILED and silently reported the same zero —
+          #1458's own reasoning for excluding PlaidCleanupServiceNotConfiguredTotal from this
+          response ("unknown != zero") applied to those four metrics but not, until now, to these
+          three. `!available` renders 'Unavailable' with a warning accent instead of a green "0"
+          the operator would otherwise read as "no backlog" when the truth is "we don't know".
+          Scope discipline: this only makes the failure VISIBLE — whether a non-zero (or
+          unavailable) backlog should also degrade the overall /admin/health status is a separate
+          product decision #1458 never asked for, so `data.status` is untouched here. */}
       <section className="mb-8">
         <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Job Backlog</h2>
         <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
           <SummaryCard
             title="Plaid Cleanup Outstanding Users"
-            value={data.job_backlog.plaid_cleanup_outstanding_users.toString()}
+            value={jobBacklogAvailable ? data.job_backlog.plaid_cleanup_outstanding_users.toString() : 'Unavailable'}
             icon={<Users size={24} />}
-            status={data.job_backlog.plaid_cleanup_outstanding_users > 0 ? 'warning' : 'success'}
+            status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.plaid_cleanup_outstanding_users > 0 ? 'warning' : 'success')}
           />
           <SummaryCard
             title="Plaid Cleanup Oldest Outstanding"
-            value={formatBacklogAge(data.job_backlog.plaid_cleanup_oldest_outstanding_seconds)}
+            value={jobBacklogAvailable ? formatBacklogAge(data.job_backlog.plaid_cleanup_oldest_outstanding_seconds) : 'Unavailable'}
             icon={<Clock size={24} />}
-            status={data.job_backlog.plaid_cleanup_oldest_outstanding_seconds > 0 ? 'warning' : 'success'}
+            status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.plaid_cleanup_oldest_outstanding_seconds > 0 ? 'warning' : 'success')}
           />
           <SummaryCard
             title="Manual Override Oldest Uncleared Expired"
-            value={formatBacklogAge(data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds)}
+            value={jobBacklogAvailable ? formatBacklogAge(data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds) : 'Unavailable'}
             icon={<Timer size={24} />}
-            status={data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds > 0 ? 'warning' : 'success'}
+            status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds > 0 ? 'warning' : 'success')}
           />
         </div>
       </section>

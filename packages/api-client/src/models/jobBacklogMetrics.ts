@@ -32,6 +32,7 @@
  */
 
 export interface JobBacklogMetrics {
+  available: boolean;
   manual_tier_override_oldest_uncleared_expired_seconds: number;
   plaid_cleanup_oldest_outstanding_seconds: number;
   plaid_cleanup_outstanding_users: number;

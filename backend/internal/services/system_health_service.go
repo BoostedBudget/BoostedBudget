@@ -128,6 +128,12 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 	// Get job backlog metrics (Issue #1458)
 	jobBacklogMetrics, err := s.getJobBacklogMetrics(ctx)
 	if err != nil {
+		// Issue #1458 follow-up G16: this zero-valued struct leaves Available at its zero value
+		// (false) — the query failed, so there is no verified backlog to report, not a healthy
+		// zero. Scope discipline: this deliberately does NOT feed into calculateOverallStatus
+		// below — whether a non-zero (or now-unavailable) backlog should degrade overall health
+		// is a product decision #1458 never asked for; only making the failure VISIBLE is in
+		// scope here.
 		response.JobBacklog = domain.JobBacklogMetrics{}
 	} else {
 		response.JobBacklog = *jobBacklogMetrics
@@ -277,6 +283,9 @@ func (s *systemHealthService) getPaddleMetrics(ctx context.Context) (*domain.Pad
 // a missing jobHealthRepo simply means this gauge isn't wired yet, not a health-check failure).
 func (s *systemHealthService) getJobBacklogMetrics(ctx context.Context) (*domain.JobBacklogMetrics, error) {
 	if s.jobHealthRepo == nil {
+		// Not wired yet, not a query failure — but still no real data to report, so this stays
+		// Available: false (the zero value) rather than a falsely-confident "verified zero"
+		// (Issue #1458 follow-up G16; see JobBacklogMetrics.Available's doc comment).
 		return &domain.JobBacklogMetrics{}, nil
 	}
 
@@ -294,6 +303,9 @@ func (s *systemHealthService) getJobBacklogMetrics(ctx context.Context) (*domain
 		PlaidCleanupOutstandingUsers:                    int64(outstandingUsers),
 		PlaidCleanupOldestOutstandingSeconds:            int64(oldestOutstanding.Seconds()),
 		ManualTierOverrideOldestUnclearedExpiredSeconds: int64(oldestUnclearedExpired.Seconds()),
+		// Both queries above succeeded — this is a VERIFIED backlog snapshot (possibly a real
+		// zero), not an unknown. Issue #1458 follow-up G16.
+		Available: true,
 	}, nil
 }
 

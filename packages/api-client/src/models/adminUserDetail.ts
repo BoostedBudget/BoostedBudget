@@ -34,6 +34,7 @@
 export interface AdminUserDetail {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  as_of: string;
   boosts_count: number;
   budgets_count: number;
   created_at: string;

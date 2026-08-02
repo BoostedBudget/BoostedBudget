@@ -591,6 +591,9 @@ components:
           format: uri
           readOnly: true
           type: string
+        as_of:
+          format: date-time
+          type: string
         boosts_count:
           format: int64
           type: integer
@@ -642,6 +645,7 @@ components:
       required:
         - transactions_count
         - budgets_count
+        - as_of
         - id
         - email
         - subscription_tier
@@ -724,6 +728,9 @@ components:
           format: uri
           readOnly: true
           type: string
+        as_of:
+          format: date-time
+          type: string
         has_more:
           type: boolean
         page:
@@ -751,6 +758,7 @@ components:
         - page_size
         - total_pages
         - has_more
+        - as_of
       type: object
     AllocationBreakdown:
       additionalProperties: false
@@ -3799,6 +3807,8 @@ components:
     JobBacklogMetrics:
       additionalProperties: false
       properties:
+        available:
+          type: boolean
         manual_tier_override_oldest_uncleared_expired_seconds:
           format: int64
           type: integer
@@ -3812,6 +3822,7 @@ components:
         - plaid_cleanup_outstanding_users
         - plaid_cleanup_oldest_outstanding_seconds
         - manual_tier_override_oldest_uncleared_expired_seconds
+        - available
       type: object
     LargestTransactionItem:
       additionalProperties: false

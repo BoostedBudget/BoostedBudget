@@ -557,6 +557,7 @@ func TestGetSystemHealth_JobBacklogMetricsPopulated(t *testing.T) {
 	assert.Equal(t, int64(3), result.JobBacklog.PlaidCleanupOutstandingUsers)
 	assert.Equal(t, int64(2*60*60), result.JobBacklog.PlaidCleanupOldestOutstandingSeconds)
 	assert.Equal(t, int64(90*60), result.JobBacklog.ManualTierOverrideOldestUnclearedExpiredSeconds)
+	assert.True(t, result.JobBacklog.Available, "a successful query must be marked available (Issue #1458 follow-up G16)")
 
 	mockJobHealthRepo.AssertExpectations(t)
 }
@@ -587,6 +588,12 @@ func TestGetSystemHealth_JobBacklogMetrics_NilRepo_ZeroValues(t *testing.T) {
 // TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues mirrors
 // TestGetSystemHealth_PaddleMetricsError_UsesZeroValues's "partial data over none" convention —
 // a job-health query failure must not fail the whole /admin/health response.
+//
+// Issue #1458 follow-up G16: this also proves the failure is marked `Available: false`, not just
+// zero-valued — see TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguishable
+// below for why the two must be distinguishable at all (a bare zero-value-struct equality check,
+// which this test used before G16, cannot tell "query failed" apart from "query succeeded, found
+// nothing" — both produce the exact same zero-valued domain.JobBacklogMetrics{}).
 func TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues(t *testing.T) {
 	mockHealthRepo := new(MockSystemHealthRepository)
 	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
@@ -608,6 +615,75 @@ func TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, domain.JobBacklogMetrics{}, result.JobBacklog)
+	assert.False(t, result.JobBacklog.Available, "a failed job-backlog query must be marked unavailable, not silently reported as a real zero")
 
 	mockJobHealthRepo.AssertExpectations(t)
+}
+
+// TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguishable is the RED/GREEN
+// pin for Issue #1458 follow-up G16 (the gap between #1458's own reasoning — applied to the FOUR
+// metrics it excluded from this response — and these THREE, which it included but still let a
+// failed query masquerade as a healthy zero).
+//
+// Before this fix, a query ERROR and a query that SUCCEEDS with a genuinely empty backlog were
+// both represented by the exact same value: a zero-valued domain.JobBacklogMetrics{}. No field on
+// the struct could tell them apart, so HealthDashboardPage.tsx rendered both as a confident green
+// "0" — exactly backwards, since the failed-query case is the one moment the operator most needs
+// a signal that the gauge cannot currently be trusted.
+//
+// This test proves the two cases are now distinguishable via `Available`: a REAL zero backlog
+// (the repository call succeeds and legitimately returns 0/0) is marked `Available: true`, while a
+// FAILED query is marked `Available: false` — even though every numeric field reads identically
+// (0) in both cases.
+func TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguishable(t *testing.T) {
+	t.Run("a successful query reporting a real, verified zero backlog is marked Available", func(t *testing.T) {
+		mockHealthRepo := new(MockSystemHealthRepository)
+		mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+		mockPool := new(MockPool)
+		mockJobHealthRepo := new(MockJobHealthRepository)
+
+		setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
+		mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), nil)
+		mockJobHealthRepo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(time.Duration(0), nil)
+
+		service := &systemHealthService{
+			healthRepo:     mockHealthRepo,
+			deadLetterRepo: mockDeadLetterRepo,
+			pool:           mockPool,
+			jobHealthRepo:  mockJobHealthRepo,
+		}
+
+		result, err := service.GetSystemHealth(context.Background())
+
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), result.JobBacklog.PlaidCleanupOutstandingUsers)
+		assert.True(t, result.JobBacklog.Available, "a successful query that legitimately finds zero backlog must be marked available — this is a VERIFIED zero, not an unknown")
+
+		mockJobHealthRepo.AssertExpectations(t)
+	})
+
+	t.Run("a failed query is marked unavailable even though every numeric field is also zero", func(t *testing.T) {
+		mockHealthRepo := new(MockSystemHealthRepository)
+		mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+		mockPool := new(MockPool)
+		mockJobHealthRepo := new(MockJobHealthRepository)
+
+		setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
+		mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), errors.New("db error"))
+
+		service := &systemHealthService{
+			healthRepo:     mockHealthRepo,
+			deadLetterRepo: mockDeadLetterRepo,
+			pool:           mockPool,
+			jobHealthRepo:  mockJobHealthRepo,
+		}
+
+		result, err := service.GetSystemHealth(context.Background())
+
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), result.JobBacklog.PlaidCleanupOutstandingUsers, "numeric fields still read zero on error — Available is the only signal that distinguishes this from the real-zero case above")
+		assert.False(t, result.JobBacklog.Available, "a failed query must never be marked available")
+
+		mockJobHealthRepo.AssertExpectations(t)
+	})
 }
