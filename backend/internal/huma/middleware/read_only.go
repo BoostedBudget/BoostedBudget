@@ -1,10 +1,14 @@
 package middleware
 
 // #930: Read-only enforcement middleware.
-// Blocks mutating HTTP methods (POST/PUT/PATCH/DELETE) for users with inactive, cancelled, or past_due subscriptions.
+// Blocks mutating HTTP methods (POST/PUT/PATCH/DELETE) for users whose EFFECTIVE subscription
+// status (override-aware; Issue #1413) is inactive, cancelled, or past_due.
 // GET and HEAD are always allowed (read-only access).
 // Certain paths (resubscribe, self-service) are explicitly whitelisted to allow full access.
 // #898: Narrowed subscription whitelist — only checkout and cancel are allowed while locked.
+// #1413: When the effective status could NOT be resolved (a DB error during the Clerk
+// middleware's lookup), mutating requests are failed closed (503) rather than silently
+// allowed through — see the SubscriptionStatusUnresolvedKey handling below.
 
 import (
 	"context"
@@ -78,8 +82,8 @@ var readOnlyPrefixAllowedPaths = []string{
 
 // NewReadOnlyMiddleware creates a Huma middleware that enforces read-only access for
 // inactive, cancelled, and past_due subscriptions. It blocks POST, PUT, PATCH, and DELETE for
-// users whose subscription status is read-only (see domain.IsReadOnlySubscription), while
-// allowing GET and HEAD.
+// users whose EFFECTIVE subscription status is read-only (see domain.IsReadOnlySubscription),
+// while allowing GET and HEAD.
 //
 // Public routes (no Security annotation) are always passed through.
 // Whitelisted paths are always allowed to support resubscription and self-service flows.
@@ -87,6 +91,14 @@ var readOnlyPrefixAllowedPaths = []string{
 // checker is optional (nil-safe) — when set, a caller whose raw subscription status is
 // read-only but who is actively covered by a household plan (#1367 — Phase 3) is treated
 // as having access rather than being blocked. nil fails closed to pre-#1367 behavior.
+//
+// #1413: three context states are distinguished for mutating requests:
+//  1. EffectiveSubscriptionStatusKey present → evaluated as today.
+//  2. SubscriptionStatusUnresolvedKey true (status lookup failed, e.g. a DB error) → the
+//     request is failed closed with 503 (after the same whitelist checks below), never
+//     silently allowed through.
+//  3. Neither key set (no status reader configured at all) → allowed through, exactly as
+//     before #1413 — this is NOT the same as case 2 and must not be blocked.
 func NewReadOnlyMiddleware(checker HouseholdCoverageChecker) func(ctx huma.Context, next func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		// Skip middleware for public routes (no Security annotation)
@@ -102,20 +114,26 @@ func NewReadOnlyMiddleware(checker HouseholdCoverageChecker) func(ctx huma.Conte
 			return
 		}
 
-		// For mutating methods, check subscription status
-		subStatus, ok := ctx.Context().Value(inputs.SubscriptionStatusKey).(string)
-		if !ok || subStatus == "" {
-			// No subscription status in context — cannot determine restriction, allow through
-			next(ctx)
-			return
-		}
+		// For mutating methods, check the effective subscription status.
+		effectiveStatus, ok := ctx.Context().Value(inputs.EffectiveSubscriptionStatusKey).(string)
+		unresolved, _ := ctx.Context().Value(inputs.SubscriptionStatusUnresolvedKey).(bool)
 
-		// Only restrict inactive and cancelled subscriptions
-		status := domain.SubscriptionStatus(subStatus)
-		if !status.IsReadOnlySubscription() {
+		if ok && effectiveStatus != "" {
+			// Only restrict inactive and cancelled subscriptions
+			status := domain.SubscriptionStatus(effectiveStatus)
+			if !status.IsReadOnlySubscription() {
+				next(ctx)
+				return
+			}
+		} else if !unresolved {
+			// No effective status in context and the lookup was never attempted/never
+			// failed (no status reader configured) — cannot determine restriction, allow
+			// through. This preserves pre-#1413 behavior exactly.
 			next(ctx)
 			return
 		}
+		// Falls through to the whitelist checks below in both remaining cases: the
+		// effective status is read-only, OR it could not be resolved (unresolved == true).
 
 		// Check if path is whitelisted — exact-match first, then method-scoped exact
 		// match (GT-1), then prefix, then the household invite accept/decline suffix
@@ -137,6 +155,19 @@ func NewReadOnlyMiddleware(checker HouseholdCoverageChecker) func(ctx huma.Conte
 		}
 		if readOnlyPathSuffixAllowed(path) {
 			next(ctx)
+			return
+		}
+
+		// #1413: fail closed when the effective status could not be resolved (e.g. a DB
+		// error during the Clerk middleware's lookup). This check MUST run after every
+		// allow-list check above — blocking earlier would also block Paddle/Plaid webhooks,
+		// all /api/v1/admin/ routes, and every subscription-recovery path during exactly
+		// the kind of database blip this is meant to guard against. Distinguished from the
+		// normal 403 lockout below: a 503 "please retry" is honest about an outage, whereas
+		// "your subscription has ended" would be a lie.
+		if unresolved {
+			writeReadOnlyJSONError(ctx, http.StatusServiceUnavailable,
+				"We're temporarily unable to verify your subscription status. Please retry shortly.")
 			return
 		}
 

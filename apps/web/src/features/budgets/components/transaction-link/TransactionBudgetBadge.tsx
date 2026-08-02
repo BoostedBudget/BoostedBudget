@@ -6,7 +6,7 @@
  * the transaction matches. Clicking navigates to the budget detail page.
  */
 
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { FolderIcon, TagIcon, SparklesIcon } from 'lucide-react'
 import { getBudgetDetailPath } from '../../constants'
 import type { BudgetCategoryMatch, MatchReason } from '../../utils/transactionBudgetMatcher'

@@ -45,16 +45,16 @@ type SavingsImpactWriteRepository interface {
 type SavingsStatsWorker struct {
 	river.WorkerDefaults[SavingsStatsArgs]
 
-	aggregateRepo    SavingsStatsAggregateRepository
+	aggregateRepo     SavingsStatsAggregateRepository
 	savingsImpactRepo SavingsImpactWriteRepository
-	logger           *slog.Logger
+	logger            *slog.Logger
 }
 
 // SavingsStatsWorkerDeps contains the dependencies for SavingsStatsWorker.
 type SavingsStatsWorkerDeps struct {
-	AggregateRepo    SavingsStatsAggregateRepository
+	AggregateRepo     SavingsStatsAggregateRepository
 	SavingsImpactRepo SavingsImpactWriteRepository
-	Logger           *slog.Logger
+	Logger            *slog.Logger
 }
 
 // NewSavingsStatsWorker creates a new SavingsStatsWorker.
@@ -64,9 +64,9 @@ func NewSavingsStatsWorker(deps SavingsStatsWorkerDeps) *SavingsStatsWorker {
 		logger = slog.Default()
 	}
 	return &SavingsStatsWorker{
-		aggregateRepo:    deps.AggregateRepo,
+		aggregateRepo:     deps.AggregateRepo,
 		savingsImpactRepo: deps.SavingsImpactRepo,
-		logger:           logger,
+		logger:            logger,
 	}
 }
 
@@ -92,6 +92,8 @@ func (w *SavingsStatsWorker) Work(ctx context.Context, job *river.Job[SavingsSta
 		status := "success"
 		if err != nil {
 			status = "failed"
+		} else {
+			observability.RecordJobSuccess(job.Kind) // Issue #1413 P4: last-success heartbeat
 		}
 		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
@@ -140,4 +142,3 @@ func (w *SavingsStatsWorker) Work(ctx context.Context, job *river.Job[SavingsSta
 
 	return nil
 }
-

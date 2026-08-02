@@ -5,7 +5,7 @@
  * Issue #699: Create Marketing Landing Page for First-Time Visitors
  */
 
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { Check, ArrowRight } from 'lucide-react'
 import { useSubscriptionTiers } from '@/features/subscription/hooks/useSubscriptionTiers'
 import type { TierName } from '@/features/subscription/types'

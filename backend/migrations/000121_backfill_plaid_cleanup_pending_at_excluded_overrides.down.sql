@@ -1,0 +1,20 @@
+-- Down migration: intentional no-op (data preservation) — mirrors 000120's down migration.
+--
+-- We do NOT null out plaid_cleanup_pending_at for rows this migration stamped, because:
+-- 1. There is no way to distinguish a row THIS migration stamped from one any later, legitimate
+--    writer (a fresh cancellation, 000120's own re-stamp, ClearPlaidCleanupPendingIfMatches, a
+--    comp grant/removal) has since touched — the WHERE clause that selected them
+--    (plaid_cleanup_pending_at IS NULL) is, by construction, no longer true for any of them after
+--    the up migration runs.
+-- 2. NULLing plaid_cleanup_pending_at for every currently-eligible row would silently reintroduce
+--    the EXACT invisible-forever leak this migration exists to close: a real, currently-running
+--    ineligibility episode would lose its grace-window anchor, and nothing would ever reset it —
+--    a comp lapsing is a pure wall-clock event that writes nothing (see this migration's up.sql
+--    header comment), so there is no later writer to fall back on.
+--
+-- If a specific environment genuinely needs to force re-evaluation of the grace window for a
+-- SPECIFIC user (e.g. to test the repair pass), null that one user's marker directly instead of
+-- reverting this migration wholesale:
+--   UPDATE users SET plaid_cleanup_pending_at = NULL WHERE id = '<user-id>';
+--
+-- No-op: intentionally no executable statement below this line.

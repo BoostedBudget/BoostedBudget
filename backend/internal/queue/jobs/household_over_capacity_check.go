@@ -186,6 +186,25 @@ func NewHouseholdOverCapacityCheckWorker(deps HouseholdOverCapacityCheckWorkerDe
 	}
 }
 
+// effectiveTierName returns owner's effective tier name, falling back to the raw SubscriptionTier
+// when an active manual_tier_override names no tier configured in w.tierConfig (Issue #1413 —
+// the tier axis of the malformed-override rule, this task). manual_tier_override is an
+// unconstrained VARCHAR(50) with no CHECK constraint, so its value can be garbage; both tier
+// lookups in processHousehold (the top-of-function read and the fresh re-check) previously
+// passed owner.ComputeEffectiveTier() straight into w.tierConfig.GetTier(), which would fail the
+// ENTIRE daily run for a household whose owner carries such a value.
+func (w *HouseholdOverCapacityCheckWorker) effectiveTierName(owner *domain.User) string {
+	tier, overrideValue, hasOverride := owner.EffectiveTierWithActiveOverride()
+	if hasOverride && w.tierConfig != nil {
+		if _, err := w.tierConfig.GetTier(domain.TierName(overrideValue)); err != nil {
+			w.logger.Warn("rejecting manual tier override on tier axis: value does not name a configured tier",
+				"user_id", owner.ID, "manual_tier_override", overrideValue)
+			return owner.SubscriptionTier
+		}
+	}
+	return tier
+}
+
 // Work processes a household over-capacity check job.
 //
 // The worker scans every household with active members and, per household:
@@ -212,6 +231,8 @@ func (w *HouseholdOverCapacityCheckWorker) Work(ctx context.Context, job *river.
 		status := "success"
 		if err != nil {
 			status = "failed"
+		} else {
+			observability.RecordJobSuccess(job.Kind) // Issue #1413 P4: last-success heartbeat
 		}
 		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
@@ -273,10 +294,12 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		return fmt.Errorf("failed to get owner %s: %w", h.OwnerUserID, err)
 	}
 
-	// Case 1: owner's own subscription is read-only (cancelled/past_due/inactive) —
-	// grace is moot, members already fall back to their own tier via the (unchanged)
-	// entitlement resolver's owner-read-only branch.
-	if domain.SubscriptionStatus(owner.SubscriptionStatus).IsReadOnlySubscription() {
+	// Case 1: owner's own EFFECTIVE subscription status is read-only
+	// (cancelled/past_due/inactive) AND the owner isn't currently comped via an active
+	// manual_tier_override (#1413) — grace is moot, members already fall back to their own
+	// tier via the entitlement resolver's owner-read-only branch, which reads the same
+	// effective status so the two can never disagree.
+	if domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
 		if h.OverCapacitySince != nil {
 			if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
 				return fmt.Errorf("failed to clear over-capacity for read-only-owner household %s: %w", h.ID, err)
@@ -285,7 +308,7 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		return nil
 	}
 
-	tier, err := w.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+	tier, err := w.tierConfig.GetTier(domain.TierName(w.effectiveTierName(owner)))
 	if err != nil {
 		return fmt.Errorf("failed to resolve tier for owner %s: %w", h.OwnerUserID, err)
 	}
@@ -323,7 +346,7 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("failed to re-fetch owner %s for fresh read-only check: %w", h.OwnerUserID, err)
 	}
-	if domain.SubscriptionStatus(freshOwner.SubscriptionStatus).IsReadOnlySubscription() {
+	if domain.SubscriptionStatus(freshOwner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
 		if h.OverCapacitySince != nil {
 			if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
 				return fmt.Errorf("failed to clear over-capacity for read-only-owner household %s (fresh re-check): %w", h.ID, err)
@@ -331,7 +354,7 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		}
 		return nil
 	}
-	freshTier, err := w.tierConfig.GetTier(domain.TierName(freshOwner.ComputeEffectiveTier()))
+	freshTier, err := w.tierConfig.GetTier(domain.TierName(w.effectiveTierName(freshOwner)))
 	if err != nil {
 		return fmt.Errorf("failed to resolve fresh tier for owner %s: %w", h.OwnerUserID, err)
 	}

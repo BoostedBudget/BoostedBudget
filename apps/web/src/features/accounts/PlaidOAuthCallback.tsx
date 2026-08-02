@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { usePlaidLink } from 'react-plaid-link'
 import { useCreateLinkToken } from '@boostedbudget/api-client/endpoints/plaid/plaid'
 

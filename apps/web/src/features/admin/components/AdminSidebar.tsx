@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink } from 'react-router'
 import { LayoutDashboard, Users, CreditCard, Activity, Webhook, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ADMIN_SIDEBAR_ITEMS } from '../constants'

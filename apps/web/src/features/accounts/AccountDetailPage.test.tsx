@@ -15,7 +15,7 @@
 
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, act } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router'
 
 import { AccountDetailPage } from './AccountDetailPage'
 import { mockUseGetAccounts, mockRefetchAccounts } from '@/test/mocks/accounts-api'

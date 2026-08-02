@@ -12,7 +12,7 @@
  */
 
 import { useEffect } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link } from 'react-router'
 import { ArrowLeft, AlertCircle } from 'lucide-react'
 import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import { AccountSummaryHeader } from './components/AccountSummaryHeader'

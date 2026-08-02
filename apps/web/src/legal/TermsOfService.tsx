@@ -8,7 +8,7 @@
  * Route: /legal/terms (see App.tsx)
  */
 
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 
 export function TermsOfService() {
   return (

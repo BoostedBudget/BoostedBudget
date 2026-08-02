@@ -5,20 +5,30 @@ import "time"
 // AdminUserListItem represents a user in the admin list view.
 // Contains summarized user information with aggregated counts.
 type AdminUserListItem struct {
-	ID                   string     `json:"id"`
-	Email                string     `json:"email"`
-	SubscriptionTier     string     `json:"subscription_tier"`
-	SubscriptionStatus   string     `json:"subscription_status"`
-	ManualTierOverride   *string    `json:"manual_tier_override,omitempty"`
-	ManualTierEndsAt     *time.Time `json:"manual_tier_ends_at,omitempty"`
-	PrimaryRegion        string     `json:"primary_region"`
-	CreatedAt            time.Time  `json:"created_at"`
-	LastLoginAt          *time.Time `json:"last_login_at,omitempty"`
-	IsActive             bool       `json:"is_active"`
-	IsAdmin              bool       `json:"is_admin"`
-	LinkedAccountsCount  int        `json:"linked_accounts_count"`
-	BoostsCount          int        `json:"boosts_count"`
-	ReferralsCount       int        `json:"referrals_count"`
+	ID                 string `json:"id"`
+	Email              string `json:"email"`
+	SubscriptionTier   string `json:"subscription_tier"`
+	SubscriptionStatus string `json:"subscription_status"`
+	// EffectiveStatus is the server-computed effective subscription status (Issue #1413) — it
+	// forces "active" when a live manual tier override exists, otherwise mirrors
+	// SubscriptionStatus. No omitempty: the frontend must always see this key so it never
+	// distinguishes "empty" from "absent" (mirrors domain.User.IsComped's precedent).
+	EffectiveStatus    string     `json:"effective_status"`
+	ManualTierOverride *string    `json:"manual_tier_override,omitempty"`
+	ManualTierEndsAt   *time.Time `json:"manual_tier_ends_at,omitempty"`
+	// DeletionRequestedAt/DeletionScheduledAt surface a pending GDPR account deletion (Issue
+	// #1413) so the admin override modal can warn that a comp will not save an account already
+	// scheduled for deletion. Absent (omitempty) means no pending deletion.
+	DeletionRequestedAt *time.Time `json:"deletion_requested_at,omitempty"`
+	DeletionScheduledAt *time.Time `json:"deletion_scheduled_at,omitempty"`
+	PrimaryRegion       string     `json:"primary_region"`
+	CreatedAt           time.Time  `json:"created_at"`
+	LastLoginAt         *time.Time `json:"last_login_at,omitempty"`
+	IsActive            bool       `json:"is_active"`
+	IsAdmin             bool       `json:"is_admin"`
+	LinkedAccountsCount int        `json:"linked_accounts_count"`
+	BoostsCount         int        `json:"boosts_count"`
+	ReferralsCount      int        `json:"referrals_count"`
 }
 
 // AdminUserDetail extends AdminUserListItem with additional statistics.

@@ -18,7 +18,43 @@ var (
 	ErrLinkedItemNotFound = errors.New("linked item not found")
 	// ErrDuplicateLinkedItem is returned when attempting to create a linked item that already exists
 	ErrDuplicateLinkedItem = errors.New("linked item already exists for this user")
+	// ErrNoLinkedItemsUpdated is returned by MarkItemsDisconnected when its UPDATE affected ZERO
+	// rows despite being given a non-empty ids slice (Issue #1413 Medium finding, PR #1443 Codex
+	// review round 4): before this fix, RowsAffected was never inspected, so a write that silently
+	// touched nothing (every given id already 'disconnected'/'replaced', excluded by this query's
+	// own WHERE guard — see MarkItemsDisconnected's doc comment) was indistinguishable from a
+	// genuine success to both a caller and a test.
+	//
+	// Deliberately still a case NOT to escalate to a hard failure: cleanupItems (plaid_item_
+	// cleanup_service.go), the only production caller, does not filter 'replaced' items out of
+	// the ids it passes here (only 'disconnected' items are skipped before ever reaching this
+	// write) — RemoveAllUserItems's GetByUserID fetch returns items in ANY status, so a lone
+	// already-'replaced' item legitimately reaching this call (e.g. Plaid's ITEM_NOT_FOUND mapped
+	// to success for an item replaced by a re-link before this pass ever ran) is a reachable,
+	// expected no-op, not a bug — see TestLinkedItemRepository_MarkItemsDisconnected_
+	// AlreadyReplacedIsNotReverted. Callers should treat this as a logged anomaly (errors.Is-
+	// checkable) rather than a genuine per-item failure — turning an idempotent no-op into a hard
+	// abort would reproduce the exact false-positive failure mode Issue #1413 #1453's sibling
+	// finding (verifyNoNewLinkedItemAppeared) exists to avoid.
+	ErrNoLinkedItemsUpdated = errors.New("MarkItemsDisconnected: update affected zero rows (all given ids already disconnected/replaced?)")
 )
+
+// normalizeLinkedItemStatus treats a NULL linked_items.status value as
+// domain.LinkedItemStatusActive — Issue #1413 round-8 Blocker 1: the column is nullable
+// (migration 000013 added an 'active' default but no NOT NULL constraint), so a row inserted
+// before that default existed can have a genuinely NULL status while still being a fully live
+// connection (the same rule GetUsersNeedingPlaidDisconnectRepair's SQL and this repository's own
+// GetActiveItemsByUserID/MarkItemsDisconnected WHERE clauses already apply). domain.LinkedItem.Status
+// is a bare LinkedItemStatus (string) field, not a pointer, so scanning a SQL NULL directly into it
+// fails outright ("cannot scan NULL into *string") rather than merely misclassifying it — callers
+// must scan the raw column into a *string and pass it through this helper instead of scanning
+// directly into &item.Status.
+func normalizeLinkedItemStatus(raw *string) domain.LinkedItemStatus {
+	if raw == nil {
+		return domain.LinkedItemStatusActive
+	}
+	return domain.LinkedItemStatus(*raw)
+}
 
 // LinkedItemRepository defines the interface for linked item data access
 type LinkedItemRepository interface {
@@ -97,6 +133,21 @@ type LinkedItemRepository interface {
 	// This is used when a subscription expires to preserve transaction history while
 	// stopping Plaid syncing. Unlike Delete, this does NOT cascade delete accounts/transactions.
 	MarkAllUserItemsDisconnected(ctx context.Context, userID string) error
+
+	// MarkItemsDisconnected marks the given SPECIFIC linked items (by their internal UUIDs) as
+	// 'disconnected', leaving any item NOT in ids untouched. Issue #1413 H2: unlike
+	// MarkAllUserItemsDisconnected (which marks every item for a user regardless of whether ITS
+	// OWN Plaid /item/remove call actually succeeded), this persists per-item cleanup outcome so
+	// a retry after a partial failure only re-attempts the items still outstanding — a failed
+	// item's status stays untouched (still visible to GetActiveItemsByUserID / still present in
+	// GetByUserID with a non-disconnected status) instead of being silently marked done alongside
+	// its successful siblings. A nil or empty ids is a no-op (not an error).
+	//
+	// Returns ErrNoLinkedItemsUpdated (errors.Is-checkable) if the UPDATE affected zero rows
+	// despite a non-empty ids — see that sentinel's doc comment for why this is a reachable,
+	// legitimate no-op (not automatically a bug) and must not be conflated with a genuine
+	// database error.
+	MarkItemsDisconnected(ctx context.Context, ids []string) error
 
 	// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
 	GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
@@ -282,6 +333,7 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1`
 
 	var item domain.LinkedItem
+	var statusRaw *string
 	err := r.db.QueryRow(ctx, query, id).Scan(
 		&item.ID,
 		&item.UserID,
@@ -292,7 +344,7 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
-		&item.Status,
+		&statusRaw,
 		&item.ErrorCode,
 		&item.ErrorMessage,
 		&item.LastErrorAt,
@@ -313,6 +365,7 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 	if err != nil {
 		return nil, err
 	}
+	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 		return nil, err
@@ -323,6 +376,12 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 
 // GetByUserID retrieves all linked items for a specific user
 // Issue #171: Updated to include status, error tracking, and soft-delete fields
+//
+// Issue #1413 round-10 (closing most of #1444): this method has NO status predicate at all — it
+// is reachable via the hard-deletion fallback (PlaidItemCleanupService.RemoveAllUserItems), which
+// is exactly why a NULL-status row here used to panic ("cannot scan NULL into *string") instead of
+// merely being misclassified: normalizeLinkedItemStatus (see its own doc comment) treats NULL as
+// domain.LinkedItemStatusActive, matching GetActiveItemsByUserID/GetByID's established fix.
 func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 ORDER BY created_at DESC`
 
@@ -335,6 +394,7 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
+		var statusRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
@@ -345,7 +405,7 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
-			&item.Status,
+			&statusRaw,
 			&item.ErrorCode,
 			&item.ErrorMessage,
 			&item.LastErrorAt,
@@ -362,6 +422,7 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 		if err != nil {
 			return nil, err
 		}
+		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
 		}
@@ -379,11 +440,15 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 }
 
 // GetByItemID retrieves a linked item by its Plaid item ID
+//
+// Issue #1413 round-10 (#1444): NULL-safe status scan (see normalizeLinkedItemStatus) — this
+// method has no status predicate, so a genuinely NULL-status row is reachable here.
 func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (*domain.LinkedItem, error) {
 	blindIdx := r.enc.BlindIndex(itemID)
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE item_id_blind_idx = $1`
 
 	var item domain.LinkedItem
+	var statusRaw *string
 	err := r.db.QueryRow(ctx, query, blindIdx).Scan(
 		&item.ID,
 		&item.UserID,
@@ -394,7 +459,7 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
-		&item.Status,
+		&statusRaw,
 		&item.ErrorCode,
 		&item.ErrorMessage,
 		&item.LastErrorAt,
@@ -415,6 +480,7 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 	if err != nil {
 		return nil, err
 	}
+	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 		return nil, err
@@ -551,10 +617,14 @@ func (r *linkedItemRepository) Delete(ctx context.Context, id string) error {
 //
 // This is used by handlers to ensure users can only access their own linked items.
 // Issue #171: Updated to include status, error tracking, and soft-delete fields
+//
+// Issue #1413 round-10 (#1444): NULL-safe status scan (see normalizeLinkedItemStatus) — this
+// method has no status predicate, so a genuinely NULL-status row is reachable here.
 func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID string) (*domain.LinkedItem, error) {
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1 AND user_id = $2`
 
 	var item domain.LinkedItem
+	var statusRaw *string
 	err := r.db.QueryRow(ctx, query, id, userID).Scan(
 		&item.ID,
 		&item.UserID,
@@ -565,7 +635,7 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
-		&item.Status,
+		&statusRaw,
 		&item.ErrorCode,
 		&item.ErrorMessage,
 		&item.LastErrorAt,
@@ -586,6 +656,7 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 	if err != nil {
 		return nil, err
 	}
+	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 		return nil, err
@@ -639,10 +710,14 @@ func (r *linkedItemRepository) DeleteByUser(ctx context.Context, id, userID stri
 //	tx.Commit(ctx)
 //
 // Returns ErrLinkedItemNotFound if the item doesn't exist.
+//
+// Issue #1413 round-10 (#1444): NULL-safe status scan (see normalizeLinkedItemStatus) — this
+// method has no status predicate, so a genuinely NULL-status row is reachable here.
 func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id string) (*domain.LinkedItem, error) {
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1 FOR UPDATE`
 
 	var item domain.LinkedItem
+	var statusRaw *string
 	err := tx.QueryRow(ctx, query, id).Scan(
 		&item.ID,
 		&item.UserID,
@@ -653,7 +728,7 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
-		&item.Status,
+		&statusRaw,
 		&item.ErrorCode,
 		&item.ErrorMessage,
 		&item.LastErrorAt,
@@ -674,6 +749,7 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 	if err != nil {
 		return nil, err
 	}
+	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 		return nil, err
@@ -687,11 +763,16 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 // Issue #171: Plaid Re-Link Handling
 //
 // Returns nil, nil if no matching item found (not an error).
+//
+// Issue #1413 round-10 (#1444): NULL-safe status scan (see normalizeLinkedItemStatus) for
+// consistency with every other scan site in this file, even though the `status = $3` predicate
+// above structurally excludes a NULL-status row already (SQL's `NULL = 'x'` is never TRUE).
 func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, userID, institutionID, status string) (*domain.LinkedItem, error) {
 	institutionIDBlind := r.enc.BlindIndex(institutionID)
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 AND institution_id_blind_idx = $2 AND status = $3 ORDER BY created_at DESC LIMIT 1`
 
 	var item domain.LinkedItem
+	var statusRaw *string
 	err := r.db.QueryRow(ctx, query, userID, institutionIDBlind, status).Scan(
 		&item.ID,
 		&item.UserID,
@@ -702,7 +783,7 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
-		&item.Status,
+		&statusRaw,
 		&item.ErrorCode,
 		&item.ErrorMessage,
 		&item.LastErrorAt,
@@ -724,6 +805,7 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 	if err != nil {
 		return nil, err
 	}
+	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 		return nil, err
@@ -743,6 +825,10 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 //
 // Only returns items that haven't been scheduled yet (cleanup_scheduled_at IS NULL).
 // Issue #668: Plaid Item Management for Cost Optimization
+//
+// Issue #1413 round-10 (#1444): NULL-safe status scan (see normalizeLinkedItemStatus) for
+// consistency with every other scan site in this file, even though `status NOT IN (...)` above
+// already structurally excludes a NULL-status row (SQL three-valued logic).
 func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
 	query := `
 		SELECT li.id, li.user_id, li.item_id, li.access_token_encrypted,
@@ -782,6 +868,7 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
+		var statusRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
@@ -792,7 +879,7 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
-			&item.Status,
+			&statusRaw,
 			&item.ErrorCode,
 			&item.ErrorMessage,
 			&item.LastErrorAt,
@@ -811,6 +898,7 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 		if err != nil {
 			return nil, err
 		}
+		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
 		}
@@ -828,6 +916,10 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 }
 
 // GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due.
+//
+// Issue #1413 round-10 (#1444): NULL-safe status scan (see normalizeLinkedItemStatus) for
+// consistency with every other scan site in this file, even though `status NOT IN (...)` above
+// already structurally excludes a NULL-status row (SQL three-valued logic).
 func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
 	query := `
 		SELECT id, user_id, item_id, access_token_encrypted,
@@ -852,6 +944,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
+		var statusRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
@@ -862,7 +955,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
-			&item.Status,
+			&statusRaw,
 			&item.ErrorCode,
 			&item.ErrorMessage,
 			&item.LastErrorAt,
@@ -881,6 +974,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 		if err != nil {
 			return nil, err
 		}
+		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
 		}
@@ -942,6 +1036,11 @@ func (r *linkedItemRepository) ClearCleanupSchedule(ctx context.Context, itemID 
 // MarkAllUserItemsDisconnected marks all linked items for a user as 'disconnected'.
 // This preserves transaction history while indicating the Plaid connection is no longer active.
 // Issue #679, #680: Trial expiration
+//
+// Issue #1413 round-8 Blocker 1: WHERE guard treats a NULL status as live too, matching
+// GetActiveItemsByUserID/MarkItemsDisconnected below and GetUsersNeedingPlaidDisconnectRepair
+// (profile_repository.go) — a bare `status NOT IN (...)` evaluates to SQL's UNKNOWN (not TRUE) for
+// a NULL status, silently leaving such a row untouched.
 func (r *linkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context, userID string) error {
 	now := time.Now()
 
@@ -951,16 +1050,62 @@ func (r *linkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context,
 		    updated_at = $1,
 		    status_changed_at = $1
 		WHERE user_id = $2
-		  AND status NOT IN ('disconnected', 'replaced')
+		  AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))
 	`
 
 	_, err := r.db.Exec(ctx, query, now, userID)
 	return err
 }
 
+// MarkItemsDisconnected marks only the given linked items as 'disconnected' — see the interface
+// doc comment for why this differs from MarkAllUserItemsDisconnected (Issue #1413 H2).
+//
+// Issue #1413 round-8 Blocker 1: WHERE guard treats a NULL status as live too — see
+// MarkAllUserItemsDisconnected's doc comment above for why a bare `status NOT IN (...)` silently
+// excludes a NULL-status row under SQL three-valued logic.
+//
+// Issue #1413 Medium finding (PR #1443 Codex review round 4): the UPDATE's RowsAffected is now
+// inspected — previously only the query error was returned, so a write that matched zero rows
+// (every given id already excluded by the WHERE guard above) succeeded silently, indistinguishable
+// from a genuine write to both a caller and a test. See ErrNoLinkedItemsUpdated's doc comment for
+// why this is surfaced as an errors.Is-checkable sentinel rather than folded into a hard failure.
+func (r *linkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET status = 'disconnected',
+		    updated_at = $1,
+		    status_changed_at = $1
+		WHERE id = ANY($2)
+		  AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))
+	`
+
+	tag, err := r.db.Exec(ctx, query, now, ids)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: 0 of %d given id(s) matched", ErrNoLinkedItemsUpdated, len(ids))
+	}
+	return nil
+}
+
 // GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
+//
+// Issue #1413 round-8 Blocker 1: the WHERE guard now treats a NULL status as live too, matching
+// GetUsersNeedingPlaidDisconnectRepair's (profile_repository.go) NULL-aware predicate. Before this
+// fix, a bare `status NOT IN (...)` silently excluded a NULL-status row (SQL three-valued logic:
+// NULL NOT IN (...) is UNKNOWN, not TRUE) — the repair query would select the user, but this fetch
+// would return zero items, so PlaidItemCleanupService.cleanupItems reported success and the item
+// leaked forever, re-selected by the repair query every day with no effect. See
+// TestPlaidCleanupService_Integration_NullStatusItem_ActuallyDisconnectedAndMarked
+// (internal/services) for the end-to-end proof.
 func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
-	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 AND status NOT IN ('disconnected', 'replaced') ORDER BY created_at DESC`
+	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 AND (status IS NULL OR status NOT IN ('disconnected', 'replaced')) ORDER BY created_at DESC`
 
 	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
@@ -971,6 +1116,7 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
+		var statusRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
@@ -981,7 +1127,7 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
-			&item.Status,
+			&statusRaw,
 			&item.ErrorCode,
 			&item.ErrorMessage,
 			&item.LastErrorAt,
@@ -998,6 +1144,7 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 		if err != nil {
 			return nil, err
 		}
+		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
 		}

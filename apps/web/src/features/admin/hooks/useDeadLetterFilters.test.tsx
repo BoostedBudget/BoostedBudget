@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
-import { BrowserRouter, MemoryRouter } from 'react-router-dom'
+import { BrowserRouter, MemoryRouter } from 'react-router'
 import { createElement } from 'react'
 import type { ReactNode } from 'react'
 import { useDeadLetterFilters } from './useDeadLetterFilters'

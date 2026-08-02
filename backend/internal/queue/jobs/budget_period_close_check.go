@@ -132,6 +132,8 @@ func (w *BudgetPeriodCloseCheckWorker) Work(ctx context.Context, job *river.Job[
 		status := "success"
 		if err != nil {
 			status = "failed"
+		} else {
+			observability.RecordJobSuccess(job.Kind) // Issue #1413 P4: last-success heartbeat
 		}
 		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())

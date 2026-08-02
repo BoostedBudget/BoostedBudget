@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { useAuth, useUser, useClerk } from '@clerk/react-router'
 import { Inbox } from 'lucide-react'
 import { Navigation } from './Navigation'

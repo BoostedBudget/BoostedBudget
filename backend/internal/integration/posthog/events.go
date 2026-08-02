@@ -91,6 +91,31 @@ const (
 	// clears the over-capacity state silently.
 	EventHouseholdOverCapacityEntered = "household_over_capacity_entered"
 
+	// Admin subscription override events (Issue #1413)
+	//
+	// Issue #1413 Task NB (Codex Medium, author-ratified): the frontend fires its OWN
+	// admin_subscription_override_applied/_removed events (apps/web/src/shared/analytics/events.ts)
+	// identifying the ACTING ADMIN as distinct_id (usePostHogIdentify.ts). These two backend
+	// events identify the TARGET user as distinct_id instead (the user whose tier was changed) —
+	// same name, different subject, so a naive PostHog query double-counts. The backend
+	// constants below carry a "Server"/"_server" suffix so the two are distinguishable by name;
+	// the frontend names are untouched (a different task's territory, and existing dashboards
+	// depend on them). An analyst reading both: *_applied_server / *_removed_server = one row per
+	// TARGET user whose comp changed (their profile, their consent gate — see
+	// EventAdminSubscriptionOverrideAppliedServer's own comment); *_applied / *_removed (no
+	// suffix, frontend-only) = one row per ACTING ADMIN who changed someone's comp.
+	EventAdminSubscriptionOverrideAppliedServer = "admin_subscription_override_applied_server"
+	EventAdminSubscriptionOverrideRemovedServer = "admin_subscription_override_removed_server"
+	// EventAdminSubscriptionOverrideExpired fires from the daily
+	// ManualTierOverrideExpiryCheckWorker when a manual tier override lapses on its own
+	// (manual_tier_ends_at passed) rather than being cleared by an admin. Deliberately a
+	// separate event from EventAdminSubscriptionOverrideRemovedServer: an automatic expiry and an
+	// admin's deliberate removal are different events for funnel purposes, and this path also
+	// has a NULL actor (no admin acted) — conflating the two would make the funnel unreadable.
+	// No frontend twin exists for this event (it is backend-only, fired from a daily job with no
+	// user or admin action), so it does not need a "_server" suffix or renaming.
+	EventAdminSubscriptionOverrideExpired = "admin_subscription_override_expired"
+
 	// MCP server events (Issue #1087)
 	// NOTE: MCP analytics are fired exclusively by the Cloudflare Worker (apps/mcp-server/src/analytics/)
 	// which has direct access to the MCP session context. The backend does not receive the PostHog

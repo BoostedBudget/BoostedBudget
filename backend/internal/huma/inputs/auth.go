@@ -17,9 +17,20 @@ const (
 	ClerkUserIDKey ContextKey = "clerk_user_id"
 	// ClerkClaimsKey is the context key for Clerk session claims.
 	ClerkClaimsKey ContextKey = "clerk_claims"
-	// SubscriptionStatusKey is the context key for the user's subscription status.
-	// Set by Clerk middleware; read by read-only enforcement middleware (#930).
-	SubscriptionStatusKey ContextKey = "subscription_status"
+	// EffectiveSubscriptionStatusKey is the context key for the user's EFFECTIVE subscription
+	// status — "active" when a non-expired manual tier override (admin comp) is in effect,
+	// otherwise the raw subscription status (Issue #1413). Set by Clerk middleware; read by
+	// read-only enforcement middleware (#930).
+	EffectiveSubscriptionStatusKey ContextKey = "subscription_status"
+
+	// SubscriptionStatusUnresolvedKey is the context key set to true when the Clerk
+	// middleware's effective-subscription-status lookup FAILED (e.g. a DB error) — the
+	// status is unknown, not merely absent. This is distinct from the key simply being
+	// unset (no status reader configured), which legitimately means "cannot determine
+	// restriction, allow through." Read by the read-only enforcement middleware to fail
+	// closed on mutating requests rather than silently granting write access during an
+	// outage (Issue #1413).
+	SubscriptionStatusUnresolvedKey ContextKey = "subscription_status_unresolved"
 
 	// ClerkUserIDHeader is the HTTP header used by test helpers to supply a user ID
 	// without going through JWT validation. In production, the Clerk middleware always

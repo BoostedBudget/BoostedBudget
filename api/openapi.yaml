@@ -432,6 +432,47 @@ components:
       required:
         - message
       type: object
+    AdminRemoveTierOverrideInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminRemoveTierOverrideInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        reason:
+          description: Reason for removing the manual tier override
+          minLength: 1
+          type: string
+      required:
+        - reason
+      type: object
+    AdminRemoveTierOverrideOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminRemoveTierOverrideOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        message:
+          type: string
+        removed:
+          type: boolean
+        reverted_status:
+          type: string
+        reverted_tier:
+          type: string
+      required:
+        - message
+        - removed
+        - reverted_tier
+        - reverted_status
+      type: object
     AdminSubscriptionDetailOutputBody:
       additionalProperties: false
       properties:
@@ -446,6 +487,14 @@ components:
           format: int64
           type: integer
         base_tier:
+          type: string
+        deletion_requested_at:
+          format: date-time
+          type: string
+        deletion_scheduled_at:
+          format: date-time
+          type: string
+        effective_status:
           type: string
         effective_tier:
           type: string
@@ -470,6 +519,7 @@ components:
         - base_tier
         - subscription_status
         - effective_tier
+        - effective_status
         - limits
         - features
         - active_overrides_count
@@ -542,6 +592,14 @@ components:
         created_at:
           format: date-time
           type: string
+        deletion_requested_at:
+          format: date-time
+          type: string
+        deletion_scheduled_at:
+          format: date-time
+          type: string
+        effective_status:
+          type: string
         email:
           type: string
         id:
@@ -580,6 +638,7 @@ components:
         - email
         - subscription_tier
         - subscription_status
+        - effective_status
         - primary_region
         - created_at
         - is_active
@@ -596,6 +655,14 @@ components:
           type: integer
         created_at:
           format: date-time
+          type: string
+        deletion_requested_at:
+          format: date-time
+          type: string
+        deletion_scheduled_at:
+          format: date-time
+          type: string
+        effective_status:
           type: string
         email:
           type: string
@@ -630,6 +697,7 @@ components:
         - email
         - subscription_tier
         - subscription_status
+        - effective_status
         - primary_region
         - created_at
         - is_active
@@ -2987,6 +3055,9 @@ components:
         cancel_at_period_end:
           description: Whether the subscription is scheduled to cancel at end of current period
           type: boolean
+        comp_ends_at:
+          description: RFC 3339 datetime when complimentary access ends; absent means indefinite
+          type: string
         currency:
           description: Currency code
           examples:
@@ -2997,6 +3068,9 @@ components:
           examples:
             - "2026-03-01"
           type: string
+        is_comped:
+          description: True when access is granted by an admin comp rather than a paid subscription
+          type: boolean
         next_billing_date:
           description: Next billing date
           examples:
@@ -3041,6 +3115,7 @@ components:
         - amount
         - currency
         - cancel_at_period_end
+        - is_comped
       type: object
     GetHoldingsOutputBody:
       additionalProperties: false
@@ -6802,6 +6877,11 @@ components:
           type: string
         clerk_user_id:
           type: string
+        comp_ends_at:
+          format: date-time
+          type: string
+        comp_tier:
+          type: string
         created_at:
           format: date-time
           type: string
@@ -6810,6 +6890,8 @@ components:
           type: string
         deletion_scheduled_at:
           format: date-time
+          type: string
+        effective_status:
           type: string
         effective_tier:
           type: string
@@ -6822,6 +6904,8 @@ components:
         id:
           type: string
         is_active:
+          type: boolean
+        is_comped:
           type: boolean
         is_deleted:
           type: boolean
@@ -6838,6 +6922,9 @@ components:
         paddle_subscription_id:
           type: string
         past_due_started_at:
+          format: date-time
+          type: string
+        plaid_cleanup_pending_at:
           format: date-time
           type: string
         primary_region:
@@ -6887,6 +6974,7 @@ components:
         - email_verified
         - subscription_tier
         - subscription_status
+        - is_comped
         - had_trial
         - primary_region
         - is_active
@@ -8106,6 +8194,42 @@ paths:
       security:
         - clerk: []
       summary: Update user subscription tier
+      tags:
+        - Admin Subscriptions
+  /api/v1/admin/users/{user_id}/subscription/tier/clear:
+    post:
+      description: Clear a user's manual tier override, restoring their raw subscription tier and status. Idempotent — returns removed=false if no override exists. Requires admin privileges.
+      operationId: remove-admin-user-tier-override
+      parameters:
+        - description: ID of the user whose manual tier override should be cleared
+          in: path
+          name: user_id
+          required: true
+          schema:
+            description: ID of the user whose manual tier override should be cleared
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminRemoveTierOverrideInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminRemoveTierOverrideOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Remove manual subscription tier override
       tags:
         - Admin Subscriptions
   /api/v1/admin/webhooks/paddle:
