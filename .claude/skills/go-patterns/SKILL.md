@@ -226,6 +226,45 @@ func (r *featureRepository) GetByUserID(ctx context.Context, userID string, limi
 }
 ```
 
+### Nullable columns: never scan SQL `NULL` into a non-pointer field (Issue #1444)
+
+**This is a convention, not an enforced lint rule** — the repo has no `.golangci.yml`/`.yaml`
+anywhere, so `golangci-lint run` uses its stock defaults only, and none of those defaults catch
+this.
+
+**Failure mode:** scanning a nullable SQL column directly into a non-pointer Go field (e.g.
+`&f.Name` where `Name string` and the column allows `NULL`) panics or errors the moment a real
+`NULL` row is read — pgx (and `database/sql`) cannot convert SQL `NULL` into a non-pointer string,
+int, etc. This is a repo-wide risk anywhere a `SELECT` scans a nullable column straight into a
+struct field typed as the bare Go type rather than a pointer or null-aware wrapper.
+
+**Three remedies, pick whichever fits the column:**
+
+1. **`COALESCE` in the SQL** — `SELECT COALESCE(status, 'unknown') FROM ...` — cheapest when a
+   sensible non-NULL default exists and the column's NULL-ness is incidental, not meaningful.
+2. **A nullable intermediate** — scan into `*string` or `sql.NullString` (or the `*int`/`sql.Null*`
+   equivalent), then convert to the domain type with the actual NULL-vs-value branching made
+   explicit in Go, when NULL carries real meaning the caller needs to distinguish from a value.
+3. **A `NOT NULL` migration** — if the column is never supposed to be NULL by design, fix the
+   schema instead of coding around it (see the three-step `NOT NULL` migration pattern in
+   `db-migration-guide`'s Grace-Window Timestamps section) so the scan target's non-pointer type is
+   actually guaranteed correct rather than assumed.
+
+**The trap that hides this bug from you:** a `WHERE status NOT IN ('a', 'b')` or `WHERE status <>
+'x'` predicate on a nullable column evaluates to `UNKNOWN` (not `TRUE`) for a `NULL` row in SQL's
+three-valued logic, so those rows are silently excluded from the result set. That means a query
+guarded by exactly this kind of predicate can scan cleanly in production for a long time — not
+because no row is ever NULL, but because the predicate itself is quietly filtering the NULL rows
+out before they ever reach the non-pointer scan. The panic surfaces only once a query without that
+filter (a new caller, a broadened `WHERE`, an admin report) reads one of those rows directly.
+
+**Testing consequence:** a RED test for this must **seed the NULL via raw SQL** (a direct `INSERT`
+or `UPDATE ... SET col = NULL`), not through the normal fixture/factory path. If no production
+writer can actually produce a NULL in that column, a fixture-built test will pass before the fix is
+even applied — proving nothing about the real hazard. The test only has teeth if it reproduces the
+same on-disk state a real NULL row would leave, independent of whether the application's own
+writers currently know how to create one.
+
 ## Domain Model Pattern
 
 ```go

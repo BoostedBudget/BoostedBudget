@@ -281,6 +281,60 @@ apply against a production-sized table.** Review DDL-plus-backfill migrations an
 timestamp writers by eye against the two conventions above; don't rely on the gates having caught
 it.
 
+### Migrations do not receive the application pool's UTC time zone pin (Issue #1461/#1464 follow-up)
+
+**Any calendar arithmetic in a migration must pin its time zone explicitly with `AT TIME ZONE
+'UTC'` — the session-default time zone a migration runs under is not UTC and is not guaranteed.**
+
+`backend/internal/database/pgx.go` sets `poolConfig.ConnConfig.RuntimeParams["TimeZone"] = "UTC"`
+on every connection the **application** opens (Issue #1461), because Postgres performs
+calendar-interval arithmetic — `make_interval(months => N)`, `INTERVAL 'N days'`, `CURRENT_DATE` —
+in the **session** time zone, not UTC, and the unpinned session default (confirmed locally to be
+`America/New_York`) silently shifts the computed instant depending on deployment environment and
+DST.
+
+**No migration path goes through that pool.** Every way this repo applies migrations shells out to
+either `psql` or the standalone `migrate` CLI against `$DATABASE_URL`, none of which touch
+`pgx.go`'s `RuntimeParams`:
+
+- `Makefile`'s `migrate-up`/`migrate-down` pipe each `.sql` file into `docker-compose exec ...
+  psql`.
+- `.github/workflows/test.yml`'s `backend-integration-test` job runs `migrate -database
+  "$DATABASE_URL" -path backend/migrations up`.
+- `backend/scripts/docker-entrypoint.sh` and `scripts/test-migrations.sh` both run the same
+  `migrate -database ... up` CLI invocation.
+
+So a migration doing calendar arithmetic on a `timestamptz` runs under whatever time zone the
+connecting Postgres server/session defaults to — silently reintroducing the exact bug #1461 fixed,
+in the one place the pool-level fix cannot reach. As of this writing, the six migrations added
+alongside #1461/#1464 follow-up work (`000123`-`000128`) only use `NOW()` for `updated_at`, whose
+absolute value is timezone-independent — this hazard is currently latent, not yet triggered, but
+the next migration that computes a deadline or backfills a calendar-relative column will hit it if
+this isn't caught in review.
+
+Expressions that are session-time-zone-dependent and therefore unsafe unpinned in a migration:
+
+- **`make_interval(...)` added to or subtracted from a `timestamptz`** — its **calendar** components
+  (`years`, `months`, `weeks`, `days`) are evaluated in the session zone before converting back to
+  an absolute instant. Its **fixed-duration** components (`hours`, `mins`, `secs`) are exact and
+  are *not* session-dependent — so `make_interval(hours => 72)` is safe unpinned while
+  `make_interval(months => 6)` is not. Getting this distinction wrong in either direction wastes a
+  review round: the repo has several `INTERVAL '<n> hours'` / `'<n> seconds'` sites that are
+  genuinely unaffected.
+- **`INTERVAL 'N days'` (or any calendar unit) added to a `timestamptz`** — the *days* component is
+  applied as calendar days in the session zone, preserving local wall-clock time rather than adding
+  exactly 24h × N. This is easy to miss because it looks like pure duration arithmetic; it isn't,
+  once the interval carries a calendar unit rather than a fixed-duration one.
+- **`CURRENT_DATE`** — resolves to "today" in the session zone, which can be a different calendar
+  date than "today" in UTC near a day boundary.
+
+**Squawk cannot detect this**, for the same reason it misses the DDL-plus-backfill hazard above: it
+lints individual SQL statements, not the session context a migration transaction executes under.
+Review any migration that does calendar arithmetic on a `timestamptz` by eye, and wrap the
+time-zone-sensitive expression in `AT TIME ZONE 'UTC'` (or compute the value in application code
+under the pinned pool, if the migration can be restructured to do so) rather than trusting the
+gates to catch an unpinned session zone.
+
 ## Rollback Patterns (.down.sql)
 
 ### Drop Table

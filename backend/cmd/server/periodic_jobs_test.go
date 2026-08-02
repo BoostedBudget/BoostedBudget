@@ -27,19 +27,19 @@ import (
 // 14 specs — one per periodic job main.go registers when every dependency is present.
 func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 	return periodicJobsDeps{
-		scheduledDeletionCheckWorker:         jobs.NewScheduledDeletionCheckWorker(jobs.ScheduledDeletionCheckWorkerDeps{}),
-		itemCleanupCheckWorker:               jobs.NewItemCleanupCheckWorker(jobs.ItemCleanupCheckWorkerDeps{}),
-		trialExpirationCheckWorker:           jobs.NewTrialExpirationCheckWorker(jobs.TrialExpirationCheckWorkerDeps{}),
-		pastDueCheckWorker:                   jobs.NewPastDueCheckWorker(jobs.PastDueCheckWorkerDeps{}),
-		paddleReconciliationWorker:           jobs.NewPaddleReconciliationWorker(jobs.PaddleReconciliationWorkerDeps{}),
-		retentionCleanupCheckWorker:          jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{}),
-		manualTierOverrideExpiryCheckWorker:  jobs.NewManualTierOverrideExpiryCheckWorker(jobs.ManualTierOverrideExpiryCheckWorkerDeps{}),
-		householdMemberCleanupCheckWorker:    jobs.NewHouseholdMemberCleanupCheckWorker(jobs.HouseholdMemberCleanupCheckWorkerDeps{}),
-		householdOverCapacityCheckWorker:     jobs.NewHouseholdOverCapacityCheckWorker(jobs.HouseholdOverCapacityCheckWorkerDeps{}),
-		dlqCleanupCheckWorker:                jobs.NewDLQCleanupCheckWorker(jobs.DLQCleanupCheckWorkerDeps{}),
-		budgetPeriodCloseCheckWorker:         jobs.NewBudgetPeriodCloseCheckWorker(jobs.BudgetPeriodCloseCheckWorkerDeps{}),
-		savingsStatsWorker:                   jobs.NewSavingsStatsWorker(jobs.SavingsStatsWorkerDeps{}),
-		portfolioSnapshotWorker:              jobs.NewPortfolioSnapshotWorker(jobs.PortfolioSnapshotWorkerDeps{}),
+		scheduledDeletionCheckWorker:        jobs.NewScheduledDeletionCheckWorker(jobs.ScheduledDeletionCheckWorkerDeps{}),
+		itemCleanupCheckWorker:              jobs.NewItemCleanupCheckWorker(jobs.ItemCleanupCheckWorkerDeps{}),
+		trialExpirationCheckWorker:          jobs.NewTrialExpirationCheckWorker(jobs.TrialExpirationCheckWorkerDeps{}),
+		pastDueCheckWorker:                  jobs.NewPastDueCheckWorker(jobs.PastDueCheckWorkerDeps{}),
+		paddleReconciliationWorker:          jobs.NewPaddleReconciliationWorker(jobs.PaddleReconciliationWorkerDeps{}),
+		retentionCleanupCheckWorker:         jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{}),
+		manualTierOverrideExpiryCheckWorker: jobs.NewManualTierOverrideExpiryCheckWorker(jobs.ManualTierOverrideExpiryCheckWorkerDeps{}),
+		householdMemberCleanupCheckWorker:   jobs.NewHouseholdMemberCleanupCheckWorker(jobs.HouseholdMemberCleanupCheckWorkerDeps{}),
+		householdOverCapacityCheckWorker:    jobs.NewHouseholdOverCapacityCheckWorker(jobs.HouseholdOverCapacityCheckWorkerDeps{}),
+		dlqCleanupCheckWorker:               jobs.NewDLQCleanupCheckWorker(jobs.DLQCleanupCheckWorkerDeps{}),
+		budgetPeriodCloseCheckWorker:        jobs.NewBudgetPeriodCloseCheckWorker(jobs.BudgetPeriodCloseCheckWorkerDeps{}),
+		savingsStatsWorker:                  jobs.NewSavingsStatsWorker(jobs.SavingsStatsWorkerDeps{}),
+		portfolioSnapshotWorker:             jobs.NewPortfolioSnapshotWorker(jobs.PortfolioSnapshotWorkerDeps{}),
 	}
 }
 
