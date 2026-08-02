@@ -1254,12 +1254,18 @@ jobs:
       - name: Run comprehensive migration tests
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
-          PG_DUMP: ${{ env.UNIQUE_WORKSPACE }}/scripts/pg_dump-via-docker
           PG_DUMP_CONTAINER: test-postgres-${{ github.run_id }}
         run: |
           cd ${{ env.UNIQUE_WORKSPACE }}
           chmod +x scripts/test-migrations.sh scripts/pg_dump-via-docker
-          ./scripts/test-migrations.sh
+          # PG_DUMP is set HERE, after the cd, and absolutised with $PWD rather than being declared
+          # in `env:` above. UNIQUE_WORKSPACE is a RELATIVE path (workspace-migration-tests-<run_id>),
+          # so an env-level `${{ env.UNIQUE_WORKSPACE }}/scripts/...` resolves against the wrong
+          # directory once this step cds into the workspace — the script then cannot find the shim.
+          # (That exact mistake failed this job once; the prerequisites guard reported
+          # "pg_dump not found: <relative path>" instead of silently continuing, which is what the
+          # guard exists for.)
+          PG_DUMP="$PWD/scripts/pg_dump-via-docker" ./scripts/test-migrations.sh
 
       - name: Upload performance benchmarks
         id: upload-migration-perf

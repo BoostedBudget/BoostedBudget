@@ -382,7 +382,14 @@ test_data_integrity() {
     #   3. stderr is NOT redirected — SQL error messages appear in CI logs for diagnosis.
     # `\set ON_ERROR_STOP on` makes psql exit 3 immediately on the first SQL error
     # instead of continuing and silently masking failures with a 0 exit code.
-    if ! psql "$DATABASE_URL" <<EOF > /dev/null
+    # Heredoc is QUOTED (<<'EOF'), so bash performs no expansion on the SQL below. Unquoted, the
+    # backticks in the "`category` column dropped in migration 000065" comment were command-
+    # substituted, printing "category: command not found" on every run — harmless there because it
+    # sits in a SQL comment, but it meant any `$` or backtick in this block would be silently
+    # mangled before Postgres ever saw it, and it added a spurious error line that could mask a real
+    # one. Nothing in this block needs shell expansion; the sibling backfill heredoc below already
+    # uses the quoted form.
+    if ! psql "$DATABASE_URL" <<'EOF' > /dev/null
 \set ON_ERROR_STOP on
 -- primary_region must be 'iad' after migrations 000005 and 000059.
 -- subscription_tier is the column name (not 'tier'); valid values post-migration-000040:
