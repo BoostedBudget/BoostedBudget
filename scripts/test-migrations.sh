@@ -97,24 +97,50 @@ run_psql() {
 PG_DUMP="${PG_DUMP:-pg_dump}"
 
 get_schema_hash() {
-    # Capture pg_dump output, filtering out security tokens
-    local dump=$("$PG_DUMP" "$DATABASE_URL" --schema-only --no-owner --no-privileges \
-        --schema=public 2>/dev/null \
-        | grep -v '^\\restrict ' \
-        | grep -v '^\\unrestrict ')
+    # Capture pg_dump's raw output SEPARATELY from the restrict/unrestrict filter below, and check
+    # ITS exit status directly via `|| dump_exit=$?` — NOT `local raw_dump=$(...)`, which would mask
+    # a real pg_dump failure behind `local`'s own (always-0) exit status (see the root-cause note on
+    # PG_DUMP above `apply_migrations`). This is what fixes R3-15: previously a `pg_dump` that wrote
+    # SOME output and then died mid-stream (a broken pipe, a killed connection, a partial dump) was
+    # non-empty and got hashed as a valid schema — the empty-dump guard below only ever caught TOTAL
+    # emptiness, never a truncated-but-non-empty dump.
+    local raw_dump
+    local dump_exit=0
+    raw_dump=$("$PG_DUMP" "$DATABASE_URL" --schema-only --no-owner --no-privileges \
+        --schema=public 2>/dev/null) || dump_exit=$?
+
+    if [ "$dump_exit" -ne 0 ]; then
+        echo "❌ get_schema_hash: pg_dump FAILED (exit code $dump_exit) — it failed to connect, read the" >&2
+        echo "   schema, or died mid-dump (a truncated dump is a failure, not a smaller-but-valid schema)." >&2
+        echo "   Re-run without 2>/dev/null to see the real error. Common causes:" >&2
+        echo "     - a DATABASE_URL missing '?sslmode=disable'" >&2
+        echo "     - pg_dump older than the server (it refuses; see check_pg_dump_version below)" >&2
+        exit 1
+    fi
+
+    # Filter out pg_dump 15.14+ security tokens (CVE-2025-8714): \restrict / \unrestrict lines whose
+    # random keys change on every dump. This filter's own exit status is DELIBERATELY not checked
+    # (kept under `local dump=$(...)`, which masks it): grep -v exits 1 if it filters out every line,
+    # which would be a false-positive "failure" here, not a real one — in practice it can't happen
+    # (pg_dump --schema-only always emits a real schema body after the header), but treating a
+    # fully-filtered pipeline as a hard error would conflate "the filter matched everything" with "pg_dump
+    # failed". The empty-dump guard immediately below already catches that case, with a clearer message
+    # than a bare pipefail abort would give.
+    local dump=$(printf '%s\n' "$raw_dump" | grep -v '^\\restrict ' | grep -v '^\\unrestrict ')
 
     # FAIL CLOSED on an empty dump. pg_dump emits a header (SET statements, comments) even for a
-    # schema containing zero objects, so an EMPTY result never means "no tables" — it means pg_dump
-    # itself failed and its stderr went to /dev/null above (a bad DATABASE_URL, a missing
-    # sslmode=disable, an unreachable server). Without this check the callers hash "" twice, find
-    # the two equal, and print "IDEMPOTENCY TEST PASSED - Schema unchanged after re-applying
-    # migrations" having applied and compared nothing at all. Observed for real: a DATABASE_URL
-    # without sslmode=disable produced md5 68b329da9893e34099c7d8ad5cb9c940 (the hash of an empty
-    # string) from both calls and two green PASSED lines.
+    # schema containing zero objects, so an EMPTY result never means "no tables" — it means either
+    # pg_dump failed in a way not already caught above, or the restrict/unrestrict filter matched
+    # every line. Without this check the callers hash "" twice, find the two equal, and print
+    # "IDEMPOTENCY TEST PASSED - Schema unchanged after re-applying migrations" having applied and
+    # compared nothing at all. Observed for real: a DATABASE_URL without sslmode=disable produced md5
+    # 68b329da9893e34099c7d8ad5cb9c940 (the hash of an empty string) from both calls and two green
+    # PASSED lines.
     if [ -z "$dump" ]; then
-        echo "❌ get_schema_hash: pg_dump produced NO output — it failed to connect or read the schema." >&2
+        echo "❌ get_schema_hash: pg_dump produced NO output after filtering — it failed to connect or read the schema." >&2
         echo "   This is not an empty schema (pg_dump emits a header even with zero objects); it is a" >&2
-        echo "   pg_dump failure. Re-run without 2>/dev/null to see the real error. Common causes:" >&2
+        echo "   pg_dump failure or the restrict/unrestrict filter matched every line. Re-run without" >&2
+        echo "   2>/dev/null to see the real error. Common causes:" >&2
         echo "     - a DATABASE_URL missing '?sslmode=disable'" >&2
         echo "     - pg_dump older than the server (it refuses; see check_pg_dump_version below)" >&2
         exit 1
@@ -214,8 +240,12 @@ test_idempotency() {
 
     # First application
     log_info "Applying migrations (1st time)..."
+    # `$?` here would ALWAYS be 0 (that's the exit status of the `local` builtin, not of
+    # apply_migrations — see the root-cause note by PG_DUMP above). apply_migrations only ever
+    # produces empty stdout via its internal `exit 1` before it reaches its own `echo "$duration"`,
+    # so checking for that emptiness is what actually detects a failed apply here.
     local duration1=$(apply_migrations)
-    if [ $? -ne 0 ]; then
+    if [ -z "$duration1" ]; then
         fail_test "First migration application failed"
         return 1
     fi
@@ -232,8 +262,9 @@ test_idempotency() {
 
     # Second application (idempotency test)
     log_info "Applying migrations (2nd time - idempotency test)..."
+    # See note above duration1: `$?` is always 0 here (masked by `local`); check emptiness instead.
     local duration2=$(apply_migrations)
-    if [ $? -ne 0 ]; then
+    if [ -z "$duration2" ]; then
         fail_test "Second migration application failed - migrations are NOT idempotent!"
         log_error "This likely means migrations lack IF NOT EXISTS guards"
         log_error "See migrations 000013, 000015 for good idempotency patterns"
@@ -370,7 +401,12 @@ test_data_integrity() {
 
     # Clean start and apply migrations
     clean_database
-    apply_migrations > /dev/null 2>&1
+    # apply_migrations is called directly here (no command substitution / subshell), so a
+    # `migrate up` failure calls its own `exit 1` in THIS shell and the whole script aborts right
+    # there with apply_migrations' own diagnostic — there is no "after" for a check to run. Only
+    # stdout (the duration, unused here) is discarded so that diagnostic reaches the console
+    # (previously `2>&1` sent it to /dev/null too, so a failure here died with no explanation).
+    apply_migrations > /dev/null
 
     # Seed test data
     log_info "Seeding test data..."
@@ -537,7 +573,14 @@ EOF
     # 000070-equivalent: backfill user_account_id keys into boosts JSONB columns.
     # Mirrors the original three UPDATE steps from 000070_backfill_user_account_id_in_rules.up.sql
     # but targets the renamed table (boosts) and column (boost_type). Idempotent.
-    psql "$DATABASE_URL" <<'BACKFILL_SQL'
+    #
+    # `\set ON_ERROR_STOP on` + `if !`: without ON_ERROR_STOP, psql's own exit code does NOT
+    # reflect a failed SQL statement inside a script/heredoc (verified empirically: psql exits 0
+    # here even when every statement inside errors). Without this guard a failed backfill UPDATE
+    # was invisible at this step — it would usually still surface later via the JSONB assertions
+    # below, but only by accident, not because this step was actually checked.
+    if ! psql "$DATABASE_URL" <<'BACKFILL_SQL'
+\set ON_ERROR_STOP on
 UPDATE boosts r
 SET actions = jsonb_set(
     r.actions,
@@ -578,8 +621,17 @@ WHERE r.trigger_config->>'type' = 'event'
   AND a.id::text = r.trigger_config->'filters'->>'account_id'
   AND a.user_account_id IS NOT NULL;
 BACKFILL_SQL
+    then
+        fail_test "Failed to apply 000070-equivalent backfill: check stderr above for the specific SQL error"
+        return 1
+    fi
 
-    psql "$DATABASE_URL" -f "$abs_migrations_dir/000072_backfill_user_account_id_in_categorization_rule_conditions.up.sql"
+    # Same ON_ERROR_STOP gap as above applies to -f script invocations; -v ON_ERROR_STOP=1 is the
+    # command-line equivalent (the migration file itself is a versioned artifact, not edited here).
+    if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$abs_migrations_dir/000072_backfill_user_account_id_in_categorization_rule_conditions.up.sql"; then
+        fail_test "Failed to apply migration 000072 backfill against seeded data: check stderr above for the specific SQL error"
+        return 1
+    fi
     log_success "Backfill migrations applied against seeded data"
 
     # Record row counts before re-running migrations
@@ -600,11 +652,11 @@ BACKFILL_SQL
     # Re-apply migrations (idempotency test with data present)
     echo ""
     log_info "Re-applying migrations with data present (idempotency test)..."
-    apply_migrations > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        fail_test "Migration re-application failed with data present"
-        return 1
-    fi
+    # apply_migrations is called directly (no subshell): a `migrate up` failure calls its own
+    # `exit 1` in THIS shell and the whole script aborts right there with its own diagnostic — the
+    # `if [ $? -ne 0 ]` that used to follow this line could never run, so it has been removed.
+    # Only stdout is discarded (`2>&1` previously sent the diagnostic to /dev/null too).
+    apply_migrations > /dev/null
     log_success "Migrations re-applied successfully"
 
     # Check row counts after
@@ -709,11 +761,11 @@ test_schema_constraints() {
     # Ensure migrations are applied
     clean_database
     log_info "Applying migrations for schema validation..."
-    apply_migrations > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        fail_test "Failed to apply migrations for schema validation"
-        return 1
-    fi
+    # apply_migrations is called directly (no subshell): a `migrate up` failure calls its own
+    # `exit 1` in THIS shell and the whole script aborts right there with its own diagnostic — the
+    # `if [ $? -ne 0 ]` that used to follow this line could never run, so it has been removed.
+    # Only stdout is discarded (`2>&1` previously sent the diagnostic to /dev/null too).
+    apply_migrations > /dev/null
     log_success "Migrations applied successfully"
     echo ""
 
@@ -810,12 +862,27 @@ test_rollback() {
 
     # Step 1: Apply all migrations (forward)
     log_info "Step 1: Applying all migrations (forward)..."
+    # `local apply_duration=$(apply_migrations)` masks apply_migrations' exit status behind
+    # `local`'s own (always-0) status. There was previously NO check at all here — R3-2. As with
+    # test_idempotency, checking for empty stdout is what actually detects a failed apply, since
+    # apply_migrations only ever produces empty stdout via its internal `exit 1`.
     local apply_duration=$(apply_migrations)
+    if [ -z "$apply_duration" ]; then
+        fail_test "Migration application failed during rollback test (forward step)"
+        return 1
+    fi
     log_success "Migrations applied in ${apply_duration}s"
 
     # Capture baseline schema hash
     log_info "Capturing baseline schema hash..."
+    # Same masking issue as above, for get_schema_hash — R3-1. get_schema_hash only ever produces
+    # empty stdout via its internal `exit 1` guards, so an empty hash here means it failed, not
+    # that the schema is somehow empty (see get_schema_hash's own comments).
     local hash_baseline=$(get_schema_hash)
+    if [ -z "$hash_baseline" ]; then
+        fail_test "Failed to capture baseline schema hash for rollback test"
+        return 1
+    fi
     log_info "Baseline schema hash: $hash_baseline"
     echo ""
 
@@ -848,12 +915,24 @@ test_rollback() {
 
     # Step 3: Re-apply all migrations (forward again)
     log_info "Step 3: Re-applying all migrations (forward)..."
+    # See note on the Step 1 apply_duration above — same masked-guard fix (R3-2).
     local reapply_duration=$(apply_migrations)
+    if [ -z "$reapply_duration" ]; then
+        fail_test "Migration re-application failed during rollback test (reverse step)"
+        return 1
+    fi
     log_success "Migrations re-applied in ${reapply_duration}s"
 
     # Capture final schema hash
     log_info "Capturing final schema hash..."
+    # See note on hash_baseline above — same masked-guard fix (R3-1). This is the specific defect:
+    # previously BOTH hash_baseline and hash_reapplied could be empty (unchecked) and "" = ""
+    # printed ROLLBACK TEST PASSED having verified nothing.
     local hash_reapplied=$(get_schema_hash)
+    if [ -z "$hash_reapplied" ]; then
+        fail_test "Failed to capture final schema hash for rollback test"
+        return 1
+    fi
     log_info "Final schema hash: $hash_reapplied"
     echo ""
 
