@@ -790,6 +790,80 @@ func TestGetUserSubscription_ValidOverride_ResolvesToOverrideTier(t *testing.T) 
 	mockAdmin.AssertExpectations(t)
 }
 
+// TestGetUserSubscription_EffectiveTier_DerivedFromAsOf_NotLaterClockRead is the RED test for
+// Issue #1466 (the tier-axis residual of #1462, left for PR #1465 to defer): GetUserSubscription
+// captures `asOf := time.Now()` (admin_subscriptions.go) BEFORE calling
+// h.adminUserService.GetUserDetail, and echoes that SAME instant back as `as_of`. Before this fix,
+// EffectiveTier was computed afterward via SubscriptionService.GetEffectiveSubscription ->
+// effectiveTierName -> domain.User.EffectiveTierWithActiveOverride(), which read a SECOND,
+// independent time.Now() — so a request whose processing crossed the override's expiry boundary
+// between the asOf capture and that later call would return an `as_of`/`effective_status`
+// describing one instant and an `effective_tier` describing a later one.
+//
+// Modeled on
+// TestAdminUserService_GetUserDetail_EffectiveStatus_DerivedFromPassedInstant_NotLaterClockRead
+// (admin_user_service_test.go), which pinned the identical defect on the status axis for PR #1465.
+// Made deterministic (no flaky timing race) the same way: the override is set to expire shortly
+// after the request begins, and an artificial delay is injected INSIDE the mocked GetUserDetail
+// call — simulating request-processing time — to push the second (pre-fix) clock read past the
+// override's expiry boundary. As of asOf (captured before the delay), the override was still
+// live, so a correct implementation must report the override tier ("household_3"). The pre-fix
+// implementation instead re-reads time.Now() AFTER the delay, sees an EXPIRED override, and wrongly
+// falls back to the raw tier ("premium") — so this test fails on the pre-fix code and passes on
+// the fix.
+func TestGetUserSubscription_EffectiveTier_DerivedFromAsOf_NotLaterClockRead(t *testing.T) {
+	tierConfig := literalAdminSubscriptionsTierConfig()
+	subService := services.NewSubscriptionService(tierConfig, nil)
+	subService.SetOverrideTierValidator(func(tier string) bool {
+		_, err := tierConfig.GetTier(domain.TierName(tier))
+		return err == nil
+	})
+	api, mockService, mockAdmin := setupAdminSubscriptionsAPIWithSubService(t, subService)
+
+	clerkUserID := "user_" + uuid.New().String()
+	actorUserID := uuid.New().String()
+	targetUserID := uuid.New().String()
+	override := "household_3"
+	// Still live when the handler captures asOf (just before GetUserDetail is called), but will
+	// have expired by the time the injected delay below elapses.
+	overrideEndsAt := time.Now().Add(20 * time.Millisecond)
+
+	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).
+		Run(func(args mock.Arguments) {
+			// Simulate request-processing time crossing the override's expiry boundary BETWEEN
+			// the handler's asOf capture (already taken before this call) and
+			// GetEffectiveSubscription's own (pre-fix) internal clock read, taken after this call
+			// returns.
+			time.Sleep(60 * time.Millisecond)
+		}).
+		Return(&domain.AdminUserDetail{
+			AdminUserListItem: domain.AdminUserListItem{
+				ID:                 targetUserID,
+				SubscriptionTier:   "premium",
+				SubscriptionStatus: "active",
+				EffectiveStatus:    "active",
+				ManualTierOverride: &override,
+				ManualTierEndsAt:   &overrideEndsAt,
+			},
+		}, nil)
+	mockService.On("GetOwnedHouseholdActiveMemberCount", mock.Anything, targetUserID).Return(0, nil)
+
+	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
+	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
+
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var body getUserSubscriptionResponseBody
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	assert.Equal(t, "household_3", body.EffectiveTier,
+		"effective_tier must be derived from as_of (when the override was still live), not a later internal clock read taken after it had already expired")
+
+	mockService.AssertExpectations(t)
+	mockAdmin.AssertExpectations(t)
+}
+
 func TestRemoveUserTierOverride_Success(t *testing.T) {
 	api, mockService, mockAdmin := setupAdminSubscriptionsAPI(t)
 

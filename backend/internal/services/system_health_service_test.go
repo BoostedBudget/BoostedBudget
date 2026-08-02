@@ -620,6 +620,50 @@ func TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues(t *testing.T) {
 	mockJobHealthRepo.AssertExpectations(t)
 }
 
+// TestGetSystemHealth_JobBacklogMetrics_SecondQueryError_DiscardsFirstQuerysGoodData is the
+// coverage gap Codex flagged for Issue #1458 (batch R4 Task 4): every existing error test above
+// stubs ONLY the FIRST query (GetOutstandingPlaidCleanupStats) to fail. Nothing pinned what
+// happens when that first query SUCCEEDS with real, non-zero data and the SECOND query
+// (GetOldestUnclearedExpiredManualTierOverrideAge) is the one that fails — a genuinely different
+// code path through getJobBacklogMetrics's two sequential, independently-failable calls.
+//
+// Codex verified the implementation is already correct here (a coverage gap, not a behaviour
+// bug): getJobBacklogMetrics returns (nil, err) on the second query's failure, so the first
+// query's outstandingUsers/oldestOutstanding are discarded rather than surfaced as a
+// partially-populated JobBacklogMetrics — see that method's own doc comment (system_health_service.go)
+// for why discarding (not partial-reporting) is the deliberate choice. This test pins that
+// discard behaviour so it can no longer regress silently.
+func TestGetSystemHealth_JobBacklogMetrics_SecondQueryError_DiscardsFirstQuerysGoodData(t *testing.T) {
+	mockHealthRepo := new(MockSystemHealthRepository)
+	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+	mockPool := new(MockPool)
+	mockJobHealthRepo := new(MockJobHealthRepository)
+
+	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
+	// First query succeeds with real, non-zero data.
+	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(5, 3*time.Hour, nil)
+	// Second query fails.
+	mockJobHealthRepo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(time.Duration(0), errors.New("db error"))
+
+	service := &systemHealthService{
+		healthRepo:     mockHealthRepo,
+		deadLetterRepo: mockDeadLetterRepo,
+		pool:           mockPool,
+		jobHealthRepo:  mockJobHealthRepo,
+	}
+
+	result, err := service.GetSystemHealth(context.Background())
+
+	require.NoError(t, err, "a job-backlog query failure must not fail the whole /admin/health response")
+	assert.Equal(t, domain.JobBacklogMetrics{}, result.JobBacklog,
+		"the first query's good data (5 outstanding users, 3h oldest) must be DISCARDED, not partially surfaced, when the second query fails")
+	assert.Equal(t, int64(0), result.JobBacklog.PlaidCleanupOutstandingUsers,
+		"the first query's real, non-zero result must not leak through even though it succeeded")
+	assert.False(t, result.JobBacklog.Available, "a failed second query must mark the whole gauge unavailable")
+
+	mockJobHealthRepo.AssertExpectations(t)
+}
+
 // TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguishable is the RED/GREEN
 // pin for Issue #1458 follow-up G16 (the gap between #1458's own reasoning — applied to the FOUR
 // metrics it excluded from this response — and these THREE, which it included but still let a

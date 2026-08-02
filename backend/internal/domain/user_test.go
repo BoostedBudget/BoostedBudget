@@ -723,3 +723,170 @@ func TestEffectiveTierWithActiveOverride_ExpiredOverride_ReturnsRawTierAndNoOver
 	assert.Equal(t, "", overrideValue)
 	assert.False(t, hasOverride)
 }
+
+// ─── Issue #1466 (Task 2, batch R4) — direct domain-level coverage for the -At variants ───────
+//
+// Before these tests, EffectiveStatusWithActiveOverrideAt had zero direct references anywhere in
+// this file — its three sibling TestEffectiveStatusWithActiveOverride_* tests above all exercise
+// the no-arg delegating form, and the -At path's only coverage anywhere was one sleep-based
+// service-layer test (TestAdminUserService_GetUserDetail_EffectiveStatus_DerivedFromPassedInstant_NotLaterClockRead,
+// admin_user_service_test.go). The tests below exercise both -At variants directly, at the
+// no-override/active/expired matrix already covered for the no-arg forms, plus the exact-tie
+// boundary semantics TestHasActiveManualOverrideAt_BoundarySemantics pins for
+// hasActiveManualOverrideAt itself — asserted here at the EffectiveStatusWithActiveOverrideAt/
+// EffectiveTierWithActiveOverrideAt level too, since both delegate straight through
+// hasActiveManualOverrideAt and must agree with it exactly at the tie.
+
+// TestEffectiveStatusWithActiveOverrideAt_NoOverride_ReturnsRawStatusAndNoOverride mirrors
+// TestEffectiveStatusWithActiveOverride_NoOverride_ReturnsRawStatusAndNoOverride, calling the -At
+// variant directly with an explicit instant instead of the no-arg delegating form.
+func TestEffectiveStatusWithActiveOverrideAt_NoOverride_ReturnsRawStatusAndNoOverride(t *testing.T) {
+	user := &User{SubscriptionStatus: "inactive"}
+
+	status, overrideValue, hasOverride := user.EffectiveStatusWithActiveOverrideAt(time.Now())
+
+	assert.Equal(t, "inactive", status)
+	assert.Equal(t, "", overrideValue)
+	assert.False(t, hasOverride)
+}
+
+// TestEffectiveStatusWithActiveOverrideAt_ActiveOverride_ReturnsActiveAndValue mirrors
+// TestEffectiveStatusWithActiveOverride_ActiveOverride_ReturnsActiveAndValue at the -At level: a
+// live override (relative to the PASSED instant, not an internal clock read) reports status
+// "active" alongside the override's raw string value.
+func TestEffectiveStatusWithActiveOverrideAt_ActiveOverride_ReturnsActiveAndValue(t *testing.T) {
+	now := time.Now()
+	override := "not_a_tier"
+	futureEnd := now.Add(24 * time.Hour)
+	user := &User{
+		SubscriptionStatus: "inactive",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &futureEnd,
+	}
+
+	status, overrideValue, hasOverride := user.EffectiveStatusWithActiveOverrideAt(now)
+
+	assert.Equal(t, string(SubscriptionStatusActive), status)
+	assert.Equal(t, "not_a_tier", overrideValue)
+	assert.True(t, hasOverride)
+}
+
+// TestEffectiveStatusWithActiveOverrideAt_ExpiredOverride_ReturnsRawStatusAndNoOverride mirrors
+// TestEffectiveStatusWithActiveOverride_ExpiredOverride_ReturnsRawStatusAndNoOverride at the -At
+// level: an override that has already expired AS OF THE PASSED INSTANT falls back to the raw
+// status with hasOverride false.
+func TestEffectiveStatusWithActiveOverrideAt_ExpiredOverride_ReturnsRawStatusAndNoOverride(t *testing.T) {
+	now := time.Now()
+	override := "premium"
+	expired := now.Add(-24 * time.Hour)
+	user := &User{
+		SubscriptionStatus: "cancelled",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &expired,
+	}
+
+	status, overrideValue, hasOverride := user.EffectiveStatusWithActiveOverrideAt(now)
+
+	assert.Equal(t, "cancelled", status)
+	assert.Equal(t, "", overrideValue)
+	assert.False(t, hasOverride)
+}
+
+// TestEffectiveStatusWithActiveOverrideAt_ExactTieBoundary_StillActive pins the exact-tie
+// boundary at the EffectiveStatusWithActiveOverrideAt level: TestHasActiveManualOverrideAt_BoundarySemantics
+// already locks in that `ManualTierEndsAt == now` counts as still active on
+// hasActiveManualOverrideAt itself; this asserts EffectiveStatusWithActiveOverrideAt (which
+// delegates straight through it) reports the SAME thing — status forced to active, override value
+// surfaced, hasOverride true — rather than silently disagreeing with the lower-level predicate at
+// the one instant that actually distinguishes `>=` from `>` semantics.
+func TestEffectiveStatusWithActiveOverrideAt_ExactTieBoundary_StillActive(t *testing.T) {
+	now := time.Now()
+	override := "household_2"
+	endsAt := now // exact tie
+	user := &User{
+		SubscriptionStatus: "inactive",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &endsAt,
+	}
+
+	status, overrideValue, hasOverride := user.EffectiveStatusWithActiveOverrideAt(now)
+
+	assert.Equal(t, string(SubscriptionStatusActive), status,
+		"an override ending exactly at now must still count as active, matching hasActiveManualOverrideAt's own !Before(now) semantics")
+	assert.Equal(t, "household_2", overrideValue)
+	assert.True(t, hasOverride)
+}
+
+// TestEffectiveTierWithActiveOverrideAt_NoOverride_ReturnsRawTierAndNoOverride mirrors
+// TestEffectiveTierWithActiveOverride_NoOverride_ReturnsRawTierAndNoOverride, calling the -At
+// variant directly with an explicit instant.
+func TestEffectiveTierWithActiveOverrideAt_NoOverride_ReturnsRawTierAndNoOverride(t *testing.T) {
+	user := &User{SubscriptionTier: "premium"}
+
+	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverrideAt(time.Now())
+
+	assert.Equal(t, "premium", tier)
+	assert.Equal(t, "", overrideValue)
+	assert.False(t, hasOverride)
+}
+
+// TestEffectiveTierWithActiveOverrideAt_ActiveOverride_ReturnsOverrideTierAndValue mirrors
+// TestEffectiveTierWithActiveOverride_ActiveOverride_ReturnsOverrideTierAndValue at the -At level.
+func TestEffectiveTierWithActiveOverrideAt_ActiveOverride_ReturnsOverrideTierAndValue(t *testing.T) {
+	now := time.Now()
+	override := "not_a_tier"
+	futureEnd := now.Add(24 * time.Hour)
+	user := &User{
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &futureEnd,
+	}
+
+	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverrideAt(now)
+
+	assert.Equal(t, "not_a_tier", tier)
+	assert.Equal(t, "not_a_tier", overrideValue)
+	assert.True(t, hasOverride)
+}
+
+// TestEffectiveTierWithActiveOverrideAt_ExpiredOverride_ReturnsRawTierAndNoOverride mirrors
+// TestEffectiveTierWithActiveOverride_ExpiredOverride_ReturnsRawTierAndNoOverride at the -At
+// level: an override expired AS OF THE PASSED INSTANT falls back to the raw tier.
+func TestEffectiveTierWithActiveOverrideAt_ExpiredOverride_ReturnsRawTierAndNoOverride(t *testing.T) {
+	now := time.Now()
+	override := "household_5"
+	expired := now.Add(-24 * time.Hour)
+	user := &User{
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &expired,
+	}
+
+	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverrideAt(now)
+
+	assert.Equal(t, "premium", tier)
+	assert.Equal(t, "", overrideValue)
+	assert.False(t, hasOverride)
+}
+
+// TestEffectiveTierWithActiveOverrideAt_ExactTieBoundary_StillActive is the tier-axis twin of
+// TestEffectiveStatusWithActiveOverrideAt_ExactTieBoundary_StillActive — same exact-tie fixture,
+// asserting EffectiveTierWithActiveOverrideAt agrees with hasActiveManualOverrideAt's `>=`
+// semantics too.
+func TestEffectiveTierWithActiveOverrideAt_ExactTieBoundary_StillActive(t *testing.T) {
+	now := time.Now()
+	override := "household_2"
+	endsAt := now // exact tie
+	user := &User{
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &endsAt,
+	}
+
+	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverrideAt(now)
+
+	assert.Equal(t, "household_2", tier,
+		"an override ending exactly at now must still count as active, matching hasActiveManualOverrideAt's own !Before(now) semantics")
+	assert.Equal(t, "household_2", overrideValue)
+	assert.True(t, hasOverride)
+}

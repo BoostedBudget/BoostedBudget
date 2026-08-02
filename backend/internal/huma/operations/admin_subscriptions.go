@@ -200,7 +200,13 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 
 	var effectiveSub *domain.EffectiveSubscription
 	if h.subService != nil {
-		effectiveSub, err = h.subService.GetEffectiveSubscription(ctx, userObj)
+		// Issue #1466: derive EffectiveTier from the SAME asOf instant already captured above for
+		// `as_of` and (via GetUserDetail) for EffectiveStatus — not a second, independent
+		// time.Now() read. Before this fix, GetEffectiveSubscription's no-arg form read its own
+		// fresh clock through domain.User.EffectiveTierWithActiveOverride(), so a request crossing
+		// an override's expiry boundary between asOf's capture and this call could return an
+		// effective_tier describing a later instant than as_of/effective_status.
+		effectiveSub, err = h.subService.GetEffectiveSubscriptionAt(ctx, userObj, asOf)
 		if err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to calculate effective limits: %w", err))
 		}
