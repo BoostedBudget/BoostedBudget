@@ -26,7 +26,9 @@ make -C backend lint        # golangci-lint
 # Integration tests (-tags integration) MUST add `-p 1`: without it, go test runs
 # packages concurrently against the one shared Postgres DB, and a global-scan
 # worker test can pick up another package's fixture and fail with a mismatched
-# entity — a convincing false failure (see .github/workflows/test.yml:777).
+# entity — a convincing false failure. CI does this too: see the "Run integration tests"
+# step in .github/workflows/test.yml (referenced by step name, not line number — this
+# cross-reference has gone stale three times as the workflow grew).
 
 # Frontend (from /apps/web)
 bun run test                # Unit tests (bun:test)
