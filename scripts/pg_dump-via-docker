@@ -56,6 +56,31 @@ if [ -z "$container" ]; then
     container=$(printf '%s\n' "$candidates" | grep . | head -1)
 fi
 
+# Rewrite the connection URL's host:port to the server's address as seen from INSIDE the container.
+#
+# Necessary because the caller's DATABASE_URL is host-oriented. CI publishes the container with
+# `-p 5432` (no host port), so Docker assigns a random ephemeral host port and the URL becomes
+# postgres://test:test@localhost:<random>/test. Inside the container that port is not listening —
+# Postgres is on 5432 — so passing the URL through unchanged fails to connect, and (before the
+# empty-dump guard) would have produced exactly the silent empty dump this shim exists to prevent.
+#
+# Only the authority is replaced: everything from the last `@` up to the first `/` becomes
+# 127.0.0.1:<internal port>. Credentials, database name and query parameters (notably
+# ?sslmode=disable) are preserved. Override the port with PG_DUMP_CONTAINER_PORT if a container ever
+# runs Postgres somewhere other than 5432.
+internal_port="${PG_DUMP_CONTAINER_PORT:-5432}"
+
+args=()
+for arg in "$@"; do
+    case "$arg" in
+        postgres://*|postgresql://*)
+            arg=$(printf '%s' "$arg" \
+                | sed -E "s#(postgres(ql)?://[^@]*@)[^/]*#\1127.0.0.1:${internal_port}#")
+            ;;
+    esac
+    args+=("$arg")
+done
+
 # -i (not -it): stdout must stay a clean pipe for the caller to hash. A TTY would inject control
 # characters and silently change the hash, which is the class of bug this whole shim exists to stop.
-exec docker exec -i "$container" pg_dump "$@"
+exec docker exec -i "$container" pg_dump "${args[@]}"
