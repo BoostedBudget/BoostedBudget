@@ -868,9 +868,9 @@ PLAID_SECRET                # Plaid secret (sandbox/production)
 PLAID_PUBLIC_KEY            # Plaid public key
 
 # Payments (Paddle)
-PADDLE_API_KEY              # Paddle API key
-PADDLE_WEBHOOK_SECRET       # Paddle webhook secret (pdl_ntfset_...)
-PADDLE_CLIENT_TOKEN         # Paddle client-side token (frontend)
+PADDLE_API_KEY              # Fly secret: Paddle API key
+PADDLE_WEBHOOK_SECRET       # Fly secret: Paddle webhook secret (pdl_ntfset_...)
+VITE_PADDLE_CLIENT_TOKEN    # GitHub production-environment secret for the frontend build
 
 # Security
 ENCRYPTION_KEY              # 32-byte encryption key for sensitive data
@@ -913,6 +913,12 @@ fly secrets set \
   PADDLE_WEBHOOK_SECRET="pdl_ntfset_..." \
   ENCRYPTION_KEY="your_32_byte_key_here" \
   --app boostedbudget-api
+
+# Set the frontend live client token on the GitHub production environment.
+# Omit --body so gh reads the value securely from standard input.
+gh secret set VITE_PADDLE_CLIENT_TOKEN \
+  --env production \
+  --repo BoostedBudget/BoostedBudget
 
 # List secrets
 fly secrets list --app boostedbudget-api

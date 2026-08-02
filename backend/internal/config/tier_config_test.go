@@ -198,7 +198,7 @@ func TestGetConfigPath_EnvironmentSpecific(t *testing.T) {
 
 func TestLoadTierConfig_EnvironmentSpecific(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		paddleEnv string
 	}{
 		{"loads sandbox config when PADDLE_ENVIRONMENT=sandbox", "sandbox"},
@@ -219,6 +219,89 @@ func TestLoadTierConfig_EnvironmentSpecific(t *testing.T) {
 			assert.Len(t, config.Tiers, 5)
 		})
 	}
+}
+
+func TestLoadTierConfig_ProductionHasCompletePaddleCatalog(t *testing.T) {
+	cleanup := setAndCleanupEnv(map[string]string{
+		"SUBSCRIPTION_TIERS_CONFIG": "",
+		"PADDLE_ENVIRONMENT":        "production",
+	})
+	t.Cleanup(func() {
+		cleanup()
+		resetConfigSingleton()
+	})
+	resetConfigSingleton()
+
+	tierConfig, err := LoadTierConfig()
+	require.NoError(t, err)
+	householdFive, err := tierConfig.GetTier(domain.TierHousehold5)
+	require.NoError(t, err)
+	assert.Equal(t, "Household (5)", householdFive.DisplayName,
+		"production must not advertise more than the enforced five household seats")
+
+	seen := make(map[string]domain.TierName)
+	for tierName, tier := range tierConfig.Tiers {
+		priceIDs := map[string]*string{
+			"monthly": tier.Pricing.PaddlePriceIDMonthly,
+			"yearly":  tier.Pricing.PaddlePriceIDYearly,
+		}
+
+		for interval, priceID := range priceIDs {
+			require.NotNil(t, priceID,
+				"tier %s must configure a production Paddle %s price", tierName, interval)
+			require.NotEmpty(t, *priceID,
+				"tier %s must configure a non-empty production Paddle %s price", tierName, interval)
+			require.True(t, strings.HasPrefix(*priceID, "pri_"),
+				"tier %s production Paddle %s price must use a pri_ ID", tierName, interval)
+
+			previousTier, duplicate := seen[*priceID]
+			require.False(t, duplicate,
+				"production Paddle price ID %s is shared by tiers %s and %s", *priceID, previousTier, tierName)
+			seen[*priceID] = tierName
+		}
+	}
+
+	assert.Len(t, seen, 10, "five production tiers must configure monthly and yearly Paddle prices")
+}
+
+func TestProductionPaddleCatalogDoesNotReuseSandboxPrices(t *testing.T) {
+	sandboxPriceIDs := loadPaddlePriceIDsForEnvironment(t, "sandbox")
+	productionPriceIDs := loadPaddlePriceIDsForEnvironment(t, "production")
+
+	for priceID, productionTier := range productionPriceIDs {
+		sandboxTier, reused := sandboxPriceIDs[priceID]
+		require.False(t, reused,
+			"production tier %s reuses sandbox Paddle price %s from tier %s", productionTier, priceID, sandboxTier)
+	}
+}
+
+func loadPaddlePriceIDsForEnvironment(t *testing.T, paddleEnvironment string) map[string]domain.TierName {
+	t.Helper()
+
+	cleanup := setAndCleanupEnv(map[string]string{
+		"SUBSCRIPTION_TIERS_CONFIG": "",
+		"PADDLE_ENVIRONMENT":        paddleEnvironment,
+	})
+	defer cleanup()
+	defer resetConfigSingleton()
+	resetConfigSingleton()
+
+	tierConfig, err := LoadTierConfig()
+	require.NoError(t, err)
+
+	priceIDs := make(map[string]domain.TierName)
+	for tierName, tier := range tierConfig.Tiers {
+		for _, priceID := range []*string{
+			tier.Pricing.PaddlePriceIDMonthly,
+			tier.Pricing.PaddlePriceIDYearly,
+		} {
+			if priceID != nil && *priceID != "" {
+				priceIDs[*priceID] = tierName
+			}
+		}
+	}
+
+	return priceIDs
 }
 
 // Issue #772: GetTierByPriceID tests (GAP 3)

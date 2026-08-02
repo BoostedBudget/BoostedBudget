@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Create the five-product, ten-price live Paddle subscription catalog and bind every live price ID to the production tier configuration.
+**Goal:** Create the five-product, ten-price live Paddle subscription catalog, bind every live price ID to production configuration, and prepare the production credentials and webhook wiring.
 
 **Architecture:** Paddle remains the billing catalog while `config/subscription_tiers.production.yaml` maps stable application tier keys to environment-specific price IDs. Catalog creation is idempotent: exact existing products and prices are reused, conflicting definitions stop the run, and a final read-only reconciliation proves the live state matches the repository.
 
@@ -160,7 +160,34 @@ Expected: all commands exit zero. If environment-dependent E2E cannot run, repor
 
 Review the full diff for incorrect IDs, cross-environment leakage, missing validation, unsafe assumptions, and repository convention violations. Address findings and rerun affected verification.
 
-### Task 6: Commit, push, and create the PR
+### Task 6: Wire the production environment and credentials
+
+**Files:**
+- Modify: `backend/fly.toml`
+- Modify: `.github/workflows/deploy-production.yml`
+- Modify: `boosted-budget-fly-deployment.md`
+
+**Step 1: Add a failing deployment-wiring regression test**
+
+Assert that Fly sets `PADDLE_ENVIRONMENT=production` and the production frontend build sets `VITE_PADDLE_ENV=production`.
+
+**Step 2: Wire both production environment selectors**
+
+Add the non-secret backend and frontend values to their deployment configuration, then rerun the focused regression test.
+
+**Step 3: Prepare the production webhook**
+
+Configure `https://api.boostedbudget.com/webhooks/paddle` for the nine subscription and transaction events handled by the backend and retain its signing secret for Fly. Delivery cannot be exercised while the production API is offline.
+
+**Step 4: Install credentials securely**
+
+Set `PADDLE_API_KEY` and `PADDLE_WEBHOOK_SECRET` on Fly app `boostedbudget-api`. Set `VITE_PADDLE_CLIENT_TOKEN` on the GitHub `production` environment. Verify secret names only; never print secret values.
+
+**Step 5: Record deferred activation**
+
+After the first production deployment, send a Paddle simulation and verify delivery and signature processing. The production API is intentionally offline during this setup, so network delivery cannot be exercised in this branch.
+
+### Task 7: Commit, push, and create the PR
 
 **Files:**
 - Commit all tracked changes on `feature/746-production-paddle-catalog`

@@ -19,13 +19,16 @@ kill_timeout = 30
   # Plaid configuration
   PLAID_ENV = "production"
 
+  # Paddle configuration (selects the live API and production tier catalog)
+  PADDLE_ENVIRONMENT = "production"
+
   # NOTE: Sensitive values set via `fly secrets set`:
   # - DATABASE_URL (PostgreSQL connection string)
   # - CLERK_SECRET_KEY (Clerk authentication)
   # - PLAID_CLIENT_ID
   # - PLAID_SECRET
-  # - STRIPE_SECRET_KEY
-  # - STRIPE_WEBHOOK_SECRET
+  # - PADDLE_API_KEY
+  # - PADDLE_WEBHOOK_SECRET
 
 [experimental]
   auto_rollback = true
