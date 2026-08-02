@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { AdminSidebar } from './AdminSidebar'
 import { ADMIN_SIDEBAR_ITEMS } from '../constants'
 

@@ -7,8 +7,9 @@
  * Issue #679, #680: Account freezing when subscription expires
  */
 
-import { Navigate, useLocation } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router'
 import { useProfile } from '@/features/profile/hooks/useProfile'
+import { presentationFromUser } from '@/features/subscription/lib/subscriptionPresentation'
 import { ReadOnlyProvider } from './ReadOnlyContext'
 
 interface PremiumRouteProps {
@@ -95,32 +96,27 @@ export function PremiumRoute({ children }: PremiumRouteProps) {
     return <LoadingSkeleton />
   }
 
-  const status = user.subscription_status
-  const activeStatuses = ['active', 'trial', 'trialing']
-  const readOnlyStatuses = ['inactive', 'cancelled', 'past_due']
+  // Issue #1413: the raw subscription_status alone can't tell "comped" from "expired" — an
+  // admin-comped user may carry any raw status left behind on the user row. Route through the
+  // single shared derivation instead of re-deriving "active"/"read-only"/"unknown" here.
+  const presentation = presentationFromUser(user)
 
-  if (activeStatuses.includes(status)) {
+  if (presentation.isUnknown) {
     return (
-      <ReadOnlyProvider isReadOnly={false} subscriptionStatus={status}>
-        {children}
-      </ReadOnlyProvider>
+      <Navigate
+        to="/pricing"
+        state={{ from: location, frozen: true }}
+        replace
+      />
     )
   }
 
-  if (readOnlyStatuses.includes(status)) {
-    return (
-      <ReadOnlyProvider isReadOnly={true} subscriptionStatus={status}>
-        {children}
-      </ReadOnlyProvider>
-    )
-  }
-
-  // Unknown status — redirect to pricing
   return (
-    <Navigate
-      to="/pricing"
-      state={{ from: location, frozen: true }}
-      replace
-    />
+    <ReadOnlyProvider
+      isReadOnly={!presentation.hasWriteAccess}
+      subscriptionStatus={presentation.contextStatus}
+    >
+      {children}
+    </ReadOnlyProvider>
   )
 }

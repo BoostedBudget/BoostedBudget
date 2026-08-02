@@ -1,22 +1,19 @@
-import { Link } from 'react-router-dom'
-import { Award, Check } from 'lucide-react'
+import { Link } from 'react-router'
+import { Award, Check, Gift } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import type { BadgeProps } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { useSubscriptionTiers } from '../../subscription/hooks/useSubscriptionTiers'
 import type { SubscriptionTier } from '../../subscription/types'
-
-const SUBSCRIPTION_STATUS_BADGE: Record<string, BadgeProps['variant']> = {
-  active: 'success',
-  inactive: 'destructive',
-  cancelled: 'secondary',
-  trial: 'info',
-}
+import type { SubscriptionPresentation } from '../../subscription/lib/subscriptionPresentation'
 
 interface SubscriptionCardProps {
   tier: string // User's subscription_tier from API
-  status: string // User's subscription_status from API
-  trialDaysRemaining?: number
+  /**
+   * Issue #1413: the single shared status → UI derivation (badge variant/label, comp state),
+   * rather than a raw `status: string` this component used to re-derive its own badge mapping
+   * from.
+   */
+  presentation: SubscriptionPresentation
   /**
    * Household seat usage (used/total). Caller (ProfilePage) computes this via
    * `useHousehold()` and passes it down — this component stays presentational
@@ -58,11 +55,11 @@ function buildFeatureList(tierData: SubscriptionTier): string[] {
   return features
 }
 
-export function SubscriptionCard({ tier, status, trialDaysRemaining, seatUsage }: SubscriptionCardProps) {
+export function SubscriptionCard({ tier, presentation, seatUsage }: SubscriptionCardProps) {
   const { tiers, loading, error } = useSubscriptionTiers()
 
   // Handle loading state
-  if (loading || !tier || !status) {
+  if (loading || !tier || !presentation) {
     return (
       <Card className="border-2 my-4 flex justify-center items-center min-h-[200px] text-muted-foreground">
         <p>Loading subscription details...</p>
@@ -97,6 +94,12 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining, seatUsage }
 
   const isPremiumTier = ['premium', 'household_2', 'household_3', 'household_4', 'household_5'].includes(tier)
 
+  // Issue #1413: a comped user is not being charged — no monthly price, and an explicit note
+  // about the comp end date (or that access is ongoing) instead.
+  const compEndDateLabel = presentation.isComped && presentation.compEndsAt
+    ? presentation.compEndsAt.slice(0, 10)
+    : undefined
+
   return (
     <Card className={`subscription-card tier-${tier} border-2 my-4 ${isPremiumTier ? 'border-primary bg-gradient-to-br from-card to-primary/5' : ''}`}>
       <div className="flex justify-between items-start mb-6 flex-wrap gap-3">
@@ -104,17 +107,25 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining, seatUsage }
           <Award className="w-8 h-8 text-primary" aria-hidden="true" />
           <h3 className="text-2xl m-0 font-bold text-foreground">{displayName}</h3>
         </div>
-        <div className="flex items-baseline gap-1">
-          <span className="text-2xl font-bold text-foreground">{displayPrice}</span>
-          {tierInfo.pricing.price_monthly > 0 && (
-            <span className="text-sm text-muted-foreground font-normal">/month</span>
-          )}
-        </div>
-        <Badge variant={SUBSCRIPTION_STATUS_BADGE[status] ?? 'secondary'} className="capitalize tracking-wide">
-          {status === 'trial' && trialDaysRemaining !== undefined
-            ? `Trial — ${trialDaysRemaining} day${trialDaysRemaining === 1 ? '' : 's'} remaining`
-            : status}
+        {!presentation.isComped && (
+          <div className="flex items-baseline gap-1">
+            <span className="text-2xl font-bold text-foreground">{displayPrice}</span>
+            {tierInfo.pricing.price_monthly > 0 && (
+              <span className="text-sm text-muted-foreground font-normal">/month</span>
+            )}
+          </div>
+        )}
+        <Badge variant={presentation.badgeVariant} className="gap-1 tracking-wide">
+          {presentation.isComped && <Gift size={14} aria-hidden="true" />}
+          {presentation.badgeLabel}
         </Badge>
+        {presentation.isComped && (
+          <p className="w-full text-sm text-muted-foreground">
+            {compEndDateLabel
+              ? `Complimentary access ends ${compEndDateLabel}`
+              : 'Complimentary Premium, provided by BoostedBudget'}
+          </p>
+        )}
       </div>
 
       <div className="mb-6">

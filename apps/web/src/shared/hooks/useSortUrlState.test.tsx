@@ -1,6 +1,6 @@
 import { describe, it, expect, spyOn } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { createElement } from 'react'
 import type { SortState } from '@/shared/components/DataTable'
 

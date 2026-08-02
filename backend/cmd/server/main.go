@@ -116,6 +116,10 @@ func main() {
 		appLogger.Info("Database connection pool established (pgx v5)")
 		// Start DB pool metrics collection (runs until process exits)
 		observability.StartDBMetricsCollector(context.Background(), db)
+		// Issue #1413 Task P4: start the manual-tier-override job-health gauge collector (runs
+		// until process exits) — the direct, always-on measure of the C1 hazard, independent of
+		// whether manual_tier_override_expiry_check's own job metrics are being scraped.
+		startJobHealthMetricsCollector(context.Background(), repository.NewJobHealthRepository(db), appLogger)
 	} else {
 		appLogger.Warn("Running without database (set DATABASE_URL to enable)")
 	}
@@ -243,10 +247,25 @@ func main() {
 	// Issue #930: Declare retention cleanup check worker
 	var retentionCleanupCheckWorker *jobs.RetentionCleanupCheckWorker
 
+	// Issue #1413 (Task 9): Declare manual tier override expiry check worker (the
+	// time-triggered twin of the admin "remove override" endpoint — Issue #1414 / Task 7).
+	// Not gated on DELETION_TOKEN_SECRET — it depends on adminUserRepo/clerkService, not
+	// deletionService. (Stale as of round-8: this used to be a contrast with retention's worker,
+	// which WAS gated on DELETION_TOKEN_SECRET at the time. Issue #1413 round-8 Blocker 2 moved
+	// retention's worker's own construction outside that gate too — see its construction site
+	// below — so both are now unconditional on DELETION_TOKEN_SECRET specifically. Neither is
+	// truly ungated, though: both still sit inside the OUTER `if db != nil && cfg.ClerkSecretKey
+	// != ""` block this whole function body lives in — a real, separate gate, filed as its own
+	// issue.)
+	var manualTierOverrideExpiryCheckWorker *jobs.ManualTierOverrideExpiryCheckWorker
+
 	// Issue #1371 — Phase 7 (Task 2): Declare household member cleanup check worker
 	// (purges household_members rows removed 30+ days ago). Constructed once
-	// householdService is available (below); not gated on DELETION_TOKEN_SECRET like
-	// retention's worker, since it depends on householdService, not deletionService.
+	// householdService is available (below); not gated on DELETION_TOKEN_SECRET either — it
+	// depends on householdService, not deletionService. See
+	// manualTierOverrideExpiryCheckWorker's declaration comment above for why this is no longer a
+	// useful contrast with retention's worker (round-8 made that unconditional too), and for the
+	// real outer gate both still sit inside.
 	var householdMemberCleanupCheckWorker *jobs.HouseholdMemberCleanupCheckWorker
 
 	// Issue #1371 — Phase 7 (Task 6): Declare household over-capacity check worker
@@ -355,6 +374,19 @@ func main() {
 
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db, fieldEncryptor)
+		// Issue #1413 G2 / round-5: reject a manual_tier_override that names no configured tier
+		// — both on the access-granting path (GetEffectiveSubscriptionStatusByUserID) and on the
+		// profile response's representation path (humaProfileHandler.SetOverrideTierValidator,
+		// wired below once it exists) — tierConfig was already loaded above (or the process
+		// would have os.Exit(1)'d), so this validator is wired for the entire lifetime of the
+		// process; see SetOverrideTierValidator's doc comment (profile_repository.go) for the
+		// nil-validator fallback this deliberately never exercises in production. Shared as one
+		// closure so both call sites can never drift apart on what counts as "configured".
+		overrideTierValidator := func(tier string) bool {
+			_, tierErr := tierConfig.GetTier(domain.TierName(tier))
+			return tierErr == nil
+		}
+		profileRepo.SetOverrideTierValidator(overrideTierValidator)
 		privacyRepo := repository.NewPrivacyRepository(db)
 		linkedItemRepo := repository.NewLinkedItemRepository(db, fieldEncryptor)
 		accountRepo := repository.NewAccountRepository(db, fieldEncryptor)
@@ -386,6 +418,13 @@ func main() {
 		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)                // Issue #910: Plaid Liabilities
 		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor)          // Issue #910: Plaid Liabilities
 		merchantRepo := repository.NewMerchantRepository(db)                                                  // Issue #1163: Merchant batch-upsert
+		// NewWorkClaimsOutcomeRepository (not NewWorkClaimsRepository): the subscription-cancellation
+		// webhook needs the wider WorkClaimsOutcomeRepository view (#1413 round-3 finding H3, see
+		// SubscriptionWebhookWorker.SetWorkClaimsRepo). Every other consumer below still declares its
+		// setter parameter as the narrower repository.WorkClaimsRepository, and a
+		// WorkClaimsOutcomeRepository value satisfies that automatically (its method set is a
+		// superset) — so this single swap requires no other changes at any other call site.
+		workClaimsRepo := repository.NewWorkClaimsOutcomeRepository(db) // Issue #1413: durable leased claims for destructive actions
 
 		// Create GDPR-consent-gated analytics client.
 		// User-behavior analytics events (e.g. transfer suggestion accept/reject) use
@@ -402,6 +441,25 @@ func main() {
 		clerkService := services.NewClerkService(cfg.ClerkSecretKey)
 		appLogger.Info("Clerk Backend API service initialized")
 
+		// Issue #1413 (Task 9): Manual tier override expiry check worker — reuses
+		// AdminUserRepository.RemoveUserTierOverride (adminUserRepo, Issue #1414 / Task 7) as
+		// the time-triggered twin of the admin "remove override" endpoint. RetentionMonths
+		// mirrors trialService.SetRetentionMonths / NewAdminUserService's retentionMonths param
+		// below — same cfg.RetentionPeriodMonths value threaded everywhere retention windows
+		// are sized.
+		manualTierOverrideExpiryCheckWorker = jobs.NewManualTierOverrideExpiryCheckWorker(jobs.ManualTierOverrideExpiryCheckWorkerDeps{
+			ProfileRepo:     profileRepo,
+			Remover:         adminUserRepo,
+			ClerkService:    clerkService,
+			RetentionMonths: cfg.RetentionPeriodMonths,
+			Logger:          appLogger,
+		})
+		// Consent-gated (Issue #1413 round 10): this worker's event carries the expired target user's
+		// own UUID as distinct_id, so it is that user's personal data even though a system job fired
+		// it — see SetGDPRAnalytics' doc comment for why the earlier raw-phClient clearance was reversed.
+		manualTierOverrideExpiryCheckWorker.SetGDPRAnalytics(gdprClient)
+		appLogger.Info("Manual tier override expiry check worker created (River)")
+
 		// Create services
 		profileService := services.NewProfileService(services.NewProfileServiceDeps{
 			Repo:         profileRepo,
@@ -417,6 +475,12 @@ func main() {
 		registrationService.SetAnalytics(phClient)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
 		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)
+		// Issue #1413 (tier axis, this task): same validator as profileRepo/humaProfileHandler/
+		// householdEntitlementService above, so a malformed manual_tier_override falls back to
+		// the raw subscription tier here too — GetEffectiveSubscription backs the admin
+		// subscription-detail endpoint, Plaid sync depth limits, and feature/limit resolution
+		// for every user. See SubscriptionService.SetOverrideTierValidator's doc comment.
+		subscriptionService.SetOverrideTierValidator(overrideTierValidator)
 		entitlementRepo := repository.NewEntitlementRepository(db) // Issue #1366: household entitlement resolution
 		householdRepo := repository.NewHouseholdRepository(db)     // Issue #1366: minimal household reads
 		// Issue #1367 — Phase 3: declared here (not near route registration below) so the
@@ -424,6 +488,11 @@ func main() {
 		householdInviteRepo := repository.NewHouseholdInviteRepository(db, fieldEncryptor)
 		householdShareRepo := repository.NewHouseholdShareRepository(db)
 		householdEntitlementService := services.NewHouseholdEntitlementService(entitlementRepo, profileRepo, householdRepo, tierConfig)
+		// Issue #1413 — closes the household-owner mutation bypass: same validator as
+		// profileRepo/humaProfileHandler above, so a malformed owner override can no longer
+		// make ResolveEffectiveEntitlement report the owner (and therefore every member) as
+		// covered. See HouseholdEntitlementService.SetOverrideTierValidator's doc comment.
+		householdEntitlementService.SetOverrideTierValidator(overrideTierValidator)
 		subscriptionService.SetEntitlementResolver(householdEntitlementService) // nil-safe injection; dormant until Phase 3 seeds rows
 		// Issue #353: Dashboard service for balance tracking
 		dashboardService := services.NewDashboardService(balanceSnapshotRepo, accountRepo)
@@ -611,6 +680,11 @@ func main() {
 			deletionService.SetHouseholdReader(householdRepo)
 			deletionService.SetHouseholdInviteRevoker(householdInviteRepo)
 			deletionService.SetDB(db)
+			// Issue #1413 Critical finding C2: required for ExecuteDeletion to gain
+			// EXCLUSIVITY on ActionAccountDeletion before any irreversible Paddle/Plaid
+			// cleanup or cascade delete — replaces the old self-assigning ClaimForDeletion
+			// guard, which reserved nothing. See work_claims_repository.go's package doc.
+			deletionService.SetWorkClaimsRepo(workClaimsRepo)
 			appLogger.Info("Deletion service initialized (30-day grace period)")
 
 			// Register Huma deletion routes (Issue #559: Huma migration)
@@ -635,16 +709,6 @@ func main() {
 			})
 			appLogger.Info("Scheduled deletion check worker created (River)")
 
-			// Issue #930: Create retention cleanup check worker
-			// Note: EmailService is nil in MVP — notice emails are skipped until Phase 3 email templates
-			retentionCleanupCheckWorker = jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{
-				ProfileRepo:     profileRepo,
-				DeletionService: deletionService,
-				RetentionMonths: cfg.RetentionPeriodMonths,
-				Logger:          appLogger,
-			})
-			appLogger.Info("Retention cleanup check worker created (River)")
-
 			// Issue #633: Create DLQ cleanup worker
 			dlqCleanupCheckWorker = jobs.NewDLQCleanupCheckWorker(jobs.DLQCleanupCheckWorkerDeps{
 				Repo:          deadLetterJobRepo,
@@ -653,8 +717,33 @@ func main() {
 			})
 			appLogger.Info("DLQ cleanup check worker created (River)")
 		} else {
-			appLogger.Warn("Deletion services disabled (requires DELETION_TOKEN_SECRET)")
+			appLogger.Warn("Hard-deletion services disabled (requires DELETION_TOKEN_SECRET) — account-deletion routes/workers unavailable; retention-clock repair and Plaid-disconnect repair are unaffected (constructed unconditionally below)")
 		}
+
+		// Issue #930: Create retention cleanup check worker. Issue #1413 round-8 Blocker 2
+		// (Codex review): this MUST be constructed unconditionally, outside the
+		// cfg.DeletionTokenSecret gate above — retentionCleanupCheckWorker.repairPlaidDisconnects
+		// is the ONLY place a read-only user's Plaid items are ever disconnected (see that
+		// function's doc comment), so gating its construction on an unrelated secret meant a
+		// production deployment with perfectly good Plaid credentials but no
+		// DELETION_TOKEN_SECRET would silently never disconnect anyone. deletionService may
+		// still be nil here (DELETION_TOKEN_SECRET unset) — that only disables Step 3's
+		// auto-deletion (deleteExpiredAccounts nil-guards it and logs a warning instead of
+		// panicking); Steps 0/0b/1/2 (retention-clock repair, Plaid-disconnect repair, 30d/7d
+		// notices) all run regardless, since none of them touch deletionService at all.
+		// Note: EmailService is nil in MVP — notice emails are skipped until Phase 3 email templates
+		retentionCleanupCheckWorker = jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{
+			ProfileRepo:     profileRepo,
+			DeletionService: deletionService,
+			RetentionMonths: cfg.RetentionPeriodMonths,
+			Logger:          appLogger,
+		})
+		// Issue #1413 Medium finding M9 (Codex review round 3): required for
+		// send30dNotices/send7dNotices to gain EXCLUSIVITY on ActionRetentionNotice30d/7d
+		// before a notice email is sent — replaces the old ClaimRetentionNotice30dSent/7dSent,
+		// which stamped the *_sent_at marker BEFORE the send was attempted.
+		retentionCleanupCheckWorker.SetWorkClaimsRepo(workClaimsRepo)
+		appLogger.Info("Retention cleanup check worker created (River)")
 
 		// Create Paddle services (if configured) - Issue #45, #46: Paddle Payment Integration
 		if cfg.PaddleAPIKey != "" {
@@ -720,6 +809,11 @@ func main() {
 					Logger:        logger,
 				})
 				subscriptionWebhookWorker.SetAnalytics(phClient)
+				// Issue #1413 High finding H7 (Codex review round 4): required for
+				// processSubscriptionCanceled to gain EXCLUSIVITY on
+				// ActionSubscriptionCancelledCleanup before its Plaid disconnect / retention-clock
+				// side effects — replaces the old plain-read comp check, which reserved nothing.
+				subscriptionWebhookWorker.SetWorkClaimsRepo(workClaimsRepo)
 				appLogger.Info("Subscription webhook worker created (River)")
 			}
 		} else {
@@ -738,12 +832,17 @@ func main() {
 		// Placement: after Paddle init (paddleService available), before Plaid init.
 
 		// Issue #679, #680: Create TrialService unconditionally.
-		// PlaidCleanup is nil initially — wired via SetPlaidCleanup() if Plaid is configured.
-		// ExpireTrial already nil-guards plaidCleanup before calling it.
-		trialService = services.NewTrialService(tierConfig, profileRepo, nil)
+		// Issue #1413 round-7: TrialService has no Plaid dependency at all — ExpireTrial never
+		// calls Plaid. The disconnect lives entirely in RetentionCleanupCheckWorker's grace-window
+		// repair pass (wired further below, once plaidCleanupService is available).
+		trialService = services.NewTrialService(tierConfig, profileRepo)
 		trialService.SetRetentionMonths(cfg.RetentionPeriodMonths)
 		// #1367 — Phase 3: exempt actively covered household members from trial expiry.
 		trialService.SetHouseholdChecker(householdEntitlementService)
+		// Issue #1413 round-4 finding H2: required for ExpireTrial to gain EXCLUSIVITY on
+		// ActionTrialExpiration before its Plaid disconnect — trial_service was the one
+		// destructive flow in this branch with no work_claims flow claim at all.
+		trialService.SetWorkClaimsRepo(workClaimsRepo)
 		appLogger.Info("Trial service initialized")
 
 		// Issue #898: Create PastDueService unconditionally; plaidCleanup wired later if Plaid is configured.
@@ -758,6 +857,14 @@ func main() {
 			pastDueCfg.PlaidDisconnectDays,
 		)
 		pastDueService.SetAnalytics(phClient)
+		// #1413: exempt actively covered household members from past_due dunning, closing an
+		// asymmetry with TrialService's #1367 household exemption (wired identically above).
+		pastDueService.SetHouseholdChecker(householdEntitlementService)
+		// Issue #1413 High findings H6a/H6b (Codex review round 4): required for
+		// processPlaidDisconnectWindow/processGraceExpiry to gain EXCLUSIVITY on
+		// ActionPlaidDisconnectPastDue/ActionPastDueGraceCancel before any irreversible Plaid/Paddle
+		// call — replaces the old self-assigning-update guards, which reserved nothing.
+		pastDueService.SetWorkClaimsRepo(workClaimsRepo)
 		appLogger.Info("Past-due service initialized",
 			"grace_days", pastDueCfg.GraceDays,
 			"plaid_disconnect_days", pastDueCfg.PlaidDisconnectDays,
@@ -881,6 +988,13 @@ func main() {
 					linkedItemRepo,
 					plaidService,
 				)
+				// Issue #1413 H1: required for RemoveAllUserItems/DisconnectAllUserItems to gain
+				// EXCLUSIVITY on ActionPlaidDisconnectUser before any Plaid /item/remove call —
+				// closes the race where deletion, past-due dunning, the subscription-cancellation
+				// webhook, and trial expiration (all sharing this one service instance) could each
+				// hold their own, different flow claim and disconnect the same user's Plaid items
+				// concurrently.
+				plaidCleanupService.SetWorkClaimsRepo(workClaimsRepo)
 				appLogger.Info("Plaid item cleanup service initialized")
 
 				// Issue #668: Wire cleanup service to deletion service (resolves nil dependency from earlier)
@@ -896,13 +1010,17 @@ func main() {
 					appLogger.Info("Plaid cleanup service wired to subscription webhook worker")
 				}
 
-				// Issue #1015: Wire Plaid cleanup to trial service (created before Plaid block with nil cleanup)
-				trialService.SetPlaidCleanup(plaidCleanupService)
-				appLogger.Info("Plaid cleanup service wired to trial service")
-
 				// Issue #898: Wire Plaid cleanup to past-due service (created before Plaid block with nil cleanup)
 				pastDueService.SetPlaidCleanup(plaidCleanupService)
 				appLogger.Info("Plaid cleanup service wired to past-due service")
+
+				// Issue #1413 round-6: wire Plaid cleanup to the retention cleanup check worker's
+				// Plaid-disconnect repair pass (created before this Plaid block, with nil cleanup —
+				// same late-binding pattern as trial/past-due service above).
+				if retentionCleanupCheckWorker != nil {
+					retentionCleanupCheckWorker.SetPlaidCleanup(plaidCleanupService)
+					appLogger.Info("Plaid cleanup service wired to retention cleanup check worker")
+				}
 
 				// Issue #36: Transaction Monitor Service for auto-detecting completed transfers
 				transactionMonitorService := services.NewTransactionMonitorService(transferSuggestionRepo)
@@ -1185,19 +1303,77 @@ func main() {
 			}
 
 			// Issue #930: Retention cleanup check (daily)
+			//
+			// Issue #1413 Finding 2 (Codex review, PR #1443): InsertOpts (Queue + UniqueOpts) is
+			// built by jobs.RetentionCleanupCheckInsertOpts() rather than hand-written here — a
+			// previous version of this literal called jobs.RetentionCleanupCheckUniqueOpts() from
+			// NOWHERE, hand-copying its OWN independent (and stale) ByState list instead, so the
+			// round that added Completed to that function's ByState was a no-op in production: a
+			// completed retention job still failed to block a RunOnStart insertion after every
+			// process restart or leader election, silently re-running the 30-day/7-day GDPR
+			// pre-deletion notices and deleteExpiredAccounts on every deploy. This is the third
+			// "defined, tested, never wired" instance on this branch — see
+			// jobs.ManualTierOverrideExpiryCheckInsertOpts's doc comment (used one registration
+			// below this one) for the identical failure mode recurring in the sibling job. main.go
+			// now calls jobs.RetentionCleanupCheckInsertOpts() directly instead of hand-writing the
+			// InsertOpts literal, so main.go is no longer a second, independently-maintained
+			// expression of the same shape — a future change to jobs.RetentionCleanupCheckUniqueOpts()
+			// automatically propagates to what actually ships.
 			if retentionCleanupCheckWorker != nil {
 				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
 					river.PeriodicInterval(24*time.Hour),
 					func() (river.JobArgs, *river.InsertOpts) {
 						return jobs.RetentionCleanupCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low",
-							}
+							TriggerSource: "periodic",
+						}, jobs.RetentionCleanupCheckInsertOpts()
 					},
-					&river.PeriodicJobOpts{RunOnStart: false},
+					// Issue #1413 P0: RunOnStart MUST be true — see
+					// jobs.RetentionCleanupCheckPeriodicOpts()'s doc comment for the full
+					// River in-memory-scheduler rationale. Safe only because
+					// jobs.RetentionCleanupCheckInsertOpts() above always carries UniqueOpts.
+					jobs.RetentionCleanupCheckPeriodicOpts(),
 				))
 				appLogger.Info("Retention cleanup check periodic job configured (daily)")
+			}
+
+			// Issue #1413 (Task 9): Manual tier override expiry check (daily) — the
+			// time-triggered twin of the admin "remove override" endpoint (Issue #1414 /
+			// Task 7). HasActiveManualOverride() derives comp state at read time only, so
+			// nothing else re-arms retention / re-syncs Clerk / audits a comp that lapses on
+			// its own without an admin manually clearing it.
+			//
+			// Issue #1413 G3: InsertOpts (Queue + UniqueOpts) is built by
+			// jobs.ManualTierOverrideExpiryCheckInsertOpts() rather than hand-written here —
+			// a previous version of this literal omitted UniqueOpts entirely, silently
+			// leaving ManualTierOverrideExpiryCheckUniqueOpts()'s documented dedup
+			// unenforced. That job is the ONLY thing bounding how long
+			// noManualOverrideAtAllPredicate keeps a user out of the retention pipeline
+			// (profile_repository.go), so duplicate or missed runs directly affect whether
+			// accounts are ever deleted.
+			//
+			// Issue #1413 Finding 2 (Codex review, PR #1443): the IDENTICAL failure mode this
+			// comment describes recurred one job ABOVE this one — the retention cleanup check's
+			// periodic registration hand-wrote its own InsertOpts literal instead of calling
+			// jobs.RetentionCleanupCheckInsertOpts(), the fix G3 established here. That was the
+			// third "defined, tested, never wired" instance on this branch; it is now fixed the
+			// same way. If a THIRD job's registration is ever found hand-writing UniqueOpts
+			// instead of calling its own *InsertOpts() builder, treat it as this same recurring
+			// class of bug, not a one-off.
+			if manualTierOverrideExpiryCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.ManualTierOverrideExpiryCheckArgs{
+							TriggerSource: "periodic",
+						}, jobs.ManualTierOverrideExpiryCheckInsertOpts()
+					},
+					// Issue #1413 P0: RunOnStart MUST be true — see
+					// jobs.ManualTierOverrideExpiryCheckPeriodicOpts()'s doc comment for the
+					// full River in-memory-scheduler rationale. Safe only because
+					// ManualTierOverrideExpiryCheckInsertOpts() above always carries UniqueOpts.
+					jobs.ManualTierOverrideExpiryCheckPeriodicOpts(),
+				))
+				appLogger.Info("Manual tier override expiry check periodic job configured (daily)")
 			}
 
 			// Issue #1371 — Phase 7 (Task 2): Household member cleanup check (daily)
@@ -1403,6 +1579,10 @@ func main() {
 				river.AddWorker(riverWorkers, retentionCleanupCheckWorker)
 				appLogger.Info("Retention cleanup check worker registered with River")
 			}
+			if manualTierOverrideExpiryCheckWorker != nil {
+				river.AddWorker(riverWorkers, manualTierOverrideExpiryCheckWorker)
+				appLogger.Info("Manual tier override expiry check worker registered with River")
+			}
 			// Issue #1371 — Phase 7 (Task 2): Household member cleanup check worker
 			// (constructed above, always non-nil here)
 			if householdMemberCleanupCheckWorker != nil {
@@ -1574,7 +1754,15 @@ func main() {
 		appLogger.Info("Admin service initialized", "hardcoded_admin_emails", len(adminEmailConfig.AdminEmails))
 
 		// Issue #639: Admin user management - needs adminService for admin status checks
-		adminUserService := services.NewAdminUserService(adminUserRepo, adminService)
+		// Issue #1414: clerkService re-syncs Clerk metadata on tier-override removal;
+		// RetentionPeriodMonths sizes the retention-clock re-arm (same value trialService.SetRetentionMonths gets).
+		// Issue #1413: tierConfig validates manual tier overrides and sizes the household seat-capacity warning.
+		adminUserService := services.NewAdminUserService(adminUserRepo, adminService, clerkService, cfg.RetentionPeriodMonths, tierConfig)
+		// Issue #1413 Task NB (Codex High finding): these events land on the TARGET user's
+		// PostHog profile (their UUID is distinct_id), so consent is gated the same way
+		// transfer_suggestion_service's user-initiated events are — via gdprClient, not the raw
+		// phClient other admin-triggered-but-operational events use.
+		adminUserService.SetGDPRAnalytics(gdprClient)
 
 		// Issue #640: System health monitoring service
 		systemHealthService := services.NewSystemHealthService(
@@ -1767,6 +1955,10 @@ func main() {
 
 		// Register Huma profile routes (Issue #559: Huma migration)
 		humaProfileHandler := operations.NewProfileHandler(profileService)
+		// Issue #1413 round-5: same validator as profileRepo above, so the profile response's
+		// derived comp fields (effective_status/is_comped/comp_tier) can never report a comp the
+		// access-granting path would reject.
+		humaProfileHandler.SetOverrideTierValidator(overrideTierValidator)
 		operations.RegisterProfileRoutes(humaAPI, humaProfileHandler)
 		appLogger.Info("Huma profile routes registered")
 
@@ -2081,6 +2273,44 @@ func createClerkCheck() func() error {
 		// Will be replaced with actual Clerk endpoint check when we add Clerk
 		return nil
 	}
+}
+
+// startJobHealthMetricsCollector runs a goroutine that periodically refreshes
+// observability.ManualTierOverrideOldestUnclearedExpiredSeconds and, since Issue #1413's
+// Plaid-cleanup-backlog follow-up, observability.PlaidCleanupOutstandingUsers/
+// PlaidCleanupOldestOutstandingSeconds from the database. Lives here — not in the observability
+// package alongside observability.StartDBMetricsCollector, which it otherwise mirrors — because it
+// needs repository.JobHealthRepository, and internal/repository already imports
+// internal/observability; putting this collector there would create an import cycle. A failed
+// query is logged and skipped for THAT metric only (not fatal, and not allowed to block the
+// other): a transient DB hiccup here must not crash the whole process, and each gauge simply keeps
+// its last-known value until its next tick succeeds. The goroutine stops when ctx is cancelled.
+func startJobHealthMetricsCollector(ctx context.Context, repo repository.JobHealthRepository, logger *slog.Logger) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
+				if err != nil {
+					logger.Warn("failed to refresh manual tier override job-health gauge", "error", err)
+				} else {
+					observability.ManualTierOverrideOldestUnclearedExpiredSeconds.Set(age.Seconds())
+				}
+
+				plaidCount, plaidOldestAge, err := repo.GetOutstandingPlaidCleanupStats(ctx)
+				if err != nil {
+					logger.Warn("failed to refresh Plaid-cleanup job-health gauges", "error", err)
+				} else {
+					observability.PlaidCleanupOutstandingUsers.Set(float64(plaidCount))
+					observability.PlaidCleanupOldestOutstandingSeconds.Set(plaidOldestAge.Seconds())
+				}
+			}
+		}
+	}()
 }
 
 func boolStatus(configured bool) string {

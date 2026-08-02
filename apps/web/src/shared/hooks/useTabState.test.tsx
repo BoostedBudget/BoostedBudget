@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router'
 import type { ReactNode } from 'react'
 import { useTabState } from './useTabState'
 

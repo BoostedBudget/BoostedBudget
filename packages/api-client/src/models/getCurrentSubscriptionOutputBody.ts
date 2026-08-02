@@ -40,10 +40,14 @@ export interface GetCurrentSubscriptionOutputBody {
   billing_interval: string;
   /** Whether the subscription is scheduled to cancel at end of current period */
   cancel_at_period_end: boolean;
+  /** RFC 3339 datetime when complimentary access ends; absent means indefinite */
+  comp_ends_at?: string;
   /** Currency code */
   currency: string;
   /** End of current billing period */
   current_period_end?: string;
+  /** True when access is granted by an admin comp rather than a paid subscription */
+  is_comped: boolean;
   /** Next billing date */
   next_billing_date?: string;
   /** RFC 3339 datetime when the scheduled cancel takes effect */

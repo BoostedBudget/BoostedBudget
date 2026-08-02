@@ -1832,9 +1832,9 @@ func (m *mockProfileRepoForCursorTests) GetUsersScheduledForDeletion(ctx context
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *mockProfileRepoForCursorTests) DeleteUserCascade(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
+func (m *mockProfileRepoForCursorTests) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
+	return args.Bool(0), args.Error(1)
 }
 
 // Issue #679, #680: Trial expiration - methods for trial management
@@ -1852,11 +1852,6 @@ func (m *mockProfileRepoForCursorTests) GetUsersWithExpiringTrials(ctx context.C
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*domain.User), args.Error(1)
-}
-
-func (m *mockProfileRepoForCursorTests) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
-	args := m.Called(ctx, userID, status)
-	return args.Error(0)
 }
 
 func (m *mockProfileRepoForCursorTests) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
@@ -1884,20 +1879,59 @@ func (m *mockProfileRepoForCursorTests) GetUsersWithActivePaddleSubscriptions(ct
 }
 
 // Retention tracking stubs (#930)
-func (m *mockProfileRepoForCursorTests) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) { return "", nil }
-func (m *mockProfileRepoForCursorTests) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error { return nil }
+func (m *mockProfileRepoForCursorTests) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) { return "", nil }
+func (m *mockProfileRepoForCursorTests) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error { return nil }
 func (m *mockProfileRepoForCursorTests) ClearRetentionDates(ctx context.Context, userID string) error { return nil }
 func (m *mockProfileRepoForCursorTests) SetRetentionNotice30dSent(ctx context.Context, userID string) error { return nil }
 func (m *mockProfileRepoForCursorTests) SetRetentionNotice7dSent(ctx context.Context, userID string) error { return nil }
 func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) { return nil, nil }
 func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) { return nil, nil }
 func (m *mockProfileRepoForCursorTests) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) { return nil, nil }
+func (m *mockProfileRepoForCursorTests) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
 func (m *mockProfileRepoForCursorTests) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error { return nil }
 func (m *mockProfileRepoForCursorTests) ClearPastDueStartedAt(ctx context.Context, userID string) error            { return nil }
 func (m *mockProfileRepoForCursorTests) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{}, nil
 }
-func (m *mockProfileRepoForCursorTests) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
+// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
+// (Issue #1413 H5 residual) are not exercised by these cursor tests; stubbed to satisfy the
+// widened ProfileRepository interface.
+func (m *mockProfileRepoForCursorTests) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
+	return false, nil
+}
+
+func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
+	return []*domain.User{}, nil
+}
+
+func (m *mockProfileRepoForCursorTests) RepairRetentionClock(ctx context.Context, userID string, startedAt time.Time, retentionMonths int) (bool, error) {
+	return false, nil
+}
+
+// GetUsersNeedingPlaidDisconnectRepair (Issue #1413 round-7 grace-window repair path) is not
+// exercised by these cursor tests; stubbed to satisfy the widened ProfileRepository interface.
+func (m *mockProfileRepoForCursorTests) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error) {
+	return []*domain.User{}, nil
+}
+func (m *mockProfileRepoForCursorTests) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+func (m *mockProfileRepoForCursorTests) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+// ClaimForDeletion, IsRetentionNotice30dEligible, IsRetentionNotice7dEligible (Issue #1413 Codex
+// review round 3) are not exercised by these cursor tests; stubbed to satisfy the widened
+// ProfileRepository interface.
+func (m *mockProfileRepoForCursorTests) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+func (m *mockProfileRepoForCursorTests) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+func (m *mockProfileRepoForCursorTests) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
 func (m *mockProfileRepoForCursorTests) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) { return nil, nil }

@@ -106,6 +106,9 @@ export const ANALYTICS_EVENTS = {
   ADMIN_DLQ_RETRY: 'admin_dlq_retry',
   ADMIN_DLQ_DELETE: 'admin_dlq_delete',
   ADMIN_DLQ_BULK_DELETE: 'admin_dlq_bulk_delete',
+  // Issue #1413: Admin subscription override (comp tier apply/remove)
+  ADMIN_SUBSCRIPTION_OVERRIDE_APPLIED: 'admin_subscription_override_applied',
+  ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED: 'admin_subscription_override_removed',
 
   // Notifications (#952)
   NOTIFICATION_DRAWER_OPENED: 'notification_drawer_opened',

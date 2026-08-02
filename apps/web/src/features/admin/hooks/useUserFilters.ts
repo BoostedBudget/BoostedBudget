@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import type { ListAdminUsersParams, ListAdminUsersSortBy, ListAdminUsersSortDir } from '@boostedbudget/api-client/models'
 import { parseSortParam, serializeSortParam } from '@/shared/hooks/useSortUrlState'
 import type { SortState } from '@/shared/components/DataTable'

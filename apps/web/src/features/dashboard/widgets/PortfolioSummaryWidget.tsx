@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useRef } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { TrendingUp } from 'lucide-react'
 import { useGetPortfolioSummary } from '@boostedbudget/api-client/endpoints/investments/investments'
 import { PortfolioSummaryCard } from '@/features/investments/components/PortfolioSummaryCard'

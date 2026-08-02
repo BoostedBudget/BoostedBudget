@@ -162,6 +162,9 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('get-admin-user-subscription', REASON_ADMIN),
   excluded('create-admin-subscription-override', REASON_ADMIN),
   excluded('update-admin-user-tier', REASON_ADMIN),
+  // #1414: revoking a subscription comp is an irreversible, billing-adjacent admin action.
+  // Excluded under the blanket admin policy — deliberately, not merely by default.
+  excluded('remove-admin-user-tier-override', REASON_ADMIN),
 
   // ── Auto-Categorization ─────────────────────────────────────────────────
   // Rule mutations un-excluded per Issue #957 (Q1 decision). Mitigations:

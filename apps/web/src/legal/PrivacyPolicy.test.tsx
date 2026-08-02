@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { PrivacyPolicy } from './PrivacyPolicy'
 
 const renderWithRouter = (component: React.ReactElement) =>

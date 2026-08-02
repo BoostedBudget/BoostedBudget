@@ -618,7 +618,15 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
-    timeout-minutes: 15
+    # This job is COMPILE-bound, not test-bound. The integration tests themselves run in
+    # ~8s against a warm local Postgres; the "Run integration tests" step spends almost all
+    # its time compiling every package's test binary with -tags integration from the
+    # job-local Go build cache configured below (deliberately job-local, to avoid
+    # cross-job contamination on the shared self-hosted runner). That compile time grows
+    # with the codebase: measured 9m24s → 11m12s → >15m over three days of #1413 work,
+    # which is what pushed it past the previous 15m limit.
+    # Raised to 25m as an unblock. The real fix is a warm/shared build cache — see #1446.
+    timeout-minutes: 25
     env:
       UNIQUE_WORKSPACE: workspace-backend-integration-test-${{ github.run_id }}
       # Container name is unique per run AND per rerun attempt, so a killed
