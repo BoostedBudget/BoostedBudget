@@ -93,6 +93,22 @@ get_schema_hash() {
         | grep -v '^\\restrict ' \
         | grep -v '^\\unrestrict ')
 
+    # FAIL CLOSED on an empty dump. pg_dump emits a header (SET statements, comments) even for a
+    # schema containing zero objects, so an EMPTY result never means "no tables" — it means pg_dump
+    # itself failed and its stderr went to /dev/null above (a bad DATABASE_URL, a missing
+    # sslmode=disable, an unreachable server). Without this check the callers hash "" twice, find
+    # the two equal, and print "IDEMPOTENCY TEST PASSED - Schema unchanged after re-applying
+    # migrations" having applied and compared nothing at all. Observed for real: a DATABASE_URL
+    # without sslmode=disable produced md5 68b329da9893e34099c7d8ad5cb9c940 (the hash of an empty
+    # string) from both calls and two green PASSED lines.
+    if [ -z "$dump" ]; then
+        echo "❌ get_schema_hash: pg_dump produced NO output — it failed to connect or read the schema." >&2
+        echo "   This is not an empty schema (pg_dump emits a header even with zero objects); it is a" >&2
+        echo "   pg_dump failure. Re-run the command without 2>/dev/null to see the real error. A" >&2
+        echo "   common cause is a DATABASE_URL missing '?sslmode=disable'." >&2
+        exit 1
+    fi
+
     # Save to timestamped file for debugging
     local timestamp=$(date +%s%N)
     local dump_file="/tmp/schema_dump_${timestamp}.sql"
@@ -129,7 +145,18 @@ apply_migrations() {
 
     # NOTE: Errors visible for debugging - previously silenced with > /dev/null 2>&1
     # golang-migrate requires -database and -path flags
-    migrate -database "$DATABASE_URL" -path "$abs_migrations_dir" up
+    #
+    # FAIL CLOSED on a non-zero exit. This was previously unchecked, so a migrate failure
+    # (unreachable server, a DATABASE_URL missing sslmode=disable, dirty state, a genuinely broken
+    # migration) left the suite running against a schema where NOTHING had been applied — and the
+    # idempotency and performance suites then reported PASSED, because comparing two
+    # never-populated schemas trivially succeeds. A migration safety net that goes green when the
+    # migrations did not run is worse than no net.
+    if ! migrate -database "$DATABASE_URL" -path "$abs_migrations_dir" up; then
+        echo "❌ apply_migrations: 'migrate up' FAILED — aborting rather than testing an unmigrated schema." >&2
+        echo "   A common cause is a DATABASE_URL missing '?sslmode=disable'." >&2
+        exit 1
+    fi
 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
