@@ -1213,4 +1213,51 @@ describe('SubscriptionOverrideModal', () => {
             expect(screen.queryByText(/complimentary/i)).not.toBeInTheDocument()
         })
     })
+
+    // Issue #1462 G3: `as_of` is consumed (anchors `now`, above) but was never RENDERED — so an
+    // admin had no way to tell a freshly-opened modal from one that had been sitting open for
+    // several minutes off a frozen snapshot (useAdminSubscriptionDetail has no refetchInterval,
+    // and the global QueryClient sets staleTime: 5 minutes + refetchOnWindowFocus: false — see
+    // main.tsx — so nothing refreshes an open modal on a timer). #1462 option 3 was conjunctive:
+    // anchor to the server clock AND label the snapshot's age; only the first half shipped
+    // originally.
+    describe('Snapshot age label (Issue #1462 G3)', () => {
+        it("renders the snapshot's age next to the effective-status badge when as_of is present", () => {
+            const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: { ...SUB_DETAIL, as_of: fiveMinutesAgo },
+            })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            // Bucketed by formatRelativeTime (minutes, not an exact value) — the point is that a
+            // real, non-empty relative-age label renders from `as_of`, not the precise minute
+            // boundary (real wall-clock time elapses between fixture construction and assertion).
+            expect(screen.getByText(/snapshot:\s*\d+m ago/i)).toBeInTheDocument()
+        })
+
+        it('degrades to a placeholder rather than crashing when as_of is absent (e.g. an older cached response)', () => {
+            // SUB_DETAIL (the base fixture used throughout this file) never sets `as_of` — this
+            // deliberately exercises that "absent" shape, matching an older cached response from
+            // before this field existed.
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: { ...SUB_DETAIL },
+            })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            // Must not crash, and must not silently render an empty/misleading age — falls back
+            // to the same em-dash placeholder convention formatDate already uses in this file.
+            expect(screen.getByText(/snapshot:\s*—/i)).toBeInTheDocument()
+            expect(screen.queryByText(/ago/i)).not.toBeInTheDocument()
+        })
+    })
 })

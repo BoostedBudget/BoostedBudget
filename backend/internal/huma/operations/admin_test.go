@@ -498,6 +498,7 @@ func TestGetSystemHealth_IncludesJobBacklogMetrics(t *testing.T) {
 				PlaidCleanupOutstandingUsers:                    3,
 				PlaidCleanupOldestOutstandingSeconds:            7200,
 				ManualTierOverrideOldestUnclearedExpiredSeconds: 3600,
+				Available: true,
 			},
 		},
 	}
@@ -518,6 +519,7 @@ func TestGetSystemHealth_IncludesJobBacklogMetrics(t *testing.T) {
 	assert.Equal(t, int64(3), output.Body.JobBacklog.PlaidCleanupOutstandingUsers)
 	assert.Equal(t, int64(7200), output.Body.JobBacklog.PlaidCleanupOldestOutstandingSeconds)
 	assert.Equal(t, int64(3600), output.Body.JobBacklog.ManualTierOverrideOldestUnclearedExpiredSeconds)
+	assert.True(t, output.Body.JobBacklog.Available)
 }
 
 // TestGetSystemHealth_ServiceNotConfigured tests 503 when service is nil.

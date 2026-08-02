@@ -57,6 +57,28 @@ type JobBacklogMetrics struct {
 	// expired-but-uncleared manual_tier_override has been sitting uncleared, in seconds (0 when
 	// there are none) — repository.JobHealthRepository.GetOldestUnclearedExpiredManualTierOverrideAge.
 	ManualTierOverrideOldestUnclearedExpiredSeconds int64 `json:"manual_tier_override_oldest_uncleared_expired_seconds"`
+	// Available distinguishes "queried successfully and found a real (possibly zero) backlog"
+	// from "the underlying query failed/is unwired" (Issue #1458 follow-up G16). Before this
+	// field existed, SystemHealthService.getJobBacklogMetrics collapsed a query ERROR into the
+	// exact same zero-valued struct as a genuinely empty backlog, so /admin/health rendered a
+	// failed query as a confident green "0" — indistinguishable from "nothing to worry about".
+	// That inverts this gauge's whole purpose: an operator loses the signal exactly when the
+	// system can no longer report it.
+	//
+	// This is precisely the "unknown != zero" principle this package's own doc comment above
+	// (see the four EXCLUDED metrics) already invokes to justify leaving
+	// PlaidCleanupServiceNotConfiguredTotal off this response entirely — it was applied to those
+	// four metrics and not to these three. This field closes that gap for these three instead of
+	// excluding them.
+	//
+	// Deliberately a bool flag rather than making the three numeric fields above `*int64`: same
+	// wire-visible signal, far less disruptive to the generated TypeScript client and to every
+	// existing consumer that reads these fields as plain numbers (HealthDashboardPage.tsx,
+	// formatBacklogAge, etc.), all of which would otherwise need nil-checks added everywhere.
+	// Defaults to the Go zero value (false) — the fail-closed direction: any code path that
+	// forgets to explicitly report success (a nil/unwired repo, an early return, a future bug)
+	// silently reads as "unavailable", never as a falsely-confident "available, zero".
+	Available bool `json:"available"`
 }
 
 // ServiceHealthStatuses contains health status for all services
