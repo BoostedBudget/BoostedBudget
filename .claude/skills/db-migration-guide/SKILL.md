@@ -335,6 +335,34 @@ time-zone-sensitive expression in `AT TIME ZONE 'UTC'` (or compute the value in 
 under the pinned pool, if the migration can be restructured to do so) rather than trusting the
 gates to catch an unpinned session zone.
 
+### The complete inventory of session-TZ-dependent SQL (Issue #1461)
+
+Recorded here because it previously existed only in a commit message and four inline comments — and
+because the **first** attempt at this inventory undercounted it as "two lines", which is how four of
+these sites shipped unguarded.
+
+**Ten sites, in three families.** All are deterministic today *only* because `NewPool` pins every
+pooled connection to UTC (`backend/internal/database/pgx.go`); none of them is safe if that pin is
+lost, and none of them is reached by the migration paths described above.
+
+| Family | Count | Where |
+|---|---|---|
+| `CURRENT_DATE` written into a `DATE` column | 2 | `savings_contribution_repository.go` |
+| `clock_timestamp() + make_interval(months => N)` on a `timestamptz` | 4 | `profile_repository.go` ×3, `admin_user_repository.go` ×1 |
+| `timestamptz - INTERVAL '<n> days'` (the 30-day and 7-day GDPR pre-deletion notice boundaries) | 4 | `profile_repository.go` |
+
+**The distinction that decides membership**, and the one the first sweep got wrong: an interval's
+**calendar** components (`years`, `months`, `weeks`, `days`) are applied in the session zone, so day
+arithmetic preserves local wall-clock time rather than adding exactly 24h. Its **fixed-duration**
+components (`hours`, `mins`, `secs`) are exact and are *not* session-dependent. So
+`INTERVAL '30 days'` belongs on this list and `INTERVAL '72 hours'` does not — and the repo has
+several exact-unit interval sites that are genuinely unaffected. Conflating the two wastes a review
+round in either direction.
+
+Everything else checked and found safe: all 20 `AT TIME ZONE` sites already pin `'UTC'` explicitly;
+every `DATE_TRUNC` operates on a `DATE` column; `::date` casts are either on `DATE` columns or on
+explicitly-typed parameters; there are no `CURRENT_TIME` uses.
+
 ## Rollback Patterns (.down.sql)
 
 ### Drop Table

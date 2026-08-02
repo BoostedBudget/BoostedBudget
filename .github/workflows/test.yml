@@ -231,10 +231,19 @@ jobs:
             exit 1
           fi
 
-          python3 - "$RESULTS" 150 <<'PY'
+          # Two thresholds, because they catch different regressions:
+          #   ceiling 140  — measured 134 skipped, so 6 of headroom (was 150, i.e. 16: a real
+          #                  regression of up to 16 newly-skipping tests slipped through silently).
+          #   floor   260  — measured 283 executed. Catches a COLLECTION regression, which the
+          #                  ceiling structurally cannot: if a testMatch/testDir/project-config
+          #                  change stops tests being collected at all, `skipped` stays ≈134 while
+          #                  `executed` collapses — and the run reports green. playwright.config.ts
+          #                  keys six testMatch regexes off filename suffixes, so a rename doing
+          #                  exactly this is realistic.
+          python3 - "$RESULTS" 140 260 <<'PY'
           import json, sys
 
-          path, ceiling = sys.argv[1], int(sys.argv[2])
+          path, ceiling, floor = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
           try:
               stats = json.load(open(path)).get("stats")
           except (ValueError, OSError) as exc:
@@ -257,10 +266,17 @@ jobs:
               sys.exit(1)
 
           if skipped > ceiling:
-              print(f"::error::{skipped} E2E tests skipped, exceeding the ceiling of {ceiling} ({executed} executed). Investigate before assuming this is fine — see the ceiling-derivation comment above.")
+              print(f"::error::{skipped} E2E tests skipped, exceeding the ceiling of {ceiling} ({executed} executed). Investigate before assuming this is fine — see the derivation comment above.")
               sys.exit(1)
 
-          print(f"E2E skipped-test count verified: {skipped} skipped, {executed} executed (ceiling {ceiling})")
+          # The collection-regression guard. Deliberately separate from `executed == 0`: that only
+          # catches a total wipeout, and from the ceiling: a suite can stop COLLECTING most of its
+          # tests while the skip count barely moves, which trips neither of the other two.
+          if executed < floor:
+              print(f"::error::only {executed} E2E tests executed, below the floor of {floor} ({skipped} skipped). The skip count alone would not reveal this — tests appear to have stopped being COLLECTED rather than skipped. Check playwright.config.ts's testMatch/testDir and project definitions before adjusting this number.")
+              sys.exit(1)
+
+          print(f"E2E counts verified: {skipped} skipped (ceiling {ceiling}), {executed} executed (floor {floor})")
           PY
 
       - name: Upload E2E test results
@@ -670,9 +686,11 @@ jobs:
         # made EVERY commit — including doc-only or workflow-only ones, which cannot
         # change compiled output — mint a brand-new cache entry. Under GitHub's 10GB
         # per-repository cache cap, that churn can evict a still-warm entry and silently
-        # turn a later, genuinely-unrelated build cold. hashFiles('backend/**/*.go',
-        # '**/go.sum') changes only when Go source or dependencies actually change, which
-        # is what #1446 originally asked for ("GOCACHE keyed by go.sum + a source hash").
+        # turn a later, genuinely-unrelated build cold. The key hashes Go source, go.mod,
+        # go.sum AND the JSON that backend/testdata/plaid/fixtures.go go:embeds — embedded
+        # assets are compilation inputs but are not .go files, so a *.go-only hash would let
+        # a fixture change restore a stale cache (found in round 3). This is what #1446
+        # originally asked for ("GOCACHE keyed by go.sum + a source hash").
         # restore-keys still falls back to the most recent cache for this Go version (any
         # source hash), then to the most recent cache for this OS at all, so a commit that
         # DOES change Go source still gets a warm (if imperfect) starting cache rather than
@@ -681,7 +699,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', '**/go.sum') }}
+          key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
           restore-keys: |
             gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-
             gocache-backend-test-${{ runner.os }}-
@@ -759,7 +777,7 @@ jobs:
         # packages from later commits — most of the intended speedup was lost with the job still
         # reporting a "warm" cache.
         #
-        # The key above is now a Go source hash (hashFiles('backend/**/*.go', '**/go.sum')),
+        # The key above is now a compilation-input hash (Go source, go.mod, go.sum, embedded JSON),
         # not github.sha — see the "Restore Go build cache" step above for why the earlier
         # github.sha-keyed version (#1446 follow-up G4) was itself a bug: it minted a new cache
         # entry on EVERY commit, including ones that cannot change compiled output, and could
@@ -778,7 +796,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', '**/go.sum') }}
+          key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
 
       - name: Final workspace cleanup
         if: always()
@@ -858,7 +876,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', '**/go.sum') }}
+          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
           restore-keys: |
             gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-
             gocache-backend-integration-${{ runner.os }}-
@@ -993,7 +1011,7 @@ jobs:
         # packages from later commits — defeating the #1446 fix this cache exists for, on the
         # one job (compile-bound, see timeout-minutes comment) that most needs it warm.
         #
-        # The key above is now a Go source hash (hashFiles('backend/**/*.go', '**/go.sum')),
+        # The key above is now a compilation-input hash (Go source, go.mod, go.sum, embedded JSON),
         # not github.sha — see backend-test's "Save Go build cache" step above for the full
         # rationale: keying on github.sha (G4 follow-up) minted a new cache entry on every
         # commit, including ones that cannot change compiled output, risking eviction of a
@@ -1009,7 +1027,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', '**/go.sum') }}
+          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
 
       - name: Cleanup PostgreSQL container
         if: always()

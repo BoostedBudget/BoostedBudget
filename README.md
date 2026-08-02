@@ -23,7 +23,7 @@ BoostedBudget is a global budgeting platform that helps users optimize their fin
 
 **Backend:**
 - Go 1.25+ with Echo framework
-- PostgreSQL 15
+- PostgreSQL 17
 - Redis 7
 - RabbitMQ 3
 - OpenAPI 3.1 specification
