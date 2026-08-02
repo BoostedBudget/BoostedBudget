@@ -259,16 +259,23 @@ type User struct {
 	// formerly documented here as round-14 finding L1's "not a SET/CLEAR site"). It wrote
 	// subscription_status directly without ever touching this column, and `rg` confirmed zero
 	// production callers, so it was deleted rather than left as a live trap. The durable reason
-	// this matters is NOT the method's name, it's the invariant gap it exposed: both self-healing
-	// backstops (StampMissingPlaidCleanupMarkers, ClearCompletedPlaidCleanupMarkers) are gated on
-	// an ineligible-status predicate, so this invariant's FIRST branch — status not ineligible ⇒
-	// marker must be NULL — has NO backstop at all. Any future status-only writer (one that sets
-	// subscription_status without also transitioning this column, the same shape
-	// UpdateSubscriptionStatus had) reintroduces the identical unguarded gap and MUST maintain
-	// plaid_cleanup_pending_at itself, the way every writer below already does — do not assume a
-	// backstop will catch it. The known CLEAR sites are: UpdateSubscriptionFromPaddle, ClearRetentionDates,
-	// ClearPlaidCleanupPending/ClearPlaidCleanupPendingIfMatches, UpdateTrialStatus, and
-	// ClearCompletedPlaidCleanupMarkers (all profile_repository.go). AdminUserRepository's
+	// this matters is NOT the method's name, it's the invariant gap it exposed: until Issue #1455,
+	// both self-healing backstops (StampMissingPlaidCleanupMarkers, ClearCompletedPlaidCleanupMarkers)
+	// were gated on an ineligible-status predicate, so this invariant's FIRST branch — status not
+	// ineligible ⇒ marker must be NULL — had NO backstop at all. Issue #1455's
+	// ClearMarkersOnEligibleStatus (profile_repository.go) closes that gap: a THIRD self-healing
+	// backstop, called from repairPlaidDisconnects (retention_cleanup_check.go, internal/queue/jobs)
+	// alongside the other two, that clears any non-NULL marker it finds on a row whose raw status is
+	// not inactive/cancelled — see that method's own doc comment for the full reasoning. Any future
+	// status-only writer (one that sets subscription_status without also transitioning this column,
+	// the same shape UpdateSubscriptionStatus had) still MUST maintain plaid_cleanup_pending_at
+	// itself — round 17's framing above applies here exactly as it does to the other two backstops:
+	// "the backstop will catch it eventually" bounds how long a violation can persist, it does not
+	// excuse a writer from getting this right in the first place. The known CLEAR sites are:
+	// UpdateSubscriptionFromPaddle, ClearRetentionDates,
+	// ClearPlaidCleanupPending/ClearPlaidCleanupPendingIfMatches, UpdateTrialStatus,
+	// ClearCompletedPlaidCleanupMarkers, and ClearMarkersOnEligibleStatus (all profile_repository.go).
+	// AdminUserRepository's
 	// updateUserTierQuery (comp grant/extend)
 	// deliberately does NOT touch this column at all as of round-13 — see its own doc comment.
 	// See each site's own doc comment for its justification against this invariant, and

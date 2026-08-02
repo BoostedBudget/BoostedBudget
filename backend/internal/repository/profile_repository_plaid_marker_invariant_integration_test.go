@@ -199,14 +199,36 @@ func (r plaidMarkerRow) hasActiveOverride(now time.Time) bool {
 // helper — see StampMissingPlaidCleanupMarkers's own doc comment on why it must only ever be
 // invoked from a fixture a test fully owns), so every assertion here observes production writers'
 // steady-state behavior, not a mid-heal snapshot.
+// plaidMarkerInvariantT is the minimal interface assertPlaidMarkerBranch1 needs from its first
+// parameter: just enough to satisfy testify's assert.TestingT (Errorf) and to allow it to call
+// Helper() for correct file:line attribution. *testing.T trivially satisfies this, so every
+// existing call site below needs no change. Widening from the concrete *testing.T is what lets
+// TestAssertPlaidMarkerBranch1_DetectsViolation (Issue #1455, below) substitute a recording
+// double that CAPTURES a failure instead of propagating it to a live *testing.T — the only way to
+// prove this branch can actually detect a violation, since calling assert.Nil against a real, live
+// *testing.T with a non-nil marker fails the very test you are writing.
+type plaidMarkerInvariantT interface {
+	Errorf(format string, args ...interface{})
+	Helper()
+}
+
+// assertPlaidMarkerBranch1 is invariant branch 1's own assertion (status NOT ineligible ⇒ marker
+// must be NULL), extracted out of assertPlaidMarkerInvariant below so it can be driven directly —
+// see plaidMarkerInvariantT's doc comment above, and TestAssertPlaidMarkerBranch1_DetectsViolation's
+// doc comment (Issue #1455), for why: this exact assert.Nil call had never been driven
+// against a genuinely violating row anywhere in this file before that test.
+func assertPlaidMarkerBranch1(t plaidMarkerInvariantT, marker *time.Time, status string, context string) {
+	assert.Nil(t, marker,
+		"[%s] invariant violated: no ineligibility episode is open (status=%q) but plaid_cleanup_pending_at is %v",
+		context, status, marker)
+}
+
 func assertPlaidMarkerInvariant(t *testing.T, pool *pgxpool.Pool, userID string, context string) {
 	t.Helper()
 	row := readPlaidMarkerRow(t, pool, userID)
 	ineligible := domain.SubscriptionStatus(row.status).IsEligibleForPlaidDisconnectRepair()
 	if !ineligible {
-		assert.Nil(t, row.marker,
-			"[%s] invariant violated: no ineligibility episode is open (status=%q) but plaid_cleanup_pending_at is %v",
-			context, row.status, row.marker)
+		assertPlaidMarkerBranch1(t, row.marker, row.status, context)
 		return
 	}
 
@@ -262,6 +284,55 @@ func plaidMarkerLinkedItemCounts(t *testing.T, pool *pgxpool.Pool, userID string
 		WHERE user_id = $1
 	`, userID).Scan(&total, &live))
 	return total, live
+}
+
+// recordingT is a minimal assert.TestingT double that RECORDS a failure instead of propagating it
+// to a live *testing.T — see plaidMarkerInvariantT's doc comment above for why this is the only way
+// to test that assertPlaidMarkerBranch1 can actually detect a violation (Issue #1455).
+type recordingT struct {
+	failed   bool
+	messages []string
+}
+
+func (r *recordingT) Errorf(format string, args ...interface{}) {
+	r.failed = true
+	r.messages = append(r.messages, fmt.Sprintf(format, args...))
+}
+
+func (r *recordingT) Helper() {}
+
+// TestAssertPlaidMarkerBranch1_DetectsViolation is Issue #1455: assertPlaidMarkerInvariant's
+// branch 1 (status NOT ineligible ⇒ marker must be NULL) is pre-existing and unchanged on this
+// branch, and no test anywhere in this file ever drove it against a row that actually violates it.
+// The one subtest that constructs that exact raw state,
+// branch1_backstop_heals_stale_marker_on_reactivation (below, in the sweep test), deliberately
+// heals the row via ClearMarkersOnEligibleStatus BEFORE ever calling assertPlaidMarkerInvariant — by
+// the time the helper runs there, the marker is already NULL and assert.Nil passes trivially. That
+// subtest's own comment says this routing-around is deliberate, and it is correct for what THAT
+// subtest is proving (the backstop heals the corrupted state) — but the net effect is that branch
+// 1's own assert.Nil call had never actually been forced to fail anywhere in this suite. An
+// assertion that cannot go red is not coverage.
+//
+// This test drives a genuine violation directly into the extracted assertPlaidMarkerBranch1, using
+// recordingT (immediately above) to CAPTURE the resulting failure instead of propagating it to this
+// test's own *testing.T — calling assert.Nil against a live *testing.T with a non-nil marker would
+// fail the very test being written, so there is no way to observe "did this correctly fail" using a
+// real *testing.T directly. No database access is needed: branch 1's predicate is a pure function of
+// (marker, status), which is exactly why it could be extracted at all.
+//
+// Falsifiability: this test was run against a deliberately neutered assertPlaidMarkerBranch1 (its
+// assert.Nil call replaced with a no-op) and confirmed to fail — rec.failed was false — before being
+// restored to the real assertion. See the accompanying report for the RED transcript and
+// confirmation the mutation landed in the assertion itself, not a comment.
+func TestAssertPlaidMarkerBranch1_DetectsViolation(t *testing.T) {
+	rec := &recordingT{}
+	violatingMarker := time.Now().Add(-time.Hour)
+
+	assertPlaidMarkerBranch1(rec, &violatingMarker, "active", "branch1 violation check")
+
+	assert.True(t, rec.failed, "assertPlaidMarkerBranch1 must flag a non-NULL marker on a non-ineligible status as a violation")
+	require.Len(t, rec.messages, 1)
+	assert.Contains(t, rec.messages[0], "invariant violated", "the recorded failure message must be branch 1's own violation message")
 }
 
 // createPlaidMarkerTestUser creates a minimal user with the given initial status for these tests.
@@ -924,5 +995,95 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 		assert.GreaterOrEqual(t, clearedCount, 1, "at least this fixture's row must be healed")
 
 		assertPlaidMarkerInvariant(t, pool, user.ID, "branch1: after ClearMarkersOnEligibleStatus")
+	})
+
+	// t.Run("cancel_to_disconnect_to_cas_clear", ...) is Issue #1457 Gap 1: no existing real-DB
+	// test paired a genuine Plaid disconnect (LinkedItemRepository.MarkItemsDisconnected) with the
+	// CAS-guarded clear (ProfileRepository.ClearPlaidCleanupPendingIfMatches) — the exact pair
+	// repairPlaidDisconnects (retention_cleanup_check.go) calls in sequence once a disconnect
+	// succeeds. What existed before this subtest: mock-based unit tests of the mechanics elsewhere
+	// (subscription_webhook_test.go, retention_cleanup_check_test.go, past_due_service_test.go);
+	// one integration test pairing a real MarkItemsDisconnected with the UNCONDITIONAL
+	// ClearPlaidCleanupPending, not the CAS variant
+	// (TestRemoveUserTierOverride_Integration_M1_NoPhantomMarker_WhenCleanupAlreadyComplete,
+	// admin_user_repository_remove_tier_override_integration_test.go); and CAS-clear integration
+	// tests, above in this file, that never disconnect anything at all
+	// (TestClearPlaidCleanupPendingIfMatches_Integration_ClearsWhenMatches/_SkipsWhenMismatched).
+	// None of those exercises the actual intermediate window between a real disconnect and its
+	// CAS-guarded clear — which is the entire point of this subtest.
+	t.Run("cancel_to_disconnect_to_cas_clear", func(t *testing.T) {
+		user := createPlaidMarkerTestUser(t, pool, repo, "sweepcasclear", "active")
+		linkedItemRepo := NewLinkedItemRepository(pool, enc)
+
+		// Seed a LIVE linked_items row BEFORE the cancellation — non-negotiable (see
+		// trial_to_expire's comment above). With zero linked_items rows,
+		// assertPlaidMarkerInvariant's non-NULL branch always lands in the #1453 zero-rows
+		// exception (assert.Equal(t, 0, total) trivially true) and its NULL branch always lands in
+		// assert.Equal(t, 0, live) (also trivially true) — BOTH branches would pass no matter what
+		// this subtest does, exactly the vacuity found in five subtests of this sweep in an
+		// earlier round.
+		var itemID string
+		require.NoError(t, pool.QueryRow(ctx, `
+			INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted, status)
+			VALUES (gen_random_uuid(), $1, $2, 'enc-test-token', 'active')
+			RETURNING id
+		`, user.ID, "item-"+user.ID).Scan(&itemID))
+		assertPlaidMarkerInvariant(t, pool, user.ID, "cas-clear: initial, before cancellation")
+
+		// Step 1: the real production writer for a joint status+marker transition into
+		// ineligibility — UpdateSubscriptionFromPaddle('cancelled') — starts the episode.
+		require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
+		afterCancel := readPlaidMarkerRow(t, pool, user.ID)
+		require.NotNil(t, afterCancel.marker, "cancellation must start the episode's marker")
+		marker := *afterCancel.marker
+		assertPlaidMarkerInvariant(t, pool, user.ID, "cas-clear: after cancellation")
+
+		// Step 2: the real disconnect writer — the "disconnect" half of Issue #1457 Gap 1.
+		require.NoError(t, linkedItemRepo.MarkItemsDisconnected(ctx, []string{itemID}))
+		var itemStatus *string
+		require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM linked_items WHERE id = $1`, itemID).Scan(&itemStatus))
+		require.NotNil(t, itemStatus)
+		require.Equal(t, "disconnected", *itemStatus, "precondition: MarkItemsDisconnected must actually have transitioned the item's status, not just returned nil")
+
+		// The intermediate window — the entire point of this subtest. The marker is STILL
+		// non-NULL (step 1's value, untouched: disconnecting an item never itself touches this
+		// column), but the only linked item is now 'disconnected' (live == 0): cleanup has, in
+		// reality, already completed, and the CAS clear (step 3) simply hasn't run yet.
+		//
+		// assertPlaidMarkerInvariant is deliberately NOT called here, unlike every other step in
+		// this subtest. Its non-NULL branch treats "live == 0 but total > 0" as a genuine
+		// violation ("cleanup already completed and the marker should have been cleared") — the
+		// correct STEADY-STATE reading, but this instant is not steady state: production's own
+		// repairPlaidDisconnects pass calls MarkItemsDisconnected and
+		// ClearPlaidCleanupPendingIfMatches as two SEPARATE sequential writes
+		// (retention_cleanup_check.go), never atomically together, so this exact
+		// non-NULL-marker/zero-live-items window is a real, expected, and temporary state in the
+		// DOCUMENTED direction — domain.User.PlaidCleanupPendingAt's own doc comment: "An episode
+		// ENDS the instant Plaid cleanup for THAT SPECIFIC episode completes — i.e. the moment
+		// the marker is cleared for it", NOT the instant the linked item is actually disconnected.
+		// Calling the helper here would assert a state it was never designed to tolerate, purely
+		// because this subtest compresses two sequential production writes into one test body.
+		// This mirrors branch1_backstop_heals_stale_marker_on_reactivation's own precedent
+		// (above): assert the raw column state directly when the helper cannot express the exact
+		// in-between state under test, rather than contorting the helper to special-case it.
+		midState := readPlaidMarkerRow(t, pool, user.ID)
+		require.NotNil(t, midState.marker, "the marker must still be set immediately after the disconnect — only the CAS clear (next step) ends the episode")
+		assert.True(t, marker.Equal(*midState.marker), "the marker must still be the SAME value cancellation set — disconnecting an item must not itself touch it")
+		_, liveAfterDisconnect := plaidMarkerLinkedItemCounts(t, pool, user.ID)
+		assert.Equal(t, 0, liveAfterDisconnect, "the only linked item must now be disconnected (not live) — this is the state the CAS clear below is about to observe")
+
+		// Step 3: the CAS-guarded clear, keyed to the EXACT value read at candidate-selection
+		// time — mirroring repairPlaidDisconnects's real call to ClearPlaidCleanupPendingIfMatches.
+		// This is the "... CAS-clear" half of Issue #1457 Gap 1, and the instant the episode
+		// actually ends per the domain doc's own definition.
+		cleared, err := repo.ClearPlaidCleanupPendingIfMatches(ctx, user.ID, marker)
+		require.NoError(t, err)
+		require.True(t, cleared, "the CAS clear must succeed — the marker has not moved since cancellation set it")
+		assertPlaidMarkerInvariant(t, pool, user.ID, "cas-clear: after the CAS-guarded clear")
+
+		// A CAS mismatch (clearing with a STALE timestamp) leaving the marker in place is already
+		// covered generically, elsewhere in this file —
+		// TestClearPlaidCleanupPendingIfMatches_Integration_SkipsWhenMismatched, above — so it is
+		// deliberately not duplicated here.
 	})
 }
