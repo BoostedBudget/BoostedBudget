@@ -1,5 +1,5 @@
 # BoostedBudget Subscription Tiers Configuration - PRODUCTION ENVIRONMENT
-# Last updated: 2026-01-26
+# Last updated: 2026-08-02
 #
 # ⚠️ ENVIRONMENT-SPECIFIC CONFIG FILE ⚠️
 # This file is automatically loaded when PADDLE_ENVIRONMENT=production
@@ -37,8 +37,8 @@ tiers:
     price_monthly: 8.99
     price_yearly: 79.00
     mobile_price_yearly: 89.99
-    paddle_price_id_monthly: null
-    paddle_price_id_yearly: null
+    paddle_price_id_monthly: "pri_01kz251bysnr129fwzkdb0t2xy"
+    paddle_price_id_yearly: "pri_01kz251c0pa4mnpervhzf8bzjh"
     users_included: 1
 
     limits:
@@ -57,8 +57,8 @@ tiers:
     price_monthly: 12.99
     price_yearly: 119.00
     mobile_price_yearly: 134.99
-    paddle_price_id_monthly: null
-    paddle_price_id_yearly: null
+    paddle_price_id_monthly: "pri_01kz251c6yc40tnemzavvetxxv"
+    paddle_price_id_yearly: "pri_01kz251c8tx9q7g4r8cm0patkv"
     users_included: 2
 
     limits:
@@ -77,8 +77,8 @@ tiers:
     price_monthly: 14.99
     price_yearly: 139.00
     mobile_price_yearly: 154.99
-    paddle_price_id_monthly: null
-    paddle_price_id_yearly: null
+    paddle_price_id_monthly: "pri_01kz251cene6d6bmddzvbs41x6"
+    paddle_price_id_yearly: "pri_01kz251cgajq6zrjzc79q75dpd"
     users_included: 3
 
     limits:
@@ -97,8 +97,8 @@ tiers:
     price_monthly: 16.99
     price_yearly: 159.00
     mobile_price_yearly: 179.99
-    paddle_price_id_monthly: null
-    paddle_price_id_yearly: null
+    paddle_price_id_monthly: "pri_01kz251cnb0chp34708cyqgzjb"
+    paddle_price_id_yearly: "pri_01kz251cq4z4swwvvn78f27wt4"
     users_included: 4
 
     limits:
@@ -112,13 +112,13 @@ tiers:
       advanced_reports: true
 
   household_5:
-    display_name: "Household (5+)"
-    description: "Premium features for 5+ family members"
+    display_name: "Household (5)"
+    description: "Premium features for up to 5 family members"
     price_monthly: 18.99
     price_yearly: 179.00
     mobile_price_yearly: 199.99
-    paddle_price_id_monthly: null
-    paddle_price_id_yearly: null
+    paddle_price_id_monthly: "pri_01kz251cw50919d0tqd8awyqpn"
+    paddle_price_id_yearly: "pri_01kz251cxyscjs3syw04r7rjf4"
     users_included: 5
 
     limits:
