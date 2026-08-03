@@ -625,6 +625,7 @@ jobs:
           VITE_ENVIRONMENT: production
           VITE_MCP_URL: https://mcp.boostedbudget.com
           VITE_PADDLE_CLIENT_TOKEN: ${{ secrets.VITE_PADDLE_CLIENT_TOKEN }}
+          VITE_PADDLE_ENV: production
           VITE_POSTHOG_KEY: ${{ secrets.POSTHOG_API_KEY }}
         run: bun run build
 
