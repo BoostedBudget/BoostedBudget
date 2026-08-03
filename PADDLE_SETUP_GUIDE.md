@@ -20,7 +20,7 @@ This guide contains all the manual steps YOU (the human user) need to perform to
 
 - [ ] **3. Configure Webhook** (10 min)
   - Set endpoint URL: `https://your-backend-url.com/webhooks/paddle`
-  - Subscribe to 8 event types
+  - Subscribe to 12 event types
   - Save webhook secret
 
 - [ ] **4. Get API Credentials** (5 min)
@@ -151,8 +151,8 @@ Then create two prices:
 
 ### Step 2.6: Create Household_5 Product
 
-- **Name:** `Household (5+)`
-- **Description:** `Premium features for 5+ family members`
+- **Name:** `Household (5)`
+- **Description:** `Premium features for up to 5 family members`
 - **Monthly:** `$18.99 USD` - **SAVE AS `household_5_monthly`**
 - **Yearly:** `$179.00 USD` - **SAVE AS `household_5_yearly`**
 
@@ -191,8 +191,12 @@ Create a table with all your Price IDs:
      - [x] `subscription.canceled`
      - [x] `subscription.paused`  ← defensive: treated as cancellation (#933, pause not a product feature)
      - [x] `subscription.past_due`
+     - [x] `subscription.resumed` ← acknowledged safely; resume is not currently a product feature
+     - [x] `subscription.trialing`
      - [x] `transaction.completed`
      - [x] `transaction.payment_failed`
+     - [x] `transaction.past_due`
+     - [x] `transaction.canceled`
 4. Click **Save Webhook**
 5. Copy the **Webhook Secret** (format: `pdl_ntfset_01h...`) - **SAVE THIS**
 
@@ -451,7 +455,7 @@ Repeat Phase 2 steps in your production Paddle account:
 
 Repeat Phase 3 steps with production backend URL:
 - Webhook URL: `https://api.boostedbudget.com/webhooks/paddle`
-- Subscribe to same 8 event types
+- Subscribe to the same 12 event types
 - **SAVE NEW PRODUCTION WEBHOOK SECRET**
 
 ### Step 6.4: Get Production API Keys
