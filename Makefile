@@ -1,4 +1,4 @@
-.PHONY: help dev build test clean migrate-up migrate-down generate docker-up docker-down docker-rebuild test-fast test-all lighthouse check-bundle-size perf-check
+.PHONY: help dev build test clean migrate-up migrate-down generate docker-up docker-down docker-rebuild test-fast test-all test-scripts lighthouse check-bundle-size perf-check
 
 # Default target
 help:
@@ -16,6 +16,7 @@ help:
 	@echo "  make test-ci          - Run CI tests with coverage enforcement"
 	@echo "  make backend-test     - Run backend tests only"
 	@echo "  make frontend-test    - Run frontend tests only"
+	@echo "  make test-scripts     - Run shell script regression suites (scripts/**/*.test.sh)"
 	@echo ""
 	@echo "Backend:"
 	@echo "  make backend-build    - Build backend binary"
@@ -195,8 +196,36 @@ test-all:
 	@echo ""
 	@echo "📄 Coverage Reports:"
 	@echo "  Backend:  backend/coverage.html (open in browser)"
-	@echo "  Frontend: apps/web/coverage/combined.lcov (bun:test + vitest combined)"
+	@echo "  Frontend: apps/web/coverage/combined.lcov (bun:test, merged across process groups)"
 	@echo "            apps/web/coverage/html/index.html (if lcov/genhtml installed)"
+
+# Shell script regression suites.
+# These test the CI/local tooling scripts themselves (not the app) — e.g. the LCOV merge
+# logic in check-frontend-coverage.sh, the orphan-chunk bundle guard, the migration
+# rollback-residue comparison, and the pg_dump-via-docker URL/arg handling. None of them
+# were wired into any runner before this target existed.
+test-scripts:
+	@echo "========================================"
+	@echo "Running shell script regression suites"
+	@echo "========================================"
+	@echo ""
+	@echo "1/4: check-frontend-coverage.test.sh (exercises the real lcov merger)"
+	@if command -v lcov &> /dev/null; then \
+		bash scripts/check-frontend-coverage.test.sh; \
+	else \
+		echo "⚠️  lcov not installed — skipping (install: brew install lcov). CI always has lcov."; \
+	fi
+	@echo ""
+	@echo "2/4: check-orphan-chunks.test.sh"
+	@bash scripts/__tests__/check-orphan-chunks.test.sh
+	@echo ""
+	@echo "3/4: rollback-residue.test.sh"
+	@bash scripts/__tests__/rollback-residue.test.sh
+	@echo ""
+	@echo "4/4: pg_dump-via-docker.test.sh"
+	@bash scripts/__tests__/pg_dump-via-docker.test.sh
+	@echo ""
+	@echo "✅ Shell script regression suites passed!"
 
 # Frontend
 frontend-install:

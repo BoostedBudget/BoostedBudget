@@ -19,6 +19,15 @@ kill_timeout = 30
   # Plaid configuration (sandbox for staging)
   PLAID_ENV = "sandbox"
 
+  # Paddle configuration (sandbox API + sandbox tier catalog). Explicit rather than relying on
+  # config.go's PaddleEnvironment default of "sandbox": that default only governs which Paddle
+  # API mode the client uses. tier_config.go's getConfigPath() reads this SAME env var
+  # independently and, until this line existed, treated it being unset as "no environment
+  # specified — use config/subscription_tiers.yaml (the default/template catalogue)", NOT
+  # "sandbox". Same unset variable, two different effective meanings on this exact deploy
+  # target. Setting it explicitly collapses that to one meaning everywhere it's read.
+  PADDLE_ENVIRONMENT = "sandbox"
+
   # NOTE: Sensitive values set via `fly secrets set`:
   # - DATABASE_URL (Neon staging - pooled connection)
   # - MIGRATION_DATABASE_URL (Neon staging - direct connection for migrations)
