@@ -4,9 +4,11 @@
 # Exit 0 on all assertions passing, non-zero on any failure.
 #
 # Part 1 sources the target script to call its pure functions (rewrite_pg_url,
-# valid_port, is_postgres_image) directly — no Docker involved at all. Sourcing
-# only defines functions; it does not run main (see the BASH_SOURCE guard at
-# the bottom of pg_dump-via-docker), so this is safe.
+# valid_port, is_postgres_image, percent_decode, forbidden_query_params_present)
+# directly, plus one deliberately-isolated real-docker call (container_is_running,
+# see below) — no CONTAINER is ever touched. Sourcing only defines functions; it
+# does not run main (see the BASH_SOURCE guard at the bottom of pg_dump-via-docker),
+# so this is safe.
 #
 # Part 2 runs the real script as a subprocess with a fake `docker` shadowing
 # PATH, so container-selection/validation and the docker-exec invocation are
@@ -21,9 +23,10 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$SCRIPT_DIR/pg_dump-via-docker"
 
-# Defensively ignore any ambient PG_DUMP_CONTAINER*/-related env vars so this
+# Defensively ignore any ambient PG_DUMP_CONTAINER*/-related env vars (and PGHOSTADDR/PGSERVICE,
+# which pg_dump-via-docker itself now refuses to run with set — see Task S3-5 cases below) so this
 # test's outcomes never depend on whoever's shell happens to be running it.
-unset PG_DUMP_CONTAINER PG_DUMP_CONTAINER_PORT 2>/dev/null || true
+unset PG_DUMP_CONTAINER PG_DUMP_CONTAINER_PORT PGHOSTADDR PGSERVICE 2>/dev/null || true
 
 PASS=0
 FAIL=0
@@ -120,6 +123,43 @@ check_image "'postgres-sidecar' custom-named image does NOT match" "myrepo/postg
 check_image "'postgres-exporter' sidecar with registry path does NOT match" "quay.io/prometheuscommunity/postgres-exporter:v0.15" no
 
 echo ""
+echo "forbidden_query_params_present (URL redirection guard):"
+
+check_forbidden() {
+  local desc="$1" url="$2" expect_forbidden="$3"
+  if forbidden_query_params_present "$url"; then
+    if [ "$expect_forbidden" = "yes" ]; then pass "$desc"; else fail "$desc — expected to allow '$url'"; fi
+  else
+    if [ "$expect_forbidden" = "no" ]; then pass "$desc"; else fail "$desc — expected to reject '$url'"; fi
+  fi
+}
+
+check_forbidden "no query string at all is allowed" \
+  "postgres://user:pass@localhost:5432/test" no
+check_forbidden "benign query params (sslmode, application_name) are allowed" \
+  "postgres://user:pass@localhost:5432/test?sslmode=disable&application_name=ci" no
+check_forbidden "host= in query string is rejected" \
+  "postgres://user:pass@wronghost:1/wrongdb?host=real" yes
+check_forbidden "hostaddr= in query string is rejected" \
+  "postgres://user:pass@wronghost:1/wrongdb?hostaddr=10.0.0.1" yes
+check_forbidden "port= in query string is rejected" \
+  "postgres://user:pass@wronghost:1/wrongdb?port=6543" yes
+check_forbidden "dbname= in query string is rejected" \
+  "postgres://user@wronghost/wrongdb?dbname=real" yes
+check_forbidden "service= in query string is rejected" \
+  "postgres://user@wronghost/wrongdb?service=other" yes
+check_forbidden "servicefile= in query string is rejected" \
+  "postgres://user@wronghost/wrongdb?servicefile=/tmp/evil.conf" yes
+check_forbidden "percent-encoded key name (%68ost = 'host') is rejected" \
+  "postgres://user@wronghost/wrongdb?%68ost=real" yes
+check_forbidden "uppercase key name (HOST) is rejected case-insensitively" \
+  "postgres://user@wronghost/wrongdb?HOST=real" yes
+check_forbidden "forbidden key repeated after benign ones is still caught (no first-match shortcut)" \
+  "postgres://user@wronghost/wrongdb?sslmode=disable&application_name=ci&host=real" yes
+check_forbidden "no-slash URI with only dbname= (query lost from the authority, gains dbname) is rejected" \
+  "postgres://user@wronghost?dbname=real" yes
+
+echo ""
 echo "container_is_running (real docker, read-only, name guaranteed not to exist):"
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   if container_is_running "definitely-nonexistent-container-pgdvd-test-$$"; then
@@ -164,8 +204,24 @@ case "$1" in
     exit 1
     ;;
   exec)
-    # Real call is: docker exec -i <container> pg_dump [args...]
     shift
+    # pg_dump-via-docker resolves the binary's path INSIDE the container before running it, via:
+    #   docker exec <container> sh -c 'command -v pg_dump'
+    # (no -i, and this happens BEFORE the real dump invocation below). Simulate a container that
+    # has the real client tools on PATH by answering "pg_dump". Set FAKE_DOCKER_NO_PG_DUMP=1 to
+    # simulate a container whose image has no pg_dump on PATH at all.
+    if [ "$2" = "sh" ] && [ "$3" = "-c" ]; then
+      case "$4" in
+        *'command -v pg_dump'*)
+          if [ -n "${FAKE_DOCKER_NO_PG_DUMP:-}" ]; then
+            exit 1
+          fi
+          echo "pg_dump"
+          exit 0
+          ;;
+      esac
+    fi
+    # Real call is: docker exec -i <container> <resolved-pg_dump-path> [args...]
     if [ -n "${FAKE_DOCKER_EXEC_LOG:-}" ]; then
       printf '%s\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     fi
@@ -238,6 +294,96 @@ elif echo "$output" | grep -qi "is not a running container"; then
 else
   fail "expected a clear 'is not a running container' message, got: $output"
 fi
+
+# --- pg_dump not resolvable on PATH inside the container fails closed (Task S3-4) ---
+echo ""
+echo "pg_dump not found on PATH inside the container:"
+output=$(FAKE_DOCKER_RUNNING="fake-pg" FAKE_DOCKER_NO_PG_DUMP=1 PG_DUMP_CONTAINER=fake-pg run_with_fake_docker --version 2>&1)
+status=$?
+if [ "$status" -eq 0 ]; then
+  fail "expected non-zero exit when pg_dump is not on the container's PATH, got 0"
+elif echo "$output" | grep -qi "no 'pg_dump' found on PATH"; then
+  pass "fails closed with a clear message when pg_dump is not on the container's PATH"
+else
+  fail "expected a clear 'no pg_dump found on PATH' message, got: $output"
+fi
+
+# --- ambient PGHOSTADDR/PGSERVICE are refused (Task S3-5: known redirection mechanisms) ---
+echo ""
+echo "ambient PGHOSTADDR is refused:"
+output=$(PGHOSTADDR="10.0.0.1" FAKE_DOCKER_RUNNING="fake-pg" PG_DUMP_CONTAINER=fake-pg run_with_fake_docker --version 2>&1)
+status=$?
+if [ "$status" -eq 0 ]; then
+  fail "expected non-zero exit with PGHOSTADDR set, got 0"
+elif echo "$output" | grep -qi "PGHOSTADDR"; then
+  pass "fails closed with PGHOSTADDR set in the environment"
+else
+  fail "expected a clear PGHOSTADDR message, got: $output"
+fi
+
+echo ""
+echo "ambient PGSERVICE is refused:"
+output=$(PGSERVICE="myservice" FAKE_DOCKER_RUNNING="fake-pg" PG_DUMP_CONTAINER=fake-pg run_with_fake_docker --version 2>&1)
+status=$?
+if [ "$status" -eq 0 ]; then
+  fail "expected non-zero exit with PGSERVICE set, got 0"
+elif echo "$output" | grep -qi "PGSERVICE"; then
+  pass "fails closed with PGSERVICE set in the environment"
+else
+  fail "expected a clear PGSERVICE message, got: $output"
+fi
+
+# --- end-to-end: a bare postgres:// URL with a redirecting query param is refused before exec ---
+echo ""
+echo "bare postgres:// URL with host= in its query string is refused end-to-end:"
+EXEC_LOG="$(mktemp)"
+output=$(FAKE_DOCKER_RUNNING="fake-pg" FAKE_DOCKER_EXEC_LOG="$EXEC_LOG" PG_DUMP_CONTAINER=fake-pg \
+  run_with_fake_docker "postgres://user:pass@wronghost:1/wrongdb?host=real" 2>&1)
+status=$?
+if [ "$status" -eq 0 ]; then
+  fail "expected non-zero exit for a URL with host= in its query string, got 0"
+elif [ -s "$EXEC_LOG" ]; then
+  fail "pg_dump must never be exec'd for a rejected URL, but the exec log is non-empty: $(cat "$EXEC_LOG")"
+elif echo "$output" | grep -qi "refusing a connection URL"; then
+  pass "refuses the redirecting URL end-to-end without ever calling docker exec pg_dump"
+else
+  fail "expected a clear refusal message, got: $output"
+fi
+rm -f "$EXEC_LOG"
+
+# --- end-to-end: --dbname=<URL> with a redirecting query param is refused before exec ---
+echo ""
+echo "--dbname=<URL> with dbname= in its own query string is refused end-to-end:"
+EXEC_LOG="$(mktemp)"
+output=$(FAKE_DOCKER_RUNNING="fake-pg" FAKE_DOCKER_EXEC_LOG="$EXEC_LOG" PG_DUMP_CONTAINER=fake-pg \
+  run_with_fake_docker "--dbname=postgres://user@wronghost/wrongdb?dbname=real" 2>&1)
+status=$?
+if [ "$status" -eq 0 ]; then
+  fail "expected non-zero exit for --dbname=<URL> with dbname= in its query string, got 0"
+elif [ -s "$EXEC_LOG" ]; then
+  fail "pg_dump must never be exec'd for a rejected --dbname=<URL>, but the exec log is non-empty: $(cat "$EXEC_LOG")"
+elif echo "$output" | grep -qi "refusing --dbname="; then
+  pass "refuses the redirecting --dbname=<URL> end-to-end without ever calling docker exec pg_dump"
+else
+  fail "expected a clear refusal message, got: $output"
+fi
+rm -f "$EXEC_LOG"
+
+# --- end-to-end: a benign --dbname=<URL> still gets its host:port rewritten and reaches exec ---
+echo ""
+echo "--dbname=<URL> WITHOUT a redirecting param is rewritten and reaches exec:"
+EXEC_LOG="$(mktemp)"
+output=$(FAKE_DOCKER_RUNNING="fake-pg" FAKE_DOCKER_EXEC_LOG="$EXEC_LOG" PG_DUMP_CONTAINER=fake-pg \
+  run_with_fake_docker "--dbname=postgres://user:pass@localhost:54321/test?sslmode=disable" 2>&1)
+status=$?
+if [ "$status" -ne 0 ]; then
+  fail "expected exit 0 for a benign --dbname=<URL>, got $status: $output"
+elif grep -q '^-i fake-pg pg_dump --dbname=postgres://user:pass@127.0.0.1:5432/test?sslmode=disable$' "$EXEC_LOG"; then
+  pass "benign --dbname=<URL> is rewritten to the container-internal host:port and reaches exec"
+else
+  fail "expected the rewritten --dbname=<URL> in the exec log, got: $(cat "$EXEC_LOG" 2>/dev/null)"
+fi
+rm -f "$EXEC_LOG"
 
 # --- auto-detect anchors on the image, skipping a postgres-adjacent sidecar ---
 echo ""

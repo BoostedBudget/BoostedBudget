@@ -32,9 +32,13 @@
 # This file is both the CI-invoked executable (`PG_DUMP="$PWD/scripts/pg_dump-via-docker"`) and,
 # via the BASH_SOURCE guard at the bottom, sourceable by
 # scripts/__tests__/pg_dump-via-docker.test.sh, which sources it to exercise rewrite_pg_url,
-# valid_port and is_postgres_image directly, without Docker. Sourcing only defines functions; it
-# does not run main (and, notably, does not itself turn on `set -euo pipefail` for the sourcing
-# shell — that is enabled inside main, once, only for the direct-execution path).
+# valid_port, is_postgres_image and container_is_running directly, without Docker (that test file's
+# own real-docker call is a single read-only container_is_running probe against a name guaranteed
+# not to exist — see that file's header). detect_postgres_containers is NOT called directly after
+# sourcing; it's only exercised indirectly, end-to-end, by Part 2's fake-docker subprocess runs of
+# this script (main calls it). Sourcing only defines functions; it does not run main (and,
+# notably, does not itself turn on `set -euo pipefail` for the sourcing shell — that is enabled
+# inside main, once, only for the direct-execution path).
 
 # rewrite_pg_url URL PORT
 # Rewrite a postgres://... or postgresql://... URL's host:port authority to 127.0.0.1:PORT.
@@ -82,6 +86,55 @@ valid_port() {
         ''|*[!0-9]*) return 1 ;;
         *) return 0 ;;
     esac
+}
+
+# percent_decode STRING — decode %XX percent-encoding and '+' (space), for matching query-string
+# parameter NAMES case-insensitively regardless of encoding (e.g. "%68ost" must be recognized as
+# "host"). Uses the standard bash printf '%b' trick; safe here because the only thing ever fed to
+# it is a query-parameter key/value pulled out of a caller-supplied URL for a read-only comparison
+# — the decoded result is never re-interpolated into a command or eval'd.
+percent_decode() {
+    local s="${1//+/ }"
+    printf '%b' "${s//%/\\x}"
+}
+
+# forbidden_query_params_present URL — true (exit 0) if URL's query string contains ANY of the
+# libpq connection parameters that OVERRIDE a URI's own host/port/dbname authority: host,
+# hostaddr, port, dbname, service, servicefile. service/servicefile are included because a libpq
+# "service" points at a service definition file that can itself specify host/port/dbname —
+# achieving the same redirection one level removed.
+#
+# Why this matters: rewrite_pg_url only fixes the URL's textual authority (host:port). Verified
+# empirically against a real Postgres server (not assumed from documentation): a URL with a
+# deliberately-wrong host:port in its authority but a correct dbname/host/port in its QUERY STRING
+# still connects to the query string's target — libpq's query parameters win. So a caller-supplied
+# URL like postgres://u@wronghost:1/wrongdb?host=real&port=5555&dbname=real still ends up dumping
+# "real", defeating the point of rewriting the authority at all.
+#
+# Every parameter in the query string is checked (not just the first), so a REPEATED parameter
+# (?sslmode=disable&host=evil) is caught the same way a single one is — there is no "first match
+# wins" shortcut here to bypass. Percent-encoded key names (e.g. %68ost) are decoded before
+# matching, case-insensitively, so encoding cannot hide a forbidden key either.
+#
+# Honest scope: this rejects these SPECIFIC, KNOWN redirection mechanisms. It does not — and
+# cannot from here — prove the resulting URL points at the intended database; it only closes off
+# the ways found to redirect it out from under this shim's own host:port rewrite.
+forbidden_query_params_present() {
+    local url="$1" query pair key
+    case "$url" in
+        *'?'*) query="${url#*\?}" ;;
+        *) return 1 ;;
+    esac
+    local IFS='&'
+    for pair in $query; do
+        [ -n "$pair" ] || continue
+        key="${pair%%=*}"
+        key="$(percent_decode "$key" | tr '[:upper:]' '[:lower:]')"
+        case "$key" in
+            host|hostaddr|port|dbname|service|servicefile) return 0 ;;
+        esac
+    done
+    return 1
 }
 
 # is_postgres_image IMAGE — true if IMAGE's repository component is exactly "postgres".
@@ -132,6 +185,18 @@ detect_postgres_containers() {
 
 main() {
     set -euo pipefail
+
+    # Reject ambient PGHOSTADDR/PGSERVICE the same way forbidden_query_params_present rejects the
+    # equivalent query-string parameters: both let libpq redirect the connection regardless of
+    # what URL was passed on the command line, defeating the point of rewriting that URL's
+    # authority below. This is a known, specific redirection mechanism being closed off — not a
+    # guarantee no other environment variable could ever matter to libpq.
+    if [ -n "${PGHOSTADDR:-}" ] || [ -n "${PGSERVICE:-}" ]; then
+        echo "pg_dump-via-docker: refusing to run with PGHOSTADDR or PGSERVICE set in the" >&2
+        echo "  environment — both can redirect the connection independently of the URL given on" >&2
+        echo "  the command line. Unset them before invoking this script." >&2
+        exit 1
+    fi
 
     local container
     container="${PG_DUMP_CONTAINER:-}"
@@ -184,11 +249,36 @@ main() {
         exit 1
     fi
 
+    # Rejects two known ways a caller-supplied URL can redirect the connection out from under the
+    # rewrite above: (1) a bare postgres://... or postgresql://... argument whose OWN query string
+    # carries host/hostaddr/port/dbname/service/servicefile (libpq lets these override the URL's
+    # own authority — verified empirically, see forbidden_query_params_present's comment), and (2)
+    # the same thing one level removed via `--dbname=<URI>` (libpq's --dbname/-d accepts either a
+    # plain database name or a full connection URI; a bare `postgres://` case pattern alone would
+    # never match `--dbname=postgres://...` since the argument doesn't start with the scheme).
+    # Honest scope: this closes off these SPECIFIC mechanisms; it does not guarantee the resulting
+    # URL points at the intended database.
     local args=() arg
     for arg in "$@"; do
         case "$arg" in
             postgres://*|postgresql://*)
+                if forbidden_query_params_present "$arg"; then
+                    echo "pg_dump-via-docker: refusing a connection URL whose query string contains" >&2
+                    echo "  host, hostaddr, port, dbname, service, or servicefile — any of these can" >&2
+                    echo "  override the URL's own authority and connect somewhere other than the" >&2
+                    echo "  container this shim targets." >&2
+                    exit 1
+                fi
                 arg="$(rewrite_pg_url "$arg" "$internal_port")"
+                ;;
+            --dbname=postgres://*|--dbname=postgresql://*)
+                if forbidden_query_params_present "${arg#--dbname=}"; then
+                    echo "pg_dump-via-docker: refusing --dbname=<URL> whose query string contains a" >&2
+                    echo "  redirecting libpq parameter (host, hostaddr, port, dbname, service, or" >&2
+                    echo "  servicefile) — see the postgres:// case above for why." >&2
+                    exit 1
+                fi
+                arg="--dbname=$(rewrite_pg_url "${arg#--dbname=}" "$internal_port")"
                 ;;
         esac
         args+=("$arg")
@@ -203,18 +293,45 @@ main() {
     # variable under `set -u` and aborts with "args[@]: unbound variable" instead of running
     # pg_dump with no arguments (which would otherwise just print pg_dump's own usage). Verified on
     # 3.2.57; fixed in bash 4.4+, but this repo's devs and CI runner are macOS.
+    #
+    # Resolve `pg_dump` to an absolute path INSIDE the chosen container via `command -v`, and
+    # validate that resolution succeeded, rather than letting a bare `pg_dump` invocation search
+    # PATH implicitly on every call. This is deliberately NOT a hardcoded absolute path (e.g.
+    # /usr/lib/postgresql/17/bin/pg_dump): CI runs Debian's postgres:17 image and local Compose
+    # runs postgres:17-alpine, and those two images put pg_dump at different paths, so a hardcoded
+    # path would break one of them. Resolving fresh, per run, inside whichever container was
+    # actually selected works for both.
+    #
+    # Honest scope: this does NOT prove the resolved binary is the genuine PostgreSQL pg_dump — a
+    # container whose PATH has some other program named pg_dump ahead of the real one would still
+    # resolve here (see is_postgres_image's own comment above for the parallel caveat about the
+    # image name). What this DOES fix: previously, if the image had no pg_dump on PATH at all,
+    # `docker exec ... pg_dump` would fail in whatever way `docker exec` fails for a missing
+    # executable, and — because get_schema_hash in scripts/test-migrations.sh only checked the
+    # dump's exit status and non-emptiness — that failure mode was not obviously distinguishable
+    # from other pg_dump failures. Resolving and checking here first gives an unambiguous, specific
+    # error instead.
+    local resolved_pg_dump
+    resolved_pg_dump="$(docker exec "$container" sh -c 'command -v pg_dump' 2>/dev/null)" || resolved_pg_dump=""
+    if [ -z "$resolved_pg_dump" ]; then
+        echo "pg_dump-via-docker: no 'pg_dump' found on PATH inside container '$container'." >&2
+        echo "  The container's image may not include the PostgreSQL client tools." >&2
+        exit 1
+    fi
+
     if [ "${#args[@]}" -gt 0 ]; then
-        exec docker exec -i "$container" pg_dump "${args[@]}"
+        exec docker exec -i "$container" "$resolved_pg_dump" "${args[@]}"
     else
-        exec docker exec -i "$container" pg_dump
+        exec docker exec -i "$container" "$resolved_pg_dump"
     fi
 }
 
 # Only run main when executed directly (`./pg_dump-via-docker ...` or `bash pg_dump-via-docker`),
 # not when sourced by the test file — this is what lets the test file source this same file to call
-# rewrite_pg_url/valid_port/is_postgres_image/container_is_running/detect_postgres_containers in
-# isolation, without also running main (and without `set -euo pipefail` leaking into the test
-# script's own shell).
+# rewrite_pg_url/valid_port/is_postgres_image/container_is_running in isolation (see the header
+# comment above for which functions the test file actually calls directly vs. only indirectly via
+# main), without also running main (and without `set -euo pipefail` leaking into the test script's
+# own shell).
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     main "$@"
 fi
