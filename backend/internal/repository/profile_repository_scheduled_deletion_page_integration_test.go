@@ -1,0 +1,134 @@
+//go:build integration
+
+package repository
+
+// Integration tests for ProfileRepository.GetUsersScheduledForDeletionPage (Batch S2 Task 4).
+//
+// GetUsersScheduledForDeletion (no LIMIT, no id tie-breaker) fed a real hard delete (#1440) from a
+// job now registered with RunOnStart: true (#1448) — see that method's own doc comment. A bare
+// `LIMIT n` on its own would starve later users if an oldest row is permanently or long stuck
+// (e.g. a continuously-renewed admin comp): the same oldest N rows would occupy every batch
+// forever. GetUsersScheduledForDeletionPage's keyset cursor — ORDER BY (deletion_scheduled_at, id)
+// plus a WHERE (deletion_scheduled_at, id) > (cursor) predicate — is what lets a caller loop past
+// a stuck row within a single run.
+//
+// pgxmock cannot validate any of this: it only matches query text/arg shape, never whether the
+// tuple comparison and ORDER BY tie-breaker actually produce a deterministic, non-overlapping
+// sequence of pages across real rows.
+//
+// Run with:
+//
+//	DATABASE_URL=postgres://... go test ./internal/repository/... -run TestGetUsersScheduledForDeletionPage_Integration -tags integration -v -p 1
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// seedScheduledDeletionFixtureUsers creates n users, all eligible for deletion (deletion_scheduled_at
+// in the past, is_deleted = FALSE), with strictly increasing deletion_scheduled_at so ORDER BY
+// (deletion_scheduled_at, id) ASC gives a deterministic, known sequence. Returns the users in that
+// same ascending order. Registers cleanup for both the users and any deletion_scheduled_at side
+// effects.
+func seedScheduledDeletionFixtureUsers(t *testing.T, ctx context.Context, pool *pgxpool.Pool, repo ProfileRepository, n int) []string {
+	t.Helper()
+	base := time.Now().Add(-24 * time.Hour) // safely in the past for every seeded row
+	ids := make([]string, n)
+	for i := 0; i < n; i++ {
+		suffix := fmt.Sprintf("%d-%d", time.Now().UnixNano(), i)
+		user := createClaimForDeletionFixtureUser(t, ctx, pool, repo, suffix, false, nil, nil, nil)
+		scheduledAt := base.Add(time.Duration(i) * time.Minute)
+		require.NoError(t, repo.MarkForDeletion(ctx, user.ID, scheduledAt))
+		ids[i] = user.ID
+	}
+	return ids
+}
+
+func TestGetUsersScheduledForDeletionPage_Integration_BoundedAndReachesLaterUsers(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	const limit = 2
+	const seeded = 5 // deliberately MORE rows than the limit
+
+	ids := seedScheduledDeletionFixtureUsers(t, ctx, pool, repo, seeded)
+	idSet := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+
+	// Walk every page exactly the way ScheduledDeletionCheckWorker.Work does: start with a nil
+	// cursor, advance to the last row of each page, stop once a page comes back short.
+	var cursor *DeletionSweepCursor
+	seen := map[string]bool{}
+	var pageCount, pageSizeSum int
+	for {
+		page, err := repo.GetUsersScheduledForDeletionPage(ctx, cursor, limit)
+		require.NoError(t, err)
+		if len(page) == 0 {
+			break
+		}
+		pageCount++
+		pageSizeSum += len(page)
+
+		// (a) Boundedness: no single query call may return more than `limit` rows.
+		require.LessOrEqual(t, len(page), limit,
+			"a single GetUsersScheduledForDeletionPage call must never return more than the requested limit")
+
+		for _, u := range page {
+			if idSet[u.ID] {
+				seen[u.ID] = true
+			}
+		}
+
+		last := page[len(page)-1]
+		cursor = &DeletionSweepCursor{ScheduledAt: *last.DeletionScheduledAt, UserID: last.ID}
+
+		if len(page) < limit {
+			break // exhausted
+		}
+		require.Less(t, pageCount, 20, "runaway pagination loop — something is wrong with the cursor advancing")
+	}
+
+	require.Greater(t, pageCount, 1,
+		"seeding 5 rows against a page size of 2 must require MORE THAN ONE page call — otherwise "+
+			"this test isn't actually exercising pagination")
+
+	// (b) No starvation: EVERY seeded user — including the ones ranked well past the first
+	// page/batch — must be reached within this single walk, not just the oldest `limit` rows.
+	for _, id := range ids {
+		assert.True(t, seen[id], "user %s (seeded, eligible for deletion) was never returned by any page — later users must not be starved by the page size", id)
+	}
+	assert.Equal(t, seeded, len(seen), "every seeded eligible user must be reached exactly once across all pages")
+}
+
+// TestGetUsersScheduledForDeletionPage_Integration_NoLimit_DefaultsTo500 proves the documented
+// non-positive-limit fallback (profile_repository.go) without needing to seed 500+ rows: a
+// limit of 0 must not silently return zero rows or error.
+func TestGetUsersScheduledForDeletionPage_Integration_NoLimit_DefaultsTo500(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	ids := seedScheduledDeletionFixtureUsers(t, ctx, pool, repo, 1)
+
+	page, err := repo.GetUsersScheduledForDeletionPage(ctx, nil, 0)
+	require.NoError(t, err)
+
+	found := false
+	for _, u := range page {
+		if u.ID == ids[0] {
+			found = true
+		}
+	}
+	assert.True(t, found, "limit<=0 must fall back to a sane positive default, not silently return nothing")
+}

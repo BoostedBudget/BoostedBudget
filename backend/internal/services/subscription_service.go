@@ -140,18 +140,20 @@ func (s *SubscriptionService) GetEffectiveSubscription(
 // override's expiry boundary between the handler's asOf capture and this call could return an
 // as_of/effective_status describing one instant and an effective_tier describing a later one.
 //
-// NOTE: the injected HouseholdEntitlementResolver (SetEntitlementResolver) is NOT threaded
-// through this `now` — HouseholdEntitlementResolver.ResolveEffectiveEntitlement(ctx, user) has no
-// instant parameter of its own, and widening that interface (used by
-// HouseholdEntitlementService, its test doubles, and the SubscriptionChecker-adjacent callers) is
-// a larger change than this fix carries. So a household member's tier, when an entitlement
-// resolver is wired, can still be derived from the resolver's own internal clock rather than the
-// asOf passed here. This mirrors exactly why Issue #1466 itself was filed rather than folded into
-// PR #1465: GetEffectiveSubscription's signature (and this same breadth concern) is shared by two
-// other internal call sites (GetHistoricalDepthLimit, CanUserAccessFeature below) plus the
-// SubscriptionChecker interface (user_tag_service.go) — threading `now` through the -At variant
-// here, rather than changing GetEffectiveSubscription's own signature, is what keeps all of those
-// unaffected.
+// Batch S2 Task 1: the injected HouseholdEntitlementResolver (SetEntitlementResolver) IS now
+// threaded through this `now` via ResolveEffectiveEntitlementAt. Before this fix, the resolver's
+// plain ResolveEffectiveEntitlement(ctx, user) had no instant parameter at all, so it fell back to
+// its OWN internal time.Now() — a SECOND, independent clock read taken later than `now`/asOf. That
+// silently overwrote tierName (see the unconditional assignment below) for EVERY user the resolver
+// is asked about whenever one is wired, not only household members: main.go's production wiring
+// (SetEntitlementResolver(householdEntitlementService)) is unconditional for every request, and
+// even the resolver's "own" (no household row) branch — the common case — used to read its own
+// clock. A previous version of this doc comment scoped the gap to "a household member's tier",
+// which understated it. See
+// TestGetEffectiveSubscriptionAt_ProductionWiring_RealResolver_TierDerivedFromAsOf_NotResolversOwnClock
+// (subscription_service_test.go) for the regression proof, and
+// HouseholdEntitlementResolver.ResolveEffectiveEntitlementAt's own doc comment
+// (household_entitlement_service.go) for the resolver-side half of this fix.
 func (s *SubscriptionService) GetEffectiveSubscriptionAt(
 	ctx context.Context,
 	user *domain.User,
@@ -166,7 +168,7 @@ func (s *SubscriptionService) GetEffectiveSubscriptionAt(
 	// limit/feature resolution for solo users too. The error is logged (not silently
 	// dropped) so a systemic entitlement-resolution outage is visible in production.
 	if s.entitlementResolver != nil {
-		eff, err := s.entitlementResolver.ResolveEffectiveEntitlement(ctx, user)
+		eff, err := s.entitlementResolver.ResolveEffectiveEntitlementAt(ctx, user, now)
 		if err != nil {
 			slog.Warn("household entitlement resolution failed; falling back to own tier",
 				"user_id", user.ID, "error", err)
@@ -189,7 +191,7 @@ func (s *SubscriptionService) GetEffectiveSubscriptionAt(
 	var activeOverridesCount int
 
 	if s.overrideRepo != nil {
-		overrides, err := s.overrideRepo.GetActiveOverrides(ctx, user.ID)
+		overrides, err := s.overrideRepo.GetActiveOverrides(ctx, user.ID, now)
 		if err != nil {
 			// Log error but continue with base limits
 			// In production, you might want to handle this differently
@@ -262,16 +264,39 @@ func (s *SubscriptionService) RemoveOverride(
 	return nil
 }
 
-// GetUserOverrides returns all active overrides for a user
+// GetUserOverrides returns all active overrides for a user.
+//
+// Delegates to GetUserOverridesAt(ctx, userID, time.Now()) — see that method's doc comment for
+// why a caller assembling a response around a single already-captured snapshot instant (the admin
+// subscription-detail handler's `asOf`) must call the -At variant instead of this method, which
+// reads its own fresh clock.
 func (s *SubscriptionService) GetUserOverrides(
 	ctx context.Context,
 	userID string,
+) ([]domain.UserSubscriptionOverride, error) {
+	return s.GetUserOverridesAt(ctx, userID, time.Now())
+}
+
+// GetUserOverridesAt is the -At twin of GetUserOverrides, evaluated against the given instant
+// instead of an internal time.Now() read.
+//
+// Added for Batch S2 Task 2: GetUserSubscription (admin_subscriptions.go) calls this a SECOND
+// time in the same handler invocation, after GetEffectiveSubscriptionAt already queried
+// GetActiveOverrides once internally (for ActiveOverridesCount/limits) — both must filter
+// against the SAME `asOf` the handler already captured and echoes back as `as_of`, or the
+// returned resource_overrides list could show an override as active/expired inconsistently with
+// active_overrides_count in the very same response, purely because a moment of NOW() elapsed
+// between the two independent live queries.
+func (s *SubscriptionService) GetUserOverridesAt(
+	ctx context.Context,
+	userID string,
+	asOf time.Time,
 ) ([]domain.UserSubscriptionOverride, error) {
 	if s.overrideRepo == nil {
 		return []domain.UserSubscriptionOverride{}, nil
 	}
 
-	overrides, err := s.overrideRepo.GetActiveOverrides(ctx, userID)
+	overrides, err := s.overrideRepo.GetActiveOverrides(ctx, userID, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user overrides: %w", err)
 	}

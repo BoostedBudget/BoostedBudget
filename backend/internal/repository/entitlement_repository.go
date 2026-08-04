@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -18,9 +19,16 @@ var ErrEntitlementNotFound = errors.New("active entitlement not found")
 // and member removal.
 type EntitlementRepository interface {
 	// GetActiveEntitlement returns the user's currently open-ended entitlement row
-	// (effective_until IS NULL, effective_from <= now()). Returns ErrEntitlementNotFound
+	// (effective_until IS NULL, effective_from <= asOf). Returns ErrEntitlementNotFound
 	// if none exists. The 000112 partial unique index guarantees at most one such row.
-	GetActiveEntitlement(ctx context.Context, userID string) (*domain.SubscriptionEntitlement, error)
+	//
+	// asOf is a bound parameter, not the database's own NOW() (Batch S2 Task 2, Issue #1466
+	// neighborhood): the sole caller, HouseholdEntitlementService.ResolveEffectiveEntitlementAt,
+	// threads through the SAME instant its own caller (e.g. the admin subscription-detail
+	// handler's `asOf`) already captured, so this read agrees with every other
+	// expiry/liveness predicate evaluated for the same request instead of silently reading the
+	// database's transaction-start clock.
+	GetActiveEntitlement(ctx context.Context, userID string, asOf time.Time) (*domain.SubscriptionEntitlement, error)
 
 	// CreateHouseholdEntitlement inserts an open-ended (effective_until=NULL) entitlement
 	// row for userID, source='household', payer=payerUserID (must equal the household's
@@ -54,15 +62,15 @@ func NewEntitlementRepository(db DB) EntitlementRepository {
 	return &entitlementRepository{db: db}
 }
 
-func (r *entitlementRepository) GetActiveEntitlement(ctx context.Context, userID string) (*domain.SubscriptionEntitlement, error) {
+func (r *entitlementRepository) GetActiveEntitlement(ctx context.Context, userID string, asOf time.Time) (*domain.SubscriptionEntitlement, error) {
 	var e domain.SubscriptionEntitlement
 	err := r.db.QueryRow(ctx, `
 		SELECT id, user_id, source, tier, status, payer_user_id, household_id,
 		       effective_from, effective_until, created_at, updated_at
 		FROM subscription_entitlements
-		WHERE user_id = $1 AND effective_until IS NULL AND effective_from <= now()
+		WHERE user_id = $1 AND effective_until IS NULL AND effective_from <= $2
 		LIMIT 1
-	`, userID).Scan(
+	`, userID, asOf).Scan(
 		&e.ID, &e.UserID, &e.Source, &e.Tier, &e.Status, &e.PayerUserID, &e.HouseholdID,
 		&e.EffectiveFrom, &e.EffectiveUntil, &e.CreatedAt, &e.UpdatedAt,
 	)

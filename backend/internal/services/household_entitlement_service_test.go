@@ -16,8 +16,8 @@ import (
 
 type mockEntitlementRepo struct{ mock.Mock }
 
-func (m *mockEntitlementRepo) GetActiveEntitlement(ctx context.Context, userID string) (*domain.SubscriptionEntitlement, error) {
-	args := m.Called(ctx, userID)
+func (m *mockEntitlementRepo) GetActiveEntitlement(ctx context.Context, userID string, asOf time.Time) (*domain.SubscriptionEntitlement, error) {
+	args := m.Called(ctx, userID, asOf)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -223,7 +223,7 @@ func (m *mockHouseholdRepo) ListMembershipsPastPurgeWindow(ctx context.Context, 
 
 func TestResolveEffectiveEntitlement_NoRow_FallsBackToOwn(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, repository.ErrEntitlementNotFound)
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1", mock.Anything).Return(nil, repository.ErrEntitlementNotFound)
 	svc := NewHouseholdEntitlementService(entRepo, &mockUserLoader{}, &mockHouseholdRepo{}, nil)
 
 	user := &domain.User{ID: "user-1", SubscriptionTier: "premium", SubscriptionStatus: "active"}
@@ -235,9 +235,43 @@ func TestResolveEffectiveEntitlement_NoRow_FallsBackToOwn(t *testing.T) {
 	entRepo.AssertExpectations(t)
 }
 
+// TestResolveEffectiveEntitlementAt_UsesPassedInstant_NotInternalClock is the resolver-level pin
+// for Batch S2 Task 1, complementing the higher-level (SubscriptionService)
+// TestGetEffectiveSubscriptionAt_ProductionWiring_RealResolver_TierDerivedFromAsOf_NotResolversOwnClock
+// (subscription_service_test.go): calls ResolveEffectiveEntitlementAt directly with an instant far
+// in the PAST — before which an override was still live, but which has long since expired
+// relative to the real wall clock this test actually runs under. A correct implementation must
+// resolve the override tier because it was live AS OF the passed instant; an implementation that
+// (bug-for-bug) ignored the parameter and read time.Now() internally would instead see the
+// long-expired override and fall back to the raw tier.
+func TestResolveEffectiveEntitlementAt_UsesPassedInstant_NotInternalClock(t *testing.T) {
+	entRepo := &mockEntitlementRepo{}
+	pastInstant := time.Now().Add(-48 * time.Hour)
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-past-instant", pastInstant).Return(nil, repository.ErrEntitlementNotFound)
+	svc := NewHouseholdEntitlementService(entRepo, &mockUserLoader{}, &mockHouseholdRepo{}, nil)
+
+	override := "household_3"
+	overrideEndsAt := pastInstant.Add(1 * time.Hour) // live AT pastInstant, long expired by now()
+	user := &domain.User{
+		ID:                 "user-past-instant",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &overrideEndsAt,
+	}
+
+	eff, err := svc.ResolveEffectiveEntitlementAt(context.Background(), user, pastInstant)
+	require.NoError(t, err)
+	assert.Equal(t, "household_3", eff.Tier,
+		"must resolve the override tier AS OF the passed instant (still live then), not fall back "+
+			"to the raw tier because the override has since expired relative to the real wall clock")
+	assert.Equal(t, domain.EntitlementSourceOwn, eff.Source)
+	entRepo.AssertExpectations(t) // proves GetActiveEntitlement was called WITH pastInstant, not time.Now()
+}
+
 func TestResolveEffectiveEntitlement_OwnSubscriptionRow_UsesOwn(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceOwn, Tier: "premium", Status: "active",
 	}, nil)
 	svc := NewHouseholdEntitlementService(entRepo, &mockUserLoader{}, &mockHouseholdRepo{}, nil)
@@ -250,7 +284,7 @@ func TestResolveEffectiveEntitlement_OwnSubscriptionRow_UsesOwn(t *testing.T) {
 
 func TestResolveEffectiveEntitlement_HouseholdRow_OwnerActive_UsesOwnerTier(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -270,7 +304,7 @@ func TestResolveEffectiveEntitlement_HouseholdRow_OwnerActive_UsesOwnerTier(t *t
 
 func TestResolveEffectiveEntitlement_HouseholdRow_OwnerTrialing_UsesOwnerTier(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "trialing",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -290,7 +324,7 @@ func TestResolveEffectiveEntitlement_HouseholdRow_OwnerTrialing_UsesOwnerTier(t 
 
 func TestResolveEffectiveEntitlement_OwnerPastDue_MemberFallsBackToOwn(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -315,7 +349,7 @@ func TestResolveEffectiveEntitlement_OwnerPastDue_MemberFallsBackToOwn(t *testin
 // the checklist names cancelled specifically, so it gets its own test.
 func TestResolveEffectiveEntitlement_OwnerCancelled_MemberFallsBackToOwn(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -334,7 +368,7 @@ func TestResolveEffectiveEntitlement_OwnerCancelled_MemberFallsBackToOwn(t *test
 
 func TestResolveEffectiveEntitlement_OwnerManualOverrideHonored(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -359,7 +393,7 @@ func TestResolveEffectiveEntitlement_OwnerManualOverrideHonored(t *testing.T) {
 // comp only re-surfaces via the owner-lapsed fallback (see the sibling test below).
 func TestResolveEffectiveEntitlement_MemberManualOverride_LosesToActiveHouseholdCoverage(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -387,7 +421,7 @@ func TestResolveEffectiveEntitlement_MemberManualOverride_LosesToActiveHousehold
 // a member's own override.
 func TestResolveEffectiveEntitlement_MemberManualOverride_AppliesWhenOwnerLapses(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -418,7 +452,7 @@ func TestResolveEffectiveEntitlement_MemberManualOverride_AppliesWhenOwnerLapses
 // now be "active" whenever ComputeEffectiveStatus() says so.
 func TestResolveEffectiveEntitlement_CompedSoloUser_StatusIsActive(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, repository.ErrEntitlementNotFound)
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1", mock.Anything).Return(nil, repository.ErrEntitlementNotFound)
 	svc := NewHouseholdEntitlementService(entRepo, &mockUserLoader{}, &mockHouseholdRepo{}, nil)
 
 	futureEnd := time.Now().Add(30 * 24 * time.Hour)
@@ -448,7 +482,7 @@ func TestResolveEffectiveEntitlement_CompedSoloUser_StatusIsActive(t *testing.T)
 // middleware waves every request through, and only then does tier resolution 500.
 func TestResolveEffectiveEntitlement_SoloUser_MalformedOverride_TierFallsBackToRaw(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, repository.ErrEntitlementNotFound)
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1", mock.Anything).Return(nil, repository.ErrEntitlementNotFound)
 	svc := NewHouseholdEntitlementService(entRepo, &mockUserLoader{}, &mockHouseholdRepo{}, nil)
 	svc.SetOverrideTierValidator(func(tier string) bool { return tier == "household_2" || tier == "premium" })
 
@@ -469,7 +503,7 @@ func TestResolveEffectiveEntitlement_SoloUser_MalformedOverride_TierFallsBackToR
 // tier would silently un-comp every legitimately comped user, which is worse than the bug.
 func TestResolveEffectiveEntitlement_SoloUser_ValidOverride_TierAppliesOverride(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, repository.ErrEntitlementNotFound)
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1", mock.Anything).Return(nil, repository.ErrEntitlementNotFound)
 	svc := NewHouseholdEntitlementService(entRepo, &mockUserLoader{}, &mockHouseholdRepo{}, nil)
 	svc.SetOverrideTierValidator(func(tier string) bool { return tier == "household_3" || tier == "premium" })
 
@@ -496,7 +530,7 @@ func TestResolveEffectiveEntitlement_SoloUser_ValidOverride_TierAppliesOverride(
 // actively paying, not just lapsed.
 func TestResolveEffectiveEntitlement_OwnerActiveRawStatus_MalformedOverride_TierFallsBackToRaw(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -523,7 +557,7 @@ func TestResolveEffectiveEntitlement_OwnerActiveRawStatus_MalformedOverride_Tier
 // household owners, but any solo user with a corrupt override row.
 func TestGetEntitlementSummary_SoloUser_MalformedOverride_NotError(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, repository.ErrEntitlementNotFound)
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1", mock.Anything).Return(nil, repository.ErrEntitlementNotFound)
 	householdRepo := &mockHouseholdRepo{}
 	householdRepo.On("GetHouseholdForUser", mock.Anything, "user-1").Return(nil, false, false, nil)
 	svc := NewHouseholdEntitlementService(entRepo, &mockUserLoader{}, householdRepo, fakeTierConfig())
@@ -553,7 +587,7 @@ func TestGetEntitlementSummary_SoloUser_MalformedOverride_NotError(t *testing.T)
 // tier, not the owner's real (lapsed) tier.
 func TestResolveEffectiveEntitlement_CompedOwnerRawInactive_MemberCoveredAtCompTier(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -592,7 +626,7 @@ func TestResolveEffectiveEntitlement_CompedOwnerRawInactive_MemberCoveredAtCompT
 // their own tier/source.
 func TestResolveEffectiveEntitlement_OwnerMalformedOverride_MemberFallsBackToOwn(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -619,7 +653,7 @@ func TestResolveEffectiveEntitlement_OwnerMalformedOverride_MemberFallsBackToOwn
 // closes.
 func TestResolveEffectiveEntitlement_OwnerValidOverride_MemberStillCovered(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -648,7 +682,7 @@ func TestResolveEffectiveEntitlement_OwnerValidOverride_MemberStillCovered(t *te
 // outage for every currently-comped household, not just a silent regression.
 func TestResolveEffectiveEntitlement_NilValidator_MalformedOverride_PreFixBehaviorPreserved(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -678,7 +712,7 @@ func TestResolveEffectiveEntitlement_NilValidator_MalformedOverride_PreFixBehavi
 // incorrectly keep an expired comp's coverage alive.
 func TestResolveEffectiveEntitlement_OwnerOverrideExpired_MemberFallsBackToOwnTier(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -710,7 +744,7 @@ func TestResolveEffectiveEntitlement_OwnerOverrideExpired_MemberFallsBackToOwnTi
 // computed values.
 func TestResolveEffectiveEntitlement_MemberManualOverride_LosesToActiveHouseholdCoverage_StatusLevel(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "trialing",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -734,7 +768,7 @@ func TestResolveEffectiveEntitlement_MemberManualOverride_LosesToActiveHousehold
 
 func TestResolveEffectiveEntitlement_RepositoryError_Propagates(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, errors.New("db timeout"))
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1", mock.Anything).Return(nil, errors.New("db timeout"))
 	svc := NewHouseholdEntitlementService(entRepo, &mockUserLoader{}, &mockHouseholdRepo{}, nil)
 
 	user := &domain.User{ID: "user-1", SubscriptionTier: "premium", SubscriptionStatus: "active"}
@@ -744,7 +778,7 @@ func TestResolveEffectiveEntitlement_RepositoryError_Propagates(t *testing.T) {
 
 func TestResolveEffectiveEntitlement_OwnerLookupError_Propagates(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
 		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
 	}, nil)
@@ -761,7 +795,7 @@ func TestGetEntitlementSummary_Solo_NoHousehold(t *testing.T) {
 	tierConfig, err := config.LoadTierConfig()
 	require.NoError(t, err)
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, repository.ErrEntitlementNotFound)
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1", mock.Anything).Return(nil, repository.ErrEntitlementNotFound)
 	householdRepo := &mockHouseholdRepo{}
 	householdRepo.On("GetHouseholdForUser", mock.Anything, "user-1").Return(nil, false, false, nil)
 	svc := NewHouseholdEntitlementService(entRepo, &mockUserLoader{}, householdRepo, tierConfig)
@@ -780,7 +814,7 @@ func TestGetEntitlementSummary_Owner_WithSeats(t *testing.T) {
 	tierConfig, err := config.LoadTierConfig()
 	require.NoError(t, err)
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "owner-1").Return(nil, repository.ErrEntitlementNotFound)
+	entRepo.On("GetActiveEntitlement", mock.Anything, "owner-1", mock.Anything).Return(nil, repository.ErrEntitlementNotFound)
 	householdRepo := &mockHouseholdRepo{}
 	householdRepo.On("GetHouseholdForUser", mock.Anything, "owner-1").
 		Return(&domain.Household{ID: "household-1"}, true, true, nil)
@@ -811,7 +845,7 @@ func TestIsCoveredByHousehold_ActiveHouseholdEntitlement_True(t *testing.T) {
 
 	entRepo := &mockEntitlementRepo{}
 	payerID := "owner-1"
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, PayerUserID: &payerID,
 	}, nil)
 
@@ -833,7 +867,7 @@ func TestIsCoveredByHousehold_OwnerReadOnly_False(t *testing.T) {
 
 	entRepo := &mockEntitlementRepo{}
 	payerID := "owner-1"
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, PayerUserID: &payerID,
 	}, nil)
 
@@ -862,7 +896,7 @@ func TestIsCoveredByHousehold_OwnerMalformedOverride_False(t *testing.T) {
 
 	entRepo := &mockEntitlementRepo{}
 	payerID := "owner-1"
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, PayerUserID: &payerID,
 	}, nil)
 
@@ -891,7 +925,7 @@ func TestIsCoveredByHousehold_OwnerValidOverride_True(t *testing.T) {
 
 	entRepo := &mockEntitlementRepo{}
 	payerID := "owner-1"
-	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1", mock.Anything).Return(&domain.SubscriptionEntitlement{
 		Source: domain.EntitlementSourceHousehold, PayerUserID: &payerID,
 	}, nil)
 
@@ -911,7 +945,7 @@ func TestIsCoveredByHousehold_SoloUser_False(t *testing.T) {
 	userRepo.On("GetUserByID", mock.Anything, "user-1").Return(solo, nil)
 
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, repository.ErrEntitlementNotFound)
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1", mock.Anything).Return(nil, repository.ErrEntitlementNotFound)
 
 	svc := NewHouseholdEntitlementService(entRepo, userRepo, &mockHouseholdRepo{}, tierConfig)
 

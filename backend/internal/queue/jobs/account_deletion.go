@@ -110,9 +110,28 @@ func (w *AccountDeletionWorker) Work(ctx context.Context, job *river.Job[Account
 	return nil
 }
 
-// AccountDeletionUniqueOpts returns the recommended uniqueness options.
-// Only one deletion job per user can be queued/running at a time.
-// This prevents duplicate deletion attempts.
+// AccountDeletionUniqueOpts returns the recommended uniqueness options: intended to keep only one
+// deletion job per user queued/running at a time.
+//
+// Batch S2 Task 3 correction: before this task, the SOLE production caller
+// (ScheduledDeletionCheckWorker.Work, scheduled_deletion_check.go) built AccountDeletionArgs with
+// a RequestID embedding the enqueuing job's own river job.ID and time.Now().Unix() — both differ
+// on every single enqueue. Since ByArgs (below) is true with NO ByPeriod, River can only dedup
+// two enqueues whose full Args are byte-identical; a RequestID that changes every time defeats
+// this uniqueness constraint UNCONDITIONALLY, for every user, not as an edge case. Fixed by
+// making RequestID a deterministic function of the user alone
+// (see TestScheduledDeletionCheckWorker_Work_SameUserAcrossRuns_ProducesIdenticalArgs).
+//
+// Severity of the pre-fix bug was Medium, not Critical: ExecuteDeletion (deletion_service.go)
+// acquires an independent work-claims lease (ActionAccountDeletion) BEFORE any destructive or
+// external work, and ClaimForDeletion (profile_repository.go) atomically re-verifies eligibility
+// at claim time — so a genuinely concurrent duplicate job blocks on the lease and a
+// sequential duplicate (running after the first released its lease) simply no-ops rather than
+// double-deleting. The real cost of the pre-fix bug was duplicate queued work, repeated
+// external-service calls (Paddle cancel, Plaid disconnect — both run BEFORE the lease is released,
+// so a duplicate whose lease-acquisition window doesn't overlap the first attempt's can still
+// re-run them) per the interface doc on DeleteUserCascade, and log/error noise — never a second
+// hard delete.
 func AccountDeletionUniqueOpts() *queue.UniqueOpts {
 	return &queue.UniqueOpts{
 		ByArgs: true,

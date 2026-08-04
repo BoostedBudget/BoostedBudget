@@ -841,6 +841,12 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 // Issue #1413 round-10 (#1444): NULL-safe status scan (see normalizeLinkedItemStatus) for
 // consistency with every other scan site in this file, even though `status NOT IN (...)` above
 // already structurally excludes a NULL-status row (SQL three-valued logic).
+//
+// Cross-reference (Batch S2 Task 4, not fixed here): this query has an ORDER BY but NO LIMIT —
+// the same unbounded-sweep shape ProfileRepository.GetUsersScheduledForDeletion had before it was
+// split into GetUsersScheduledForDeletionPage's keyset-paginated form (see that method's doc
+// comment for the full starvation rationale a bare LIMIT alone would introduce here too). Tracked
+// as the same defect class under issue #1469 (ItemCleanupCheck) — out of scope for this task.
 func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
 	query := `
 		SELECT li.id, li.user_id, li.item_id, li.access_token_encrypted,

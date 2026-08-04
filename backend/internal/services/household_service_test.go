@@ -198,7 +198,7 @@ func TestHouseholdService_GetMyHousehold_Found(t *testing.T) {
 	user := &domain.User{ID: "user-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
 	userRepo.On("GetUserByID", mock.Anything, "user-1").Return(user, nil)
 	entRepo := &mockEntitlementRepo{}
-	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, repository.ErrEntitlementNotFound)
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1", mock.Anything).Return(nil, repository.ErrEntitlementNotFound)
 
 	entSvc := NewHouseholdEntitlementService(entRepo, userRepo, hhRepo, testTierConfig(t))
 	svc := NewHouseholdService(nil, hhRepo, &mockHouseholdInviteRepo{}, &mockHouseholdShareRepo{},
