@@ -23,6 +23,21 @@ PERF_WARN_THRESHOLD=${PERF_WARN_THRESHOLD:-60}    # seconds
 PERF_FAIL_THRESHOLD=${PERF_FAIL_THRESHOLD:-300}   # seconds
 PERF_REPORT_FILE="${PERF_REPORT_FILE:-migration-performance.json}"
 
+# Resolve MIGRATIONS_DIR to an absolute path ONCE, here, and use that resolved value ($ABS_MIGRATIONS_DIR)
+# everywhere a migrate/psql -f call needs a path. Previously three call sites (apply_migrations,
+# rollback_migrations, and the 000072 backfill invocation inside test_data_integrity) each
+# recomputed their own project_root and then hardcoded "$project_root/backend/migrations",
+# ignoring MIGRATIONS_DIR entirely — so the suite could log one directory (this variable, via
+# main's "Migrations: $MIGRATIONS_DIR" line) while actually migrating a completely different one
+# if a caller ever set MIGRATIONS_DIR to something else. Resolving MIGRATIONS_DIR itself into an
+# absolute path, once, and using that resolved value everywhere, makes the logged path and the
+# migrated path the same value by construction instead of by coincidence.
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+case "$MIGRATIONS_DIR" in
+    /*) ABS_MIGRATIONS_DIR="$MIGRATIONS_DIR" ;;
+    *) ABS_MIGRATIONS_DIR="$PROJECT_ROOT/${MIGRATIONS_DIR#./}" ;;
+esac
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -118,6 +133,29 @@ get_schema_hash() {
         exit 1
     fi
 
+    # Require the raw completion trailer BEFORE any filtering (checked on raw_dump, not on the
+    # \restrict/\unrestrict-filtered `dump` below). A pg_dump that exits 0 and writes SOME non-empty
+    # output but dies mid-stream (a stub binary, a killed connection, a broken pipe) is a truncated
+    # dump, not a smaller-but-valid schema — the exit-code check above and the empty-dump check
+    # below only ever caught total failure or total emptiness, never "exited 0 with partial,
+    # non-empty output". Checked on the UNFILTERED raw_dump specifically so a future change to the
+    # \restrict/\unrestrict filter can never be the reason this trailer check passes or fails.
+    #
+    # Uses a here-string (<<<), NOT `printf ... | grep -q`: grep -q exits the moment it finds a
+    # match, closing its read end of the pipe — if the producer (printf, writing a ~250KB/7000+
+    # line dump) is still mid-write when that happens, it can be killed by SIGPIPE, and under
+    # `pipefail` that makes the WHOLE pipeline report failure even though grep already found the
+    # trailer. Reproduced for real while building this: the exact same content, byte-for-byte
+    # (confirmed via length + last-line comparison), intermittently tripped this check when piped
+    # but never once did across 20+ repeated calls using a here-string or a full-scan `grep -c`
+    # instead. A here-string has no live producer process to race against.
+    if ! grep -q '^-- PostgreSQL database dump complete$' <<< "$raw_dump"; then
+        echo "❌ get_schema_hash: pg_dump output has no completion trailer — it produced SOME output" >&2
+        echo "   but died mid-stream. A truncated dump must never be hashed as if it were a" >&2
+        echo "   smaller-but-valid schema; that would silently verify nothing." >&2
+        exit 1
+    fi
+
     # Filter out pg_dump 15.14+ security tokens (CVE-2025-8714): \restrict / \unrestrict lines whose
     # random keys change on every dump. This filter's own exit status is DELIBERATELY not checked
     # (kept under `local dump=$(...)`, which masks it): grep -v exits 1 if it filters out every line,
@@ -159,8 +197,177 @@ get_schema_hash() {
     echo "$dump" | head -50 >&2
     echo "..." >&2
 
-    # Calculate and return hash
+    # Calculate and return hash. This hash is comparable ONLY across calls within the same script
+    # run: it is produced by one fixed $PG_DUMP binary dumping one server, so every comparison this
+    # suite makes (test_idempotency's hash1/hash2; test_rollback's hash_baseline/hash_reapplied) is
+    # between two dumps from that SAME client/server pair. It is never persisted or compared across
+    # separate invocations, PostgreSQL versions, or pg_dump client versions, and must not be treated
+    # as stable if it ever is. `$dump`'s line order is exactly pg_dump's own output order — never
+    # sorted — since re-ordering could mask a genuine ordering-sensitive schema difference (e.g.
+    # column order).
     echo "$dump" | md5sum | cut -d' ' -f1
+}
+
+# =============================================================================
+# Full-schema object inventory — for test_rollback's clean-state check
+# =============================================================================
+#
+# get_schema_hash above intentionally scopes pg_dump to --schema=public, which is correct for
+# comparing the public application schema across two `up` runs (Test 1) or across up->down->up
+# (Test 5's baseline/reapplied hash) — but --schema=public makes PostgreSQL's own pg_dump silently
+# omit non-schema-scoped objects entirely. Extensions are the clearest case: `CREATE EXTENSION
+# pg_trgm` never appears in a --schema=public dump even though 000101_merchant_name_handling.up.sql
+# creates it and its own down.sql deliberately does not drop it (comment there: "pg_trgm extension
+# is not dropped here since other features may use it"). That made the OLD clean-state check
+# (`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name !=
+# 'schema_migrations'`) blind on two separate axes: it only ever looked at TABLES (never functions,
+# extensions, types, triggers, ...), and even a full pg_dump-based check scoped to --schema=public
+# would still miss extensions specifically, for the reason above.
+#
+# get_full_object_inventory therefore drops --schema=public entirely and instead excludes exactly
+# the schema_migrations object via pg_dump's own --exclude-table=public.schema_migrations (a
+# dependency-aware exclusion of one named object, not a text-grep that could also eat unrelated
+# lines that happen to match).
+#
+# What this covers, stated honestly: every object pg_dump emits one of its own
+# "-- Name: X; Type: Y; Schema: Z; Owner: -" TOC header comments for, which — per direct inspection
+# of real dumps taken while building this, not just documentation — includes tables, sequences,
+# functions, types, triggers, indexes, constraints, extensions, and comments-on-objects; pg_dump's
+# TOC header format is generic across every object kind it supports, so this is NOT a hand-picked
+# list of object types we maintain (which the earlier table-only check effectively was) — it is
+# whatever pg_dump itself considers a distinct, nameable object. This was NOT independently
+# verified against pg_dump's own source for completeness across every object kind (policies,
+# materialized views, domains, collations, operator classes were not each individually produced
+# and confirmed in a test dump here) — only extensions, tables, sequences, functions, types,
+# triggers, indexes, and constraints were. It does not cover cluster-level objects (roles,
+# tablespaces), which pg_dump never dumps by default and which this suite has never claimed to
+# check.
+extract_object_identities() {
+    printf '%s\n' "$1" \
+        | grep -oE '^-- Name: .+; Type: [A-Z ]+; Schema: [^;]*; Owner: -$' \
+        | sed -E 's/^-- Name: (.+); Type: ([A-Z ]+); Schema: [^;]*; Owner: -$/\2 \1/' \
+        | grep -v '^COMMENT ' \
+        | sort -u
+}
+
+get_full_object_inventory() {
+    local raw_dump
+    local dump_exit=0
+    raw_dump=$("$PG_DUMP" "$DATABASE_URL" --schema-only --no-owner --no-privileges \
+        --exclude-table=public.schema_migrations 2>/dev/null) || dump_exit=$?
+
+    if [ "$dump_exit" -ne 0 ]; then
+        echo "❌ get_full_object_inventory: pg_dump FAILED (exit code $dump_exit)." >&2
+        exit 1
+    fi
+
+    # Here-string, not `printf | grep -q` — see get_schema_hash's identical check above for why
+    # (a piped grep -q that exits early on a match can SIGPIPE a still-writing large producer,
+    # which pipefail then reports as this check's own failure; reproduced for real on this dump).
+    if ! grep -q '^-- PostgreSQL database dump complete$' <<< "$raw_dump"; then
+        echo "❌ get_full_object_inventory: pg_dump output has no completion trailer — it died" >&2
+        echo "   mid-stream. A truncated dump must never be treated as 'the schema has fewer" >&2
+        echo "   objects'; it means pg_dump itself failed partway through." >&2
+        exit 1
+    fi
+
+    extract_object_identities "$raw_dump"
+}
+
+# Allowlist of residue that a migration DELIBERATELY retains across a full rollback, each entry
+# tagged with why. Two parallel indexed arrays, not `declare -A`: this repo's devs and CI runner
+# use macOS's shipped bash 3.2 (see scripts/pg_dump-via-docker's own comment on the same
+# constraint), which has no associative arrays.
+ROLLBACK_ALLOWLIST_KEYS=(
+    "EXTENSION pg_trgm"
+)
+ROLLBACK_ALLOWLIST_REASONS=(
+    "000101_merchant_name_handling.down.sql deliberately does not drop pg_trgm (comment: other features may use it)"
+)
+
+is_allowlisted_residue() {
+    local key="$1" i
+    for i in "${!ROLLBACK_ALLOWLIST_KEYS[@]}"; do
+        [ "${ROLLBACK_ALLOWLIST_KEYS[$i]}" = "$key" ] && return 0
+    done
+    return 1
+}
+
+allowlist_reason_for() {
+    local key="$1" i
+    for i in "${!ROLLBACK_ALLOWLIST_KEYS[@]}"; do
+        if [ "${ROLLBACK_ALLOWLIST_KEYS[$i]}" = "$key" ]; then
+            printf '%s' "${ROLLBACK_ALLOWLIST_REASONS[$i]}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# assert_clean_rollback_state PRE_INVENTORY POST_INVENTORY
+#
+# PRE_INVENTORY: get_full_object_inventory captured right after clean_database, BEFORE the first
+# `up` in this run — i.e. whatever was already in the database, if anything, before this suite
+# touched it. In this suite's actual flow that is always empty, because clean_database's
+# `DROP SCHEMA public CASCADE` always cascade-drops any pre-existing extension too (verified
+# empirically: CREATE EXTENSION pg_trgm, then DROP SCHEMA public CASCADE, leaves pg_extension with
+# zero pg_trgm rows) — but the comparison below is written to be correct regardless, and is
+# exercised against BOTH provenances by scripts/__tests__/rollback-residue.test.sh with synthetic
+# inventories, since the live DB path can only ever exercise the "absent before" case.
+# POST_INVENTORY: get_full_object_inventory captured after `down -all`.
+#
+# This is deliberately TWO checks, not one "the diff must equal the allowlist" set-equality —
+# because a single strict-equality check on the pre/post DIFF breaks depending on whether the
+# retained object already existed before the first `up`:
+#   Case 1 (pg_trgm absent before the first up): pg_trgm appears only in POST -> it IS residue
+#     caused by this run's up/down cycle -> the diff is {EXTENSION pg_trgm}, correctly equal to
+#     the allowlist.
+#   Case 2 (pg_trgm already installed before the first up, e.g. ambient state on a shared DB):
+#     pg_trgm appears in BOTH PRE and POST -> the diff is EMPTY (this run left nothing new behind)
+#     -> a strict "diff == allowlist" check would wrongly FAIL here, because {} != {EXTENSION
+#     pg_trgm}, even though nothing is actually wrong.
+#
+# Check A (unexpected new residue): every object in POST but not in PRE — i.e. every object this
+# run's up/down cycle actually left behind — must be on the allowlist. Anything else fails. This is
+# what catches update_updated_at_column() surviving 000001's rollback (before that was fixed), or
+# any future stray object.
+#
+# Check B (stale allowlist entries): every allowlisted object must still actually be present in
+# POST. This deliberately does NOT use the PRE/POST diff (which would reintroduce the Case-2
+# problem above) — it only asks "is the allowlisted object still there after rollback," which is
+# true in both provenance cases whenever the allowlist entry is still accurate. If some future fix
+# makes a migration's .down.sql actually drop what it used to leave behind, the allowlist entry
+# becomes stale and this check fails, forcing the comment to be pruned rather than silently
+# rotting into a false permission for residue that no longer exists.
+assert_clean_rollback_state() {
+    local pre_inventory="$1" post_inventory="$2"
+    local new_residue line ok=true
+
+    new_residue=$(comm -13 <(printf '%s\n' "$pre_inventory") <(printf '%s\n' "$post_inventory"))
+    if [ -n "$new_residue" ]; then
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            if is_allowlisted_residue "$line"; then
+                log_warning "Rollback left allowlisted residue: $line ($(allowlist_reason_for "$line"))"
+            else
+                fail_test "Rollback left unexpected residue not on the allowlist: $line"
+                ok=false
+            fi
+        done <<< "$new_residue"
+    fi
+
+    local i entry
+    for i in "${!ROLLBACK_ALLOWLIST_KEYS[@]}"; do
+        entry="${ROLLBACK_ALLOWLIST_KEYS[$i]}"
+        # Here-string, not `printf | grep -qxF` — see get_schema_hash's trailer check for why a
+        # piped grep that can exit early is a pipefail/SIGPIPE race against a live producer.
+        if ! grep -qxF "$entry" <<< "$post_inventory"; then
+            fail_test "Allowlist entry '$entry' is stale — not actually present after rollback (${ROLLBACK_ALLOWLIST_REASONS[$i]}); remove it from ROLLBACK_ALLOWLIST_KEYS or fix whatever stopped retaining it"
+            ok=false
+        fi
+    done
+
+    [ "$ok" = true ]
 }
 
 # Clean database (drop all tables and golang-migrate tracking)
@@ -175,11 +382,6 @@ clean_database() {
 apply_migrations() {
     local start_time=$(date +%s)
 
-    # Get absolute path to migrations directory
-    local abs_migrations_dir
-    local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    abs_migrations_dir="$project_root/backend/migrations"
-
     # NOTE: Errors visible for debugging - previously silenced with > /dev/null 2>&1
     # golang-migrate requires -database and -path flags
     #
@@ -189,7 +391,7 @@ apply_migrations() {
     # idempotency and performance suites then reported PASSED, because comparing two
     # never-populated schemas trivially succeeds. A migration safety net that goes green when the
     # migrations did not run is worse than no net.
-    if ! migrate -database "$DATABASE_URL" -path "$abs_migrations_dir" up; then
+    if ! migrate -database "$DATABASE_URL" -path "$ABS_MIGRATIONS_DIR" up; then
         echo "❌ apply_migrations: 'migrate up' FAILED — aborting rather than testing an unmigrated schema." >&2
         echo "   A common cause is a DATABASE_URL missing '?sslmode=disable'." >&2
         exit 1
@@ -205,16 +407,11 @@ apply_migrations() {
 rollback_migrations() {
     local start_time=$(date +%s)
 
-    # Get absolute path to migrations directory
-    local abs_migrations_dir
-    local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    abs_migrations_dir="$project_root/backend/migrations"
-
     # Rollback all migrations using -all flag
     # golang-migrate executes SQL directly without static analysis limitations
     local rollback_output
     local error_type="none"
-    rollback_output=$(migrate -database "$DATABASE_URL" -path "$abs_migrations_dir" down -all 2>&1) || {
+    rollback_output=$(migrate -database "$DATABASE_URL" -path "$ABS_MIGRATIONS_DIR" down -all 2>&1) || {
         error_type="other"
         echo "$rollback_output" >&2
     }
@@ -240,12 +437,13 @@ test_idempotency() {
 
     # First application
     log_info "Applying migrations (1st time)..."
-    # `$?` here would ALWAYS be 0 (that's the exit status of the `local` builtin, not of
-    # apply_migrations — see the root-cause note by PG_DUMP above). apply_migrations only ever
-    # produces empty stdout via its internal `exit 1` before it reaches its own `echo "$duration"`,
-    # so checking for that emptiness is what actually detects a failed apply here.
-    local duration1=$(apply_migrations)
-    if [ -z "$duration1" ]; then
+    # `local duration1=$(apply_migrations)` would mask apply_migrations' real exit status behind
+    # `local`'s own (always-0) status — confirmed empirically: `set -e; local f() { local x=$(false); }`
+    # never aborts, vs. a bare `x=$(false)` which does. Declaring `local` on its own line first,
+    # then assigning in a plain `if !` test, makes the check live: bash treats that assignment's
+    # own exit status as testable.
+    local duration1
+    if ! duration1=$(apply_migrations); then
         fail_test "First migration application failed"
         return 1
     fi
@@ -253,8 +451,8 @@ test_idempotency() {
 
     # Capture schema hash
     log_info "Capturing schema hash..."
-    local hash1=$(get_schema_hash)
-    if [ -z "$hash1" ]; then
+    local hash1
+    if ! hash1=$(get_schema_hash); then
         fail_test "Failed to capture schema hash after first application"
         return 1
     fi
@@ -262,9 +460,9 @@ test_idempotency() {
 
     # Second application (idempotency test)
     log_info "Applying migrations (2nd time - idempotency test)..."
-    # See note above duration1: `$?` is always 0 here (masked by `local`); check emptiness instead.
-    local duration2=$(apply_migrations)
-    if [ -z "$duration2" ]; then
+    # Same masked-local fix as duration1 above.
+    local duration2
+    if ! duration2=$(apply_migrations); then
         fail_test "Second migration application failed - migrations are NOT idempotent!"
         log_error "This likely means migrations lack IF NOT EXISTS guards"
         log_error "See migrations 000013, 000015 for good idempotency patterns"
@@ -274,8 +472,8 @@ test_idempotency() {
 
     # Capture schema hash again
     log_info "Capturing schema hash (2nd)..."
-    local hash2=$(get_schema_hash)
-    if [ -z "$hash2" ]; then
+    local hash2
+    if ! hash2=$(get_schema_hash); then
         fail_test "Failed to capture schema hash after second application"
         return 1
     fi
@@ -338,10 +536,24 @@ test_performance() {
     clean_database
 
     # Time the migration application
+    #
+    # This used to be `duration_output=$(apply_migrations 2>&1)` — a BARE assignment (no `local`
+    # on the same line) — followed by `local apply_exit_code=$?` and an `if [ $apply_exit_code -ne
+    # 0 ]` check. That check was dead code: under `set -euo pipefail`, a bare `var=$(cmd)` whose
+    # command substitution fails aborts the WHOLE SCRIPT right there (confirmed empirically:
+    # `set -e; x=$(false); echo reached` never prints "reached", exits 1 immediately) — so
+    # `apply_exit_code=$?` could never be reached on the failure path it existed to check. The
+    # non-negated `if cmd; then ... else ... fi` form below is what actually makes this live: bash
+    # evaluates the assignment's exit status as the `if`'s condition, which suppresses `set -e`
+    # for exactly this one command, and `$?` inside the `else` branch is the real exit code.
     local start_time=$(date +%s)
     local duration_output
-    duration_output=$(apply_migrations 2>&1)
-    local apply_exit_code=$?
+    local apply_exit_code
+    if duration_output=$(apply_migrations 2>&1); then
+        apply_exit_code=0
+    else
+        apply_exit_code=$?
+    fi
     local end_time=$(date +%s)
     local total_duration=$((end_time - start_time))
 
@@ -377,7 +589,7 @@ test_performance() {
   "threshold_warn_seconds": $PERF_WARN_THRESHOLD,
   "threshold_fail_seconds": $PERF_FAIL_THRESHOLD,
   "status": "$perf_status",
-  "migrations_count": $(ls -1 "$MIGRATIONS_DIR"/*.up.sql 2>/dev/null | wc -l | tr -d ' ')
+  "migrations_count": $(ls -1 "$ABS_MIGRATIONS_DIR"/*.up.sql 2>/dev/null | wc -l | tr -d ' ')
 }
 EOF
 
@@ -567,8 +779,6 @@ EOF
     # to `boosts` (column rule_type → boost_type) by migration 000095. We cannot replay the
     # historical file against the renamed schema; instead we run an equivalent inline query.
     log_info "Applying backfill migrations against seeded data (000070-equivalent, 000072)..."
-    local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    local abs_migrations_dir="$project_root/backend/migrations"
 
     # 000070-equivalent: backfill user_account_id keys into boosts JSONB columns.
     # Mirrors the original three UPDATE steps from 000070_backfill_user_account_id_in_rules.up.sql
@@ -628,7 +838,7 @@ BACKFILL_SQL
 
     # Same ON_ERROR_STOP gap as above applies to -f script invocations; -v ON_ERROR_STOP=1 is the
     # command-line equivalent (the migration file itself is a versioned artifact, not edited here).
-    if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$abs_migrations_dir/000072_backfill_user_account_id_in_categorization_rule_conditions.up.sql"; then
+    if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ABS_MIGRATIONS_DIR/000072_backfill_user_account_id_in_categorization_rule_conditions.up.sql"; then
         fail_test "Failed to apply migration 000072 backfill against seeded data: check stderr above for the specific SQL error"
         return 1
     fi
@@ -847,8 +1057,21 @@ test_schema_constraints() {
 # =============================================================================
 # Test 5: Rollback Testing
 # =============================================================================
-# Purpose: Verify that rollback migrations (.down.sql) correctly reverse
-#          the forward migrations (.up.sql), enabling safe rollbacks in production
+# Purpose: Check that a full up→down→up round-trip is schema-neutral (the public schema hash
+#          before rollback matches the hash after re-applying), and that rollback leaves no
+#          residue beyond a fixed, named allowlist.
+#
+# What this does NOT prove, stated explicitly because it is easy to over-read the PASSED message:
+#   - It does NOT prove each individual .down.sql correctly reverses its own .up.sql. A LATER
+#     migration's .down.sql can remove residue an EARLIER one left behind (or vice versa mask it),
+#     and a full down→up→up cycle would still land on the same final schema. Proving per-pair
+#     reversal would mean comparing schema(N-1) against schema(apply N, then down N) for every N —
+#     not implemented here (130 migrations × a full cycle each is a lot of runtime for CI to pay on
+#     every PR); this is a real gap, not a hedge.
+#   - It does NOT prove DATA survives a rollback. Every check in this test is schema-only
+#     (pg_dump --schema-only / object-identity inventories); no row data is compared before and
+#     after. A .down.sql that DROPs a table and its .up.sql recreates it empty would pass this test
+#     while losing every row.
 
 test_rollback() {
     log_section "TEST 5: ROLLBACK TESTING"
@@ -860,14 +1083,26 @@ test_rollback() {
     # Clean start
     clean_database
 
+    # Capture the full-schema object inventory BEFORE the first `up` in this run — i.e. whatever
+    # was already in the database, if anything, right after clean_database. Used by
+    # assert_clean_rollback_state below to tell "residue THIS run's up/down cycle left behind" apart
+    # from "state that was already there before we touched anything" (see that function's comment
+    # for why the distinction matters).
+    log_info "Capturing pre-migration object inventory (rollback baseline)..."
+    local pre_up_inventory
+    if ! pre_up_inventory=$(get_full_object_inventory); then
+        fail_test "Failed to capture pre-migration object inventory for rollback test"
+        return 1
+    fi
+
     # Step 1: Apply all migrations (forward)
     log_info "Step 1: Applying all migrations (forward)..."
-    # `local apply_duration=$(apply_migrations)` masks apply_migrations' exit status behind
-    # `local`'s own (always-0) status. There was previously NO check at all here — R3-2. As with
-    # test_idempotency, checking for empty stdout is what actually detects a failed apply, since
-    # apply_migrations only ever produces empty stdout via its internal `exit 1`.
-    local apply_duration=$(apply_migrations)
-    if [ -z "$apply_duration" ]; then
+    # `local apply_duration=$(apply_migrations)` would mask apply_migrations' real exit status
+    # behind `local`'s own (always-0) status — see test_idempotency's duration1 comment for the
+    # empirical confirmation. Declaring `local` separately, then checking the plain assignment in
+    # `if !`, makes this live.
+    local apply_duration
+    if ! apply_duration=$(apply_migrations); then
         fail_test "Migration application failed during rollback test (forward step)"
         return 1
     fi
@@ -875,11 +1110,8 @@ test_rollback() {
 
     # Capture baseline schema hash
     log_info "Capturing baseline schema hash..."
-    # Same masking issue as above, for get_schema_hash — R3-1. get_schema_hash only ever produces
-    # empty stdout via its internal `exit 1` guards, so an empty hash here means it failed, not
-    # that the schema is somehow empty (see get_schema_hash's own comments).
-    local hash_baseline=$(get_schema_hash)
-    if [ -z "$hash_baseline" ]; then
+    local hash_baseline
+    if ! hash_baseline=$(get_schema_hash); then
         fail_test "Failed to capture baseline schema hash for rollback test"
         return 1
     fi
@@ -900,24 +1132,28 @@ test_rollback() {
 
     log_success "Migrations rolled back in ${rollback_duration}s"
 
-    # Verify clean state (only schema_migrations tracking table should remain)
-    log_info "Verifying clean state after rollback..."
-    local tables_after_rollback=$(run_psql "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name != 'schema_migrations'")
-
-    if [ "$tables_after_rollback" != "0" ]; then
-        fail_test "Rollback incomplete - $tables_after_rollback application tables still exist"
-        log_error "Expected: 0 tables, Found: $tables_after_rollback tables"
+    # Verify clean state after rollback: every object THIS cycle left behind that wasn't already
+    # there before Step 1 must be on the fixed allowlist above (see assert_clean_rollback_state for
+    # the two-check design and why it isn't a single "diff == allowlist" set-equality).
+    log_info "Verifying clean state after rollback (full object inventory, not just tables)..."
+    local post_rollback_inventory
+    if ! post_rollback_inventory=$(get_full_object_inventory); then
+        fail_test "Failed to capture post-rollback object inventory for rollback test"
         return 1
     fi
 
-    log_success "Clean state verified (0 application tables)"
+    if ! assert_clean_rollback_state "$pre_up_inventory" "$post_rollback_inventory"; then
+        fail_test "Rollback left residue outside the allowlist — see errors above"
+        return 1
+    fi
+
+    log_success "Clean state verified (no unallowlisted residue across the full object inventory)"
     echo ""
 
     # Step 3: Re-apply all migrations (forward again)
     log_info "Step 3: Re-applying all migrations (forward)..."
-    # See note on the Step 1 apply_duration above — same masked-guard fix (R3-2).
-    local reapply_duration=$(apply_migrations)
-    if [ -z "$reapply_duration" ]; then
+    local reapply_duration
+    if ! reapply_duration=$(apply_migrations); then
         fail_test "Migration re-application failed during rollback test (reverse step)"
         return 1
     fi
@@ -925,11 +1161,8 @@ test_rollback() {
 
     # Capture final schema hash
     log_info "Capturing final schema hash..."
-    # See note on hash_baseline above — same masked-guard fix (R3-1). This is the specific defect:
-    # previously BOTH hash_baseline and hash_reapplied could be empty (unchecked) and "" = ""
-    # printed ROLLBACK TEST PASSED having verified nothing.
-    local hash_reapplied=$(get_schema_hash)
-    if [ -z "$hash_reapplied" ]; then
+    local hash_reapplied
+    if ! hash_reapplied=$(get_schema_hash); then
         fail_test "Failed to capture final schema hash for rollback test"
         return 1
     fi
@@ -941,9 +1174,12 @@ test_rollback() {
 
     if [ "$hash_baseline" = "$hash_reapplied" ]; then
         echo ""
-        pass_test "ROLLBACK TEST PASSED - Schema identical after up→down→up cycle"
-        log_success "✓ All .down.sql migrations correctly reverse their .up.sql counterparts"
-        log_success "✓ Rollback capability verified for production use"
+        pass_test "ROLLBACK TEST PASSED - Public schema hash identical after up→down→up cycle"
+        log_success "✓ A full down→up round-trip is schema-neutral for the public schema"
+        log_success "✓ No unallowlisted residue found across the full (non-public-scoped) object inventory"
+        log_warning "This does NOT prove each .down.sql individually reverses its own .up.sql (a later"
+        log_warning ".down.sql could mask an earlier one's incomplete reversal), and does NOT prove"
+        log_warning "data survives a rollback (every check here is schema-only, no row data compared)."
         return 0
     else
         echo ""
@@ -963,12 +1199,16 @@ main() {
     log_section "MIGRATION TESTING FRAMEWORK"
     log_info "Issue #326: Comprehensive Migration Testing (golang-migrate + Squawk)"
     log_info "Database: $DATABASE_URL"
-    log_info "Migrations: $MIGRATIONS_DIR"
+    # Log the RESOLVED absolute path (what every migrate/psql -f call site below actually uses),
+    # not the raw possibly-relative MIGRATIONS_DIR config value — see ABS_MIGRATIONS_DIR's
+    # definition above for why: logging the raw value while migrating a different resolved path
+    # was exactly the previous bug (Task S3-6).
+    log_info "Migrations: $ABS_MIGRATIONS_DIR (from MIGRATIONS_DIR=$MIGRATIONS_DIR)"
     echo ""
 
     # Check prerequisites
-    if [ ! -d "$MIGRATIONS_DIR" ]; then
-        log_error "Migrations directory not found: $MIGRATIONS_DIR"
+    if [ ! -d "$ABS_MIGRATIONS_DIR" ]; then
+        log_error "Migrations directory not found: $ABS_MIGRATIONS_DIR"
         exit 1
     fi
 
@@ -1046,11 +1286,22 @@ main() {
         exit 1
     else
         log_success "ALL MIGRATION TESTS PASSED"
-        log_success "Migrations are safe to deploy"
+        # NOT "safe to deploy" / "safe for production" unconditionally: this suite checks
+        # idempotency, timing, row-count + JSONB-backfill preservation for ONE seeded fixture set,
+        # expected-table/index/FK/constraint presence, and rollback schema-neutrality (see
+        # test_rollback's own comment for what that test explicitly does not prove — per-pair
+        # .down.sql correctness, or that a rollback preserves REAL production data).
+        log_success "All automated migration checks passed for this run"
         echo ""
         exit 0
     fi
 }
 
-# Run main function
-main
+# Only run main when executed directly (`./test-migrations.sh ...` or `bash test-migrations.sh`),
+# not when sourced — mirrors the same BASH_SOURCE guard in scripts/pg_dump-via-docker, and for the
+# same reason: this lets scripts/__tests__/rollback-residue.test.sh source this file to call
+# extract_object_identities/assert_clean_rollback_state/is_allowlisted_residue directly, with
+# synthetic inventory strings, without touching a real database or running the full suite.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main
+fi

@@ -268,30 +268,53 @@ Check for missing IF NOT EXISTS guards on:
 
 ### Test 5: Rollback Testing
 
-**Purpose:** Validate that .up/.down migration pairs work correctly and enable safe production rollbacks
+**Purpose:** Check that a full up→down→up round-trip is schema-neutral, and that rollback leaves
+no unaccounted-for residue (beyond a small, explicitly named allowlist — see
+`scripts/test-migrations.sh`'s `ROLLBACK_ALLOWLIST_KEYS`).
 
 **How It Works:**
 1. Apply all migrations (forward .up.sql files)
-2. Capture baseline schema hash
-3. Rollback all migrations (reverse .down.sql files to version 0)
-4. Verify clean state (only schema_migrations table remains)
-5. Re-apply all migrations (forward again)
-6. Capture reapplied schema hash
-7. Compare hashes → must be identical
+2. Capture a full object inventory (tables, extensions, functions, etc. — not just the public
+   schema) as a pre-migration baseline
+3. Apply all migrations, capture baseline schema hash (public schema only)
+4. Rollback all migrations (reverse .down.sql files to version 0)
+5. Capture a full object inventory again and compare against the pre-migration baseline: any
+   object left behind by this cycle must be on the fixed allowlist, and every allowlisted object
+   must actually still be present (catching a stale allowlist entry too)
+6. Re-apply all migrations (forward again)
+7. Capture reapplied schema hash
+8. Compare hashes → must be identical
+
+**What this does NOT prove** (stated explicitly, because the PASSED message is easy to over-read):
+- It does **not** prove that each individual `.down.sql` correctly reverses its own `.up.sql`. A
+  later migration's `.down.sql` can remove residue an earlier one left, or vice versa, and a full
+  down→up→up cycle can still land on the same final schema. Proving per-migration-pair reversal
+  would mean comparing `schema(N-1)` against `schema(apply N, then down N)` for every migration N —
+  not implemented (130 migrations × a full cycle each is a lot of CI runtime to pay on every PR).
+- It does **not** prove data survives a rollback. Every check here is schema/object-identity only;
+  no row data is ever compared before and after. A `.down.sql` that drops a table and whose
+  `.up.sql` recreates it empty would pass this test while losing every row.
 
 **Why It Matters:**
-- Enables rapid recovery from bad migrations (MTTR: 30-60 min → <5 min)
-- Validates that rollback migrations accurately reverse forward migrations
-- Catches destructive rollbacks that lose data
-- Ensures production rollback confidence (99%+ success rate vs ~70% manual)
+- Enables rapid recovery from bad migrations by giving SOME automated confidence before a manual
+  rollback, rather than none
+- Checks that a full down→up round-trip is schema-neutral for the public schema
+- Catches unexpected residue (extra tables, functions, extensions, etc.) left behind after a
+  rollback, outside a small named allowlist of deliberately-retained objects
+- Does **not** catch data loss from a rollback (see above) — there is no MTTR or success-rate figure
+  backing this test; none has been measured, and none is claimed here
 
 **Success Criteria:**
 ```
 ✅ All migrations rolled back to version 0
-✅ Clean state verified (no leftover tables/constraints)
+✅ Clean state verified (full object inventory — tables, extensions, functions, etc. — not just
+   tables/constraints — against a small named allowlist of deliberately-retained objects)
 ✅ Schema hash after up→down→up cycle matches baseline
-✅ Rollback capability: 100% (all 15 migrations have .down.sql files)
 ```
+(The old "Rollback capability: 100% (all 15 migrations have .down.sql files)" line above was
+stale — this repo has 130+ migrations now, not 15 — and is removed rather than updated with a new
+number that would just go stale again the same way; `ls backend/migrations/*.down.sql | wc -l`
+gives the current count directly.)
 
 **Failure Example:**
 
