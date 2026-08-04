@@ -1315,23 +1315,48 @@ jobs:
           # (no Homebrew, no network) while not breaking a currently-working one over a version
           # this step was never actually the load-bearing guard for.
           if [ -z "$POSTGRES_BIN" ]; then
-            echo "::notice::No PostgreSQL >= $REQUIRED_MAJOR client found — attempting brew install postgresql@$REQUIRED_MAJOR"
-            brew install "postgresql@$REQUIRED_MAJOR" || true
-            POSTGRES_BIN="$(find_postgres17_bin)" || true
+            # `brew` is NOT on this runner's PATH (measured: "line 71: brew: command not found"
+            # on runner-4), so try its two standard locations explicitly rather than assuming
+            # the shim is resolvable. If none is present, skip the install attempt instead of
+            # emitting a misleading "attempting brew install" notice that cannot succeed.
+            BREW_BIN=""
+            for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+              [ -x "$candidate" ] && BREW_BIN="$candidate" && break
+            done
+            if [ -n "$BREW_BIN" ]; then
+              echo "::notice::No PostgreSQL >= $REQUIRED_MAJOR client found — attempting $BREW_BIN install postgresql@$REQUIRED_MAJOR"
+              "$BREW_BIN" install "postgresql@$REQUIRED_MAJOR" || true
+              POSTGRES_BIN="$(find_postgres17_bin)" || true
+            else
+              echo "::notice::No PostgreSQL >= $REQUIRED_MAJOR client found and no brew executable at /opt/homebrew/bin/brew or /usr/local/bin/brew — skipping the install attempt."
+            fi
           fi
 
-          if [ -z "$POSTGRES_BIN" ]; then
-            echo "::error::PostgreSQL >= $REQUIRED_MAJOR client not found, and installing postgresql@$REQUIRED_MAJOR via Homebrew did not produce one"
-            echo "::error::Install manually: brew install postgresql@$REQUIRED_MAJOR"
+          # A host client BELOW $REQUIRED_MAJOR is a WARNING, not a failure — and this is the
+          # correction to a regression this workflow shipped once already. The reasoning that
+          # justified failing hard ("a <17 client is useless here") is wrong for THIS job: the
+          # "Run comprehensive migration tests" step sets PG_DUMP=scripts/pg_dump-via-docker,
+          # and that wrapper `exec docker exec`s into the CONTAINER's pg_dump (see its main()),
+          # so the pg_dump that produces every schema hash is always the container's 17 — the
+          # host client this step resolves is never the one dumping. The host `psql` is used
+          # only for ordinary queries against the container, which an older major does fine.
+          #
+          # Failing hard therefore gated the job on a binary it does not depend on, and did
+          # break it: this runner has no PostgreSQL >= 17 and no brew on PATH, so a previously
+          # green job went red. Warning keeps the property that actually mattered — no SILENT
+          # acceptance of an old client — without inventing a requirement.
+          #
+          # The genuine requirement is that SOME psql exists, since test-migrations.sh cannot
+          # run without one. That, and only that, is still fatal.
+          if [ -n "$POSTGRES_BIN" ]; then
+            echo "$POSTGRES_BIN" >> $GITHUB_PATH
+            echo "::notice::PostgreSQL client $("$POSTGRES_BIN/psql" --version | cut -d' ' -f3) at $POSTGRES_BIN"
+          elif command -v psql &> /dev/null && command -v pg_dump &> /dev/null; then
+            echo "::warning::No PostgreSQL >= $REQUIRED_MAJOR client on this runner; proceeding with $(psql --version | cut -d' ' -f3) on PATH. Schema dumps are unaffected — the migration-tests step overrides PG_DUMP to scripts/pg_dump-via-docker, which runs the container's own pg_dump $REQUIRED_MAJOR. Install postgresql@$REQUIRED_MAJOR to silence this."
+          else
+            echo "::error::No PostgreSQL client (psql/pg_dump) found at all — scripts/test-migrations.sh cannot run. Install postgresql@$REQUIRED_MAJOR."
             exit 1
           fi
-
-          if ! check_client_version "$POSTGRES_BIN/psql"; then
-            exit 1
-          fi
-
-          echo "$POSTGRES_BIN" >> $GITHUB_PATH
-          echo "::notice::PostgreSQL ($("$POSTGRES_BIN/psql" --version | cut -d' ' -f3)) at $POSTGRES_BIN"
           echo "::endgroup::"
 
       - name: Start PostgreSQL container
