@@ -86,9 +86,25 @@ type AdminSubscriptionDetailOutput struct {
 		// AsOf is the server instant EffectiveTier/EffectiveStatus above were computed from
 		// (Issue #1462) — a single snapshot the client can anchor its own override-liveness
 		// arithmetic to (isOverrideActive/getOverrideStatus in SubscriptionOverrideModal.tsx)
-		// instead of the browser's own clock, so the chip and the effective-status badge cannot
-		// disagree with the server (or each other) due to client/server clock skew or request
-		// latency near an expiry boundary.
+		// instead of the browser's own clock, avoiding client/server clock skew.
+		//
+		// Batch S2 Task 2 correction: the ONLY defensible claim here is that all expiry/liveness
+		// predicates in THIS response were evaluated against the same asOf parameter — a previous
+		// version of this comment overclaimed that the chip and the effective-status badge
+		// "cannot disagree with the server (or each other)". That is false on two counts this
+		// field does not fix:
+		//   1. as_of is NOT a historical/transactional snapshot of the whole response. EffectiveTier,
+		//      EffectiveStatus, ResourceOverrides, and ActiveOverridesCount above are each populated
+		//      by SEPARATE live queries/computations that merely share this one instant as a filter
+		//      parameter — they are not read inside a single transaction. An override created (or a
+		//      tier changed) AFTER asOf but before one of those later reads completes will still show
+		//      up, because none of these queries filter on created_at/updated_at <= asOf, only on
+		//      expiry.
+		//   2. asOf is NOT equivalent to a database NOW(): NOW() is Postgres's transaction-start
+		//      time; asOf is a Go-process wall-clock read (time.Now()) captured BEFORE any of this
+		//      handler's DB I/O runs. The two can and do disagree by however long that I/O takes —
+		//      this skew is intentional (asOf anchors the CLIENT's rendering, not the database's
+		//      internal transaction bookkeeping), not a bug to fix by trying to make them equal.
 		AsOf time.Time `json:"as_of"`
 	}
 }
@@ -206,6 +222,17 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 		// fresh clock through domain.User.EffectiveTierWithActiveOverride(), so a request crossing
 		// an override's expiry boundary between asOf's capture and this call could return an
 		// effective_tier describing a later instant than as_of/effective_status.
+		//
+		// Batch S2 Task 1 closed a residual of this same bug class one layer down: when a
+		// household entitlement resolver is wired (main.go's production wiring, unconditional for
+		// every request, not only household members), GetEffectiveSubscriptionAt used to have its
+		// asOf-derived tier UNCONDITIONALLY OVERWRITTEN by
+		// HouseholdEntitlementResolver.ResolveEffectiveEntitlement(ctx, user), which had no instant
+		// parameter of its own and fell back to ITS OWN internal time.Now(). That is now threaded
+		// through via ResolveEffectiveEntitlementAt(ctx, user, asOf) — see that method's doc
+		// comment (household_entitlement_service.go) — so this call's `asOf` genuinely reaches
+		// every tier computation this response depends on, not just the tier-axis's own top-level
+		// override check.
 		effectiveSub, err = h.subService.GetEffectiveSubscriptionAt(ctx, userObj, asOf)
 		if err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to calculate effective limits: %w", err))
@@ -218,9 +245,15 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 		}
 	}
 
+	// Batch S2 Task 2: GetUserOverridesAt(ctx, userObj.ID, asOf) — not the no-arg GetUserOverrides
+	// — so this list filters against the exact SAME instant already captured above as `asOf` and
+	// used by GetEffectiveSubscriptionAt's own internal GetActiveOverrides call (which backs
+	// active_overrides_count/limits below). Before this fix, this was a second, independent
+	// NOW()-filtered query — theoretically able to disagree with active_overrides_count in the
+	// very same response if an override's expiry fell between the two live reads.
 	overrides := []domain.UserSubscriptionOverride{}
 	if h.subService != nil {
-		if o, _ := h.subService.GetUserOverrides(ctx, userObj.ID); o != nil {
+		if o, _ := h.subService.GetUserOverridesAt(ctx, userObj.ID, asOf); o != nil {
 			overrides = o
 		}
 	}

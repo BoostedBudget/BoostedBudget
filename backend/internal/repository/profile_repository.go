@@ -1082,7 +1082,17 @@ func (r *profileRepository) CancelDeletion(ctx context.Context, userID string) e
 	return nil
 }
 
-// GetUsersScheduledForDeletion returns users whose deletion date has passed
+// GetUsersScheduledForDeletion returns users whose deletion date has passed.
+//
+// Batch S2 Task 4: this is an UNBOUNDED query — no LIMIT, and ORDER BY deletion_scheduled_at
+// with no id tie-breaker. Kept unchanged for its one remaining caller (workers.DeletionWorker,
+// internal/workers/deletion_worker.go) — a ticker-based worker that is NOT wired in main.go (dead
+// code; NewDeletionWorker has no call site) — so this method carries no live production traffic.
+// The live production path, ScheduledDeletionCheckWorker (internal/queue/jobs), now calls
+// GetUsersScheduledForDeletionPage below instead, which bounds each query and paginates via a
+// deterministic keyset cursor so a permanently-stuck oldest user (e.g. a continuously-renewed
+// admin comp) cannot starve later users out of every batch forever. See that method's doc
+// comment for the full rationale.
 func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
 	query := userSelectQuery + `
 		WHERE deletion_scheduled_at IS NOT NULL
@@ -1091,6 +1101,59 @@ func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([
 		ORDER BY deletion_scheduled_at ASC
 	`
 	return r.queryUsers(ctx, query, time.Now())
+}
+
+// DeletionSweepCursor is a keyset-pagination position for GetUsersScheduledForDeletionPage,
+// captured from the last row of the previous page — (ScheduledAt, UserID), matching that page's
+// ORDER BY (deletion_scheduled_at, id) ASC. A nil cursor starts from the beginning.
+type DeletionSweepCursor struct {
+	ScheduledAt time.Time
+	UserID      string
+}
+
+// GetUsersScheduledForDeletionPage returns up to `limit` users whose deletion_scheduled_at has
+// passed, ordered by (deletion_scheduled_at, id) ASC for deterministic keyset pagination — Batch
+// S2 Task 4 (Issue #1440/#1448 follow-up; same defect class as #1469/ItemCleanupCheck).
+//
+// GetUsersScheduledForDeletion above has NO LIMIT and orders by deletion_scheduled_at alone (no
+// id tie-breaker, so ties are not even deterministically ordered). That was harmless while this
+// query only fed a soft, reversible flow, but #1440 turned it into a REAL hard delete, and #1448
+// registered its caller with RunOnStart: true — so an unbounded result set is now unbounded
+// destructive work triggered on process start, with no deterministic order to reason about.
+//
+// A bare `LIMIT n` alone would trade one bug for a worse one: since this predicate does not care
+// WHY a user hasn't been deleted yet (only deletion_scheduled_at/is_deleted), a permanently- or
+// long-stuck oldest row (e.g. an admin comp continuously renewed after each scheduled deletion
+// date, or a linked_items cleanup that never finishes — see DeleteUserCascade's own guards) would
+// occupy a slot in the oldest-first page FOREVER, starving every user ranked past the page size
+// out of every single run. Keyset pagination fixes this: the caller (ScheduledDeletionCheckWorker)
+// loops pages within ONE run, advancing the cursor past whatever it just saw — including past a
+// stuck row — until a page comes back short (exhausted) or a total-processed safety cap is hit,
+// so later users are still reached in the SAME run a naive single bounded query would have
+// starved them in.
+func (r *profileRepository) GetUsersScheduledForDeletionPage(ctx context.Context, after *DeletionSweepCursor, limit int) ([]*domain.User, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	if after == nil {
+		query := userSelectQuery + `
+			WHERE deletion_scheduled_at IS NOT NULL
+			  AND deletion_scheduled_at <= $1
+			  AND is_deleted = FALSE
+			ORDER BY deletion_scheduled_at ASC, id ASC
+			LIMIT $2
+		`
+		return r.queryUsers(ctx, query, time.Now(), limit)
+	}
+	query := userSelectQuery + `
+		WHERE deletion_scheduled_at IS NOT NULL
+		  AND deletion_scheduled_at <= $1
+		  AND is_deleted = FALSE
+		  AND (deletion_scheduled_at, id) > ($2, $3)
+		ORDER BY deletion_scheduled_at ASC, id ASC
+		LIMIT $4
+	`
+	return r.queryUsers(ctx, query, time.Now(), after.ScheduledAt, after.UserID, limit)
 }
 
 // DeleteUserCascade performs a REAL hard delete of the users row, guarded by a re-verification of

@@ -8,6 +8,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -291,6 +292,17 @@ func (m *mockResolver) ResolveEffectiveEntitlement(ctx context.Context, user *do
 	return args.Get(0).(domain.EffectiveEntitlement), args.Error(1)
 }
 
+// ResolveEffectiveEntitlementAt (Batch S2 Task 1) is the method GetEffectiveSubscriptionAt
+// actually calls now — see HouseholdEntitlementResolver's doc comment. Every existing test below
+// that wires mockResolver registers expectations against THIS method, not the plain
+// ResolveEffectiveEntitlement above (which no production or test call site here still invokes,
+// but which stays on the mock/interface so IsCoveredByHousehold/GetEntitlementSummary's real
+// no-arg callers keep working against HouseholdEntitlementService).
+func (m *mockResolver) ResolveEffectiveEntitlementAt(ctx context.Context, user *domain.User, now time.Time) (domain.EffectiveEntitlement, error) {
+	args := m.Called(ctx, user, now)
+	return args.Get(0).(domain.EffectiveEntitlement), args.Error(1)
+}
+
 func TestGetEffectiveSubscription_NilResolver_GoldenUnchanged(t *testing.T) {
 	tierConfig, err := config.LoadTierConfig()
 	require.NoError(t, err)
@@ -310,7 +322,7 @@ func TestGetEffectiveSubscription_ResolverPresentNoHouseholdRow_GoldenUnchanged(
 	service := NewSubscriptionService(tierConfig, nil)
 	resolver := &mockResolver{}
 	user := &domain.User{ID: "user-123", SubscriptionTier: string(domain.TierPremium)}
-	resolver.On("ResolveEffectiveEntitlement", mock.Anything, user).Return(domain.EffectiveEntitlement{
+	resolver.On("ResolveEffectiveEntitlementAt", mock.Anything, user, mock.Anything).Return(domain.EffectiveEntitlement{
 		Tier: "premium", Status: "active", Source: domain.EntitlementSourceOwn,
 	}, nil).Once()
 	service.SetEntitlementResolver(resolver)
@@ -327,7 +339,7 @@ func TestGetEffectiveSubscription_ResolverAppliesHouseholdTier(t *testing.T) {
 	service := NewSubscriptionService(tierConfig, nil)
 	resolver := &mockResolver{}
 	user := &domain.User{ID: "member-1", SubscriptionTier: string(domain.TierPremium)}
-	resolver.On("ResolveEffectiveEntitlement", mock.Anything, user).Return(domain.EffectiveEntitlement{
+	resolver.On("ResolveEffectiveEntitlementAt", mock.Anything, user, mock.Anything).Return(domain.EffectiveEntitlement{
 		Tier: "household_2", Status: "active", Source: domain.EntitlementSourceHousehold,
 	}, nil).Once()
 	service.SetEntitlementResolver(resolver)
@@ -345,7 +357,7 @@ func TestGetEffectiveSubscription_ResolverError_FailsOpenToOwnTier(t *testing.T)
 	service := NewSubscriptionService(tierConfig, nil)
 	resolver := &mockResolver{}
 	user := &domain.User{ID: "user-123", SubscriptionTier: string(domain.TierPremium)}
-	resolver.On("ResolveEffectiveEntitlement", mock.Anything, user).
+	resolver.On("ResolveEffectiveEntitlementAt", mock.Anything, user, mock.Anything).
 		Return(domain.EffectiveEntitlement{}, errors.New("db timeout")).Once()
 	service.SetEntitlementResolver(resolver)
 
@@ -443,4 +455,84 @@ func TestGetEffectiveSubscription_MalformedOverride_NilValidator_PreFixBehaviorP
 
 	_, err = service.GetEffectiveSubscription(context.Background(), user)
 	assert.Error(t, err, "nil validator must skip validation, not deny — matching this codebase's other SetOverrideTierValidator call sites")
+}
+
+// ─── Batch S2 Task 1 — GetEffectiveSubscriptionAt's asOf must survive the entitlement resolver ──
+
+// TestGetEffectiveSubscriptionAt_ProductionWiring_RealResolver_TierDerivedFromAsOf_NotResolversOwnClock
+// is the RED test for Batch S2 Task 1: GetEffectiveSubscriptionAt(ctx, user, asOf) computes
+// tierName := effectiveTierNameAt(user, asOf) first (correctly derived from the caller's asOf),
+// then — if an entitlement resolver is wired (main.go:500, SetEntitlementResolver) —
+// UNCONDITIONALLY OVERWRITES tierName with
+// s.entitlementResolver.ResolveEffectiveEntitlement(ctx, user)'s result. That call takes NO
+// instant parameter at all, so it falls through to HouseholdEntitlementService's own internal
+// `now := time.Now()` — a SECOND, independent clock read taken later than asOf.
+//
+// The existing regression test for this exact class of bug
+// (TestGetEffectiveSubscription_ResolverPresentNoHouseholdRow_GoldenUnchanged and friends, above)
+// only prove the mockResolver test double is invoked correctly — they never touch asOf/timing at
+// all. TestGetUserSubscription_EffectiveTier_DerivedFromAsOf_NotLaterClockRead
+// (admin_subscriptions_test.go) DOES test asOf-derivation, but builds the SubscriptionService with
+// NO entitlement resolver wired at all (SetEntitlementResolver is never called on that test's
+// subService) — a wiring shape production NEVER uses (main.go:500 always wires
+// householdEntitlementService, unconditionally, for every request). This test instead wires a REAL
+// *HouseholdEntitlementService (backed by minimal repo/loader test doubles), exactly like
+// main.go's production wiring, for a SOLO user with no household entitlement row — the common
+// case, and proof that this bug affects EVERY user, not just household members: even the
+// "own"/no-household-row branch of ResolveEffectiveEntitlement reads its own now := time.Now().
+//
+// Made deterministic (no flaky timing race) the same way as
+// TestAdminUserService_GetUserDetail_EffectiveStatus_DerivedFromPassedInstant_NotLaterClockRead
+// (admin_user_service_test.go) and TestGetUserSubscription_EffectiveTier_DerivedFromAsOf_NotLaterClockRead
+// (admin_subscriptions_test.go): asOf is captured FIRST while the override is still live, then an
+// artificial sleep pushes wall-clock time past the override's expiry, and ONLY THEN is
+// GetEffectiveSubscriptionAt called with the ORIGINAL asOf. A correct implementation must report
+// the override tier (the override was live AS OF asOf); the pre-fix implementation instead
+// re-reads time.Now() AFTER the sleep, inside the resolver, sees an EXPIRED override, and wrongly
+// falls back to the raw tier — so this test fails on today's code and passes once
+// GetEffectiveSubscriptionAt threads asOf all the way through the resolver
+// (ResolveEffectiveEntitlementAt).
+func TestGetEffectiveSubscriptionAt_ProductionWiring_RealResolver_TierDerivedFromAsOf_NotResolversOwnClock(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	entRepo := new(mockEntitlementRepo)
+	userLoader := new(mockUserLoader)
+	householdRepo := new(mockHouseholdRepo)
+	householdEntitlementService := NewHouseholdEntitlementService(entRepo, userLoader, householdRepo, tierConfig)
+
+	subService := NewSubscriptionService(tierConfig, nil)
+	// Exactly main.go:500's production wiring — unconditional, not gated on whether the user
+	// actually belongs to a household.
+	subService.SetEntitlementResolver(householdEntitlementService)
+
+	userID := "user-solo-1"
+	override := string(domain.TierHousehold3)
+
+	asOf := time.Now()
+	// Still live AT asOf, but will have expired by the time the sleep below elapses.
+	overrideEndsAt := asOf.Add(20 * time.Millisecond)
+
+	user := &domain.User{
+		ID:                 userID,
+		SubscriptionTier:   string(domain.TierPremium),
+		SubscriptionStatus: "active",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &overrideEndsAt,
+	}
+
+	// Solo user: no household entitlement row at all — the common case, and the one this bug's
+	// own doc-comment note incorrectly scoped to "a household member's tier" (see
+	// SubscriptionService.GetEffectiveSubscriptionAt's doc comment before this fix).
+	entRepo.On("GetActiveEntitlement", mock.Anything, userID, mock.Anything).Return(nil, repository.ErrEntitlementNotFound)
+
+	// Simulate request-processing time crossing the override's expiry boundary BETWEEN the
+	// caller's asOf capture (above) and GetEffectiveSubscriptionAt's call into the resolver.
+	time.Sleep(60 * time.Millisecond)
+
+	effective, err := subService.GetEffectiveSubscriptionAt(context.Background(), user, asOf)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TierHousehold3, effective.Tier,
+		"effective tier must be derived from asOf (when the override was still live), not the "+
+			"entitlement resolver's own later time.Now() read taken after it had already expired")
 }

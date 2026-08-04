@@ -156,7 +156,7 @@ func TestHouseholdServiceIntegration_AcceptInvite_FullHappyPath(t *testing.T) {
 
 	// Household entitlement was written for the invitee, sourced from the owner.
 	entRepo := repository.NewEntitlementRepository(f.pool)
-	entitlement, err := entRepo.GetActiveEntitlement(ctx, invitee.ID)
+	entitlement, err := entRepo.GetActiveEntitlement(ctx, invitee.ID, time.Now())
 	require.NoError(t, err)
 	require.Equal(t, domain.EntitlementSourceHousehold, entitlement.Source)
 	require.Equal(t, owner.ID, *entitlement.PayerUserID)
@@ -1168,7 +1168,7 @@ func TestHouseholdServiceIntegration_AcceptInvite_RestoresRemovedMemberWithinWin
 
 	// A fresh household entitlement exists for the restored member.
 	entRepo := repository.NewEntitlementRepository(f.pool)
-	entitlement, err := entRepo.GetActiveEntitlement(ctx, invitee.ID)
+	entitlement, err := entRepo.GetActiveEntitlement(ctx, invitee.ID, time.Now())
 	require.NoError(t, err)
 	require.Equal(t, domain.EntitlementSourceHousehold, entitlement.Source)
 	require.Equal(t, owner.ID, *entitlement.PayerUserID)

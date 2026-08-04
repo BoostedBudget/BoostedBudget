@@ -22,6 +22,20 @@ type userLoader interface {
 // dependency (see SubscriptionService.SetEntitlementResolver).
 type HouseholdEntitlementResolver interface {
 	ResolveEffectiveEntitlement(ctx context.Context, user *domain.User) (domain.EffectiveEntitlement, error)
+
+	// ResolveEffectiveEntitlementAt is the -At twin, evaluated against the given instant instead
+	// of an internal time.Now() read (Batch S2 Task 1, an Issue #1466 residual). Before this
+	// method existed, SubscriptionService.GetEffectiveSubscriptionAt captured a caller-supplied
+	// `asOf` and used it for the tier-axis's OWN clock read (effectiveTierNameAt), but then — if
+	// an entitlement resolver was wired (main.go's production wiring, unconditional for every
+	// request) — UNCONDITIONALLY OVERWROTE that result with this resolver's answer, and the plain
+	// ResolveEffectiveEntitlement had no instant parameter to receive asOf through, so it fell
+	// back to its own internal now := time.Now(). That overwrite fires for EVERY user the
+	// resolver is asked about, not only household members: even the "own" (no household row)
+	// branch — the common case — reads its own clock. See
+	// TestGetEffectiveSubscriptionAt_ProductionWiring_RealResolver_TierDerivedFromAsOf_NotResolversOwnClock
+	// (subscription_service_test.go) for the regression proof.
+	ResolveEffectiveEntitlementAt(ctx context.Context, user *domain.User, now time.Time) (domain.EffectiveEntitlement, error)
 }
 
 // HouseholdEntitlementService implements HouseholdEntitlementResolver by resolving
@@ -123,9 +137,22 @@ func (s *HouseholdEntitlementService) SetOverrideTierValidator(validator func(ti
 // them) window here. Fixed for consistency with the owner branch's own established pattern, and
 // because the -At variants added for #1466 (domain.User.EffectiveStatusWithActiveOverrideAt/
 // EffectiveTierWithActiveOverrideAt) make sharing a single instant free.
+//
+// Batch S2 Task 1: delegates to ResolveEffectiveEntitlementAt(ctx, user, time.Now()) — the plain
+// no-arg form is now a thin wrapper so its two existing callers (IsCoveredByHousehold,
+// GetEntitlementSummary) are unaffected. SubscriptionService.GetEffectiveSubscriptionAt calls the
+// -At variant directly with its own caller-supplied instant instead of this method.
 func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Context, user *domain.User) (domain.EffectiveEntitlement, error) {
-	now := time.Now()
+	return s.ResolveEffectiveEntitlementAt(ctx, user, time.Now())
+}
 
+// ResolveEffectiveEntitlementAt is the -At twin required by the HouseholdEntitlementResolver
+// interface (see that interface's doc comment for the full Batch S2 Task 1 rationale): identical
+// to the body ResolveEffectiveEntitlement used to have, except `now` is a parameter instead of an
+// internal time.Now() read, so SubscriptionService.GetEffectiveSubscriptionAt can pass its own
+// caller-supplied `asOf` straight through instead of this service reading a second, independent
+// clock.
+func (s *HouseholdEntitlementService) ResolveEffectiveEntitlementAt(ctx context.Context, user *domain.User, now time.Time) (domain.EffectiveEntitlement, error) {
 	ownStatus, _, _ := user.EffectiveStatusWithActiveOverrideAt(now)
 	own := domain.EffectiveEntitlement{
 		Tier:   s.effectiveTierNameAt(ctx, user, now),
@@ -133,7 +160,7 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Co
 		Source: domain.EntitlementSourceOwn,
 	}
 
-	ent, err := s.entitlementRepo.GetActiveEntitlement(ctx, user.ID)
+	ent, err := s.entitlementRepo.GetActiveEntitlement(ctx, user.ID, now)
 	if errors.Is(err, repository.ErrEntitlementNotFound) {
 		return own, nil
 	}

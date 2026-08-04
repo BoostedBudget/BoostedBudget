@@ -111,15 +111,16 @@ func TestSubscriptionOverrideRepository_GetActiveOverrides_Success(t *testing.T)
 
 	ctx := context.Background()
 	userID := "user-abc"
+	asOf := time.Now()
 
 	rows := pgxmock.NewRows(overrideColumns)
 	rows.AddRow(makeOverrideRow(1, userID, "transaction_history_days")...)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, resource_type`)).
-		WithArgs(userID).
+		WithArgs(userID, asOf).
 		WillReturnRows(rows)
 
-	results, err := repo.GetActiveOverrides(ctx, userID)
+	results, err := repo.GetActiveOverrides(ctx, userID, asOf)
 
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
@@ -135,13 +136,14 @@ func TestSubscriptionOverrideRepository_GetActiveOverrides_Empty(t *testing.T) {
 
 	ctx := context.Background()
 	userID := "user-no-overrides"
+	asOf := time.Now()
 
 	rows := pgxmock.NewRows(overrideColumns)
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, resource_type`)).
-		WithArgs(userID).
+		WithArgs(userID, asOf).
 		WillReturnRows(rows)
 
-	results, err := repo.GetActiveOverrides(ctx, userID)
+	results, err := repo.GetActiveOverrides(ctx, userID, asOf)
 
 	require.NoError(t, err)
 	assert.Empty(t, results)

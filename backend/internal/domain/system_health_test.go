@@ -1,10 +1,12 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Note: Status calculation logic is tested in service layer (TestSystemHealthService_CalculateOverallStatus)
@@ -95,21 +97,32 @@ func TestDeadLetterMetrics_Validation(t *testing.T) {
 	assert.Equal(t, int64(12), metrics.OldestJobAgeHours)
 }
 
-// TestJobBacklogMetrics_Validation covers the three DB-derived backlog gauges surfaced on
-// /admin/health (Issue #1458) — structurally identical to DeadLetterMetrics above, mirroring the
-// same Paddle-metrics precedent (#762/#761).
+// TestJobBacklogMetrics_FieldsRoundTrip is a plain struct-literal smoke test — matches the
+// sibling DeadLetterMetrics/SyncStatusMetrics tests above/below in this file. It is NOT a
+// behavioral test: constructing a struct and reading back the literals just assigned cannot fail
+// short of the Go compiler being broken, and this specifically does NOT exercise
+// SystemHealthService.getJobBacklogMetrics — the actual producer of a real JobBacklogMetrics
+// value — at all.
 //
-// Batch R4 Task 4: before this fix, this test was a tautology — it assigned three literals to a
-// struct and asserted the exact same three literals back, which cannot fail short of the Go
-// compiler being broken, and never touched Available at all. Strengthened to actually exercise
-// Available's documented fail-closed contract (see JobBacklogMetrics.Available's own doc comment,
-// system_health.go): the zero value must read as "unavailable" (never a falsely-confident
-// "available, verified zero"), and an explicitly-set true must read back as true.
-func TestJobBacklogMetrics_Validation(t *testing.T) {
-	var zeroValue JobBacklogMetrics
-	assert.False(t, zeroValue.Available,
-		"Available must default to false (the Go zero value) — any code path that forgets to explicitly report success must read as unavailable, never as a falsely-confident verified zero")
-
+// Batch S2 Task 5 correction: this test previously (as TestJobBacklogMetrics_Validation) also
+// asserted `assert.False(t, zeroValue.Available, ...)` against a bare Go zero value and claimed,
+// in its own comment, to have been "strengthened to actually exercise Available's documented
+// fail-closed contract" — that claim was FALSE. Asserting a zero-value bool defaults to false is
+// a property of the Go language, not of this type's contract, and cannot fail either. Both
+// tautological assertions are deleted here, not merely restated.
+//
+// The producer's actual fail-closed contract — Available: false on either query erroring,
+// Available: true only when both succeed — is exercised at the SERVICE layer, where the producer
+// (getJobBacklogMetrics, an unexported method of systemHealthService) actually lives and can be
+// called: see TestGetSystemHealth_JobBacklogMetricsPopulated (success path),
+// TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues (first query fails),
+// TestGetSystemHealth_JobBacklogMetrics_SecondQueryError_DiscardsFirstQuerysGoodData (second query
+// fails — this ALREADY existed before this task; it is not a gap this task closes), and
+// TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguishable (all in
+// system_health_service_test.go). This domain-package test cannot reach that unexported method at
+// all — the domain package only defines the wire type — so "test the real producer instead" means
+// pointing at those existing tests, not duplicating them here.
+func TestJobBacklogMetrics_FieldsRoundTrip(t *testing.T) {
 	metrics := JobBacklogMetrics{
 		PlaidCleanupOutstandingUsers:                    3,
 		PlaidCleanupOldestOutstandingSeconds:            7200,
@@ -120,7 +133,36 @@ func TestJobBacklogMetrics_Validation(t *testing.T) {
 	assert.Equal(t, int64(3), metrics.PlaidCleanupOutstandingUsers)
 	assert.Equal(t, int64(7200), metrics.PlaidCleanupOldestOutstandingSeconds)
 	assert.Equal(t, int64(3600), metrics.ManualTierOverrideOldestUnclearedExpiredSeconds)
-	assert.True(t, metrics.Available, "Available must be true when a query has genuinely verified the backlog (possibly a real zero)")
+	assert.True(t, metrics.Available)
+}
+
+// TestJobBacklogMetrics_Available_SerializesEvenWhenFalse is a genuinely falsifiable
+// domain-level test (Batch S2 Task 5): it exercises the actual `available` JSON tag on the wire
+// type, not a hand-constructed literal. Available's own doc comment (system_health.go) says it
+// "defaults to the Go zero value (false) — the fail-closed direction" specifically so a caller
+// that forgot to set it reads as unavailable, NOT as an absent/undefined field. That guarantee
+// would silently break if a future edit added `,omitempty` to the `available` json tag: Go's
+// encoding/json omits a `false` bool with omitempty, so the key would vanish from the response
+// entirely for the "never queried, zero value" case — indistinguishable on the wire from a field
+// that was never added at all, rather than explicit `false`.
+//
+// Falsified by adding `,omitempty` to Available's json tag in system_health.go: this test then
+// fails because `"available"` no longer appears in the marshaled output at all.
+func TestJobBacklogMetrics_Available_SerializesEvenWhenFalse(t *testing.T) {
+	var zeroValue JobBacklogMetrics // Available is false, the Go zero value — never explicitly set
+
+	b, err := json.Marshal(zeroValue)
+	require.NoError(t, err)
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(b, &decoded))
+
+	availableValue, present := decoded["available"]
+	require.True(t, present,
+		"the \"available\" key must be present in the marshaled JSON even when Available is the "+
+			"Go zero value (false) — an omitempty tag would drop it, making a genuinely-unavailable "+
+			"gauge indistinguishable on the wire from a field that was never added")
+	assert.Equal(t, false, availableValue)
 }
 
 func TestSystemHealthResponse_Timestamp(t *testing.T) {
