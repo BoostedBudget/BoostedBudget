@@ -84,8 +84,6 @@ func (w *AccountDeletionWorker) Work(ctx context.Context, job *river.Job[Account
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
 	}()
 
-	startTime := time.Now()
-
 	// Execute the deletion through the service layer
 	// This handles all cascading deletions and audit logging
 	err = w.deletionService.ExecuteDeletion(ctx, args.UserID)
@@ -95,7 +93,7 @@ func (w *AccountDeletionWorker) Work(ctx context.Context, job *river.Job[Account
 			"user_id", args.UserID,
 			"request_id", args.RequestID,
 			"error", err,
-			"duration_ms", time.Since(startTime).Milliseconds(),
+			"duration_ms", time.Since(start).Milliseconds(),
 		)
 		return fmt.Errorf("failed to delete account: %w", err)
 	}
@@ -104,7 +102,7 @@ func (w *AccountDeletionWorker) Work(ctx context.Context, job *river.Job[Account
 		"job_id", job.ID,
 		"user_id", args.UserID,
 		"request_id", args.RequestID,
-		"duration_ms", time.Since(startTime).Milliseconds(),
+		"duration_ms", time.Since(start).Milliseconds(),
 	)
 
 	return nil
