@@ -306,11 +306,22 @@ either `psql` or the standalone `migrate` CLI against `$DATABASE_URL`, none of w
 
 So a migration doing calendar arithmetic on a `timestamptz` runs under whatever time zone the
 connecting Postgres server/session defaults to — silently reintroducing the exact bug #1461 fixed,
-in the one place the pool-level fix cannot reach. As of this writing, the six migrations added
-alongside #1461/#1464 follow-up work (`000123`-`000128`) only use `NOW()` for `updated_at`, whose
-absolute value is timezone-independent — this hazard is currently latent, not yet triggered, but
-the next migration that computes a deadline or backfills a calendar-relative column will hit it if
-this isn't caught in review.
+in the one place the pool-level fix cannot reach.
+
+**This is not latent — it has already been triggered, twice, in already-applied migrations:**
+
+- `000105_add_past_due_started_at.up.sql:10` — `NOW() - INTERVAL '20 days'`, written into
+  `past_due_started_at`, the anchor for the 21-day auto-cancel grace window.
+- `000016_create_balance_snapshots_table.up.sql:48` — `CURRENT_DATE AS snapshot_date`, backfilled
+  into a `snapshot_date DATE NOT NULL` column.
+
+Both are already applied and immutable; see "The inventory of session-TZ-dependent SQL" below for
+the full list, including two more sites in `000017`'s rollback and one CURRENT_TIMESTAMP site in
+`000004` found while auditing this claim. The seven migrations added alongside #1461/#1464
+follow-up work (`000123`-`000129` — not `000123`-`000128`; `000129` is the current highest
+migration in the repo) only use `NOW()` for `updated_at`, whose absolute value is
+timezone-independent, so they don't add to the list — but the next migration that computes a
+deadline or backfills a calendar-relative column will add to it if this isn't caught in review.
 
 Expressions that are session-time-zone-dependent and therefore unsafe unpinned in a migration:
 
@@ -335,15 +346,18 @@ time-zone-sensitive expression in `AT TIME ZONE 'UTC'` (or compute the value in 
 under the pinned pool, if the migration can be restructured to do so) rather than trusting the
 gates to catch an unpinned session zone.
 
-### The complete inventory of session-TZ-dependent SQL (Issue #1461)
+### The inventory of session-TZ-dependent SQL (Issue #1461) — application code, plus the migration sites the pool pin cannot reach
 
 Recorded here because it previously existed only in a commit message and four inline comments — and
 because the **first** attempt at this inventory undercounted it as "two lines", which is how four of
-these sites shipped unguarded.
+these sites shipped unguarded. A **second** attempt scoped this list to application Go code only
+and, in doing so, implicitly (and wrongly) suggested migrations were clear — see the "currently
+latent" claim corrected earlier in this document. This list cannot claim completeness either; it
+is what two audit passes found, not a proof no more exist.
 
-**Ten sites, in three families.** All are deterministic today *only* because `NewPool` pins every
-pooled connection to UTC (`backend/internal/database/pgx.go`); none of them is safe if that pin is
-lost, and none of them is reached by the migration paths described above.
+**Ten sites in application Go code, in three families.** All ten are deterministic today *only*
+because `NewPool` pins every pooled connection to UTC (`backend/internal/database/pgx.go`); none of
+them is safe if that pin is lost.
 
 | Family | Count | Where |
 |---|---|---|
@@ -359,9 +373,34 @@ components (`hours`, `mins`, `secs`) are exact and are *not* session-dependent. 
 several exact-unit interval sites that are genuinely unaffected. Conflating the two wastes a review
 round in either direction.
 
-Everything else checked and found safe: all 20 `AT TIME ZONE` sites already pin `'UTC'` explicitly;
-every `DATE_TRUNC` operates on a `DATE` column; `::date` casts are either on `DATE` columns or on
-explicitly-typed parameters; there are no `CURRENT_TIME` uses.
+**None of the ten application sites is reached by the migration paths described above — but three
+more sites, resident in migration SQL itself, are not reached by the `NewPool` pin either, and are
+therefore in the same unsafe category, not a safe one:**
+
+| Site | What |
+|---|---|
+| `000105_add_past_due_started_at.up.sql:10` | `NOW() - INTERVAL '20 days'` |
+| `000016_create_balance_snapshots_table.up.sql:48` | `CURRENT_DATE AS snapshot_date` |
+| `000017_migrate_to_timestamp_snapshots.down.sql:20` | `DATE(bs2.snapshot_at) = DATE(bs1.snapshot_at)` inside a `DELETE FROM balance_snapshots bs1` — decides which duplicate rows the rollback deletes |
+| `000017_migrate_to_timestamp_snapshots.down.sql:27` | `USING DATE(snapshot_at)` in the column-type-conversion `ALTER TABLE` |
+| `000004_create_subscription_overrides_table.up.sql:8-9` | `created_at`/`updated_at` declared as a naked `TIMESTAMP` (no time zone) with `DEFAULT CURRENT_TIMESTAMP` — found independently while building the migration-content scanner test, not previously documented anywhere |
+
+All five of these are already applied and immutable; a scanner test
+(`backend/internal/database/migration_tz_hazard_scan_test.go`) allowlists each occurrence by exact
+matched text so no *new* occurrence in a future migration can slip in silently.
+
+**Re-deriving the `AT TIME ZONE` count**, since a prior version of this document asserted "all 20"
+without showing the count: application Go code (non-test, non-comment) has **19** `AT TIME ZONE`
+sites — `savings_impact_repository.go` (1), `balance_snapshot_repository.go` (9),
+`analytics_repository.go` (9) — and all 19 pin `'UTC'` explicitly. Migration SQL separately
+contains 7 raw occurrences of the text `AT TIME ZONE` across `000017`, `000092`, `000096`, of which
+most are inside `--` comments or a `COMMENT ON COLUMN` doc string, not executable code; only 3 are
+live code (`000017.up.sql:25`, `:38`, `000092.up.sql:55`), and all 3 pin `'UTC'`. A single combined
+count spanning both Go and SQL depends heavily on which of those categories you include, so no
+single "N total" figure is asserted here — use the two counts above, which are each independently
+reproducible. Every `DATE_TRUNC` in application code operates on a `DATE` column; `::date` casts in
+application code are either on `DATE` columns or on explicitly-typed parameters; there are no
+`CURRENT_TIME` uses.
 
 ## Rollback Patterns (.down.sql)
 
@@ -409,11 +448,16 @@ cd backend
 squawk migrations/*.sql --pg-version=17
 ```
 
-**Squawk catches:**
-- Dangerous DROP TABLE/COLUMN operations
-- NOT NULL columns without defaults
-- Non-concurrent index creation
-- Type changes that require rewrites
+**Squawk catches** (per `.squawk.toml`'s `excluded_rules`, verified against the config, not assumed):
+- Dangerous DROP TABLE/COLUMN operations (`ban-drop-table`/`ban-drop-column`, enabled)
+- NOT NULL columns without defaults (`adding-not-nullable-field`, enabled)
+- Foreign key additions that may lock tables (`adding-foreign-key-constraint`, enabled)
+- Unique constraints that may lock (`disallowed-unique-constraint`, enabled)
+
+**Squawk does NOT catch, in this repo's config** (both are in `.squawk.toml`'s `excluded_rules`,
+so Squawk reports 0 issues for either even though the rules exist upstream):
+- Non-concurrent index creation (`require-concurrent-index-creation` excluded — "Small tables initially")
+- Column type changes that require a table rewrite (`changing-column-type` excluded — "Intentional schema evolutions")
 
 ### Apply Migrations
 
