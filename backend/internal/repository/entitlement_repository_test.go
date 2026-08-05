@@ -30,7 +30,7 @@ func setupEntitlementMockDB(t *testing.T) (pgxmock.PgxPoolIface, EntitlementRepo
 // simply returns no rows for it — reproducing what the real partial-unique-indexed table
 // would do. If the query is ever changed to also match closed epochs within
 // [effective_from, effective_until) (the change this task's brief says NOT to make),
-// TestEntitlementRepository_GetActiveEntitlement_ClosedEntitlement_NotReturned's
+// TestEntitlementRepository_GetActiveEntitlement_QueryPinsCurrentStateOpenEpochSelection's
 // regexp.QuoteMeta match on the exact WHERE clause breaks, flagging the change.
 
 func TestEntitlementRepository_GetActiveEntitlement_Found(t *testing.T) {
@@ -63,7 +63,7 @@ func TestEntitlementRepository_GetActiveEntitlement_Found(t *testing.T) {
 	assert.Nil(t, e.EffectiveUntil)
 }
 
-func TestEntitlementRepository_GetActiveEntitlement_NotFound(t *testing.T) {
+func TestEntitlementRepository_GetActiveEntitlement_NotFound_Unit(t *testing.T) {
 	t.Parallel()
 	mock, repo := setupEntitlementMockDB(t)
 	defer mock.Close()
@@ -83,15 +83,15 @@ func TestEntitlementRepository_GetActiveEntitlement_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrEntitlementNotFound)
 }
 
-// TestEntitlementRepository_GetActiveEntitlement_ClosedEntitlement_NotReturned pins the
-// current-state selection: a row whose effective_until is in the FUTURE relative to asOf
-// (i.e. it was still open AT asOf, by the effective_from/effective_until epoch, but has
-// since been closed by the time this query runs) is NOT returned. The real table's
-// effective_until IS NULL filter excludes it regardless of asOf; this test reproduces that
-// by having the mocked query return no rows, and exists to fail loudly if someone "fixes"
-// GetActiveEntitlement to also match closed epochs without also handling the uniqueness
-// implications (see the doc comment on GetActiveEntitlement and this task's brief).
-func TestEntitlementRepository_GetActiveEntitlement_ClosedEntitlement_NotReturned(t *testing.T) {
+// TestEntitlementRepository_GetActiveEntitlement_QueryPinsCurrentStateOpenEpochSelection pins the
+// exact SQL text of the current-state selection via regexp.QuoteMeta on the WHERE clause — it
+// does NOT prove row-filtering behaviour (pgxmock cannot execute a real WHERE clause; this test's
+// mock is configured to return no rows unconditionally, identical to the _NotFound test above).
+// Its purpose is to fail loudly if someone "fixes" GetActiveEntitlement's WHERE clause to also
+// match closed epochs within [effective_from, effective_until) without also handling the
+// uniqueness implications (see the doc comment on GetActiveEntitlement and this task's brief) —
+// any change to that WHERE clause breaks this test's QuoteMeta match, forcing a deliberate update.
+func TestEntitlementRepository_GetActiveEntitlement_QueryPinsCurrentStateOpenEpochSelection(t *testing.T) {
 	t.Parallel()
 	mock, repo := setupEntitlementMockDB(t)
 	defer mock.Close()
