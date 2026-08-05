@@ -302,8 +302,10 @@ type RetentionProfileRepository interface {
 
 // RetentionDeletionService defines the deletion methods needed for retention cleanup.
 type RetentionDeletionService interface {
-	// ExecuteDeletion executes the full deletion process for a user.
-	ExecuteDeletion(ctx context.Context, userID string) error
+	// ExecuteDeletion executes the full deletion process for a user under the caller-declared
+	// authorisation kind. This worker always passes repository.DeletionKindRetention — see
+	// deleteExpiredAccounts.
+	ExecuteDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) error
 }
 
 // RetentionEmailService defines the email methods needed for retention notices.
@@ -1500,7 +1502,15 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 			continue
 		}
 
-		if deleteErr := w.deletionService.ExecuteDeletion(ctx, user.ID); deleteErr != nil {
+		// repository.DeletionKindRetention, never DeletionKindUserRequested: these candidates come
+		// from GetUsersWithExpiredRetention, which selects on retention_expires_at and explicitly
+		// filters deletion_requested_at IS NULL — nobody asked for these deletions. The retention
+		// claim predicate re-verifies exactly that, plus the no-override-at-all rule this
+		// belt-and-braces guard above mirrors. Passing the user-requested kind here would refuse
+		// every legitimate retention deletion (no request exists to satisfy it) AND, worse, would
+		// be authorised for any user who happened to have an elapsed request — bypassing the
+		// deliberate separation of the two authorisations.
+		if deleteErr := w.deletionService.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention); deleteErr != nil {
 			w.logger.Error("failed to execute retention deletion",
 				"job_id", jobID, "user_id", user.ID, "error", deleteErr)
 			errorCount++

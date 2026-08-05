@@ -221,22 +221,31 @@ type ProfileRepository interface {
 
 	// ClaimForDeletion atomically verifies, at the moment of the claim, that a user is still
 	// eligible for ExecuteDeletion's irreversible external cleanup (Paddle cancel, Plaid
-	// disconnect) and cascade delete: not already deleted, and either carrying no currently-
-	// active manual tier override OR having an outstanding GDPR deletion request of their own
-	// (deletion_requested_at IS NOT NULL — the ratified rule that a user's own deletion request
-	// beats an admin comp). Returns (true, nil) if the claim succeeded (safe to proceed with
-	// the destructive work), (false, nil) if an admin granted/extended a comp between the
-	// caller's earlier GetUserByID read and this call, with no outstanding GDPR request to
-	// override it — a legitimate skip, not an error; the daily retention job will simply not
-	// re-select this user while the comp is live. Issue #1413 Critical finding C2 (Codex review
-	// round 2): the destructive work must not run on a decision made off a stale snapshot.
+	// disconnect) and cascade delete, UNDER THE AUTHORISATION `kind` NAMES:
+	//
+	//   - DeletionKindUserRequested: not already deleted, deletion_requested_at still set, and
+	//     deletion_scheduled_at already elapsed. No override check — the ratified rule is that a
+	//     user's own deletion request beats an admin comp.
+	//   - DeletionKindRetention: not already deleted, no deletion request outstanding, and no
+	//     manual tier override at all (live or lapsed-but-uncleared).
+	//
+	// Returns (true, nil) if the claim succeeded (safe to proceed with the destructive work), and
+	// (false, nil) — a legitimate skip, NOT an error — whenever the authorisation no longer holds:
+	// an admin granted/extended a comp on a retention candidate, or (Issue #1440, T0) the user
+	// cancelled or re-scheduled the deletion request this caller was queued for. An unrecognised
+	// kind is a genuine error and never a claim: this fails closed.
+	//
+	// Callers MUST pass the kind that matches the query which selected the user, and must never
+	// derive it from the user's current row state — that state is precisely what a stale caller
+	// cannot trust. See the implementation's doc comment for the enumeration of production callers
+	// and their kinds.
 	//
 	// Ordering note for callers: this claim must run BEFORE any external cleanup, not folded
 	// into DeleteUserCascade's own final write — Plaid/Paddle IDs must still be readable when
 	// the external calls run, so the claim has to come first as its own step, or the external
 	// work would already be irreversibly done by the time a later guard could catch a comp
 	// granted in the race window.
-	ClaimForDeletion(ctx context.Context, userID string) (bool, error)
+	ClaimForDeletion(ctx context.Context, userID string, kind DeletionClaimKind) (bool, error)
 
 	// UpdateUserEmailTx updates a user's email, blind index, and resets email_verified=false
 	// within an existing transaction. Returns ErrDuplicateEmail if the email is already in use.
@@ -1242,17 +1251,21 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// or comp-grant must either commit before this SELECT runs (and be seen by it) or block until
 	// this transaction ends (by which point the outcome here is already decided and committed).
 	//
-	// Reuses claimForDeletionPredicate UNCHANGED for the comp-vs-GDPR-request precedence rule —
-	// the SAME rule ClaimForDeletion already enforces, so a user's own outstanding GDPR deletion
-	// request still beats a live comp here exactly as it does there. See that predicate's own doc
-	// comment; it is deliberately not "fixed" or restated here.
+	// Uses deletionAuthorisationUnionPredicate — "a claim of EITHER kind would still be
+	// authorised" — which preserves the comp-vs-GDPR-request precedence rule exactly as
+	// ClaimForDeletion enforces it: a user's own outstanding GDPR deletion request still beats a
+	// live comp here. Issue #1440, T0: that constant is now COMPOSED from the two kind-specific
+	// predicates rather than being a hand-written third variant, so it cannot drift away from what
+	// ClaimForDeletion actually enforces. See its doc comment for why the union plus the
+	// exact-value check below is equivalent to the kind-specific rule in every reachable case, and
+	// therefore why this method does not need to be told the kind.
 	//
 	// ADDITIONALLY requires deletion_requested_at to be EXACTLY the value the caller observed
 	// before calling ClaimForDeletion (IS NOT DISTINCT FROM handles the NULL case) — this is the
-	// part claimForDeletionPredicate cannot provide by itself: that predicate treats "no
-	// manual_tier_override at all" as sufficient authorization REGARDLESS of
-	// deletion_requested_at, so an uncomped user who explicitly cancels their own deletion
-	// request between the claim and this point would otherwise still pass it (cancelling makes
+	// part no authorisation predicate can provide by itself: the retention branch of the union
+	// treats "no manual_tier_override at all" as sufficient authorization for a user with no
+	// outstanding request, so an uncomped user who explicitly cancels their own deletion request
+	// between the claim and this point would otherwise still pass it (cancelling makes
 	// deletion_requested_at NULL, and "no override" was already true) — this is the C1 finding's
 	// most serious case: an explicitly-cancelled deletion must not still happen.
 	var stillEligible bool
@@ -1261,7 +1274,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 			SELECT 1 FROM users
 			WHERE id = $1 AND is_deleted = FALSE
 			  AND deletion_requested_at IS NOT DISTINCT FROM $2
-	`+claimForDeletionPredicate+`
+	`+deletionAuthorisationUnionPredicate+`
 			FOR UPDATE
 		)
 	`, userID, expectedDeletionRequestedAt).Scan(&stillEligible)
@@ -1602,54 +1615,186 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	return true, nil
 }
 
-// claimForDeletionPredicate expresses the ratified product rule that a user's own GDPR
-// deletion request beats an admin comp: the claim succeeds when EITHER the user has an
-// outstanding deletion request of their own, OR there is no manual tier override AT ALL (live or
-// already lapsed).
+// DeletionClaimKind names WHICH of the two mutually exclusive authorisations a hard-deletion claim
+// is being made under. It is declared by the CALLER — never derived from the row's current state —
+// because the whole point of the split (Issue #1440, T0) is that a stale caller's authorisation
+// must be re-checked against the rule it was actually issued under, and current row state is
+// exactly the thing that may have changed underneath it.
 //
-// This reuses noManualOverrideAtAllPredicate unmodified, wrapped in "TRUE <fragment>" so its
-// leading "AND (...)" becomes a standalone boolean usable inside this OR — the same splicing
-// trick previously used (incorrectly, for this predicate) with noActiveManualOverridePredicate.
+// There are precisely two production authorisations, and they are distinguished by which query
+// selected the user (see ClaimForDeletion's doc comment for the enumeration of callers):
 //
-// Issue #1413 Critical finding C1 (third round of remediation — the first two rounds left this
-// on the live-only rule): this predicate MUST agree with the retention queries
-// (GetUsersWithExpiredRetention et al.), which already exclude ANY override, live or lapsed, via
-// noManualOverrideAtAllPredicate. Before this fix, claimForDeletionPredicate used
-// noActiveManualOverridePredicate ("still live right now") instead — the exact rule that's
-// correct for point-in-time transitions like CancelIfPastDueOccurrenceWithRetention, but wrong here: a comp that lapsed
-// moments before the independently-scheduled manual_tier_override_expiry_check job clears the
-// column would pass the live-only check and be hard-deleted, with no warning, in the ordering gap
-// between that job and the retention worker. That is the original data-loss bug this whole branch
-// (#1413) exists to fix — see noManualOverrideAtAllPredicate's doc comment for the full race, AND
-// for why this is honestly a delay only while manual_tier_override_expiry_check keeps running
-// successfully every day, not a guaranteed bound — that job's own failures are the thing to watch.
+//   - DeletionKindUserRequested — the user asked to be deleted (DeletionService.RequestDeletion →
+//     MarkForDeletion → GetUsersScheduledForDeletionPage → ScheduledDeletionCheckWorker enqueues
+//     AccountDeletionArgs → AccountDeletionWorker → ExecuteDeletion).
+//   - DeletionKindRetention — nobody asked; the retention clock on a long-inactive account expired
+//     (GetUsersWithExpiredRetention → RetentionCleanupCheckWorker.deleteExpiredAccounts →
+//     ExecuteDeletion, an in-process call, NOT a River job).
+type DeletionClaimKind string
+
+const (
+	// DeletionKindUserRequested is the authorisation carried by a user's own GDPR deletion
+	// request whose grace period has elapsed.
+	DeletionKindUserRequested DeletionClaimKind = "user_requested"
+	// DeletionKindRetention is the authorisation carried by an expired data-retention clock on an
+	// account nobody asked to delete.
+	DeletionKindRetention DeletionClaimKind = "retention"
+)
+
+// userRequestedDeletionClaimPredicate authorises a hard delete on the strength of the user's OWN
+// outstanding GDPR deletion request.
+//
+// The clause that actually closes Issue #1440's T0 defect is `deletion_scheduled_at <= NOW()`. It
+// does BOTH jobs, because CancelDeletion NULLs deletion_scheduled_at as well as
+// deletion_requested_at:
+//
+//   - Cancellation: the column is NULL, `NULL <= NOW()` is NULL, and a NULL in a WHERE clause is
+//     not true — so the claim is refused. Before the split, a cancelled user was authorised
+//     anyway, through the retention rule's "no manual tier override at all" clause, which is true
+//     of every ordinary uncomped user whether they cancelled or not. Cancelling therefore did not
+//     reliably stop the deletion — data loss that inverts GDPR intent. Proved by
+//     TestExecuteDeletion_Integration_EpisodeCancelled_StaleJobDoesNotDelete (internal/services)
+//     and TestClaimForDeletion_Integration_UserRequested_Cancelled_NotClaimed.
+//   - Cancel-then-re-request: the SECOND episode's window is still open, so a job queued for the
+//     first one no-ops instead of deleting immediately. deletion_requested_at cannot express this
+//     at all — MarkForDeletion overwrites it, so a stale job reads the NEW value and sees nothing
+//     wrong. Proved by TestExecuteDeletion_Integration_EpisodeReRequested_StaleJobDoesNotDeleteEarly
+//     and TestClaimForDeletion_Integration_UserRequested_ReRequestedNotYetDue_NotClaimed.
+//
+// The other two clauses are honestly NOT independently load-bearing today, and this comment says so
+// rather than implying otherwise — mutation-testing each clause separately is what established it:
+//
+//   - `deletion_requested_at IS NOT NULL` is DEFENCE IN DEPTH, not the cancellation guard. Removing
+//     it alone changes no current behaviour, because CancelDeletion clears both columns together.
+//     It exists so that a future writer which cleared only ONE of the two — the exact partial-state
+//     bug this codebase has already shipped twice in adjacent code — cannot turn into a wrongful
+//     hard delete. Pinned by
+//     TestClaimForDeletion_Integration_UserRequested_RequestClearedButScheduleRemains_NotClaimed,
+//     which constructs that (currently unreachable) partial state directly.
+//   - `deletion_scheduled_at IS NOT NULL` is strictly redundant with the comparison below it, for
+//     the NULL-is-not-true reason above. It is kept only because it states the intent in a form a
+//     reader does not have to reason about three-valued logic to verify.
+//
+// Deliberately NO manual-tier-override check: the ratified product rule is that a user's own GDPR
+// deletion request beats an admin comp, so a comped user who has explicitly asked to be deleted
+// must still be deleted. Adding an override check here would illegally strand them — a GDPR
+// compliance problem, not just a bug. Pinned by
+// TestClaimForDeletion_Integration_ActiveOverride_WithDeletionRequest_StillClaims.
+const userRequestedDeletionClaimPredicate = `
+	  AND deletion_requested_at IS NOT NULL
+	  AND deletion_scheduled_at IS NOT NULL
+	  AND deletion_scheduled_at <= NOW()
+`
+
+// retentionDeletionClaimPredicate authorises a hard delete on the strength of an expired retention
+// clock, for an account nobody asked to delete.
+//
+// It must agree with the query that selects these candidates, GetUsersWithExpiredRetention, which
+// filters `deletion_requested_at IS NULL` and splices this same noManualOverrideAtAllPredicate.
+// Both clauses are reproduced here rather than trusted to the candidate query, because the claim's
+// entire job is to re-verify against committed state at claim time what the candidate query
+// observed earlier.
+//
+// noManualOverrideAtAllPredicate — "no override AT ALL, live or already lapsed" — not
+// noActiveManualOverridePredicate ("live right now"). Issue #1413 Critical finding C1: a comp
+// pauses the retention clock while live and is only re-armed by the independently scheduled
+// manual_tier_override_expiry_check job, so a comp that lapsed moments before that job clears the
+// column would pass a live-only check and be hard-deleted in the ordering gap between the two
+// jobs. That is honestly a delay, not a guaranteed bound: it holds only while
+// manual_tier_override_expiry_check keeps succeeding daily — that job's own failures are the thing
+// to watch. See noManualOverrideAtAllPredicate's own doc comment for the full race, and
 // TestClaimForDeletion_Integration_ExpiredOverride_NoDeletionRequest_NotClaimed /
-// TestClaimForDeletion_Integration_ClearedOverride_Claims are the real-DB proof this is a delay
-// while the expiry job is healthy, not a permanent exemption.
+// TestClaimForDeletion_Integration_ClearedOverride_Claims for the real-DB proof that it is a delay
+// and not a permanent exemption.
 //
-// Deliberately still a SEPARATE predicate from noActiveManualOverridePredicate, which stays
-// exactly as it was for its own callers (CancelIfPastDueOccurrenceWithRetention, ClaimPlaidDisconnectIfPastDue,
-// ExpireTrialIfNoOverride) — those are point-in-time transitions guarded against a comp granted
-// in a race window, not a cross-job-ordering hazard like this one.
-const claimForDeletionPredicate = `
+// `deletion_requested_at IS NULL` is a TIGHTENING relative to the pre-split predicate, which
+// treated an outstanding request as an additional reason to allow a retention claim. A user who
+// requests deletion between the retention candidate query and this claim is entitled to their full
+// grace period and their cancellation window; the retention path must not short-circuit either.
+// Such a user is picked up by the user-requested path once their own window elapses.
+const retentionDeletionClaimPredicate = `
+	  AND deletion_requested_at IS NULL
+	` + noManualOverrideAtAllPredicate
+
+// deletionAuthorisationUnionPredicate is satisfied when a claim of EITHER kind would be authorised.
+// It is composed from the two kind predicates above rather than restated, so it cannot drift away
+// from them.
+//
+// Its only consumer is DeleteUserCascade's in-transaction re-check, which — unlike ClaimForDeletion
+// — is not told which kind authorised the run. It does not need to be: it ALSO requires
+// deletion_requested_at IS NOT DISTINCT FROM the exact value the caller observed, which pins the
+// episode. Combined with the union above, that is equivalent to the kind-specific rule in every
+// reachable case:
+//
+//   - a user-requested run has a non-NULL expected value, so the exact-value check forces the
+//     union's first branch (the second requires NULL) and thus re-checks deletion_scheduled_at;
+//   - a retention run has a NULL expected value, so it forces the second branch and thus re-checks
+//     the override rule.
+//
+// Nothing can change deletion_scheduled_at without also changing deletion_requested_at: the only
+// two writers of either column are MarkForDeletion (sets both) and CancelDeletion (NULLs both),
+// verified by grep over this file. So pinning deletion_requested_at pins the whole episode,
+// including its schedule.
+const deletionAuthorisationUnionPredicate = `
 	  AND (
-	    deletion_requested_at IS NOT NULL
-	    OR (TRUE` + noManualOverrideAtAllPredicate + `)
+	    (TRUE` + userRequestedDeletionClaimPredicate + `)
+	    OR (TRUE` + retentionDeletionClaimPredicate + `)
 	  )
 `
 
+// deletionClaimPredicateFor maps a DeletionClaimKind to its SQL predicate, failing CLOSED on an
+// unrecognised kind: an unknown authorisation must never be treated as permission to hard-delete a
+// user, and the zero value of DeletionClaimKind ("") deliberately falls into this branch so a
+// caller that forgets to set it gets an error rather than a deletion.
+func deletionClaimPredicateFor(kind DeletionClaimKind) (string, error) {
+	switch kind {
+	case DeletionKindUserRequested:
+		return userRequestedDeletionClaimPredicate, nil
+	case DeletionKindRetention:
+		return retentionDeletionClaimPredicate, nil
+	default:
+		return "", fmt.Errorf("unknown deletion claim kind %q", string(kind))
+	}
+}
+
 // ClaimForDeletion atomically verifies, at the moment of the claim, that a user is still
-// eligible for ExecuteDeletion's irreversible work. See the ProfileRepository interface doc for
-// the full rationale and ordering requirement (Issue #1413 Critical finding C2, Codex review
-// round 2). This is a self-assigning no-op write (updated_at only) purely to obtain an atomic,
-// row-level check via a single UPDATE ... WHERE statement, mirroring
-// ClaimPlaidDisconnectIfPastDue's shape — without adding a new "claimed" column.
-func (r *profileRepository) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+// eligible for ExecuteDeletion's irreversible work UNDER THE AUTHORISATION `kind` NAMES. See the
+// ProfileRepository interface doc for the full rationale and ordering requirement (Issue #1413
+// Critical finding C2, Codex review round 2). This is a self-assigning no-op write (updated_at
+// only) purely to obtain an atomic, row-level check via a single UPDATE ... WHERE statement,
+// mirroring ClaimPlaidDisconnectIfPastDue's shape — without adding a new "claimed" column.
+//
+// Issue #1440, T0 — why `kind` exists, and why it cannot be inferred here: this method used to
+// take only a userID and evaluate the UNION of both authorisations, which meant a caller acting on
+// a user-requested deletion could be authorised by the RETENTION rule instead. That is not a
+// theoretical mismatch: the retention rule allows any uncomped user, so a job queued for a
+// deletion request the user had since cancelled sailed straight through it. Inferring the kind from
+// the row's current state cannot fix that, because the cancelled row looks exactly like a retention
+// candidate — the authorisation has to come from the caller, which knows which query selected this
+// user.
+//
+// The two production callers, both reached via DeletionService.ExecuteDeletion:
+//
+//   - AccountDeletionWorker (queue/jobs/account_deletion.go), the only worker for the
+//     `account_deletion` River job kind, enqueued only by ScheduledDeletionCheckWorker
+//     (queue/jobs/scheduled_deletion_check.go) from GetUsersScheduledForDeletionPage
+//     → DeletionKindUserRequested.
+//   - RetentionCleanupCheckWorker.deleteExpiredAccounts (queue/jobs/retention_cleanup_check.go),
+//     an in-process call from GetUsersWithExpiredRetention → DeletionKindRetention.
+//
+// A third caller, workers.DeletionWorker (internal/workers/deletion_worker.go), is dead code —
+// NewDeletionWorker has no non-test call site — but is a user-requested path by construction
+// (GetUsersScheduledForDeletion) and passes DeletionKindUserRequested accordingly.
+func (r *profileRepository) ClaimForDeletion(ctx context.Context, userID string, kind DeletionClaimKind) (bool, error) {
+	predicate, err := deletionClaimPredicateFor(kind)
+	if err != nil {
+		return false, fmt.Errorf("ClaimForDeletion: %w", err)
+	}
 	ct, err := r.db.Exec(ctx, `
 		UPDATE users
 		SET updated_at = NOW()
 		WHERE id = $1 AND is_deleted = FALSE
-	`+claimForDeletionPredicate,
+	`+predicate,
 		userID)
 	if err != nil {
 		return false, fmt.Errorf("ClaimForDeletion: %w", err)

@@ -22,6 +22,9 @@ import (
 // MockDeletionService mocks the DeletionService interface
 type MockDeletionService struct {
 	mock.Mock
+	// LastKind records the repository.DeletionClaimKind the last ExecuteDeletion call passed
+	// (Issue #1440, T0). Asserted by TestAccountDeletionWorker_Work_ClaimsAsUserRequested.
+	LastKind repository.DeletionClaimKind
 }
 
 func (m *MockDeletionService) RequestDeletion(ctx context.Context, userID, email string) (string, time.Time, error) {
@@ -34,7 +37,12 @@ func (m *MockDeletionService) CancelDeletion(ctx context.Context, token string) 
 	return args.Error(0)
 }
 
-func (m *MockDeletionService) ExecuteDeletion(ctx context.Context, userID string) error {
+// ExecuteDeletion records the caller-declared authorisation kind in LastKind rather than folding it
+// into m.Called: the kind is asserted directly by
+// TestAccountDeletionWorker_Work_ClaimsAsUserRequested, which keeps every other expectation in this
+// package free of an argument it does not care about (Issue #1440, T0).
+func (m *MockDeletionService) ExecuteDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) error {
+	m.LastKind = kind
 	args := m.Called(ctx, userID)
 	return args.Error(0)
 }
@@ -96,6 +104,30 @@ func TestAccountDeletionWorker_Work_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	mockService.AssertExpectations(t)
+}
+
+// TestAccountDeletionWorker_Work_ClaimsAsUserRequested pins the authorisation this worker declares
+// (Issue #1440, T0). This job is only ever enqueued by ScheduledDeletionCheckWorker from
+// GetUsersScheduledForDeletionPage, i.e. always on the strength of a user's own deletion request
+// whose grace period elapsed. Declaring DeletionKindRetention instead would authorise deleting a
+// user who never asked and whose retention clock has not expired — and would skip the
+// deletion_scheduled_at check that is the entire reason a stale, cancelled, or re-requested job now
+// no-ops.
+func TestAccountDeletionWorker_Work_ClaimsAsUserRequested(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	mockService := new(MockDeletionService)
+	mockService.On("ExecuteDeletion", ctx, userID).Return(nil)
+
+	worker := NewAccountDeletionWorker(AccountDeletionWorkerDeps{
+		DeletionService: mockService,
+		Logger:          slog.Default(),
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestAccountDeletionJob(AccountDeletionArgs{UserID: userID})))
+	assert.Equal(t, repository.DeletionKindUserRequested, mockService.LastKind,
+		"the account_deletion job is a user-requested deletion and must claim under that authorisation")
 }
 
 func TestAccountDeletionWorker_Work_DeletionError(t *testing.T) {

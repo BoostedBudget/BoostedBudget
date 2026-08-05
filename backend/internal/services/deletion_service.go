@@ -21,8 +21,18 @@ type DeletionService interface {
 	// CancelDeletion cancels a pending deletion using the cancellation token
 	CancelDeletion(ctx context.Context, token string) error
 
-	// ExecuteDeletion executes the full deletion process for a user
-	ExecuteDeletion(ctx context.Context, userID string) error
+	// ExecuteDeletion executes the full deletion process for a user under the authorisation
+	// `kind` names — repository.DeletionKindUserRequested for a user's own elapsed GDPR deletion
+	// request, repository.DeletionKindRetention for an expired retention clock on an account
+	// nobody asked to delete.
+	//
+	// Issue #1440, T0: the kind is a required, caller-declared parameter rather than something
+	// inferred from the user's row, because a caller can be arbitrarily stale — an
+	// account_deletion job sits in River until a worker picks it up, during which the user may
+	// cancel or re-request. Inferring the kind from current state would authorise exactly the
+	// cases the split exists to refuse. It is threaded straight through to
+	// repository.ProfileRepository.ClaimForDeletion; see that method for the predicates.
+	ExecuteDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) error
 
 	// SetPlaidCleanupService sets the Plaid cleanup service for removing Plaid items
 	// before user deletion. This setter allows wiring the service after DeletionService
@@ -268,8 +278,9 @@ func (s *deletionService) CancelDeletion(ctx context.Context, tokenString string
 	return nil
 }
 
-// ExecuteDeletion executes the full deletion process for a user
-func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) error {
+// ExecuteDeletion executes the full deletion process for a user. See the DeletionService interface
+// doc for why `kind` is a caller-declared parameter.
+func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) error {
 	// Get user details before deletion
 	user, err := s.profileRepo.GetUserByID(ctx, userID)
 	if err != nil {
@@ -378,19 +389,22 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// moment of the claim — e.g. an admin comp granted between the GetUserByID read above and
 	// this call. The two are complementary, not redundant (see the #1413 design doc's required
 	// call shape): the claim alone cannot know whether deletion is still authorised.
-	eligible, err := s.profileRepo.ClaimForDeletion(ctx, userID)
+	eligible, err := s.profileRepo.ClaimForDeletion(ctx, userID, kind)
 	if err != nil {
 		releaseClaim(err.Error())
 		return fmt.Errorf("failed to claim user for deletion: %w", err)
 	}
 	if !eligible {
-		// An admin granted or extended a comp between the GetUserByID read above and this
-		// check, and the user has no outstanding GDPR deletion request of their own to
-		// override it. Release immediately so a later run (once the comp lapses and is
-		// cleared) doesn't have to wait out the full lease. Legitimate outcome, not an error.
-		releaseClaim("precondition lost — comp granted or extended since last read")
-		slog.Default().Info("skipping auto-deletion — claim not granted (comped since last read)",
-			"user_id", userID)
+		// The authorisation this caller was issued under no longer holds. For a retention caller:
+		// an admin granted or extended a comp between the GetUserByID read above and this check.
+		// For a user-requested caller (Issue #1440, T0): the user cancelled the request this job
+		// was queued for, or re-requested with a fresh grace period that has not yet elapsed —
+		// which is exactly the case that used to slip through and hard-delete a user who had asked
+		// to keep their account. Release immediately so a later run doesn't have to wait out the
+		// full lease. Legitimate outcome, not an error.
+		releaseClaim("precondition lost — deletion no longer authorised under this claim kind")
+		slog.Default().Info("skipping deletion — claim not granted (authorisation no longer holds)",
+			"user_id", userID, "claim_kind", string(kind))
 		return nil
 	}
 

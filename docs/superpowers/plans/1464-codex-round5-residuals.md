@@ -90,11 +90,39 @@ USER — no enqueuing job.ID, no wall-clock component". That is intentional and 
 `AccountDeletionUniqueOpts()` uses `ByArgs: true` with no `ByPeriod`, so River can only dedup
 enqueues whose args are byte-identical.
 
-**Do NOT change the key.** Verified: the reviewer's worry that a stale job from a cancelled
-episode could act on a new one is already closed elsewhere — `ClaimForDeletion`
-(`profile_repository.go`, ~line 1638 and the comments around 1241-1245) requires
-`deletion_requested_at` to be `IS NOT DISTINCT FROM` the value the caller observed, and
-`CancelDeletion` sets it to NULL, so a surviving job cannot delete a user who cancelled.
+**Do NOT change the key.** (That conclusion stands; the reasoning below it did not.)
+
+> **RETRACTED — this paragraph was WRONG (Issue #1440, T0).** It read:
+>
+> > Verified: the reviewer's worry that a stale job from a cancelled episode could act on a new
+> > one is already closed elsewhere — `ClaimForDeletion` (`profile_repository.go`, ~line 1638 and
+> > the comments around 1241-1245) requires `deletion_requested_at` to be `IS NOT DISTINCT FROM`
+> > the value the caller observed, and `CancelDeletion` sets it to NULL, so a surviving job cannot
+> > delete a user who cancelled.
+>
+> `ClaimForDeletion` had no such predicate. Its signature was
+> `ClaimForDeletion(ctx context.Context, userID string) (bool, error)` — no expected-timestamp
+> parameter of any kind — and its predicate authorised any user with no manual tier override at
+> all, which is true of every ordinary uncomped user whether they cancelled or not. The
+> `IS NOT DISTINCT FROM` guard that was cited lives in `DeleteUserCascade`, a different method,
+> and it compares against the value the STALE JOB read at its own start, so it cannot distinguish
+> episodes either. The reviewer's worry was correct and the finding was real: a cancelled user was
+> hard-deleted by an already-queued job, and a cancel-then-re-request was deleted before its new
+> grace period elapsed. Both are now proved by integration tests
+> (`TestExecuteDeletion_Integration_EpisodeCancelled_StaleJobDoesNotDelete`,
+> `TestExecuteDeletion_Integration_EpisodeReRequested_StaleJobDoesNotDeleteEarly`).
+>
+> The claim survived three separate reviews because each verified that `ClaimForDeletion` existed
+> and was called, not what it took as parameters.
+>
+> **What actually closes it now:** `ClaimForDeletion` takes an explicit
+> `repository.DeletionClaimKind`, and the two authorisations have separate predicates.
+> `DeletionKindUserRequested` requires `deletion_requested_at IS NOT NULL AND
+> deletion_scheduled_at <= NOW()`; `DeletionKindRetention` requires
+> `deletion_requested_at IS NULL` plus the no-override-at-all rule. `AccountDeletionWorker` passes
+> the user-requested kind, so cancellation (which NULLs both columns) and re-request (which
+> installs a future schedule) both make a stale job fail the claim and no-op. The dedup key is
+> still not what protects anything — the claim predicate is.
 
 **Required change:** correct the field doc to say what it is — a per-user, deterministic
 audit identifier, stable across runs BY DESIGN so River's `ByArgs` uniqueness works — and

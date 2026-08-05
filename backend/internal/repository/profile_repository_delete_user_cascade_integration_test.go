@@ -97,9 +97,14 @@ func createDeleteCascadeFixtureUser(
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) })
 
+	// deletion_scheduled_at mirrors deletion_requested_at (Issue #1440, T0): MarkForDeletion is the
+	// only production writer of either column and always sets both, so a fixture with one set and
+	// the other NULL is unreachable state. Callers pass a PAST deletionRequestedAt, so the grace
+	// period reads as elapsed — the state in which a deletion is legitimately executable.
 	_, err = pool.Exec(ctx, `
 		UPDATE users
 		SET deletion_requested_at = $1,
+		    deletion_scheduled_at = $1,
 		    manual_tier_override = $2,
 		    manual_tier_ends_at = $3
 		WHERE id = $4`,
@@ -146,7 +151,7 @@ func TestDeleteUserCascade_Integration_CompGrantedAfterClaim_NotDeleted(t *testi
 	// Retention-triggered path: no outstanding deletion request at claim time.
 	user := createDeleteCascadeFixtureUser(t, ctx, pool, repo, suffix, nil, nil, nil)
 
-	claimed, err := repo.ClaimForDeletion(ctx, user.ID)
+	claimed, err := repo.ClaimForDeletion(ctx, user.ID, DeletionKindRetention)
 	require.NoError(t, err)
 	require.True(t, claimed, "sanity check: the user must be claimable before the comp lands")
 
@@ -186,7 +191,7 @@ func TestDeleteUserCascade_Integration_DeletionCancelledAfterClaim_NotDeleted(t 
 	user := createDeleteCascadeFixtureUser(t, ctx, pool, repo, suffix, &requestedAt, nil, nil)
 	require.NotNil(t, user.DeletionRequestedAt, "fixture sanity check")
 
-	claimed, err := repo.ClaimForDeletion(ctx, user.ID)
+	claimed, err := repo.ClaimForDeletion(ctx, user.ID, DeletionKindUserRequested)
 	require.NoError(t, err)
 	require.True(t, claimed, "sanity check: the user must be claimable before cancelling")
 
@@ -222,7 +227,7 @@ func TestDeleteUserCascade_Integration_OwnGDPRRequestStillOutstanding_DeletedDes
 	overrideEndsAt := time.Now().Add(24 * time.Hour) // still active
 	user := createDeleteCascadeFixtureUser(t, ctx, pool, repo, suffix, &requestedAt, &tier, &overrideEndsAt)
 
-	claimed, err := repo.ClaimForDeletion(ctx, user.ID)
+	claimed, err := repo.ClaimForDeletion(ctx, user.ID, DeletionKindUserRequested)
 	require.NoError(t, err)
 	require.True(t, claimed, "a user's own outstanding GDPR deletion request must beat a live admin comp at claim time")
 
