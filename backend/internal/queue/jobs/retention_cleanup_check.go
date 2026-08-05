@@ -461,26 +461,14 @@ func NewRetentionCleanupCheckWorker(deps RetentionCleanupCheckWorkerDeps) *Reten
 	if logger == nil {
 		logger = slog.Default()
 	}
-	retentionMonths := deps.RetentionMonths
-	if retentionMonths <= 0 {
-		retentionMonths = 6 // Default: 6-month retention period
-	}
-	pageSize := deps.ExpiredRetentionPageSize
-	if pageSize <= 0 {
-		pageSize = expiredRetentionPageSize
-	}
-	maxUsers := deps.MaxUsersPerRetentionSweep
-	if maxUsers <= 0 {
-		maxUsers = maxUsersPerRetentionSweep
-	}
 	return &RetentionCleanupCheckWorker{
 		profileRepo:               deps.ProfileRepo,
 		deletionService:           deps.DeletionService,
 		emailService:              deps.EmailService,
-		retentionMonths:           retentionMonths,
+		retentionMonths:           intOrDefault(deps.RetentionMonths, 6), // Default: 6-month retention period
 		logger:                    logger,
-		expiredRetentionPageSize:  pageSize,
-		maxUsersPerRetentionSweep: maxUsers,
+		expiredRetentionPageSize:  intOrDefault(deps.ExpiredRetentionPageSize, expiredRetentionPageSize),
+		maxUsersPerRetentionSweep: intOrDefault(deps.MaxUsersPerRetentionSweep, maxUsersPerRetentionSweep),
 	}
 }
 
