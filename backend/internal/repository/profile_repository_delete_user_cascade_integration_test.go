@@ -473,8 +473,8 @@ func TestDeleteUserCascade_Integration_RedactsAuditLogPII(t *testing.T) {
 // Critical finding's RED test (Codex review, coordinator's own #1440 follow-up brief): the #1367
 // household-owner guard (domain.ErrHouseholdHasActiveMembers) lives ONLY in
 // DeletionService.RequestDeletion — the USER-INITIATED request path. ExecuteDeletion's other two
-// callers (the retention-triggered deleteExpiredAccounts, and the legacy DeletionWorker /
-// AccountDeletionWorker paths) call DeleteUserCascade directly with NO owner guard at all. A
+// callers (the retention-triggered deleteExpiredAccounts, and the AccountDeletionWorker path)
+// call DeleteUserCascade directly with NO owner guard at all. A
 // household owner whose retention clock expires while they still have an ACTIVE non-owner member
 // must not be hard-deleted here: households.owner_user_id's CASCADE would take the household row
 // and every other member's household_members row with it. This test calls DeleteUserCascade
