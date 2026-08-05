@@ -70,7 +70,8 @@ func TestGetUsersScheduledForDeletionPage_Integration_BoundedAndReachesLaterUser
 	// (profile_repository.go), so `candidates` counts exactly the rows the walk can return —
 	// including rows this test did not create.
 	//
-	// Why this is not just "a bigger number": the previous ceiling was raised from 3-ish to 100 (5x)
+	// Why this is not just "a bigger number": commit 9c23dd15 raised the ceiling from 20 to 100 (5x;
+	// 3 pages is this test's own natural ceiling, not the previous assertion value) while
 	// citing leaked asof_threading_integration_test.go fixtures becoming deletion candidates. That
 	// specific mechanism is impossible — those tests pass deletionRequestedAt=nil,
 	// createClaimForDeletionFixtureUser writes that nil into deletion_scheduled_at, and this query
