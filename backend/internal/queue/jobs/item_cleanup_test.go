@@ -185,7 +185,6 @@ func TestItemCleanupWorker_Work_StillEligible_ProceedsWithRemoval(t *testing.T) 
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 
 	expectCleanupClaimGranted(mockRepo, ctx, linkedItemID)
-	expectCleanupClaimGranted(mockRepo, ctx, linkedItemID)
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
 	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)

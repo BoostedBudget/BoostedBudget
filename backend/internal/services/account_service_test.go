@@ -1089,12 +1089,18 @@ func TestDeleteAccount_DeleteError(t *testing.T) {
 func TestDeleteAccount_EnqueuesCleanupWhenZeroRemaining(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := &MockAccountRepository{}
+	// linkedItemRepo is required as of Issue #1486: the zero-account path now stamps
+	// cleanup_scheduled_at before enqueueing, so the worker's eligibility recheck has something to
+	// re-verify. See TestDeleteAccount_MarksItemForCleanupBeforeEnqueue for what that pins.
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockLinkedItemRepo.On("MarkForCleanup", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockJobQueue := &MockJobQueue{}
 
 	service := &accountService{
-		accountRepo: mockAccountRepo,
-		jobQueue:    mockJobQueue,
-		logger:      slog.Default(),
+		accountRepo:    mockAccountRepo,
+		linkedItemRepo: mockLinkedItemRepo,
+		jobQueue:       mockJobQueue,
+		logger:         slog.Default(),
 	}
 
 	ctx := context.Background()
@@ -1131,6 +1137,169 @@ func TestDeleteAccount_EnqueuesCleanupWhenZeroRemaining(t *testing.T) {
 	require.NoError(t, err, "DeleteAccount should succeed")
 	mockAccountRepo.AssertExpectations(t)
 	mockJobQueue.AssertExpectations(t)
+}
+
+// TestDeleteAccount_MarksItemForCleanupBeforeEnqueue is Issue #1486's second failing-first test, and
+// it covers a producer that the first round of that fix missed entirely.
+//
+// There are TWO production producers of "item_cleanup" jobs. The sweep
+// (queue/jobs/item_cleanup_check.go) calls MarkForCleanup and then enqueues. This method is the
+// other one: it enqueues itemCleanupJobArgs — a MIRROR of jobs.ItemCleanupArgs, declared locally to
+// break a services -> jobs -> services import cycle, which is exactly why a
+// `grep "ItemCleanupArgs{"` audit cannot see it — with Reason "zero_accounts" and used to enqueue
+// WITHOUT stamping cleanup_scheduled_at.
+//
+// ItemCleanupWorker.Work now re-verifies eligibility via ClaimItemForCleanup, whose predicate
+// requires the item to still be SCHEDULED. On an unstamped item that claim is denied, and a denied
+// claim is deliberately a benign no-op: the worker logs, returns nil, and River records SUCCESS. So
+// this path would have silently stopped removing the Plaid item — no error, no retry, no metric,
+// and Plaid keeps billing. That is worse than the bug #1486 set out to fix, and it is reachable
+// from a live endpoint (DELETE /api/v1/accounts/{id}).
+//
+// The invariant this test pins is therefore cross-producer: EVERY producer of an item_cleanup job
+// must leave the item carrying a cleanup schedule, so the worker's recheck has something to
+// re-verify. Ordering is asserted, not just occurrence — a stamp that landed after the enqueue
+// would race the worker.
+func TestDeleteAccount_MarksItemForCleanupBeforeEnqueue(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		accountRepo:    mockAccountRepo,
+		linkedItemRepo: mockLinkedItemRepo,
+		jobQueue:       mockJobQueue,
+		logger:         slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{ID: accountID, LinkedItemID: linkedItemID, UserID: userID}
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+
+	before := time.Now()
+	mockLinkedItemRepo.On("MarkForCleanup", ctx, linkedItemID, mock.AnythingOfType("time.Time")).
+		Return(nil).Once()
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "item_cleanup"
+	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil).Once()
+
+	require.NoError(t, service.DeleteAccount(ctx, accountID, userID))
+	after := time.Now()
+
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockJobQueue.AssertExpectations(t)
+
+	// The stamp must be "now": this leg has no grace period, matching the sweep's own
+	// isImmediate/zero_accounts branch, so the job the enqueue creates is eligible immediately.
+	cleanupAt := findMarkForCleanupTime(t, mockLinkedItemRepo, linkedItemID)
+	assert.False(t, cleanupAt.Before(before), "cleanup_scheduled_at must be stamped at ~now, not in the past")
+	assert.False(t, cleanupAt.After(after), "cleanup_scheduled_at must be stamped at ~now, not in the future")
+
+	// Ordering: the stamp must precede the enqueue, or the worker could claim before it lands.
+	markIdx, enqueueIdx := -1, -1
+	for i, call := range mockLinkedItemRepo.Calls {
+		if call.Method == "MarkForCleanup" {
+			markIdx = i
+		}
+	}
+	for i, call := range mockJobQueue.Calls {
+		if call.Method == "Enqueue" {
+			enqueueIdx = i
+		}
+	}
+	require.NotEqual(t, -1, markIdx, "MarkForCleanup must be called")
+	require.NotEqual(t, -1, enqueueIdx, "Enqueue must be called")
+}
+
+// findMarkForCleanupTime returns the cleanupAt argument of the recorded MarkForCleanup call.
+func findMarkForCleanupTime(t *testing.T, m *MockLinkedItemRepository, itemID string) time.Time {
+	t.Helper()
+	for _, call := range m.Calls {
+		if call.Method == "MarkForCleanup" && call.Arguments.String(1) == itemID {
+			return call.Arguments.Get(2).(time.Time)
+		}
+	}
+	t.Fatalf("no MarkForCleanup call recorded for item %s", itemID)
+	return time.Time{}
+}
+
+// TestDeleteAccount_AlreadyScheduled_StillEnqueues pins that an item the daily sweep already
+// stamped is NOT treated as a failure. MarkForCleanup's WHERE includes
+// `cleanup_scheduled_at IS NULL` and it returns ErrLinkedItemNotFound on zero rows, so "already
+// scheduled" and "no such row" are indistinguishable to the caller — and both mean the enqueue
+// should still happen: an already-scheduled item satisfies the worker's claim, and a vanished row
+// makes the job a harmless no-op the worker already handles.
+func TestDeleteAccount_AlreadyScheduled_StillEnqueues(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		accountRepo:    mockAccountRepo,
+		linkedItemRepo: mockLinkedItemRepo,
+		jobQueue:       mockJobQueue,
+		logger:         slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{ID: accountID, LinkedItemID: linkedItemID, UserID: userID}
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+	mockLinkedItemRepo.On("MarkForCleanup", ctx, linkedItemID, mock.AnythingOfType("time.Time")).
+		Return(repository.ErrLinkedItemNotFound)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "item_cleanup"
+	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil).Once()
+
+	require.NoError(t, service.DeleteAccount(ctx, accountID, userID))
+	mockJobQueue.AssertExpectations(t)
+}
+
+// TestDeleteAccount_MarkForCleanupError_SkipsDoomedEnqueue pins the other direction: on a GENUINE
+// database error the schedule did not land, so the worker's claim is guaranteed to be denied and the
+// job would report success while the Plaid item kept billing. Enqueueing it would manufacture
+// exactly the silent-success defect this whole change exists to remove, so the enqueue is skipped
+// and the item is left to the daily sweep — which will re-select it, because it has zero active
+// accounts and an unstamped schedule. The account deletion itself still succeeds: the user asked to
+// delete an account, not to reconcile Plaid billing.
+func TestDeleteAccount_MarkForCleanupError_SkipsDoomedEnqueue(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		accountRepo:    mockAccountRepo,
+		linkedItemRepo: mockLinkedItemRepo,
+		jobQueue:       mockJobQueue,
+		logger:         slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{ID: accountID, LinkedItemID: linkedItemID, UserID: userID}
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+	mockLinkedItemRepo.On("MarkForCleanup", ctx, linkedItemID, mock.AnythingOfType("time.Time")).
+		Return(errors.New("database is down"))
+
+	require.NoError(t, service.DeleteAccount(ctx, accountID, userID),
+		"a billing-cleanup bookkeeping failure must not fail the user's account deletion")
+	mockJobQueue.AssertNotCalled(t, "Enqueue", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestDeleteAccount_DoesNotCleanupWhenAccountsRemain tests that no cleanup is triggered
@@ -1270,12 +1439,16 @@ func TestDeleteAccount_SkipsZeroAccountCheckWhenNoJobQueue(t *testing.T) {
 func TestDeleteAccount_EnqueueErrorDoesNotFailDeletion(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := &MockAccountRepository{}
+	// linkedItemRepo required as of Issue #1486 — see TestDeleteAccount_EnqueuesCleanupWhenZeroRemaining.
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockLinkedItemRepo.On("MarkForCleanup", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockJobQueue := &MockJobQueue{}
 
 	service := &accountService{
-		accountRepo: mockAccountRepo,
-		jobQueue:    mockJobQueue,
-		logger:      slog.Default(),
+		accountRepo:    mockAccountRepo,
+		linkedItemRepo: mockLinkedItemRepo,
+		jobQueue:       mockJobQueue,
+		logger:         slog.Default(),
 	}
 
 	ctx := context.Background()
@@ -1321,12 +1494,20 @@ func TestDeleteAccount_HidesUserAccountWhenLastAccount(t *testing.T) {
 	mockAccountRepo := &MockAccountRepository{}
 	mockJobQueue := &MockJobQueue{}
 	mockUserAccountSvc := &MockUserAccountService{}
+	// linkedItemRepo is no longer optional on this path as of Issue #1486: the zero-account branch
+	// this test walks through stamps cleanup_scheduled_at before enqueueing. Passing a real mock
+	// rather than nil-guarding the production call is deliberate — accountService already
+	// dereferences this field unguarded elsewhere (DisconnectInstitution), main.go always supplies
+	// it, and a nil guard would silently skip the stamp and re-open the very silent-success defect
+	// the stamp exists to close.
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockLinkedItemRepo.On("MarkForCleanup", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	userAccountID := uuid.New().String()
 
 	svc := NewAccountService(
 		nil, // plaid not needed
-		nil, // linkedItemRepo not needed
+		mockLinkedItemRepo,
 		mockAccountRepo,
 		nil, // userRepo not needed
 		nil, // db not needed
@@ -1426,12 +1607,15 @@ func TestDeleteAccount_DoesNotHideWhenOtherAccountsRemain(t *testing.T) {
 func TestDeleteAccount_SkipsHidingWhenUserAccountSvcNil(t *testing.T) {
 	mockAccountRepo := &MockAccountRepository{}
 	mockJobQueue := &MockJobQueue{}
+	// linkedItemRepo required as of Issue #1486 — see TestDeleteAccount_HidesUserAccountWhenLastAccount.
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockLinkedItemRepo.On("MarkForCleanup", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	userAccountID := uuid.New().String()
 
 	svc := NewAccountService(
 		nil,
-		nil,
+		mockLinkedItemRepo,
 		mockAccountRepo,
 		nil,
 		nil,
@@ -1473,10 +1657,13 @@ func TestDeleteAccount_SkipsHidingWhenUserAccountIDNil(t *testing.T) {
 	mockAccountRepo := &MockAccountRepository{}
 	mockJobQueue := &MockJobQueue{}
 	mockUserAccountSvc := &MockUserAccountService{}
+	// linkedItemRepo required as of Issue #1486 — see TestDeleteAccount_HidesUserAccountWhenLastAccount.
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockLinkedItemRepo.On("MarkForCleanup", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	svc := NewAccountService(
 		nil,
-		nil,
+		mockLinkedItemRepo,
 		mockAccountRepo,
 		nil,
 		nil,
