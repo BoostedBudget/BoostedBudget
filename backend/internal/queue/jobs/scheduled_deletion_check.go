@@ -34,6 +34,20 @@ func (ScheduledDeletionCheckArgs) Kind() string { return "scheduled_deletion_che
 // once.
 const scheduledDeletionCheckPageSize = 500
 
+// maxUsersPerDeletionSweep bounds the TOTAL number of users processed across every page
+// fetched within ONE Work() run (see the pagination loop below) — the safety cap
+// GetUsersScheduledForDeletionPage's doc comment (profile_repository.go) promises but, until
+// this fix, was never implemented: each page query was bounded to pageSize rows, but the loop
+// around it kept paging until a page came back short, so a large enough backlog made ONE
+// run's total work unbounded. 50,000 is chosen well above any plausible one-run backlog
+// while still bounding blast radius — at pageSize=500 that is up to 100 page round-trips,
+// already far more than a healthy run should ever need. Hitting the cap does NOT reschedule
+// or retry anything; it only stops THIS run early and logs a WARN naming how many users were
+// processed. This is not silent truncation: the existing periodic schedule
+// (ScheduledDeletionCheckPeriodicOpts) already re-runs this job on its own cadence, and that
+// next run picks up the users this run deferred — no new scheduling is added here.
+const maxUsersPerDeletionSweep = 50000
+
 // ProfileRepository defines the methods needed for deletion scheduling.
 type ProfileRepository interface {
 	// GetUsersScheduledForDeletionPage returns up to `limit` users whose deletion_scheduled_at
@@ -54,6 +68,7 @@ type ScheduledDeletionCheckWorker struct {
 	jobQueue    queue.JobQueue
 	logger      *slog.Logger
 	pageSize    int
+	maxUsers    int
 }
 
 // ScheduledDeletionCheckWorkerDeps contains the dependencies for ScheduledDeletionCheckWorker.
@@ -65,6 +80,10 @@ type ScheduledDeletionCheckWorkerDeps struct {
 	// production default. Exists so tests can exercise the multi-page keyset-cursor loop without
 	// seeding hundreds of fixture users — production should never set this.
 	PageSize int
+	// MaxUsersPerSweep overrides maxUsersPerDeletionSweep. Zero/unset uses the production
+	// default. Exists so tests can exercise the total-processed safety cap without seeding
+	// tens of thousands of fixture users — production should never set this.
+	MaxUsersPerSweep int
 }
 
 // NewScheduledDeletionCheckWorker creates a new scheduled deletion check worker.
@@ -79,11 +98,16 @@ func NewScheduledDeletionCheckWorker(deps ScheduledDeletionCheckWorkerDeps) *Sch
 	if pageSize <= 0 {
 		pageSize = scheduledDeletionCheckPageSize
 	}
+	maxUsers := deps.MaxUsersPerSweep
+	if maxUsers <= 0 {
+		maxUsers = maxUsersPerDeletionSweep
+	}
 	return &ScheduledDeletionCheckWorker{
 		profileRepo: deps.ProfileRepo,
 		jobQueue:    deps.JobQueue,
 		logger:      logger,
 		pageSize:    pageSize,
+		maxUsers:    maxUsers,
 	}
 }
 
@@ -100,10 +124,16 @@ func (w *ScheduledDeletionCheckWorker) SetJobQueue(jq queue.JobQueue) {
 //  1. Fetches users scheduled for deletion (grace period expired), one bounded page at a time
 //  2. Enqueues an AccountDeletionJob for each user
 //  3. Uses unique constraints to prevent duplicate deletion jobs
-//  4. Advances a keyset cursor and repeats until a page comes back short (exhausted) — Batch S2
-//     Task 4: bounding each individual query does NOT bound the total users processed in one
-//     run, so a permanently-stuck oldest user cannot starve later users out of every batch
-//     forever (see GetUsersScheduledForDeletionPage's doc comment).
+//  4. Advances a keyset cursor and repeats until a page comes back short (exhausted), OR the
+//     total processed reaches maxUsersPerDeletionSweep — Batch S2 Task 4: bounding each
+//     individual query does NOT bound the total users processed in one run, so a
+//     permanently-stuck oldest user cannot starve later users out of every batch forever (see
+//     GetUsersScheduledForDeletionPage's doc comment). Hitting the cap logs a WARN and stops this
+//     run early; it does not schedule anything new. The next periodic run (Codex round5 residual
+//     #3) re-starts its own pagination from the oldest still-eligible row rather than resuming
+//     this run's cursor — it reaches users past this run's cap once the ones this run already
+//     enqueued are actually deleted (until then they are cheaply re-skipped via
+//     AccountDeletionUniqueOpts' dedup, not reprocessed).
 //
 // Errors in individual deletion enqueueing don't fail the entire job.
 func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[ScheduledDeletionCheckArgs]) (err error) {
@@ -144,6 +174,19 @@ func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[
 
 		if len(users) == 0 {
 			break
+		}
+
+		// fetchedCount is the page's length AS RETURNED by the repository, before any
+		// maxUsersPerDeletionSweep truncation below — the only reliable signal for whether the
+		// repository itself is exhausted (fetchedCount < w.pageSize means there was nothing left
+		// to return, regardless of the cap).
+		fetchedCount := len(users)
+
+		// maxUsersPerDeletionSweep: if this page would push totalUsers to or past the cap,
+		// truncate it now so the enqueue loop below never processes more than the cap allows —
+		// "at most maxUsers enqueued", not "cap-or-more".
+		if remaining := w.maxUsers - totalUsers; fetchedCount >= remaining {
+			users = users[:remaining]
 		}
 
 		totalUsers += len(users)
@@ -193,8 +236,35 @@ func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[
 			UserID:      last.ID,
 		}
 
+		// exhausted mirrors the pre-existing short-page check below, but computed from
+		// fetchedCount (pre-truncation) so it still reflects what the REPOSITORY actually told
+		// us, even on the page that also happens to trip the cap.
+		exhausted := fetchedCount < w.pageSize
+
+		// maxUsersPerDeletionSweep hit: stop THIS run now — but only warn if the repository
+		// itself did NOT already tell us it was exhausted (fetchedCount == w.pageSize, a full
+		// page). If a genuinely short/final page happens to land exactly on the cap, there is no
+		// real remainder to defer, and warning "deferring remainder" would be a false alarm; the
+		// unconditional `if exhausted { break }` below already covers that case correctly.
+		//
+		// No new scheduling is needed for the true-remainder case: the existing periodic
+		// registration (ScheduledDeletionCheckPeriodicOpts) already re-runs this job on its own
+		// cadence, and that later run's pagination starts over from the oldest still-eligible
+		// row — which reaches users past this run's cap once the ones already enqueued here are
+		// actually deleted (or, if not yet deleted, are cheaply skipped again via
+		// AccountDeletionUniqueOpts' dedup rather than double-processed). The WARN below is what
+		// keeps this from reading as silent truncation.
+		if totalUsers >= w.maxUsers && !exhausted {
+			w.logger.Warn("scheduled deletion sweep hit its total-processed safety cap; deferring remainder to next periodic run",
+				"job_id", job.ID,
+				"processed", totalUsers,
+				"cap", w.maxUsers,
+			)
+			break
+		}
+
 		// A short page means this was the last one — no need for another round-trip to confirm.
-		if len(users) < w.pageSize {
+		if exhausted {
 			break
 		}
 	}

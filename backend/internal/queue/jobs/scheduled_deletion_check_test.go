@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -163,6 +164,137 @@ func TestScheduledDeletionCheckWorker_Work_PagesPastFirstBatch_ReachesLaterUsers
 			return ok && args.UserID == u.ID
 		}), mock.Anything)
 	}
+}
+
+// TestScheduledDeletionCheckWorker_Work_StopsAtTotalProcessedCap is the failing-first unit test
+// for Batch S2 Task 3 (Codex round5 residual #3): GetUsersScheduledForDeletionPage's doc comment
+// promises the caller's pagination loop stops "until a page comes back short (exhausted) or a
+// total-processed safety cap is hit" — but until this fix, no such cap existed; the loop only
+// ever broke on a short/empty page, so a backlog large enough made ONE run's total work
+// unbounded (each individual query was bounded to pageSize, but the loop around it was not).
+//
+// The stub below returns a FULL page (never short) indefinitely, standing in for an
+// arbitrarily large backlog. It is itself bounded to safetyNetCalls returns so a regression
+// cannot hang this test / CI forever — if the cap is missing, the worker keeps calling past
+// the expected ceil(cap/pageSize) count, the stub eventually runs out of programmed calls, and
+// testify's mock panics with "mock: I don't know what to return" (a fast, loud failure, not a
+// hang). With the cap implemented, the worker stops itself at exactly ceil(cap/pageSize) page
+// fetches, well before exhausting the stub's safety net.
+func TestScheduledDeletionCheckWorker_Work_StopsAtTotalProcessedCap(t *testing.T) {
+	ctx := context.Background()
+
+	const pageSize = 10
+	const sweepCap = 25                        // deliberately NOT a multiple of pageSize, to prove the last page is truncated
+	const wantPageFetches = 3                  // ceil(25/10)
+	const safetyNetCalls = wantPageFetches + 5 // way more than a correct implementation ever needs
+
+	mockRepo := new(MockProfileRepository)
+	mockQueue := new(MockJobQueue)
+
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Each call gets its own full page of `pageSize` users, with ids/cursors that keep
+	// advancing call-to-call like production would — pre-generated as a fixed chain of
+	// safetyNetCalls .Once() expectations, so a call beyond that chain has nothing left to
+	// match and testify's mock panics loudly instead of returning forever.
+	for i := 0; i < safetyNetCalls; i++ {
+		page := make([]*domain.User, pageSize)
+		for j := 0; j < pageSize; j++ {
+			idx := i*pageSize + j
+			scheduledAt := base.Add(time.Duration(idx) * time.Minute)
+			page[j] = &domain.User{ID: fmt.Sprintf("user-%03d", idx), DeletionScheduledAt: &scheduledAt}
+		}
+		mockRepo.On("GetUsersScheduledForDeletionPage", ctx, mock.Anything, pageSize).Return(page, nil).Once()
+	}
+
+	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+
+	worker := NewScheduledDeletionCheckWorker(ScheduledDeletionCheckWorkerDeps{
+		ProfileRepo:      mockRepo,
+		JobQueue:         mockQueue,
+		Logger:           newTestDeletionCheckLogger(),
+		PageSize:         pageSize,
+		MaxUsersPerSweep: sweepCap,
+	})
+
+	job := newTestScheduledDeletionCheckJob(ScheduledDeletionCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+
+	fetchCalls := 0
+	for _, call := range mockRepo.Calls {
+		if call.Method == "GetUsersScheduledForDeletionPage" {
+			fetchCalls++
+		}
+	}
+	assert.Equal(t, wantPageFetches, fetchCalls,
+		"worker must stop fetching pages once the total-processed cap is reached, not keep "+
+			"paging until a short/empty page — without the cap, this exceeds wantPageFetches "+
+			"well before the stub's safety net runs out")
+
+	mockQueue.AssertNumberOfCalls(t, "Enqueue", sweepCap)
+}
+
+// TestScheduledDeletionCheckWorker_Work_ExactCapFitOnGenuinelyExhaustedPage_NoDeferralWarning
+// pins a boundary case flagged by adversarial review of Batch S2 Task 3: totalUsers can reach
+// the cap on the SAME page the repository already reports as short/exhausted (fetchedCount <
+// pageSize — i.e. there is genuinely no remainder, the repo has nothing left to give). That is
+// NOT the "deferring remainder to next periodic run" case the WARN log describes — logging it
+// there would be a false alarm telling an operator work was deferred when it was not. This test
+// asserts the WARN is NOT emitted when totalUsers lands on the cap via a short/exhausted page.
+func TestScheduledDeletionCheckWorker_Work_ExactCapFitOnGenuinelyExhaustedPage_NoDeferralWarning(t *testing.T) {
+	ctx := context.Background()
+
+	const pageSize = 10
+	const sweepCap = 15 // page1 (10, full) + page2 (5, short/exhausted) lands EXACTLY on the cap
+
+	mockRepo := new(MockProfileRepository)
+	mockQueue := new(MockJobQueue)
+
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	page1 := make([]*domain.User, pageSize)
+	for j := 0; j < pageSize; j++ {
+		scheduledAt := base.Add(time.Duration(j) * time.Minute)
+		page1[j] = &domain.User{ID: fmt.Sprintf("user-%03d", j), DeletionScheduledAt: &scheduledAt}
+	}
+	page2 := make([]*domain.User, 5) // short: 5 < pageSize, the repo's own exhaustion signal
+	for j := 0; j < 5; j++ {
+		idx := pageSize + j
+		scheduledAt := base.Add(time.Duration(idx) * time.Minute)
+		page2[j] = &domain.User{ID: fmt.Sprintf("user-%03d", idx), DeletionScheduledAt: &scheduledAt}
+	}
+	mockRepo.On("GetUsersScheduledForDeletionPage", ctx, (*repository.DeletionSweepCursor)(nil), pageSize).
+		Return(page1, nil).Once()
+	mockRepo.On("GetUsersScheduledForDeletionPage", ctx, mock.MatchedBy(func(c *repository.DeletionSweepCursor) bool {
+		return c != nil && c.UserID == "user-009"
+	}), pageSize).Return(page2, nil).Once()
+
+	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	worker := NewScheduledDeletionCheckWorker(ScheduledDeletionCheckWorkerDeps{
+		ProfileRepo:      mockRepo,
+		JobQueue:         mockQueue,
+		Logger:           logger,
+		PageSize:         pageSize,
+		MaxUsersPerSweep: sweepCap,
+	})
+
+	job := newTestScheduledDeletionCheckJob(ScheduledDeletionCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t) // exactly the 2 page fetches above — no third fetch after exhaustion
+	mockQueue.AssertNumberOfCalls(t, "Enqueue", sweepCap)
+
+	logOutput := logBuf.String()
+	assert.NotContains(t, logOutput, "deferring remainder",
+		"a genuinely exhausted final page landing exactly on the cap has no real remainder to "+
+			"defer — warning about deferral here would be a false alarm to whoever reads this log")
+	assert.Contains(t, logOutput, "scheduled deletion check completed",
+		"this run legitimately completed (repo exhausted); the normal completion log must still fire")
 }
 
 // TestScheduledDeletionCheckWorker_Work_SameUserAcrossRuns_ProducesIdenticalArgs is the RED test
@@ -346,7 +478,7 @@ func TestScheduledDeletionCheckWorker_Work_UniqueSkippedCounting(t *testing.T) {
 func TestScheduledDeletionCheckUniqueOpts(t *testing.T) {
 	opts := ScheduledDeletionCheckUniqueOpts()
 
-	assert.False(t, opts.ByArgs) // All check jobs are equivalent
+	assert.False(t, opts.ByArgs)                                          // All check jobs are equivalent
 	assert.Equal(t, 1*60*60*1000000000, int(opts.ByPeriod.Nanoseconds())) // 1 hour
 	assert.Contains(t, opts.ByState, queue.JobStateAvailable)
 	assert.Contains(t, opts.ByState, queue.JobStateScheduled)

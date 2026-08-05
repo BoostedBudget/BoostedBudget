@@ -1128,9 +1128,17 @@ type DeletionSweepCursor struct {
 // occupy a slot in the oldest-first page FOREVER, starving every user ranked past the page size
 // out of every single run. Keyset pagination fixes this: the caller (ScheduledDeletionCheckWorker)
 // loops pages within ONE run, advancing the cursor past whatever it just saw — including past a
-// stuck row — until a page comes back short (exhausted) or a total-processed safety cap is hit,
-// so later users are still reached in the SAME run a naive single bounded query would have
-// starved them in.
+// stuck row — until a page comes back short (exhausted) OR the caller's total-processed safety
+// cap (maxUsersPerDeletionSweep, queue/jobs/scheduled_deletion_check.go) is reached. Hitting the
+// cap logs a WARN naming how many users were processed and stops that run early WITHOUT
+// scheduling anything new. The next periodic run's pagination starts over from the oldest
+// still-eligible row (there is no persisted cross-run cursor) — the users this run already
+// enqueued are cheaply re-skipped via AccountDeletionUniqueOpts' dedup until they are actually
+// deleted, at which point they drop out of this query's is_deleted = FALSE filter entirely,
+// letting that later run's own cap reach users past this run's. This is deferred continuation,
+// not silent truncation, but it is NOT instantaneous: a backlog that keeps arriving faster than
+// AccountDeletionWorker can drain it will keep re-spending each run's cap on rows it already
+// queued, not exclusively on new ones.
 func (r *profileRepository) GetUsersScheduledForDeletionPage(ctx context.Context, after *DeletionSweepCursor, limit int) ([]*domain.User, error) {
 	if limit <= 0 {
 		limit = 500
