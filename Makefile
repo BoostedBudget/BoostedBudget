@@ -202,8 +202,9 @@ test-all:
 # Shell script regression suites.
 # These test the CI/local tooling scripts themselves (not the app) — e.g. the LCOV merge
 # logic in check-frontend-coverage.sh, the orphan-chunk bundle guard, the migration
-# rollback-residue comparison, and the pg_dump-via-docker URL/arg handling. None of them
-# were wired into any runner before this target existed.
+# rollback-residue comparison, the pg_dump-via-docker URL/arg handling, and the E2E
+# storage-state guard's negative fixtures. None of them were wired into any runner before
+# this target existed.
 test-scripts:
 	@echo "========================================"
 	@echo "Running shell script regression suites"
