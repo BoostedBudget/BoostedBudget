@@ -65,21 +65,38 @@
 -- USING clause below pins UTC explicitly via `AT TIME ZONE 'UTC'` instead, which carries its own
 -- meaning independent of session state.
 --
--- Idempotent: the DO block only runs the conversion when created_at is still the pre-migration
--- naked TIMESTAMP, so re-running this file (or applying it to a database that already has the
--- widened columns from a prior partial run) is a no-op. All three columns are converted together
--- inside one DO block, which `psql -f -` sends and executes as a single autocommitted statement —
--- so this migration cannot partially apply (some columns converted, others not) the way a
--- sequence of separate top-level ALTER statements could under `psql -f -`'s per-statement
--- autocommit.
+-- Idempotent: all three columns are converted together inside one DO block, which `psql -f -`
+-- sends and executes as a single autocommitted statement — so this migration cannot partially
+-- apply (some columns converted, others not) the way a sequence of separate top-level ALTER
+-- statements could under `psql -f -`'s per-statement autocommit. That atomicity means only two
+-- states are reachable by re-running this file: all three columns still the pre-migration naked
+-- TIMESTAMP (convert), or all three already TIMESTAMPTZ (no-op). The guard below checks all
+-- three columns (not just created_at) and treats any OTHER combination — which this migration's
+-- own atomicity argument says should be unreachable — as an error rather than silently no-oping
+-- or silently re-running `AT TIME ZONE 'UTC'` against an already-zoned column: if a mixed state
+-- is ever observed anyway (manual intervention, a restored dump, a future edit that splits this
+-- block), that is a real anomaly and should fail loudly.
 DO $$
+DECLARE
+    created_at_type TEXT;
+    updated_at_type TEXT;
+    expires_at_type TEXT;
 BEGIN
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'user_subscription_overrides'
-          AND column_name = 'created_at'
-          AND data_type = 'timestamp without time zone'
-    ) THEN
+    SELECT data_type INTO created_at_type FROM information_schema.columns
+        WHERE table_name = 'user_subscription_overrides' AND column_name = 'created_at';
+    SELECT data_type INTO updated_at_type FROM information_schema.columns
+        WHERE table_name = 'user_subscription_overrides' AND column_name = 'updated_at';
+    SELECT data_type INTO expires_at_type FROM information_schema.columns
+        WHERE table_name = 'user_subscription_overrides' AND column_name = 'expires_at';
+
+    IF created_at_type = 'timestamp with time zone'
+       AND updated_at_type = 'timestamp with time zone'
+       AND expires_at_type = 'timestamp with time zone' THEN
+        -- Already converted (e.g. a prior application of this file) — no-op.
+        NULL;
+    ELSIF created_at_type = 'timestamp without time zone'
+       AND updated_at_type = 'timestamp without time zone'
+       AND expires_at_type = 'timestamp without time zone' THEN
         -- Drop and recreate the created_at/updated_at DEFAULTs explicitly around the type change,
         -- rather than relying on an implicit coercion of the existing DEFAULT expression during
         -- ALTER COLUMN TYPE. (DEFAULT CURRENT_TIMESTAMP into a TIMESTAMPTZ column is itself safe —
@@ -98,6 +115,9 @@ BEGIN
 
         ALTER TABLE user_subscription_overrides ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;
         ALTER TABLE user_subscription_overrides ALTER COLUMN updated_at SET DEFAULT CURRENT_TIMESTAMP;
+    ELSE
+        RAISE EXCEPTION 'Migration 000130: user_subscription_overrides has a mixed timestamp/timestamptz state that should be unreachable (created_at=%, updated_at=%, expires_at=%) — refusing to silently no-op or silently re-widen an already-converted column.',
+            created_at_type, updated_at_type, expires_at_type;
     END IF;
 END $$;
 
