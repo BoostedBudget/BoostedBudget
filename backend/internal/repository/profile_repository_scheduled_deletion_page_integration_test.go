@@ -65,6 +65,38 @@ func TestGetUsersScheduledForDeletionPage_Integration_BoundedAndReachesLaterUser
 		idSet[id] = true
 	}
 
+	// Derive the page ceiling from the candidate population this query can ACTUALLY see, instead of
+	// hand-picking a number. The predicate below is a copy of GetUsersScheduledForDeletionPage's
+	// (profile_repository.go), so `candidates` counts exactly the rows the walk can return —
+	// including rows this test did not create.
+	//
+	// Why this is not just "a bigger number": the previous ceiling was raised from 3-ish to 100 (5x)
+	// citing leaked asof_threading_integration_test.go fixtures becoming deletion candidates. That
+	// specific mechanism is impossible — those tests pass deletionRequestedAt=nil,
+	// createClaimForDeletionFixtureUser writes that nil into deletion_scheduled_at, and this query
+	// requires deletion_scheduled_at IS NOT NULL, so such a row can never be a candidate. The
+	// coupling itself is real, though: several other integration suites in this package and in
+	// internal/services DO create non-nil deletion_scheduled_at rows (deletion_cancel_marker,
+	// delete_user_cascade, plaid_disconnect_repair, retention_clock_repair, claim_for_deletion's
+	// &requestedAt cases, admin_user_repository_deletion_fields, deletion_service_episode), and any
+	// of those leaking from a failed cleanup inflates the page count here. Counting the population
+	// removes the guesswork entirely: the ceiling stays tight (4 pages when the table holds only
+	// this test's 5 rows at limit 2) and cannot be inflated by an unrelated package's fixtures.
+	//
+	// Integration runs use -p 1 (see CLAUDE.md), so no other package inserts concurrently; the +1
+	// page of slack covers a row whose deletion_scheduled_at falls between this COUNT's NOW() and a
+	// later page's time.Now(), which would make it newly eligible mid-walk.
+	var candidates int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM users
+		WHERE deletion_scheduled_at IS NOT NULL
+		  AND deletion_scheduled_at <= NOW()
+		  AND is_deleted = FALSE`).Scan(&candidates))
+	require.GreaterOrEqual(t, candidates, seeded,
+		"the candidate count must include at least this test's %d seeded rows — otherwise the seed "+
+			"or the predicate copy above is wrong and the ceiling below is meaningless", seeded)
+	maxPages := (candidates+limit-1)/limit + 1
+
 	// Walk every page exactly the way ScheduledDeletionCheckWorker.Work does: start with a nil
 	// cursor, advance to the last row of each page, stop once a page comes back short.
 	var cursor *DeletionSweepCursor
@@ -90,19 +122,31 @@ func TestGetUsersScheduledForDeletionPage_Integration_BoundedAndReachesLaterUser
 		}
 
 		last := page[len(page)-1]
-		cursor = &DeletionSweepCursor{ScheduledAt: *last.DeletionScheduledAt, UserID: last.ID}
+		next := DeletionSweepCursor{ScheduledAt: *last.DeletionScheduledAt, UserID: last.ID}
+
+		// (c) The direct runaway oracle: the cursor must move STRICTLY forward in
+		// (deletion_scheduled_at, id) order on every iteration. A page count is only a proxy for
+		// this; asserting it directly catches a non-advancing or backwards cursor on the very first
+		// bad iteration instead of after N wasted pages, and it does not care how many rows the
+		// shared database happens to hold.
+		if cursor != nil {
+			advanced := next.ScheduledAt.After(cursor.ScheduledAt) ||
+				(next.ScheduledAt.Equal(cursor.ScheduledAt) && next.UserID > cursor.UserID)
+			require.True(t, advanced,
+				"cursor must advance strictly in (deletion_scheduled_at, id) order: (%s, %s) does not come after (%s, %s)",
+				next.ScheduledAt, next.UserID, cursor.ScheduledAt, cursor.UserID)
+		}
+		cursor = &next
 
 		if len(page) < limit {
 			break // exhausted
 		}
-		// Ceiling is 100, not the tighter number this test's own 5 rows / limit 2 would suggest
-		// (3 pages expected). createClaimForDeletionFixtureUser (this package's shared fixture
-		// helper, see its doc comment) also stamps deletion_scheduled_at, so a leaked row from a
-		// failed cleanup in ANY test sharing that helper — this file or
-		// asof_threading_integration_test.go — becomes eligible here too and consumes extra
-		// pages. This assertion still catches a genuinely broken cursor (which would never
-		// terminate at all) without a modest fixture leak reading as a false "cursor bug".
-		require.Less(t, pageCount, 100, "runaway pagination loop — something is wrong with the cursor advancing")
+		// Ceiling derived above from the real candidate population (see the comment at maxPages),
+		// so it stays tight without a fixture leak from an unrelated suite reading as a false
+		// "cursor bug".
+		require.LessOrEqual(t, pageCount, maxPages,
+			"runaway pagination loop — something is wrong with the cursor advancing (%d candidate rows at limit %d allows at most %d pages)",
+			candidates, limit, maxPages)
 	}
 
 	require.Greater(t, pageCount, 1,
