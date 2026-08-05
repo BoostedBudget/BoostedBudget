@@ -1134,8 +1134,9 @@ type DeletionSweepCursor struct {
 // scheduling anything new. The next periodic run's pagination starts over from the oldest
 // still-eligible row (there is no persisted cross-run cursor) — the users this run already
 // enqueued are cheaply re-skipped via AccountDeletionUniqueOpts' dedup until they are actually
-// deleted, at which point they drop out of this query's is_deleted = FALSE filter entirely,
-// letting that later run's own cap reach users past this run's. This is deferred continuation,
+// deleted, at which point the row is hard-deleted (DeleteUserCascade's `DELETE FROM users` below)
+// and no longer matches this query at all, letting that later run's own cap reach users past this
+// run's. This is deferred continuation,
 // not silent truncation, but it is NOT instantaneous: a backlog that keeps arriving faster than
 // AccountDeletionWorker can drain it will keep re-spending each run's cap on rows it already
 // queued, not exclusively on new ones.

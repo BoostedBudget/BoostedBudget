@@ -29,9 +29,10 @@ func (ScheduledDeletionCheckArgs) Kind() string { return "scheduled_deletion_che
 // Task 4) — see that method's doc comment (profile_repository.go) for why an unbounded single
 // query is unsafe now that #1440 made this a real hard delete and #1448 gave its caller
 // RunOnStart: true. Work() below loops pages of this size within a single run until exhausted,
-// so bounding the per-query result set does NOT bound how many eligible users get an enqueue
-// attempt in one run — it only bounds how much memory/row-count a single query call handles at
-// once.
+// so bounding the per-query result set does NOT, by itself, bound how many eligible users get an
+// enqueue attempt in one run — it only bounds how much memory/row-count a single query call
+// handles at once. The total across every page in one run is bounded separately, by
+// maxUsersPerDeletionSweep below.
 const scheduledDeletionCheckPageSize = 500
 
 // maxUsersPerDeletionSweep bounds the TOTAL number of users processed across every page
@@ -44,8 +45,13 @@ const scheduledDeletionCheckPageSize = 500
 // already far more than a healthy run should ever need. Hitting the cap does NOT reschedule
 // or retry anything; it only stops THIS run early and logs a WARN naming how many users were
 // processed. This is not silent truncation: the existing periodic schedule
-// (ScheduledDeletionCheckPeriodicOpts) already re-runs this job on its own cadence, and that
-// next run picks up the users this run deferred — no new scheduling is added here.
+// (ScheduledDeletionCheckPeriodicOpts) already re-runs this job on its own cadence — but that
+// next run does NOT resume where this one stopped. There is no persisted cross-run cursor
+// (Work()'s `cursor` variable below is local and starts nil on every invocation), so the next
+// run restarts oldest-first. It reaches users past this run's cap only once the ones this run
+// already enqueued are actually deleted (until then they are cheaply re-skipped via
+// AccountDeletionUniqueOpts' dedup, not reprocessed) — see Work()'s doc comment below and
+// GetUsersScheduledForDeletionPage's doc comment (profile_repository.go) for the full picture.
 const maxUsersPerDeletionSweep = 50000
 
 // ProfileRepository defines the methods needed for deletion scheduling.
@@ -126,14 +132,16 @@ func (w *ScheduledDeletionCheckWorker) SetJobQueue(jq queue.JobQueue) {
 //  3. Uses unique constraints to prevent duplicate deletion jobs
 //  4. Advances a keyset cursor and repeats until a page comes back short (exhausted), OR the
 //     total processed reaches maxUsersPerDeletionSweep — Batch S2 Task 4: bounding each
-//     individual query does NOT bound the total users processed in one run, so a
-//     permanently-stuck oldest user cannot starve later users out of every batch forever (see
+//     individual query only bounds that ONE page's size, not the total processed across every
+//     page fetched in this run; the loop below re-queries until exhaustion or the cap, so a
+//     permanently-stuck oldest user cannot starve later users out of every page forever (see
 //     GetUsersScheduledForDeletionPage's doc comment). Hitting the cap logs a WARN and stops this
-//     run early; it does not schedule anything new. The next periodic run (Codex round5 residual
-//     #3) re-starts its own pagination from the oldest still-eligible row rather than resuming
-//     this run's cursor — it reaches users past this run's cap once the ones this run already
-//     enqueued are actually deleted (until then they are cheaply re-skipped via
-//     AccountDeletionUniqueOpts' dedup, not reprocessed).
+//     run early; it does not schedule anything new. The next periodic run re-starts its own
+//     pagination from the oldest still-eligible row rather than resuming this run's cursor —
+//     there is no persisted cross-run cursor (Codex round5 residual #3) — so it reaches users
+//     past this run's cap only once the ones this run already enqueued are actually deleted
+//     (until then they are cheaply re-skipped via AccountDeletionUniqueOpts' dedup, not
+//     reprocessed).
 //
 // Errors in individual deletion enqueueing don't fail the entire job.
 func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[ScheduledDeletionCheckArgs]) (err error) {
@@ -186,6 +194,13 @@ func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[
 		// truncate it now so the enqueue loop below never processes more than the cap allows —
 		// "at most maxUsers enqueued", not "cap-or-more".
 		if remaining := w.maxUsers - totalUsers; fetchedCount >= remaining {
+			// remaining <= 0 only if totalUsers already reached the cap on a prior
+			// iteration, which the break at the bottom of this loop prevents from
+			// happening — guarded explicitly anyway, since users[:remaining] would
+			// panic on a negative slice length.
+			if remaining <= 0 {
+				break
+			}
 			users = users[:remaining]
 		}
 

@@ -83,11 +83,14 @@ DECLARE
     expires_at_type TEXT;
 BEGIN
     SELECT data_type INTO created_at_type FROM information_schema.columns
-        WHERE table_name = 'user_subscription_overrides' AND column_name = 'created_at';
+        WHERE table_name = 'user_subscription_overrides' AND column_name = 'created_at'
+          AND table_schema = current_schema();
     SELECT data_type INTO updated_at_type FROM information_schema.columns
-        WHERE table_name = 'user_subscription_overrides' AND column_name = 'updated_at';
+        WHERE table_name = 'user_subscription_overrides' AND column_name = 'updated_at'
+          AND table_schema = current_schema();
     SELECT data_type INTO expires_at_type FROM information_schema.columns
-        WHERE table_name = 'user_subscription_overrides' AND column_name = 'expires_at';
+        WHERE table_name = 'user_subscription_overrides' AND column_name = 'expires_at'
+          AND table_schema = current_schema();
 
     IF created_at_type = 'timestamp with time zone'
        AND updated_at_type = 'timestamp with time zone'
