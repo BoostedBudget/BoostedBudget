@@ -897,7 +897,37 @@ const cleanupCandidateSelectQuery = `
 	FROM linked_items li
 	WHERE li.cleanup_scheduled_at IS NULL
 	  AND li.status NOT IN ('replaced', 'disconnected')
-	  AND (
+	  AND ` + cleanupCandidateReasonPredicate + `
+`
+
+// cleanupCandidateReasonPredicate is the four-legged OR that answers "is there still a REASON to
+// clean this item up?" — extracted from cleanupCandidateSelectQuery (Issue #1486) so the sweep that
+// SCHEDULES a cleanup and ClaimItemForCleanup, which re-verifies it at the moment the irreversible
+// Plaid /item/remove is about to run, share one piece of text and cannot drift. $1 is the errorDays
+// interval, $2 the staleDays interval, exactly as in cleanupCandidateSelectQuery; a caller splicing
+// this into a statement of its own must start its remaining parameters at $3, and must alias the
+// linked_items row as `li` (the NOT EXISTS leg is correlated on li.id).
+//
+// What is deliberately NOT in here, and why the split falls exactly at this line:
+//
+//   - `li.cleanup_scheduled_at IS NULL` is a CANDIDACY condition for the sweep only ("not already
+//     scheduled"). It is false by construction for every item ClaimItemForCleanup is ever asked
+//     about, because MarkForCleanup set it — so a recheck that reused it verbatim would deny every
+//     claim, and a recheck of "is it still scheduled" would be no recheck at all, since NOTHING in
+//     this codebase clears cleanup_scheduled_at except ItemCleanupWorker itself AFTER a successful
+//     removal (grep `\.ClearCleanupSchedule(` — one production call site,
+//     queue/jobs/item_cleanup.go). A reconnected, fully repaired item still carries its schedule.
+//     ClaimItemForCleanup therefore requires the INVERSE (IS NOT NULL) and adds it itself.
+//   - `li.status NOT IN ('replaced', 'disconnected')` is also sweep-only, and including it in a
+//     recheck would be actively harmful: the re-link path (services/account_service.go, "re-link
+//     detected, soft-deleting old linked item") marks the OLD item 'replaced' WITHOUT calling Plaid
+//     /item/remove, so a 'replaced' item's Plaid item is still live and still billing. Declining to
+//     remove it would strand it forever — the sweep excludes 'replaced' too, so it would never be
+//     re-selected. A 'disconnected' item is the harmless direction: that path removes the item from
+//     Plaid first and only then marks the status (services/plaid_item_cleanup_service.go's
+//     cleanupItems), so a second /item/remove is a wasted API call that PlaidItemCleanupService
+//     already swallows, not a lost one.
+const cleanupCandidateReasonPredicate = `(
 	      -- Items in error state for > errorDays
 	      (li.status IN ('error', 'login_required') AND li.last_error_at < NOW() - $1::interval)
 	      -- OR items with revoked status (immediate cleanup candidate)
@@ -909,8 +939,7 @@ const cleanupCandidateSelectQuery = `
 	          SELECT 1 FROM accounts a
 	          WHERE a.linked_item_id = li.id AND a.status = 'active'
 	      )
-	  )
-`
+	  )`
 
 // cleanupCandidateSortKey is the ASC-NULLS-LAST ordering of GetItemsForCleanup, re-expressed with
 // COALESCE so the identical expression can appear inside a row-comparison keyset predicate — a
@@ -1196,6 +1225,53 @@ func (r *linkedItemRepository) MarkForCleanup(ctx context.Context, itemID string
 	}
 
 	return nil
+}
+
+// ClaimItemForCleanup re-verifies, in ONE statement at the moment of the claim, that a single item
+// is STILL a cleanup candidate, and reports whether the caller may proceed with the irreversible
+// Plaid /item/remove. Issue #1486.
+//
+// Returns (true, nil) when the item is still scheduled AND still matches
+// cleanupCandidateReasonPredicate (see that constant for why the recheck is eligibility and not
+// merely "is it still scheduled"), and (false, nil) — a LEGITIMATE, EXPECTED outcome and NOT an
+// error — when it is not: the user repaired the connection through Plaid Link update mode, accounts
+// came back, the row was already removed, or the schedule was cancelled. Callers MUST treat
+// (false, nil) as success-with-nothing-to-do and MUST NOT call RemoveItem; they must fail closed on
+// a non-nil error rather than proceeding, because "we could not tell" is not "still eligible".
+//
+// errorDays/staleDays must be the SAME thresholds the sweep used when it scheduled the item
+// (queue/jobs/item_cleanup_check.go keeps both workers on one pair of defaults for exactly this
+// reason) — a recheck run with a stricter threshold than the sweep would deny claims the sweep
+// legitimately created and strand still-billing items.
+//
+// Why an UPDATE whose RowsAffected is the answer, mirroring ClaimForDeletion
+// (profile_repository.go), rather than a SELECT: the write takes a row lock, so a concurrent
+// repair transaction that has already written the row but not yet committed blocks this statement
+// instead of being invisible to it. Under READ COMMITTED an UPDATE re-evaluates its WHERE against
+// the freshly committed row once the lock is granted, so the repair correctly denies the claim; a
+// plain SELECT would have read the pre-repair snapshot and granted it, and the resulting
+// /item/remove cannot be undone. `SET updated_at = NOW()` is redundant with the
+// update_linked_items_updated_at BEFORE UPDATE trigger (which assigns NEW.updated_at
+// unconditionally) and is written out anyway to keep the statement's intent readable — note the
+// consequence, that a DENIED claim still bumps updated_at.
+//
+// This is a re-verification, NOT a lease: it grants no exclusivity that outlives the statement.
+// What prevents two cleanup jobs racing on one item is ItemCleanupUniqueOpts' job-level uniqueness.
+func (r *linkedItemRepository) ClaimItemForCleanup(ctx context.Context, itemID string, errorDays, staleDays int) (bool, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE linked_items li
+		SET updated_at = NOW()
+		WHERE li.id = $3
+		  AND li.cleanup_scheduled_at IS NOT NULL
+		  AND `+cleanupCandidateReasonPredicate,
+		strings.TrimSpace(fmt.Sprintf("%d days", errorDays)),
+		strings.TrimSpace(fmt.Sprintf("%d days", staleDays)),
+		itemID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("ClaimItemForCleanup: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
 }
 
 // ClearCleanupSchedule clears the cleanup schedule for an item (e.g., if user reconnected).

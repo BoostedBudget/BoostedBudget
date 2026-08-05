@@ -66,6 +66,21 @@ func (m *MockLinkedItemRepoForCleanup) ClearCleanupSchedule(ctx context.Context,
 	return args.Error(0)
 }
 
+// ClaimItemForCleanup (Issue #1486) is the eligibility recheck ItemCleanupWorker.Work must perform
+// before the irreversible Plaid /item/remove. A real testify expectation, not a no-op stub: whether
+// it is called at all, and with which thresholds, is exactly what these tests assert.
+func (m *MockLinkedItemRepoForCleanup) ClaimItemForCleanup(ctx context.Context, itemID string, errorDays, staleDays int) (bool, error) {
+	args := m.Called(ctx, itemID, errorDays, staleDays)
+	return args.Bool(0), args.Error(1)
+}
+
+// expectCleanupClaimGranted programs the recheck to grant the claim, which is the precondition for
+// every pre-existing test in this file: they were all written before the recheck existed and all
+// assert the removal path.
+func expectCleanupClaimGranted(mockRepo *MockLinkedItemRepoForCleanup, ctx context.Context, itemID string) {
+	mockRepo.On("ClaimItemForCleanup", ctx, itemID, defaultCleanupErrorDays, defaultCleanupStaleDays).Return(true, nil)
+}
+
 // Implement other interface methods (not used in item_cleanup.go but required)
 // GetItemsForCleanupPage satisfies LinkedItemCleanupRepository (Issue #1469). ItemCleanupWorker —
 // the worker these tests exercise — never calls it; it shares the interface with
@@ -116,6 +131,197 @@ func newTestItemCleanupJob(args ItemCleanupArgs) *river.Job[ItemCleanupArgs] {
 	}
 }
 
+// TestItemCleanupWorker_Work_NoLongerEligible_SkipsIrreversibleRemoval is Issue #1486's failing-
+// first test. The job was enqueued (and, for the deferred legs, sat behind a 7-day grace period)
+// while the item was a cleanup candidate; by the time it runs, the user has reconnected. Nothing
+// clears cleanup_scheduled_at on reconnect — the only production ClearCleanupSchedule call is this
+// worker's own, AFTER a successful removal — so the ONLY thing that can stop the irreversible Plaid
+// /item/remove is an eligibility recheck at execution time.
+//
+// Before the fix, Work called RemoveItem unconditionally and this test failed on
+// AssertNotCalled(RemoveItem).
+func TestItemCleanupWorker_Work_NoLongerEligible_SkipsIrreversibleRemoval(t *testing.T) {
+	ctx := context.Background()
+	linkedItemID := "item-reconnected"
+
+	mockCleanupSvc := new(MockPlaidCleanupService)
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+
+	mockRepo.On("ClaimItemForCleanup", ctx, linkedItemID, defaultCleanupErrorDays, defaultCleanupStaleDays).
+		Return(false, nil)
+	// Declining releases the stale schedule so the sweep (which requires cleanup_scheduled_at IS
+	// NULL) can consider the item again if it degrades a second time.
+	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+
+	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
+		PlaidCleanupSvc: mockCleanupSvc,
+		LinkedItemRepo:  mockRepo,
+		Logger:          slog.Default(),
+	})
+
+	err := worker.Work(ctx, newTestItemCleanupJob(ItemCleanupArgs{
+		LinkedItemID: linkedItemID,
+		UserID:       "user-456",
+		Reason:       "long_term_error",
+	}))
+
+	// A no-longer-eligible item is a SUCCESS with nothing to do, not a failure: returning an error
+	// would retry the job and re-attempt the same removal.
+	require.NoError(t, err)
+	mockCleanupSvc.AssertNotCalled(t, "RemoveItem")
+	mockRepo.AssertNotCalled(t, "Delete")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestItemCleanupWorker_Work_StillEligible_ProceedsWithRemoval is the mandatory sibling of the test
+// above. Without it, that test could pass because the claim always denies, or because the worker
+// skips everything unconditionally — the both-false trap. Together they pin that the recheck
+// DISCRIMINATES.
+func TestItemCleanupWorker_Work_StillEligible_ProceedsWithRemoval(t *testing.T) {
+	ctx := context.Background()
+	linkedItemID := "item-still-broken"
+
+	mockCleanupSvc := new(MockPlaidCleanupService)
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+
+	expectCleanupClaimGranted(mockRepo, ctx, linkedItemID)
+	expectCleanupClaimGranted(mockRepo, ctx, linkedItemID)
+	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
+	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
+
+	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
+		PlaidCleanupSvc: mockCleanupSvc,
+		LinkedItemRepo:  mockRepo,
+		Logger:          slog.Default(),
+	})
+
+	err := worker.Work(ctx, newTestItemCleanupJob(ItemCleanupArgs{
+		LinkedItemID: linkedItemID,
+		UserID:       "user-456",
+		Reason:       "long_term_error",
+	}))
+
+	require.NoError(t, err)
+	mockCleanupSvc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestItemCleanupWorker_Work_ClaimError_FailsClosed pins that "we could not tell" is never treated
+// as "still eligible". A recheck that errored must NOT be followed by an irreversible removal; the
+// job returns an error so River retries it.
+func TestItemCleanupWorker_Work_ClaimError_FailsClosed(t *testing.T) {
+	ctx := context.Background()
+	linkedItemID := "item-claim-errors"
+
+	mockCleanupSvc := new(MockPlaidCleanupService)
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+
+	mockRepo.On("ClaimItemForCleanup", ctx, linkedItemID, defaultCleanupErrorDays, defaultCleanupStaleDays).
+		Return(false, errors.New("database is down"))
+
+	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
+		PlaidCleanupSvc: mockCleanupSvc,
+		LinkedItemRepo:  mockRepo,
+		Logger:          slog.Default(),
+	})
+
+	err := worker.Work(ctx, newTestItemCleanupJob(ItemCleanupArgs{
+		LinkedItemID: linkedItemID,
+		UserID:       "user-456",
+		Reason:       "stale",
+	}))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "database is down")
+	mockCleanupSvc.AssertNotCalled(t, "RemoveItem")
+	// The schedule must survive a claim error: clearing it would hide the item from the sweep too.
+	mockRepo.AssertNotCalled(t, "ClearCleanupSchedule")
+	mockRepo.AssertNotCalled(t, "Delete")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestItemCleanupWorker_Work_DeclinedClaim_ClearScheduleErrorDoesNotFail pins that releasing the
+// stale schedule is best-effort: a failure there must not turn a benign skip into a retried job.
+func TestItemCleanupWorker_Work_DeclinedClaim_ClearScheduleErrorDoesNotFail(t *testing.T) {
+	ctx := context.Background()
+	linkedItemID := "item-reconnected-clear-fails"
+
+	mockCleanupSvc := new(MockPlaidCleanupService)
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+
+	mockRepo.On("ClaimItemForCleanup", ctx, linkedItemID, defaultCleanupErrorDays, defaultCleanupStaleDays).
+		Return(false, nil)
+	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(errors.New("database error"))
+
+	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
+		PlaidCleanupSvc: mockCleanupSvc,
+		LinkedItemRepo:  mockRepo,
+		Logger:          slog.Default(),
+	})
+
+	err := worker.Work(ctx, newTestItemCleanupJob(ItemCleanupArgs{
+		LinkedItemID: linkedItemID,
+		UserID:       "user-456",
+		Reason:       "zero_accounts",
+	}))
+
+	require.NoError(t, err)
+	mockCleanupSvc.AssertNotCalled(t, "RemoveItem")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestItemCleanupWorker_Work_UsesConfiguredThresholds pins that the recheck is run with the
+// worker's CONFIGURED thresholds, not the package defaults — the pairing with the sweep is what
+// keeps the recheck from denying claims the sweep legitimately created.
+func TestItemCleanupWorker_Work_UsesConfiguredThresholds(t *testing.T) {
+	ctx := context.Background()
+	linkedItemID := "item-custom-thresholds"
+
+	mockCleanupSvc := new(MockPlaidCleanupService)
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+
+	// Deliberately NOT expectCleanupClaimGranted: this test's whole point is that the CONFIGURED
+	// 5/11 reach the recheck, so the default-threshold expectation must be absent.
+	mockRepo.On("ClaimItemForCleanup", ctx, linkedItemID, 5, 11).Return(true, nil)
+	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
+	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
+
+	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
+		PlaidCleanupSvc:    mockCleanupSvc,
+		LinkedItemRepo:     mockRepo,
+		Logger:             slog.Default(),
+		ErrorDaysThreshold: 5,
+		StaleDaysThreshold: 11,
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestItemCleanupJob(ItemCleanupArgs{
+		LinkedItemID: linkedItemID,
+		UserID:       "user-456",
+		Reason:       "revoked",
+	})))
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestItemCleanupWorkers_ShareEligibilityThresholdDefaults pins the invariant defaultCleanupErrorDays
+// / defaultCleanupStaleDays exist for: the sweep that SCHEDULES a cleanup and the worker that
+// RE-VERIFIES it must default to the same thresholds, or the recheck silently denies claims the
+// sweep created and the item keeps billing forever (its cleanup_scheduled_at stays set, so the
+// sweep never re-selects it).
+func TestItemCleanupWorkers_ShareEligibilityThresholdDefaults(t *testing.T) {
+	sweep := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{})
+	remover := NewItemCleanupWorker(ItemCleanupWorkerDeps{})
+
+	assert.Equal(t, sweep.errorDaysThreshold, remover.errorDaysThreshold,
+		"the sweep and the eligibility recheck must default to the same errorDays threshold")
+	assert.Equal(t, sweep.staleDaysThreshold, remover.staleDaysThreshold,
+		"the sweep and the eligibility recheck must default to the same staleDays threshold")
+	assert.Equal(t, defaultCleanupErrorDays, remover.errorDaysThreshold)
+	assert.Equal(t, defaultCleanupStaleDays, remover.staleDaysThreshold)
+}
+
 func TestItemCleanupArgs_Kind(t *testing.T) {
 	args := ItemCleanupArgs{}
 	assert.Equal(t, "item_cleanup", args.Kind())
@@ -129,6 +335,7 @@ func TestItemCleanupWorker_Work_Success(t *testing.T) {
 	mockCleanupSvc := new(MockPlaidCleanupService)
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 
+	expectCleanupClaimGranted(mockRepo, ctx, linkedItemID)
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
 	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
@@ -160,6 +367,7 @@ func TestItemCleanupWorker_Work_ItemNotFoundSkipsCleanup(t *testing.T) {
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 
 	// Return item not found error - this should result in success
+	expectCleanupClaimGranted(mockRepo, ctx, linkedItemID)
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).
 		Return(repository.ErrLinkedItemNotFound)
 	// Delete IS called even when item-not-found — orphan DB row must be cleaned up
@@ -195,6 +403,7 @@ func TestItemCleanupWorker_Work_CleanupError(t *testing.T) {
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 
 	cleanupErr := errors.New("plaid API error")
+	expectCleanupClaimGranted(mockRepo, ctx, linkedItemID)
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(cleanupErr)
 
 	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
@@ -225,6 +434,7 @@ func TestItemCleanupWorker_Work_ClearScheduleErrorDoesNotFail(t *testing.T) {
 	mockCleanupSvc := new(MockPlaidCleanupService)
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 
+	expectCleanupClaimGranted(mockRepo, ctx, linkedItemID)
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 	// ClearCleanupSchedule fails - but job should still succeed
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).
@@ -259,6 +469,7 @@ func TestItemCleanupWorker_Work_ZeroAccountsReason(t *testing.T) {
 	mockCleanupSvc := new(MockPlaidCleanupService)
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 
+	expectCleanupClaimGranted(mockRepo, ctx, linkedItemID)
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
 	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
@@ -291,6 +502,7 @@ func TestItemCleanupWorker_Work_UserDeletionReason(t *testing.T) {
 	mockCleanupSvc := new(MockPlaidCleanupService)
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 
+	expectCleanupClaimGranted(mockRepo, ctx, linkedItemID)
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
 	mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
@@ -357,6 +569,7 @@ func TestItemCleanupWorker_Work_AllReasons(t *testing.T) {
 			mockCleanupSvc := new(MockPlaidCleanupService)
 			mockRepo := new(MockLinkedItemRepoForCleanup)
 
+			expectCleanupClaimGranted(mockRepo, ctx, linkedItemID)
 			mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 			mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
 			mockRepo.On("Delete", ctx, linkedItemID).Return(nil)
@@ -390,6 +603,7 @@ func TestItemCleanupWorker_Work_DeleteErrorDoesNotFail(t *testing.T) {
 	mockCleanupSvc := new(MockPlaidCleanupService)
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 
+	expectCleanupClaimGranted(mockRepo, ctx, linkedItemID)
 	mockCleanupSvc.On("RemoveItem", ctx, linkedItemID).Return(nil)
 	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
 	// Delete fails - job should still succeed (best-effort)

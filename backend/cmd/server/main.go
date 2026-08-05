@@ -1194,10 +1194,16 @@ func main() {
 
 				// Issue #668: Create ItemCleanupWorker for executing individual item cleanup
 				// Calls Plaid /item/remove to stop billing for orphaned items
+				// ErrorDaysThreshold/StaleDaysThreshold MUST match the check worker's above
+				// (Issue #1486): this worker re-verifies eligibility with them immediately before
+				// the irreversible Plaid /item/remove, and a stricter pair here would silently
+				// decline cleanups the sweep legitimately scheduled.
 				itemCleanupWorker = jobs.NewItemCleanupWorker(jobs.ItemCleanupWorkerDeps{
-					PlaidCleanupSvc: plaidCleanupService,
-					LinkedItemRepo:  linkedItemRepo,
-					Logger:          appLogger,
+					PlaidCleanupSvc:    plaidCleanupService,
+					LinkedItemRepo:     linkedItemRepo,
+					Logger:             appLogger,
+					ErrorDaysThreshold: 30, // must equal ItemCleanupCheckWorkerDeps.ErrorDaysThreshold above
+					StaleDaysThreshold: 60, // must equal ItemCleanupCheckWorkerDeps.StaleDaysThreshold above
 				})
 				appLogger.Info("Item cleanup worker created")
 
