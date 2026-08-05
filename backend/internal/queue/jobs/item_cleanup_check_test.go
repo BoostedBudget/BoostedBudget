@@ -55,6 +55,16 @@ func (m *MockLinkedItemCleanupRepo) MarkForCleanup(ctx context.Context, itemID s
 	return args.Error(0)
 }
 
+// ClaimItemForCleanup (Issue #1486) is never called through THIS mock — it belongs to
+// ItemCleanupWorker, not to the sweep this file exercises — so it is a bare no-op returning "not
+// claimable" rather than a testify expectation, which would panic as unregistered. Stubbed only to
+// satisfy the widened LinkedItemCleanupRepository interface. Returning false is the fail-safe
+// direction: were the sweep ever to start calling it, no test here would silently authorise an
+// irreversible removal.
+func (m *MockLinkedItemCleanupRepo) ClaimItemForCleanup(ctx context.Context, itemID string, errorDays, staleDays int) (bool, error) {
+	return false, nil
+}
+
 func (m *MockLinkedItemCleanupRepo) ClearCleanupSchedule(ctx context.Context, itemID string) error {
 	args := m.Called(ctx, itemID)
 	return args.Error(0)

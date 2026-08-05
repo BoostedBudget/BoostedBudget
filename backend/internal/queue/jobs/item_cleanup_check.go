@@ -35,6 +35,22 @@ func (ItemCleanupCheckArgs) Kind() string { return "item_cleanup_check" }
 // expiredRetentionPageSize; a page's cost is a row fetch either way.
 const itemCleanupCheckPageSize = 500
 
+// defaultCleanupErrorDays / defaultCleanupStaleDays are the item-cleanup eligibility thresholds
+// shared by BOTH halves of the flow: the sweep (ItemCleanupCheckWorker) that decides an item is a
+// candidate and schedules it, and the per-item eligibility recheck (ItemCleanupWorker →
+// ClaimItemForCleanup) that re-verifies it just before the irreversible Plaid /item/remove.
+//
+// Issue #1486: they are constants shared by both constructors, rather than two independently
+// defaulted fields, because a mismatch is silent and one-directional. A recheck running a STRICTER
+// threshold than the sweep would deny claims the sweep legitimately created — every affected item
+// would keep its cleanup_scheduled_at (so the sweep, which requires IS NULL, never re-selects it)
+// and keep billing, with nothing in the logs but a routine "no longer a candidate" skip.
+// TestItemCleanupWorkers_ShareEligibilityThresholdDefaults pins the pairing.
+const (
+	defaultCleanupErrorDays = 30
+	defaultCleanupStaleDays = 60
+)
+
 // maxItemsPerCleanupSweep bounds the TOTAL number of items Work() marks for cleanup and enqueues
 // across every page fetched within ONE run.
 //
@@ -46,21 +62,23 @@ const itemCleanupCheckPageSize = 500
 //   - determineCleanupReasonAndTiming returns ("zero_accounts", true) for the zero-active-accounts
 //     leg, and isImmediate sets cleanupAt = now (see the enqueue loop in Work). **That leg gets no
 //     grace period whatsoever** — its ItemCleanup job is scheduled for immediate execution.
-//   - ItemCleanupWorker.Work (item_cleanup.go) calls plaidCleanupSvc.RemoveItem straight away. It
-//     performs **no** recheck that cleanup_scheduled_at still stands and **no** reconnection check,
-//     despite its own doc comment claiming it "Validates the item still needs cleanup (grace period
-//     expired, not reconnected)" and that cleanup "is skipped" if the user reconnected. That
-//     validation does not exist in the body.
-//   - The only production ClearCleanupSchedule call is in item_cleanup.go, AFTER a successful
-//     RemoveItem. It is post-hoc state cleanup, **not** a cancellation hook, and nothing calls it on
-//     reconnection.
+//   - ItemCleanupWorker.Work (item_cleanup.go) used to call plaidCleanupSvc.RemoveItem straight
+//     away, with **no** recheck of any kind, despite its own doc comment claiming it "Validates the
+//     item still needs cleanup (grace period expired, not reconnected)". **Issue #1486 fixed that**:
+//     Work now calls ClaimItemForCleanup first and skips the Plaid call when the item is no longer a
+//     candidate. What that does NOT change is this cap's derivation — see the ⚠ note below the
+//     bullet list.
+//   - The only production ClearCleanupSchedule calls are in item_cleanup.go: one after a successful
+//     RemoveItem (post-hoc state cleanup) and, as of #1486, one releasing the stale schedule when
+//     the recheck declines. Neither is a cancellation hook that anything ELSE calls — in particular,
+//     **nothing clears cleanup_scheduled_at on reconnection**, which is precisely why #1486's
+//     recheck had to re-evaluate ELIGIBILITY rather than re-read the schedule.
 //
-// So for the zero-accounts leg there is no window, no cancellation path, and no recheck: a
+// So for the zero-accounts leg there is still no grace window and no external cancellation path — a
 // misclassification (account replacement in flight, a concurrent account create, an accounts row
-// briefly non-'active') schedules an immediate, irreversible Plaid /item/remove. The
-// error/login_required/stale legs DO carry gracePeriodDays (7 by default) before their job becomes
-// eligible, but even they get no recheck when it fires. Tracked as its own issue — the fix belongs in
-// ItemCleanupWorker, not in this cap.
+// briefly non-'active') still schedules an IMMEDIATE Plaid /item/remove. What #1486 added is a
+// recheck at execution time, which closes the transient-misclassification case for every leg whose
+// cause has since cleared, but cannot help a row that is genuinely, persistently a candidate.
 //
 // GIVEN that, the cap is derived from the ASYMMETRY between its two error directions, which is the
 // only ground left once reversibility is off the table. The two directions are not comparable:
@@ -89,16 +107,31 @@ const itemCleanupCheckPageSize = 500
 //     and when the recoverable direction is this cheap there is no reason to buy throughput with
 //     irreversible risk on either sweep.
 //   - The previous value was 10,000, justified on a reversibility argument (a 7-day grace window and
-//     ClearCleanupSchedule as a cancellation hook) that the three verified facts above disprove for
-//     the immediate legs, and that no leg actually gets, since none is rechecked when its job fires.
-//     Do not restore 10,000, and do not raise this citing a grace period or a cancellation path:
-//     neither exists today.
+//     ClearCleanupSchedule as a cancellation hook) that the facts above disprove for the immediate
+//     leg. Do not restore 10,000, and do not raise this citing a grace period or a cancellation
+//     path: the zero-accounts leg still gets neither.
 //   - At itemCleanupCheckPageSize=500 the cap is 2 page round-trips, so it is reached on a page
 //     boundary rather than by mid-page truncation in the common case.
 //
-// Raising this becomes defensible only once ItemCleanupWorker actually rechecks that the schedule
-// still stands before calling Plaid — i.e. once the deferred legs are genuinely cancellable and the
-// immediate leg is either rechecked or given a window. That is a precondition, not a formality.
+// ⚠ WHAT ISSUE #1486 DID AND DID NOT CHANGE ABOUT THIS CAP. The earlier version of this comment
+// named the missing execution-time recheck as the PRECONDITION for raising the cap. That
+// precondition is now satisfied (ItemCleanupWorker.Work → ClaimItemForCleanup), so the sentence has
+// been removed rather than left standing as a prohibition whose stated reason no longer holds. The
+// cap is nonetheless LEFT AT 1,000, on narrower and now-accurate grounds:
+//
+//   - The recheck removes the STALE-decision risk (an item that stopped being a candidate between
+//     being scheduled and its job running), which is the risk a large batch multiplies. It does not
+//     make the action reversible: every item that IS still a candidate is still irreversibly
+//     removed, so a run's blast radius is still "up to N irreversible Plaid removals", just
+//     N accurate ones.
+//   - The remaining reasons not to raise it are therefore (a) the accuracy of the PREDICATE itself,
+//     which the recheck re-evaluates but does not validate — a predicate that is wrong is wrong
+//     twice, at schedule time and at claim time — and (b) throughput/round-trip cost, which nothing
+//     currently pressures: there are no production users, so no backlog exists to drain.
+//   - Raising it is now a legitimate change to propose on throughput evidence (a real backlog, the
+//     cap-hit WARN firing run after run) plus the drain arithmetic above. It is no longer blocked on
+//     a missing safety property. It must NOT be raised on the argument that the recheck makes
+//     cleanup reversible — it does not.
 //
 // Hitting the cap does NOT reschedule or retry anything: it stops THIS run early and logs a WARN
 // naming how many items were processed. The periodic registration re-runs the job on its own
@@ -129,6 +162,23 @@ type LinkedItemCleanupRepository interface {
 	GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error)
 	// MarkForCleanup marks an item for cleanup with the scheduled cleanup time
 	MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error
+	// ClaimItemForCleanup re-verifies, in one statement, that a single item is STILL a cleanup
+	// candidate and reports whether the caller may proceed with the irreversible Plaid
+	// /item/remove. Issue #1486: ItemCleanupWorker.Work used to call RemoveItem with no check of
+	// any kind, however long the job had been queued behind its grace period.
+	//
+	// (false, nil) is a LEGITIMATE outcome, not an error — the user reconnected, accounts came
+	// back, or the row is gone. A non-nil error must be treated as "cannot tell", which is NOT
+	// "still eligible": fail closed and let the job retry.
+	//
+	// Declared HERE and on the concrete repository only — deliberately NOT on the wide
+	// repository.LinkedItemRepository, whose mocks live in several test files. Same placement, and
+	// for the same reason, as GetItemsForCleanupPage above. See
+	// repository.linkedItemRepository.ClaimItemForCleanup and the
+	// cleanupCandidateReasonPredicate constant it splices for why the recheck re-evaluates
+	// ELIGIBILITY rather than merely re-reading cleanup_scheduled_at (nothing clears that on
+	// reconnect), and for the two sweep-only conditions it deliberately does not reuse.
+	ClaimItemForCleanup(ctx context.Context, itemID string, errorDays, staleDays int) (bool, error)
 	// ClearCleanupSchedule clears the cleanup schedule (e.g., if user reconnected)
 	ClearCleanupSchedule(ctx context.Context, itemID string) error
 	// Delete hard-deletes the linked_items row after Plaid billing is stopped.
@@ -215,8 +265,8 @@ func NewItemCleanupCheckWorker(deps ItemCleanupCheckWorkerDeps) *ItemCleanupChec
 		jobQueue:           deps.JobQueue,
 		logger:             logger,
 		gracePeriodDays:    intOrDefault(deps.GracePeriodDays, 7),
-		errorDaysThreshold: intOrDefault(deps.ErrorDaysThreshold, 30),
-		staleDaysThreshold: intOrDefault(deps.StaleDaysThreshold, 60),
+		errorDaysThreshold: intOrDefault(deps.ErrorDaysThreshold, defaultCleanupErrorDays),
+		staleDaysThreshold: intOrDefault(deps.StaleDaysThreshold, defaultCleanupStaleDays),
 		cleanupPageSize:    intOrDefault(deps.CleanupPageSize, itemCleanupCheckPageSize),
 		maxItemsPerSweep:   intOrDefault(deps.MaxItemsPerCleanupSweep, maxItemsPerCleanupSweep),
 	}

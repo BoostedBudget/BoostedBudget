@@ -40,6 +40,11 @@ type ItemCleanupWorker struct {
 	plaidCleanupSvc services.PlaidItemCleanupService
 	linkedItemRepo  LinkedItemCleanupRepository
 	logger          *slog.Logger
+	// errorDaysThreshold / staleDaysThreshold are the eligibility thresholds the per-item recheck
+	// (ClaimItemForCleanup) re-evaluates with. They MUST match the sweep's — see
+	// defaultCleanupErrorDays in item_cleanup_check.go for what a mismatch costs.
+	errorDaysThreshold int
+	staleDaysThreshold int
 }
 
 // ItemCleanupWorkerDeps contains the dependencies for ItemCleanupWorker.
@@ -47,6 +52,12 @@ type ItemCleanupWorkerDeps struct {
 	PlaidCleanupSvc services.PlaidItemCleanupService
 	LinkedItemRepo  LinkedItemCleanupRepository
 	Logger          *slog.Logger
+	// ErrorDaysThreshold / StaleDaysThreshold must be given the SAME values as
+	// ItemCleanupCheckWorkerDeps' fields of the same names (Issue #1486). Zero/unset uses the
+	// shared defaultCleanupErrorDays / defaultCleanupStaleDays, which is what keeps the two
+	// workers in step when neither is configured explicitly.
+	ErrorDaysThreshold int
+	StaleDaysThreshold int
 }
 
 // NewItemCleanupWorker creates a new item cleanup worker.
@@ -56,20 +67,28 @@ func NewItemCleanupWorker(deps ItemCleanupWorkerDeps) *ItemCleanupWorker {
 		logger = slog.Default()
 	}
 	return &ItemCleanupWorker{
-		plaidCleanupSvc: deps.PlaidCleanupSvc,
-		linkedItemRepo:  deps.LinkedItemRepo,
-		logger:          logger,
+		plaidCleanupSvc:    deps.PlaidCleanupSvc,
+		linkedItemRepo:     deps.LinkedItemRepo,
+		logger:             logger,
+		errorDaysThreshold: intOrDefault(deps.ErrorDaysThreshold, defaultCleanupErrorDays),
+		staleDaysThreshold: intOrDefault(deps.StaleDaysThreshold, defaultCleanupStaleDays),
 	}
 }
 
 // Work processes an item cleanup job.
 //
 // The worker:
-//  1. Validates the item still needs cleanup (grace period expired, not reconnected)
+//  1. Re-verifies that the item is STILL a cleanup candidate (ClaimItemForCleanup) — Issue #1486.
+//     Until then this comment claimed a validation the body did not perform.
 //  2. Calls PlaidItemCleanupService.RemoveItem() to call Plaid /item/remove
-//  3. Logs the cleanup for audit
+//  3. Clears the cleanup schedule and hard-deletes the linked_items row (both best-effort)
+//  4. Logs the cleanup for audit
 //
-// If the user has reconnected the item during the grace period, the cleanup is skipped.
+// If the item is no longer a candidate — the user reconnected it through Plaid Link update mode,
+// its accounts came back, or its error cleared — step 1 declines, the stale schedule is released,
+// and the job returns nil WITHOUT calling Plaid. What it does NOT do is check "is the grace period
+// expired": that is River's job, not this worker's (the sweep enqueues with WithScheduledAt), and
+// nothing here re-derives it.
 func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanupArgs]) (err error) {
 	args := job.Args
 
@@ -92,6 +111,55 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 	}()
 
 	startTime := time.Now()
+
+	// Issue #1486: re-verify ELIGIBILITY before the irreversible Plaid /item/remove.
+	//
+	// This job may have been queued for a long time — the error/login_required/stale legs schedule
+	// it a full gracePeriodDays out (ItemCleanupCheckWorker), and River retries add more — and the
+	// user can repair the connection through Plaid Link update mode at any point in that window.
+	// Nothing marks that repair on the cleanup schedule: the only production
+	// ClearCleanupSchedule call is this worker's own, below, AFTER a successful removal. So a
+	// reconnected item still carries cleanup_scheduled_at, and a recheck of "is it still
+	// scheduled" would authorise removing it. The recheck therefore re-asks the sweep's own
+	// question — "is this still a cleanup candidate?" — against the same shared SQL predicate the
+	// sweep selected it with (repository.cleanupCandidateReasonPredicate).
+	claimed, claimErr := w.linkedItemRepo.ClaimItemForCleanup(ctx, args.LinkedItemID, w.errorDaysThreshold, w.staleDaysThreshold)
+	if claimErr != nil {
+		// Fail CLOSED. "We could not tell" is not "still eligible", and /item/remove cannot be
+		// undone — returning an error leaves the schedule intact and lets River retry.
+		w.logger.Error("failed to re-verify item cleanup eligibility, not removing item",
+			"job_id", job.ID,
+			"linked_item_id", args.LinkedItemID,
+			"error", claimErr,
+		)
+		return fmt.Errorf("failed to re-verify cleanup eligibility for item %s: %w", args.LinkedItemID, claimErr)
+	}
+	if !claimed {
+		w.logger.Info("item is no longer a cleanup candidate, skipping Plaid removal",
+			"job_id", job.ID,
+			"linked_item_id", args.LinkedItemID,
+			"user_id", args.UserID,
+			"reason", args.Reason,
+		)
+
+		// Release the now-stale schedule (best-effort). Chosen over leaving it set: the sweep's
+		// candidate predicate requires cleanup_scheduled_at IS NULL, so an item that keeps a
+		// schedule it will never act on is invisible to every future sweep — if it degrades again
+		// later it would never be cleaned up, and Plaid would bill for it indefinitely. Keeping the
+		// row as an audit trail is not worth that: the audit record lives in this log line and in
+		// the completed River job, neither of which the clear touches. A failure here is logged and
+		// swallowed, exactly like the post-removal clear below — turning a benign skip into a
+		// retried job would re-run this same no-op.
+		if clearErr := w.linkedItemRepo.ClearCleanupSchedule(ctx, args.LinkedItemID); clearErr != nil {
+			w.logger.Warn("failed to clear stale cleanup schedule for a no-longer-eligible item",
+				"linked_item_id", args.LinkedItemID,
+				"error", clearErr,
+			)
+		}
+
+		// A no-longer-eligible item is a SUCCESS with nothing to do, not a failure.
+		return nil
+	}
 
 	// Call cleanup service to remove the item from Plaid
 	removeErr := w.plaidCleanupSvc.RemoveItem(ctx, args.LinkedItemID)
