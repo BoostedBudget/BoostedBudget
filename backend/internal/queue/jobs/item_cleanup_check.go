@@ -38,28 +38,53 @@ const itemCleanupCheckPageSize = 500
 // maxItemsPerCleanupSweep bounds the TOTAL number of items Work() marks for cleanup and enqueues
 // across every page fetched within ONE run.
 //
-// 10,000 — deliberately BETWEEN the two sibling sweeps' caps, and derived from where this job's
-// per-row action sits between theirs on both recoverability and cost:
+// ⚠ FIRST, the correction that matters most, because this comment's first version got it wrong and
+// the wrong version was the whole basis for choosing 10,000: **this sweep's per-row action is NOT
+// uniformly deferred, and NOT reversible.** Three verified facts, each of which contradicts a claim
+// the earlier draft made:
 //
-//   - 10x maxUsersPerRetentionSweep (1,000), because that sweep's loop body IS an irreversible hard
-//     delete executed inline, whereas this loop body only STAMPS cleanup_scheduled_at and enqueues a
-//     job scheduled gracePeriodDays (7 by default) in the future. The irreversible step — Plaid
-//     /item/remove, in ItemCleanupWorker — has not happened when this run ends, and
-//     ClearCleanupSchedule exists precisely to undo a scheduling during that window (it is what
-//     runs when a user reconnects). A generous cap here risks a bounded amount of REVERSIBLE work.
-//   - 1/5 of maxUsersPerDeletionSweep (50,000), because that sweep's loop body is a single River
-//     enqueue, while this one performs up to three round-trips per row:
-//     CountActiveByLinkedItemID (determineCleanupReasonAndTiming), MarkForCleanup, and the enqueue.
-//     The same time budget therefore covers proportionally fewer rows.
+//   - determineCleanupReasonAndTiming returns ("zero_accounts", true) for the zero-active-accounts
+//     leg, and isImmediate sets cleanupAt = now (see the enqueue loop in Work). **That leg gets no
+//     grace period whatsoever** — its ItemCleanup job is scheduled for immediate execution.
+//   - ItemCleanupWorker.Work (item_cleanup.go) calls plaidCleanupSvc.RemoveItem straight away. It
+//     performs **no** recheck that cleanup_scheduled_at still stands and **no** reconnection check,
+//     despite its own doc comment claiming it "Validates the item still needs cleanup (grace period
+//     expired, not reconnected)" and that cleanup "is skipped" if the user reconnected. That
+//     validation does not exist in the body.
+//   - The only production ClearCleanupSchedule call is in item_cleanup.go, AFTER a successful
+//     RemoveItem. It is post-hoc state cleanup, **not** a cancellation hook, and nothing calls it on
+//     reconnection.
 //
-// Sanity-checked against the population: linked_items holds roughly one row per user per linked
-// institution, and this job's dedup period is 24 hours (ItemCleanupCheckUniqueOpts), so 10,000 is a
-// per-day ceiling far above any plausible steady-state candidate volume — it does not throttle
-// correct operation. It is still low enough that a wrong predicate (the zero-active-accounts leg is
-// the easiest one to misfire, since it matches any item with no active accounts at all) schedules a
-// bounded number of disconnects per day rather than the whole table, with a WARN log and a 7-day
-// grace window in which a human can intervene. At itemCleanupCheckPageSize=500 the cap is 20 page
-// round-trips.
+// So for the zero-accounts leg there is no window, no cancellation path, and no recheck: a
+// misclassification (account replacement in flight, a concurrent account create, an accounts row
+// briefly non-'active') schedules an immediate, irreversible Plaid /item/remove. The
+// error/login_required/stale legs DO carry gracePeriodDays (7 by default) before their job becomes
+// eligible, but even they get no recheck when it fires. Tracked as its own issue — the fix belongs in
+// ItemCleanupWorker, not in this cap.
+//
+// GIVEN that, 10,000 is justified as a deliberately CONSERVATIVE blast-radius bound, not as a
+// "reversible work is cheap" allowance:
+//
+//   - It is not defended on reversibility at all. Treat every one of the 10,000 as potentially
+//     irreversible-on-the-same-tick, because for the zero-accounts leg it is.
+//   - It is 1/5 of maxUsersPerDeletionSweep (50,000) on cost grounds, which is the one comparison
+//     that does hold: that sweep's loop body is a single River enqueue, while this one performs up to
+//     three round-trips per row (CountActiveByLinkedItemID via
+//     determineCleanupReasonAndTiming, MarkForCleanup, and the enqueue), so the same time budget
+//     covers proportionally fewer rows.
+//   - It is above maxUsersPerRetentionSweep (1,000) only because the per-row loss is narrower, NOT
+//     because it is undoable: losing a Plaid item costs the user a re-link through Plaid Link and a
+//     re-sync; losing a retention candidate destroys the account. Both are irreversible; they are not
+//     equally bad.
+//   - Population sanity: linked_items holds roughly one row per user per linked institution, so
+//     10,000 candidate items is far above any plausible steady-state volume and the cap does not
+//     throttle correct operation. At itemCleanupCheckPageSize=500 that is 20 page round-trips.
+//
+// **This number should be treated as open, not settled.** It was originally chosen on a
+// reversibility argument that turned out to be false for one leg, and the brief that requested it
+// suggested the cap "can be more generous" on the same false premise. If the ItemCleanupWorker
+// recheck gap is closed (making the deferred legs genuinely cancellable), raising it is defensible;
+// until then, lowering it is the safer direction. Do not raise it citing the grace period.
 //
 // Hitting the cap does NOT reschedule or retry anything: it stops THIS run early and logs a WARN
 // naming how many items were processed. The periodic registration re-runs the job on its own
@@ -80,7 +105,7 @@ type LinkedItemCleanupRepository interface {
 	//
 	// This replaces the unbounded GetItemsForCleanup(ctx, errorDays, staleDays) on this interface.
 	// It is declared HERE and on the concrete repository only — deliberately NOT on the wide
-	// repository.LinkedItemRepository interface, which eight files' mocks implement. See
+	// repository.LinkedItemRepository interface, which several test files' mocks implement. See
 	// repository.linkedItemRepository.GetItemsForCleanupPage's doc comment for why a bare LIMIT is
 	// not sufficient (both pre-existing sort columns are nullable, so the li.id tie-breaker is what
 	// makes the order total) and for the precise, cap-bounded statement of what the keyset cursor
@@ -355,10 +380,13 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 			}
 		}
 
-		// The cursor advances past every row this page RETURNED — including rows the loop skipped or
-		// failed to mark. That is the point of a keyset cursor here: a row that is a candidate by the
-		// predicate but cannot actually be marked must not occupy the oldest slot of every subsequent
-		// page within this run.
+		// The cursor advances past every row this page yielded AFTER the cap truncation above — i.e.
+		// past the last row actually processed, not necessarily the last row the repository returned.
+		// Those are the same row except on a page the cap truncated, and on that page the loop always
+		// breaks below, so the difference is never observable. What matters is that it advances past
+		// rows the loop SKIPPED or FAILED to mark: that is the point of a keyset cursor here — a row
+		// that is a candidate by the predicate but cannot actually be marked must not occupy the
+		// oldest slot of every subsequent page within this run.
 		cursor = &repository.ItemCleanupSweepCursor{
 			LastErrorAt:  lastItem.LastErrorAt,
 			LastSyncedAt: lastItem.LastSyncedAt,

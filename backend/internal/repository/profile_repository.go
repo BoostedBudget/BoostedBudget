@@ -375,6 +375,11 @@ func (r *profileRepository) SetOverrideTierValidator(validator func(tierName str
 // Precedent: NewMerchantRepository, NewMerchantOverrideRepository, NewSystemHealthRepository, and
 // NewDeadLetterJobRepository already return their unexported concrete pointer types in this same
 // package.
+// Compile-time proof that the concrete type satisfies the wide interface. This constructor has always
+// returned the concrete type, so it never had the compiler's implicit check; added alongside the
+// matching assertion in linked_item_repository.go (Issue #1469) so both repositories are covered.
+var _ ProfileRepository = (*profileRepository)(nil)
+
 func NewProfileRepository(db DB, enc *appcrypto.FieldEncryptor) *profileRepository {
 	return &profileRepository{db: db, enc: enc}
 }
@@ -2374,11 +2379,11 @@ func (r *profileRepository) IsRetentionNotice7dEligibleForOccurrence(ctx context
 // admin_user_repository.go's should_rearm_retention/should_mark_plaid_cleanup_pending already embed
 // inline. As of Issue #1413 Finding 4 (Low, Codex review, PR #1443 second follow-up round),
 // noActiveManualOverridePredicate below also splices this constant in rather than restating its
-// own copy of the same "IS NOT NULL AND <> ”" text, closing the drift risk the original version of
+// own copy of the same "IS NOT NULL AND <> ''" text, closing the drift risk the original version of
 // this comment flagged (a change to one copy silently not reaching the other); the
 // should_rearm_retention/should_mark_plaid_cleanup_pending Go-side inline copies are untouched —
 // this substitution is scoped to this one production SQL string. The substitution is text-only:
-// `manual_tier_override IS NOT NULL` and `AND manual_tier_override <> ”` used to sit on their own
+// `manual_tier_override IS NOT NULL` and `AND manual_tier_override <> ''` used to sit on their own
 // lines inside noActiveManualOverridePredicate's raw string; splicing this single-line constant in
 // their place changes only whitespace layout (a newline+indent becomes a space) — the token
 // sequence, and therefore the generated SQL Postgres actually parses, is identical. Verified via
@@ -2421,7 +2426,7 @@ const manualTierOverrideNonEmptyClause = `manual_tier_override IS NOT NULL AND m
 // cross-job-ordering hazard.
 //
 // Issue #1413 Finding 4 (Low, Codex review, PR #1443 second follow-up round): the non-empty-override
-// half of this predicate (`manual_tier_override IS NOT NULL AND manual_tier_override <> ”`) used to
+// half of this predicate (`manual_tier_override IS NOT NULL AND manual_tier_override <> ''`) used to
 // be hand-restated here, duplicating manualTierOverrideNonEmptyClause's own copy of the identical
 // text — a real drift risk (if one were edited and not the other, cleanup could ignore an override
 // in this final predicate while its end date still deferred cleanup via the GREATEST guard below).
@@ -2544,9 +2549,17 @@ func (r *profileRepository) GetUsersNeedingRetention7dNotice(ctx context.Context
 // id tie-breaker, so ties are not even deterministically ordered. It has NO remaining production
 // caller: RetentionCleanupCheckWorker.deleteExpiredAccounts (the only one it ever had) now calls
 // GetUsersWithExpiredRetentionPage below. It is retained ONLY because it is still declared on the
-// wide ProfileRepository interface (line ~135), which nine files' mocks implement; removing it is
+// wide ProfileRepository interface (line ~135), which several test files' mocks implement; removing it is
 // recommended as a separate change (see GetUsersWithExpiredRetentionPage's doc comment) rather
 // than smuggled into the fix for the destructive path.
+//
+// No mock TOTAL is asserted here on purpose. Three different counting methods produced three
+// different answers for this exact question during review (a `grep -rl "func .*Method"` sweep also
+// matches Test function names and this implementation itself, inflating it), so any single number
+// would be another unverifiable figure of the kind this branch has already had to retire. Enumerate
+// them when you need the list, and count what the command prints:
+//
+//	grep -rn '^func (m \*[A-Za-z]*) GetUsersWithExpiredRetention(' internal/
 func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
 	query := userSelectQuery + `
 		WHERE retention_expires_at IS NOT NULL
@@ -3542,7 +3555,7 @@ func (r *profileRepository) ClearMarkersOnEligibleStatus(ctx context.Context) (i
 // Issue #1413 round-5 gap G7 (PR #1443 gap analysis) — deliberately NOT a strict complement of
 // domain.User.HasActiveManualOverride() / hasActiveManualOverrideAt(), unlike
 // noActiveManualOverridePredicate's genuine parity with that same Go method. They agree on the
-// override-value checks (`IS NOT NULL AND <> ”` mirrors the Go method's nil/empty guard) and on
+// override-value checks (`IS NOT NULL AND <> ''` mirrors the Go method's nil/empty guard) and on
 // the expiry boundary (SQL `< NOW()` and Go `Before(now)` are both strict, so an exact tie is
 // "not expired" on both sides). They diverge on TWO independent cases:
 //

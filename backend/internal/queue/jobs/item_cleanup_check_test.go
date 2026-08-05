@@ -744,6 +744,29 @@ func TestItemCleanupCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
 // deterministic, non-overlapping page sequence — is pinned by
 // linked_item_repository_cleanup_page_integration_test.go, which pgxmock cannot substitute for.
 
+// expectItemCleanupCursor matches the cursor the WORKER built against the row it must have been built
+// from — all three components, with pointer nil-ness compared exactly, since nil is a legitimate
+// cursor value here (both columns are nullable) and therefore cannot be treated as "don't care".
+// Matching ItemID alone is what left the timestamp components unpinned; see the comment inside
+// TestItemCleanupCheckWorker_Work_PagesPastFirstBatch.
+func expectItemCleanupCursor(from domain.LinkedItem) interface{} {
+	return mock.MatchedBy(func(c *repository.ItemCleanupSweepCursor) bool {
+		return c != nil &&
+			c.ItemID == from.ID &&
+			sameTimePtr(c.LastErrorAt, from.LastErrorAt) &&
+			sameTimePtr(c.LastSyncedAt, from.LastSyncedAt)
+	})
+}
+
+// sameTimePtr reports whether two *time.Time carry the same value, treating nil as a distinct,
+// meaningful value rather than a wildcard.
+func sameTimePtr(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
 // TestItemCleanupCheckWorker_Work_PagesPastFirstBatch proves boundedness WITHOUT starvation inside
 // one run: with a page size of 2 and 5 candidates, Work() must issue three bounded page fetches
 // (2, 2, 1 — never all 5 in one call) and still schedule every candidate, including the ones ranked
@@ -751,29 +774,36 @@ func TestItemCleanupCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
 func TestItemCleanupCheckWorker_Work_PagesPastFirstBatch(t *testing.T) {
 	ctx := context.Background()
 
+	// BOTH timestamp columns are populated (not just last_error_at) so a cursor that drops either one
+	// is detectable — see expectItemCleanupCursor for why that matters.
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	items := make([]domain.LinkedItem, 5)
 	for i := range items {
 		errAt := base.Add(time.Duration(i) * time.Hour)
+		syncAt := base.Add(time.Duration(i)*time.Hour + 30*time.Minute)
 		items[i] = domain.LinkedItem{
-			ID:          uuid.New().String(),
-			UserID:      "user-1",
-			Status:      "revoked",
-			LastErrorAt: &errAt,
+			ID:           uuid.New().String(),
+			UserID:       "user-1",
+			Status:       "revoked",
+			LastErrorAt:  &errAt,
+			LastSyncedAt: &syncAt,
 		}
 	}
 
 	mockRepo := new(MockLinkedItemCleanupRepo)
 	mockQueue := new(MockJobQueue)
 
+	// ⚠ All THREE cursor components are asserted. An earlier version matched on ItemID alone, which
+	// left the two timestamp components unpinned: forcing both to nil left this test — and both full
+	// packages, unit and integration — green. A nil-nil cursor COALESCEs to ('infinity','infinity'),
+	// which no finite row can exceed, so the query returns nothing after the first page and the run
+	// silently stops one page in — or, symmetrically, a wrong non-nil value skips or repeats rows.
 	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, (*repository.ItemCleanupSweepCursor)(nil), 2).
 		Return(items[0:2], nil).Once()
-	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.MatchedBy(func(c *repository.ItemCleanupSweepCursor) bool {
-		return c != nil && c.ItemID == items[1].ID
-	}), 2).Return(items[2:4], nil).Once()
-	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.MatchedBy(func(c *repository.ItemCleanupSweepCursor) bool {
-		return c != nil && c.ItemID == items[3].ID
-	}), 2).Return(items[4:5], nil).Once() // short page (1 < 2): the run must stop here, not re-query
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, expectItemCleanupCursor(items[1]), 2).
+		Return(items[2:4], nil).Once()
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, expectItemCleanupCursor(items[3]), 2).
+		Return(items[4:5], nil).Once() // short page (1 < 2): the run must stop here, not re-query
 
 	mockRepo.On("MarkForCleanup", ctx, mock.Anything, mock.Anything).Return(nil)
 	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything, mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
@@ -816,13 +846,24 @@ func TestItemCleanupCheckWorker_Work_StopsAtTotalProcessedCap(t *testing.T) {
 	mockQueue := new(MockJobQueue)
 
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	pages := make([][]domain.LinkedItem, safetyNetCalls)
 	for i := 0; i < safetyNetCalls; i++ {
 		page := make([]domain.LinkedItem, pageSize)
 		for j := 0; j < pageSize; j++ {
 			errAt := base.Add(time.Duration(i*pageSize+j) * time.Minute)
-			page[j] = domain.LinkedItem{ID: uuid.New().String(), UserID: "user-1", Status: "revoked", LastErrorAt: &errAt}
+			syncAt := errAt.Add(30 * time.Second)
+			page[j] = domain.LinkedItem{ID: uuid.New().String(), UserID: "user-1", Status: "revoked", LastErrorAt: &errAt, LastSyncedAt: &syncAt}
 		}
-		mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, pageSize).Return(page, nil).Once()
+		pages[i] = page
+	}
+	// Each call's cursor is asserted against the previous page's LAST row — all three components, via
+	// expectItemCleanupCursor. A mock.Anything cursor here (the earlier version) meant this test could
+	// not tell a correct cursor from a nil-timestamped one either.
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, (*repository.ItemCleanupSweepCursor)(nil), pageSize).
+		Return(pages[0], nil).Once()
+	for i := 1; i < safetyNetCalls; i++ {
+		mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, expectItemCleanupCursor(pages[i-1][pageSize-1]), pageSize).
+			Return(pages[i], nil).Once()
 	}
 
 	mockRepo.On("MarkForCleanup", ctx, mock.Anything, mock.Anything).Return(nil)

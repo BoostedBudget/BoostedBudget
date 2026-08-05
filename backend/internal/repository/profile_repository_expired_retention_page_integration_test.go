@@ -22,6 +22,15 @@ package repository
 // deterministic, non-overlapping sequence of pages over real rows. Nor can it show a second
 // sweep advancing past rows a first sweep already deleted.
 //
+// ⚠ Which test covers which half, because this file's first version claimed the tie-breaker was
+// covered when it was not: the cap/paging tests below seed STRICTLY INCREASING
+// retention_expires_at values, so they never create a tie and therefore never exercise the `id`
+// component at all — removing `id` from the ORDER BY and from the keyset tuple left every one of
+// them green. TestGetUsersWithExpiredRetentionPage_Integration_TiedExpiry_IdTieBreakerMakesOrderTotal
+// is the test that actually pins it: it seeds rows sharing ONE retention_expires_at, so the `id`
+// component is the only thing that can order them, and it fails if `id` is absent from either
+// place. Do not delete it thinking the paging tests cover the same ground.
+//
 // Run with:
 //
 //	DATABASE_URL=postgres://... go test ./internal/repository/... -run TestGetUsersWithExpiredRetentionPage_Integration -tags integration -v -p 1
@@ -29,6 +38,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -62,6 +72,32 @@ func seedExpiredRetentionFixtureUsers(t *testing.T, ctx context.Context, pool *p
 		user := createRetentionFixtureUser(t, ctx, pool, repo, suffix, expiresAt, nil, nil)
 		ids[i] = user.ID
 	}
+	return ids
+}
+
+// seedTiedExpiryFixtureUsers creates n users that all share the SAME retention_expires_at, so
+// ORDER BY retention_expires_at alone cannot order them and the `id` component of the sort key is
+// the only thing that makes the order total. Returns the ids sorted the way the query must return
+// them: ascending by id, since the timestamp component ties for every row.
+//
+// This is the retention-side counterpart of the item sweep's
+// TestGetItemsForCleanupPage_Integration_AllNullSortKeys_IdTieBreakerMakesOrderTotal. Ties are not
+// hypothetical here: every writer of retention_expires_at computes it in Postgres as
+// clock_timestamp() + make_interval(months => n) (see RepairRetentionClock), so a batch of users
+// whose retention clocks were armed by the same statement — or by the same
+// StampMissingPlaidCleanupMarkers-style bulk UPDATE — shares a timestamp exactly.
+func seedTiedExpiryFixtureUsers(t *testing.T, ctx context.Context, pool *pgxpool.Pool, repo ProfileRepository, n int) []string {
+	t.Helper()
+	// One shared instant, distinct from the increasing-epoch seeds above so the two suites cannot
+	// interfere with each other's ordering assumptions.
+	expiresAt := expiredRetentionSweepEpoch.Add(-48 * time.Hour)
+	ids := make([]string, n)
+	for i := 0; i < n; i++ {
+		suffix := fmt.Sprintf("tied_%d_%d", time.Now().UnixNano(), i)
+		user := createRetentionFixtureUser(t, ctx, pool, repo, suffix, expiresAt, nil, nil)
+		ids[i] = user.ID
+	}
+	sort.Strings(ids)
 	return ids
 }
 
@@ -271,4 +307,89 @@ func TestGetUsersWithExpiredRetentionPage_Integration_KeepsManualOverrideExclusi
 	}
 
 	assertRetentionSelection(t, got, fixtures)
+}
+
+// TestGetUsersWithExpiredRetentionPage_Integration_TiedExpiry_IdTieBreakerMakesOrderTotal is the
+// test that actually pins the `id` component of the sort key on the HARD-DELETE side. Every other
+// test in this file seeds strictly increasing retention_expires_at values, so none of them creates a
+// tie and none of them can detect `id` going missing from the ORDER BY or the keyset tuple —
+// verified by mutation: removing it left all of them, and both full packages, green.
+//
+// With ties, `id` is load-bearing in both places at once:
+//   - ORDER BY retention_expires_at alone leaves tied rows in an arbitrary, run-to-run-unstable
+//     order, so consecutive pages are not guaranteed to be disjoint.
+//   - A keyset predicate of `retention_expires_at > $1` alone SKIPS every remaining row that shares
+//     the cursor's timestamp — in this sweep, that means eligible users are silently never deleted,
+//     which is a GDPR erasure failure rather than a performance nit.
+//
+// The assertion is "exactly once", which catches both directions (a skipped row appears zero times,
+// a repeated row more than once).
+func TestGetUsersWithExpiredRetentionPage_Integration_TiedExpiry_IdTieBreakerMakesOrderTotal(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	const pageSize = 2
+	const seeded = 5 // > pageSize, so the walk must cross pages WITHIN the tied group
+
+	ids := seedTiedExpiryFixtureUsers(t, ctx, pool, repo, seeded)
+
+	// Sanity-check the fixture itself: if these rows did not actually tie, this test would silently
+	// degrade into a duplicate of the increasing-timestamp tests and prove nothing.
+	var distinctExpiries int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COUNT(DISTINCT retention_expires_at) FROM users WHERE id = ANY($1)`, ids).Scan(&distinctExpiries))
+	require.Equal(t, 1, distinctExpiries,
+		"fixture precondition: all %d seeded rows must share ONE retention_expires_at, otherwise the "+
+			"id tie-breaker is not being exercised at all", seeded)
+
+	seen := map[string]int{}
+	var order []string
+	var cursor *RetentionSweepCursor
+	pages := 0
+	for {
+		page, err := repo.GetUsersWithExpiredRetentionPage(ctx, cursor, pageSize)
+		require.NoError(t, err)
+		if len(page) == 0 {
+			break
+		}
+		pages++
+		require.LessOrEqual(t, pages, 5000, "runaway pagination — the cursor is not advancing")
+
+		for _, u := range page {
+			seen[u.ID]++
+			for _, id := range ids {
+				if u.ID == id {
+					order = append(order, u.ID)
+				}
+			}
+		}
+
+		last := page[len(page)-1]
+		next := RetentionSweepCursor{ExpiresAt: *last.RetentionExpiresAt, UserID: last.ID}
+		if cursor != nil {
+			advanced := next.ExpiresAt.After(cursor.ExpiresAt) ||
+				(next.ExpiresAt.Equal(cursor.ExpiresAt) && next.UserID > cursor.UserID)
+			require.True(t, advanced,
+				"cursor must advance strictly even when the timestamp component TIES — that is exactly "+
+					"what the id tie-breaker is for: (%s, %s) does not come after (%s, %s)",
+				next.ExpiresAt, next.UserID, cursor.ExpiresAt, cursor.UserID)
+		}
+		cursor = &next
+
+		if len(page) < pageSize {
+			break
+		}
+	}
+
+	for _, id := range ids {
+		assert.Equal(t, 1, seen[id],
+			"user %s (seeded, eligible, tied retention_expires_at) must be returned EXACTLY once "+
+				"across the whole walk — zero means the keyset predicate skipped past a tied row and that "+
+				"user is never deleted; more than once means pages overlap", id)
+	}
+	assert.Equal(t, ids, order,
+		"within a tied group the rows must come back in ascending id order — the only total order "+
+			"available when retention_expires_at is identical for every row")
 }

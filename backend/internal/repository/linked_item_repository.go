@@ -180,16 +180,27 @@ const linkedItemSelectCols = `id, user_id, item_id, access_token_encrypted,
        investments_last_synced_date, liabilities_last_synced_at,
        status_changed_at`
 
-// NewLinkedItemRepository creates a new LinkedItemRepository instance
 // NewLinkedItemRepository returns the CONCRETE *linkedItemRepository, not the LinkedItemRepository
 // interface — Issue #1469. It used to return the interface, which meant a method absent from that
 // wide interface was unreachable through the value main.go holds, so the paged
 // GetItemsForCleanupPage below could only be reached by ALSO adding it to the wide interface and to
-// all eight of its mock implementations. Returning the concrete type (exactly as
-// NewProfileRepository already does) keeps the paged sweep method on the concrete repository plus
-// the ONE narrow consumer interface that needs it (jobs.LinkedItemCleanupRepository), which is the
-// placement the sibling scheduled-deletion fix established. Every existing caller assigning the
-// result to a LinkedItemRepository variable or parameter still compiles unchanged.
+// every one of its mock implementations (enumerate them with
+// `grep -rn '^func (m \*[A-Za-z]*) GetItemsForCleanup(' internal/`; no total is asserted here
+// because three counting methods gave three different answers during review). Returning the concrete
+// type (exactly as NewProfileRepository already does) keeps the paged sweep method on the concrete
+// repository plus the ONE narrow consumer interface that needs it
+// (jobs.LinkedItemCleanupRepository), which is the placement the sibling scheduled-deletion fix
+// established. Every existing caller assigning the result to a LinkedItemRepository variable or
+// parameter still compiles unchanged — and the package-level `var _ LinkedItemRepository =
+// (*linkedItemRepository)(nil)` assertion below keeps that a COMPILE-TIME guarantee rather than an
+// incidental one, restoring the proof the old interface return type used to provide for free.
+// Compile-time proof that the concrete type still satisfies the wide interface. Issue #1469 changed
+// NewLinkedItemRepository's return type from LinkedItemRepository to *linkedItemRepository, which
+// silently removed the compiler's own check that every interface method is implemented — a later
+// signature drift would then only surface at whichever call site happens to assign the result to an
+// interface. This restores it explicitly and costs nothing at runtime.
+var _ LinkedItemRepository = (*linkedItemRepository)(nil)
+
 func NewLinkedItemRepository(db DB, enc *appcrypto.FieldEncryptor) *linkedItemRepository { //nolint:revive // deliberate: see doc comment (mirrors NewProfileRepository)
 	return &linkedItemRepository{db: db, enc: enc}
 }
@@ -855,7 +866,9 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 // Issue #1469: this query is UNBOUNDED — an ORDER BY but no LIMIT, and no id tie-breaker. It has NO
 // remaining production caller: ItemCleanupCheckWorker.Work (the only one it ever had) now calls
 // GetItemsForCleanupPage below. It is retained ONLY because it is still declared on the wide
-// LinkedItemRepository interface, which eight files' mocks implement, and because
+// LinkedItemRepository interface, which several test files' mocks implement (enumerate them with
+// `grep -rn '^func (m \*[A-Za-z]*) GetItemsForCleanup(' internal/` and count what it prints — no
+// total is asserted here, because three counting methods gave three answers during review), and because
 // TestGetItemsForCleanupPage_Integration_MatchesUnpagedPredicate uses it as the oracle that the
 // paged form did not drop a predicate leg. Removing it is recommended as a separate change — see
 // GetItemsForCleanupPage's doc comment.
