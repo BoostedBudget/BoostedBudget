@@ -1182,28 +1182,33 @@ func main() {
 				// Issue #668: Create ItemCleanupCheckWorker for periodic orphaned item detection
 				// Checks for items in error state, revoked, stale, or with zero accounts
 				itemCleanupCheckWorker = jobs.NewItemCleanupCheckWorker(jobs.ItemCleanupCheckWorkerDeps{
-					LinkedItemRepo:     linkedItemRepo,
-					AccountRepo:        accountRepo, // For zero-account detection
-					JobQueue:           nil,         // Set after River client created (circular dependency)
-					Logger:             appLogger,
-					GracePeriodDays:    7,  // Days to wait before cleanup (error/stale/revoked items)
-					ErrorDaysThreshold: 30, // Days in error state before cleanup candidate
-					StaleDaysThreshold: 60, // Days since last sync before cleanup candidate
+					LinkedItemRepo:  linkedItemRepo,
+					AccountRepo:     accountRepo, // For zero-account detection
+					JobQueue:        nil,         // Set after River client created (circular dependency)
+					Logger:          appLogger,
+					GracePeriodDays: 7, // Days to wait before cleanup (error/stale/revoked items)
+					// ErrorDaysThreshold / StaleDaysThreshold are deliberately LEFT UNSET here
+					// (Issue #1486). They must equal ItemCleanupWorker's, which re-verifies
+					// eligibility with them immediately before the irreversible Plaid /item/remove;
+					// a stricter pair there would silently decline cleanups this sweep legitimately
+					// scheduled, and each affected item would keep its cleanup_scheduled_at — hiding
+					// it from every future sweep while Plaid kept billing. Passing literals to each
+					// constructor separately made that parity comment-enforced and one-sidedly
+					// editable. Unset means both constructors read the SAME
+					// defaultCleanupErrorDays / defaultCleanupStaleDays (30 / 60, unchanged from the
+					// literals this replaced), so the invariant is structural.
 				})
 				appLogger.Info("Item cleanup check worker created")
 
 				// Issue #668: Create ItemCleanupWorker for executing individual item cleanup
 				// Calls Plaid /item/remove to stop billing for orphaned items
-				// ErrorDaysThreshold/StaleDaysThreshold MUST match the check worker's above
-				// (Issue #1486): this worker re-verifies eligibility with them immediately before
-				// the irreversible Plaid /item/remove, and a stricter pair here would silently
-				// decline cleanups the sweep legitimately scheduled.
+				// ErrorDaysThreshold/StaleDaysThreshold are left unset for the same reason as the
+				// check worker's above (Issue #1486) — both then read the one shared pair of
+				// constants, so the two cannot drift apart.
 				itemCleanupWorker = jobs.NewItemCleanupWorker(jobs.ItemCleanupWorkerDeps{
-					PlaidCleanupSvc:    plaidCleanupService,
-					LinkedItemRepo:     linkedItemRepo,
-					Logger:             appLogger,
-					ErrorDaysThreshold: 30, // must equal ItemCleanupCheckWorkerDeps.ErrorDaysThreshold above
-					StaleDaysThreshold: 60, // must equal ItemCleanupCheckWorkerDeps.StaleDaysThreshold above
+					PlaidCleanupSvc: plaidCleanupService,
+					LinkedItemRepo:  linkedItemRepo,
+					Logger:          appLogger,
 				})
 				appLogger.Info("Item cleanup worker created")
 

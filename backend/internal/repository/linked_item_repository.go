@@ -125,7 +125,9 @@ type LinkedItemRepository interface {
 	// MarkForCleanup marks an item for cleanup with notification and scheduled cleanup timestamp.
 	MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error
 
-	// ClearCleanupSchedule clears the cleanup schedule for an item (e.g., if user reconnected).
+	// ClearCleanupSchedule clears the cleanup schedule for an item. NOT called on reconnection:
+	// repairing an item through Plaid Link update mode leaves cleanup_scheduled_at set. See
+	// cleanupCandidateReasonPredicate for the full list of production callers and why that matters.
 	ClearCleanupSchedule(ctx context.Context, itemID string) error
 
 	// Issue #679, #680: Trial expiration - mark items as disconnected to preserve history
@@ -1253,18 +1255,26 @@ func (r *linkedItemRepository) MarkForCleanup(ctx context.Context, itemID string
 // plain SELECT would have read the pre-repair snapshot and granted it, and the resulting
 // /item/remove cannot be undone. `SET updated_at = NOW()` is redundant with the
 // update_linked_items_updated_at BEFORE UPDATE trigger (which assigns NEW.updated_at
-// unconditionally) and is written out anyway to keep the statement's intent readable — note the
-// consequence, that a DENIED claim still bumps updated_at.
+// unconditionally) and is written out anyway to keep the statement's intent readable. A DENIED claim
+// writes nothing at all: the WHERE matches no row, so RowsAffected is 0 and neither the SET nor the
+// trigger runs — the re-verification leaves no trace on the row when it says no.
 //
 // This is a re-verification, NOT a lease: it grants no exclusivity that outlives the statement, and
 // nothing else supplies that exclusivity either. Do NOT credit ItemCleanupUniqueOpts with it: its
 // `ByArgs: true` keys on Kind PLUS the full Args, and Args carries Reason — so a sweep-enqueued
 // Reason:"stale" job and an accountService.DeleteAccount-enqueued Reason:"zero_accounts" job for the
-// SAME item are distinct unique keys and can coexist. What actually makes that benign is the Plaid
-// side: whichever loses the race gets ITEM_NOT_FOUND from /item/remove, which
-// PlaidItemCleanupService.RemoveItem swallows and ItemCleanupWorker.Work maps to success (see its
-// IsItemNotFoundError branch), and the row Delete is a safe no-op. Two claims can therefore both be
-// granted; the second one's work is simply redundant, not harmful.
+// SAME item are distinct unique keys and can coexist. What actually makes that benign is that the
+// loser of the race has nothing left to fail on, via two SEPARATE idempotency paths:
+//
+//   - Plaid-level: every error from /item/remove, ITEM_NOT_FOUND included, is logged and swallowed
+//     inside PlaidItemCleanupService.RemoveItem ("Don't return Plaid errors - graceful degradation"),
+//     so it never reaches the worker at all.
+//   - Repository-level: if the winner already deleted the local row, RemoveItem's GetByID returns
+//     ErrLinkedItemNotFound, and THAT is what ItemCleanupWorker.Work's IsItemNotFoundError branch
+//     recognises (IsItemNotFoundError is errors.Is(err, repository.ErrLinkedItemNotFound) — it has
+//     nothing to do with Plaid's ITEM_NOT_FOUND code). The subsequent row Delete is a safe no-op.
+//
+// Two claims can therefore both be granted; the second one's work is simply redundant, not harmful.
 func (r *linkedItemRepository) ClaimItemForCleanup(ctx context.Context, itemID string, errorDays, staleDays int) (bool, error) {
 	ct, err := r.db.Exec(ctx, `
 		UPDATE linked_items li
@@ -1282,7 +1292,10 @@ func (r *linkedItemRepository) ClaimItemForCleanup(ctx context.Context, itemID s
 	return ct.RowsAffected() > 0, nil
 }
 
-// ClearCleanupSchedule clears the cleanup schedule for an item (e.g., if user reconnected).
+// ClearCleanupSchedule clears the cleanup schedule for an item. Despite the name's suggestion, it is
+// NOT called on reconnection — a user repairing an item through Plaid Link update mode leaves
+// cleanup_scheduled_at set, which is exactly why ClaimItemForCleanup re-verifies ELIGIBILITY instead
+// of re-reading the schedule. See cleanupCandidateReasonPredicate.
 func (r *linkedItemRepository) ClearCleanupSchedule(ctx context.Context, itemID string) error {
 	now := time.Now()
 
