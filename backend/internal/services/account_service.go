@@ -75,8 +75,14 @@ type itemCleanupJobArgs struct {
 // Kind returns the job type identifier. Must match jobs.ItemCleanupArgs.Kind()
 func (itemCleanupJobArgs) Kind() string { return "item_cleanup" }
 
-// itemCleanupUniqueOpts returns uniqueness options for item cleanup jobs.
-// Mirrors jobs.ItemCleanupUniqueOpts() to prevent duplicate cleanups.
+// itemCleanupUniqueOpts returns uniqueness options for item cleanup jobs, mirroring
+// jobs.ItemCleanupUniqueOpts().
+//
+// It does NOT prevent duplicate cleanups of the same item: `ByArgs: true` keys on Kind PLUS the full
+// Args, and Args carries Reason — so a sweep-enqueued Reason:"stale" job and the Reason:"zero_accounts"
+// job enqueued below are distinct unique keys for the same linked item and can coexist. What makes
+// that benign is the Plaid side, not this option; see ClaimItemForCleanup in
+// repository/linked_item_repository.go.
 // Issue #668: Plaid Item Management for Cost Optimization
 func itemCleanupUniqueOpts() *queue.UniqueOpts {
 	return &queue.UniqueOpts{
@@ -710,10 +716,33 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 				_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*itemCleanupUniqueOpts()))
 				if err != nil {
 					if s.logger != nil {
-						s.logger.Warn("failed to enqueue item cleanup job",
+						s.logger.Warn("failed to enqueue item cleanup job, releasing the cleanup stamp",
 							"linked_item_id", linkedItemID,
 							"user_id", userID,
 							"error", err,
+						)
+					}
+
+					// Release the stamp we just set. cleanup_scheduled_at is a DURABLE marker that
+					// hides a row from the sweep (repository.cleanupCandidateSelectQuery requires
+					// cleanup_scheduled_at IS NULL), so a stamp left set with no job in flight is
+					// not a harmless leftover — it removes a still-billing Plaid item from every
+					// future sweep permanently. Before the stamp existed this path left the row
+					// untouched and the next daily sweep recovered it; keeping the stamp here would
+					// make a transient queue error strictly worse than the old behaviour.
+					//
+					// Safe from the race the stamp guards against: that race is with a worker
+					// executing the job, and the enqueue that would have created it just failed, so
+					// no worker can be mid-flight.
+					if clearErr := s.linkedItemRepo.ClearCleanupSchedule(ctx, linkedItemID); clearErr != nil && s.logger != nil {
+						// Both writes failed. The row now keeps cleanup_scheduled_at with no job:
+						// invisible to every future sweep, and Plaid keeps billing for it until an
+						// operator clears the column by hand. Logged at Error precisely because
+						// nothing downstream will notice on its own.
+						s.logger.Error("failed to release cleanup stamp after a failed enqueue; item is now hidden from the cleanup sweep and still billing until cleanup_scheduled_at is cleared manually",
+							"linked_item_id", linkedItemID,
+							"user_id", userID,
+							"error", clearErr,
 						)
 					}
 				} else if s.logger != nil {
