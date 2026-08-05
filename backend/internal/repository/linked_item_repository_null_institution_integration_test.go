@@ -85,7 +85,7 @@ func createNullInstitutionFixtureUser(t *testing.T, ctx context.Context, tx pgx.
 // it. Every subtest below gets its own transaction so state never leaks between cases and the
 // shared dev DB is left with no residue (per the task brief: "prefer pool.Begin + defer tx.Rollback
 // so your tests leave no residue").
-func newNullInstitutionTestTx(t *testing.T, ctx context.Context) (pgx.Tx, LinkedItemRepository, ProfileRepository) {
+func newNullInstitutionTestTx(t *testing.T, ctx context.Context) (pgx.Tx, *linkedItemRepository, ProfileRepository) {
 	t.Helper()
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -182,7 +182,7 @@ func TestLinkedItemRepository_NullInstitutionFields_GetByUserAndInstitution(t *t
 	assert.Equal(t, "", got.InstitutionName, "NULL institution_name should surface as the empty string")
 }
 
-func TestLinkedItemRepository_NullInstitutionFields_GetItemsForCleanup(t *testing.T) {
+func TestLinkedItemRepository_NullInstitutionFields_GetItemsForCleanupPage(t *testing.T) {
 	ctx := context.Background()
 	tx, repo, profileRepo := newNullInstitutionTestTx(t, ctx)
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -191,8 +191,10 @@ func TestLinkedItemRepository_NullInstitutionFields_GetItemsForCleanup(t *testin
 	// No accounts exist for this item, so the "zero active accounts" cleanup-candidate branch
 	// always matches regardless of errorDays/staleDays — no extra state needed.
 
-	items, err := repo.GetItemsForCleanup(ctx, 30, 30)
-	require.NoError(t, err, "a NULL institution_id/institution_name row must not fail the scan")
+	// Paged, walked to exhaustion (#1488 deleted the unbounded GetItemsForCleanup): the fixture row
+	// has last_error_at NULL, so it sorts LAST among candidates and a single first page could miss it
+	// entirely behind another suite's committed rows.
+	items := walkAllCleanupCandidates(t, ctx, repo)
 	found := findLinkedItemByID(t, items, fixture.ID)
 	assert.Equal(t, "", found.InstitutionID, "NULL institution_id should surface as the empty string")
 	assert.Equal(t, "", found.InstitutionName, "NULL institution_name should surface as the empty string")

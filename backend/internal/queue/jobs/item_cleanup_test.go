@@ -95,14 +95,6 @@ func (m *MockLinkedItemRepoForCleanup) GetItemsForCleanupPage(ctx context.Contex
 	return args.Get(0).([]domain.LinkedItem), args.Error(1)
 }
 
-func (m *MockLinkedItemRepoForCleanup) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
-	args := m.Called(ctx, errorDays, staleDays)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]domain.LinkedItem), args.Error(1)
-}
-
 func (m *MockLinkedItemRepoForCleanup) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {

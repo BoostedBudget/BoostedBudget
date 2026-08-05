@@ -299,10 +299,10 @@ func TestClaimItemForCleanup_Integration_DeleteAccountPathIsClaimable(t *testing
 }
 
 // TestClaimItemForCleanup_Integration_MatchesSweepPredicate is the no-drift oracle: for every item
-// the SWEEP itself selects (via the unbounded GetItemsForCleanup, the same oracle the paged-sweep
-// suite uses), stamping the schedule the way MarkForCleanup does must leave the item claimable. If
-// someone ever tightens cleanupCandidateReasonPredicate for one caller and not the other, this
-// fails.
+// the SWEEP itself selects (via walkAllCleanupCandidates, which pages GetItemsForCleanupPage to
+// exhaustion — #1488 deleted the unbounded GetItemsForCleanup this used to call), stamping the
+// schedule the way MarkForCleanup does must leave the item claimable. If someone ever tightens
+// cleanupCandidateReasonPredicate for one caller and not the other, this fails.
 func TestClaimItemForCleanup_Integration_MatchesSweepPredicate(t *testing.T) {
 	ctx := context.Background()
 	tx, repo, profileRepo := newCleanupPageTestTx(t, ctx)
@@ -310,8 +310,7 @@ func TestClaimItemForCleanup_Integration_MatchesSweepPredicate(t *testing.T) {
 	const seeded = 5
 	ids := seedCleanupCandidates(t, ctx, tx, repo, profileRepo, seeded)
 
-	selected, err := repo.GetItemsForCleanup(ctx, cleanupPageErrorDays, cleanupPageStaleDays)
-	require.NoError(t, err)
+	selected := walkAllCleanupCandidates(t, ctx, repo)
 	selectedIDs := map[string]bool{}
 	for _, it := range selected {
 		selectedIDs[it.ID] = true
@@ -321,10 +320,10 @@ func TestClaimItemForCleanup_Integration_MatchesSweepPredicate(t *testing.T) {
 		require.True(t, selectedIDs[id], "sanity: the sweep must select seeded item %s", id)
 
 		// What MarkForCleanup does, and nothing else.
-		_, err = tx.Exec(ctx, `
+		_, execErr := tx.Exec(ctx, `
 			UPDATE linked_items SET cleanup_notified_at = NOW(), cleanup_scheduled_at = NOW()
 			WHERE id = $1 AND cleanup_scheduled_at IS NULL`, id)
-		require.NoError(t, err)
+		require.NoError(t, execErr)
 
 		claimed, claimErr := repo.ClaimItemForCleanup(ctx, id, cleanupPageErrorDays, cleanupPageStaleDays)
 		require.NoError(t, claimErr)
