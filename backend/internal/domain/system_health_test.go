@@ -97,44 +97,15 @@ func TestDeadLetterMetrics_Validation(t *testing.T) {
 	assert.Equal(t, int64(12), metrics.OldestJobAgeHours)
 }
 
-// TestJobBacklogMetrics_FieldsRoundTrip is a plain struct-literal smoke test — matches the
-// sibling DeadLetterMetrics/SyncStatusMetrics tests above/below in this file. It is NOT a
-// behavioral test: constructing a struct and reading back the literals just assigned cannot fail
-// short of the Go compiler being broken, and this specifically does NOT exercise
-// SystemHealthService.getJobBacklogMetrics — the actual producer of a real JobBacklogMetrics
-// value — at all.
-//
-// Batch S2 Task 5 correction: this test previously (as TestJobBacklogMetrics_Validation) also
-// asserted `assert.False(t, zeroValue.Available, ...)` against a bare Go zero value and claimed,
-// in its own comment, to have been "strengthened to actually exercise Available's documented
-// fail-closed contract" — that claim was FALSE. Asserting a zero-value bool defaults to false is
-// a property of the Go language, not of this type's contract, and cannot fail either. Both
-// tautological assertions are deleted here, not merely restated.
-//
-// The producer's actual fail-closed contract — Available: false on either query erroring,
-// Available: true only when both succeed — is exercised at the SERVICE layer, where the producer
-// (getJobBacklogMetrics, an unexported method of systemHealthService) actually lives and can be
-// called: see TestGetSystemHealth_JobBacklogMetricsPopulated (success path),
-// TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues (first query fails),
+// TestJobBacklogMetrics_FieldsRoundTrip (renamed from TestJobBacklogMetrics_Validation, a
+// tautological struct-literal smoke test that only read back literals it had just assigned) was
+// deleted in #1464 batch T2 (G5-9). Deleting it does not improve coverage — it removes dead
+// weight. Real fail-closed coverage for JobBacklogMetrics.Available already exists at the SERVICE
+// layer, where the producer (getJobBacklogMetrics, an unexported method of systemHealthService)
+// actually lives: TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues (first query fails),
 // TestGetSystemHealth_JobBacklogMetrics_SecondQueryError_DiscardsFirstQuerysGoodData (second query
-// fails — this ALREADY existed before this task; it is not a gap this task closes), and
-// TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguishable (all in
-// system_health_service_test.go). This domain-package test cannot reach that unexported method at
-// all — the domain package only defines the wire type — so "test the real producer instead" means
-// pointing at those existing tests, not duplicating them here.
-func TestJobBacklogMetrics_FieldsRoundTrip(t *testing.T) {
-	metrics := JobBacklogMetrics{
-		PlaidCleanupOutstandingUsers:                    3,
-		PlaidCleanupOldestOutstandingSeconds:            7200,
-		ManualTierOverrideOldestUnclearedExpiredSeconds: 3600,
-		Available: true,
-	}
-
-	assert.Equal(t, int64(3), metrics.PlaidCleanupOutstandingUsers)
-	assert.Equal(t, int64(7200), metrics.PlaidCleanupOldestOutstandingSeconds)
-	assert.Equal(t, int64(3600), metrics.ManualTierOverrideOldestUnclearedExpiredSeconds)
-	assert.True(t, metrics.Available)
-}
+// fails), and TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguishable (all
+// in system_health_service_test.go, verified present before this deletion).
 
 // TestJobBacklogMetrics_Available_SerializesEvenWhenFalse is a genuinely falsifiable
 // domain-level test (Batch S2 Task 5): it exercises the actual `available` JSON tag on the wire

@@ -126,6 +126,72 @@ func TestAsOfThreading_GetActiveEntitlement_ConsistentAcrossSessionTimeZones(t *
 			"(UTC found=%v vs America/New_York found=%v)", utcFound, nyFound)
 }
 
+// TestAsOfThreading_GetActiveEntitlement_ResidualWindow_ClosedAfterAsOfIsNotReturned pins the
+// residual-window semantics documented on GetActiveEntitlement's doc comment (G5-4): the
+// `effective_until IS NULL` half of the WHERE clause is a CURRENT-STATE predicate, evaluated at
+// query time, not at asOf. An entitlement that was open at asOf but has since been closed
+// (effective_until set strictly after asOf, but before this query runs) must NOT be returned —
+// there is no asOf-consistent "as it existed then" read of a closed epoch.
+//
+// This test would FAIL if the predicate were relaxed to
+// `(effective_until IS NULL OR effective_until > $2)` — that relaxed form would match the closed
+// row below (effective_until is after asOf), flipping assertion 1 from ErrEntitlementNotFound to
+// a found row. Relaxing the predicate that way would also require revisiting the LIMIT 1's
+// determinism: migration 000112's partial unique index
+// (uq_subscription_entitlements_active_user, WHERE effective_until IS NULL) only guarantees
+// uniqueness for the OPEN row: with the relaxed predicate, an asOf that falls inside more than
+// one closed epoch's [effective_from, effective_until) window would make LIMIT 1 pick an
+// arbitrary one among them. Do NOT relax the predicate without addressing that.
+func TestAsOfThreading_GetActiveEntitlement_ResidualWindow_ClosedAfterAsOfIsNotReturned(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	profileRepo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+	entRepo := NewEntitlementRepository(pool)
+
+	asOf := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	effectiveFrom := asOf.Add(-30 * 24 * time.Hour) // well before asOf
+	effectiveUntil := asOf.Add(1 * time.Hour)       // closed strictly AFTER asOf
+
+	// Row 1: was open at asOf, closed afterwards. Must NOT be returned for this asOf.
+	closedUser := createClaimForDeletionFixtureUser(t, ctx, pool, profileRepo,
+		fmt.Sprintf("residual-closed-%d", time.Now().UnixNano()), false, nil, nil, nil)
+	_, err := pool.Exec(ctx, `
+		INSERT INTO subscription_entitlements (user_id, source, tier, status, effective_from, effective_until)
+		VALUES ($1, 'own_subscription', 'premium', 'active', $2, $3)
+	`, closedUser.ID, effectiveFrom, effectiveUntil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM subscription_entitlements WHERE user_id = $1`, closedUser.ID) //nolint:errcheck
+	})
+
+	// Row 2 (sibling, mandatory sanity check): same effective_from/asOf shape, but still open
+	// (effective_until IS NULL). MUST be returned for the same asOf. Without this positive
+	// assertion, assertion 1 passing could mean the fixture was never created, the user id was
+	// wrong, or setup silently failed — a both-false pass that proves nothing.
+	openUser := createClaimForDeletionFixtureUser(t, ctx, pool, profileRepo,
+		fmt.Sprintf("residual-open-%d", time.Now().UnixNano()), false, nil, nil, nil)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO subscription_entitlements (user_id, source, tier, status, effective_from, effective_until)
+		VALUES ($1, 'own_subscription', 'premium', 'active', $2, NULL)
+	`, openUser.ID, effectiveFrom)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM subscription_entitlements WHERE user_id = $1`, openUser.ID) //nolint:errcheck
+	})
+
+	// Assertion 1: closed-after-asOf row is NOT returned.
+	_, err = entRepo.GetActiveEntitlement(ctx, closedUser.ID, asOf)
+	assert.ErrorIs(t, err, ErrEntitlementNotFound,
+		"an entitlement open at asOf but closed strictly after asOf must NOT be returned — "+
+			"effective_until IS NULL is a current-state predicate, not an asOf-relative one")
+
+	// Assertion 2 (sanity): still-open row for the same asOf IS returned.
+	ent, err := entRepo.GetActiveEntitlement(ctx, openUser.ID, asOf)
+	require.NoError(t, err, "sanity: the still-open sibling row must be found for the same asOf")
+	assert.True(t, ent != nil && ent.Tier == "premium", "sanity: found row must be the seeded fixture")
+}
+
 // ─── SubscriptionOverrideRepository.GetActiveOverrides ──────────────────────────────────────
 
 // TestAsOfThreading_GetActiveOverrides_FiltersByPassedInstant_NotDatabaseNow mirrors the
