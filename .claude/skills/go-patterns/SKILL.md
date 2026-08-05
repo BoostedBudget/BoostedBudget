@@ -280,7 +280,9 @@ Two rules that are easy to satisfy in the SQL and easy to leave unverified in th
 **1. Seed a tie, or you have not tested the tie-breaker.** Three separate paged sweeps on this repo
 shipped with an `id` tie-breaker that **no test could detect the removal of** — deleting `id` from
 both the `ORDER BY` and the cursor tuple left the whole suite green. The cause was identical each
-time: the fixture helper seeded strictly increasing timestamps (`epoch.Add(i * time.Minute)`), so a
+time: the fixture helper seeded strictly increasing timestamps
+(`epoch.Add(time.Duration(i) * time.Minute)` — the conversion is required; `i * time.Minute` does not
+compile), so a
 tie never existed to disambiguate. Seed **N rows sharing one `sort_col` value** and assert each row
 is returned **exactly once** across pages. Without a tie in the fixture, the tie-breaker is decoration.
 
