@@ -90,6 +90,20 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
+      # Regression suite for scripts/check-e2e-storage-state.py — the guard the "Guard — E2E
+      # auth session must have been obtained" step below delegates to. Placed here, right
+      # after checkout and before Bun/Playwright/Go setup, because this job (unlike the other
+      # four jobs that host a shell-suite step) has no `needs: detect-changes` / paths-filter
+      # gate at all (`if: always() && !cancelled()` only reacts to prior job outcomes, not to
+      # changed paths) — it runs unconditionally on every ordinary PR, guaranteeing the fixture
+      # suite executes even on a change confined to scripts/**. The suite itself is pure
+      # Python/shell with no E2E/Playwright/browser dependency, so it does not need to wait for
+      # any of the setup below. Was previously unwired from every runner — see the suite's own
+      # header comment.
+      - name: Test E2E storage-state guard
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-e2e-storage-state.test.sh
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
