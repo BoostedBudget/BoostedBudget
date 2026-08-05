@@ -130,11 +130,18 @@ const expiredRetentionPageSize = 500
 // cascading foreign keys. Nothing between this loop and irreversible data loss.
 //
 // Derivation of 1,000:
-//   - Upper side: this job's dedup period is 23 hours (RetentionCleanupCheckUniqueOpts), so 1,000 is
-//     the per-day ceiling on retention hard deletions. For a paid-only product with no free tier
-//     whose candidates are accounts that have been inactive/cancelled for a full retention period
-//     (6 months by default, cfg.RetentionPeriodMonths), 1,000 expiring in a single day is already
-//     far above any plausible steady-state volume, so the cap does not throttle correct operation.
+//   - Upper side: 1,000 is a ceiling **per sweep invocation**, and deliberately not described as a
+//     per-day one. River's ByPeriod (RetentionCleanupCheckUniqueOpts, 23h) rounds insert times into
+//     FIXED buckets rather than enforcing a rolling window — this file already documents that
+//     semantics for the Completed-state fix (see RetentionCleanupCheckUniqueOpts's doc comment, which
+//     talks about "the current ByPeriod bucket"). Two sweeps landing either side of a bucket boundary
+//     can therefore execute close together, so the real short-window worst case is ~2,000 hard
+//     deletions in well under 24 hours, not 1,000 per day. An earlier version of this comment claimed
+//     a per-day ceiling, which the same file's own bucket semantics contradict.
+//     Even at that doubled worst case the bound holds for its purpose: for a paid-only product with
+//     no free tier whose candidates are accounts inactive/cancelled for a full retention period
+//     (6 months by default, cfg.RetentionPeriodMonths), 1,000 expiring per sweep is already far above
+//     any plausible steady-state volume, so the cap does not throttle correct operation.
 //   - Lower side: it has to be small enough that a WRONG candidate predicate — the failure mode
 //     that actually produced this branch's only CRITICAL finding, a cancelled user being
 //     hard-deleted — destroys a bounded number of accounts on the RunOnStart tick after a deploy
@@ -177,7 +184,7 @@ type RetentionProfileRepository interface {
 	//
 	// This replaces the unbounded GetUsersWithExpiredRetention(ctx) on this interface. It is
 	// declared HERE and on the concrete repository only — deliberately NOT on the wide
-	// repository.ProfileRepository interface, which nine files' mocks implement. See
+	// repository.ProfileRepository interface, which several test files' mocks implement. See
 	// repository.profileRepository.GetUsersWithExpiredRetentionPage's doc comment for why a bare
 	// LIMIT is not sufficient and for the precise, cap-bounded statement of what the keyset cursor
 	// does and does not guarantee.
@@ -1581,10 +1588,13 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 		lastUser := users[len(users)-1]
 		w.deleteExpiredAccountPage(ctx, jobID, users, &deletedCount, &errorCount)
 
-		// The cursor advances past every row this page RETURNED — including rows the loop skipped
-		// (manual override) or failed to delete. That is the whole point of a keyset cursor here: a
-		// row that is eligible by the query's predicate but cannot actually be deleted must not
-		// occupy the oldest slot of every subsequent page within this run.
+		// The cursor advances past every row this page yielded AFTER the cap truncation above — i.e.
+		// past the last row actually processed, not necessarily the last row the repository returned.
+		// Those are the same row except on a page the cap truncated, and on that page the loop always
+		// breaks below, so the difference is never observable. What matters is that it advances past
+		// rows the loop SKIPPED (manual override) or FAILED to delete: that is the whole point of a
+		// keyset cursor here — a row that is eligible by the query's predicate but cannot actually be
+		// deleted must not occupy the oldest slot of every subsequent page within this run.
 		cursor = &repository.RetentionSweepCursor{
 			ExpiresAt: derefRetentionExpiresAt(lastUser),
 			UserID:    lastUser.ID,
@@ -1667,9 +1677,18 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccountPage(ctx context.Conte
 // derefRetentionExpiresAt safely reads user.RetentionExpiresAt for cursor advancement.
 // GetUsersWithExpiredRetentionPage's WHERE clause guarantees every returned row has a non-nil
 // RetentionExpiresAt, but this stays defensive rather than assuming that invariant holds forever
-// (e.g. under a future test double that does not enforce it) — falling back to the zero time only
-// makes the cursor's ExpiresAt component overly permissive, never miss real rows. Mirrors
-// derefDeletionScheduledAt (scheduled_deletion_check.go).
+// (e.g. under a future test double that does not enforce it).
+//
+// What the zero-time fallback actually costs, stated fully: it never makes the sweep MISS a row (the
+// cursor's ExpiresAt component only becomes more permissive), but it does stop the cursor ADVANCING —
+// with a zero ExpiresAt, the tuple's first element decides every (retention_expires_at, id) > ($1, $2)
+// comparison, so the query keeps returning the head page and this run spends its whole
+// maxUsersPerRetentionSweep budget re-reading the same rows. That is bare-LIMIT starvation, which is
+// the exact failure #1478 exists to remove, so the fallback is a safety net against a panic, NOT a
+// tolerable steady state. TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_PagesPastFirstBatch
+// and _StopsAtTotalProcessedCap both assert the ExpiresAt component of the cursor this function
+// feeds, precisely so a regression here cannot pass silently. Mirrors derefDeletionScheduledAt
+// (scheduled_deletion_check.go), which has the same caveat.
 func derefRetentionExpiresAt(user *domain.User) time.Time {
 	if user.RetentionExpiresAt == nil {
 		return time.Time{}

@@ -3717,6 +3717,20 @@ func TestRetentionCleanupCheck_ProcessRetentionNotices_NilRetentionExpiresAt_Ret
 // pinned by profile_repository_expired_retention_page_integration_test.go, which pgxmock cannot
 // substitute for).
 
+// expectRetentionCursor matches the cursor the WORKER built against the row it must have been built
+// from — BOTH the ExpiresAt timestamp and the UserID. Matching UserID alone is what left
+// derefRetentionExpiresAt unpinned; see the comment inside
+// TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_PagesPastFirstBatch for why a wrong timestamp
+// component silently reintroduces bare-LIMIT starvation.
+func expectRetentionCursor(from *domain.User) interface{} {
+	return mock.MatchedBy(func(c *repository.RetentionSweepCursor) bool {
+		return c != nil &&
+			c.UserID == from.ID &&
+			from.RetentionExpiresAt != nil &&
+			c.ExpiresAt.Equal(*from.RetentionExpiresAt)
+	})
+}
+
 // TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_PagesPastFirstBatch proves boundedness
 // WITHOUT starvation inside one sweep: with a page size of 2 and 5 candidates, the sweep must
 // issue three bounded page fetches (2, 2, 1 — never all 5 in one call) and still delete every
@@ -3735,14 +3749,23 @@ func TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_PagesPastFirstBatch(t
 	mockRepo := new(MockRetentionProfileRepository)
 	mockDeletion := new(MockRetentionDeletionService)
 
+	// ⚠ BOTH cursor components are asserted, not just UserID. An earlier version of this test matched
+	// on UserID alone, which left derefRetentionExpiresAt entirely unpinned: forcing it to return
+	// time.Time{} left this test — and both full packages, unit and integration — green. That failure
+	// is not cosmetic. With a zero ExpiresAt the tuple's FIRST element decides every
+	// (retention_expires_at, id) > ($1, $2) comparison, so the query returns the head page forever;
+	// rows whose ExecuteDeletion fails (claim contention) or that are skipped (manual override) sit at
+	// the head of every page and consume the entire maxUsersPerRetentionSweep budget. That is exactly
+	// the bare-LIMIT starvation #1478 exists to remove, reintroduced via the cursor.
+	//
+	// expectRetentionCursor below is shared with the cap test so neither can drift back to a
+	// UserID-only match.
 	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, (*repository.RetentionSweepCursor)(nil), 2).
 		Return(users[0:2], nil).Once()
-	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.MatchedBy(func(c *repository.RetentionSweepCursor) bool {
-		return c != nil && c.UserID == "expired-2"
-	}), 2).Return(users[2:4], nil).Once()
-	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.MatchedBy(func(c *repository.RetentionSweepCursor) bool {
-		return c != nil && c.UserID == "expired-4"
-	}), 2).Return(users[4:5], nil).Once() // short page (1 < 2): the sweep must stop here, not re-query
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, expectRetentionCursor(users[1]), 2).
+		Return(users[2:4], nil).Once()
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, expectRetentionCursor(users[3]), 2).
+		Return(users[4:5], nil).Once() // short page (1 < 2): the sweep must stop here, not re-query
 
 	mockDeletion.On("ExecuteDeletion", ctx, mock.Anything).Return(nil)
 
@@ -3783,6 +3806,7 @@ func TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_StopsAtTotalProcessed
 	mockDeletion := new(MockRetentionDeletionService)
 
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	pages := make([][]*domain.User, safetyNetCalls)
 	for i := 0; i < safetyNetCalls; i++ {
 		page := make([]*domain.User, pageSize)
 		for j := 0; j < pageSize; j++ {
@@ -3790,7 +3814,16 @@ func TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_StopsAtTotalProcessed
 			expiresAt := base.Add(time.Duration(idx) * time.Minute)
 			page[j] = &domain.User{ID: fmt.Sprintf("expired-%03d", idx), RetentionExpiresAt: &expiresAt}
 		}
-		mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, pageSize).Return(page, nil).Once()
+		pages[i] = page
+	}
+	// Each call's cursor is asserted against the previous page's LAST row — BOTH components, via
+	// expectRetentionCursor. A mock.Anything cursor here (the earlier version) meant this test could
+	// not tell a correct cursor from a zero-timestamped one either.
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, (*repository.RetentionSweepCursor)(nil), pageSize).
+		Return(pages[0], nil).Once()
+	for i := 1; i < safetyNetCalls; i++ {
+		mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, expectRetentionCursor(pages[i-1][pageSize-1]), pageSize).
+			Return(pages[i], nil).Once()
 	}
 
 	mockDeletion.On("ExecuteDeletion", ctx, mock.Anything).Return(nil)
