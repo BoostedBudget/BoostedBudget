@@ -171,15 +171,24 @@ type ProfileRepository interface {
 	// for this user BEFORE calling ClaimForDeletion (nil for the retention-triggered path, which
 	// never sets it). Re-verifying this EXACT value (not merely whether it is nil) is required
 	// to catch the case Codex round-4 review flagged as the most serious residual in this task:
-	// reusing claimForDeletionPredicate alone is NOT sufficient, because that predicate treats
-	// "no manual_tier_override at all" as sufficient authorization REGARDLESS of
-	// deletion_requested_at — so an uncomped user who explicitly cancels their own deletion
-	// request (CancelDeletion) during the external-cleanup window would otherwise still pass it
-	// (cancelling sets deletion_requested_at to NULL, and "no override" was already true). Adding
+	// the authorisation predicate this method splices, deletionAuthorisationUnionPredicate, is
+	// satisfied when a claim of EITHER kind would be authorised — and its RETENTION branch
+	// (deletion_requested_at IS NULL plus no manual_tier_override at all) is satisfied by an
+	// uncomped user who has just cancelled their own deletion request during the external-cleanup
+	// window: cancelling sets deletion_requested_at to NULL, and "no override" was already true.
+	// So the predicate alone is NOT sufficient here. Adding
 	// `deletion_requested_at IS NOT DISTINCT FROM expectedDeletionRequestedAt` closes this: a
 	// cancellation (non-null -> null) is a mismatch, and so is a same-instant cancel-then-new-
 	// request (a new, later timestamp the original claim never verified) — both correctly abort,
 	// leaving the user to be picked up by whichever flow's own schedule next applies to them.
+	//
+	// Issue #1440, T0 — this paragraph's CONCLUSION is unchanged; only its stated reason was
+	// rewritten. It previously blamed `claimForDeletionPredicate` for treating "no
+	// manual_tier_override at all" as sufficient authorization REGARDLESS of deletion_requested_at.
+	// That constant no longer exists, and that rule is now false of BOTH of its replacements: the
+	// retention predicate requires deletion_requested_at IS NULL, and the user-requested predicate
+	// has no override clause at all. The exact-value check is still required, for the reason stated
+	// above.
 	//
 	// Also refuses to proceed while any of the user's linked_items rows still need Plaid-side
 	// cleanup (uncleanedLinkedItemExistsClause — status IS NULL OR status NOT IN ('disconnected',
@@ -1691,9 +1700,20 @@ const userRequestedDeletionClaimPredicate = `
 //
 // It must agree with the query that selects these candidates, GetUsersWithExpiredRetention, which
 // filters `deletion_requested_at IS NULL` and splices this same noManualOverrideAtAllPredicate.
-// Both clauses are reproduced here rather than trusted to the candidate query, because the claim's
-// entire job is to re-verify against committed state at claim time what the candidate query
+// Those two clauses are reproduced here rather than trusted to the candidate query, because the
+// claim's job is to re-verify against committed state at claim time what the candidate query
 // observed earlier.
+//
+// It re-verifies only those two, and this comment does not pretend otherwise. The candidate query
+// ALSO requires `retention_expires_at IS NOT NULL AND retention_expires_at <= NOW()` and
+// `subscription_status IN ('inactive', 'cancelled')`; this predicate checks neither. So a
+// retention-kind claim authorises any uncomped user with no outstanding deletion request,
+// regardless of their retention clock or subscription status. That breadth is PRE-EXISTING (the
+// pre-split predicate checked neither either) and is not reachable today, because the only
+// retention caller — RetentionCleanupCheckWorker.deleteExpiredAccounts — never asks for a claim on
+// a user the candidate query did not return. It is recorded here because a future second retention
+// caller would inherit that breadth silently; tightening the predicate to include the clock and
+// status is the fix if one ever appears.
 //
 // noManualOverrideAtAllPredicate — "no override AT ALL, live or already lapsed" — not
 // noActiveManualOverridePredicate ("live right now"). Issue #1413 Critical finding C1: a comp
@@ -1731,10 +1751,24 @@ const retentionDeletionClaimPredicate = `
 //   - a retention run has a NULL expected value, so it forces the second branch and thus re-checks
 //     the override rule.
 //
-// Nothing can change deletion_scheduled_at without also changing deletion_requested_at: the only
-// two writers of either column are MarkForDeletion (sets both) and CancelDeletion (NULLs both),
-// verified by grep over this file. So pinning deletion_requested_at pins the whole episode,
-// including its schedule.
+// Nothing can change deletion_scheduled_at without also changing deletion_requested_at, so pinning
+// deletion_requested_at pins the whole episode, including its schedule.
+//
+// The full writer set is FOUR statements, not two — an earlier version of this comment said "the
+// only two writers … verified by grep over this file", which was an incomplete enumeration: grepping
+// for `deletion_scheduled_at =` finds UPDATEs and misses INSERT column lists. Enumerated properly
+// (every occurrence of either column name across non-test Go plus every migration):
+//
+//   - CreateUser (INSERT, this file) — writes both, adjacent bind params from the same domain.User.
+//   - CreateUserTx (INSERT, this file) — likewise.
+//   - MarkForDeletion (UPDATE, this file) — sets both.
+//   - CancelDeletion (UPDATE, this file) — NULLs both.
+//
+// The invariant survives the correction: all four write both columns in a single statement, so the
+// pair is never observable half-updated. The two INSERTs cannot produce a mid-episode row either —
+// they create the row, so there is no prior episode for a stale claim to be holding. No migration
+// writes either column (they only declare, index, or filter on them), and there is no column
+// DEFAULT or trigger on either.
 const deletionAuthorisationUnionPredicate = `
 	  AND (
 	    (TRUE` + userRequestedDeletionClaimPredicate + `)

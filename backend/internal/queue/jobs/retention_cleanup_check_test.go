@@ -166,7 +166,9 @@ type MockRetentionDeletionService struct {
 	mock.Mock
 	// LastKind records the repository.DeletionClaimKind the last ExecuteDeletion call passed
 	// (Issue #1440, T0). Asserted by
-	// TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_ClaimsAsRetention.
+	// TestRetentionCleanupCheck_RepairFailure_NonFatal_ContinuesToNoticesAndDeletion, the one test
+	// in this file whose fixture actually reaches deleteExpiredAccounts with a non-empty candidate
+	// list.
 	LastKind repository.DeletionClaimKind
 }
 

@@ -19,7 +19,7 @@ import (
 type MockDeletionServiceForWorker struct {
 	mock.Mock
 	// LastKind records the repository.DeletionClaimKind the last ExecuteDeletion call passed
-	// (Issue #1440, T0). Asserted by TestProcessScheduledDeletions_ClaimsAsUserRequested.
+	// (Issue #1440, T0). Asserted by TestWorker_FindsScheduledUsers.
 	LastKind repository.DeletionClaimKind
 }
 

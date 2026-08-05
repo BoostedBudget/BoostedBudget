@@ -127,8 +127,21 @@ enqueues whose args are byte-identical.
 **Required change:** correct the field doc to say what it is — a per-user, deterministic
 audit identifier, stable across runs BY DESIGN so River's `ByArgs` uniqueness works — and
 note the consequence honestly: it does not distinguish separate request episodes for the same
-user, and the cancel/re-request safety property comes from `ClaimForDeletion`'s
-observed-value predicate, not from this field.
+user, and ~~the cancel/re-request safety property comes from `ClaimForDeletion`'s
+observed-value predicate, not from this field~~.
+
+> **RETRACTED (Issue #1440, T0) — the struck clause above.** It is the same false claim the block
+> at the top of this section retracts, and it was ALSO wrong here: there was no observed-value
+> predicate in `ClaimForDeletion`, and at the time this instruction was written there was no
+> cancel/re-request safety property at all — a cancelled user was hard-deleted by an already-queued
+> job. The instruction as executed therefore documented a guarantee that did not exist.
+>
+> What is true now: the safety property comes from the caller-declared
+> `repository.DeletionClaimKind` passed to `ClaimForDeletion`, and specifically from
+> `userRequestedDeletionClaimPredicate`'s `deletion_scheduled_at <= NOW()` (plus
+> `deletion_requested_at IS NOT NULL` as defence in depth). `AccountDeletionWorker` passes
+> `DeletionKindUserRequested`. It is still NOT this field — that part of the original sentence was
+> the only accurate half of it.
 
 **Required test:** the existing
 `TestScheduledDeletionCheckWorker_Work_SameUserAcrossRuns_ProducesIdenticalArgs` already pins
