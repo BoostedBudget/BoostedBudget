@@ -134,9 +134,10 @@ func newTestItemCleanupJob(args ItemCleanupArgs) *river.Job[ItemCleanupArgs] {
 // TestItemCleanupWorker_Work_NoLongerEligible_SkipsIrreversibleRemoval is Issue #1486's failing-
 // first test. The job was enqueued (and, for the deferred legs, sat behind a 7-day grace period)
 // while the item was a cleanup candidate; by the time it runs, the user has reconnected. Nothing
-// clears cleanup_scheduled_at on reconnect — the only production ClearCleanupSchedule call is this
-// worker's own, AFTER a successful removal — so the ONLY thing that can stop the irreversible Plaid
-// /item/remove is an eligibility recheck at execution time.
+// clears cleanup_scheduled_at on reconnect — the only production callers of ClearCleanupSchedule are
+// both inside ItemCleanupWorker.Work, one after a successful removal and one releasing the stale
+// schedule when the claim declines (grep `\.ClearCleanupSchedule(`) — so the ONLY thing that can
+// stop the irreversible Plaid /item/remove is an eligibility recheck at execution time.
 //
 // Before the fix, Work called RemoveItem unconditionally and this test failed on
 // AssertNotCalled(RemoveItem).
@@ -168,6 +169,45 @@ func TestItemCleanupWorker_Work_NoLongerEligible_SkipsIrreversibleRemoval(t *tes
 	// A no-longer-eligible item is a SUCCESS with nothing to do, not a failure: returning an error
 	// would retry the job and re-attempt the same removal.
 	require.NoError(t, err)
+	mockCleanupSvc.AssertNotCalled(t, "RemoveItem")
+	mockRepo.AssertNotCalled(t, "Delete")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestItemCleanupWorker_Work_NoLongerEligible_ClearFailureIsRetried is the failing-first test for
+// the recovery defect in the decline path: the clear was best-effort, so a transient DB failure was
+// logged, Work returned nil, River recorded success and never retried — leaving cleanup_scheduled_at
+// set forever. Because the sweep's candidate predicate requires cleanup_scheduled_at IS NULL, that
+// permanently hides a still-billing Plaid item, which is the exact hazard the decline path's own
+// comment describes. Only the CLEAR failing is retryable; the decline itself is still a success.
+//
+// Before the fix this failed on require.Error: Work swallowed clearErr and returned nil.
+func TestItemCleanupWorker_Work_NoLongerEligible_ClearFailureIsRetried(t *testing.T) {
+	ctx := context.Background()
+	linkedItemID := "item-clear-fails"
+
+	mockCleanupSvc := new(MockPlaidCleanupService)
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+
+	mockRepo.On("ClaimItemForCleanup", ctx, linkedItemID, defaultCleanupErrorDays, defaultCleanupStaleDays).
+		Return(false, nil)
+	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(errors.New("connection reset"))
+
+	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
+		PlaidCleanupSvc: mockCleanupSvc,
+		LinkedItemRepo:  mockRepo,
+		Logger:          slog.Default(),
+	})
+
+	err := worker.Work(ctx, newTestItemCleanupJob(ItemCleanupArgs{
+		LinkedItemID: linkedItemID,
+		UserID:       "user-456",
+		Reason:       "long_term_error",
+	}))
+
+	require.Error(t, err, "a failed schedule release must surface so River retries it")
+	assert.Contains(t, err.Error(), "connection reset")
+	// The retry must not become a licence to remove: the decline still stands.
 	mockCleanupSvc.AssertNotCalled(t, "RemoveItem")
 	mockRepo.AssertNotCalled(t, "Delete")
 	mockRepo.AssertExpectations(t)
@@ -240,36 +280,6 @@ func TestItemCleanupWorker_Work_ClaimError_FailsClosed(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-// TestItemCleanupWorker_Work_DeclinedClaim_ClearScheduleErrorDoesNotFail pins that releasing the
-// stale schedule is best-effort: a failure there must not turn a benign skip into a retried job.
-func TestItemCleanupWorker_Work_DeclinedClaim_ClearScheduleErrorDoesNotFail(t *testing.T) {
-	ctx := context.Background()
-	linkedItemID := "item-reconnected-clear-fails"
-
-	mockCleanupSvc := new(MockPlaidCleanupService)
-	mockRepo := new(MockLinkedItemRepoForCleanup)
-
-	mockRepo.On("ClaimItemForCleanup", ctx, linkedItemID, defaultCleanupErrorDays, defaultCleanupStaleDays).
-		Return(false, nil)
-	mockRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(errors.New("database error"))
-
-	worker := NewItemCleanupWorker(ItemCleanupWorkerDeps{
-		PlaidCleanupSvc: mockCleanupSvc,
-		LinkedItemRepo:  mockRepo,
-		Logger:          slog.Default(),
-	})
-
-	err := worker.Work(ctx, newTestItemCleanupJob(ItemCleanupArgs{
-		LinkedItemID: linkedItemID,
-		UserID:       "user-456",
-		Reason:       "zero_accounts",
-	}))
-
-	require.NoError(t, err)
-	mockCleanupSvc.AssertNotCalled(t, "RemoveItem")
-	mockRepo.AssertExpectations(t)
-}
-
 // TestItemCleanupWorker_Work_UsesConfiguredThresholds pins that the recheck is run with the
 // worker's CONFIGURED thresholds, not the package defaults — the pairing with the sweep is what
 // keeps the recheck from denying claims the sweep legitimately created.
@@ -309,6 +319,11 @@ func TestItemCleanupWorker_Work_UsesConfiguredThresholds(t *testing.T) {
 // RE-VERIFIES it must default to the same thresholds, or the recheck silently denies claims the
 // sweep created and the item keeps billing forever (its cleanup_scheduled_at stays set, so the
 // sweep never re-selects it).
+//
+// Constructing both workers from zero-valued deps is the production path as of #1486:
+// cmd/server/main.go passes no thresholds to either constructor, precisely so that neither can be
+// edited one-sidedly. This test therefore pins the wiring production actually uses, not a
+// default-only path it bypasses.
 func TestItemCleanupWorkers_ShareEligibilityThresholdDefaults(t *testing.T) {
 	sweep := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{})
 	remover := NewItemCleanupWorker(ItemCleanupWorkerDeps{})

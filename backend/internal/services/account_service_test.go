@@ -1483,6 +1483,9 @@ func TestDeleteAccount_EnqueueErrorDoesNotFailDeletion(t *testing.T) {
 
 	// Mock enqueue failure
 	mockJobQueue.On("Enqueue", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("queue error"))
+	// A failed enqueue releases the stamp it just set, so the sweep can recover the item — see
+	// TestDeleteAccount_EnqueueFailureReleasesCleanupStamp, which is what pins that behaviour.
+	mockLinkedItemRepo.On("ClearCleanupSchedule", mock.Anything, mock.Anything).Return(nil)
 
 	// Execute
 	err := service.DeleteAccount(ctx, accountID, userID)
@@ -1490,6 +1493,56 @@ func TestDeleteAccount_EnqueueErrorDoesNotFailDeletion(t *testing.T) {
 	// Assert - deletion should still succeed despite enqueue error
 	require.NoError(t, err, "DeleteAccount should succeed even if enqueue fails")
 	mockAccountRepo.AssertExpectations(t)
+	mockJobQueue.AssertExpectations(t)
+}
+
+// TestDeleteAccount_EnqueueFailureReleasesCleanupStamp is the failing-first test for the recovery
+// defect the #1486 stamp introduced: cleanup_scheduled_at is a DURABLE "hidden from the sweep"
+// marker (the sweep's candidate predicate requires cleanup_scheduled_at IS NULL —
+// repository.cleanupCandidateSelectQuery), so a stamp left set with no job in flight hides a
+// still-billing Plaid item from EVERY future sweep. Before the stamp existed, an enqueue failure
+// left the row untouched and the next daily sweep re-selected it; keeping the stamp on that path
+// is therefore strictly worse than the pre-#1486 behaviour, not merely unimproved.
+//
+// Releasing the stamp cannot lose the race the stamp exists to prevent: the race is with a worker
+// running the job, and the enqueue that would have created that job failed.
+//
+// Before the fix this failed on ClearCleanupSchedule not being called at all.
+func TestDeleteAccount_EnqueueFailureReleasesCleanupStamp(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		accountRepo:    mockAccountRepo,
+		linkedItemRepo: mockLinkedItemRepo,
+		jobQueue:       mockJobQueue,
+		logger:         slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{
+		ID:           accountID,
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+	mockLinkedItemRepo.On("MarkForCleanup", ctx, linkedItemID, mock.Anything).Return(nil)
+	mockJobQueue.On("Enqueue", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("queue error"))
+	mockLinkedItemRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+
+	require.NoError(t, service.DeleteAccount(ctx, accountID, userID),
+		"an enqueue failure must not fail the deletion the user asked for")
+
+	mockLinkedItemRepo.AssertCalled(t, "ClearCleanupSchedule", ctx, linkedItemID)
+	mockLinkedItemRepo.AssertExpectations(t)
 	mockJobQueue.AssertExpectations(t)
 }
 

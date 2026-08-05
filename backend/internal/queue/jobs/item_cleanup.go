@@ -55,7 +55,9 @@ type ItemCleanupWorkerDeps struct {
 	// ErrorDaysThreshold / StaleDaysThreshold must be given the SAME values as
 	// ItemCleanupCheckWorkerDeps' fields of the same names (Issue #1486). Zero/unset uses the
 	// shared defaultCleanupErrorDays / defaultCleanupStaleDays, which is what keeps the two
-	// workers in step when neither is configured explicitly.
+	// workers in step. Prefer leaving both unset — cmd/server/main.go does, so production parity is
+	// structural rather than enforced by a comment on two separate literals. Only tests that need a
+	// specific threshold set these.
 	ErrorDaysThreshold int
 	StaleDaysThreshold int
 }
@@ -117,8 +119,10 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 	// This job may have been queued for a long time — the error/login_required/stale legs schedule
 	// it a full gracePeriodDays out (ItemCleanupCheckWorker), and River retries add more — and the
 	// user can repair the connection through Plaid Link update mode at any point in that window.
-	// Nothing marks that repair on the cleanup schedule: the only production
-	// ClearCleanupSchedule call is this worker's own, below, AFTER a successful removal. So a
+	// Nothing marks that repair on the cleanup schedule: the only production callers of
+	// ClearCleanupSchedule are both inside this function — one after a successful RemoveItem, and
+	// one releasing the stale schedule when this very claim declines (grep
+	// `\.ClearCleanupSchedule(`). NOTHING clears it on reconnection. So a
 	// reconnected item still carries cleanup_scheduled_at, and a recheck of "is it still
 	// scheduled" would authorise removing it. The recheck therefore re-asks the sweep's own
 	// question — "is this still a cleanup candidate?" — against the same shared SQL predicate the
@@ -142,22 +146,29 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 			"reason", args.Reason,
 		)
 
-		// Release the now-stale schedule (best-effort). Chosen over leaving it set: the sweep's
-		// candidate predicate requires cleanup_scheduled_at IS NULL, so an item that keeps a
-		// schedule it will never act on is invisible to every future sweep — if it degrades again
-		// later it would never be cleaned up, and Plaid would bill for it indefinitely. Keeping the
-		// row as an audit trail is not worth that: the audit record lives in this log line and in
-		// the completed River job, neither of which the clear touches. A failure here is logged and
-		// swallowed, exactly like the post-removal clear below — turning a benign skip into a
-		// retried job would re-run this same no-op.
+		// Release the now-stale schedule. Chosen over leaving it set: the sweep's candidate
+		// predicate requires cleanup_scheduled_at IS NULL, so an item that keeps a schedule it will
+		// never act on is invisible to every future sweep — if it degrades again later it would
+		// never be cleaned up, and Plaid would bill for it indefinitely. Keeping the row as an audit
+		// trail is not worth that: the audit record lives in this log line and in the completed
+		// River job, neither of which the clear touches.
+		//
+		// A failure here is RETURNED, not swallowed. Returning nil would let River record success
+		// and never come back, permanently creating the exact state the paragraph above calls
+		// unacceptable. The retry is not a pointless re-run of a no-op: the recheck it repeats is
+		// cheap and idempotent, and the clear — the part that actually failed — is what the retry
+		// is for. Removal stays off the table either way, because the claim will decline again.
 		if clearErr := w.linkedItemRepo.ClearCleanupSchedule(ctx, args.LinkedItemID); clearErr != nil {
-			w.logger.Warn("failed to clear stale cleanup schedule for a no-longer-eligible item",
+			w.logger.Error("failed to clear stale cleanup schedule for a no-longer-eligible item, retrying",
+				"job_id", job.ID,
 				"linked_item_id", args.LinkedItemID,
 				"error", clearErr,
 			)
+			return fmt.Errorf("failed to clear stale cleanup schedule for item %s: %w", args.LinkedItemID, clearErr)
 		}
 
-		// A no-longer-eligible item is a SUCCESS with nothing to do, not a failure.
+		// A no-longer-eligible item whose schedule was released is a SUCCESS with nothing to do,
+		// not a failure.
 		return nil
 	}
 
