@@ -98,7 +98,7 @@ var MirroredJobArgsShapes = map[string]JobArgsShape{
 // three different definitions.
 func JSONFieldNames(args any) (names []string, omitEmpty map[string]bool) {
 	t := reflect.TypeOf(args)
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	omitEmpty = map[string]bool{}
