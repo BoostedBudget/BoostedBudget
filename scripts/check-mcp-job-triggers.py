@@ -351,8 +351,20 @@ DEPLOY_TRUTH_TABLE = [
 # The exact shape step (4) requires. Written as a regex over the compute step's `run:` script so a
 # rewrite into something that is NOT a pure OR — an AND, a negation, an early exit — fails closed
 # instead of silently invalidating this mode's whole licence to check the filter surface alone.
+#
+# EVERY leg's comparison operator is pinned to `= "true"`, including force/bootstrap. An earlier
+# version matched the FORCE leg with `[^]]*`, which swallowed the operator: mutating it to
+# `[ "$FORCE" != "true" ]` left the guard green, and in production that inversion would deploy the
+# MCP worker on EVERY non-force dispatch. force/bootstrap are outside what this mode MODELS (they
+# only ever widen the decision to "deploy") but their SHAPE is still load-bearing — "only ever widen"
+# is exactly the property a negated comparison breaks.
+#
+# The two workflows name the force variable differently — prod copies FORCE_REBUILD into a local
+# FORCE, staging tests FORCE_REBUILD directly — so the alternation covers both, and nothing else.
+# `\s*` tolerance means indentation and line reflow do NOT trip this; reordering the three legs, or
+# switching to `[[ ]]`, does.
 MCP_COMPUTE_OR = re.compile(
-    r"mcp_changed=false\s*\n\s*if\s+\[\s*\"\$\{?FORCE(_REBUILD)?[^]]*\]\s*\|\|\s*"
+    r"mcp_changed=false\s*\n\s*if\s+\[\s*\"\$\{?FORCE(_REBUILD)?\}?\"\s*=\s*\"true\"\s*\]\s*\|\|\s*"
     r"\[\s*\"\$BOOT_MCP\"\s*=\s*\"true\"\s*\]\s*\|\|\s*"
     r"\[\s*\"\$\{MCP_CHANGED:-\}\"\s*=\s*\"true\"\s*\];\s*then\s*\n\s*mcp_changed=true\s*\n\s*fi"
 )

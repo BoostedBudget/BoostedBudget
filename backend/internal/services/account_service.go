@@ -606,7 +606,12 @@ func (s *accountService) GetAccounts(ctx context.Context, userID string) ([]doma
 // 1. Gets the account to retrieve its linked_item_id
 // 2. Delegates to the repository layer which validates ownership via WHERE id = $1 AND user_id = $2
 // 3. After deletion, checks if the linked item now has zero active accounts
-// 4. If zero accounts remain, enqueues a cleanup job to remove the Plaid item (stop billing)
+// 4. If zero accounts remain, stamps cleanup_scheduled_at and enqueues a Plaid-item cleanup job
+//
+// Issue #1486 — step 4's stamp (MarkForCleanup) is NOT optional and must precede the enqueue:
+// ItemCleanupWorker re-verifies eligibility before calling Plaid and requires the item to still be
+// scheduled, so an unstamped job is declined and silently reports success while Plaid keeps billing.
+// See the inline comment at the enqueue site for the full argument.
 //
 // Use case: User wants to remove a single account (e.g., closed credit card) while
 // keeping other accounts from the same institution.
@@ -642,27 +647,73 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 				)
 			}
 		} else if remainingCount == 0 {
-			// Step 5: If no accounts remain, enqueue cleanup job
-			cleanupJob := itemCleanupJobArgs{
-				LinkedItemID: linkedItemID,
-				UserID:       userID,
-				Reason:       "zero_accounts",
-			}
-			_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*itemCleanupUniqueOpts()))
-			if err != nil {
+			// Step 5: If no accounts remain, stamp the cleanup schedule and THEN enqueue.
+			//
+			// Issue #1486 — why the MarkForCleanup call is here and must stay here. This method is
+			// the SECOND production producer of "item_cleanup" jobs; the sweep
+			// (queue/jobs/item_cleanup_check.go) is the first, and it has always called
+			// MarkForCleanup before enqueueing. ItemCleanupWorker.Work now re-verifies eligibility
+			// through ClaimItemForCleanup before calling Plaid /item/remove, and that predicate
+			// requires the item to still be SCHEDULED. Enqueueing without stamping produced a job
+			// the worker was GUARANTEED to decline — and a declined claim is deliberately a benign
+			// no-op, so the worker logged, returned nil, and River recorded SUCCESS while the Plaid
+			// item went on billing. No error, no retry, no metric.
+			//
+			// The daily sweep is NOT a reliable backstop for that, which is why this is a stamp
+			// rather than a comment: accountRepository.GetByIDAndUser applies no status filter, so an
+			// account belonging to a 'replaced' or 'disconnected' linked item is deletable, and the
+			// sweep's candidate predicate excludes both statuses. Such an item would have been
+			// stranded permanently, still billing.
+			//
+			// So both producers now uphold ONE invariant: every item_cleanup job's item carries a
+			// cleanup schedule. No grace period — cleanupAt is now, matching the sweep's own
+			// isImmediate branch for the zero_accounts leg.
+			//
+			// ErrLinkedItemNotFound is EXPECTED and benign: MarkForCleanup's WHERE includes
+			// `cleanup_scheduled_at IS NULL`, so it reports that sentinel both when the sweep has
+			// already stamped this item (the claim will succeed anyway) and when the row is gone (the
+			// job becomes a no-op the worker already handles). Any OTHER error means the schedule did
+			// not land, so the job would be a guaranteed silent no-op — do not create it; leave the
+			// item to the sweep, which can still see it precisely because the stamp failed.
+			//
+			// Structured as a flag rather than an early return so Step 6 below (hiding an orphaned
+			// user_account) still runs on the stamp-failure path — it is unrelated bookkeeping and
+			// must not be skipped.
+			scheduleStamped := true
+			if markErr := s.linkedItemRepo.MarkForCleanup(ctx, linkedItemID, time.Now()); markErr != nil &&
+				!errors.Is(markErr, repository.ErrLinkedItemNotFound) {
+				scheduleStamped = false
 				if s.logger != nil {
-					s.logger.Warn("failed to enqueue item cleanup job",
+					s.logger.Warn("failed to mark zero-account item for cleanup, not enqueueing a job the worker would decline",
 						"linked_item_id", linkedItemID,
 						"user_id", userID,
-						"error", err,
+						"error", markErr,
 					)
 				}
-			} else if s.logger != nil {
-				s.logger.Info("enqueued item cleanup job for zero-account item",
-					"linked_item_id", linkedItemID,
-					"user_id", userID,
-					"reason", "zero_accounts",
-				)
+			}
+
+			if scheduleStamped {
+				cleanupJob := itemCleanupJobArgs{
+					LinkedItemID: linkedItemID,
+					UserID:       userID,
+					Reason:       "zero_accounts",
+				}
+				_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*itemCleanupUniqueOpts()))
+				if err != nil {
+					if s.logger != nil {
+						s.logger.Warn("failed to enqueue item cleanup job",
+							"linked_item_id", linkedItemID,
+							"user_id", userID,
+							"error", err,
+						)
+					}
+				} else if s.logger != nil {
+					s.logger.Info("enqueued item cleanup job for zero-account item",
+						"linked_item_id", linkedItemID,
+						"user_id", userID,
+						"reason", "zero_accounts",
+					)
+				}
 			}
 		}
 	}

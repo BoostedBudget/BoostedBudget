@@ -913,10 +913,11 @@ const cleanupCandidateSelectQuery = `
 //   - `li.cleanup_scheduled_at IS NULL` is a CANDIDACY condition for the sweep only ("not already
 //     scheduled"). It is false by construction for every item ClaimItemForCleanup is ever asked
 //     about, because MarkForCleanup set it — so a recheck that reused it verbatim would deny every
-//     claim, and a recheck of "is it still scheduled" would be no recheck at all, since NOTHING in
-//     this codebase clears cleanup_scheduled_at except ItemCleanupWorker itself AFTER a successful
-//     removal (grep `\.ClearCleanupSchedule(` — one production call site,
-//     queue/jobs/item_cleanup.go). A reconnected, fully repaired item still carries its schedule.
+//     claim, and a recheck of "is it still scheduled" would be no recheck at all: the only
+//     production callers of ClearCleanupSchedule are both inside ItemCleanupWorker.Work — one after
+//     a successful RemoveItem, and, as of #1486, one releasing the stale schedule when this very
+//     claim declines (grep `\.ClearCleanupSchedule(`). NOTHING clears it on reconnection, so a
+//     reconnected, fully repaired item still carries its schedule.
 //     ClaimItemForCleanup therefore requires the INVERSE (IS NOT NULL) and adds it itself.
 //   - `li.status NOT IN ('replaced', 'disconnected')` is also sweep-only, and including it in a
 //     recheck would be actively harmful: the re-link path (services/account_service.go, "re-link
@@ -1255,8 +1256,15 @@ func (r *linkedItemRepository) MarkForCleanup(ctx context.Context, itemID string
 // unconditionally) and is written out anyway to keep the statement's intent readable — note the
 // consequence, that a DENIED claim still bumps updated_at.
 //
-// This is a re-verification, NOT a lease: it grants no exclusivity that outlives the statement.
-// What prevents two cleanup jobs racing on one item is ItemCleanupUniqueOpts' job-level uniqueness.
+// This is a re-verification, NOT a lease: it grants no exclusivity that outlives the statement, and
+// nothing else supplies that exclusivity either. Do NOT credit ItemCleanupUniqueOpts with it: its
+// `ByArgs: true` keys on Kind PLUS the full Args, and Args carries Reason — so a sweep-enqueued
+// Reason:"stale" job and an accountService.DeleteAccount-enqueued Reason:"zero_accounts" job for the
+// SAME item are distinct unique keys and can coexist. What actually makes that benign is the Plaid
+// side: whichever loses the race gets ITEM_NOT_FOUND from /item/remove, which
+// PlaidItemCleanupService.RemoveItem swallows and ItemCleanupWorker.Work maps to success (see its
+// IsItemNotFoundError branch), and the row Delete is a safe no-op. Two claims can therefore both be
+// granted; the second one's work is simply redundant, not harmful.
 func (r *linkedItemRepository) ClaimItemForCleanup(ctx context.Context, itemID string, errorDays, staleDays int) (bool, error) {
 	ct, err := r.db.Exec(ctx, `
 		UPDATE linked_items li

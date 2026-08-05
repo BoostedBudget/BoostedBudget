@@ -23,8 +23,10 @@
 #     literally the pre-#1484 content of both files
 #   * misspelling the MCP_CHANGED env wiring, deleting the mcp_changed export, or ungating the
 #     deploy job -> guard errors (each is silent at runtime: the deploy just stops running)
-#   * turning the compute step's mcp_changed OR into an AND -> guard errors, because that OR is the
-#     only reason --deploy may check the filter globs alone
+#   * turning the compute step's mcp_changed OR into an AND, or NEGATING its force leg -> guard
+#     errors, because that OR is the only reason --deploy may check the filter globs alone; and the
+#     complement, a whitespace-only reflow of the same line, must still be ACCEPTED, so the shape
+#     check is shown to discriminate rather than to reject every edit
 #   * a second step with id filter-mcp -> guard errors rather than silently validating the first
 #
 # Case 1 (default mode) and case 9 (--deploy) run against the real, unmutated workflows and must
@@ -250,6 +252,34 @@ mutate_file "$PROD" 1 \
   "|| [ \"\${MCP_CHANGED:-}\" = \"true\" ]; then" \
   "&& [ \"\${MCP_CHANGED:-}\" = \"true\" ]; then"
 assert_deploy_rejected "compute-or-became-and" "not the pure"
+echo ""
+
+echo "Case 12b: NEGATING the compute step's force leg must be an error"
+# The mutation an earlier version of the regex let through: `[^]]*` swallowed the FORCE leg's
+# comparison, so this inversion stayed green. In production it would deploy the MCP worker on EVERY
+# non-force dispatch. force/bootstrap are outside what --deploy MODELS, but their SHAPE is
+# load-bearing: "these legs only ever widen the decision" is precisely what a negation breaks.
+mutate_file "$PROD" 1 \
+  "if [ \"\$FORCE\" = \"true\" ] || [ \"\$BOOT_MCP\" = \"true\" ] || [ \"\${MCP_CHANGED:-}\" = \"true\" ]; then
+            mcp_changed=true" \
+  "if [ \"\$FORCE\" != \"true\" ] || [ \"\$BOOT_MCP\" = \"true\" ] || [ \"\${MCP_CHANGED:-}\" = \"true\" ]; then
+            mcp_changed=true"
+assert_deploy_rejected "compute-force-leg-negated" "not the pure"
+echo ""
+
+echo "Case 12c: re-indenting the compute step's OR must NOT be rejected (tolerance is deliberate)"
+# The complement of 12/12b, so the shape check is shown to discriminate rather than reject any edit:
+# \s* tolerance means whitespace changes are fine. Without this case, tightening the regex until it
+# rejected everything would still look green.
+mutate_file "$PROD" 1 \
+  "          if [ \"\$FORCE\" = \"true\" ] || [ \"\$BOOT_MCP\" = \"true\" ] || [ \"\${MCP_CHANGED:-}\" = \"true\" ]; then" \
+  "          if [ \"\$FORCE\" = \"true\" ]     ||   [ \"\$BOOT_MCP\" = \"true\" ] || [ \"\${MCP_CHANGED:-}\" = \"true\" ]; then"
+if output=$(python3 "$SCRIPT" --deploy "$SANDBOX/mutated.yml" 2>&1); then
+  pass "compute-or-reindented: accepted, as intended"
+else
+  fail "compute-or-reindented: whitespace-only change was rejected — the regex is too strict"
+  echo "$output" | sed 's/^/      /'
+fi
 echo ""
 
 echo "Case 13: deleting the detect-changes mcp_changed export must be an error"

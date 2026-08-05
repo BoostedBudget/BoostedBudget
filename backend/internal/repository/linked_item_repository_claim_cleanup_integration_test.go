@@ -257,6 +257,47 @@ func TestClaimItemForCleanup_Integration_ReplacedItemStaysClaimable(t *testing.T
 	assert.True(t, claimed, "a 'replaced' item whose Plaid item was never removed must still be claimable")
 }
 
+// TestClaimItemForCleanup_Integration_DeleteAccountPathIsClaimable walks the OTHER production
+// producer's sequence at the SQL level: accountService.DeleteAccount (services/account_service.go)
+// enqueues an item_cleanup job when the last account at an institution is deleted, and as of Issue
+// #1486 stamps the schedule with the REAL MarkForCleanup first. Before that stamp existed, the
+// worker's claim was denied and the job reported success while Plaid kept billing.
+//
+// The fixture is the case the daily sweep can NEVER rescue, which is why this is the important row:
+// accountRepository.GetByIDAndUser applies no status filter, so an account on a 'replaced' linked
+// item is deletable — and the sweep's candidate predicate excludes 'replaced'. Without the stamp
+// this item is stranded permanently, still billing.
+func TestClaimItemForCleanup_Integration_DeleteAccountPathIsClaimable(t *testing.T) {
+	ctx := context.Background()
+	tx, repo, profileRepo := newCleanupPageTestTx(t, ctx)
+
+	itemID := seedClaimCleanupItem(t, ctx, tx, repo, profileRepo)
+	// Undo the seed's schedule: DeleteAccount's path starts from an UNSCHEDULED item, which is the
+	// whole point. Also make it 'replaced' with a recent sync, so the ONLY leg that can match is
+	// zero-active-accounts — the leg DeleteAccount itself creates.
+	_, err := tx.Exec(ctx, `
+		UPDATE linked_items
+		SET cleanup_scheduled_at = NULL, cleanup_notified_at = NULL,
+		    status = 'replaced', replaced_at = NOW(), last_error_at = NULL, last_synced_at = NOW()
+		WHERE id = $1`, itemID)
+	require.NoError(t, err)
+
+	claimed, err := repo.ClaimItemForCleanup(ctx, itemID, cleanupPageErrorDays, cleanupPageStaleDays)
+	require.NoError(t, err)
+	require.False(t, claimed,
+		"precondition — this is the bug: an unstamped item is NOT claimable, so DeleteAccount's job "+
+			"would have been declined and silently reported success")
+
+	// Exactly what DeleteAccount now does before enqueueing.
+	require.NoError(t, repo.MarkForCleanup(ctx, itemID, time.Now()))
+
+	claimed, err = repo.ClaimItemForCleanup(ctx, itemID, cleanupPageErrorDays, cleanupPageStaleDays)
+	require.NoError(t, err)
+	assert.True(t, claimed,
+		"after MarkForCleanup the DeleteAccount-enqueued job must be claimable — otherwise a "+
+			"'replaced' zero-account item is stranded forever, because the sweep excludes 'replaced'")
+}
+
 // TestClaimItemForCleanup_Integration_MatchesSweepPredicate is the no-drift oracle: for every item
 // the SWEEP itself selects (via the unbounded GetItemsForCleanup, the same oracle the paged-sweep
 // suite uses), stamping the schedule the way MarkForCleanup does must leave the item claimable. If
