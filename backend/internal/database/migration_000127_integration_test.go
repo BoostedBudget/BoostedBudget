@@ -188,7 +188,7 @@ func TestMigration000127_BackfillMalformedTierOverrideAndMarkerResidue(t *testin
 	// Plaid cleanup during the 30-day grace (the #1449 H6 split) — runtime candidate selection —
 	// whereas this migration corrects a historical artifact, and a zero-linked-items user has
 	// nothing to clean up regardless of deletion state. Nulling cannot race the deletion flow:
-	// neither DeletionService nor DeletionWorker reads plaid_cleanup_pending_at at all.
+	// neither DeletionService nor AccountDeletionWorker reads plaid_cleanup_pending_at at all.
 	//
 	// Note ClearMarkersOnEligibleStatus would not rescue these rows either — its predicate is
 	// NOT(inactive/cancelled), and these users ARE inactive/cancelled. ────────────────────────────

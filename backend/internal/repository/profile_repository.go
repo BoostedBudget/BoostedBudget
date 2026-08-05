@@ -1108,9 +1108,10 @@ func (r *profileRepository) CancelDeletion(ctx context.Context, userID string) e
 // GetUsersScheduledForDeletion returns users whose deletion date has passed.
 //
 // Batch S2 Task 4: this is an UNBOUNDED query — no LIMIT, and ORDER BY deletion_scheduled_at
-// with no id tie-breaker. Kept unchanged for its one remaining caller (workers.DeletionWorker,
-// internal/workers/deletion_worker.go) — a ticker-based worker that is NOT wired in main.go (dead
-// code; NewDeletionWorker has no call site) — so this method carries no live production traffic.
+// with no id tie-breaker. It has NO caller at all as of Issue #1482, which deleted its last one
+// (workers.DeletionWorker, a never-wired ticker-based worker), so this method carries no live
+// production traffic. It is retained ONLY because it is still declared on the wide
+// ProfileRepository interface (line ~161), which several test files' mocks implement.
 // The live production path, ScheduledDeletionCheckWorker (internal/queue/jobs), now calls
 // GetUsersScheduledForDeletionPage below instead, which bounds each query and paginates via a
 // deterministic keyset cursor so a permanently-stuck oldest user (e.g. a continuously-renewed
@@ -1836,9 +1837,8 @@ func deletionClaimPredicateFor(kind DeletionClaimKind) (string, error) {
 //   - RetentionCleanupCheckWorker.deleteExpiredAccounts (queue/jobs/retention_cleanup_check.go),
 //     an in-process call from GetUsersWithExpiredRetention → DeletionKindRetention.
 //
-// A third caller, workers.DeletionWorker (internal/workers/deletion_worker.go), is dead code —
-// NewDeletionWorker has no non-test call site — but is a user-requested path by construction
-// (GetUsersScheduledForDeletion) and passes DeletionKindUserRequested accordingly.
+// There used to be a third caller, workers.DeletionWorker — a ticker-based worker that was never
+// wired into main.go. Issue #1482 deleted it; these two are now the complete caller set.
 func (r *profileRepository) ClaimForDeletion(ctx context.Context, userID string, kind DeletionClaimKind) (bool, error) {
 	predicate, err := deletionClaimPredicateFor(kind)
 	if err != nil {
