@@ -470,6 +470,46 @@ func (p *FeatureProcessor) process(ctx context.Context) error {
 }
 ```
 
+### A River job's key is its `Kind()` string, not its Go type name (#1486/#1490)
+
+River pairs a producer with a worker by the **`Kind()` string**, then deserializes `river_job.args`
+into the **worker's** args type. Two consequences that have each already cost this repo a defect:
+
+**1. Enumerate producers by kind string, and know that grep is not enough.** `internal/services`
+cannot import `internal/queue/jobs` (jobs imports services), so it declares six **mirror** args
+structs locally — `plaidSyncJobArgs`, `investmentHoldingsSyncJobArgs`,
+`investmentTransactionsSyncJobArgs`, `itemCleanupJobArgs`, `effectiveCategoryRefreshJobArgs`,
+`emailChangePropagationArgs` — each re-declaring its counterpart's JSON tags and returning the same
+`Kind()`. **#1486 was Critical because it was audited by Go type name**: a second producer of
+`item_cleanup` lived in a package the `ItemCleanupArgs` grep never touched, so a new recheck
+predicate silently left Plaid items billing. Start from:
+
+```bash
+cd backend && grep -rn 'Kind() string { return "' internal/services internal/workers
+```
+
+**That command is necessary but NOT sufficient.** `queue.RawJobArgs.Kind()` returns a *stored*
+string (`internal/queue/raw_job.go`), and `deadLetterService.Retry` re-enqueues **any**
+dead-lettered kind through it — with the original queue and max-attempts but **no `UniqueOpts`**. So
+every kind has one producer no static grep can see, it can resurrect a job whose preconditions have
+since changed, and it can bypass deduplication. Audit each kind assuming a replay is possible: the
+worker must re-verify its own preconditions rather than trust the producer (`PlaidSyncWorker` is the
+model — it re-checks item existence and ownership and returns `nil` for both).
+
+**2. A mirror that drifts fails in production, not in CI — unless it is pinned.** Nothing about the
+mirrors is compile-checked; the two types are in packages that cannot see each other. A renamed or
+dropped JSON tag means the worker reads a **zero value** for a field the producer thought it set.
+`queue.MirroredJobArgsShapes` (`internal/queue/job_arg_shapes.go`) declares each kind's field set,
+its `omitempty` subset, and any field the mirror may legitimately omit; the two halves of the pin
+live in `internal/queue/jobs/job_arg_shapes_pin_test.go` and
+`internal/services/job_arg_shapes_pin_test.go`. **Adding a mirror means adding a table entry** —
+otherwise the new pair is unpinned.
+
+When you write such a pin, declare the expectation; never derive it from the thing under test. Two
+of these assertions read a type's `omitempty` tags and then checked that same type's output against
+them, and stayed green in **both** directions of the mutation until the expectation moved into the
+table.
+
 ## Wiring in main.go
 
 ```go
