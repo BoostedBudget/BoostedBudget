@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1919,7 +1920,7 @@ func (m *mockProfileRepoForCursorTests) ExpireTrialIfNoOverride(ctx context.Cont
 
 // ClaimForDeletion (Issue #1413 Codex review round 3) is not exercised by these cursor tests;
 // stubbed to satisfy the widened ProfileRepository interface.
-func (m *mockProfileRepoForCursorTests) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+func (m *mockProfileRepoForCursorTests) ClaimForDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) (bool, error) {
 	return false, nil
 }
 func (m *mockProfileRepoForCursorTests) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) { return nil, nil }

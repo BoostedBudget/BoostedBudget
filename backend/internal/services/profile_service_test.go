@@ -209,7 +209,7 @@ func (m *MockProfileRepository) ExpireTrialIfNoOverride(ctx context.Context, use
 
 // ClaimForDeletion (Issue #1413 Codex review round 3) is not exercised by these profile-service
 // tests; stubbed to satisfy the widened ProfileRepository interface.
-func (m *MockProfileRepository) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+func (m *MockProfileRepository) ClaimForDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) (bool, error) {
 	return false, nil
 }
 

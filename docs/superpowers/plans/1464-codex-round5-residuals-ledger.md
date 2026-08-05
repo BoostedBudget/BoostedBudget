@@ -6,6 +6,19 @@ partial unique index and the live-resolution design; dedup-key change unnecessar
 ClaimForDeletion's IS NOT DISTINCT FROM predicate already guards cancel/re-request).
 Net: 3 doc-accuracy fixes + 1 real hardening + 1 real cap. Folded into 3 tasks.
 
+RETRACTION (Issue #1440, T0). The parenthetical above — "dedup-key change unnecessary because
+ClaimForDeletion's IS NOT DISTINCT FROM predicate already guards cancel/re-request" — was FALSE.
+ClaimForDeletion had no such predicate; its signature was (ctx, userID) with no expected-value
+parameter, and its predicate authorised any uncomped user regardless of cancellation. The
+IS NOT DISTINCT FROM guard is DeleteUserCascade's, and it compares against what the stale job
+itself read, so it cannot separate episodes. The reviewer's cancel/re-request worry was real: a
+cancelled user genuinely was hard-deleted by an already-queued job, and a cancel-then-re-request
+genuinely was deleted before its new grace period elapsed. The CONCLUSION (do not change the dedup
+key) still holds, but for a different reason — Args must stay byte-identical for ByArgs dedup — and
+the actual fix is a caller-declared repository.DeletionClaimKind with one claim predicate per
+authorisation. See the retraction block in 1464-codex-round5-residuals.md and
+queue/jobs/account_deletion.go's RequestID doc comment.
+
 Task 1: dispatched (sonnet) — correct GetActiveEntitlement + RequestID docs, pin semantics
         with tests. BASE 2f613b18.
 Task 1: complete (commits 2f613b1..b81adad, review clean — spec PASS, quality approved)

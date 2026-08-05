@@ -64,8 +64,15 @@ func (w *DeletionWorker) ProcessScheduledDeletions(ctx context.Context) error {
 			// Continue processing
 		}
 
-		// Execute deletion for this user
-		if err := w.deletionService.ExecuteDeletion(ctx, user.ID); err != nil {
+		// Execute deletion for this user.
+		//
+		// repository.DeletionKindUserRequested: GetUsersScheduledForDeletion above selects on
+		// deletion_scheduled_at, which only DeletionService.RequestDeletion → MarkForDeletion ever
+		// sets, so every user this worker sees is here because they asked to be deleted. (This
+		// worker is dead code — NewDeletionWorker has no non-test call site, and the live path is
+		// jobs.ScheduledDeletionCheckWorker — but the kind must still be correct: a wrong kind here
+		// would become a live defect the moment anyone wired it up.)
+		if err := w.deletionService.ExecuteDeletion(ctx, user.ID, repository.DeletionKindUserRequested); err != nil {
 			// Log error but continue processing other users
 			w.logger.Error("error deleting user", "user_id", user.ID, "error", err)
 			// Don't return error - we want to continue processing

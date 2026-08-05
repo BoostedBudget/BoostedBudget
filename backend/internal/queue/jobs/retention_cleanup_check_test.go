@@ -164,9 +164,16 @@ func (m *MockRetentionProfileRepository) SetRetentionNotice7dSent(ctx context.Co
 // MockRetentionDeletionService mocks the RetentionDeletionService interface.
 type MockRetentionDeletionService struct {
 	mock.Mock
+	// LastKind records the repository.DeletionClaimKind the last ExecuteDeletion call passed
+	// (Issue #1440, T0). Asserted by
+	// TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_ClaimsAsRetention.
+	LastKind repository.DeletionClaimKind
 }
 
-func (m *MockRetentionDeletionService) ExecuteDeletion(ctx context.Context, userID string) error {
+// ExecuteDeletion records the caller-declared authorisation kind in LastKind rather than folding it
+// into m.Called, so existing expectations in this package stay unchanged (Issue #1440, T0).
+func (m *MockRetentionDeletionService) ExecuteDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) error {
+	m.LastKind = kind
 	args := m.Called(ctx, userID)
 	return args.Error(0)
 }
@@ -436,6 +443,14 @@ func TestRetentionCleanupCheck_RepairFailure_NonFatal_ContinuesToNoticesAndDelet
 	require.NoError(t, err, "a repair failure must not fail the whole job — deletion still ran and succeeded")
 
 	mockDeletion.AssertCalled(t, "ExecuteDeletion", ctx, "user-still-deleted")
+
+	// Issue #1440, T0: this worker must claim under the RETENTION authorisation. Passing the
+	// user-requested kind here would be a live defect — its predicate requires an outstanding
+	// deletion request, which GetUsersWithExpiredRetention explicitly excludes, so every retention
+	// deletion would silently stop happening; and for a user who did have an elapsed request it
+	// would delete them on the retention path, bypassing the separation entirely.
+	assert.Equal(t, repository.DeletionKindRetention, mockDeletion.LastKind,
+		"retention-triggered deletion must claim under DeletionKindRetention")
 }
 
 // TestRetentionCleanupCheck_RepairSkip_PreconditionLostSinceQuery proves RepairRetentionClock

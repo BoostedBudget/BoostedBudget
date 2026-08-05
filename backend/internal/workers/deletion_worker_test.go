@@ -18,6 +18,9 @@ import (
 // MockDeletionServiceForWorker for testing
 type MockDeletionServiceForWorker struct {
 	mock.Mock
+	// LastKind records the repository.DeletionClaimKind the last ExecuteDeletion call passed
+	// (Issue #1440, T0). Asserted by TestProcessScheduledDeletions_ClaimsAsUserRequested.
+	LastKind repository.DeletionClaimKind
 }
 
 func (m *MockDeletionServiceForWorker) RequestDeletion(ctx context.Context, userID, email string) (string, time.Time, error) {
@@ -30,7 +33,8 @@ func (m *MockDeletionServiceForWorker) CancelDeletion(ctx context.Context, token
 	return args.Error(0)
 }
 
-func (m *MockDeletionServiceForWorker) ExecuteDeletion(ctx context.Context, userID string) error {
+func (m *MockDeletionServiceForWorker) ExecuteDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) error {
+	m.LastKind = kind
 	args := m.Called(ctx, userID)
 	return args.Error(0)
 }
@@ -222,7 +226,7 @@ func (m *MockProfileRepoForWorker) ExpireTrialIfNoOverride(ctx context.Context, 
 // ClaimForDeletion (Issue #1413 Codex review round 3) is not exercised by these deletion-worker
 // tests (ExecuteDeletion itself is mocked at the DeletionService level here, not
 // ProfileRepository); stubbed to satisfy the widened ProfileRepository interface.
-func (m *MockProfileRepoForWorker) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+func (m *MockProfileRepoForWorker) ClaimForDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) (bool, error) {
 	return false, nil
 }
 
@@ -268,6 +272,13 @@ func TestWorker_FindsScheduledUsers(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 	mockService.AssertExpectations(t)
 	mockService.AssertNumberOfCalls(t, "ExecuteDeletion", 2)
+
+	// Issue #1440, T0: GetUsersScheduledForDeletion selects on deletion_scheduled_at, which only
+	// MarkForDeletion (the user's own request path) ever sets — so this worker must claim under the
+	// user-requested authorisation. This worker is currently dead code (NewDeletionWorker has no
+	// non-test call site), but a wrong kind here becomes a live defect the moment it is wired up.
+	assert.Equal(t, repository.DeletionKindUserRequested, mockService.LastKind,
+		"deletion_scheduled_at candidates are user-requested deletions")
 }
 
 // TestWorker_ProcessesUsers tests that worker processes each user correctly

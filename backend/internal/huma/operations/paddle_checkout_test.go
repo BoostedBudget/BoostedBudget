@@ -15,6 +15,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -223,7 +224,7 @@ func (m *mockProfileRepo) ExpireTrialIfNoOverride(ctx context.Context, userID st
 
 // ClaimForDeletion (Issue #1413 Codex review round 3) is not exercised by these Paddle checkout
 // tests; stubbed to satisfy the widened ProfileRepository interface.
-func (m *mockProfileRepo) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+func (m *mockProfileRepo) ClaimForDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) (bool, error) {
 	return false, nil
 }
 
