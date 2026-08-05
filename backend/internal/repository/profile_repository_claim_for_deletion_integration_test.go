@@ -35,9 +35,11 @@ import (
 // same pattern used throughout this package's manual-override fixtures), and registers cleanup.
 //
 // deletion_scheduled_at is set to the SAME value as deletionRequestedAt rather than being a
-// separate parameter (Issue #1440, T0). Two reasons: in production the only writer of either column
-// is MarkForDeletion, which always sets both together, so a fixture with one set and the other NULL
-// is a state the system cannot actually reach; and every caller here passes a PAST
+// separate parameter (Issue #1440, T0). Two reasons: every production writer of either column
+// (CreateUser, CreateUserTx, MarkForDeletion, CancelDeletion — see the four-writer enumeration
+// above deletionAuthorisationUnionPredicate in profile_repository.go) sets both columns together in
+// a single statement, so a fixture with one set and the other NULL is a state the system cannot
+// actually reach; and every caller here passes a PAST
 // deletionRequestedAt, so the grace period reads as elapsed — which is the state in which a
 // deletion job legitimately gets enqueued. A test that needs a schedule still in the FUTURE
 // (cancel-then-re-request) overrides the column explicitly after calling this.
@@ -238,10 +240,12 @@ func TestClaimForDeletion_Integration_UserRequested_ReRequestedNotYetDue_NotClai
 // columns). It is defence in depth, and this test is the only thing that covers it.
 //
 // The state it builds — deletion_requested_at NULL while deletion_scheduled_at is set and elapsed —
-// is UNREACHABLE through any production writer today: MarkForDeletion and CancelDeletion are the
-// only writers of either column and both always write both. It is constructed by direct UPDATE
-// deliberately, to pin the behaviour of a future partial-clear writer before one exists rather than
-// after it causes a wrongful hard delete.
+// is UNREACHABLE through any production writer today: all four writers of either column
+// (CreateUser, CreateUserTx, MarkForDeletion, CancelDeletion — see the four-writer enumeration above
+// deletionAuthorisationUnionPredicate in profile_repository.go) always write both together in a
+// single statement, and the two INSERTs create the row, so there is no prior episode for a partial
+// write to leave behind. It is constructed by direct UPDATE deliberately, to pin the behaviour of a
+// future partial-clear writer before one exists rather than after it causes a wrongful hard delete.
 func TestClaimForDeletion_Integration_UserRequested_RequestClearedButScheduleRemains_NotClaimed(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
