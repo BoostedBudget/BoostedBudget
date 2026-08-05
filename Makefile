@@ -202,32 +202,35 @@ test-all:
 # Shell script regression suites.
 # These test the CI/local tooling scripts themselves (not the app) — e.g. the LCOV merge
 # logic in check-frontend-coverage.sh, the orphan-chunk bundle guard, the migration
-# rollback-residue comparison, the pg_dump-via-docker URL/arg handling, and the E2E
-# storage-state guard's negative fixtures. None of them were wired into any runner before
-# this target existed.
+# rollback-residue comparison, the pg_dump-via-docker URL/arg handling, the E2E
+# storage-state guard's negative fixtures, and the MCP job trigger truth table. None of them
+# were wired into any runner before this target existed.
 test-scripts:
 	@echo "========================================"
 	@echo "Running shell script regression suites"
 	@echo "========================================"
 	@echo ""
-	@echo "1/5: check-frontend-coverage.test.sh (exercises the real lcov merger)"
+	@echo "1/6: check-frontend-coverage.test.sh (exercises the real lcov merger)"
 	@if command -v lcov &> /dev/null; then \
 		bash scripts/check-frontend-coverage.test.sh; \
 	else \
 		echo "⚠️  lcov not installed — skipping (install: brew install lcov). CI always has lcov."; \
 	fi
 	@echo ""
-	@echo "2/5: check-orphan-chunks.test.sh"
+	@echo "2/6: check-orphan-chunks.test.sh"
 	@bash scripts/__tests__/check-orphan-chunks.test.sh
 	@echo ""
-	@echo "3/5: rollback-residue.test.sh"
+	@echo "3/6: rollback-residue.test.sh"
 	@bash scripts/__tests__/rollback-residue.test.sh
 	@echo ""
-	@echo "4/5: pg_dump-via-docker.test.sh"
+	@echo "4/6: pg_dump-via-docker.test.sh"
 	@bash scripts/__tests__/pg_dump-via-docker.test.sh
 	@echo ""
-	@echo "5/5: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
+	@echo "5/6: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
 	@bash scripts/__tests__/check-e2e-storage-state.test.sh
+	@echo ""
+	@echo "6/6: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
+	@bash scripts/__tests__/check-mcp-job-triggers.test.sh
 	@echo ""
 	@echo "✅ Shell script regression suites passed!"
 
