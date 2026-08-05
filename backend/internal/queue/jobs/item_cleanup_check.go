@@ -39,7 +39,7 @@ const itemCleanupCheckPageSize = 500
 // across every page fetched within ONE run.
 //
 // ⚠ FIRST, the correction that matters most, because this comment's first version got it wrong and
-// the wrong version was the whole basis for choosing 10,000: **this sweep's per-row action is NOT
+// the wrong version was the whole basis for the 10,000 this cap used to be: **its per-row action is NOT
 // uniformly deferred, and NOT reversible.** Three verified facts, each of which contradicts a claim
 // the earlier draft made:
 //
@@ -62,29 +62,43 @@ const itemCleanupCheckPageSize = 500
 // eligible, but even they get no recheck when it fires. Tracked as its own issue — the fix belongs in
 // ItemCleanupWorker, not in this cap.
 //
-// GIVEN that, 10,000 is justified as a deliberately CONSERVATIVE blast-radius bound, not as a
-// "reversible work is cheap" allowance:
+// GIVEN that, the cap is derived from the ASYMMETRY between its two error directions, which is the
+// only ground left once reversibility is off the table. The two directions are not comparable:
 //
-//   - It is not defended on reversibility at all. Treat every one of the 10,000 as potentially
-//     irreversible-on-the-same-tick, because for the zero-accounts leg it is.
-//   - It is 1/5 of maxUsersPerDeletionSweep (50,000) on cost grounds, which is the one comparison
-//     that does hold: that sweep's loop body is a single River enqueue, while this one performs up to
-//     three round-trips per row (CountActiveByLinkedItemID via
-//     determineCleanupReasonAndTiming, MarkForCleanup, and the enqueue), so the same time budget
-//     covers proportionally fewer rows.
-//   - It is above maxUsersPerRetentionSweep (1,000) only because the per-row loss is narrower, NOT
-//     because it is undoable: losing a Plaid item costs the user a re-link through Plaid Link and a
-//     re-sync; losing a retention candidate destroys the account. Both are irreversible; they are not
-//     equally bad.
-//   - Population sanity: linked_items holds roughly one row per user per linked institution, so
-//     10,000 candidate items is far above any plausible steady-state volume and the cap does not
-//     throttle correct operation. At itemCleanupCheckPageSize=500 that is 20 page round-trips.
+//   - Processing too MANY items in one run is IRREVERSIBLE. Every row over the true figure is a Plaid
+//     /item/remove the user did not need, undoable only by re-linking the institution through Plaid
+//     Link and re-syncing. For the zero-accounts leg there is not even a window in which to notice.
+//   - Processing too FEW is REVERSIBLE and costs only money. A candidate that misses this run is
+//     picked up by the next one; in the meantime Plaid keeps billing for an item nobody is using.
+//     There is no user-facing harm at all in the interim, because every candidate is by definition
+//     already in a state that yields no data: error, login_required, revoked, stale past
+//     staleDaysThreshold, or holding zero active accounts.
 //
-// **This number should be treated as open, not settled.** It was originally chosen on a
-// reversibility argument that turned out to be false for one leg, and the brief that requested it
-// suggested the cap "can be more generous" on the same false premise. If the ItemCleanupWorker
-// recheck gap is closed (making the deferred legs genuinely cancellable), raising it is defensible;
-// until then, lowering it is the safer direction. Do not raise it citing the grace period.
+// An irreversible cost on one side and a metered, recoverable cost on the other means the cap should
+// be set LOW and allowed to defer, not set high to "keep up". Hence 1,000 — the same value as
+// maxUsersPerRetentionSweep, deliberately, so there is one blast-radius number to reason about across
+// both irreversible sweeps rather than two that invite comparison. Concretely:
+//
+//   - Drain arithmetic bounds the downside precisely. At 1,000 per run on this job's ~daily cadence
+//     (ItemCleanupCheckUniqueOpts, 24h ByPeriod), a backlog of B items clears in about B/1000 runs.
+//     Even an implausible 50,000-item backlog drains in ~50 runs while costing nothing but Plaid item
+//     fees, and the cap-hit WARN below names the overflow on every single run, so the backlog is
+//     visible for its whole life rather than silent.
+//   - It is NOT set to 1,000 because the per-row loss equals retention's — it does not. Destroying an
+//     account is worse than dropping a bank connection. It is set there because both are irreversible,
+//     and when the recoverable direction is this cheap there is no reason to buy throughput with
+//     irreversible risk on either sweep.
+//   - The previous value was 10,000, justified on a reversibility argument (a 7-day grace window and
+//     ClearCleanupSchedule as a cancellation hook) that the three verified facts above disprove for
+//     the immediate legs, and that no leg actually gets, since none is rechecked when its job fires.
+//     Do not restore 10,000, and do not raise this citing a grace period or a cancellation path:
+//     neither exists today.
+//   - At itemCleanupCheckPageSize=500 the cap is 2 page round-trips, so it is reached on a page
+//     boundary rather than by mid-page truncation in the common case.
+//
+// Raising this becomes defensible only once ItemCleanupWorker actually rechecks that the schedule
+// still stands before calling Plaid — i.e. once the deferred legs are genuinely cancellable and the
+// immediate leg is either rechecked or given a window. That is a precondition, not a formality.
 //
 // Hitting the cap does NOT reschedule or retry anything: it stops THIS run early and logs a WARN
 // naming how many items were processed. The periodic registration re-runs the job on its own
@@ -94,7 +108,7 @@ const itemCleanupCheckPageSize = 500
 // cannot prevent later rows from being reached; at or above it, every later run re-spends its whole
 // budget on the same unmarkable rows and never reaches anything past the cap. Do not restate that as
 // "no starvation".
-const maxItemsPerCleanupSweep = 10000
+const maxItemsPerCleanupSweep = 1000
 
 // LinkedItemCleanupRepository defines the methods needed for item cleanup scheduling.
 type LinkedItemCleanupRepository interface {
