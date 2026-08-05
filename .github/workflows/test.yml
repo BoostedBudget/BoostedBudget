@@ -73,12 +73,15 @@ jobs:
               - 'api/openapi.yaml'
               - 'packages/**'
             # Dedicated filter for the undici-pin risk (G5-11/#1464 review): the `frontend`
-            # filter also matches apps/web/**, packages/**, and scripts/**, so wiring the MCP
-            # jobs to it (see mcp-server-validate/mcp-server-integration below) made both run
-            # on essentially every frontend PR — two extra jobs on the same 4-runner Mac Mini
-            # that hit ENOSPC on 2026-08-04. The actual risk is narrower: only a change to root
+            # filter also matches apps/web/** and scripts/**, so wiring the MCP jobs to it (see
+            # mcp-server-validate/mcp-server-integration below) made both run on essentially
+            # every frontend PR — two extra jobs on the same 4-runner Mac Mini that hit ENOSPC
+            # on 2026-08-04. The dependency-pin risk is narrow: only a change to root
             # package.json/bun.lock can move the undici version miniflare and the root
-            # `overrides` both pin. This filter targets exactly that.
+            # `overrides` both pin. This filter targets exactly that. It deliberately does NOT
+            # carry packages/** — that is real MCP source, matched by `mcp` above, and folding it
+            # in here would make this filter's name and this comment describe less than it
+            # matches (the same defect class #1464 U1a fixed in the conditions below).
             deps:
               - 'package.json'
               - 'bun.lock'
