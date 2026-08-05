@@ -200,6 +200,7 @@ curl -H "Authorization: Bearer mock-token" http://localhost:4010/user/profile
 - **[Deployment Guide](./boosted-budget-fly-deployment.md)** - Fly.io deployment instructions
 - **[CLAUDE.md](./CLAUDE.md)** - Development guidelines and patterns
 - **[GitHub Secrets Setup](./docs/GITHUB_SECRETS_SETUP.md)** - CI/CD secrets configuration
+- **[Self-hosted runner maintenance](./infra/runners/README.md)** - disk-guard, post-job cleanup, and maintenance scripts for the self-hosted CI runners
 - **[OpenAPI Spec](./api/openapi.yaml)** - API documentation
 
 ## 🔧 Project Structure
