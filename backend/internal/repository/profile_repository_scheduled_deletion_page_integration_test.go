@@ -16,6 +16,15 @@ package repository
 // tuple comparison and ORDER BY tie-breaker actually produce a deterministic, non-overlapping
 // sequence of pages across real rows.
 //
+// ⚠ Which test covers which half. The paging/cap tests below seed STRICTLY INCREASING
+// deletion_scheduled_at values, so they never create a tie and therefore never exercise the `id`
+// component of the sort key at all — verified by mutation while fixing the identical hole in the
+// sibling retention sweep (#1478): removing `id` from both the ORDER BY and the keyset tuple left
+// every test in this file, and both full packages, GREEN.
+// TestGetUsersScheduledForDeletionPage_Integration_TiedSchedule_IdTieBreakerMakesOrderTotal is the
+// test that actually pins it. Do not delete it as redundant with the paging tests — it is the only
+// thing here that fails when the tie-breaker goes missing.
+//
 // Run with:
 //
 //	DATABASE_URL=postgres://... go test ./internal/repository/... -run TestGetUsersScheduledForDeletionPage_Integration -tags integration -v -p 1
@@ -23,6 +32,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -183,4 +193,118 @@ func TestGetUsersScheduledForDeletionPage_Integration_NoLimit_DefaultsTo500(t *t
 		}
 	}
 	assert.True(t, found, "limit<=0 must fall back to a sane positive default, not silently return nothing")
+}
+
+// seedTiedScheduleFixtureUsers creates n users that all share the SAME deletion_scheduled_at, so
+// ORDER BY deletion_scheduled_at alone cannot order them and the `id` component of the sort key is
+// the only thing that makes the order total. Returns the ids sorted the way the query must return
+// them: ascending by id, since the timestamp component ties for every row.
+//
+// MarkForDeletion writes the caller's exact timestamp (it does not recompute one in Postgres), so a
+// tie is seedable through the ordinary repository path. Ties are not contrived: MarkForDeletion's
+// production caller derives deletion_scheduled_at as request time + a fixed grace period, so any two
+// deletion requests landing in the same clock tick — or any bulk/backfill that stamps a batch from one
+// value — tie exactly.
+func seedTiedScheduleFixtureUsers(t *testing.T, ctx context.Context, pool *pgxpool.Pool, repo ProfileRepository, n int) []string {
+	t.Helper()
+	// One shared instant, comfortably in the past so every row is eligible, and distinct from
+	// seedScheduledDeletionFixtureUsers' base so the two suites cannot perturb each other's ordering.
+	scheduledAt := time.Now().Add(-72 * time.Hour)
+	ids := make([]string, n)
+	for i := 0; i < n; i++ {
+		suffix := fmt.Sprintf("tied-%d-%d", time.Now().UnixNano(), i)
+		user := createClaimForDeletionFixtureUser(t, ctx, pool, repo, suffix, false, nil, nil, nil)
+		require.NoError(t, repo.MarkForDeletion(ctx, user.ID, scheduledAt))
+		ids[i] = user.ID
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// TestGetUsersScheduledForDeletionPage_Integration_TiedSchedule_IdTieBreakerMakesOrderTotal pins the
+// `id` component of this sweep's sort key. Every other test in this file seeds strictly increasing
+// deletion_scheduled_at values, so none of them creates a tie and none can detect `id` going missing
+// from the ORDER BY or the keyset tuple — verified by mutation: removing it left all of them, and both
+// full packages, green.
+//
+// With ties, `id` is load-bearing in both places at once:
+//   - ORDER BY deletion_scheduled_at alone leaves tied rows in an arbitrary, run-to-run-unstable
+//     order, so consecutive pages are not guaranteed to be disjoint.
+//   - A keyset predicate of `deletion_scheduled_at > $n` alone SKIPS every remaining row sharing the
+//     cursor's timestamp. On THIS sweep that means a user who asked to be deleted is silently never
+//     enqueued for deletion — a GDPR erasure failure, not a performance nit.
+//
+// The assertion is "exactly once", which catches both directions (a skipped row appears zero times, a
+// repeated row more than once). This mirrors
+// TestGetUsersWithExpiredRetentionPage_Integration_TiedExpiry_IdTieBreakerMakesOrderTotal for the
+// sibling retention sweep and the item sweep's all-NULL-sort-key test; all three exist because a
+// tie-breaker no test ever ties on is indistinguishable from one that is absent.
+func TestGetUsersScheduledForDeletionPage_Integration_TiedSchedule_IdTieBreakerMakesOrderTotal(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	const limit = 2
+	const seeded = 5 // > limit, so the walk must cross pages WITHIN the tied group
+
+	ids := seedTiedScheduleFixtureUsers(t, ctx, pool, repo, seeded)
+
+	// Sanity-check the fixture itself: if these rows did not actually tie, this test would silently
+	// degrade into a duplicate of the increasing-timestamp tests and prove nothing.
+	var distinctSchedules int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COUNT(DISTINCT deletion_scheduled_at) FROM users WHERE id = ANY($1)`, ids).Scan(&distinctSchedules))
+	require.Equal(t, 1, distinctSchedules,
+		"fixture precondition: all %d seeded rows must share ONE deletion_scheduled_at, otherwise the "+
+			"id tie-breaker is not being exercised at all", seeded)
+
+	seen := map[string]int{}
+	var order []string
+	var cursor *DeletionSweepCursor
+	pages := 0
+	for {
+		page, err := repo.GetUsersScheduledForDeletionPage(ctx, cursor, limit)
+		require.NoError(t, err)
+		if len(page) == 0 {
+			break
+		}
+		pages++
+		require.LessOrEqual(t, pages, 5000, "runaway pagination — the cursor is not advancing")
+
+		for _, u := range page {
+			seen[u.ID]++
+			for _, id := range ids {
+				if u.ID == id {
+					order = append(order, u.ID)
+				}
+			}
+		}
+
+		last := page[len(page)-1]
+		next := DeletionSweepCursor{ScheduledAt: *last.DeletionScheduledAt, UserID: last.ID}
+		if cursor != nil {
+			advanced := next.ScheduledAt.After(cursor.ScheduledAt) ||
+				(next.ScheduledAt.Equal(cursor.ScheduledAt) && next.UserID > cursor.UserID)
+			require.True(t, advanced,
+				"cursor must advance strictly even when the timestamp component TIES — that is exactly "+
+					"what the id tie-breaker is for: (%s, %s) does not come after (%s, %s)",
+				next.ScheduledAt, next.UserID, cursor.ScheduledAt, cursor.UserID)
+		}
+		cursor = &next
+
+		if len(page) < limit {
+			break
+		}
+	}
+
+	for _, id := range ids {
+		assert.Equal(t, 1, seen[id],
+			"user %s (seeded, eligible for deletion, tied deletion_scheduled_at) must be returned "+
+				"EXACTLY once across the whole walk — zero means the keyset predicate skipped past a tied "+
+				"row and that user's deletion request is never acted on; more than once means pages overlap", id)
+	}
+	assert.Equal(t, ids, order,
+		"within a tied group the rows must come back in ascending id order — the only total order "+
+			"available when deletion_scheduled_at is identical for every row")
 }
