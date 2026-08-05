@@ -20,7 +20,19 @@ type AccountDeletionArgs struct {
 	// UserID is the ID of the user to delete
 	UserID string `json:"user_id"`
 
-	// RequestID is the unique identifier for the deletion request (for audit)
+	// RequestID is a deterministic, per-USER audit identifier (see
+	// scheduled_deletion_check.go's construction, "scheduled-check-%s" keyed on user ID
+	// alone) — NOT a per-request-episode identifier despite the field name. It is stable
+	// BY DESIGN across every separate periodic check run that finds the same still-eligible
+	// user, because AccountDeletionUniqueOpts() dedups via River's ByArgs (no ByPeriod),
+	// which only matches enqueues whose full Args are byte-identical; a value that varied
+	// per enqueue (e.g. embedding the enqueuing job's own ID or a timestamp) would defeat
+	// that dedup unconditionally. Consequence: this field cannot distinguish two separate
+	// deletion-request episodes for the same user (e.g. cancel-then-re-request) — it will be
+	// identical for both. That distinction, and the guarantee that a stale job from a
+	// cancelled episode cannot delete a user who since cancelled, comes from
+	// ClaimForDeletion's observed-value predicate on deletion_requested_at
+	// (profile_repository.go), not from this field.
 	RequestID string `json:"request_id,omitempty"`
 }
 

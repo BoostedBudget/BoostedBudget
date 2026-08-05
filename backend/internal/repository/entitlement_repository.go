@@ -20,14 +20,23 @@ var ErrEntitlementNotFound = errors.New("active entitlement not found")
 type EntitlementRepository interface {
 	// GetActiveEntitlement returns the user's currently open-ended entitlement row
 	// (effective_until IS NULL, effective_from <= asOf). Returns ErrEntitlementNotFound
-	// if none exists. The 000112 partial unique index guarantees at most one such row.
+	// if none exists. The 000112 partial unique index (WHERE effective_until IS NULL)
+	// guarantees at most one such row per user, so LIMIT 1 is deterministic.
 	//
-	// asOf is a bound parameter, not the database's own NOW() (Batch S2 Task 2, Issue #1466
-	// neighborhood): the sole caller, HouseholdEntitlementService.ResolveEffectiveEntitlementAt,
-	// threads through the SAME instant its own caller (e.g. the admin subscription-detail
-	// handler's `asOf`) already captured, so this read agrees with every other
-	// expiry/liveness predicate evaluated for the same request instead of silently reading the
-	// database's transaction-start clock.
+	// asOf only bounds effective_from, replacing the database's own NOW() so the sole
+	// caller (HouseholdEntitlementService.ResolveEffectiveEntitlementAt) can pass an
+	// instant it captured moments earlier rather than the query's transaction-start clock.
+	// The effective_until IS NULL half of the WHERE clause is deliberately NOT bound by
+	// asOf — it is a current-state predicate, evaluated at query time, not at asOf. That
+	// means an entitlement that was open at asOf but has since been closed (effective_until
+	// set between asOf being captured and this query running) is NOT returned; there is no
+	// asOf-consistent "as it existed then" read of a closed epoch here. This is acceptable
+	// for the one caller this has today: HouseholdEntitlementService resolves household
+	// coverage live from the owner's current user row by design, so returning a historical
+	// entitlement epoch while the rest of the resolution is live would itself be incoherent.
+	// Do NOT change this to also match closed epochs within [effective_from, effective_until)
+	// — 000112's uniqueness only holds for the open-ended row, so matching closed epochs too
+	// makes LIMIT 1 pick an arbitrary one among however many closed epochs overlap asOf.
 	GetActiveEntitlement(ctx context.Context, userID string, asOf time.Time) (*domain.SubscriptionEntitlement, error)
 
 	// CreateHouseholdEntitlement inserts an open-ended (effective_until=NULL) entitlement
