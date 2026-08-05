@@ -1157,10 +1157,22 @@ type DeletionSweepCursor struct {
 // enqueued are cheaply re-skipped via AccountDeletionUniqueOpts' dedup until they are actually
 // deleted, at which point the row is hard-deleted (DeleteUserCascade's `DELETE FROM users` below)
 // and no longer matches this query at all, letting that later run's own cap reach users past this
-// run's. This is deferred continuation,
-// not silent truncation, but it is NOT instantaneous: a backlog that keeps arriving faster than
-// AccountDeletionWorker can drain it will keep re-spending each run's cap on rows it already
-// queued, not exclusively on new ones.
+// run's. This is deferred continuation, not silent truncation, but it is NOT instantaneous: a
+// backlog that keeps arriving faster than AccountDeletionWorker can drain it will keep
+// re-spending each run's cap on rows it already queued, not exclusively on new ones.
+//
+// That rate-based framing describes only the SLOW case. The guarantee is stronger — and the
+// failure mode above the cap is structural, not merely a matter of arrival rate: because every
+// run restarts pagination from a nil cursor (there is no persisted cross-run cursor — #1477),
+// if the number of eligible rows that are NOT actually completing deletion (stuck in
+// AccountDeletionWorker, or otherwise never reaching the point where DeleteUserCascade removes
+// them from this query's result set) exceeds maxUsersPerDeletionSweep
+// (queue/jobs/scheduled_deletion_check.go), then every future sweep spends its ENTIRE budget
+// re-fetching those same oldest stuck rows and NEVER reaches anything ranked past the cap — for
+// as long as those rows keep failing to complete, regardless of how fast or slow new work
+// arrives. This is permanent starvation of every row past the cap, not "eventual drainage once
+// the backlog clears." Below the cap, the keyset-paginated, cross-page-within-one-run guarantee
+// above holds without qualification; above it, it does not.
 func (r *profileRepository) GetUsersScheduledForDeletionPage(ctx context.Context, after *DeletionSweepCursor, limit int) ([]*domain.User, error) {
 	if limit <= 0 {
 		limit = 500
