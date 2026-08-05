@@ -47,7 +47,36 @@ to the empty string, `== 'true'` is false, and the job simply stops running. So 
 export map, validates it against the filters block, and evaluates conditions against the EXPORTED
 values — a filter that is not exported cannot make a row green here either.
 
+DEPLOY MODE (--deploy, Issue #1484)
+----------------------------------
+The same defect class exists in the two DEPLOY workflows, whose `filter-mcp` steps decide whether
+the Cloudflare Workers MCP deploy runs at all. It shipped there too: both listed only
+['apps/mcp-server/**', 'api/openapi.yaml'], so an api-client-only change redeployed the frontend and
+left the deployed worker on a stale api-client.
+
+Those workflows are structurally different and the default mode CANNOT model them — it requires
+exactly one dorny/paths-filter step in detect-changes (they have three) and it evaluates job `if:`
+expressions directly over filter outputs (they route the decision through a SHELL step that also
+ORs in force_rebuild and a bootstrap flag). Rather than mismodel a shell script, --deploy checks the
+one thing #1484 is actually about — the `mcp` filter's PATH SURFACE — and separately verifies, by
+reading the workflow, the wiring that makes that surface decisive:
+
+  1. the step with id `filter-mcp` is a dorny/paths-filter step and defines an `mcp` filter;
+  2. DEPLOY_TRUTH_TABLE's hand-written path -> should-the-MCP-deploy-run rows hold against that
+     filter's actual globs;
+  3. the compute step's env passes MCP_CHANGED: ${{ steps.filter-mcp.outputs.mcp }} — the silent
+     dorny mistake, identical in consequence to a missing `outputs:` export;
+  4. the compute step's mcp_changed assignment is a pure OR of force/bootstrap/MCP_CHANGED, so
+     MCP_CHANGED=true always implies mcp_changed=true and MCP_CHANGED=false implies mcp_changed=false
+     whenever force_rebuild and bootstrap are false — that implication is exactly what licenses
+     checking the filter surface alone, so it is ASSERTED against the file, not assumed;
+  5. detect-changes exports mcp_changed from steps.compute, and the deploy job's `if:` reads it.
+
+What --deploy deliberately does NOT model: force_rebuild=true and bootstrap_mcp=true. Both only ever
+WIDEN the decision to "deploy", which is the safe direction, and (4) is what proves they are ORs.
+
 Usage: python3 scripts/check-mcp-job-triggers.py [path-to-workflow-yml]
+       python3 scripts/check-mcp-job-triggers.py --deploy <path-to-deploy-workflow-yml>
 Exit 0 when every row matches; exit 1 (and print each mismatch) otherwise.
 """
 import ast
@@ -288,7 +317,159 @@ def check_coverage(jobs):
     return found
 
 
+# =============================================================================================
+# Deploy-workflow mode (Issue #1484). See the module docstring's DEPLOY MODE section for the model
+# and for what it deliberately does not model.
+# =============================================================================================
+
+# Hand-written from what the MCP deploy is FOR, deliberately not derived from the filter it checks.
+DEPLOY_TRUTH_TABLE = [
+    ("apps/mcp-server/src/index.ts", True, "the deployed worker's own source"),
+    ("apps/mcp-server/package.json", True, "the deployed worker's own manifest"),
+    ("packages/api-client/src/x.ts", True,
+     "THE #1484 ROW: apps/mcp-server/package.json depends on @boostedbudget/api-client "
+     "(workspace:*), so an api-client-only change must redeploy the worker. Before the fix this "
+     "row was red — the frontend redeployed and the worker stayed on a stale api-client"),
+    ("packages/shared-types/src/x.ts", True,
+     "ACCEPTED OVER-TRIGGER, same as test.yml's `mcp` filter: packages/** rather than "
+     "packages/api-client/** costs one redeploy on shared-types changes and stays correct if "
+     "mcp-server ever adds that dependency"),
+    ("package.json", True, "root manifest can move a dependency the worker bundles"),
+    ("bun.lock", True,
+     "the workspace shares ONE root lockfile, so a resolved-version change for the worker's own "
+     "dependency tree lands here and nowhere else"),
+    ("api/openapi.yaml", True, "the spec the MCP spec-index and facade are generated from"),
+    ("apps/web/src/x.tsx", False, "the web app is not deployed by the MCP job"),
+    ("backend/internal/x.go", False, "backend code is deployed to Fly, not to Cloudflare"),
+    ("config/subscription_tiers.yaml", False, "tier catalogue is not MCP deploy surface"),
+    (".github/workflows/deploy-production.yml", False,
+     "documented decision, not an oversight: workflow-only changes deliberately do NOT retrigger "
+     "an MCP deploy (use force_rebuild=true). If someone adds .github/workflows/** to the filter, "
+     "this row goes red and they must change this table too, on purpose"),
+]
+
+# The exact shape step (4) requires. Written as a regex over the compute step's `run:` script so a
+# rewrite into something that is NOT a pure OR — an AND, a negation, an early exit — fails closed
+# instead of silently invalidating this mode's whole licence to check the filter surface alone.
+MCP_COMPUTE_OR = re.compile(
+    r"mcp_changed=false\s*\n\s*if\s+\[\s*\"\$\{?FORCE(_REBUILD)?[^]]*\]\s*\|\|\s*"
+    r"\[\s*\"\$BOOT_MCP\"\s*=\s*\"true\"\s*\]\s*\|\|\s*"
+    r"\[\s*\"\$\{MCP_CHANGED:-\}\"\s*=\s*\"true\"\s*\];\s*then\s*\n\s*mcp_changed=true\s*\n\s*fi"
+)
+
+MCP_CHANGED_ENV = "${{ steps.filter-mcp.outputs.mcp }}"
+MCP_DEPLOY_JOB = "deploy-mcp-worker"
+
+
+def load_deploy_workflow(path):
+    """Return (mcp filter globs, the detect-changes steps list, the jobs map). Fails closed."""
+    with open(path) as handle:
+        workflow = yaml.safe_load(handle)
+
+    jobs = workflow["jobs"]
+    steps = jobs["detect-changes"]["steps"]
+
+    matches = [s for s in steps if s.get("id") == "filter-mcp"]
+    if len(matches) != 1:
+        raise ValueError("expected exactly 1 step with id 'filter-mcp' in detect-changes, found %d"
+                         % len(matches))
+    step = matches[0]
+    if not str(step.get("uses", "")).startswith("dorny/paths-filter"):
+        raise ValueError("the filter-mcp step is not a dorny/paths-filter step (uses: %r) — this "
+                         "guard cannot tell what it matches" % step.get("uses"))
+    filters = yaml.safe_load(step["with"]["filters"])
+    if set(filters) != {"mcp"}:
+        raise ValueError("filter-mcp defines filters %s; this guard models exactly one, 'mcp'"
+                         % sorted(filters))
+    return filters["mcp"], steps, jobs
+
+
+def check_deploy_wiring(steps, jobs, path):
+    """Assert the chain filter-mcp -> MCP_CHANGED -> compute -> outputs -> the deploy job's if:."""
+    compute = [s for s in steps if s.get("id") == "compute"]
+    if len(compute) != 1:
+        raise ValueError("expected exactly 1 step with id 'compute' in detect-changes, found %d"
+                         % len(compute))
+    compute = compute[0]
+
+    env = compute.get("env") or {}
+    actual = str(env.get("MCP_CHANGED", "")).strip()
+    if actual != MCP_CHANGED_ENV:
+        raise ValueError(
+            "the compute step passes MCP_CHANGED: %r, not %r. That is the silent dorny/paths-filter "
+            "mistake: at runtime the variable is empty, mcp_changed goes false, and the MCP deploy "
+            "just stops running" % (actual, MCP_CHANGED_ENV))
+
+    script = compute.get("run") or ""
+    if not MCP_COMPUTE_OR.search(script):
+        raise ValueError(
+            "the compute step's mcp_changed assignment is not the pure "
+            "`force || bootstrap || MCP_CHANGED` OR this guard requires. That OR is what makes the "
+            "filter surface DECISIVE (MCP_CHANGED=true always deploys; MCP_CHANGED=false does not "
+            "deploy when force and bootstrap are false), and it is the only reason this mode may "
+            "check the filter globs alone. Model the new shape explicitly")
+
+    exported = str((jobs["detect-changes"].get("outputs") or {}).get("mcp_changed", "")).strip()
+    if exported != "${{ steps.compute.outputs.mcp_changed }}":
+        raise ValueError(
+            "detect-changes exports mcp_changed as %r, not ${{ steps.compute.outputs.mcp_changed }} "
+            "— an unexported or misdirected output resolves to the empty string at runtime and the "
+            "MCP deploy silently stops running" % exported)
+
+    if MCP_DEPLOY_JOB not in jobs:
+        raise ValueError("%s defines no %s job" % (path, MCP_DEPLOY_JOB))
+    condition = " ".join(str(jobs[MCP_DEPLOY_JOB].get("if", "")).split())
+    if "needs.detect-changes.outputs.mcp_changed == 'true'" not in condition:
+        raise ValueError(
+            "%s's if: is %r, which does not gate on "
+            "needs.detect-changes.outputs.mcp_changed == 'true' — this guard cannot tell what "
+            "triggers the deploy" % (MCP_DEPLOY_JOB, condition))
+
+
+def main_deploy(path):
+    try:
+        globs, steps, jobs = load_deploy_workflow(path)
+        check_deploy_wiring(steps, jobs, path)
+    except (ValueError, KeyError) as exc:
+        print("::error::%s: %s" % (path, exc))
+        return 1
+
+    failures = []
+    print("=== MCP DEPLOY trigger truth table (%s) ===" % path)
+    print("mcp filter globs: %s" % globs)
+    print("%-46s %-8s %-8s" % ("changed path", "expect", "actual"))
+    for changed_path, expected, why in DEPLOY_TRUTH_TABLE:
+        try:
+            actual = any(glob_to_regex(g).match(changed_path) for g in globs)
+        except ValueError as exc:
+            print("::error::%s" % exc)
+            return 1
+        if actual != expected:
+            failures.append((changed_path, expected, actual, why))
+        print("%-46s %-8s %-8s%s" % (
+            changed_path, "YES" if expected else "NO", "YES" if actual else "NO",
+            "" if actual == expected else "   <== MISMATCH",
+        ))
+
+    print("")
+    if failures:
+        for changed_path, expected, actual, why in failures:
+            print("::error::%s: MCP deploy expected %s, got %s. %s" % (
+                changed_path, "RUN" if expected else "SKIP", "RUN" if actual else "SKIP", why))
+        print("%d row mismatch(es)" % len(failures))
+        return 1
+    print("All %d deploy rows match, and the filter-mcp -> compute -> outputs -> %s wiring is intact."
+          % (len(DEPLOY_TRUTH_TABLE), MCP_DEPLOY_JOB))
+    return 0
+
+
 def main(argv):
+    if len(argv) > 1 and argv[1] == "--deploy":
+        if len(argv) != 3:
+            print("::error::--deploy requires exactly one workflow path")
+            return 1
+        return main_deploy(argv[2])
+
     path = argv[1] if len(argv) > 1 else DEFAULT_WORKFLOW
     try:
         jobs, filters, exports = load_workflow(path)

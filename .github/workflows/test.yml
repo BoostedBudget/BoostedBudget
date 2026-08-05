@@ -139,6 +139,10 @@ jobs:
       # dependency, so it needs none of the setup below. The defect it exists to catch (a filter
       # reasoned about in isolation from the full boolean condition it feeds) shipped twice before
       # this guard existed.
+      # Also covers the same suite's --deploy cases (#1484), which govern the `filter-mcp` steps in
+      # deploy-production.yml / deploy-to-staging.yaml. Those two workflows never run their own CI
+      # checks (they are workflow_dispatch deploys), so this is the ONLY place their MCP trigger
+      # surface is validated — which is exactly why #1484 was originally deferred as unverifiable.
       - name: Test MCP job trigger truth table
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-mcp-job-triggers.test.sh
