@@ -45,8 +45,17 @@ func (m *MockRetentionProfileRepository) GetUsersNeedingRetention7dNotice(ctx co
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockRetentionProfileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
-	args := m.Called(ctx)
+// GetUsersWithExpiredRetentionPage is the paged, keyset-cursored form deleteExpiredAccounts calls
+// as of Issue #1478 — the unbounded GetUsersWithExpiredRetention is no longer on the narrow
+// RetentionProfileRepository interface at all, so this mock does not implement it.
+//
+// Note for the many expectations below that return a page of 1-3 users and never program a second
+// call: the sweep stops as soon as a page comes back SHORT (len < pageSize), and those tests leave
+// ExpiredRetentionPageSize unset, so pageSize is the production default (500). Any page smaller
+// than that is short, so exactly one fetch happens per sweep — the same call count these
+// expectations had before the paging loop existed.
+func (m *MockRetentionProfileRepository) GetUsersWithExpiredRetentionPage(ctx context.Context, after *repository.RetentionSweepCursor, limit int) ([]*domain.User, error) {
+	args := m.Called(ctx, after, limit)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -334,7 +343,7 @@ func TestRetentionCleanupCheck_RepairsRetentionClock(t *testing.T) {
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
@@ -379,7 +388,7 @@ func TestRetentionCleanupCheck_RepairSkipsCompedUser(t *testing.T) {
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	// RepairRetentionClock is deliberately left unstubbed: an unexpected call panics, proving the
 	// comp guard runs BEFORE the write, not merely alongside it.
 
@@ -428,7 +437,7 @@ func TestRetentionCleanupCheck_RepairFailure_NonFatal_ContinuesToNoticesAndDelet
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(expiredUsers, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return(expiredUsers, nil)
 	mockDeletion.On("ExecuteDeletion", ctx, "user-still-deleted").Return(nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
@@ -479,7 +488,7 @@ func TestRetentionCleanupCheck_RepairSkip_PreconditionLostSinceQuery(t *testing.
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
@@ -524,7 +533,7 @@ func TestRetentionCleanupCheck_RepairsPlaidDisconnect(t *testing.T) {
 	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, "user-needs-plaid-repair", pendingSince).Return(true, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
@@ -588,7 +597,7 @@ func TestRetentionCleanupCheck_PlaidRepair_StampsMissingMarkersBeforeCandidateQu
 		Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -650,7 +659,7 @@ func TestRetentionCleanupCheck_PlaidRepair_StampMissingMarkersFailure_NonFatal(t
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -710,7 +719,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearsCompletedMarkersAfterStampBefor
 		Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -764,7 +773,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearCompletedMarkersFailure_NonFatal
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -825,7 +834,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearsMarkersOnEligibleStatusAfterCle
 		Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -872,7 +881,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearMarkersOnEligibleStatusFailure_N
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -922,7 +931,7 @@ func TestRetentionCleanupCheck_MonitorMalformedTierOverride_ReportsCountAndLogsA
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -967,7 +976,7 @@ func TestRetentionCleanupCheck_MonitorMalformedTierOverride_ZeroFound_SetsGaugeT
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -1014,7 +1023,7 @@ func TestRetentionCleanupCheck_MonitorMalformedTierOverride_NoValidatorConfigure
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -1058,7 +1067,7 @@ func TestRetentionCleanupCheck_MonitorMalformedTierOverrideFailure_NonFatal(t *t
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -1111,7 +1120,7 @@ func TestRetentionCleanupCheck_MonitorOrphanedFKlessRows_ReportsCountsAndLogsWhe
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -1158,7 +1167,7 @@ func TestRetentionCleanupCheck_MonitorOrphanedFKlessRows_ZeroFound_SetsGaugesToZ
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -1206,7 +1215,7 @@ func TestRetentionCleanupCheck_MonitorOrphanedFKlessRowsFailure_NonFatal(t *test
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -1251,7 +1260,7 @@ func TestRetentionCleanupCheck_PlaidRepair_QueriesWithConfiguredGracePeriod(t *t
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
@@ -1306,7 +1315,7 @@ func TestRetentionCleanupCheck_PlaidRepair_RecheckWiredToGetUserByID(t *testing.
 	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, "user-recheck-wiring", pendingSince).Return(true, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
@@ -1362,7 +1371,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsCompedUser(t *testing.T) {
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return(users, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	// GetUserByID / DisconnectAllUserItemsIfEligible are deliberately left unstubbed: an
 	// unexpected call panics, proving the comp guard runs BEFORE even the re-read, not merely
 	// alongside it.
@@ -1423,7 +1432,7 @@ func TestRetentionCleanupCheck_PlaidRepairProceedsForLapsedComp(t *testing.T) {
 	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, "user-lapsed-comp-plaid-repair", pendingSince).Return(true, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
@@ -1471,7 +1480,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfResubscribedSinceQuery(t *testi
 	mockRepo.On("GetUserByID", ctx, "user-resubscribed").Return(currentUser, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	// DisconnectAllUserItemsIfEligible is deliberately left unstubbed: an unexpected call panics.
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
@@ -1533,7 +1542,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfCompedSinceQuery(t *testing.T) 
 	mockRepo.On("GetUserByID", ctx, "user-compedsincequery").Return(currentUser, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	// DisconnectAllUserItemsIfEligible and ClearPlaidCleanupPendingIfMatches are deliberately left
 	// unstubbed: an unexpected call panics, proving isStillEligible's OWN comp re-check (not the
 	// belt-and-braces guard, which this batch user does not trip) is what stops the repair.
@@ -1601,7 +1610,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfDeletionRequestedSinceQuery(t *
 	mockRepo.On("GetUserByID", ctx, "user-deletionrequestedsincequery").Return(currentUser, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	// DisconnectAllUserItemsIfEligible and ClearPlaidCleanupPendingIfMatches are deliberately left
 	// unstubbed: an unexpected call panics, proving isStillEligible's OWN deletion_requested_at
 	// re-check (not any belt-and-braces guard above the loop, which this batch user does not trip,
@@ -1653,7 +1662,7 @@ func TestRetentionCleanupCheck_PlaidRepairFailure_NonFatal_ContinuesToNoticesAnd
 	mockPlaid.On("DisconnectAllUserItemsIfEligible", ctx, "user-plaid-repair-fail", mock.Anything).Return(errors.New("plaid: transient 500"))
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(expiredUsers, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return(expiredUsers, nil)
 	mockDeletion.On("ExecuteDeletion", ctx, "user-still-deleted-2").Return(nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
@@ -1710,7 +1719,7 @@ func TestRetentionCleanupCheck_PlaidRepairFailure_IncrementsUserFailureCounter(t
 	mockPlaid.On("DisconnectAllUserItemsIfEligible", ctx, "user-plaid-repair-fail-counter", mock.Anything).Return(errors.New("plaid: transient 500"))
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
@@ -1754,7 +1763,7 @@ func TestRetentionCleanupCheck_PlaidRepairPreCheckFailure_IncrementsUserFailureC
 	mockRepo.On("GetUserByID", ctx, "user-plaid-precheck-fail").Return(nil, errors.New("db: connection reset"))
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
@@ -1800,7 +1809,7 @@ func TestRetentionCleanupCheck_PlaidRepairSuccess_DoesNotIncrementUserFailureCou
 	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, "user-plaid-repair-success-counter", pendingSince).Return(true, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
@@ -1873,7 +1882,7 @@ func TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_MarkerLeftSetAndNotCoun
 		Return(services.ErrCleanupAborted)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	// ClearPlaidCleanupPendingIfMatches is deliberately left unstubbed: an unexpected call panics —
 	// proving the marker is NOT cleared on a mid-run abort.
 
@@ -1953,7 +1962,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearFailure_RetriesThenSucceeds(t *t
 	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, userID, pendingSince).Return(true, nil).Once()
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
@@ -2010,7 +2019,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearFailure_ExhaustsRetries_NotSilen
 	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, userID, pendingSince).Return(false, errors.New("db: connection reset"))
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -2084,7 +2093,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearRetry_ContextCanceled_AbortsWith
 	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, userID, pendingSince).Return(false, errors.New("db: connection reset"))
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
@@ -2134,7 +2143,7 @@ func TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_JoinedError(t *testing.
 		Return(fmt.Errorf("cleanupItems: %w for user user-aborted-wrapped (1 of 2 item(s) not attempted)", services.ErrCleanupAborted))
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	// ClearPlaidCleanupPendingIfMatches deliberately left unstubbed — an unexpected call panics.
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
@@ -2187,7 +2196,7 @@ func TestRetentionCleanupCheck_PlaidRepairNilCleanup_SkipsRepairPass_JobStillSuc
 	mockRepo.On("ClearMarkersOnEligibleStatus", ctx).Return(0, nil).Maybe()
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	// GetUsersNeedingPlaidDisconnectRepair / GetUserByID are deliberately left unstubbed: an
 	// unexpected call panics, proving the nil-dependency check still runs BEFORE the candidate query
 	// ever fires (only the backstop, which needs no Plaid dependency, runs ahead of it).
@@ -2263,7 +2272,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfTransitionedToPastDueSinceQuery
 	mockRepo.On("GetUserByID", ctx, "user-now-pastdue").Return(currentUser, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	// DisconnectAllUserItemsIfEligible is deliberately left unstubbed: an unexpected call panics.
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
@@ -2323,7 +2332,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfMarkerReplacedByNewEpisodeSince
 	mockRepo.On("GetUserByID", ctx, "user-marker-replaced").Return(currentUser, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	// DisconnectAllUserItemsIfEligible and ClearPlaidCleanupPendingIfMatches are deliberately left
 	// unstubbed: an unexpected call panics, proving neither the disconnect nor a clear of the NEW
 	// episode's marker ever happens.
@@ -2370,7 +2379,7 @@ func TestRetentionCleanupCheck_30dNotice_SentToUsers(t *testing.T) {
 	mockRepo.On("SetRetentionNotice30dSent", ctx, "user-1").Return(nil)
 	mockRepo.On("SetRetentionNotice30dSent", ctx, "user-2").Return(nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	const subject30 = "Your BoostedBudget data will be deleted in 30 days"
 	mockEmail.On("SendRetentionNoticeEmail", ctx, "user1@example.com", subject30, mock.AnythingOfType("string")).Return(nil)
@@ -2411,7 +2420,7 @@ func TestRetentionCleanupCheck_7dNotice_SentToUsers(t *testing.T) {
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return(users, nil)
 	mockRepo.On("IsRetentionNotice7dEligibleForOccurrence", ctx, "user-3", retentionExpiresAt).Return(true, nil)
 	mockRepo.On("SetRetentionNotice7dSent", ctx, "user-3").Return(nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	const subject7 = "Final notice: BoostedBudget data deletion in 7 days"
 	mockEmail.On("SendRetentionNoticeEmail", ctx, "user3@example.com", subject7, mock.AnythingOfType("string")).Return(nil)
@@ -2449,7 +2458,7 @@ func TestRetentionCleanupCheck_AutoDeletion_ExecutedForExpiredUsers(t *testing.T
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(users, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return(users, nil)
 	mockDeletion.On("ExecuteDeletion", ctx, "user-exp-1").Return(nil)
 	mockDeletion.On("ExecuteDeletion", ctx, "user-exp-2").Return(nil)
 
@@ -2486,7 +2495,7 @@ func TestRetentionCleanupCheck_DeletionError_ContinuesProcessing(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(users, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return(users, nil)
 	mockDeletion.On("ExecuteDeletion", ctx, "user-fail").Return(errors.New("deletion failed"))
 	mockDeletion.On("ExecuteDeletion", ctx, "user-ok").Return(nil)
 
@@ -2516,7 +2525,7 @@ func TestRetentionCleanupCheck_NoUsers_NoOp(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
 	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
@@ -2549,7 +2558,7 @@ func TestRetentionCleanupCheck_EmailServiceNil_SkipsSending(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	// IsRetentionNotice30dEligibleForOccurrence / SetRetentionNotice30dSent are deliberately left
 	// unstubbed: with no email service configured, the skip must happen BEFORE claiming or
 	// touching the profile repo at all. An unstubbed testify mock call panics, a stronger proof
@@ -2800,7 +2809,7 @@ func TestRetentionCleanupCheck_NilDeletionService_SkipsAutoDeleteButRepairStepsS
 	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, "user-needs-plaid-repair-nodeletion", plaidPendingSince).Return(true, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(expiredUsers, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return(expiredUsers, nil)
 	// DeletionService is nil — there is no mock to call ExecuteDeletion on; an unguarded call
 	// panics instead of erroring, which is why this test asserts via require.NoError plus
 	// completing without a panic, not via an AssertNotCalled expectation.
@@ -2851,7 +2860,7 @@ func TestRetentionCleanupCheck_CompedUser_NotDeleted(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(users, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return(users, nil)
 	// ExecuteDeletion is deliberately left unstubbed on mockDeletion: if the comp guard is
 	// missing, the real call would panic with "unexpected call" rather than silently pass.
 
@@ -2891,7 +2900,7 @@ func TestRetentionCleanupCheck_CompedUser_No30dNotice(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
 	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
@@ -2930,7 +2939,7 @@ func TestRetentionCleanupCheck_CompedUser_No7dNotice(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return(users, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
 	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
@@ -2988,7 +2997,7 @@ func TestRetentionCleanupCheck_LapsedComp_30dNotice_ReachesAuthoritativeReVerify
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	resourceID := retentionOccurrenceResourceID(t, "user-lapsed-comp-30d", retentionExpiresAt)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, resourceID, repository.ActionRetentionNotice30d, retentionNoticeClaimLease).
@@ -3053,7 +3062,7 @@ func TestRetentionCleanupCheck_ExpiredOverride_NotDeleted(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(users, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return(users, nil)
 	// ExecuteDeletion is deliberately left unstubbed — an unstubbed testify mock call panics,
 	// a stronger proof than AssertNotCalled alone that the guard actually short-circuits.
 
@@ -3089,7 +3098,7 @@ func TestRetentionCleanupCheck_NonComped_DeletedNormally(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(users, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return(users, nil)
 	mockDeletion.On("ExecuteDeletion", ctx, "user-ordinary").Return(nil)
 
 	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
@@ -3136,7 +3145,7 @@ func TestRetentionCleanupCheck_30dClaimLost_NoEmailSent(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	resourceID := retentionOccurrenceResourceID(t, "user-race-30d", retentionExpiresAt)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, resourceID, repository.ActionRetentionNotice30d, retentionNoticeClaimLease).
 		Return("", false, nil)
@@ -3174,7 +3183,7 @@ func TestRetentionCleanupCheck_7dClaimLost_NoEmailSent(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return(users, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 	resourceID := retentionOccurrenceResourceID(t, "user-race-7d", retentionExpiresAt)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, resourceID, repository.ActionRetentionNotice7d, retentionNoticeClaimLease).
 		Return("", false, nil)
@@ -3214,7 +3223,7 @@ func TestRetentionCleanupCheck_30dClaimError_ContinuesProcessing(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	claimErrResourceID := retentionOccurrenceResourceID(t, "user-claimerr", retentionExpiresAt)
 	claimOKResourceID := retentionOccurrenceResourceID(t, "user-claimok", retentionExpiresAt)
@@ -3267,7 +3276,7 @@ func TestRetentionCleanupCheck_30dIneligibleAfterClaim_ReleasesClaim_SkipsSend(t
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	resourceID := retentionOccurrenceResourceID(t, "user-ineligible-30d", retentionExpiresAt)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, resourceID, repository.ActionRetentionNotice30d, retentionNoticeClaimLease).
@@ -3315,7 +3324,7 @@ func TestRetentionCleanupCheck_30dSendFails_ReleasesClaim_NextRunRetries(t *test
 	// the SQL side directly; this proves the WORKER's retry behavior end to end).
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil).Twice()
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil).Twice()
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil).Twice()
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil).Twice()
 	mockRepo.On("IsRetentionNotice30dEligibleForOccurrence", ctx, "user-retry-30d", retentionExpiresAt).Return(true, nil).Twice()
 
 	const token1 = "token-attempt-1"
@@ -3383,7 +3392,7 @@ func TestRetentionCleanupCheck_7dSendFails_ReleasesClaim_NextRunRetries(t *testi
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil).Twice()
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return(users, nil).Twice()
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil).Twice()
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil).Twice()
 	mockRepo.On("IsRetentionNotice7dEligibleForOccurrence", ctx, "user-retry-7d", retentionExpiresAt).Return(true, nil).Twice()
 
 	const token1 = "token-attempt-1-7d"
@@ -3446,7 +3455,7 @@ func TestRetentionCleanupCheck_30dSendSucceeds_OrderingProof(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	resourceID := retentionOccurrenceResourceID(t, "user-order-30d", retentionExpiresAt)
 	var callOrder []string
@@ -3505,7 +3514,7 @@ func TestRetentionCleanupCheck_30dCompleteReturnsFalse_LoggedAtError(t *testing.
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	resourceID := retentionOccurrenceResourceID(t, "user-lease-lost", retentionExpiresAt)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, resourceID, repository.ActionRetentionNotice30d, retentionNoticeClaimLease).
@@ -3579,7 +3588,7 @@ func TestRetentionCleanupCheck_Success_RecordsHeartbeat(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
 
 	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
 	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
@@ -3619,7 +3628,7 @@ func TestRetentionCleanupCheck_DeletionFailure_HeartbeatNotAdvanced(t *testing.T
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(users, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return(users, nil)
 	mockDeletion.On("ExecuteDeletion", ctx, "user-fail-hb").Return(errors.New("deletion failed"))
 
 	var logBuf bytes.Buffer
@@ -3691,4 +3700,120 @@ func TestRetentionCleanupCheck_ProcessRetentionNotices_NilRetentionExpiresAt_Ret
 	assert.Equal(t, 1, errCount, "a missing occurrence discriminator must be counted as an error, not silently skipped as ineligible")
 	assert.Equal(t, 0, skipped)
 	mockEmail.AssertNotCalled(t, "SendRetentionNoticeEmail", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// ─── Issue #1478: bounding the expired-retention hard-delete sweep ─────────────────────────────
+//
+// deleteExpiredAccounts is the ONLY in-process hard-delete sweep in this codebase: it calls
+// DeletionService.ExecuteDeletion(..., DeletionKindRetention) — which ends in DeleteUserCascade's
+// `DELETE FROM users` — once per candidate row, synchronously, with no intervening queue. Until
+// this fix it consumed the ENTIRE unbounded result of GetUsersWithExpiredRetention, and
+// RetentionCleanupCheckPeriodicOpts registers this job with RunOnStart: true, so the first run
+// after every deploy hard-deleted however many rows the table happened to hold.
+//
+// These two tests are the fast unit pins for the two halves of the fix (the real-SQL half — that
+// the paged query's keyset predicate and ORDER BY tie-breaker actually produce a deterministic,
+// non-overlapping page sequence, and that a second sweep advances past a first sweep's rows — is
+// pinned by profile_repository_expired_retention_page_integration_test.go, which pgxmock cannot
+// substitute for).
+
+// TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_PagesPastFirstBatch proves boundedness
+// WITHOUT starvation inside one sweep: with a page size of 2 and 5 candidates, the sweep must
+// issue three bounded page fetches (2, 2, 1 — never all 5 in one call) and still delete every
+// candidate, including the ones ranked past the first page. A naive `LIMIT 2` with no cursor would
+// only ever see the first two.
+func TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_PagesPastFirstBatch(t *testing.T) {
+	ctx := context.Background()
+
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	users := make([]*domain.User, 5)
+	for i := range users {
+		expiresAt := base.Add(time.Duration(i) * time.Hour)
+		users[i] = &domain.User{ID: fmt.Sprintf("expired-%d", i+1), RetentionExpiresAt: &expiresAt}
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, (*repository.RetentionSweepCursor)(nil), 2).
+		Return(users[0:2], nil).Once()
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.MatchedBy(func(c *repository.RetentionSweepCursor) bool {
+		return c != nil && c.UserID == "expired-2"
+	}), 2).Return(users[2:4], nil).Once()
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.MatchedBy(func(c *repository.RetentionSweepCursor) bool {
+		return c != nil && c.UserID == "expired-4"
+	}), 2).Return(users[4:5], nil).Once() // short page (1 < 2): the sweep must stop here, not re-query
+
+	mockDeletion.On("ExecuteDeletion", ctx, mock.Anything).Return(nil)
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:              mockRepo,
+		DeletionService:          mockDeletion,
+		Logger:                   slog.Default(),
+		ExpiredRetentionPageSize: 2,
+	})
+
+	require.NoError(t, worker.deleteExpiredAccounts(ctx, 1))
+
+	mockRepo.AssertExpectations(t) // proves all three page fetches happened with the right cursors
+	mockDeletion.AssertNumberOfCalls(t, "ExecuteDeletion", 5)
+	for _, u := range users {
+		mockDeletion.AssertCalled(t, "ExecuteDeletion", ctx, u.ID)
+	}
+}
+
+// TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_StopsAtTotalProcessedCap is the
+// failing-first pin for the per-sweep cap itself. Bounding each QUERY to a page size does not bound
+// the sweep: the loop around it would keep paging until a short page, so a large enough backlog
+// makes one run's hard-deletion count unbounded again.
+//
+// The stub returns a FULL page indefinitely, standing in for an arbitrarily large backlog. It is
+// bounded to safetyNetCalls returns so a regression cannot hang CI: without the cap the sweep keeps
+// calling past ceil(cap/pageSize), the stub runs out of programmed calls, and testify panics with
+// "mock: I don't know what to return" — a fast, loud failure rather than a hang.
+func TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_StopsAtTotalProcessedCap(t *testing.T) {
+	ctx := context.Background()
+
+	const pageSize = 10
+	const sweepCap = 25                        // deliberately NOT a multiple of pageSize: proves the last page is truncated
+	const wantPageFetches = 3                  // ceil(25/10)
+	const safetyNetCalls = wantPageFetches + 5 // far more than a correct implementation ever needs
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < safetyNetCalls; i++ {
+		page := make([]*domain.User, pageSize)
+		for j := 0; j < pageSize; j++ {
+			idx := i*pageSize + j
+			expiresAt := base.Add(time.Duration(idx) * time.Minute)
+			page[j] = &domain.User{ID: fmt.Sprintf("expired-%03d", idx), RetentionExpiresAt: &expiresAt}
+		}
+		mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, pageSize).Return(page, nil).Once()
+	}
+
+	mockDeletion.On("ExecuteDeletion", ctx, mock.Anything).Return(nil)
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:               mockRepo,
+		DeletionService:           mockDeletion,
+		Logger:                    slog.Default(),
+		ExpiredRetentionPageSize:  pageSize,
+		MaxUsersPerRetentionSweep: sweepCap,
+	})
+
+	require.NoError(t, worker.deleteExpiredAccounts(ctx, 1))
+
+	fetchCalls := 0
+	for _, call := range mockRepo.Calls {
+		if call.Method == "GetUsersWithExpiredRetentionPage" {
+			fetchCalls++
+		}
+	}
+	assert.Equal(t, wantPageFetches, fetchCalls,
+		"the sweep must stop fetching pages once the total-processed cap is reached, not keep paging "+
+			"until a short/empty page — without the cap this exceeds wantPageFetches long before the "+
+			"stub's safety net runs out")
+	mockDeletion.AssertNumberOfCalls(t, "ExecuteDeletion", sweepCap)
 }

@@ -110,6 +110,47 @@ func plaidCleanupMarkerClearBackoff(attempt int) time.Duration {
 	return plaidCleanupMarkerClearRetryDelay * time.Duration(1<<uint(attempt-1)) //nolint:gosec // attempt is always small and non-negative (loop-bounded)
 }
 
+// expiredRetentionPageSize bounds each GetUsersWithExpiredRetentionPage query (Issue #1478).
+// deleteExpiredAccounts loops pages of this size within a single run, so this bounds only how many
+// rows one query call materialises — NOT how many users one run hard-deletes. That total is bounded
+// separately by maxUsersPerRetentionSweep below. 500 matches scheduledDeletionCheckPageSize; there
+// is no reason for the two sweeps' page sizes to differ, since a page's cost is a row fetch either
+// way.
+const expiredRetentionPageSize = 500
+
+// maxUsersPerRetentionSweep bounds the TOTAL number of users deleteExpiredAccounts hard-deletes
+// across every page fetched within ONE Work() run.
+//
+// 1,000 — deliberately 50x SMALLER than maxUsersPerDeletionSweep (50,000), which bounds the sibling
+// scheduled-deletion sweep. The two numbers are not comparable, because the per-row action is not
+// comparable: ScheduledDeletionCheckWorker's loop body is a single River enqueue (cheap, and the
+// actual deletion happens later in AccountDeletionWorker, still gated by ExecuteDeletion's claim),
+// whereas this loop body IS the deletion — a synchronous ExecuteDeletion per row, which acquires a
+// work claim, disconnects Plaid, and runs DeleteUserCascade's `DELETE FROM users` against ~37
+// cascading foreign keys. Nothing between this loop and irreversible data loss.
+//
+// Derivation of 1,000:
+//   - Upper side: this job's dedup period is 23 hours (RetentionCleanupCheckUniqueOpts), so 1,000 is
+//     the per-day ceiling on retention hard deletions. For a paid-only product with no free tier
+//     whose candidates are accounts that have been inactive/cancelled for a full retention period
+//     (6 months by default, cfg.RetentionPeriodMonths), 1,000 expiring in a single day is already
+//     far above any plausible steady-state volume, so the cap does not throttle correct operation.
+//   - Lower side: it has to be small enough that a WRONG candidate predicate — the failure mode
+//     that actually produced this branch's only CRITICAL finding, a cancelled user being
+//     hard-deleted — destroys a bounded number of accounts on the RunOnStart tick after a deploy
+//     rather than the whole table, leaving a day and a WARN log for a human to intervene.
+//   - At expiredRetentionPageSize=500 that is 2 page round-trips, so the cap is reached by page
+//     boundary arithmetic, not by an awkward mid-page truncation in the common case.
+//
+// Hitting the cap does NOT reschedule or retry anything: it stops THIS run's deletion step early and
+// logs a WARN naming how many users were processed. The periodic registration re-runs the job on its
+// own cadence, and that run restarts pagination from a nil cursor (there is no persisted cross-run
+// cursor — #1477). See GetUsersWithExpiredRetentionPage's doc comment (profile_repository.go) for
+// what that does and does NOT guarantee: below this cap, a stuck oldest row cannot prevent later
+// rows from being reached; at or above it, every later sweep re-spends its whole budget on the same
+// stuck rows and never reaches anything past the cap. Do not restate that as "no starvation".
+const maxUsersPerRetentionSweep = 1000
+
 // RetentionCleanupCheckArgs contains the arguments for the retention cleanup check job.
 // This job runs daily to:
 //  1. Send 30-day pre-deletion warning emails
@@ -129,8 +170,18 @@ type RetentionProfileRepository interface {
 	GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error)
 	// GetUsersNeedingRetention7dNotice returns users whose retention expires within 7 days and 7d notice not sent.
 	GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error)
-	// GetUsersWithExpiredRetention returns users whose retention_expires_at has passed and are not deleted/pending.
-	GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error)
+	// GetUsersWithExpiredRetentionPage returns up to `limit` users whose retention_expires_at has
+	// passed and who are not deleted/pending, ordered deterministically for keyset pagination
+	// (Issue #1478). after == nil starts from the beginning; pass the cursor derived from the last
+	// row of the previous page to continue.
+	//
+	// This replaces the unbounded GetUsersWithExpiredRetention(ctx) on this interface. It is
+	// declared HERE and on the concrete repository only — deliberately NOT on the wide
+	// repository.ProfileRepository interface, which nine files' mocks implement. See
+	// repository.profileRepository.GetUsersWithExpiredRetentionPage's doc comment for why a bare
+	// LIMIT is not sufficient and for the precise, cap-bounded statement of what the keyset cursor
+	// does and does not guarantee.
+	GetUsersWithExpiredRetentionPage(ctx context.Context, after *repository.RetentionSweepCursor, limit int) ([]*domain.User, error)
 
 	// GetUsersNeedingRetentionClockRepair returns users who are read-only-status
 	// (inactive/cancelled) but have NO retention clock started (retention_expires_at IS NULL) —
@@ -374,6 +425,10 @@ type RetentionCleanupCheckWorker struct {
 	claimsRepo      repository.WorkClaimsRepository
 	retentionMonths int
 	logger          *slog.Logger
+	// expiredRetentionPageSize / maxUsersPerRetentionSweep bound deleteExpiredAccounts (Issue
+	// #1478). See the two constants of the same names for the rationale and the derivation.
+	expiredRetentionPageSize  int
+	maxUsersPerRetentionSweep int
 }
 
 // RetentionCleanupCheckWorkerDeps contains the dependencies for RetentionCleanupCheckWorker.
@@ -383,6 +438,14 @@ type RetentionCleanupCheckWorkerDeps struct {
 	EmailService    RetentionEmailService
 	RetentionMonths int
 	Logger          *slog.Logger
+	// ExpiredRetentionPageSize overrides expiredRetentionPageSize (Issue #1478). Zero/unset uses
+	// the production default. Exists so tests can exercise the multi-page keyset-cursor loop
+	// without seeding hundreds of fixture users — production should never set this.
+	ExpiredRetentionPageSize int
+	// MaxUsersPerRetentionSweep overrides maxUsersPerRetentionSweep (Issue #1478). Zero/unset uses
+	// the production default. Exists so tests can exercise the total-processed safety cap without
+	// seeding thousands of fixture users — production should never set this.
+	MaxUsersPerRetentionSweep int
 }
 
 // NewRetentionCleanupCheckWorker creates a new retention cleanup check worker.
@@ -395,12 +458,22 @@ func NewRetentionCleanupCheckWorker(deps RetentionCleanupCheckWorkerDeps) *Reten
 	if retentionMonths <= 0 {
 		retentionMonths = 6 // Default: 6-month retention period
 	}
+	pageSize := deps.ExpiredRetentionPageSize
+	if pageSize <= 0 {
+		pageSize = expiredRetentionPageSize
+	}
+	maxUsers := deps.MaxUsersPerRetentionSweep
+	if maxUsers <= 0 {
+		maxUsers = maxUsersPerRetentionSweep
+	}
 	return &RetentionCleanupCheckWorker{
-		profileRepo:     deps.ProfileRepo,
-		deletionService: deps.DeletionService,
-		emailService:    deps.EmailService,
-		retentionMonths: retentionMonths,
-		logger:          logger,
+		profileRepo:               deps.ProfileRepo,
+		deletionService:           deps.DeletionService,
+		emailService:              deps.EmailService,
+		retentionMonths:           retentionMonths,
+		logger:                    logger,
+		expiredRetentionPageSize:  pageSize,
+		maxUsersPerRetentionSweep: maxUsers,
 	}
 }
 
@@ -1472,19 +1545,87 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 		return nil
 	}
 
-	users, err := w.profileRepo.GetUsersWithExpiredRetention(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to fetch users with expired retention: %w", err)
+	var cursor *repository.RetentionSweepCursor
+	var totalUsers, deletedCount, errorCount int
+
+	for {
+		users, err := w.profileRepo.GetUsersWithExpiredRetentionPage(ctx, cursor, w.expiredRetentionPageSize)
+		if err != nil {
+			return fmt.Errorf("failed to fetch users with expired retention: %w", err)
+		}
+
+		if len(users) == 0 {
+			break
+		}
+
+		// fetchedCount is the page length AS RETURNED by the repository, before the cap truncation
+		// below — the only reliable signal for whether the repository itself is exhausted
+		// (fetchedCount < pageSize means it had nothing left to give, regardless of the cap).
+		fetchedCount := len(users)
+
+		// maxUsersPerRetentionSweep: truncate the page now if it would push totalUsers to or past
+		// the cap, so the loop below never hard-deletes more than the cap allows — "at most
+		// maxUsersPerRetentionSweep deletions", not "cap-or-more".
+		if remaining := w.maxUsersPerRetentionSweep - totalUsers; fetchedCount >= remaining {
+			// remaining <= 0 is unreachable given the break at the bottom of this loop, but
+			// users[:remaining] would panic on a negative length, so it is guarded explicitly.
+			if remaining <= 0 {
+				break
+			}
+			users = users[:remaining]
+		}
+
+		totalUsers += len(users)
+		w.logger.Info("found users with expired retention", "job_id", jobID, "user_count", len(users))
+
+		lastUser := users[len(users)-1]
+		w.deleteExpiredAccountPage(ctx, jobID, users, &deletedCount, &errorCount)
+
+		// The cursor advances past every row this page RETURNED — including rows the loop skipped
+		// (manual override) or failed to delete. That is the whole point of a keyset cursor here: a
+		// row that is eligible by the query's predicate but cannot actually be deleted must not
+		// occupy the oldest slot of every subsequent page within this run.
+		cursor = &repository.RetentionSweepCursor{
+			ExpiresAt: derefRetentionExpiresAt(lastUser),
+			UserID:    lastUser.ID,
+		}
+
+		// exhausted is computed from fetchedCount (pre-truncation) so it reflects what the
+		// REPOSITORY said, even on a page that also happens to trip the cap.
+		exhausted := fetchedCount < w.expiredRetentionPageSize
+
+		// Cap hit: stop THIS run's deletion step — but only WARN when the repository had not
+		// already told us it was exhausted. A genuinely short final page that happens to land
+		// exactly on the cap has no remainder to defer, and warning about one would be a false
+		// alarm (the same boundary case pinned for the scheduled-deletion sweep).
+		if totalUsers >= w.maxUsersPerRetentionSweep && !exhausted {
+			w.logger.Warn("expired-retention deletion sweep hit its total-processed safety cap; deferring remainder to the next periodic run",
+				"job_id", jobID, "processed", totalUsers, "cap", w.maxUsersPerRetentionSweep)
+			break
+		}
+
+		if exhausted {
+			break
+		}
 	}
 
-	if len(users) == 0 {
+	if totalUsers == 0 {
 		w.logger.Info("no users with expired retention", "job_id", jobID)
 		return nil
 	}
 
-	w.logger.Info("found users with expired retention", "job_id", jobID, "user_count", len(users))
+	w.logger.Info("retention deletions processed",
+		"job_id", jobID, "deleted", deletedCount, "errors", errorCount)
+	if errorCount > 0 {
+		return fmt.Errorf("retention deletion: %d of %d deletions failed (see logs for details)", errorCount, totalUsers)
+	}
+	return nil
+}
 
-	var deletedCount, errorCount int
+// deleteExpiredAccountPage runs the per-user hard-delete step for one page of expired-retention
+// candidates. Split out of deleteExpiredAccounts (Issue #1478) purely so the pagination/cap
+// bookkeeping and the per-user deletion logic stay separately readable; the body is unchanged.
+func (w *RetentionCleanupCheckWorker) deleteExpiredAccountPage(ctx context.Context, jobID int64, users []*domain.User, deletedCount, errorCount *int) {
 	for _, user := range users {
 		// #1413 Critical finding C1 (third round of remediation): belt-and-braces hard-delete
 		// guard — a user with ANY manual tier override, live or lapsed-but-uncleared, must never
@@ -1514,20 +1655,26 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 		if deleteErr := w.deletionService.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention); deleteErr != nil {
 			w.logger.Error("failed to execute retention deletion",
 				"job_id", jobID, "user_id", user.ID, "error", deleteErr)
-			errorCount++
+			*errorCount++
 			continue
 		}
 
 		w.logger.Info("retention deletion executed", "job_id", jobID, "user_id", user.ID)
-		deletedCount++
+		*deletedCount++
 	}
+}
 
-	w.logger.Info("retention deletions processed",
-		"job_id", jobID, "deleted", deletedCount, "errors", errorCount)
-	if errorCount > 0 {
-		return fmt.Errorf("retention deletion: %d of %d deletions failed (see logs for details)", errorCount, len(users))
+// derefRetentionExpiresAt safely reads user.RetentionExpiresAt for cursor advancement.
+// GetUsersWithExpiredRetentionPage's WHERE clause guarantees every returned row has a non-nil
+// RetentionExpiresAt, but this stays defensive rather than assuming that invariant holds forever
+// (e.g. under a future test double that does not enforce it) — falling back to the zero time only
+// makes the cursor's ExpiresAt component overly permissive, never miss real rows. Mirrors
+// derefDeletionScheduledAt (scheduled_deletion_check.go).
+func derefRetentionExpiresAt(user *domain.User) time.Time {
+	if user.RetentionExpiresAt == nil {
+		return time.Time{}
 	}
-	return nil
+	return *user.RetentionExpiresAt
 }
 
 // RetentionCleanupCheckUniqueOpts returns the recommended uniqueness options.
