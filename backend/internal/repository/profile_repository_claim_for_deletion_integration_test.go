@@ -314,8 +314,8 @@ func TestClaimForDeletion_Integration_UnknownKind_FailsClosed(t *testing.T) {
 // must NOT be claimable for hard deletion, no differently than a live one.
 //
 // This test previously asserted the opposite — that an expired override still permits the
-// claim — on the theory that claimForDeletionPredicate should use the "still live right now"
-// rule (noActiveManualOverridePredicate), matching CancelIfPastDueOccurrenceWithRetention/ExpireTrialIfNoOverride. That
+// claim — on the theory that the retention-kind claim predicate should use the "still live right
+// now" rule (noActiveManualOverridePredicate), matching CancelIfPastDueOccurrenceWithRetention/ExpireTrialIfNoOverride. That
 // was the C1 bug, not a documented rule: the retention *queries* that select this same user as a
 // deletion candidate (GetUsersWithExpiredRetention) were correctly changed to exclude ANY
 // override, live or lapsed (noManualOverrideAtAllPredicate) — see that constant's doc comment for
@@ -326,8 +326,8 @@ func TestClaimForDeletion_Integration_UnknownKind_FailsClosed(t *testing.T) {
 // would sail through: selected by the query (any override present, so actually excluded — wait,
 // the real race is a comp granted AFTER a stale candidate was selected under the OLD "no override
 // at all" query semantics from before this fix existed) and then hard-deleted by this claim
-// before the expiry job ever ran. Requiring claimForDeletionPredicate to agree with the retention
-// queries' all-overrides rule closes that window: the worst case is a delay of up to one expiry
+// before the expiry job ever ran. Requiring retentionDeletionClaimPredicate to agree with the
+// retention queries' all-overrides rule closes that window: the worst case is a delay of up to one expiry
 // job cycle, never a wrongful deletion — see
 // TestClaimForDeletion_Integration_ClearedOverride_Claims immediately below for proof this is a
 // delay, not a permanent exemption.

@@ -9,11 +9,12 @@
 -- depending on the connecting session's time zone.
 --
 -- Consequences of the naked columns that this closes (postgres_subscription_override_repository.go):
---   :44  GetActiveOverrides — `WHERE ... (expires_at IS NULL OR expires_at > NOW())` compares a
---        naked TIMESTAMP against a TIMESTAMPTZ. Postgres implicitly interprets the naked value in
---        the SESSION time zone to perform that comparison, so the same stored row can read as
---        expired or still-active depending only on which zone the connection happens to be in —
---        reproduced deterministically in migration_000130_subscription_overrides_tz_integration_test.go.
+--   :44  GetActiveOverrides — `WHERE ... (expires_at IS NULL OR expires_at > $2)`, where $2 is a
+--        caller-supplied `asOf` parameter (not NOW()), compares a naked TIMESTAMP against the bound
+--        TIMESTAMPTZ parameter. Postgres implicitly interprets the naked value in the SESSION time
+--        zone to perform that comparison, so the same stored row can read as expired or
+--        still-active depending only on which zone the connection happens to be in — reproduced
+--        deterministically in migration_000130_subscription_overrides_tz_integration_test.go.
 --   :110 UpdateOverride — `updated_at = NOW()` assigns an absolute instant into the naked column;
 --        the wall-clock digits actually stored reflect the writing session's zone, not UTC.
 --   :30  CreateOverride — inserts a Go time.Time into the naked column via pgx; pgx's

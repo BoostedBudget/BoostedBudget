@@ -181,8 +181,10 @@ printf '\n'
 # 4. Tests — intentionally skipped in the hook.
 #    go test ./... (~35s) + bun run test (~4 min) exceed Claude Code's
 #    60-second PreToolUse hook timeout, causing a silent kill with no stderr
-#    output ("hook error: No stderr output"). Tests run in CI (GitHub
-#    Actions test.yml) on every push — no local gate needed here.
+#    output ("hook error: No stderr output"). This hook runs NO tests at all,
+#    on any push. CI (.github/workflows/test.yml) is pull-request-only
+#    (triggers on opened/synchronize/reopened, not on push), so a push to a
+#    branch with no open PR runs no tests anywhere until a PR exists.
 #    Run manually with: make test-fast
 # =========================================================================
 

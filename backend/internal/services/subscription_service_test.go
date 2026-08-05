@@ -481,7 +481,7 @@ func TestGetEffectiveSubscription_MalformedOverride_NilValidator_PreFixBehaviorP
 // case, and proof that this bug affects EVERY user, not just household members: even the
 // "own"/no-household-row branch of ResolveEffectiveEntitlement reads its own now := time.Now().
 //
-// Made deterministic (no flaky timing race) the same way as
+// Uses a real time.Sleep, not an injected clock, the same way as
 // TestAdminUserService_GetUserDetail_EffectiveStatus_DerivedFromPassedInstant_NotLaterClockRead
 // (admin_user_service_test.go) and TestGetUserSubscription_EffectiveTier_DerivedFromAsOf_NotLaterClockRead
 // (admin_subscriptions_test.go): asOf is captured FIRST while the override is still live, then an
@@ -528,6 +528,13 @@ func TestGetEffectiveSubscriptionAt_ProductionWiring_RealResolver_TierDerivedFro
 
 	// Simulate request-processing time crossing the override's expiry boundary BETWEEN the
 	// caller's asOf capture (above) and GetEffectiveSubscriptionAt's call into the resolver.
+	//
+	// This is a real time.Sleep against the wall clock, not an injected fake clock: the resolver
+	// under test (HouseholdEntitlementService.ResolveEffectiveEntitlement) takes no instant
+	// parameter and calls time.Now() internally (see the doc comment above), and reshaping it to
+	// accept one is out of scope for this fix. The 20ms override lifetime vs. this 60ms sleep
+	// leaves a 40ms margin, which makes the test unlikely to flake under normal load — it does not
+	// make it deterministic.
 	time.Sleep(60 * time.Millisecond)
 
 	effective, err := subService.GetEffectiveSubscriptionAt(context.Background(), user, asOf)

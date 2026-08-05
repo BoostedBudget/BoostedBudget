@@ -24,9 +24,12 @@ services:
   # Local dev data is disposable (fixtures and the QA populator rebuild it), so this is the intended
   # path rather than an in-place pg_upgrade.
   #
-  # Note for scripts/test-migrations.sh: pg_dump refuses to dump a server newer than itself, so a
-  # host client older than 17 will not work. Either install one (brew install postgresql@17) or set
-  # PG_DUMP="$PWD/scripts/pg_dump-via-docker" to use this container's own binary.
+  # Note for scripts/test-migrations.sh: PG_DUMP defaults to the host's `pg_dump` on PATH, and
+  # pg_dump refuses to dump a server newer than itself — so an UNMODIFIED host client older than 17
+  # will fail against this 17 container. That default-invocation case is the only one this
+  # requires 17 for. Either install a >= 17 host client (brew install postgresql@17) or override
+  # PG_DUMP="$PWD/scripts/pg_dump-via-docker" to dump via this container's own binary instead
+  # (which CI's migration-tests step already does, so CI is not affected by the host client at all).
   postgres:
     image: postgres:17-alpine
     container_name: boostedbudget-db
