@@ -89,14 +89,6 @@ func (m *MockProfileRepository) CancelDeletion(ctx context.Context, userID strin
 	return args.Error(0)
 }
 
-func (m *MockProfileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*domain.User), args.Error(1)
-}
-
 func (m *MockProfileRepository) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
 	return args.Bool(0), args.Error(1)
@@ -162,9 +154,6 @@ func (m *MockProfileRepository) GetUsersNeedingRetention30dNotice(ctx context.Co
 	return nil, nil
 }
 func (m *MockProfileRepository) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
-	return nil, nil
-}
-func (m *MockProfileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
 func (m *MockProfileRepository) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {

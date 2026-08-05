@@ -277,8 +277,31 @@ func TestGetUsersWithExpiredRetentionPage_Integration_NoLimit_DefaultsToPositive
 	assert.True(t, found, "limit<=0 must fall back to a sane positive default, not silently return nothing")
 }
 
+// walkAllExpiredRetentionUsers pages GetUsersWithExpiredRetentionPage to exhaustion and returns
+// every user it selects. It reproduces the result SET that the unbounded GetUsersWithExpiredRetention
+// returned before #1488 deleted it, and exists for tests that assert "this fixture user IS / IS NOT
+// selected": these run against a SHARED database, so committed rows from other suites can fill any
+// single page ahead of the fixture (the order is retention_expires_at ASC), and a bare one-page call
+// would make such an assertion depend on unrelated fixture volume rather than on the predicate.
+func walkAllExpiredRetentionUsers(t *testing.T, ctx context.Context, repo *profileRepository) []*domain.User {
+	t.Helper()
+	const pageSize = 100
+	var all []*domain.User
+	var cursor *RetentionSweepCursor
+	for {
+		page, err := repo.GetUsersWithExpiredRetentionPage(ctx, cursor, pageSize)
+		require.NoError(t, err)
+		all = append(all, page...)
+		if len(page) < pageSize {
+			return all
+		}
+		last := page[len(page)-1]
+		cursor = &RetentionSweepCursor{ExpiresAt: *last.RetentionExpiresAt, UserID: last.ID}
+	}
+}
+
 // TestGetUsersWithExpiredRetentionPage_Integration_KeepsManualOverrideExclusion pins that the
-// paged form did not silently drop any part of GetUsersWithExpiredRetention's predicate — in
+// paged form carries every part of the retention predicate — in
 // particular noManualOverrideAtAllPredicate, whose absence would let a comped user (live OR
 // lapsed-but-uncleared) be hard-deleted. That was this branch's only CRITICAL finding.
 func TestGetUsersWithExpiredRetentionPage_Integration_KeepsManualOverrideExclusion(t *testing.T) {
@@ -290,23 +313,7 @@ func TestGetUsersWithExpiredRetentionPage_Integration_KeepsManualOverrideExclusi
 	expiresAt := expiredRetentionSweepEpoch.Add(time.Minute)
 	fixtures := setupRetentionFixtures(t, ctx, pool, repo, "expired_page", expiresAt)
 
-	var got []*domain.User
-	var cursor *RetentionSweepCursor
-	for {
-		page, err := repo.GetUsersWithExpiredRetentionPage(ctx, cursor, 100)
-		require.NoError(t, err)
-		if len(page) == 0 {
-			break
-		}
-		got = append(got, page...)
-		last := page[len(page)-1]
-		cursor = &RetentionSweepCursor{ExpiresAt: *last.RetentionExpiresAt, UserID: last.ID}
-		if len(page) < 100 {
-			break
-		}
-	}
-
-	assertRetentionSelection(t, got, fixtures)
+	assertRetentionSelection(t, walkAllExpiredRetentionUsers(t, ctx, repo), fixtures)
 }
 
 // TestGetUsersWithExpiredRetentionPage_Integration_TiedExpiry_IdTieBreakerMakesOrderTotal is the

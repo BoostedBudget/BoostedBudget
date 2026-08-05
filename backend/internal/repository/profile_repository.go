@@ -97,11 +97,11 @@ type ProfileRepository interface {
 	// after clamp. So a pre-existing row can carry a GDPR deletion deadline up to ~3 days LATER than a
 	// new row with the same start date — only for clocks anchored on Mar 31, May 31, Aug 29/30/31,
 	// Oct 31 or Dec 31 (at the configured N=6). We deliberately did NOT backfill:
-	//   - every consumer (30d notice, 7d notice, GetUsersWithExpiredRetention, the occurrence CAS)
+	//   - every consumer (30d notice, 7d notice, GetUsersWithExpiredRetentionPage, the occurrence CAS)
 	//     reads the row's OWN stored value, so an untouched row is internally consistent end to end —
 	//     no notice is skipped and nobody is deleted early;
 	//   - retention_notice_30d_sent_at / _7d_sent_at are SET-ONCE flags that gate re-send, and
-	//     GetUsersWithExpiredRetention does not reference them at all, so shrinking a deadline after a
+	//     GetUsersWithExpiredRetentionPage does not reference them at all, so shrinking a deadline after a
 	//     notice had fired would delete an account on a SHORTER window than the email promised, with
 	//     no new notice;
 	//   - migrations 000119-000122 set this codebase's precedent for retroactively correcting a
@@ -130,10 +130,6 @@ type ProfileRepository interface {
 	// and whose 7-day notice has not yet been sent.
 	GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error)
 
-	// GetUsersWithExpiredRetention returns users whose retention_expires_at has passed
-	// and who are not already deleted or pending deletion.
-	GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error)
-
 	// GetUsersWithExpiredManualTierOverride returns users whose manual_tier_override is set and
 	// whose manual_tier_ends_at has strictly passed (Issue #1413 Task 9 — backs the daily job
 	// that expires lapsed admin comps).
@@ -156,9 +152,6 @@ type ProfileRepository interface {
 
 	// CancelDeletion cancels a pending deletion request
 	CancelDeletion(ctx context.Context, userID string) error
-
-	// GetUsersScheduledForDeletion returns users whose deletion date has passed
-	GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error)
 
 	// DeleteUserCascade performs application-level cascade deletion of all user data, but ONLY
 	// after re-verifying, INSIDE the same transaction that performs the destructive statements,
@@ -1105,31 +1098,6 @@ func (r *profileRepository) CancelDeletion(ctx context.Context, userID string) e
 	return nil
 }
 
-// GetUsersScheduledForDeletion returns users whose deletion date has passed.
-//
-// Batch S2 Task 4: this is an UNBOUNDED query — no LIMIT, and ORDER BY deletion_scheduled_at
-// with no id tie-breaker. It has NO caller at all as of Issue #1482, which deleted its last one
-// (workers.DeletionWorker, a never-wired ticker-based worker), so this method carries no live
-// production traffic. It is retained ONLY because it is still declared on the wide
-// ProfileRepository interface (line ~161), which several test files' mocks implement.
-// The live production path, ScheduledDeletionCheckWorker (internal/queue/jobs), now calls
-// GetUsersScheduledForDeletionPage below instead, which bounds each query and paginates via a
-// deterministic keyset cursor so a permanently-stuck oldest user (e.g. a continuously-renewed
-// admin comp) cannot starve later users out of every batch WITHIN ONE RUN — this guarantee holds
-// only up to maxUsersPerDeletionSweep (queue/jobs/scheduled_deletion_check.go) permanently-stuck
-// rows; beyond that count it is not "forever safe," it is permanent starvation of every row past
-// the cap, because every run restarts pagination from a nil cursor (no persisted cross-run
-// cursor — see #1477). See that method's doc comment for the full rationale.
-func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
-	query := userSelectQuery + `
-		WHERE deletion_scheduled_at IS NOT NULL
-		  AND deletion_scheduled_at <= $1
-		  AND is_deleted = FALSE
-		ORDER BY deletion_scheduled_at ASC
-	`
-	return r.queryUsers(ctx, query, time.Now())
-}
-
 // DeletionSweepCursor is a keyset-pagination position for GetUsersScheduledForDeletionPage,
 // captured from the last row of the previous page — (ScheduledAt, UserID), matching that page's
 // ORDER BY (deletion_scheduled_at, id) ASC. A nil cursor starts from the beginning.
@@ -1142,8 +1110,9 @@ type DeletionSweepCursor struct {
 // passed, ordered by (deletion_scheduled_at, id) ASC for deterministic keyset pagination — Batch
 // S2 Task 4 (Issue #1440/#1448 follow-up; same defect class as #1469/ItemCleanupCheck).
 //
-// GetUsersScheduledForDeletion above has NO LIMIT and orders by deletion_scheduled_at alone (no
-// id tie-breaker, so ties are not even deterministically ordered). That was harmless while this
+// The unbounded GetUsersScheduledForDeletion this replaced (deleted in #1488, once #1482 removed
+// its last caller) had NO LIMIT and ordered by deletion_scheduled_at alone (no id tie-breaker, so
+// ties were not even deterministically ordered). That was harmless while this
 // query only fed a soft, reversible flow, but #1440 turned it into a REAL hard delete, and #1448
 // registered its caller with RunOnStart: true — so an unbounded result set is now unbounded
 // destructive work triggered on process start, with no deterministic order to reason about.
@@ -1658,7 +1627,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 //     MarkForDeletion → GetUsersScheduledForDeletionPage → ScheduledDeletionCheckWorker enqueues
 //     AccountDeletionArgs → AccountDeletionWorker → ExecuteDeletion).
 //   - DeletionKindRetention — nobody asked; the retention clock on a long-inactive account expired
-//     (GetUsersWithExpiredRetention → RetentionCleanupCheckWorker.deleteExpiredAccounts →
+//     (GetUsersWithExpiredRetentionPage → RetentionCleanupCheckWorker.deleteExpiredAccounts →
 //     ExecuteDeletion, an in-process call, NOT a River job).
 type DeletionClaimKind string
 
@@ -1719,7 +1688,7 @@ const userRequestedDeletionClaimPredicate = `
 // retentionDeletionClaimPredicate authorises a hard delete on the strength of an expired retention
 // clock, for an account nobody asked to delete.
 //
-// It must agree with the query that selects these candidates, GetUsersWithExpiredRetention, which
+// It must agree with the query that selects these candidates, GetUsersWithExpiredRetentionPage, which
 // filters `deletion_requested_at IS NULL` and splices this same noManualOverrideAtAllPredicate.
 // Those two clauses are reproduced here rather than trusted to the candidate query, because the
 // claim's job is to re-verify against committed state at claim time what the candidate query
@@ -1835,7 +1804,7 @@ func deletionClaimPredicateFor(kind DeletionClaimKind) (string, error) {
 //     (queue/jobs/scheduled_deletion_check.go) from GetUsersScheduledForDeletionPage
 //     → DeletionKindUserRequested.
 //   - RetentionCleanupCheckWorker.deleteExpiredAccounts (queue/jobs/retention_cleanup_check.go),
-//     an in-process call from GetUsersWithExpiredRetention → DeletionKindRetention.
+//     an in-process call from GetUsersWithExpiredRetentionPage → DeletionKindRetention.
 //
 // There used to be a third caller, workers.DeletionWorker — a ticker-based worker that was never
 // wired into main.go. Issue #1482 deleted it; these two are now the complete caller set.
@@ -2542,44 +2511,6 @@ func (r *profileRepository) GetUsersNeedingRetention7dNotice(ctx context.Context
 	return users, nil
 }
 
-// GetUsersWithExpiredRetention returns users whose retention_expires_at has passed
-// and who are not already deleted or pending deletion (#930).
-//
-// Issue #1478: this is an UNBOUNDED query — no LIMIT, and ORDER BY retention_expires_at with no
-// id tie-breaker, so ties are not even deterministically ordered. It has NO remaining production
-// caller: RetentionCleanupCheckWorker.deleteExpiredAccounts (the only one it ever had) now calls
-// GetUsersWithExpiredRetentionPage below. It is retained ONLY because it is still declared on the
-// wide ProfileRepository interface (line ~135), which several test files' mocks implement; removing it is
-// recommended as a separate change (see GetUsersWithExpiredRetentionPage's doc comment) rather
-// than smuggled into the fix for the destructive path.
-//
-// No mock TOTAL is asserted here on purpose. Three different counting methods produced three
-// different answers for this exact question during review (a `grep -rl "func .*Method"` sweep also
-// matches Test function names and this implementation itself, inflating it), so any single number
-// would be another unverifiable figure of the kind this branch has already had to retire. Enumerate
-// them when you need the list, and count what the command prints:
-//
-//	grep -rn '^func (m \*[A-Za-z]*) GetUsersWithExpiredRetention(' internal/
-func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
-	query := userSelectQuery + `
-		WHERE retention_expires_at IS NOT NULL
-		  AND retention_expires_at <= NOW()
-		  AND subscription_status IN ('inactive', 'cancelled')
-		  AND is_deleted = FALSE
-		  AND deletion_requested_at IS NULL
-	` + noManualOverrideAtAllPredicate + `
-		ORDER BY retention_expires_at ASC
-	`
-	users, err := r.queryUsers(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	if users == nil {
-		return []*domain.User{}, nil
-	}
-	return users, nil
-}
-
 // RetentionSweepCursor is a keyset-pagination position for GetUsersWithExpiredRetentionPage,
 // captured from the last row of the previous page — (ExpiresAt, UserID), matching that page's
 // ORDER BY (retention_expires_at, id) ASC. A nil cursor starts from the beginning.
@@ -2600,10 +2531,11 @@ type RetentionSweepCursor struct {
 
 // GetUsersWithExpiredRetentionPage returns up to `limit` users whose retention_expires_at has
 // passed, ordered by (retention_expires_at, id) ASC for deterministic keyset pagination — Issue
-// #1478. Mirrors GetUsersScheduledForDeletionPage above; the WHERE clause is
-// GetUsersWithExpiredRetention's, unchanged, plus the keyset predicate.
+// #1478. Mirrors GetUsersScheduledForDeletionPage above; the WHERE clause is the unbounded
+// GetUsersWithExpiredRetention's, unchanged, plus the keyset predicate. (That unbounded method was
+// deleted in #1488 once this one had taken over its last caller.)
 //
-// Why this exists: GetUsersWithExpiredRetention (above) has no LIMIT, and its single caller,
+// Why this existed: GetUsersWithExpiredRetention had no LIMIT, and its single caller,
 // RetentionCleanupCheckWorker.deleteExpiredAccounts (queue/jobs/retention_cleanup_check.go),
 // consumed the whole slice and called DeletionService.ExecuteDeletion(..., DeletionKindRetention)
 // once per row — a REAL hard delete (DeleteUserCascade's `DELETE FROM users`), in-process, with no
@@ -2678,7 +2610,7 @@ func (r *profileRepository) GetUsersWithExpiredRetentionPage(ctx context.Context
 }
 
 // GetUsersNeedingRetentionClockRepair implements the Issue #1413 H5 residual repair path — see
-// the interface doc comment for the full rationale. Mirrors GetUsersWithExpiredRetention's
+// the interface doc comment for the full rationale. Mirrors GetUsersWithExpiredRetentionPage's
 // predicate shape except retention_expires_at IS NULL instead of IS NOT NULL/expired.
 func (r *profileRepository) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
 	query := userSelectQuery + `

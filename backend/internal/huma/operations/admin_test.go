@@ -148,11 +148,6 @@ func (m *mockLinkedItemRepo) GetByUserAndInstitution(ctx context.Context, userID
 	return nil, repository.ErrLinkedItemNotFound
 }
 
-// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
-func (m *mockLinkedItemRepo) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
-	return nil, nil
-}
-
 func (m *mockLinkedItemRepo) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
 	return nil, nil
 }

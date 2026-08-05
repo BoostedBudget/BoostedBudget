@@ -144,6 +144,34 @@ func assertSeededItemsAreOldestCandidates(t *testing.T, ctx context.Context, tx 
 			"be spent on another suite's leaked row and the cap assertions below would prove nothing")
 }
 
+// walkAllCleanupCandidates pages GetItemsForCleanupPage to exhaustion and returns every candidate it
+// selects. It reproduces the result SET that the unbounded GetItemsForCleanup returned before #1488
+// deleted it, and exists for tests that assert "this fixture row IS selected": these run inside a tx
+// on a SHARED database, so committed rows from other suites can fill any single page ahead of the
+// fixture (the order is last_error_at ASC NULLS LAST), and a bare one-page call would make such an
+// assertion depend on unrelated fixture volume. Unlike runItemCleanupSweep it applies no sweep cap —
+// it is an oracle for the predicate, not a simulation of the worker.
+func walkAllCleanupCandidates(t *testing.T, ctx context.Context, repo *linkedItemRepository) []domain.LinkedItem {
+	t.Helper()
+	const pageSize = 100
+	var all []domain.LinkedItem
+	var cursor *ItemCleanupSweepCursor
+	for {
+		page, err := repo.GetItemsForCleanupPage(ctx, cleanupPageErrorDays, cleanupPageStaleDays, cursor, pageSize)
+		require.NoError(t, err)
+		all = append(all, page...)
+		if len(page) < pageSize {
+			return all
+		}
+		last := page[len(page)-1]
+		cursor = &ItemCleanupSweepCursor{
+			LastErrorAt:  last.LastErrorAt,
+			LastSyncedAt: last.LastSyncedAt,
+			ItemID:       last.ID,
+		}
+	}
+}
+
 // runItemCleanupSweep walks pages exactly the way ItemCleanupCheckWorker.Work does: nil cursor,
 // advance to the last row of each page, stop on a short page (exhausted) or once the total
 // processed reaches sweepCap. Returns the ids processed, in order.
@@ -353,34 +381,4 @@ func TestGetItemsForCleanupPage_Integration_NoLimit_DefaultsToPositive(t *testin
 		}
 	}
 	assert.True(t, found, "limit<=0 must fall back to a sane positive default, not silently return nothing")
-}
-
-// TestGetItemsForCleanupPage_Integration_MatchesUnpagedPredicate pins that the paged form selects
-// the same SET of rows the unbounded GetItemsForCleanup does — no predicate leg was dropped or
-// tightened while adding the LIMIT and the cursor. Compared as sets over the seeded ids only, since
-// the two calls are made at slightly different NOW() values.
-func TestGetItemsForCleanupPage_Integration_MatchesUnpagedPredicate(t *testing.T) {
-	ctx := context.Background()
-	tx, repo, profileRepo := newCleanupPageTestTx(t, ctx)
-
-	const seeded = 5
-	ids := seedCleanupCandidates(t, ctx, tx, repo, profileRepo, seeded)
-
-	unpaged, err := repo.GetItemsForCleanup(ctx, cleanupPageErrorDays, cleanupPageStaleDays)
-	require.NoError(t, err)
-	unpagedSeeded := map[string]bool{}
-	for _, it := range unpaged {
-		unpagedSeeded[it.ID] = true
-	}
-
-	paged := runItemCleanupSweep(t, ctx, repo, 2, seeded)
-	pagedSeeded := map[string]bool{}
-	for _, id := range paged {
-		pagedSeeded[id] = true
-	}
-
-	for _, id := range ids {
-		assert.True(t, unpagedSeeded[id], "sanity: the unbounded query must select seeded item %s", id)
-		assert.True(t, pagedSeeded[id], "the paged query must select the same seeded item %s the unbounded one does", id)
-	}
 }

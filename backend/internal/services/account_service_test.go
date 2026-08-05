@@ -195,15 +195,6 @@ func (m *MockLinkedItemRepository) GetByUserAndInstitution(ctx context.Context, 
 	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
-// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
-func (m *MockLinkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
-	args := m.Called(ctx, errorDays, staleDays)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]domain.LinkedItem), args.Error(1)
-}
-
 func (m *MockLinkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
@@ -451,14 +442,6 @@ func (m *MockUserRepository) CancelDeletion(ctx context.Context, userID string) 
 	return args.Error(0)
 }
 
-func (m *MockUserRepository) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*domain.User), args.Error(1)
-}
-
 func (m *MockUserRepository) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
 	return args.Bool(0), args.Error(1)
@@ -542,14 +525,6 @@ func (m *MockUserRepository) GetUsersNeedingRetention30dNotice(ctx context.Conte
 }
 
 func (m *MockUserRepository) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*domain.User), args.Error(1)
-}
-
-func (m *MockUserRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

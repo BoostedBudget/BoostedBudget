@@ -113,11 +113,6 @@ type LinkedItemRepository interface {
 
 	// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
 
-	// GetItemsForCleanup retrieves items that are candidates for cleanup.
-	// Criteria: items in error/login_required state > errorDays, OR revoked status, OR not synced > staleDays.
-	// Only returns items that haven't been notified yet (cleanup_scheduled_at IS NULL).
-	GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error)
-
 	// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due.
 	// Returns items where cleanup_scheduled_at < NOW().
 	GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error)
@@ -186,9 +181,10 @@ const linkedItemSelectCols = `id, user_id, item_id, access_token_encrypted,
 // interface — Issue #1469. It used to return the interface, which meant a method absent from that
 // wide interface was unreachable through the value main.go holds, so the paged
 // GetItemsForCleanupPage below could only be reached by ALSO adding it to the wide interface and to
-// every one of its mock implementations (enumerate them with
-// `grep -rn '^func (m \*[A-Za-z]*) GetItemsForCleanup(' internal/`; no total is asserted here
-// because three counting methods gave three different answers during review). Returning the concrete
+// every mock implementation of it (enumerate them with
+// `grep -rnE '^func \([a-zA-Z_]+ \*?[A-Za-z0-9_]+\) GetItemsForCleanupPage\(' internal/`; no total is
+// asserted here because three counting methods gave three different answers during review, and the
+// receiver name is not always `m`). Returning the concrete
 // type (exactly as NewProfileRepository already does) keeps the paged sweep method on the concrete
 // repository plus the ONE narrow consumer interface that needs it
 // (jobs.LinkedItemCleanupRepository), which is the placement the sibling scheduled-deletion fix
@@ -851,43 +847,12 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 
 // Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
 
-// GetItemsForCleanup retrieves items that are candidates for cleanup.
-// Criteria:
-//   - Items in error/login_required state > errorDays
-//   - Items with revoked status (immediate cleanup candidate)
-//   - Items not synced > staleDays
-//   - Items with zero active accounts (no connected accounts remaining)
-//
-// Only returns items that haven't been scheduled yet (cleanup_scheduled_at IS NULL).
-// Issue #668: Plaid Item Management for Cost Optimization
-//
-// Issue #1413 round-10 (#1444): NULL-safe status scan (see normalizeLinkedItemStatus) for
-// consistency with every other scan site in this file, even though `status NOT IN (...)` above
-// already structurally excludes a NULL-status row (SQL three-valued logic).
-//
-// Issue #1469: this query is UNBOUNDED — an ORDER BY but no LIMIT, and no id tie-breaker. It has NO
-// remaining production caller: ItemCleanupCheckWorker.Work (the only one it ever had) now calls
-// GetItemsForCleanupPage below. It is retained ONLY because it is still declared on the wide
-// LinkedItemRepository interface, which several test files' mocks implement (enumerate them with
-// `grep -rn '^func (m \*[A-Za-z]*) GetItemsForCleanup(' internal/` and count what it prints — no
-// total is asserted here, because three counting methods gave three answers during review), and because
-// TestGetItemsForCleanupPage_Integration_MatchesUnpagedPredicate uses it as the oracle that the
-// paged form did not drop a predicate leg. Removing it is recommended as a separate change — see
-// GetItemsForCleanupPage's doc comment.
-func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
-	query := cleanupCandidateSelectQuery + `
-		ORDER BY li.last_error_at ASC NULLS LAST, li.last_synced_at ASC NULLS LAST
-	`
-	return r.queryCleanupCandidates(ctx, query,
-		strings.TrimSpace(fmt.Sprintf("%d days", errorDays)),
-		strings.TrimSpace(fmt.Sprintf("%d days", staleDays)),
-	)
-}
-
-// cleanupCandidateSelectQuery is the SELECT + WHERE shared verbatim by GetItemsForCleanup and
-// GetItemsForCleanupPage (Issue #1469), so the paged form cannot drift from the predicate it is
-// replacing. $1 is the errorDays interval, $2 the staleDays interval; a caller appending its own
-// clauses must start numbering at $3.
+// cleanupCandidateSelectQuery is the SELECT + WHERE of the cleanup sweep. It was extracted (Issue
+// #1469) so the paged GetItemsForCleanupPage could not drift from the unbounded GetItemsForCleanup it
+// replaced; that unbounded method was deleted in #1488, and GetItemsForCleanupPage is now the sole
+// consumer — but the constant stays split out because ClaimItemForCleanup shares its inner
+// cleanupCandidateReasonPredicate (#1486). $1 is the errorDays interval, $2 the staleDays interval; a
+// caller appending its own clauses must start numbering at $3.
 const cleanupCandidateSelectQuery = `
 	SELECT li.id, li.user_id, li.item_id, li.access_token_encrypted,
 	       li.institution_id, li.institution_name, li.provider, li.cursor, li.last_synced_at,
@@ -944,7 +909,7 @@ const cleanupCandidateReasonPredicate = `(
 	      )
 	  )`
 
-// cleanupCandidateSortKey is the ASC-NULLS-LAST ordering of GetItemsForCleanup, re-expressed with
+// cleanupCandidateSortKey is the ASC-NULLS-LAST ordering of the cleanup sweep, re-expressed with
 // COALESCE so the identical expression can appear inside a row-comparison keyset predicate — a
 // tuple comparison has no per-column NULLS FIRST/LAST clause, so `(a, b, c) > (x, y, z)` cannot
 // express "NULLs last" any other way. For timestamptz the two forms are equivalent: 'infinity'
@@ -988,10 +953,11 @@ type ItemCleanupSweepCursor struct {
 
 // GetItemsForCleanupPage returns up to `limit` cleanup candidates, ordered by
 // (last_error_at, last_synced_at, id) ASC with NULLs last, for deterministic keyset pagination —
-// Issue #1469. The WHERE clause is GetItemsForCleanup's, unchanged
-// (cleanupCandidateSelectQuery), plus the keyset predicate.
+// Issue #1469. The WHERE clause is the unbounded GetItemsForCleanup's, unchanged
+// (cleanupCandidateSelectQuery), plus the keyset predicate. (That unbounded method was deleted in
+// #1488 once this one had taken over its last caller.)
 //
-// Why this exists: GetItemsForCleanup has no LIMIT, and its single caller,
+// Why this exists: GetItemsForCleanup had no LIMIT, and its single caller,
 // ItemCleanupCheckWorker.Work (queue/jobs/item_cleanup_check.go), consumed the whole slice — marking
 // every row for cleanup and enqueueing an ItemCleanup job per row, which calls Plaid /item/remove.
 // That is irreversible (the user must re-link the institution through Plaid Link), and
@@ -1022,7 +988,7 @@ type ItemCleanupSweepCursor struct {
 // Successfully marked rows do not have this problem: MarkForCleanup sets cleanup_scheduled_at, after
 // which the row does not match this predicate at all.
 //
-// No index can serve this sort key, exactly as none could serve GetItemsForCleanup's: the closest
+// No index can serve this sort key, exactly as none could serve the unbounded query's: the closest
 // one, idx_linked_items_cleanup_candidates (status, last_error_at) WHERE status IN
 // ('error','login_required','revoked') AND cleanup_scheduled_at IS NULL, is partial on a status set
 // this predicate deliberately exceeds (the stale and zero-active-accounts legs match other statuses)
@@ -1064,8 +1030,9 @@ func (r *linkedItemRepository) GetItemsForCleanupPage(ctx context.Context, error
 
 // queryCleanupCandidates runs a cleanupCandidateSelectQuery-shaped query and scans every row into a
 // domain.LinkedItem, applying the same NULL-safe institution/status handling and PII decryption both
-// cleanup queries need. Extracted (Issue #1469) so GetItemsForCleanup and GetItemsForCleanupPage
-// cannot drift in their scan order or their decryption behaviour.
+// cleanup queries need. Extracted (Issue #1469) so the unbounded GetItemsForCleanup and
+// GetItemsForCleanupPage could not drift in their scan order or their decryption behaviour; the
+// unbounded form is gone (#1488) and GetItemsForCleanupPage is now the only caller.
 func (r *linkedItemRepository) queryCleanupCandidates(ctx context.Context, query string, args ...interface{}) ([]domain.LinkedItem, error) {
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
