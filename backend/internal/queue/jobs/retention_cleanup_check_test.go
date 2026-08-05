@@ -3022,7 +3022,8 @@ func TestRetentionCleanupCheck_LapsedComp_30dNotice_ReachesAuthoritativeReVerify
 // should block auto-deletion. That was the C1 bug encoded as a test, not a documented rule: the
 // belt-and-braces guard in deleteExpiredAccounts must agree with the retention queries (which
 // exclude ANY override, live or lapsed, via noManualOverrideAtAllPredicate) and with the
-// corrected claimForDeletionPredicate the real ExecuteDeletion claim now enforces. A lapsed
+// corrected retentionDeletionClaimPredicate the real ExecuteDeletion claim now enforces for this
+// retention-kind path. A lapsed
 // override that the daily manual_tier_override_expiry_check job hasn't yet cleared must still
 // delay deletion — deleting "normally" here is exactly the lapsed-comp hard-delete this branch
 // exists to fix. See domain.User.HasAnyManualOverride and noManualOverrideAtAllPredicate for the

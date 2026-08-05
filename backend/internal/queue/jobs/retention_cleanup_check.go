@@ -1490,7 +1490,8 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 		// guard — a user with ANY manual tier override, live or lapsed-but-uncleared, must never
 		// be auto-deleted. This MUST use HasAnyManualOverride (not HasActiveManualOverride) to
 		// agree with the retention queries (noManualOverrideAtAllPredicate) and with
-		// claimForDeletionPredicate, which ExecuteDeletion's own claim now enforces — using the
+		// retentionDeletionClaimPredicate — the retention-kind claim predicate ExecuteDeletion's
+		// own claim enforces for the DeletionKindRetention call below — using the
 		// live-only check here was exactly the bug this fix closes: a comp that lapsed moments
 		// before the independently-scheduled expiry job clears the column would pass this guard
 		// and reach ExecuteDeletion. The real enforcement is still ExecuteDeletion's claim; this

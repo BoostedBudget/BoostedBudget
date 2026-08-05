@@ -176,9 +176,11 @@ func TestDeleteUserCascade_Integration_CompGrantedAfterClaim_NotDeleted(t *testi
 // test in this task (Issue #1413 round-4 C1): a user with their OWN outstanding GDPR deletion
 // request cancels it during the external-cleanup window, after ClaimForDeletion already
 // succeeded but before DeleteUserCascade runs. The user carries NO manual tier override at all,
-// so reusing claimForDeletionPredicate alone would NOT catch this (that predicate treats "no
-// override" as sufficient authorization regardless of deletion_requested_at) — only the
-// additional exact-value re-check this fix adds closes it. The user must NOT be deleted.
+// so reusing deletionAuthorisationUnionPredicate alone would NOT catch this: once cancellation
+// NULLs deletion_requested_at, that predicate's retention branch (retentionDeletionClaimPredicate)
+// treats "no override at all" as sufficient authorization regardless of who requested the
+// original deletion — only the additional exact-value re-check this fix adds closes it. The user
+// must NOT be deleted.
 func TestDeleteUserCascade_Integration_DeletionCancelledAfterClaim_NotDeleted(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)

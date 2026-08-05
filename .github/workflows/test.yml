@@ -1437,11 +1437,16 @@ jobs:
         run: squawk migrations/*.sql --pg-version=17
 
       # PG_DUMP points at the server container's own pg_dump, regardless of what the "Configure
-      # PostgreSQL client tools" step above resolved on the host. That step now requires a host
-      # client >= 17 and fails the job outright otherwise (it used to silently fall back to
-      # whatever Homebrew postgresql@15 it could find, which is older than the postgres:17
-      # container this job starts, and pg_dump refuses to dump a server newer than itself) — but
-      # this indirection is kept as a second, independent guard: it is never wrong to run the
+      # PostgreSQL client tools" step above resolved on the host. That step PREFERS a host client
+      # >= 17 and never silently accepts an older one as if it were current — but it is a WARNING,
+      # not a failure: an older `psql` on PATH emits ::warning:: and the job proceeds (it used to
+      # silently fall back to whatever Homebrew postgresql@15 it could find, which is older than
+      # the postgres:17 container this job starts, and pg_dump refuses to dump a server newer than
+      # itself, which was the actual bug that step fixes). Only a TOTAL ABSENCE of any `psql` is
+      # fatal there, because scripts/test-migrations.sh cannot run without one at all. That warning
+      # is safe specifically because of the indirection below: PG_DUMP=scripts/pg_dump-via-docker
+      # execs the CONTAINER's own pg_dump, so the host client's major version never affects a
+      # schema hash — this indirection is kept as a second, independent guard: it is never wrong to run the
       # container's own pg_dump against the container's own server, no matter which host client
       # version was resolved above or how that resolution logic changes in the future.
       #
