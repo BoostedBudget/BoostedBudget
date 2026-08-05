@@ -1109,8 +1109,11 @@ func (r *profileRepository) CancelDeletion(ctx context.Context, userID string) e
 // The live production path, ScheduledDeletionCheckWorker (internal/queue/jobs), now calls
 // GetUsersScheduledForDeletionPage below instead, which bounds each query and paginates via a
 // deterministic keyset cursor so a permanently-stuck oldest user (e.g. a continuously-renewed
-// admin comp) cannot starve later users out of every batch forever. See that method's doc
-// comment for the full rationale.
+// admin comp) cannot starve later users out of every batch WITHIN ONE RUN — this guarantee holds
+// only up to maxUsersPerDeletionSweep (queue/jobs/scheduled_deletion_check.go) permanently-stuck
+// rows; beyond that count it is not "forever safe," it is permanent starvation of every row past
+// the cap, because every run restarts pagination from a nil cursor (no persisted cross-run
+// cursor — see #1477). See that method's doc comment for the full rationale.
 func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
 	query := userSelectQuery + `
 		WHERE deletion_scheduled_at IS NOT NULL
