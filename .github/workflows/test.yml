@@ -73,7 +73,8 @@ jobs:
               - 'api/openapi.yaml'
               - 'packages/**'
             # Dedicated filter for the undici-pin risk (G5-11/#1464 review): the `frontend`
-            # filter also matches apps/web/** and scripts/**, so wiring the MCP jobs to it (see
+            # filter also matches apps/web/**, scripts/**, and packages/** (the last of which is now
+            # deliberately part of the MCP surface via `mcp` above), so wiring the MCP jobs to it (see
             # mcp-server-validate/mcp-server-integration below) made both run on essentially
             # every frontend PR — two extra jobs on the same 4-runner Mac Mini that hit ENOSPC
             # on 2026-08-04. The dependency-pin risk is narrow: only a change to root
@@ -130,11 +131,14 @@ jobs:
         run: bash scripts/__tests__/check-e2e-storage-state.test.sh
 
       # Truth table for the two MCP jobs' `if:` conditions (#1464 U1a). Hosted in this job for the
-      # same reason as the suite above: it is the only job with no paths-filter gate, so the guard
-      # runs even on a PR that changes only .github/workflows/** — i.e. exactly the PR that can
-      # break it. Pure Python/YAML, no Playwright/browser dependency, so it needs none of the setup
-      # below. The defect it exists to catch (a filter reasoned about in isolation from the full
-      # boolean condition it feeds) shipped twice before this guard existed.
+      # same reason as the suite above: of the jobs that host a shell-suite step, this is the one
+      # with no `needs:`/paths-filter gate, so the guard runs even on a PR that changes only
+      # .github/workflows/** — i.e. exactly the PR that can break it. (It is not the workflow's only
+      # ungated job — detect-changes and security-scan are also unconditional — just the only
+      # ungated one that already hosts suites like this.) Pure Python/YAML, no Playwright/browser
+      # dependency, so it needs none of the setup below. The defect it exists to catch (a filter
+      # reasoned about in isolation from the full boolean condition it feeds) shipped twice before
+      # this guard existed.
       - name: Test MCP job trigger truth table
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-mcp-job-triggers.test.sh
@@ -533,12 +537,21 @@ jobs:
     #
     # `backend` is deliberately NOT OR'd in (#1464 U1a). It matched scripts/**, so a
     # script-only PR still launched both MCP jobs and the load reduction above never actually
-    # happened for script changes. Dropping it loses no coverage: a backend change cannot
-    # alter the API contract without landing an api/openapi.yaml diff, because openapi-validate
-    # (a `needs:` of this job) runs on backend||api||workflow, regenerates the spec, and fails
-    # on `git diff --exit-code api/openapi.yaml`. A committed contract change therefore always
-    # matches the `api` filter, which is still OR'd in below; a backend change with no spec diff
-    # cannot reach the MCP server at all.
+    # happened for script changes.
+    #
+    # Dropping it loses no coverage, and the decisive reason is what these two jobs DO, not what the
+    # backend means: neither job builds or runs the backend — no Go toolchain, no Postgres service,
+    # nothing but bun/vitest against apps/mcp-server. So backend source cannot change either job's
+    # outcome except through a generated artefact, and both generated artefacts are drift-checked and
+    # OR'd in here: api/openapi.yaml (regenerated + `git diff --exit-code` by openapi-validate, a
+    # `needs:` of this job, which itself runs on backend||api||workflow) matches the `api` filter,
+    # and packages/api-client/src (regenerated + diffed by typescript-client-validate) matches the
+    # `mcp` filter. A committed contract change therefore always trips one of them.
+    #
+    # What this argument does NOT claim: backend changes cannot affect the MCP server at all. They
+    # obviously can at RUNTIME — the worker calls the API, so changed error bodies, auth handling or
+    # pagination defaults reach it. That risk belongs to the backend's own suites and to staging, not
+    # to a CI job that never starts the backend.
     if: |
       always() &&
       (needs.detect-changes.outputs.mcp == 'true' ||

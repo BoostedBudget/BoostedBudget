@@ -33,10 +33,19 @@ copy of the workflow.
 
 FAIL-CLOSED
 -----------
-Every unrecognised input is an error, never a guess: an unknown glob metacharacter, an unknown
-token in an `if:` expression, an output name the filters don't define, or a job whose name starts
-with "mcp-" that this table does not cover. A guard that silently shrugs at what it does not
-understand is the defect class this file exists to prevent.
+Every unrecognised input is an error, never a guess: an unknown glob metacharacter, a `**` shape
+this file does not model, an unknown token in an `if:` expression, an output name that is not
+EXPORTED by the detect-changes job, or a job whose name starts with "mcp-" that this table does not
+cover. A guard that silently shrugs at what it does not understand is the defect class this file
+exists to prevent.
+
+Note in particular that `needs.detect-changes.outputs.X` does NOT resolve against the paths-filter
+step's `filters:` block — it resolves against the detect-changes job's own `outputs:` map, which
+re-exports each filter (`mcp: ${{ steps.filter.outputs.mcp }}`). Deleting or misspelling one line
+of that map is the classic dorny/paths-filter mistake and is SILENT at runtime: the output resolves
+to the empty string, `== 'true'` is false, and the job simply stops running. So this guard reads the
+export map, validates it against the filters block, and evaluates conditions against the EXPORTED
+values — a filter that is not exported cannot make a row green here either.
 
 Usage: python3 scripts/check-mcp-job-triggers.py [path-to-workflow-yml]
 Exit 0 when every row matches; exit 1 (and print each mismatch) otherwise.
@@ -82,6 +91,13 @@ TRUTH_TABLE = [
     ("package.json", True, "root manifest can move the undici version miniflare pins"),
     ("bun.lock", True, "root lockfile can move the undici version miniflare pins"),
     ("api/openapi.yaml", True, "the spec the MCP spec-index and facade are generated from"),
+    ("api/schemas/foo.yaml", True,
+     "the ONLY row that discriminates the `api` OR: api/openapi.yaml is matched by the `mcp` filter "
+     "too, and api/ currently holds exactly one file, so without a path reachable only through "
+     "`api/**` a maintainer could delete the `api` OR as 'redundant' with every row still green — "
+     "and that OR is the whole reason dropping `backend` is safe (openapi-validate's drift check "
+     "lands contract changes as an api/openapi.yaml diff). api/** is the declared filter surface, "
+     "so any future file added under api/ must trigger the MCP jobs"),
     ("apps/web/src/x.tsx", False, "the web app is not MCP surface"),
     ("backend/internal/x.go", False,
      "`backend` is deliberately NOT OR'd in. A backend change cannot alter the API contract "
@@ -110,35 +126,38 @@ def glob_to_regex(pattern):
             "glob %r uses metacharacter(s) %s that check-mcp-job-triggers.py does not model; "
             "extend glob_to_regex rather than letting this pass" % (pattern, "".join(bad))
         )
-    out = []
-    i = 0
-    while i < len(pattern):
-        if pattern.startswith("/**/", i):
-            out.append("/(?:.*/)?")
-            i += 4
-        elif pattern.startswith("/**", i) and i + 3 == len(pattern):
-            out.append("/.*")  # dir/** matches everything beneath dir/
-            i += 3
-        elif pattern.startswith("**", i):
-            out.append(".*")
-            i += 2
-        elif pattern[i] == "*":
-            out.append("[^/]*")
-            i += 1
-        else:
-            out.append(re.escape(pattern[i]))
-            i += 1
-    return re.compile("^" + "".join(out) + "$")
-
-
-def filter_outputs(filters, changed_paths):
-    """Compute each paths-filter output ('true'/'false') for a set of changed paths."""
-    outputs = {}
-    for name, patterns in filters.items():
-        matched = any(
-            glob_to_regex(p).match(path) for p in patterns for path in changed_paths
+    # Only two globstar shapes are modelled: a bare `**`, and a trailing `dir/**`. Every other
+    # shape (`**/*.go`, `a/**/b`, ...) has picomatch semantics this file would get WRONG — e.g.
+    # `**/*.go` also matches a root-level main.go, which a naive ".*/" translation misses. Reject
+    # rather than mismodel: a guard that quietly answers the wrong question is worse than absent.
+    if pattern == "**":
+        return re.compile("^.*$")
+    body, suffix = pattern, ""
+    if body.endswith("/**"):
+        body, suffix = body[:-3], "/.*"  # dir/** matches everything beneath dir/
+    if "**" in body:
+        raise ValueError(
+            "glob %r uses a `**` shape check-mcp-job-triggers.py does not model (only a bare `**` "
+            "or a trailing `dir/**` are supported); extend glob_to_regex rather than letting this "
+            "pass" % pattern
         )
-        outputs[name] = "true" if matched else "false"
+    out = ["[^/]*" if ch == "*" else re.escape(ch) for ch in body]
+    return re.compile("^" + "".join(out) + suffix + "$")
+
+
+def filter_outputs(filters, exports, changed_paths):
+    """Compute the detect-changes job's EXPORTED outputs ('true'/'false') for a set of paths.
+
+    Keyed by export name and carrying only exported filters, deliberately: `needs.detect-changes.
+    outputs.X` resolves through the job's `outputs:` map, so a filter that is computed but never
+    exported is invisible to every consumer, and must be invisible here too.
+    """
+    outputs = {}
+    for export_name, filter_name in exports.items():
+        patterns = filters[filter_name]
+        outputs[export_name] = "true" if any(
+            glob_to_regex(p).match(path) for p in patterns for path in changed_paths
+        ) else "false"
     return outputs
 
 
@@ -159,8 +178,9 @@ def evaluate_condition(expression, outputs, job_name):
         name, want = match.group(1), match.group(2)
         if name not in outputs:
             raise ValueError(
-                "%s references needs.detect-changes.outputs.%s, which the paths-filter step does "
-                "not define" % (job_name, name)
+                "%s references needs.detect-changes.outputs.%s, which the detect-changes job does "
+                "not define (or defines but does not export). At runtime that resolves to the empty "
+                "string and the job silently stops running" % (job_name, name)
             )
         return "True" if outputs[name] == want else "False"
 
@@ -198,18 +218,58 @@ def _interpret(node, job_name, expr):
 
 
 # ---------------------------------------------------------------------------------------------
+# `outputs:` entries must look exactly like `${{ steps.<filter-step-id>.outputs.<filter-name> }}`.
+EXPORT_EXPR = re.compile(r"^\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\s*\}\}$")
+
+
 def load_workflow(path):
     with open(path) as handle:
         workflow = yaml.safe_load(handle)
 
     jobs = workflow["jobs"]
-    steps = jobs["detect-changes"]["steps"]
-    filter_steps = [s for s in steps if str(s.get("uses", "")).startswith("dorny/paths-filter")]
+    detect = jobs["detect-changes"]
+    filter_steps = [s for s in detect["steps"]
+                    if str(s.get("uses", "")).startswith("dorny/paths-filter")]
     if len(filter_steps) != 1:
         raise ValueError("expected exactly 1 dorny/paths-filter step in detect-changes, found %d"
                          % len(filter_steps))
-    filters = yaml.safe_load(filter_steps[0]["with"]["filters"])
-    return jobs, filters
+    step = filter_steps[0]
+    step_id = step.get("id")
+    filters = yaml.safe_load(step["with"]["filters"])
+
+    # The export map is the link `needs.detect-changes.outputs.X` actually travels. Deleting or
+    # misspelling one line here is silent at runtime (empty string, condition false, job skipped),
+    # which is why it is validated rather than assumed. Returns export-name -> filter-name.
+    exports = {}
+    for export_name, expr in (detect.get("outputs") or {}).items():
+        match = EXPORT_EXPR.match(str(expr).strip())
+        if not match:
+            raise ValueError(
+                "detect-changes output %r is %r, not the expected "
+                "${{ steps.%s.outputs.<filter> }} form — this guard cannot tell what it exports"
+                % (export_name, expr, step_id))
+        ref_step, ref_filter = match.group(1), match.group(2)
+        if ref_step != step_id:
+            raise ValueError("detect-changes output %r reads steps.%s, but the paths-filter step's "
+                             "id is %r" % (export_name, ref_step, step_id))
+        if ref_filter not in filters:
+            raise ValueError(
+                "detect-changes output %r exports steps.%s.outputs.%s, but the filters block "
+                "defines no filter named %r (typo?) — at runtime this exports the empty string and "
+                "every consumer's condition silently goes false"
+                % (export_name, ref_step, ref_filter, ref_filter))
+        if ref_filter != export_name:
+            raise ValueError("detect-changes output %r exports a DIFFERENT filter (%r) — one of the "
+                             "two names is wrong" % (export_name, ref_filter))
+        exports[export_name] = ref_filter
+
+    unexported = sorted(set(filters) - set(exports))
+    if unexported:
+        raise ValueError(
+            "filter(s) %s are computed but never exported by detect-changes' `outputs:` map, so no "
+            "job can consume them — add the export or delete the filter"
+            % ", ".join(unexported))
+    return jobs, filters, exports
 
 
 def check_coverage(jobs):
@@ -231,7 +291,7 @@ def check_coverage(jobs):
 def main(argv):
     path = argv[1] if len(argv) > 1 else DEFAULT_WORKFLOW
     try:
-        jobs, filters = load_workflow(path)
+        jobs, filters, exports = load_workflow(path)
         check_coverage(jobs)
     except (ValueError, KeyError) as exc:
         print("::error::%s: %s" % (path, exc))
@@ -241,19 +301,20 @@ def main(argv):
     print("=== MCP job trigger truth table (%s) ===" % path)
     print("%-38s %-22s %-8s %-8s" % ("changed path", "matched filters", "expect", "actual"))
     for changed_path, expected, why in TRUTH_TABLE:
-        outputs = filter_outputs(filters, [changed_path])
+        outputs = filter_outputs(filters, exports, [changed_path])
         matched = ",".join(sorted(n for n, v in outputs.items() if v == "true")) or "-"
+        verdicts = {}
         for job in MCP_JOBS:
             try:
-                actual = evaluate_condition(jobs[job]["if"], outputs, job)
+                verdicts[job] = evaluate_condition(jobs[job]["if"], outputs, job)
             except ValueError as exc:
                 print("::error::%s" % exc)
                 return 1
-            if actual != expected:
-                failures.append((changed_path, job, expected, actual, why))
+            if verdicts[job] != expected:
+                failures.append((changed_path, job, expected, verdicts[job], why))
         # Both jobs share the condition; report the first job's verdict in the table body and let
         # the failure list name any job that diverged.
-        first = evaluate_condition(jobs[MCP_JOBS[0]]["if"], outputs, MCP_JOBS[0])
+        first = verdicts[MCP_JOBS[0]]
         print("%-38s %-22s %-8s %-8s%s" % (
             changed_path, matched, "YES" if expected else "NO", "YES" if first else "NO",
             "" if first == expected else "   <== MISMATCH",
