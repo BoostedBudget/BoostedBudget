@@ -265,6 +265,46 @@ even applied — proving nothing about the real hazard. The test only has teeth 
 same on-disk state a real NULL row would leave, independent of whether the application's own
 writers currently know how to create one.
 
+### Keyset pagination: a tie-breaker no test ever ties on is indistinguishable from an absent one (#1478/#1469)
+
+Every bounded sweep in this repo pages with a keyset cursor rather than `OFFSET`, and every one of
+them needs a **total** order — a unique final column, in practice `id`:
+
+```sql
+ORDER BY sort_col ASC, id ASC
+WHERE (sort_col, id) > ($1, $2)      -- tuple must match the ORDER BY exactly
+```
+
+Two rules that are easy to satisfy in the SQL and easy to leave unverified in the tests:
+
+**1. Seed a tie, or you have not tested the tie-breaker.** Three separate paged sweeps on this repo
+shipped with an `id` tie-breaker that **no test could detect the removal of** — deleting `id` from
+both the `ORDER BY` and the cursor tuple left the whole suite green. The cause was identical each
+time: the fixture helper seeded strictly increasing timestamps (`epoch.Add(i * time.Minute)`), so a
+tie never existed to disambiguate. Seed **N rows sharing one `sort_col` value** and assert each row
+is returned **exactly once** across pages. Without a tie in the fixture, the tie-breaker is decoration.
+
+**2. Assert the cursor the *worker* builds, not just the one the test builds.** The same three sweeps
+had tests that constructed cursors themselves and passed them to the repository — so nothing
+connected the worker's cursor-construction code to the query. A worker that built
+`(time.Time{}, lastID)` instead of the real timestamp passed every test, while in production the
+tuple's first element decides every comparison, the query returns the **head page forever**, and any
+row whose per-row action fails sits at the head of every page and consumes the entire sweep budget.
+That is the exact unbounded-scan starvation the cap was added to prevent, reintroduced through the
+cursor. Assert the timestamp component of the cursor the worker produces.
+
+**Nullable sort columns:** a row-value comparison `(a, b) > (x, y)` takes **no per-column
+`NULLS FIRST/LAST` clause**, so it cannot express `ORDER BY a ASC NULLS LAST` directly. Wrap both
+sides in the same total-order expression — `COALESCE(col, 'infinity'::timestamptz)` reproduces
+`NULLS LAST` under `ASC` — and keep one shared constant for the sort key so the `ORDER BY` and the
+cursor cannot drift apart. These `COALESCE` wrappers look redundant; they are load-bearing.
+
+**Cap prose:** every sweep here restarts from a nil cursor, so a per-run cap does **not** give you
+"no starvation" — above the cap the oldest rows block everything behind them **permanently** until
+the backlog drains. State the guarantee bounded by the cap; an unqualified "no starvation" claim is
+false. And a per-run cap is not a per-day ceiling: River's `ByPeriod` rounds inserts into **fixed
+buckets**, not a rolling window, so two runs either side of a boundary can execute close together.
+
 ## Domain Model Pattern
 
 ```go

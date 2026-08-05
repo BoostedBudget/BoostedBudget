@@ -191,6 +191,15 @@ type ItemCleanupCheckWorkerDeps struct {
 	MaxItemsPerCleanupSweep int
 }
 
+// intOrDefault returns value if positive, otherwise defaultValue.
+// Used to apply sensible defaults to optional dependency injection fields.
+func intOrDefault(value, defaultValue int) int {
+	if value <= 0 {
+		return defaultValue
+	}
+	return value
+}
+
 // NewItemCleanupCheckWorker creates a new item cleanup check worker.
 // Note: JobQueue can be nil initially and set later via SetJobQueue() to handle
 // circular dependency when configuring periodic jobs.
@@ -200,39 +209,16 @@ func NewItemCleanupCheckWorker(deps ItemCleanupCheckWorkerDeps) *ItemCleanupChec
 		logger = slog.Default()
 	}
 
-	// Set defaults
-	gracePeriodDays := deps.GracePeriodDays
-	if gracePeriodDays <= 0 {
-		gracePeriodDays = 7
-	}
-	errorDaysThreshold := deps.ErrorDaysThreshold
-	if errorDaysThreshold <= 0 {
-		errorDaysThreshold = 30
-	}
-	staleDaysThreshold := deps.StaleDaysThreshold
-	if staleDaysThreshold <= 0 {
-		staleDaysThreshold = 60
-	}
-
-	cleanupPageSize := deps.CleanupPageSize
-	if cleanupPageSize <= 0 {
-		cleanupPageSize = itemCleanupCheckPageSize
-	}
-	maxItemsPerSweep := deps.MaxItemsPerCleanupSweep
-	if maxItemsPerSweep <= 0 {
-		maxItemsPerSweep = maxItemsPerCleanupSweep
-	}
-
 	return &ItemCleanupCheckWorker{
 		linkedItemRepo:     deps.LinkedItemRepo,
 		accountRepo:        deps.AccountRepo,
 		jobQueue:           deps.JobQueue,
 		logger:             logger,
-		gracePeriodDays:    gracePeriodDays,
-		errorDaysThreshold: errorDaysThreshold,
-		staleDaysThreshold: staleDaysThreshold,
-		cleanupPageSize:    cleanupPageSize,
-		maxItemsPerSweep:   maxItemsPerSweep,
+		gracePeriodDays:    intOrDefault(deps.GracePeriodDays, 7),
+		errorDaysThreshold: intOrDefault(deps.ErrorDaysThreshold, 30),
+		staleDaysThreshold: intOrDefault(deps.StaleDaysThreshold, 60),
+		cleanupPageSize:    intOrDefault(deps.CleanupPageSize, itemCleanupCheckPageSize),
+		maxItemsPerSweep:   intOrDefault(deps.MaxItemsPerCleanupSweep, maxItemsPerCleanupSweep),
 	}
 }
 
