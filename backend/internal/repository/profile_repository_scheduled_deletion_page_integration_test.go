@@ -95,7 +95,14 @@ func TestGetUsersScheduledForDeletionPage_Integration_BoundedAndReachesLaterUser
 		if len(page) < limit {
 			break // exhausted
 		}
-		require.Less(t, pageCount, 20, "runaway pagination loop — something is wrong with the cursor advancing")
+		// Ceiling is 100, not the tighter number this test's own 5 rows / limit 2 would suggest
+		// (3 pages expected). createClaimForDeletionFixtureUser (this package's shared fixture
+		// helper, see its doc comment) also stamps deletion_scheduled_at, so a leaked row from a
+		// failed cleanup in ANY test sharing that helper — this file or
+		// asof_threading_integration_test.go — becomes eligible here too and consumes extra
+		// pages. This assertion still catches a genuinely broken cursor (which would never
+		// terminate at all) without a modest fixture leak reading as a false "cursor bug".
+		require.Less(t, pageCount, 100, "runaway pagination loop — something is wrong with the cursor advancing")
 	}
 
 	require.Greater(t, pageCount, 1,

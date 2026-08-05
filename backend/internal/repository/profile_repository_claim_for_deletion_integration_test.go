@@ -41,6 +41,15 @@ import (
 // deletionRequestedAt, so the grace period reads as elapsed — which is the state in which a
 // deletion job legitimately gets enqueued. A test that needs a schedule still in the FUTURE
 // (cancel-then-re-request) overrides the column explicitly after calling this.
+//
+// Cross-package coupling: setting deletion_scheduled_at here makes every fixture user with a
+// non-nil deletionRequestedAt also match GetUsersScheduledForDeletionPage's WHERE clause (past
+// deletion_scheduled_at, is_deleted = FALSE). profile_repository_scheduled_deletion_page_integration_test.go
+// pages through ALL matching rows with a small limit and a hard cap on page count; a leaked row
+// from a failed cleanup in THIS file's tests (or asof_threading_integration_test.go, which shares
+// this helper) is picked up by that page walk and can push it over its cap — a false failure
+// that reads as a cursor bug rather than a fixture-cleanup leak. Keep t.Cleanup wired on every
+// call site.
 func createClaimForDeletionFixtureUser(
 	t *testing.T,
 	ctx context.Context,
