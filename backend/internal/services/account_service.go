@@ -676,6 +676,15 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 			// not land, so the job would be a guaranteed silent no-op — do not create it; leave the
 			// item to the sweep, which can still see it precisely because the stamp failed.
 			//
+			// NON-ATOMIC, disclosed rather than fixed: accountRepo.Delete above is a standalone
+			// autocommit Exec, so it has already committed by the time this stamp runs as a separate
+			// statement. A crash in that window leaves the account gone, cleanup_scheduled_at NULL and
+			// no job — the sweep re-selects most such items, but not a 'replaced'/'disconnected' one
+			// (it excludes both statuses), which is then stranded and still billing. Pre-existing in
+			// kind — the same window previously sat between Delete and Enqueue — and widened by this
+			// one statement, so not a regression; closing it would need a transaction spanning the
+			// account delete, which is out of scope here.
+			//
 			// Structured as a flag rather than an early return so Step 6 below (hiding an orphaned
 			// user_account) still runs on the stamp-failure path — it is unrelated bookkeeping and
 			// must not be skipped.

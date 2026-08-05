@@ -1158,8 +1158,19 @@ func TestDeleteAccount_EnqueuesCleanupWhenZeroRemaining(t *testing.T) {
 //
 // The invariant this test pins is therefore cross-producer: EVERY producer of an item_cleanup job
 // must leave the item carrying a cleanup schedule, so the worker's recheck has something to
-// re-verify. Ordering is asserted, not just occurrence — a stamp that landed after the enqueue
-// would race the worker.
+// re-verify.
+//
+// ORDERING is pinned too, and via a SHARED recorder rather than per-mock call indices. The first
+// version of this test claimed to assert ordering while comparing nothing: it read `markIdx` from
+// mockLinkedItemRepo.Calls and `enqueueIdx` from mockJobQueue.Calls — two independent mock objects
+// with independent Calls slices, whose indices are not comparable to each other in any case — and
+// then only asserted each was found. Moving the stamp after the enqueue left it GREEN. Both mocks
+// now append to one `callOrder` slice from their Run hooks, so the sequence itself is the assertion.
+// Ordering matters because the enqueued job can be picked up immediately (no grace period on this
+// leg): a stamp that landed after the enqueue would race the worker's claim and lose.
+//
+// No lock guards callOrder: DeleteAccount's zero-account branch is straight-line synchronous code on
+// the caller's goroutine, and both Run hooks fire inside it.
 func TestDeleteAccount_MarksItemForCleanupBeforeEnqueue(t *testing.T) {
 	mockAccountRepo := &MockAccountRepository{}
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
@@ -1182,12 +1193,19 @@ func TestDeleteAccount_MarksItemForCleanupBeforeEnqueue(t *testing.T) {
 	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
 
+	// One shared recorder both mocks append to — the only way the relative order of calls on two
+	// separate mock objects can be observed at all.
+	var callOrder []string
+
 	before := time.Now()
 	mockLinkedItemRepo.On("MarkForCleanup", ctx, linkedItemID, mock.AnythingOfType("time.Time")).
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "MarkForCleanup") }).
 		Return(nil).Once()
 	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		return job.Kind() == "item_cleanup"
-	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil).Once()
+	}), mock.Anything).
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "Enqueue") }).
+		Return(&queue.JobResult{ID: 1}, nil).Once()
 
 	require.NoError(t, service.DeleteAccount(ctx, accountID, userID))
 	after := time.Now()
@@ -1201,20 +1219,11 @@ func TestDeleteAccount_MarksItemForCleanupBeforeEnqueue(t *testing.T) {
 	assert.False(t, cleanupAt.Before(before), "cleanup_scheduled_at must be stamped at ~now, not in the past")
 	assert.False(t, cleanupAt.After(after), "cleanup_scheduled_at must be stamped at ~now, not in the future")
 
-	// Ordering: the stamp must precede the enqueue, or the worker could claim before it lands.
-	markIdx, enqueueIdx := -1, -1
-	for i, call := range mockLinkedItemRepo.Calls {
-		if call.Method == "MarkForCleanup" {
-			markIdx = i
-		}
-	}
-	for i, call := range mockJobQueue.Calls {
-		if call.Method == "Enqueue" {
-			enqueueIdx = i
-		}
-	}
-	require.NotEqual(t, -1, markIdx, "MarkForCleanup must be called")
-	require.NotEqual(t, -1, enqueueIdx, "Enqueue must be called")
+	// Ordering: the stamp must precede the enqueue, or the enqueued job — which is eligible
+	// immediately on this leg — could reach ItemCleanupWorker's claim before the schedule lands, and
+	// the claim would be denied on an item that genuinely needs cleanup.
+	assert.Equal(t, []string{"MarkForCleanup", "Enqueue"}, callOrder,
+		"the cleanup schedule must be stamped BEFORE the job is enqueued")
 }
 
 // findMarkForCleanupTime returns the cleanupAt argument of the recorded MarkForCleanup call.
