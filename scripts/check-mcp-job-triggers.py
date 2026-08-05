@@ -361,11 +361,20 @@ DEPLOY_TRUTH_TABLE = [
 #
 # The two workflows name the force variable differently — prod copies FORCE_REBUILD into a local
 # FORCE, staging tests FORCE_REBUILD directly — so the alternation covers both, and nothing else.
-# `\s*` tolerance means indentation and line reflow do NOT trip this; reordering the three legs, or
-# switching to `[[ ]]`, does.
+#
+# What is TOLERATED: indentation, intra-line spacing, and a backslash line-continuation between legs
+# (OR_SEP below). The continuation is not cosmetic generosity — the SIBLING legs in the same compute
+# step already wrap that way (`if [ "$FORCE" = "true" ] || [ "$BOOT_BE" = "true" ] || \` for
+# backend_changed, and the identical shape for frontend_changed), so wrapping the MCP leg to match its
+# neighbours is the most natural edit a maintainer would ever make to this block. A guard that
+# rejected precisely the house idiom would be trained out of the codebase within one PR.
+#
+# What is REJECTED, and deliberately: reordering the three legs, switching to `[[ ]]`, negating any
+# comparison, or replacing an `||` with `&&`.
+OR_SEP = r"\s*\|\|\s*\\?\s*"
 MCP_COMPUTE_OR = re.compile(
-    r"mcp_changed=false\s*\n\s*if\s+\[\s*\"\$\{?FORCE(_REBUILD)?\}?\"\s*=\s*\"true\"\s*\]\s*\|\|\s*"
-    r"\[\s*\"\$BOOT_MCP\"\s*=\s*\"true\"\s*\]\s*\|\|\s*"
+    r"mcp_changed=false\s*\n\s*if\s+\[\s*\"\$\{?FORCE(_REBUILD)?\}?\"\s*=\s*\"true\"\s*\]" + OR_SEP +
+    r"\[\s*\"\$BOOT_MCP\"\s*=\s*\"true\"\s*\]" + OR_SEP +
     r"\[\s*\"\$\{MCP_CHANGED:-\}\"\s*=\s*\"true\"\s*\];\s*then\s*\n\s*mcp_changed=true\s*\n\s*fi"
 )
 

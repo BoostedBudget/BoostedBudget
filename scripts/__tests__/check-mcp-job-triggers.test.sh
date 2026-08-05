@@ -23,10 +23,12 @@
 #     literally the pre-#1484 content of both files
 #   * misspelling the MCP_CHANGED env wiring, deleting the mcp_changed export, or ungating the
 #     deploy job -> guard errors (each is silent at runtime: the deploy just stops running)
-#   * turning the compute step's mcp_changed OR into an AND, or NEGATING its force leg -> guard
+#   * turning the compute step's mcp_changed OR into an AND, or NEGATING any of its legs -> guard
 #     errors, because that OR is the only reason --deploy may check the filter globs alone; and the
-#     complement, a whitespace-only reflow of the same line, must still be ACCEPTED, so the shape
-#     check is shown to discriminate rather than to reject every edit
+#     complements — a whitespace-only reflow, and a backslash line-continuation matching the idiom the
+#     sibling legs in the same step already use — must still be ACCEPTED, so the shape check is shown
+#     to discriminate rather than to reject every edit (and a negation inside a continuation is still
+#     caught, so tolerating the wrap did not loosen the comparison pinning)
 #   * a second step with id filter-mcp -> guard errors rather than silently validating the first
 #
 # Case 1 (default mode) and case 9 (--deploy) run against the real, unmutated workflows and must
@@ -280,6 +282,32 @@ else
   fail "compute-or-reindented: whitespace-only change was rejected — the regex is too strict"
   echo "$output" | sed 's/^/      /'
 fi
+echo ""
+
+echo "Case 12d: backslash line-continuation between the OR legs must be ACCEPTED"
+# The house idiom: the SIBLING backend_changed / frontend_changed legs in this same compute step
+# already wrap with `|| \`, so wrapping the MCP leg to match its neighbours is the most natural edit a
+# maintainer would make here. A backslash is not whitespace, so an \s*-only regex rejects it — which
+# would have made the guard reject precisely the convention the file already follows.
+mutate_file "$PROD" 1 \
+  "          if [ \"\$FORCE\" = \"true\" ] || [ \"\$BOOT_MCP\" = \"true\" ] || [ \"\${MCP_CHANGED:-}\" = \"true\" ]; then" \
+  "          if [ \"\$FORCE\" = \"true\" ] || [ \"\$BOOT_MCP\" = \"true\" ] || \\
+             [ \"\${MCP_CHANGED:-}\" = \"true\" ]; then"
+if output=$(python3 "$SCRIPT" --deploy "$SANDBOX/mutated.yml" 2>&1); then
+  pass "compute-or-line-continuation: accepted, as intended"
+else
+  fail "compute-or-line-continuation: the house line-wrap idiom was rejected"
+  echo "$output" | sed 's/^/      /'
+fi
+echo ""
+
+echo "Case 12e: a negated leg must STILL be rejected once continuations are tolerated"
+# Guards the guard: OR_SEP loosening must not have loosened the comparison pinning with it.
+mutate_file "$PROD" 1 \
+  "          if [ \"\$FORCE\" = \"true\" ] || [ \"\$BOOT_MCP\" = \"true\" ] || [ \"\${MCP_CHANGED:-}\" = \"true\" ]; then" \
+  "          if [ \"\$FORCE\" = \"true\" ] || \\
+             [ \"\$BOOT_MCP\" != \"true\" ] || [ \"\${MCP_CHANGED:-}\" = \"true\" ]; then"
+assert_deploy_rejected "compute-negated-leg-with-continuation" "not the pure"
 echo ""
 
 echo "Case 13: deleting the detect-changes mcp_changed export must be an error"
