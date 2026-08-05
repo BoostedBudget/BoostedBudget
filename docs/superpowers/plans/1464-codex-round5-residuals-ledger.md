@@ -118,3 +118,61 @@ KNOWN GAP for the PR body (do NOT claim otherwise): the residual window the new
   GetActiveEntitlement doc describes (entitlement closed AFTER asOf but before the query) has NO
   executable coverage, unit or integration. Only the regexp.QuoteMeta SQL-text match would catch
   a regression to the rejected predicate.
+
+--- Issue #1440 T0 (episode-safe account deletion): commit fca65d1b, plus the round-1
+    comment-accuracy follow-up committed immediately after it ---
+
+Deferred follow-ups to FILE (raised by the T0 code review, round 1; deliberately NOT fixed in T0
+so the fix stayed comment-only after the code was approved):
+
+  C. The two episode integration tests can pass VACUOUSLY in future.
+     TestExecuteDeletion_Integration_EpisodeCancelled_StaleJobDoesNotDelete and
+     ..._EpisodeReRequested_StaleJobDoesNotDeleteEarly assert only that the user survives and
+     that ExecuteDeletion returned nil. But ExecuteDeletion also returns nil early at the
+     work-claim gate (deletion_service.go: `if !claimed { return nil }`) and at the
+     already-deleted short-circuit — so if a future change made the work claim fail for an
+     unrelated reason, both tests would still pass while proving nothing about
+     ClaimForDeletion's predicate. The repository-level tests
+     (TestClaimForDeletion_Integration_UserRequested_*) do pin the predicate directly and are
+     not vacuous, so coverage is not currently absent — but the service-level pair should assert
+     the claim outcome, not just the survival. Fix: assert
+     `profileRepo.ClaimForDeletion(ctx, userID, DeletionKindUserRequested) == false` directly in
+     those tests, or assert on the "claim not granted" log/branch, so the reason for survival is
+     pinned and not merely its effect.
+
+  D. Candidate queries use the Go clock; the claim uses the Postgres clock.
+     GetUsersScheduledForDeletionPage compares `deletion_scheduled_at <= $1` with a Go-computed
+     time.Now(), while userRequestedDeletionClaimPredicate compares against Postgres NOW(). If
+     the app clock leads the database clock, a user can be selected and enqueued a moment before
+     the database agrees their window has elapsed; the claim then refuses and the job no-ops,
+     and the next sweep re-enqueues and succeeds. Benign and self-healing — it fails CLOSED, in
+     the safe direction — but it produces "skipping deletion — claim not granted (authorisation
+     no longer holds)" log lines that an on-call engineer could easily misread as this very
+     defect recurring. Fix: make the candidate query use NOW()/clock_timestamp() like the claim
+     does (matching the precedent set by RepairRetentionClock and SetRetentionDates, which were
+     already converted to Postgres-native clocks for the same class of reason), and/or document
+     the log line so it is not misdiagnosed.
+
+Round-1 fix note (all five items were comment/doc accuracy, zero code change — verified: the
+backend diff for that commit is 68 changed lines, 0 of them non-comment):
+  I1 struck the still-live copy of the retracted claim in 1464-codex-round5-residuals.md's
+     "Required change" instruction and annotated it, since the retraction block above it only
+     scoped to the paragraph it quoted.
+  I2 rewrote DeleteUserCascade's INTERFACE-site doc, which still named the deleted
+     claimForDeletionPredicate and gave a reason now false of both replacements. The paragraph's
+     conclusion (the exact-value check is still required) is unchanged and still true, because a
+     cancelled uncomped row satisfies the union predicate's retention branch.
+  I3 repointed two dangling test citations at the real symbols
+     (TestRetentionCleanupCheck_RepairFailure_NonFatal_ContinuesToNoticesAndDeletion and
+     TestWorker_FindsScheduledUsers). Every Test symbol cited in T0's new comments was then
+     resolved against `func <name>(` — 16/16 exist.
+  M1 corrected the writer enumeration, which was worse than the review reported: FOUR writers,
+     not two — CreateUser and CreateUserTx both INSERT the pair as well. A grep for
+     `deletion_scheduled_at =` finds UPDATEs and misses INSERT column lists, which is exactly how
+     the original enumeration went wrong. The invariant survives: all four write both columns in
+     one statement, no migration writes either, and there is no DEFAULT or trigger on either.
+  M3 recorded honestly that the retention claim re-verifies only two of the candidate query's
+     four conditions — it does NOT re-check retention_expires_at or subscription_status, so a
+     retention-kind claim would authorise any uncomped user with no outstanding request. Breadth
+     is pre-existing and unreachable via the single current retention caller; a second caller
+     would inherit it silently.
