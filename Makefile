@@ -209,21 +209,24 @@ test-scripts:
 	@echo "Running shell script regression suites"
 	@echo "========================================"
 	@echo ""
-	@echo "1/4: check-frontend-coverage.test.sh (exercises the real lcov merger)"
+	@echo "1/5: check-frontend-coverage.test.sh (exercises the real lcov merger)"
 	@if command -v lcov &> /dev/null; then \
 		bash scripts/check-frontend-coverage.test.sh; \
 	else \
 		echo "⚠️  lcov not installed — skipping (install: brew install lcov). CI always has lcov."; \
 	fi
 	@echo ""
-	@echo "2/4: check-orphan-chunks.test.sh"
+	@echo "2/5: check-orphan-chunks.test.sh"
 	@bash scripts/__tests__/check-orphan-chunks.test.sh
 	@echo ""
-	@echo "3/4: rollback-residue.test.sh"
+	@echo "3/5: rollback-residue.test.sh"
 	@bash scripts/__tests__/rollback-residue.test.sh
 	@echo ""
-	@echo "4/4: pg_dump-via-docker.test.sh"
+	@echo "4/5: pg_dump-via-docker.test.sh"
 	@bash scripts/__tests__/pg_dump-via-docker.test.sh
+	@echo ""
+	@echo "5/5: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
+	@bash scripts/__tests__/check-e2e-storage-state.test.sh
 	@echo ""
 	@echo "✅ Shell script regression suites passed!"
 

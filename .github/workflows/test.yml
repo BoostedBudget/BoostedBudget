@@ -180,67 +180,20 @@ jobs:
             exit 1
           fi
 
-          # Defect fix: `grep -o '"name"' | wc -l` counts ANY JSON "name" key anywhere in the
-          # file, not just cookies. Playwright storage state is shaped
-          # {"cookies":[...],"origins":[{"origin":"...","localStorage":[{"name":...,"value":...}]}]}
-          # — so a file with "cookies":[] plus a single localStorage entry (which also has a
-          # "name" key) passed this check reporting a non-zero count, i.e. false confidence
-          # with zero actual cookies. Parse the `cookies` array itself instead.
-          #
-          # Second defect fix: a naive `len(data.get('cookies', []))` also passes for
-          # {"cookies":"x"} (len of the STRING "x" is 1), {"cookies":[null]} (len 1, zero real
-          # cookies), and {"cookies":{"k":1}} (len of the dict's keys is 1) — Python's len()
-          # doesn't care what type it's counting. Every shape below is checked explicitly:
-          # root must be a JSON object, 'cookies' must be a JSON array, and each counted entry
-          # must be an object with non-empty 'name' and 'value' fields.
+          # #1464 batch T2 (G5-13): the shape-validation logic below was extracted to
+          # scripts/check-e2e-storage-state.py so scripts/__tests__/check-e2e-storage-state.test.sh
+          # can exercise it against malformed-shape fixtures — CI previously only ever fed this
+          # guard the real, valid storage-state file, so none of the malformed shapes it was
+          # written to reject had ever actually been rejected by a test run. See that script's
+          # module docstring for the two defect fixes it preserves (grep-based "name" counting,
+          # and len()-on-any-type). Also wired into `make test-scripts`.
           #
           # jq is NOT unavailable here — deploy-qa.yml uses it unguarded at multiple sites on
           # this same [self-hosted, macOS, mac-mini] runner label, and deploy-production.yml /
           # deploy-to-staging.yaml use `jq -r`. python3 is used instead simply for consistency
           # with the skip-ceiling guard below, which already parses Playwright's JSON report
           # the same way — not because jq is unproven on this runner.
-          python3 - "$AUTH_FILE" <<'PY'
-          import json, sys
-
-          path = sys.argv[1]
-          try:
-              with open(path) as f:
-                  data = json.load(f)
-          except (ValueError, OSError) as exc:
-              print(f"::error::{path} could not be parsed as JSON: {exc}")
-              sys.exit(1)
-
-          if not isinstance(data, dict):
-              print(f"::error::{path}'s root is not a JSON object (got {type(data).__name__}) — malformed Playwright storage state.")
-              sys.exit(1)
-
-          cookies = data.get("cookies")
-          if not isinstance(cookies, list):
-              print(f"::error::{path}'s 'cookies' key is not a JSON array (got {type(cookies).__name__ if cookies is not None else 'missing'}) — malformed storage state.")
-              sys.exit(1)
-
-          if len(cookies) == 0:
-              print(f"::error::{path} has zero cookies — a Clerk session was never actually established.")
-              sys.exit(1)
-
-          valid_cookies = [c for c in cookies if isinstance(c, dict) and c.get("name") and c.get("value")]
-          if not valid_cookies:
-              print(f"::error::{path}'s cookies array has {len(cookies)} entrie(s), but none are objects with non-empty 'name'/'value' fields — malformed storage state.")
-              sys.exit(1)
-
-          # The actual Clerk session cookie (holds the session JWT). Clerk dev instances suffix
-          # it with an instance ID (e.g. "__session_JB79cyGe"); production instances use the
-          # bare name. __client_uat/__clerk_db_jwt are also set by Clerk but do not by
-          # themselves prove an authenticated session (see auth.setup.ts), so they don't count.
-          SESSION_COOKIE = "__session"
-          session_cookies = [c for c in valid_cookies if c["name"] == SESSION_COOKIE or c["name"].startswith(SESSION_COOKIE + "_")]
-          if not session_cookies:
-              names = ", ".join(sorted({c["name"] for c in valid_cookies}))
-              print(f"::error::{path} has {len(valid_cookies)} valid cookie(s) but none named '{SESSION_COOKIE}' (or '{SESSION_COOKIE}_<instance>') — the Clerk session cookie is missing, so no real session was established. Cookies present: {names}")
-              sys.exit(1)
-
-          print(f"E2E auth session verified: {len(valid_cookies)} valid cookie(s) in {path}, including Clerk session cookie(s): {', '.join(sorted(c['name'] for c in session_cookies))}")
-          PY
+          python3 "${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/scripts/check-e2e-storage-state.py" "$AUTH_FILE"
 
       # Issue #1437 (defect b): the auth guard above only proves *a* session was obtained — it
       # says nothing about how many tests actually ran. #1437's real failure mode was a total
