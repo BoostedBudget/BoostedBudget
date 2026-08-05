@@ -179,7 +179,8 @@ type LinkedItemCleanupRepository interface {
 	// ELIGIBILITY rather than merely re-reading cleanup_scheduled_at (nothing clears that on
 	// reconnect), and for the two sweep-only conditions it deliberately does not reuse.
 	ClaimItemForCleanup(ctx context.Context, itemID string, errorDays, staleDays int) (bool, error)
-	// ClearCleanupSchedule clears the cleanup schedule (e.g., if user reconnected)
+	// ClearCleanupSchedule clears the cleanup schedule. NOT called on reconnection — see the note on
+	// ClaimItemForCleanup above.
 	ClearCleanupSchedule(ctx context.Context, itemID string) error
 	// Delete hard-deletes the linked_items row after Plaid billing is stopped.
 	// Safe no-op: skips deletion if accounts (any status) still reference the item,
