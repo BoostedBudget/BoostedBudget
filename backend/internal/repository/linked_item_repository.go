@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -180,7 +181,16 @@ const linkedItemSelectCols = `id, user_id, item_id, access_token_encrypted,
        status_changed_at`
 
 // NewLinkedItemRepository creates a new LinkedItemRepository instance
-func NewLinkedItemRepository(db DB, enc *appcrypto.FieldEncryptor) LinkedItemRepository {
+// NewLinkedItemRepository returns the CONCRETE *linkedItemRepository, not the LinkedItemRepository
+// interface — Issue #1469. It used to return the interface, which meant a method absent from that
+// wide interface was unreachable through the value main.go holds, so the paged
+// GetItemsForCleanupPage below could only be reached by ALSO adding it to the wide interface and to
+// all eight of its mock implementations. Returning the concrete type (exactly as
+// NewProfileRepository already does) keeps the paged sweep method on the concrete repository plus
+// the ONE narrow consumer interface that needs it (jobs.LinkedItemCleanupRepository), which is the
+// placement the sibling scheduled-deletion fix established. Every existing caller assigning the
+// result to a LinkedItemRepository variable or parameter still compiles unchanged.
+func NewLinkedItemRepository(db DB, enc *appcrypto.FieldEncryptor) *linkedItemRepository { //nolint:revive // deliberate: see doc comment (mirrors NewProfileRepository)
 	return &linkedItemRepository{db: db, enc: enc}
 }
 
@@ -842,43 +852,177 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 // consistency with every other scan site in this file, even though `status NOT IN (...)` above
 // already structurally excludes a NULL-status row (SQL three-valued logic).
 //
-// Cross-reference (Batch S2 Task 4, not fixed here): this query has an ORDER BY but NO LIMIT —
-// the same unbounded-sweep shape ProfileRepository.GetUsersScheduledForDeletion had before it was
-// split into GetUsersScheduledForDeletionPage's keyset-paginated form (see that method's doc
-// comment for the full starvation rationale a bare LIMIT alone would introduce here too). Tracked
-// as the same defect class under issue #1469 (ItemCleanupCheck) — out of scope for this task.
+// Issue #1469: this query is UNBOUNDED — an ORDER BY but no LIMIT, and no id tie-breaker. It has NO
+// remaining production caller: ItemCleanupCheckWorker.Work (the only one it ever had) now calls
+// GetItemsForCleanupPage below. It is retained ONLY because it is still declared on the wide
+// LinkedItemRepository interface, which eight files' mocks implement, and because
+// TestGetItemsForCleanupPage_Integration_MatchesUnpagedPredicate uses it as the oracle that the
+// paged form did not drop a predicate leg. Removing it is recommended as a separate change — see
+// GetItemsForCleanupPage's doc comment.
 func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
-	query := `
-		SELECT li.id, li.user_id, li.item_id, li.access_token_encrypted,
-		       li.institution_id, li.institution_name, li.provider, li.cursor, li.last_synced_at,
-		       li.status, li.error_code, li.error_message, li.last_error_at, li.retry_count, li.next_retry_at,
-		       li.replaced_at, li.replaced_by_id,
-		       li.cleanup_notified_at, li.cleanup_scheduled_at,
-		       li.created_at, li.updated_at, li.investments_last_synced_date, li.liabilities_last_synced_at,
-		       li.status_changed_at
-		FROM linked_items li
-		WHERE li.cleanup_scheduled_at IS NULL
-		  AND li.status NOT IN ('replaced', 'disconnected')
-		  AND (
-		      -- Items in error state for > errorDays
-		      (li.status IN ('error', 'login_required') AND li.last_error_at < NOW() - $1::interval)
-		      -- OR items with revoked status (immediate cleanup candidate)
-		      OR li.status = 'revoked'
-		      -- OR items not synced for > staleDays
-		      OR (li.last_synced_at IS NOT NULL AND li.last_synced_at < NOW() - $2::interval)
-		      -- OR items with zero active accounts (immediate cleanup candidate)
-		      OR NOT EXISTS (
-		          SELECT 1 FROM accounts a
-		          WHERE a.linked_item_id = li.id AND a.status = 'active'
-		      )
-		  )
+	query := cleanupCandidateSelectQuery + `
 		ORDER BY li.last_error_at ASC NULLS LAST, li.last_synced_at ASC NULLS LAST
 	`
-
-	rows, err := r.db.Query(ctx, query,
+	return r.queryCleanupCandidates(ctx, query,
 		strings.TrimSpace(fmt.Sprintf("%d days", errorDays)),
 		strings.TrimSpace(fmt.Sprintf("%d days", staleDays)),
 	)
+}
+
+// cleanupCandidateSelectQuery is the SELECT + WHERE shared verbatim by GetItemsForCleanup and
+// GetItemsForCleanupPage (Issue #1469), so the paged form cannot drift from the predicate it is
+// replacing. $1 is the errorDays interval, $2 the staleDays interval; a caller appending its own
+// clauses must start numbering at $3.
+const cleanupCandidateSelectQuery = `
+	SELECT li.id, li.user_id, li.item_id, li.access_token_encrypted,
+	       li.institution_id, li.institution_name, li.provider, li.cursor, li.last_synced_at,
+	       li.status, li.error_code, li.error_message, li.last_error_at, li.retry_count, li.next_retry_at,
+	       li.replaced_at, li.replaced_by_id,
+	       li.cleanup_notified_at, li.cleanup_scheduled_at,
+	       li.created_at, li.updated_at, li.investments_last_synced_date, li.liabilities_last_synced_at,
+	       li.status_changed_at
+	FROM linked_items li
+	WHERE li.cleanup_scheduled_at IS NULL
+	  AND li.status NOT IN ('replaced', 'disconnected')
+	  AND (
+	      -- Items in error state for > errorDays
+	      (li.status IN ('error', 'login_required') AND li.last_error_at < NOW() - $1::interval)
+	      -- OR items with revoked status (immediate cleanup candidate)
+	      OR li.status = 'revoked'
+	      -- OR items not synced for > staleDays
+	      OR (li.last_synced_at IS NOT NULL AND li.last_synced_at < NOW() - $2::interval)
+	      -- OR items with zero active accounts (immediate cleanup candidate)
+	      OR NOT EXISTS (
+	          SELECT 1 FROM accounts a
+	          WHERE a.linked_item_id = li.id AND a.status = 'active'
+	      )
+	  )
+`
+
+// cleanupCandidateSortKey is the ASC-NULLS-LAST ordering of GetItemsForCleanup, re-expressed with
+// COALESCE so the identical expression can appear inside a row-comparison keyset predicate — a
+// tuple comparison has no per-column NULLS FIRST/LAST clause, so `(a, b, c) > (x, y, z)` cannot
+// express "NULLs last" any other way. For timestamptz the two forms are equivalent: 'infinity'
+// sorts after every finite value, and nothing in this codebase ever writes an infinite
+// last_error_at/last_synced_at (every writer passes a Go time.Time or NULL).
+//
+// Coalescing is also what makes the row comparison usable at all: PostgreSQL row-wise comparison
+// yields NULL (not true/false) as soon as a compared element is NULL, so a keyset predicate over the
+// raw nullable columns would silently return no rows for any cursor whose components include a NULL.
+// Both the column side (here) and the parameter side (GetItemsForCleanupPage) are coalesced.
+//
+// Every component is ASC; each is spelled out so a future edit cannot silently apply a single
+// trailing ASC/DESC to the last column only.
+const cleanupCandidateSortKey = `COALESCE(li.last_error_at, 'infinity'::timestamptz) ASC, COALESCE(li.last_synced_at, 'infinity'::timestamptz) ASC, li.id ASC`
+
+// cleanupCandidateSortKeyTuple is cleanupCandidateSortKey's expressions WITHOUT the per-column ASC
+// keywords, for use inside the row-comparison keyset predicate (a tuple element cannot carry an
+// ASC/DESC keyword). Kept adjacent to its sibling so the two cannot drift.
+const cleanupCandidateSortKeyTuple = `COALESCE(li.last_error_at, 'infinity'::timestamptz), COALESCE(li.last_synced_at, 'infinity'::timestamptz), li.id`
+
+// itemCleanupSweepDefaultPageSize is the fallback for a non-positive limit passed to
+// GetItemsForCleanupPage. Mirrors retentionSweepDefaultPageSize / GetUsersScheduledForDeletionPage's
+// 500.
+const itemCleanupSweepDefaultPageSize = 500
+
+// ItemCleanupSweepCursor is a keyset-pagination position for GetItemsForCleanupPage, captured from
+// the last row of the previous page, matching that page's
+// ORDER BY (last_error_at, last_synced_at, id) ASC with NULLs last. A nil cursor starts from the
+// beginning.
+//
+// LastErrorAt and LastSyncedAt are POINTERS because both columns are nullable and a NULL is a
+// legitimate cursor position: the "zero active accounts" leg of the predicate matches items that
+// have never errored and never synced, so a page can genuinely end on a row where both are NULL.
+// A nil field is sent as SQL NULL and coalesced to 'infinity' by the query, which is exactly where
+// NULLS LAST puts it.
+type ItemCleanupSweepCursor struct {
+	LastErrorAt  *time.Time
+	LastSyncedAt *time.Time
+	ItemID       string
+}
+
+// GetItemsForCleanupPage returns up to `limit` cleanup candidates, ordered by
+// (last_error_at, last_synced_at, id) ASC with NULLs last, for deterministic keyset pagination —
+// Issue #1469. The WHERE clause is GetItemsForCleanup's, unchanged
+// (cleanupCandidateSelectQuery), plus the keyset predicate.
+//
+// Why this exists: GetItemsForCleanup has no LIMIT, and its single caller,
+// ItemCleanupCheckWorker.Work (queue/jobs/item_cleanup_check.go), consumed the whole slice — marking
+// every row for cleanup and enqueueing an ItemCleanup job per row, which calls Plaid /item/remove.
+// That is irreversible (the user must re-link the institution through Plaid Link), and
+// ItemCleanupCheckPeriodicOpts registers the job with RunOnStart: true, so the first run after every
+// deploy acted on however many rows the table happened to hold. Same defect class as #1478 and as
+// the already-fixed GetUsersScheduledForDeletionPage.
+//
+// Why the li.id tie-breaker is load-bearing here specifically: BOTH pre-existing sort columns are
+// nullable, and the "zero active accounts" predicate leg matches items that have never errored and
+// never synced — so many rows can share (NULL, NULL) as their entire sort key. Keyset pagination
+// over a non-unique sort key skips and repeats rows. li.id (a uuid, NOT NULL, unique) makes the
+// order total. This is why the fix is not a bare `LIMIT n`, quite apart from the starvation argument.
+//
+// Why keyset pagination and not a bare LIMIT: an oldest-ranked row whose MarkForCleanup keeps
+// failing stays a candidate (the predicate requires cleanup_scheduled_at IS NULL, and a failed mark
+// leaves it NULL), so under a bare LIMIT the same oldest n rows would occupy every page of every run
+// and nothing ranked past them would ever be looked at. The cursor lets the caller step past
+// whatever it just saw within ONE run.
+//
+// The guarantee this buys, stated bounded by the cap (do NOT restate it as "no starvation" — that
+// claim shipped on maxUsersPerDeletionSweep and is only true below the cap): within a single run the
+// caller advances across pages until the repository returns a short page (exhausted) or the caller's
+// total-processed cap (maxItemsPerCleanupSweep, queue/jobs/item_cleanup_check.go) is reached. Across
+// runs there is NO persisted cursor (#1477) — every run restarts from nil. So while the number of
+// candidates that are NOT getting marked stays BELOW the cap, each run steps past them and later
+// rows are reached; at or above that count, every run re-spends its entire budget on the same
+// unmarkable oldest rows and never reaches anything past the cap, for as long as they keep failing.
+// Successfully marked rows do not have this problem: MarkForCleanup sets cleanup_scheduled_at, after
+// which the row does not match this predicate at all.
+//
+// No index can serve this sort key, exactly as none could serve GetItemsForCleanup's: the closest
+// one, idx_linked_items_cleanup_candidates (status, last_error_at) WHERE status IN
+// ('error','login_required','revoked') AND cleanup_scheduled_at IS NULL, is partial on a status set
+// this predicate deliberately exceeds (the stale and zero-active-accounts legs match other statuses)
+// and leads on status, not on the sort expression — so each page is a fresh scan-and-sort. That is
+// unchanged by this fix, not introduced by it, and linked_items is a small table (roughly one row
+// per user per linked institution). It is worth a dedicated expression index if this table ever
+// grows large.
+func (r *linkedItemRepository) GetItemsForCleanupPage(ctx context.Context, errorDays, staleDays int, after *ItemCleanupSweepCursor, limit int) ([]domain.LinkedItem, error) {
+	if limit <= 0 {
+		limit = itemCleanupSweepDefaultPageSize
+	}
+
+	args := []interface{}{
+		strings.TrimSpace(fmt.Sprintf("%d days", errorDays)),
+		strings.TrimSpace(fmt.Sprintf("%d days", staleDays)),
+	}
+
+	query := cleanupCandidateSelectQuery
+	if after != nil {
+		// COALESCE on the parameter side too, so a NULL cursor component compares as 'infinity' —
+		// the same position NULLS LAST gives it in the ORDER BY.
+		query += `
+		  AND (` + cleanupCandidateSortKeyTuple + `) > (
+		      COALESCE($3::timestamptz, 'infinity'::timestamptz),
+		      COALESCE($4::timestamptz, 'infinity'::timestamptz),
+		      $5::uuid
+		  )
+	`
+		args = append(args, after.LastErrorAt, after.LastSyncedAt, after.ItemID)
+	}
+	query += `
+		ORDER BY ` + cleanupCandidateSortKey + `
+		LIMIT $` + strconv.Itoa(len(args)+1) + `
+	`
+	args = append(args, limit)
+
+	return r.queryCleanupCandidates(ctx, query, args...)
+}
+
+// queryCleanupCandidates runs a cleanupCandidateSelectQuery-shaped query and scans every row into a
+// domain.LinkedItem, applying the same NULL-safe institution/status handling and PII decryption both
+// cleanup queries need. Extracted (Issue #1469) so GetItemsForCleanup and GetItemsForCleanupPage
+// cannot drift in their scan order or their decryption behaviour.
+func (r *linkedItemRepository) queryCleanupCandidates(ctx context.Context, query string, args ...interface{}) ([]domain.LinkedItem, error) {
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

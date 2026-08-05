@@ -67,6 +67,19 @@ func (m *MockLinkedItemRepoForCleanup) ClearCleanupSchedule(ctx context.Context,
 }
 
 // Implement other interface methods (not used in item_cleanup.go but required)
+// GetItemsForCleanupPage satisfies LinkedItemCleanupRepository (Issue #1469). ItemCleanupWorker —
+// the worker these tests exercise — never calls it; it shares the interface with
+// ItemCleanupCheckWorker, which is the sweep that does. Kept alongside the unbounded
+// GetItemsForCleanup below rather than replacing it, because this mock is also used where the wide
+// repository.LinkedItemRepository shape is expected.
+func (m *MockLinkedItemRepoForCleanup) GetItemsForCleanupPage(ctx context.Context, errorDays, staleDays int, after *repository.ItemCleanupSweepCursor, limit int) ([]domain.LinkedItem, error) {
+	args := m.Called(ctx, errorDays, staleDays, after, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.LinkedItem), args.Error(1)
+}
+
 func (m *MockLinkedItemRepoForCleanup) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
 	args := m.Called(ctx, errorDays, staleDays)
 	if args.Get(0) == nil {

@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
@@ -23,8 +25,17 @@ type MockLinkedItemCleanupRepo struct {
 	mock.Mock
 }
 
-func (m *MockLinkedItemCleanupRepo) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
-	args := m.Called(ctx, errorDays, staleDays)
+// GetItemsForCleanupPage is the paged, keyset-cursored form ItemCleanupCheckWorker.Work calls as of
+// Issue #1469 — the unbounded GetItemsForCleanup is no longer on the narrow
+// LinkedItemCleanupRepository interface at all, so this mock does not implement it.
+//
+// Note for the expectations below that return a page of 1-3 items and never program a second call:
+// the run stops as soon as a page comes back SHORT (len < pageSize), and those tests leave
+// CleanupPageSize unset, so pageSize is the production default (500). Any page smaller than that is
+// short, so exactly one fetch happens per run — the same call count these expectations had before
+// the paging loop existed.
+func (m *MockLinkedItemCleanupRepo) GetItemsForCleanupPage(ctx context.Context, errorDays, staleDays int, after *repository.ItemCleanupSweepCursor, limit int) ([]domain.LinkedItem, error) {
+	args := m.Called(ctx, errorDays, staleDays, after, limit)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -80,15 +91,15 @@ func TestItemCleanupCheckWorker_Work_NoCleanupCandidates(t *testing.T) {
 	mockRepo := new(MockLinkedItemCleanupRepo)
 	mockQueue := new(MockJobQueue)
 
-	mockRepo.On("GetItemsForCleanup", ctx, 30, 60).Return([]domain.LinkedItem{}, nil)
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return([]domain.LinkedItem{}, nil)
 
 	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
-		LinkedItemRepo:      mockRepo,
-		JobQueue:            mockQueue,
-		Logger:              newTestItemCleanupCheckLogger(),
-		GracePeriodDays:     7,
-		ErrorDaysThreshold:  30,
-		StaleDaysThreshold:  60,
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
 	})
 
 	job := newTestItemCleanupCheckJob(ItemCleanupCheckArgs{
@@ -118,7 +129,7 @@ func TestItemCleanupCheckWorker_Work_DetectsLongTermErrorItems(t *testing.T) {
 		},
 	}
 
-	mockRepo.On("GetItemsForCleanup", ctx, 30, 60).Return(items, nil)
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(items, nil)
 	mockRepo.On("MarkForCleanup", ctx, "item-1", mock.Anything).Return(nil)
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		cleanupArgs, ok := job.(ItemCleanupArgs)
@@ -126,12 +137,12 @@ func TestItemCleanupCheckWorker_Work_DetectsLongTermErrorItems(t *testing.T) {
 	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
 
 	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
-		LinkedItemRepo:      mockRepo,
-		JobQueue:            mockQueue,
-		Logger:              newTestItemCleanupCheckLogger(),
-		GracePeriodDays:     7,
-		ErrorDaysThreshold:  30,
-		StaleDaysThreshold:  60,
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
 	})
 
 	job := newTestItemCleanupCheckJob(ItemCleanupCheckArgs{
@@ -159,7 +170,7 @@ func TestItemCleanupCheckWorker_Work_DetectsRevokedItems(t *testing.T) {
 		},
 	}
 
-	mockRepo.On("GetItemsForCleanup", ctx, 30, 60).Return(items, nil)
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(items, nil)
 	mockRepo.On("MarkForCleanup", ctx, "item-2", mock.Anything).Return(nil)
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		cleanupArgs, ok := job.(ItemCleanupArgs)
@@ -167,12 +178,12 @@ func TestItemCleanupCheckWorker_Work_DetectsRevokedItems(t *testing.T) {
 	}), mock.Anything).Return(&queue.JobResult{ID: 2}, nil)
 
 	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
-		LinkedItemRepo:      mockRepo,
-		JobQueue:            mockQueue,
-		Logger:              newTestItemCleanupCheckLogger(),
-		GracePeriodDays:     7,
-		ErrorDaysThreshold:  30,
-		StaleDaysThreshold:  60,
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
 	})
 
 	job := newTestItemCleanupCheckJob(ItemCleanupCheckArgs{
@@ -202,7 +213,7 @@ func TestItemCleanupCheckWorker_Work_DetectsStaleItems(t *testing.T) {
 		},
 	}
 
-	mockRepo.On("GetItemsForCleanup", ctx, 30, 60).Return(items, nil)
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(items, nil)
 	mockRepo.On("MarkForCleanup", ctx, "item-3", mock.Anything).Return(nil)
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		cleanupArgs, ok := job.(ItemCleanupArgs)
@@ -210,12 +221,12 @@ func TestItemCleanupCheckWorker_Work_DetectsStaleItems(t *testing.T) {
 	}), mock.Anything).Return(&queue.JobResult{ID: 3}, nil)
 
 	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
-		LinkedItemRepo:      mockRepo,
-		JobQueue:            mockQueue,
-		Logger:              newTestItemCleanupCheckLogger(),
-		GracePeriodDays:     7,
-		ErrorDaysThreshold:  30,
-		StaleDaysThreshold:  60,
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
 	})
 
 	job := newTestItemCleanupCheckJob(ItemCleanupCheckArgs{
@@ -236,15 +247,15 @@ func TestItemCleanupCheckWorker_Work_RepositoryError(t *testing.T) {
 	mockQueue := new(MockJobQueue)
 
 	dbErr := errors.New("database connection error")
-	mockRepo.On("GetItemsForCleanup", ctx, 30, 60).Return(nil, dbErr)
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(nil, dbErr)
 
 	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
-		LinkedItemRepo:      mockRepo,
-		JobQueue:            mockQueue,
-		Logger:              newTestItemCleanupCheckLogger(),
-		GracePeriodDays:     7,
-		ErrorDaysThreshold:  30,
-		StaleDaysThreshold:  60,
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
 	})
 
 	job := newTestItemCleanupCheckJob(ItemCleanupCheckArgs{
@@ -275,17 +286,17 @@ func TestItemCleanupCheckWorker_Work_SkipsAlreadyScheduledItems(t *testing.T) {
 		},
 	}
 
-	mockRepo.On("GetItemsForCleanup", ctx, 30, 60).Return(items, nil)
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(items, nil)
 	// MarkForCleanup should NOT be called for already scheduled items
 	// Enqueue should NOT be called for already scheduled items
 
 	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
-		LinkedItemRepo:      mockRepo,
-		JobQueue:            mockQueue,
-		Logger:              newTestItemCleanupCheckLogger(),
-		GracePeriodDays:     7,
-		ErrorDaysThreshold:  30,
-		StaleDaysThreshold:  60,
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
 	})
 
 	job := newTestItemCleanupCheckJob(ItemCleanupCheckArgs{
@@ -319,7 +330,7 @@ func TestItemCleanupCheckWorker_Work_MarkForCleanupErrorContinues(t *testing.T) 
 		},
 	}
 
-	mockRepo.On("GetItemsForCleanup", ctx, 30, 60).Return(items, nil)
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(items, nil)
 	// First item fails to mark
 	mockRepo.On("MarkForCleanup", ctx, "item-1", mock.Anything).Return(errors.New("db error"))
 	// Second item succeeds
@@ -330,12 +341,12 @@ func TestItemCleanupCheckWorker_Work_MarkForCleanupErrorContinues(t *testing.T) 
 	}), mock.Anything).Return(&queue.JobResult{ID: 2}, nil)
 
 	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
-		LinkedItemRepo:      mockRepo,
-		JobQueue:            mockQueue,
-		Logger:              newTestItemCleanupCheckLogger(),
-		GracePeriodDays:     7,
-		ErrorDaysThreshold:  30,
-		StaleDaysThreshold:  60,
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
 	})
 
 	job := newTestItemCleanupCheckJob(ItemCleanupCheckArgs{
@@ -369,7 +380,7 @@ func TestItemCleanupCheckWorker_Work_EnqueueErrorContinues(t *testing.T) {
 		},
 	}
 
-	mockRepo.On("GetItemsForCleanup", ctx, 30, 60).Return(items, nil)
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(items, nil)
 	mockRepo.On("MarkForCleanup", ctx, "item-1", mock.Anything).Return(nil)
 	mockRepo.On("MarkForCleanup", ctx, "item-2", mock.Anything).Return(nil)
 	// First item fails to enqueue
@@ -384,12 +395,12 @@ func TestItemCleanupCheckWorker_Work_EnqueueErrorContinues(t *testing.T) {
 	}), mock.Anything).Return(&queue.JobResult{ID: 2}, nil)
 
 	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
-		LinkedItemRepo:      mockRepo,
-		JobQueue:            mockQueue,
-		Logger:              newTestItemCleanupCheckLogger(),
-		GracePeriodDays:     7,
-		ErrorDaysThreshold:  30,
-		StaleDaysThreshold:  60,
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
 	})
 
 	job := newTestItemCleanupCheckJob(ItemCleanupCheckArgs{
@@ -418,7 +429,7 @@ func TestItemCleanupCheckWorker_Work_EnqueuesWithCorrectScheduledTime(t *testing
 		},
 	}
 
-	mockRepo.On("GetItemsForCleanup", ctx, 30, 60).Return(items, nil)
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(items, nil)
 	mockRepo.On("MarkForCleanup", ctx, "item-1", mock.Anything).Return(nil)
 
 	// Capture the enqueue options to verify scheduling
@@ -431,12 +442,12 @@ func TestItemCleanupCheckWorker_Work_EnqueuesWithCorrectScheduledTime(t *testing
 
 	gracePeriodDays := 7
 	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
-		LinkedItemRepo:      mockRepo,
-		JobQueue:            mockQueue,
-		Logger:              newTestItemCleanupCheckLogger(),
-		GracePeriodDays:     gracePeriodDays,
-		ErrorDaysThreshold:  30,
-		StaleDaysThreshold:  60,
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    gracePeriodDays,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
 	})
 
 	job := newTestItemCleanupCheckJob(ItemCleanupCheckArgs{
@@ -468,7 +479,7 @@ func TestItemCleanupCheckWorker_Work_EnqueuesWithCorrectScheduledTime(t *testing
 func TestItemCleanupCheckUniqueOpts(t *testing.T) {
 	opts := ItemCleanupCheckUniqueOpts()
 
-	assert.False(t, opts.ByArgs) // All check jobs are equivalent
+	assert.False(t, opts.ByArgs)                 // All check jobs are equivalent
 	assert.Equal(t, 24*time.Hour, opts.ByPeriod) // 24 hours - matches daily run frequency
 	assert.Contains(t, opts.ByState, queue.JobStateAvailable)
 	assert.Contains(t, opts.ByState, queue.JobStateScheduled)
@@ -482,11 +493,11 @@ func TestNewItemCleanupCheckWorker_DefaultLogger(t *testing.T) {
 	mockQueue := new(MockJobQueue)
 
 	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
-		LinkedItemRepo:      mockRepo,
-		JobQueue:            mockQueue,
-		GracePeriodDays:     7,
-		ErrorDaysThreshold:  30,
-		StaleDaysThreshold:  60,
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
 		// Logger is nil, should use default
 	})
 
@@ -539,7 +550,7 @@ func TestItemCleanupCheckWorker_Work_DetectsZeroAccountItems(t *testing.T) {
 		},
 	}
 
-	mockRepo.On("GetItemsForCleanup", ctx, 30, 60).Return(items, nil)
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(items, nil)
 	// Return 0 accounts for this item
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, "item-zero-accounts").Return(0, nil)
 	mockRepo.On("MarkForCleanup", ctx, "item-zero-accounts", mock.Anything).Return(nil)
@@ -587,7 +598,7 @@ func TestItemCleanupCheckWorker_Work_ZeroAccountsImmediateCleanup(t *testing.T) 
 		},
 	}
 
-	mockRepo.On("GetItemsForCleanup", ctx, 30, 60).Return(items, nil)
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(items, nil)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, "item-zero-accounts").Return(0, nil)
 
 	// Capture the MarkForCleanup time to verify it's immediate (not grace period)
@@ -638,7 +649,7 @@ func TestItemCleanupCheckWorker_Work_WithAccountsUsesGracePeriod(t *testing.T) {
 		},
 	}
 
-	mockRepo.On("GetItemsForCleanup", ctx, 30, 60).Return(items, nil)
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(items, nil)
 	// Item has accounts - should use normal grace period
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, "item-with-accounts").Return(3, nil)
 
@@ -718,4 +729,128 @@ func TestItemCleanupCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
 
 	unique := ItemCleanupCheckUniqueOpts()
 	require.NotEmpty(t, unique.ByState)
+}
+
+// ─── Issue #1469: bounding the item-cleanup sweep ──────────────────────────────────────────────
+//
+// Work() used to consume the ENTIRE unbounded result of GetItemsForCleanup, marking every row for
+// cleanup and enqueueing an ItemCleanup job per row — and ItemCleanup calls Plaid /item/remove,
+// which the user can only undo by re-linking the institution through Plaid Link.
+// ItemCleanupCheckPeriodicOpts registers this job with RunOnStart: true, so the first run after
+// every deploy acted on however many candidates the table happened to hold.
+//
+// These two tests are the fast unit pins for the two halves of the fix. The real-SQL half — that the
+// keyset predicate over two NULLABLE sort columns plus the li.id tie-breaker actually produces a
+// deterministic, non-overlapping page sequence — is pinned by
+// linked_item_repository_cleanup_page_integration_test.go, which pgxmock cannot substitute for.
+
+// TestItemCleanupCheckWorker_Work_PagesPastFirstBatch proves boundedness WITHOUT starvation inside
+// one run: with a page size of 2 and 5 candidates, Work() must issue three bounded page fetches
+// (2, 2, 1 — never all 5 in one call) and still schedule every candidate, including the ones ranked
+// past the first page. A naive `LIMIT 2` with no cursor would only ever see the first two.
+func TestItemCleanupCheckWorker_Work_PagesPastFirstBatch(t *testing.T) {
+	ctx := context.Background()
+
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	items := make([]domain.LinkedItem, 5)
+	for i := range items {
+		errAt := base.Add(time.Duration(i) * time.Hour)
+		items[i] = domain.LinkedItem{
+			ID:          uuid.New().String(),
+			UserID:      "user-1",
+			Status:      "revoked",
+			LastErrorAt: &errAt,
+		}
+	}
+
+	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockQueue := new(MockJobQueue)
+
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, (*repository.ItemCleanupSweepCursor)(nil), 2).
+		Return(items[0:2], nil).Once()
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.MatchedBy(func(c *repository.ItemCleanupSweepCursor) bool {
+		return c != nil && c.ItemID == items[1].ID
+	}), 2).Return(items[2:4], nil).Once()
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.MatchedBy(func(c *repository.ItemCleanupSweepCursor) bool {
+		return c != nil && c.ItemID == items[3].ID
+	}), 2).Return(items[4:5], nil).Once() // short page (1 < 2): the run must stop here, not re-query
+
+	mockRepo.On("MarkForCleanup", ctx, mock.Anything, mock.Anything).Return(nil)
+	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything, mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+
+	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
+		CleanupPageSize:    2,
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestItemCleanupCheckJob(ItemCleanupCheckArgs{TriggerSource: "periodic"})))
+
+	mockRepo.AssertExpectations(t) // proves all three page fetches happened with the right cursors
+	mockRepo.AssertNumberOfCalls(t, "MarkForCleanup", 5)
+	mockQueue.AssertNumberOfCalls(t, "Enqueue", 5)
+}
+
+// TestItemCleanupCheckWorker_Work_StopsAtTotalProcessedCap is the failing-first pin for the per-run
+// cap itself. Bounding each QUERY to a page size does not bound the run: the loop around it would
+// keep paging until a short page, so a large enough backlog makes one run's Plaid-disable count
+// unbounded again.
+//
+// The stub returns a FULL page indefinitely, standing in for an arbitrarily large backlog. It is
+// bounded to safetyNetCalls returns so a regression cannot hang CI: without the cap the run keeps
+// calling past ceil(cap/pageSize), the stub runs out of programmed calls, and testify panics with
+// "mock: I don't know what to return" — a fast, loud failure rather than a hang.
+func TestItemCleanupCheckWorker_Work_StopsAtTotalProcessedCap(t *testing.T) {
+	ctx := context.Background()
+
+	const pageSize = 10
+	const sweepCap = 25                        // deliberately NOT a multiple of pageSize: proves the last page is truncated
+	const wantPageFetches = 3                  // ceil(25/10)
+	const safetyNetCalls = wantPageFetches + 5 // far more than a correct implementation ever needs
+
+	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockQueue := new(MockJobQueue)
+
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < safetyNetCalls; i++ {
+		page := make([]domain.LinkedItem, pageSize)
+		for j := 0; j < pageSize; j++ {
+			errAt := base.Add(time.Duration(i*pageSize+j) * time.Minute)
+			page[j] = domain.LinkedItem{ID: uuid.New().String(), UserID: "user-1", Status: "revoked", LastErrorAt: &errAt}
+		}
+		mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, pageSize).Return(page, nil).Once()
+	}
+
+	mockRepo.On("MarkForCleanup", ctx, mock.Anything, mock.Anything).Return(nil)
+	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything, mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+
+	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
+		LinkedItemRepo:          mockRepo,
+		JobQueue:                mockQueue,
+		Logger:                  newTestItemCleanupCheckLogger(),
+		GracePeriodDays:         7,
+		ErrorDaysThreshold:      30,
+		StaleDaysThreshold:      60,
+		CleanupPageSize:         pageSize,
+		MaxItemsPerCleanupSweep: sweepCap,
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestItemCleanupCheckJob(ItemCleanupCheckArgs{TriggerSource: "periodic"})))
+
+	fetchCalls := 0
+	for _, call := range mockRepo.Calls {
+		if call.Method == "GetItemsForCleanupPage" {
+			fetchCalls++
+		}
+	}
+	assert.Equal(t, wantPageFetches, fetchCalls,
+		"the run must stop fetching pages once the total-processed cap is reached, not keep paging "+
+			"until a short/empty page — without the cap this exceeds wantPageFetches long before the "+
+			"stub's safety net runs out")
+	mockRepo.AssertNumberOfCalls(t, "MarkForCleanup", sweepCap)
+	mockQueue.AssertNumberOfCalls(t, "Enqueue", sweepCap)
 }
