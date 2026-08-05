@@ -15,7 +15,7 @@
 --        zone to perform that comparison, so the same stored row can read as expired or
 --        still-active depending only on which zone the connection happens to be in — reproduced
 --        deterministically in migration_000130_subscription_overrides_tz_integration_test.go.
---   :110 UpdateOverride — `updated_at = NOW()` assigns an absolute instant into the naked column;
+--   :124 UpdateOverride — `updated_at = NOW()` assigns an absolute instant into the naked column;
 --        the wall-clock digits actually stored reflect the writing session's zone, not UTC.
 --   :30  CreateOverride — inserts a Go time.Time into the naked column via pgx; pgx's
 --        TimestampCodec discards the time.Time's Location and keeps only its wall-clock fields,
