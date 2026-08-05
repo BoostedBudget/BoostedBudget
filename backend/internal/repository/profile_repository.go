@@ -2374,11 +2374,11 @@ func (r *profileRepository) IsRetentionNotice7dEligibleForOccurrence(ctx context
 // admin_user_repository.go's should_rearm_retention/should_mark_plaid_cleanup_pending already embed
 // inline. As of Issue #1413 Finding 4 (Low, Codex review, PR #1443 second follow-up round),
 // noActiveManualOverridePredicate below also splices this constant in rather than restating its
-// own copy of the same "IS NOT NULL AND <> ''" text, closing the drift risk the original version of
+// own copy of the same "IS NOT NULL AND <> ”" text, closing the drift risk the original version of
 // this comment flagged (a change to one copy silently not reaching the other); the
 // should_rearm_retention/should_mark_plaid_cleanup_pending Go-side inline copies are untouched —
 // this substitution is scoped to this one production SQL string. The substitution is text-only:
-// `manual_tier_override IS NOT NULL` and `AND manual_tier_override <> ''` used to sit on their own
+// `manual_tier_override IS NOT NULL` and `AND manual_tier_override <> ”` used to sit on their own
 // lines inside noActiveManualOverridePredicate's raw string; splicing this single-line constant in
 // their place changes only whitespace layout (a newline+indent becomes a space) — the token
 // sequence, and therefore the generated SQL Postgres actually parses, is identical. Verified via
@@ -2421,7 +2421,7 @@ const manualTierOverrideNonEmptyClause = `manual_tier_override IS NOT NULL AND m
 // cross-job-ordering hazard.
 //
 // Issue #1413 Finding 4 (Low, Codex review, PR #1443 second follow-up round): the non-empty-override
-// half of this predicate (`manual_tier_override IS NOT NULL AND manual_tier_override <> ''`) used to
+// half of this predicate (`manual_tier_override IS NOT NULL AND manual_tier_override <> ”`) used to
 // be hand-restated here, duplicating manualTierOverrideNonEmptyClause's own copy of the identical
 // text — a real drift risk (if one were edited and not the other, cleanup could ignore an override
 // in this final predicate while its end date still deferred cleanup via the GREATEST guard below).
@@ -2539,6 +2539,14 @@ func (r *profileRepository) GetUsersNeedingRetention7dNotice(ctx context.Context
 
 // GetUsersWithExpiredRetention returns users whose retention_expires_at has passed
 // and who are not already deleted or pending deletion (#930).
+//
+// Issue #1478: this is an UNBOUNDED query — no LIMIT, and ORDER BY retention_expires_at with no
+// id tie-breaker, so ties are not even deterministically ordered. It has NO remaining production
+// caller: RetentionCleanupCheckWorker.deleteExpiredAccounts (the only one it ever had) now calls
+// GetUsersWithExpiredRetentionPage below. It is retained ONLY because it is still declared on the
+// wide ProfileRepository interface (line ~135), which nine files' mocks implement; removing it is
+// recommended as a separate change (see GetUsersWithExpiredRetentionPage's doc comment) rather
+// than smuggled into the fix for the destructive path.
 func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
 	query := userSelectQuery + `
 		WHERE retention_expires_at IS NOT NULL
@@ -2550,6 +2558,103 @@ func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([
 		ORDER BY retention_expires_at ASC
 	`
 	users, err := r.queryUsers(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if users == nil {
+		return []*domain.User{}, nil
+	}
+	return users, nil
+}
+
+// RetentionSweepCursor is a keyset-pagination position for GetUsersWithExpiredRetentionPage,
+// captured from the last row of the previous page — (ExpiresAt, UserID), matching that page's
+// ORDER BY (retention_expires_at, id) ASC. A nil cursor starts from the beginning.
+//
+// Deliberately a SIBLING of DeletionSweepCursor rather than a reuse of it. The two are structurally
+// identical (a timestamp plus a user id) but name DIFFERENT columns: DeletionSweepCursor.ScheduledAt
+// is deletion_scheduled_at, RetentionSweepCursor.ExpiresAt is retention_expires_at. Sharing one type
+// would make it a compile-time-legal mistake to feed a cursor harvested from one sweep into the
+// other sweep's query — which would silently skip or repeat rows in a HARD-DELETE path — and would
+// force one of the two field names to lie about which column it holds. The duplication is four
+// lines; the type confusion it prevents is a data-loss bug.
+const retentionSweepDefaultPageSize = 500
+
+type RetentionSweepCursor struct {
+	ExpiresAt time.Time
+	UserID    string
+}
+
+// GetUsersWithExpiredRetentionPage returns up to `limit` users whose retention_expires_at has
+// passed, ordered by (retention_expires_at, id) ASC for deterministic keyset pagination — Issue
+// #1478. Mirrors GetUsersScheduledForDeletionPage above; the WHERE clause is
+// GetUsersWithExpiredRetention's, unchanged, plus the keyset predicate.
+//
+// Why this exists: GetUsersWithExpiredRetention (above) has no LIMIT, and its single caller,
+// RetentionCleanupCheckWorker.deleteExpiredAccounts (queue/jobs/retention_cleanup_check.go),
+// consumed the whole slice and called DeletionService.ExecuteDeletion(..., DeletionKindRetention)
+// once per row — a REAL hard delete (DeleteUserCascade's `DELETE FROM users`), in-process, with no
+// intervening queue. RetentionCleanupCheckPeriodicOpts sets RunOnStart: true, so the first run
+// after every deploy performed however many hard deletions the table happened to hold. That is the
+// same defect class #1440/#1448 opened for the scheduled-deletion sweep, on a job whose per-row
+// action is strictly less recoverable.
+//
+// Why keyset pagination and not a bare LIMIT: this predicate does not care WHY a user has not been
+// deleted yet, only that retention_expires_at has passed and no override/deletion-request/soft-delete
+// excludes them. A row whose ExecuteDeletion keeps failing (a claim it cannot acquire, a
+// DeleteUserCascade guard it cannot satisfy) stays eligible, so under a bare `LIMIT n` the same
+// oldest n rows would occupy every page of every run and nothing ranked past them would ever be
+// looked at. The keyset cursor lets the caller step PAST whatever it just saw — including past a
+// stuck row — within ONE run.
+//
+// The guarantee this buys, stated bounded by the cap (do NOT restate it as "no starvation" — that
+// claim shipped on maxUsersPerDeletionSweep and is only true below the cap): within a single sweep,
+// the caller advances across pages until the repository returns a short page (exhausted) or the
+// caller's total-processed cap (maxUsersPerRetentionSweep, queue/jobs/retention_cleanup_check.go)
+// is reached. Across sweeps there is NO persisted cursor (#1477) — every sweep restarts from nil.
+// So:
+//   - While the number of eligible rows that are NOT completing deletion stays BELOW
+//     maxUsersPerRetentionSweep, each sweep steps past them and later rows are reached.
+//   - At or above that count, every sweep spends its ENTIRE budget re-fetching the same stuck
+//     oldest rows and NEVER reaches anything ranked past the cap, for as long as those rows keep
+//     failing. That is permanent starvation of every row past the cap, not slow drainage, and it
+//     does not depend on arrival rate. Raising the cap moves the threshold; it does not remove it.
+//     Fixing it properly needs a persisted cross-run cursor (#1477).
+//
+// Successful rows do not have this problem: ExecuteDeletion ends in DeleteUserCascade's
+// `DELETE FROM users`, after which the row does not match this query at all.
+func (r *profileRepository) GetUsersWithExpiredRetentionPage(ctx context.Context, after *RetentionSweepCursor, limit int) ([]*domain.User, error) {
+	if limit <= 0 {
+		limit = retentionSweepDefaultPageSize
+	}
+
+	const predicate = `
+		WHERE retention_expires_at IS NOT NULL
+		  AND retention_expires_at <= NOW()
+		  AND subscription_status IN ('inactive', 'cancelled')
+		  AND is_deleted = FALSE
+		  AND deletion_requested_at IS NULL
+	`
+
+	var query string
+	var args []interface{}
+	if after == nil {
+		query = userSelectQuery + predicate + noManualOverrideAtAllPredicate + `
+			ORDER BY retention_expires_at ASC, id ASC
+			LIMIT $1
+		`
+		args = []interface{}{limit}
+	} else {
+		query = userSelectQuery + predicate + `
+			  AND (retention_expires_at, id) > ($1, $2)
+		` + noManualOverrideAtAllPredicate + `
+			ORDER BY retention_expires_at ASC, id ASC
+			LIMIT $3
+		`
+		args = []interface{}{after.ExpiresAt, after.UserID, limit}
+	}
+
+	users, err := r.queryUsers(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -3437,7 +3542,7 @@ func (r *profileRepository) ClearMarkersOnEligibleStatus(ctx context.Context) (i
 // Issue #1413 round-5 gap G7 (PR #1443 gap analysis) — deliberately NOT a strict complement of
 // domain.User.HasActiveManualOverride() / hasActiveManualOverrideAt(), unlike
 // noActiveManualOverridePredicate's genuine parity with that same Go method. They agree on the
-// override-value checks (`IS NOT NULL AND <> ''` mirrors the Go method's nil/empty guard) and on
+// override-value checks (`IS NOT NULL AND <> ”` mirrors the Go method's nil/empty guard) and on
 // the expiry boundary (SQL `< NOW()` and Go `Before(now)` are both strict, so an exact tie is
 // "not expired" on both sides). They diverge on TWO independent cases:
 //
