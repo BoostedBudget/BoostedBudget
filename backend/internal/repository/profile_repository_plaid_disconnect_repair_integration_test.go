@@ -1927,8 +1927,8 @@ func TestPlaidDisconnectRepair_Integration_LapsedCompOlderThanMarker_UnaffectedB
 // TestPlaidDisconnectRepair_Integration_MalformedEmptyOverrideWithFutureEndsAt_GreatestGuardIgnoresEndsAt
 // is Issue #1413 Finding 3's (Medium, Codex review, PR #1443 follow-up) own regression test — the
 // fifth, malformed row shape none of the original four GREATEST cases covered: manual_tier_override
-// is EMPTY (”), not NULL, so noActiveManualOverridePredicate's own non-empty check
-// (`manual_tier_override <> ”`) does NOT exclude this row, yet manual_tier_ends_at is set to a real,
+// is EMPTY (''), not NULL, so noActiveManualOverridePredicate's own non-empty check
+// (`manual_tier_override <> ''`) does NOT exclude this row, yet manual_tier_ends_at is set to a real,
 // far-future value — a shape with no DB constraint preventing it, and one this package's own tests
 // deliberately exercise independent combinations of (see this file's own header comment and
 // GetUsersNeedingPlaidDisconnectRepair's doc comment for the full reasoning).

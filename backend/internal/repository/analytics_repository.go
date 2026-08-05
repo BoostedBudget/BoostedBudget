@@ -480,7 +480,7 @@ func effectiveCategoryDisplayExpr() string {
 // effectiveTransferExpr returns the SQL expression for the effective PFC primary used
 // in transfer filtering. Reads the denormalized effective_pfc_primary column directly.
 // effective_pfc_primary is NULL for custom-kind rows (never match TRANSFER%), so
-// COALESCE to ” ensures the NOT LIKE filter still works correctly.
+// COALESCE to '' ensures the NOT LIKE filter still works correctly.
 func effectiveTransferExpr() string {
 	return `COALESCE(t.effective_pfc_primary, '')`
 }
