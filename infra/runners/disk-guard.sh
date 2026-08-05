@@ -94,11 +94,6 @@ fi
 "$MAINTENANCE" $mode >/dev/null 2>&1
 rc=$?
 
-# 75 (EX_TEMPFAIL) means maintenance declined because another run held the host-GC lock, so
-# NO WORK HAPPENED. Treating that as success was actively dangerous: during a disk emergency
-# an --aggressive request could collide with the routine 02:00/14:00 run, get dropped, and be
-# logged as "maintenance complete" while the disk kept filling. Retry once after a short wait;
-# the routine run is normally seconds-to-minutes long.
 # 75 (EX_TEMPFAIL) means maintenance declined because another run held the host-GC lock, so NO WORK
 # HAPPENED. Treating that as success was actively dangerous: during a disk emergency an
 # --aggressive request could collide with the routine 02:00/14:00 run, be dropped, and be logged as

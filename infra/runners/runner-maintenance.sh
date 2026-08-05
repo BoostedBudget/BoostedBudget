@@ -1,6 +1,6 @@
 #!/bin/bash
 # GitHub Self-Hosted Runner Maintenance Script
-# Runs daily at 2 AM via cron: 0 2 * * * ~/github-runners/runner-maintenance.sh
+# Runs twice-daily via cron: 0 2,14 * * * ~/github-runners/runner-maintenance.sh
 
 set -euo pipefail
 
