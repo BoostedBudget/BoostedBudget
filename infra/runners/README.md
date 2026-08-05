@@ -14,7 +14,7 @@ commit, so this diff is reviewable purely as an import.
 - `disk-guard.sh` — scheduled (`0 */4 * * *`) disk-usage alert + escalating cleanup trigger.
 - `post-job-cleanup.sh` — per-job cleanup hook run by the runner after every completed job.
 
-## The incident: a 10-month-silent CI outage
+## The incident: a 9-month-silent CI outage
 
 Two `crontab` entries meant to catch disk pressure between `runner-maintenance.sh`'s twice-daily
 runs never executed a single time, from **2025-10-24 to 2026-08-04**. The emergency cleanup and
