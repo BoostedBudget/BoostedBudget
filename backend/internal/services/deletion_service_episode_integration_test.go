@@ -138,8 +138,9 @@ func TestExecuteDeletion_Integration_EpisodeCancelled_StaleJobDoesNotDelete(t *t
 //
 // The result was an immediate hard delete that skipped the entire new grace period. This window is
 // real rather than theoretical: a cancellation token stays valid for a day past
-// deletion_scheduled_at (see CancelDeletion's token expiry in this file's non-test sibling), so a
-// user genuinely can cancel and re-request while an old job is still queued.
+// deletion_scheduled_at (set in RequestDeletion, checked in CancelDeletion — see this file's
+// non-test sibling), so a user genuinely can cancel and re-request while an old job is still
+// queued.
 func TestExecuteDeletion_Integration_EpisodeReRequested_StaleJobDoesNotDeleteEarly(t *testing.T) {
 	f := setupHouseholdServiceIntegration(t)
 	ctx := context.Background()

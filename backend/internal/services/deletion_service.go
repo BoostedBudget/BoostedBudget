@@ -312,9 +312,10 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// evaluated against committed state at the moment of the claim (Issue #1413 Critical
 	// finding C2, Codex review round 2).
 	// Deliberately HasActiveManualOverride (live-only), NOT HasAnyManualOverride — even though
-	// the authoritative claim predicate this auto-deletion path reaches below,
-	// retentionDeletionClaimPredicate (profile_repository.go), uses the all-overrides rule via
-	// noManualOverrideAtAllPredicate. That
+	// the authoritative claim predicate this path reaches below — retentionDeletionClaimPredicate
+	// for a genuine auto-deletion, or userRequestedDeletionClaimPredicate for a stale
+	// user-requested job on a since-cancelled request (DeletionRequestedAt == nil at this point) —
+	// uses the all-overrides rule via noManualOverrideAtAllPredicate in either case. That
 	// asymmetry is intentional: this cheap check only short-circuits the case it can be certain
 	// about (a currently-live comp). A LAPSED comp is left to fall through to the authoritative
 	// claim, which refuses it. Both routes reach the same outcome — the user is not deleted —
