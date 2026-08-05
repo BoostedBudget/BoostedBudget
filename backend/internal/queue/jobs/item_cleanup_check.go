@@ -10,6 +10,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/riverqueue/river"
 )
 
@@ -27,10 +28,64 @@ type ItemCleanupCheckArgs struct {
 // Kind returns the unique identifier for this job type.
 func (ItemCleanupCheckArgs) Kind() string { return "item_cleanup_check" }
 
+// itemCleanupCheckPageSize bounds each GetItemsForCleanupPage query (Issue #1469). Work() loops
+// pages of this size within a single run, so this bounds only how many rows one query call
+// materialises — NOT how many items one run schedules for Plaid disconnection. That total is bounded
+// separately by maxItemsPerCleanupSweep below. 500 matches scheduledDeletionCheckPageSize and
+// expiredRetentionPageSize; a page's cost is a row fetch either way.
+const itemCleanupCheckPageSize = 500
+
+// maxItemsPerCleanupSweep bounds the TOTAL number of items Work() marks for cleanup and enqueues
+// across every page fetched within ONE run.
+//
+// 10,000 — deliberately BETWEEN the two sibling sweeps' caps, and derived from where this job's
+// per-row action sits between theirs on both recoverability and cost:
+//
+//   - 10x maxUsersPerRetentionSweep (1,000), because that sweep's loop body IS an irreversible hard
+//     delete executed inline, whereas this loop body only STAMPS cleanup_scheduled_at and enqueues a
+//     job scheduled gracePeriodDays (7 by default) in the future. The irreversible step — Plaid
+//     /item/remove, in ItemCleanupWorker — has not happened when this run ends, and
+//     ClearCleanupSchedule exists precisely to undo a scheduling during that window (it is what
+//     runs when a user reconnects). A generous cap here risks a bounded amount of REVERSIBLE work.
+//   - 1/5 of maxUsersPerDeletionSweep (50,000), because that sweep's loop body is a single River
+//     enqueue, while this one performs up to three round-trips per row:
+//     CountActiveByLinkedItemID (determineCleanupReasonAndTiming), MarkForCleanup, and the enqueue.
+//     The same time budget therefore covers proportionally fewer rows.
+//
+// Sanity-checked against the population: linked_items holds roughly one row per user per linked
+// institution, and this job's dedup period is 24 hours (ItemCleanupCheckUniqueOpts), so 10,000 is a
+// per-day ceiling far above any plausible steady-state candidate volume — it does not throttle
+// correct operation. It is still low enough that a wrong predicate (the zero-active-accounts leg is
+// the easiest one to misfire, since it matches any item with no active accounts at all) schedules a
+// bounded number of disconnects per day rather than the whole table, with a WARN log and a 7-day
+// grace window in which a human can intervene. At itemCleanupCheckPageSize=500 the cap is 20 page
+// round-trips.
+//
+// Hitting the cap does NOT reschedule or retry anything: it stops THIS run early and logs a WARN
+// naming how many items were processed. The periodic registration re-runs the job on its own
+// cadence, and that run restarts pagination from a nil cursor (there is no persisted cross-run
+// cursor — #1477). See GetItemsForCleanupPage's doc comment (repository/linked_item_repository.go)
+// for what that does and does NOT guarantee: below this cap, an oldest row that cannot be marked
+// cannot prevent later rows from being reached; at or above it, every later run re-spends its whole
+// budget on the same unmarkable rows and never reaches anything past the cap. Do not restate that as
+// "no starvation".
+const maxItemsPerCleanupSweep = 10000
+
 // LinkedItemCleanupRepository defines the methods needed for item cleanup scheduling.
 type LinkedItemCleanupRepository interface {
-	// GetItemsForCleanup returns items in error state > errorDays, OR revoked, OR not synced > staleDays, OR zero accounts
-	GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error)
+	// GetItemsForCleanupPage returns up to `limit` items in error state > errorDays, OR revoked, OR
+	// not synced > staleDays, OR with zero active accounts — ordered deterministically for keyset
+	// pagination (Issue #1469). after == nil starts from the beginning; pass the cursor derived from
+	// the last row of the previous page to continue.
+	//
+	// This replaces the unbounded GetItemsForCleanup(ctx, errorDays, staleDays) on this interface.
+	// It is declared HERE and on the concrete repository only — deliberately NOT on the wide
+	// repository.LinkedItemRepository interface, which eight files' mocks implement. See
+	// repository.linkedItemRepository.GetItemsForCleanupPage's doc comment for why a bare LIMIT is
+	// not sufficient (both pre-existing sort columns are nullable, so the li.id tie-breaker is what
+	// makes the order total) and for the precise, cap-bounded statement of what the keyset cursor
+	// does and does not guarantee.
+	GetItemsForCleanupPage(ctx context.Context, errorDays, staleDays int, after *repository.ItemCleanupSweepCursor, limit int) ([]domain.LinkedItem, error)
 	// GetItemsPendingCleanup returns items where cleanup_scheduled_at < NOW()
 	GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error)
 	// MarkForCleanup marks an item for cleanup with the scheduled cleanup time
@@ -72,6 +127,10 @@ type ItemCleanupCheckWorker struct {
 	gracePeriodDays    int
 	errorDaysThreshold int
 	staleDaysThreshold int
+	// cleanupPageSize / maxItemsPerSweep bound Work()'s candidate sweep (Issue #1469). See the
+	// itemCleanupCheckPageSize / maxItemsPerCleanupSweep constants for the rationale and derivation.
+	cleanupPageSize  int
+	maxItemsPerSweep int
 }
 
 // ItemCleanupCheckWorkerDeps contains the dependencies for ItemCleanupCheckWorker.
@@ -83,6 +142,14 @@ type ItemCleanupCheckWorkerDeps struct {
 	GracePeriodDays    int // Days to wait before cleanup (default 7)
 	ErrorDaysThreshold int // Days in error state before cleanup candidate (default 30)
 	StaleDaysThreshold int // Days since last sync before cleanup candidate (default 60)
+	// CleanupPageSize overrides itemCleanupCheckPageSize (Issue #1469). Zero/unset uses the
+	// production default. Exists so tests can exercise the multi-page keyset-cursor loop without
+	// seeding hundreds of fixture items — production should never set this.
+	CleanupPageSize int
+	// MaxItemsPerCleanupSweep overrides maxItemsPerCleanupSweep (Issue #1469). Zero/unset uses the
+	// production default. Exists so tests can exercise the total-processed safety cap without
+	// seeding thousands of fixture items — production should never set this.
+	MaxItemsPerCleanupSweep int
 }
 
 // NewItemCleanupCheckWorker creates a new item cleanup check worker.
@@ -108,6 +175,15 @@ func NewItemCleanupCheckWorker(deps ItemCleanupCheckWorkerDeps) *ItemCleanupChec
 		staleDaysThreshold = 60
 	}
 
+	cleanupPageSize := deps.CleanupPageSize
+	if cleanupPageSize <= 0 {
+		cleanupPageSize = itemCleanupCheckPageSize
+	}
+	maxItemsPerSweep := deps.MaxItemsPerCleanupSweep
+	if maxItemsPerSweep <= 0 {
+		maxItemsPerSweep = maxItemsPerCleanupSweep
+	}
+
 	return &ItemCleanupCheckWorker{
 		linkedItemRepo:     deps.LinkedItemRepo,
 		accountRepo:        deps.AccountRepo,
@@ -116,6 +192,8 @@ func NewItemCleanupCheckWorker(deps ItemCleanupCheckWorkerDeps) *ItemCleanupChec
 		gracePeriodDays:    gracePeriodDays,
 		errorDaysThreshold: errorDaysThreshold,
 		staleDaysThreshold: staleDaysThreshold,
+		cleanupPageSize:    cleanupPageSize,
+		maxItemsPerSweep:   maxItemsPerSweep,
 	}
 }
 
@@ -161,17 +239,151 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 
 	startTime := time.Now()
 
-	// Get items that need cleanup
-	items, err := w.linkedItemRepo.GetItemsForCleanup(ctx, w.errorDaysThreshold, w.staleDaysThreshold)
-	if err != nil {
-		w.logger.Error("failed to get cleanup candidates",
+	now := time.Now()
+	defaultCleanupAt := now.Add(time.Duration(w.gracePeriodDays) * 24 * time.Hour)
+
+	var cursor *repository.ItemCleanupSweepCursor
+	var totalItems, scheduledCount, skippedCount, errorCount int
+
+	for {
+		items, pageErr := w.linkedItemRepo.GetItemsForCleanupPage(ctx, w.errorDaysThreshold, w.staleDaysThreshold, cursor, w.cleanupPageSize)
+		if pageErr != nil {
+			w.logger.Error("failed to get cleanup candidates",
+				"job_id", job.ID,
+				"error", pageErr,
+			)
+			return fmt.Errorf("failed to get cleanup candidates: %w", pageErr)
+		}
+
+		if len(items) == 0 {
+			break
+		}
+
+		// fetchedCount is the page length AS RETURNED by the repository, before the cap truncation
+		// below — the only reliable signal for whether the repository itself is exhausted
+		// (fetchedCount < pageSize means it had nothing left to give, regardless of the cap).
+		fetchedCount := len(items)
+
+		// maxItemsPerCleanupSweep: truncate the page now if it would push totalItems to or past the
+		// cap, so the loop below never schedules more than the cap allows — "at most
+		// maxItemsPerCleanupSweep scheduled", not "cap-or-more".
+		if remaining := w.maxItemsPerSweep - totalItems; fetchedCount >= remaining {
+			// remaining <= 0 is unreachable given the break at the bottom of this loop, but
+			// items[:remaining] would panic on a negative length, so it is guarded explicitly.
+			if remaining <= 0 {
+				break
+			}
+			items = items[:remaining]
+		}
+
+		totalItems += len(items)
+		w.logger.Info("found cleanup candidates",
 			"job_id", job.ID,
-			"error", err,
+			"item_count", len(items),
 		)
-		return fmt.Errorf("failed to get cleanup candidates: %w", err)
+
+		lastItem := items[len(items)-1]
+
+		// Process each item in this page
+		for _, item := range items {
+			// Skip items already scheduled for cleanup. GetItemsForCleanupPage's predicate requires
+			// cleanup_scheduled_at IS NULL, so this is defensive against a test double or a future
+			// predicate change, not an expected production path.
+			if item.CleanupScheduledAt != nil {
+				w.logger.Debug("item already scheduled for cleanup, skipping",
+					"item_id", item.ID,
+					"cleanup_scheduled_at", item.CleanupScheduledAt,
+				)
+				skippedCount++
+				continue
+			}
+
+			// Determine cleanup reason and whether to use immediate cleanup
+			reason, isImmediate := w.determineCleanupReasonAndTiming(ctx, item)
+
+			// Use immediate or grace period based on reason
+			cleanupAt := defaultCleanupAt
+			if isImmediate {
+				cleanupAt = now
+			}
+
+			// Mark item for cleanup
+			if markErr := w.linkedItemRepo.MarkForCleanup(ctx, item.ID, cleanupAt); markErr != nil {
+				w.logger.Error("failed to mark item for cleanup",
+					"job_id", job.ID,
+					"item_id", item.ID,
+					"error", markErr,
+				)
+				errorCount++
+				continue
+			}
+
+			// Enqueue cleanup job scheduled for cleanup time
+			cleanupArgs := ItemCleanupArgs{
+				LinkedItemID: item.ID,
+				UserID:       item.UserID,
+				Reason:       reason,
+			}
+
+			uniqueOpts := ItemCleanupUniqueOpts()
+			result, enqueueErr := w.jobQueue.Enqueue(ctx, cleanupArgs, queue.WithUnique(*uniqueOpts), queue.WithScheduledAt(cleanupAt))
+			if enqueueErr != nil {
+				w.logger.Error("failed to enqueue item cleanup job",
+					"job_id", job.ID,
+					"item_id", item.ID,
+					"error", enqueueErr,
+				)
+				errorCount++
+				continue
+			}
+
+			if result.UniqueSkipped {
+				w.logger.Debug("item cleanup job already queued, skipping",
+					"item_id", item.ID,
+				)
+				skippedCount++
+			} else {
+				w.logger.Info("scheduled item cleanup",
+					"item_id", item.ID,
+					"user_id", item.UserID,
+					"reason", reason,
+					"cleanup_at", cleanupAt,
+					"cleanup_job_id", result.ID,
+					"immediate", isImmediate,
+				)
+				scheduledCount++
+			}
+		}
+
+		// The cursor advances past every row this page RETURNED — including rows the loop skipped or
+		// failed to mark. That is the point of a keyset cursor here: a row that is a candidate by the
+		// predicate but cannot actually be marked must not occupy the oldest slot of every subsequent
+		// page within this run.
+		cursor = &repository.ItemCleanupSweepCursor{
+			LastErrorAt:  lastItem.LastErrorAt,
+			LastSyncedAt: lastItem.LastSyncedAt,
+			ItemID:       lastItem.ID,
+		}
+
+		// exhausted is computed from fetchedCount (pre-truncation) so it reflects what the REPOSITORY
+		// said, even on a page that also happens to trip the cap.
+		exhausted := fetchedCount < w.cleanupPageSize
+
+		// Cap hit: stop THIS run — but only WARN when the repository had not already told us it was
+		// exhausted. A genuinely short final page that happens to land exactly on the cap has no
+		// remainder to defer, and warning about one would be a false alarm.
+		if totalItems >= w.maxItemsPerSweep && !exhausted {
+			w.logger.Warn("item cleanup sweep hit its total-processed safety cap; deferring remainder to the next periodic run",
+				"job_id", job.ID, "processed", totalItems, "cap", w.maxItemsPerSweep)
+			break
+		}
+
+		if exhausted {
+			break
+		}
 	}
 
-	if len(items) == 0 {
+	if totalItems == 0 {
 		w.logger.Info("no items need cleanup",
 			"job_id", job.ID,
 			"duration_ms", time.Since(startTime).Milliseconds(),
@@ -179,87 +391,9 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 		return nil
 	}
 
-	w.logger.Info("found cleanup candidates",
-		"job_id", job.ID,
-		"item_count", len(items),
-	)
-
-	now := time.Now()
-	defaultCleanupAt := now.Add(time.Duration(w.gracePeriodDays) * 24 * time.Hour)
-
-	// Process each item
-	var scheduledCount, skippedCount, errorCount int
-	for _, item := range items {
-		// Skip items already scheduled for cleanup
-		if item.CleanupScheduledAt != nil {
-			w.logger.Debug("item already scheduled for cleanup, skipping",
-				"item_id", item.ID,
-				"cleanup_scheduled_at", item.CleanupScheduledAt,
-			)
-			skippedCount++
-			continue
-		}
-
-		// Determine cleanup reason and whether to use immediate cleanup
-		reason, isImmediate := w.determineCleanupReasonAndTiming(ctx, item)
-
-		// Use immediate or grace period based on reason
-		cleanupAt := defaultCleanupAt
-		if isImmediate {
-			cleanupAt = now
-		}
-
-		// Mark item for cleanup
-		if markErr := w.linkedItemRepo.MarkForCleanup(ctx, item.ID, cleanupAt); markErr != nil {
-			w.logger.Error("failed to mark item for cleanup",
-				"job_id", job.ID,
-				"item_id", item.ID,
-				"error", markErr,
-			)
-			errorCount++
-			continue
-		}
-
-		// Enqueue cleanup job scheduled for cleanup time
-		cleanupArgs := ItemCleanupArgs{
-			LinkedItemID: item.ID,
-			UserID:       item.UserID,
-			Reason:       reason,
-		}
-
-		uniqueOpts := ItemCleanupUniqueOpts()
-		result, enqueueErr := w.jobQueue.Enqueue(ctx, cleanupArgs, queue.WithUnique(*uniqueOpts), queue.WithScheduledAt(cleanupAt))
-		if enqueueErr != nil {
-			w.logger.Error("failed to enqueue item cleanup job",
-				"job_id", job.ID,
-				"item_id", item.ID,
-				"error", enqueueErr,
-			)
-			errorCount++
-			continue
-		}
-
-		if result.UniqueSkipped {
-			w.logger.Debug("item cleanup job already queued, skipping",
-				"item_id", item.ID,
-			)
-			skippedCount++
-		} else {
-			w.logger.Info("scheduled item cleanup",
-				"item_id", item.ID,
-				"user_id", item.UserID,
-				"reason", reason,
-				"cleanup_at", cleanupAt,
-				"cleanup_job_id", result.ID,
-				"immediate", isImmediate,
-			)
-			scheduledCount++
-		}
-	}
-
 	w.logger.Info("item cleanup check completed",
 		"job_id", job.ID,
-		"total_items", len(items),
+		"total_items", totalItems,
 		"scheduled", scheduledCount,
 		"skipped", skippedCount,
 		"errors", errorCount,
