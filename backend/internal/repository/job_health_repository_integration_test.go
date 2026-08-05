@@ -118,7 +118,7 @@ func TestJobHealthRepository_Integration_LiveOverride_NotCounted(t *testing.T) {
 // TestJobHealthRepository_Integration_NullAndEmptyOverrides_NotCounted proves NULL
 // manual_tier_override (the common case — most users never had a comp) and an empty-string
 // override are both excluded, matching expiredManualTierOverridePredicate's own
-// `IS NOT NULL AND <> ”` guard.
+// `IS NOT NULL AND <> ''` guard.
 func TestJobHealthRepository_Integration_NullAndEmptyOverrides_NotCounted(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
