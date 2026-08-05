@@ -311,12 +311,14 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// running. The real enforcement is ClaimForDeletion just below: a conditional UPDATE
 	// evaluated against committed state at the moment of the claim (Issue #1413 Critical
 	// finding C2, Codex review round 2).
-	// Deliberately HasActiveManualOverride (live-only), NOT HasAnyManualOverride — even though
-	// the authoritative claim predicate this path reaches below — retentionDeletionClaimPredicate
-	// for a genuine auto-deletion, or userRequestedDeletionClaimPredicate for a stale
-	// user-requested job on a since-cancelled request (DeletionRequestedAt == nil at this point) —
-	// uses the all-overrides rule via noManualOverrideAtAllPredicate in either case. That
-	// asymmetry is intentional: this cheap check only short-circuits the case it can be certain
+	// Deliberately HasActiveManualOverride (live-only), NOT HasAnyManualOverride. This path can
+	// reach either authoritative claim predicate below — retentionDeletionClaimPredicate for a
+	// genuine auto-deletion, or userRequestedDeletionClaimPredicate for a stale user-requested
+	// job on a since-cancelled request (DeletionRequestedAt == nil at this point) — and only the
+	// former uses the all-overrides rule via noManualOverrideAtAllPredicate; the latter
+	// deliberately has no override check at all, for the same reason given above (a user's own
+	// request beats an admin comp). That asymmetry is intentional: this cheap check only
+	// short-circuits the case it can be certain
 	// about (a currently-live comp). A LAPSED comp is left to fall through to the authoritative
 	// claim, which refuses it. Both routes reach the same outcome — the user is not deleted —
 	// but routing the lapsed case through the claim keeps the DB predicate the single source of
