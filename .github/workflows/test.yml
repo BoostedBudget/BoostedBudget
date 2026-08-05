@@ -1249,24 +1249,34 @@ jobs:
           echo "::group::Configuring PostgreSQL client"
 
           # This job dumps/restores against a postgres:17 container (see "Start PostgreSQL
-          # container" below), and pg_dump REFUSES to dump a server whose major version is
-          # newer than the client's own. A <17 client is therefore useless here — accepting
-          # one would only defer the failure to a later, more confusing point (test-migrations.sh
-          # discarding pg_dump's stderr and hashing its empty stdout — see the comment on the
-          # "Run comprehensive migration tests" step below). So both paths below — a client
-          # already on PATH, and one found via Homebrew search — are version-checked; neither
-          # falls back to an older major.
+          # container" below), and pg_dump REFUSES to dump a server whose major version is newer
+          # than the client's own. A >= 17 client is therefore PREFERRED, and both paths below —
+          # a client already on PATH, and one found via Homebrew search — are version-checked so
+          # an older major is never silently accepted as if it were current.
+          #
+          # It is NOT fatal, though, and an earlier version of this comment saying a <17 client is
+          # "useless here" was wrong: the "Run comprehensive migration tests" step sets
+          # PG_DUMP=scripts/pg_dump-via-docker, which execs the CONTAINER's pg_dump, so every
+          # schema dump is produced by the container's 17 no matter what the host client is. The
+          # host psql is used only for ordinary queries against that container, which an older
+          # major handles. Preferring 17 while warning-but-continuing below is the accurate
+          # policy; treating it as fatal gated the job on a binary it does not depend on.
           REQUIRED_MAJOR=17
 
+          # This function PROBES candidates; it does not decide the outcome. Its failures must not
+          # be annotated as errors — the caller deliberately recovers and continues with a single
+          # ::warning:: when no >= $REQUIRED_MAJOR client is found. Emitting ::error:: here painted
+          # red annotations on runs that then succeeded on purpose, which is exactly the kind of
+          # misleading signal that makes a green build hard to trust.
           check_client_version() {
             local psql_bin="$1" version
             version=$("$psql_bin" --version | grep -oE '[0-9]+' | head -1)
             if [ -z "$version" ]; then
-              echo "::error::Could not parse a version number from '$psql_bin --version'"
+              echo "::notice::Could not parse a version number from '$psql_bin --version' — skipping this candidate"
               return 1
             fi
             if [ "$version" -lt "$REQUIRED_MAJOR" ]; then
-              echo "::error::$psql_bin is PostgreSQL $version, but this job requires >= $REQUIRED_MAJOR (it starts a postgres:$REQUIRED_MAJOR container and pg_dump refuses to dump a server newer than itself)."
+              echo "::notice::$psql_bin is PostgreSQL $version (< $REQUIRED_MAJOR) — skipping this candidate; the container's pg_dump is used for dumps regardless."
               return 1
             fi
             return 0
@@ -1351,10 +1361,15 @@ jobs:
           if [ -n "$POSTGRES_BIN" ]; then
             echo "$POSTGRES_BIN" >> $GITHUB_PATH
             echo "::notice::PostgreSQL client $("$POSTGRES_BIN/psql" --version | cut -d' ' -f3) at $POSTGRES_BIN"
-          elif command -v psql &> /dev/null && command -v pg_dump &> /dev/null; then
+          elif command -v psql &> /dev/null; then
             echo "::warning::No PostgreSQL >= $REQUIRED_MAJOR client on this runner; proceeding with $(psql --version | cut -d' ' -f3) on PATH. Schema dumps are unaffected — the migration-tests step overrides PG_DUMP to scripts/pg_dump-via-docker, which runs the container's own pg_dump $REQUIRED_MAJOR. Install postgresql@$REQUIRED_MAJOR to silence this."
           else
-            echo "::error::No PostgreSQL client (psql/pg_dump) found at all — scripts/test-migrations.sh cannot run. Install postgresql@$REQUIRED_MAJOR."
+            # Only psql is required, matching the comment above. A host pg_dump is NOT: the
+            # migration-tests step sets PG_DUMP=scripts/pg_dump-via-docker, which execs the
+            # container's own pg_dump. The previous condition also demanded `command -v pg_dump`,
+            # so a runner with a working psql and no host pg_dump fell through to this fatal
+            # branch — contradicting the stated requirement directly above it.
+            echo "::error::No psql found at all — scripts/test-migrations.sh cannot run. Install postgresql@$REQUIRED_MAJOR."
             exit 1
           fi
           echo "::endgroup::"
