@@ -43,7 +43,8 @@ hours for just over 9 months:
 
 Quote that exact string — `/bin/sh: -c: line 0: unexpected EOF while looking for matching` — it is
 what makes this failure recognisable if it recurs on another host or another cron entry. It arrived
-2,600+ times in `/var/mail/runner`, unnoticed because nothing was reading that mailbox.
+2,600+ times in `/var/mail/runner`, unnoticed because nothing was reading that mailbox (the
+count rests on host state no longer inspectable from this repo, not on any imported script).
 
 **Fix:** move all `%`-bearing logic out of the crontab line entirely. `disk-guard.sh` now does its
 own threshold check and its own alert-log write internally; the crontab entry is a bare path with
@@ -60,7 +61,8 @@ users actually fill up lives on a **separate** `/System/Volumes/Data` volume tha
 shared with. `df -h /` reports against the sealed system volume, not the data volume, and macOS's
 `df` computes `Capacity` as `used / (used + avail)` **relative to that volume's own numbers** — so
 `/` reported **19–31%** used while `/System/Volumes/Data` — the volume actually filling up with
-Docker images, build caches, and vulnerability DBs — sat at **79–89%**. This is not a rounding
+Docker images, build caches, and vulnerability DBs — sat at **79–89%** (these specific readings
+rest on host state, not on anything the imported scripts evidence). This is not a rounding
 quirk or a different-but-equivalent number: `df -h /` was actively misleading about how close the
 host was to running out of space. Any disk-pressure check must read
 `/System/Volumes/Data`, not `/`.
@@ -71,11 +73,12 @@ host was to running out of space. Any disk-pressure check must read
 switched its scanning tool to Grype, but the maintenance script was never updated to match — so it
 kept faithfully pruning an unused Trivy DB while Grype's own DB cache grew unmanaged at
 `~/Library/Caches/grype`, reaching **6.7 GB**, entirely outside every path the maintenance script
-actually swept. Fixed by adding Grype's cache directory (with `grype db delete` as the primary
+actually swept (the **6.7 GB** figure itself rests on host state, not on anything the imported
+scripts evidence). Fixed by adding Grype's cache directory (with `grype db delete` as the primary
 reclaim path, verified against actual freed bytes rather than trusted blindly — see
 `purge_grype_cache()` in `runner-maintenance.sh`) alongside Trivy's.
 
-### 4. The `localhost:5432` PG 15 shadowing
+### 4. The `localhost:5432` PG 15 shadowing (an environmental observation about this host, not evidenced by any imported script)
 
 Not part of this incident's timeline, but the same class of "looks fine, silently isn't" failure,
 and already flagged in this batch's Part 4: on this machine, a native Homebrew PostgreSQL 15
