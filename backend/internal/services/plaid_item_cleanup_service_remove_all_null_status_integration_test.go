@@ -97,7 +97,7 @@ func TestPlaidCleanupService_Integration_NullStatus_RemoveAllUserItems_ActuallyD
 
 	// This is the hard-deletion path's call (DeletionService.ExecuteDeletion, before
 	// DeleteUserCascade) — must not panic and must actually disconnect the NULL-status item.
-	err = svc.RemoveAllUserItems(ctx, user.ID)
+	err = svc.RemoveAllUserItems(ctx, user.ID, alwaysEligible)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, fakePlaid.callCount(),

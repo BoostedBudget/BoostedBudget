@@ -97,7 +97,7 @@ func TestPlaidCleanupService_Integration_TerminalFailure_UnblocksErasureAndPrese
 
 	// 1. The deletion flow's own call. It must report the sentinel — not a generic failure, which is
 	//    what used to make this user's erasure impossible forever.
-	err := svc.RemoveAllUserItems(ctx, user.ID)
+	err := svc.RemoveAllUserItems(ctx, user.ID, alwaysEligible)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrPlaidRemovalUnrecoverable)
 	assert.Equal(t, 1, fakePlaid.calls, "Plaid must actually have been called — no verdict without an attempt")
@@ -123,7 +123,7 @@ func TestPlaidCleanupService_Integration_TerminalFailure_UnblocksErasureAndPrese
 
 	// 4. Daily retries keep happening throughout the window — the row is still selectable, and the
 	//    service still attempts it. Nothing about the verdict removed this work from the queue.
-	require.Error(t, svc.RemoveAllUserItems(ctx, user.ID))
+	require.Error(t, svc.RemoveAllUserItems(ctx, user.ID, alwaysEligible))
 	assert.Equal(t, 2, fakePlaid.calls, "a marked row must keep being attempted, not skipped")
 	var failedAtAfterRetry *time.Time
 	require.NoError(t, pool.QueryRow(ctx,
@@ -218,14 +218,14 @@ func TestPlaidCleanupService_Integration_TerminalFailure_ConfigFixInsideTheWindo
 
 	// Day 1: misconfigured. The verdict is recorded and the erasure is refused — nothing irreversible
 	// has happened.
-	require.ErrorIs(t, svc.RemoveAllUserItems(ctx, user.ID), ErrPlaidRemovalUnrecoverable)
+	require.ErrorIs(t, svc.RemoveAllUserItems(ctx, user.ID, alwaysEligible), ErrPlaidRemovalUnrecoverable)
 	deleted, err := profileRepo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	require.False(t, deleted)
 
 	// Day 3: an operator fixes the Plaid environment. The next daily attempt succeeds for real.
 	fakePlaid.failWith = nil
-	require.NoError(t, svc.RemoveAllUserItems(ctx, user.ID),
+	require.NoError(t, svc.RemoveAllUserItems(ctx, user.ID, alwaysEligible),
 		"with a working configuration the removal must simply succeed — the earlier verdict blocks nothing")
 
 	var removedAt, failedAt *time.Time

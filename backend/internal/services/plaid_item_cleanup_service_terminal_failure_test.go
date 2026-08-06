@@ -199,7 +199,7 @@ func Test_RemoveAllUserItems_AllFailuresUnrecoverable_ReportsPermissionAfterReco
 	mockPlaid.On("RemoveItem", ctx, "").Return(errors.New("access token cannot be empty"))
 
 	svc := newTestPlaidCleanupService(mockRepo, mockPlaid)
-	err := svc.RemoveAllUserItems(ctx, userID)
+	err := svc.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err, "the pass did not succeed and must not report nil — nothing was removed")
 	assert.ErrorIs(t, err, ErrPlaidRemovalUnrecoverable)
@@ -235,7 +235,7 @@ func Test_RemoveAllUserItems_UnrecoverablePlusTransient_ReportsGenuineFailure(t 
 	mockPlaid.On("RemoveItem", ctx, "good-token").Return(plaidErrWithCode("API_ERROR", "INTERNAL_SERVER_ERROR"))
 
 	svc := newTestPlaidCleanupService(mockRepo, mockPlaid)
-	err := svc.RemoveAllUserItems(ctx, userID)
+	err := svc.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrPlaidRemovalUnrecoverable,
@@ -275,7 +275,7 @@ func Test_RemoveAllUserItems_TerminalFailureRecordingFails_DoesNotGrantPermissio
 	mockRepo.MarkPlaidRemovalFailedErr = errors.New("connection reset by peer")
 
 	svc := newTestPlaidCleanupService(mockRepo, mockPlaid)
-	err := svc.RemoveAllUserItems(ctx, userID)
+	err := svc.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrPlaidRemovalUnrecoverable,
@@ -304,7 +304,7 @@ func Test_RemoveAllUserItems_RecordingMatchedZeroRows_StillReportsPermission(t *
 	mockRepo.MarkPlaidRemovalFailedErr = repository.ErrNoLinkedItemsUpdated
 
 	svc := newTestPlaidCleanupService(mockRepo, mockPlaid)
-	err := svc.RemoveAllUserItems(ctx, userID)
+	err := svc.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrPlaidRemovalUnrecoverable)
@@ -333,7 +333,7 @@ func Test_RemoveAllUserItems_NewLiveItemAppeared_OutranksUnrecoverableSentinel(t
 	mockPlaid.On("RemoveItem", ctx, "bad-token").Return(plaidInvalidAccessTokenErr())
 
 	svc := newTestPlaidCleanupService(mockRepo, mockPlaid)
-	err := svc.RemoveAllUserItems(ctx, userID)
+	err := svc.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrCleanupAborted,

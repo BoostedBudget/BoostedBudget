@@ -469,6 +469,14 @@ func (m *MockUserRepository) CountUncleanedLinkedItems(ctx context.Context, user
 	return 0, nil
 }
 
+// DeletionStillAuthorised — ExecuteDeletion's use-time authorisation recheck. Only that flow calls
+// it; these tests never reach it, so it is a plain stub for the same reason as the one above. It
+// returns TRUE (still authorised) so that a test which ever DID reach it would exercise the
+// proceed path rather than being silently short-circuited into a green no-op.
+func (m *MockUserRepository) DeletionStillAuthorised(ctx context.Context, userID string, kind repository.DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	return true, nil
+}
+
 // Issue #679, #680: Trial expiration methods
 func (m *MockUserRepository) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
 	args := m.Called(ctx)

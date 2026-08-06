@@ -14,6 +14,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// alwaysEligible is the eligibility recheck for tests whose subject is NOT the recheck. It reports
+// "still authorised" unconditionally, which is what these tests were written against when
+// RemoveAllUserItems passed a literal nil.
+//
+// ⚠ Do not reach for this in a test ABOUT authorisation revocation — a recheck that never says no
+// cannot detect a missing recheck. Those live in deletion_service_authorisation_revoked_test.go and
+// supply a callback that actually flips.
+func alwaysEligible(context.Context) (bool, error) { return true, nil }
+
 // Mock implementations for testing PlaidItemCleanupService
 
 // MockLinkedItemRepoForCleanup is a mock for LinkedItemRepository
@@ -192,7 +201,7 @@ func Test_RemoveAllUserItems_CallsPlaidRemoveForEachItem(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	assert.NoError(t, err)
 	mockRepo.AssertExpectations(t)
@@ -233,7 +242,7 @@ func Test_RemoveAllUserItems_AggregatesErrorButAttemptsAllItems(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, plaidErr, "the aggregate error must wrap the underlying Plaid failure")
@@ -264,7 +273,7 @@ func Test_RemoveAllUserItems_AllItemsFail_AggregatesBothErrors(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, err1)
@@ -290,7 +299,7 @@ func Test_RemoveAllUserItems_HandlesNoLinkedItems(t *testing.T) {
 	// "no items" behavior rather than claim wiring.
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	assert.NoError(t, err)
 	mockRepo.AssertExpectations(t)
@@ -310,7 +319,7 @@ func Test_RemoveAllUserItems_HandlesRepoError(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "database error")
@@ -596,7 +605,7 @@ func TestPlaidCleanup_SideEffectClaimLost_PlaidNeverCalled(t *testing.T) {
 	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 	service.SetWorkClaimsRepo(mockClaims)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrSideEffectClaimBusy)
@@ -628,7 +637,7 @@ func TestPlaidCleanup_SideEffectClaimWon_PlaidCalledExactlyOnceThenReleased(t *t
 	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 	service.SetWorkClaimsRepo(mockClaims)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.NoError(t, err)
 	mockPlaid.AssertNumberOfCalls(t, "RemoveItem", 1)
@@ -650,7 +659,7 @@ func TestPlaidCleanup_NoClaimsRepoConfigured_FailsLoudly(t *testing.T) {
 
 	service := NewPlaidItemCleanupService(mockRepo, mockPlaid) // SetWorkClaimsRepo never called
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "work claims repository not configured")
@@ -677,7 +686,7 @@ func TestPlaidCleanup_ItemAlreadyGone_TreatedAsSuccess(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	assert.NoError(t, err, "ITEM_NOT_FOUND must be treated as success, not surfaced as an error")
 	mockRepo.AssertCalled(t, "MarkItemsDisconnected", ctx, []string{"item-1"})
@@ -764,7 +773,7 @@ func TestPlaidCleanup_RetryAfterPartialFailure_OnlyOutstandingItemsAttempted(t *
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 	require.Error(t, err)
 
 	// Second pass (the "retry"): GetByUserID now reflects the DB state a real retry would see —
@@ -785,7 +794,7 @@ func TestPlaidCleanup_RetryAfterPartialFailure_OnlyOutstandingItemsAttempted(t *
 	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil).Once()
 	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil).Once()
 
-	err = service.RemoveAllUserItems(ctx, userID)
+	err = service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 	require.NoError(t, err)
 
 	// Across BOTH passes, tok-1 was attempted twice (fail, then succeed) but tok-2 was attempted
@@ -835,7 +844,7 @@ func TestPlaidCleanup_C2_ItemListReadAfterClaimNotBefore(t *testing.T) {
 	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 	service.SetWorkClaimsRepo(mockClaims)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.NoError(t, err)
 	// GetByUserID appears twice: once to drive the loop, once more for cleanupItems's post-loop
@@ -1057,7 +1066,7 @@ func TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsAfterFetch_ReturnsAborted
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err, "a live item created after the initial fetch must not be silently reported as full completion")
 	assert.ErrorIs(t, err, ErrCleanupAborted)
@@ -1113,7 +1122,7 @@ func TestPlaidCleanup_NoItemsInitially_NewItemAppearsBeforeVerify_ReturnsAborted
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrCleanupAborted)
@@ -1142,7 +1151,7 @@ func TestPlaidCleanup_GenuineFailureTakesPriority_NoRefetchAttempted(t *testing.
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, plaidErr, "a genuine per-item failure must still take priority over the new-item check")
@@ -1169,7 +1178,7 @@ func TestPlaidCleanup_VerifyRefetchFails_ReturnsError(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, refetchErr)
@@ -1215,7 +1224,7 @@ func TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsAlreadyDisconnected_NotAb
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.NoError(t, err, "a NEW item ID that is already disconnected must not trip ErrCleanupAborted — no live item was ever missed")
 	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-phantom")
@@ -1243,7 +1252,7 @@ func TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsAlreadyReplaced_NotAborte
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.NoError(t, err, "a NEW item ID that is already replaced must not trip ErrCleanupAborted — no live item was ever missed")
 	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-phantom")
@@ -1274,7 +1283,7 @@ func TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsStillLive_StillAborted(t 
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err, "a genuinely LIVE new item must still abort — status-awareness must not weaken this")
 	assert.ErrorIs(t, err, ErrCleanupAborted)
@@ -1320,7 +1329,7 @@ func TestPlaidCleanup_NoItemsInitially_NewItemAppearsButNotLive_NotAborted(t *te
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.NoError(t, err, "a new but already-disconnected item must not trip ErrCleanupAborted when the initial fetch found nothing")
 	mockPlaid.AssertNotCalled(t, "RemoveItem")
@@ -1352,7 +1361,7 @@ func TestPlaidCleanup_MarkItemsDisconnected_ZeroRowsAffected_LoggedNotEscalated(
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.NoError(t, err, "a zero-rows-affected MarkItemsDisconnected outcome must be logged, not treated as a genuine per-item failure")
 }
@@ -1376,7 +1385,7 @@ func TestPlaidCleanup_MarkItemsDisconnected_GenuineError_StillEscalated(t *testi
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 
 	require.Error(t, err, "a genuine MarkItemsDisconnected database error must still be escalated as a per-item failure")
 	assert.ErrorIs(t, err, dbErr)
@@ -1582,7 +1591,7 @@ func TestPlaidCleanup_CleanupItems_StampsPlaidRemovedForEverySuccess(t *testing.
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	require.NoError(t, service.RemoveAllUserItems(ctx, userID))
+	require.NoError(t, service.RemoveAllUserItems(ctx, userID, alwaysEligible))
 	assert.Equal(t, []string{"item-1"}, mockRepo.PlaidRemovedIDs,
 		"cleanupItems must stamp every successfully-removed item, or DeleteUserCascade's C2 guard blocks "+
 			"the deletion it was just asked to prepare for")
@@ -1609,7 +1618,7 @@ func TestPlaidCleanup_CleanupItems_StampFailure_SkipsMarkDisconnectedAndFails(t 
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveAllUserItems(ctx, userID)
+	err := service.RemoveAllUserItems(ctx, userID, alwaysEligible)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "plaid_removed_at")
 	assert.Equal(t, []string{"MarkPlaidRemoved"}, mockRepo.CallLog,

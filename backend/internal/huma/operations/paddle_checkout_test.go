@@ -157,6 +157,12 @@ func (m *mockProfileRepo) DeleteUserCascade(ctx context.Context, userID string, 
 func (m *mockProfileRepo) CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error) {
 	return 0, nil
 }
+
+// DeletionStillAuthorised — ExecuteDeletion's use-time authorisation recheck. Unreachable from these
+// checkout tests; returns TRUE so a future caller gets the proceed path rather than a silent skip.
+func (m *mockProfileRepo) DeletionStillAuthorised(ctx context.Context, userID string, kind repository.DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	return true, nil
+}
 func (m *mockProfileRepo) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error {
 	return nil
 }

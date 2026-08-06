@@ -1921,6 +1921,12 @@ func (m *mockProfileRepoForCursorTests) ExpireTrialIfNoOverride(ctx context.Cont
 func (m *mockProfileRepoForCursorTests) ClaimForDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) (bool, error) {
 	return false, nil
 }
+
+// DeletionStillAuthorised — unreachable from these cursor tests; stubbed to satisfy the widened
+// ProfileRepository interface.
+func (m *mockProfileRepoForCursorTests) DeletionStillAuthorised(ctx context.Context, userID string, kind repository.DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	return true, nil
+}
 func (m *mockProfileRepoForCursorTests) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) { return nil, nil }
 func (m *mockProfileRepoForCursorTests) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
 	return nil
