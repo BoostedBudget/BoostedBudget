@@ -119,10 +119,19 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 	// This job may have been queued for a long time — the error/login_required/stale legs schedule
 	// it a full gracePeriodDays out (ItemCleanupCheckWorker), and River retries add more — and the
 	// user can repair the connection through Plaid Link update mode at any point in that window.
-	// Nothing marks that repair on the cleanup schedule: the only production callers of
-	// ClearCleanupSchedule are both inside this function — one after a successful RemoveItem, and
-	// one releasing the stale schedule when this very claim declines (grep
-	// `\.ClearCleanupSchedule(`). NOTHING clears it on reconnection. So a
+	// Nothing marks that repair on the cleanup schedule. Issue #1486 follow-up part E: there are
+	// FOUR production callers of ClearCleanupSchedule, not two — re-derive with
+	// `grep -rn '\.ClearCleanupSchedule(' internal | grep -v _test.go`, and see
+	// TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet (item_cleanup_test.go), which
+	// fails if this enumeration drifts again:
+	//   1. this function, after a successful RemoveItem (post-hoc state cleanup);
+	//   2. this function, releasing the stale schedule when this very claim declines (#1486);
+	//   3. accountService.DeleteAccount (services/account_service.go), releasing the stamp it just
+	//      set when the zero-account cleanup enqueue fails;
+	//   4. ItemCleanupCheckWorker.Work (item_cleanup_check.go), releasing the stamp it just set when
+	//      the sweep's own enqueue fails (#1486 follow-up part D).
+	// The load-bearing half is unchanged and still true: none of the four is a reconnection hook —
+	// NOTHING clears cleanup_scheduled_at on reconnection. So a
 	// reconnected item still carries cleanup_scheduled_at, and a recheck of "is it still
 	// scheduled" would authorise removing it. The recheck therefore re-asks the sweep's own
 	// question — "is this still a cleanup candidate?" — against the same shared SQL predicate the
@@ -172,17 +181,27 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 		return nil
 	}
 
-	// Call cleanup service to remove the item from Plaid
+	// Call cleanup service to remove the item from Plaid.
+	//
+	// Issue #1486 follow-up parts A+B: RemoveItem no longer swallows Plaid failures, so a nil return here now
+	// genuinely means "this Item is gone from Plaid and billing has stopped" — either /item/remove
+	// succeeded or Plaid answered ITEM_NOT_FOUND, and RemoveItem has already recorded 'disconnected'
+	// on the row. Everything below the error branch depends on that, so do NOT restore the swallow:
+	// it made this worker delete the local row while the Item was still live and still billing,
+	// which is how a GDPR deletion could complete past DeleteUserCascade's C2 guard with an
+	// unfindable, still-billing Plaid Item left behind.
 	removeErr := w.plaidCleanupSvc.RemoveItem(ctx, args.LinkedItemID)
 	if removeErr != nil {
-		// Check if item not found - this means it was already cleaned up or removed
-		// In this case, we consider it successful
+		// The LOCAL row is missing (repository.ErrLinkedItemNotFound, wrapped out of RemoveItem's
+		// GetByID) — note this is a DIFFERENT error from Plaid's ITEM_NOT_FOUND, which RemoveItem now
+		// handles itself as success and never surfaces here. With no row there is no access token to
+		// send to Plaid and nothing to clean up, so this is a success with nothing to do; the Delete
+		// below is a belt-and-braces no-op.
 		if services.IsItemNotFoundError(removeErr) {
-			w.logger.Info("item already removed, marking job as complete",
+			w.logger.Info("linked item row is gone, marking job as complete",
 				"job_id", job.ID,
 				"linked_item_id", args.LinkedItemID,
 			)
-			// Item already gone from Plaid — still clean up the DB row (best-effort)
 			if deleteErr := w.linkedItemRepo.Delete(ctx, args.LinkedItemID); deleteErr != nil {
 				w.logger.Warn("failed to delete linked item from database after item-not-found",
 					"linked_item_id", args.LinkedItemID,
@@ -192,6 +211,11 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 			return nil
 		}
 
+		// A genuine failure: the Item may still be LIVE and still billing. Return without touching
+		// the local row — the row and its cleanup_scheduled_at are the only remaining evidence the
+		// Item exists, and the C2 guard reads exactly that row to refuse an orphaning deletion.
+		// River retries; if all attempts are exhausted, ItemCleanupCheckWorker's pending-cleanup
+		// backstop (#1486 follow-up part C) re-enqueues from the still-stamped row on the next daily sweep.
 		w.logger.Error("item cleanup failed",
 			"job_id", job.ID,
 			"linked_item_id", args.LinkedItemID,
@@ -203,7 +227,14 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 		return fmt.Errorf("failed to cleanup item: %w", removeErr)
 	}
 
-	// Clear the cleanup schedule since cleanup is complete (best-effort)
+	// Clear the cleanup schedule since cleanup is complete (best-effort).
+	//
+	// Best-effort is safe here specifically because RemoveItem has already marked the row
+	// 'disconnected' (#1486 follow-up part A). A stamp left set on a 'disconnected' row is inert rather than
+	// hazardous: cleanupCandidateSelectQuery excludes 'disconnected', GetItemsPendingCleanup excludes
+	// it too (so part C's backstop will not spin on it), and uncleanedLinkedItemExistsClause excludes
+	// it, so DeleteUserCascade is not blocked. That was NOT true before the marker existed, when a
+	// swallowed failure here left a row the sweep could never re-select.
 	if clearErr := w.linkedItemRepo.ClearCleanupSchedule(ctx, args.LinkedItemID); clearErr != nil {
 		w.logger.Warn("failed to clear cleanup schedule",
 			"linked_item_id", args.LinkedItemID,
@@ -211,7 +242,14 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 		)
 	}
 
-	// Delete the linked_items row now that Plaid billing is stopped (best-effort)
+	// Delete the linked_items row now that Plaid billing really is stopped (best-effort).
+	//
+	// #1486 follow-up: "now that Plaid billing is stopped" used to be an assertion this code had no grounds
+	// for — RemoveItem returned nil on a failed /item/remove. It is now a consequence of RemoveItem's
+	// contract (success means removed-or-already-gone at Plaid). Best-effort is likewise safe now:
+	// Delete is a deliberate no-op whenever accounts still reference the item, so the row often
+	// survives regardless, and it survives carrying 'disconnected' — which every downstream predicate
+	// reads correctly (see the ClearCleanupSchedule note just above).
 	if deleteErr := w.linkedItemRepo.Delete(ctx, args.LinkedItemID); deleteErr != nil {
 		w.logger.Warn("failed to delete linked item from database after Plaid removal",
 			"linked_item_id", args.LinkedItemID,

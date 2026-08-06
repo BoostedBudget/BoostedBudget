@@ -274,6 +274,11 @@ func Test_RemoveItem_Success(t *testing.T) {
 	mockRepo.On("GetByID", ctx, itemID).Return(item, nil)
 
 	mockPlaid.On("RemoveItem", ctx, "decrypted-token").Return(nil)
+	// #1486 follow-up part A: a successful removal durably records "Plaid billing is stopped" on the row
+	// itself, rather than leaning on ItemCleanupWorker.Work's best-effort row Delete. See
+	// Test_RemoveItem_MarksItemDisconnectedSoASurvivingRowIsNotReadAsUncleaned for what that
+	// marker protects.
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{itemID}).Return(nil)
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
@@ -284,8 +289,20 @@ func Test_RemoveItem_Success(t *testing.T) {
 	mockPlaid.AssertExpectations(t)
 }
 
-// Test_RemoveItem_PlaidError verifies that RemoveItem handles Plaid errors gracefully
-func Test_RemoveItem_PlaidError(t *testing.T) {
+// Test_RemoveItem_GenuinePlaidError_IsPropagatedAndRowIsNotMarkedClean is #1486 follow-up part B's
+// failing-first test.
+//
+// Before the fix RemoveItem logged the Plaid failure and returned nil ("Don't return Plaid errors -
+// graceful degradation"), so its only caller — ItemCleanupWorker.Work — believed removal had
+// succeeded and hard-deleted the local linked_items row "now that Plaid billing is stopped", which
+// was false in exactly this case. DeleteUserCascade's C2 guard
+// (repository.uncleanedLinkedItemExistsClause) is an EXISTS over linked_items, so the row's absence
+// made the guard pass and a GDPR deletion completed while a live, still-billing Plaid Item survived
+// with NO local record it ever existed — verbatim the outcome that guard's own comment says it
+// exists to prevent.
+//
+// This test failed on assert.Error before the fix.
+func Test_RemoveItem_GenuinePlaidError_IsPropagatedAndRowIsNotMarkedClean(t *testing.T) {
 	ctx := context.Background()
 	itemID := "item-123"
 
@@ -298,13 +315,150 @@ func Test_RemoveItem_PlaidError(t *testing.T) {
 	}
 	mockRepo.On("GetByID", ctx, itemID).Return(item, nil)
 
+	// A Plaid outage / rate limit / network failure — NOT ITEM_NOT_FOUND. The Item is still live
+	// and still billing.
 	mockPlaid.On("RemoveItem", ctx, "decrypted-token").Return(errors.New("plaid error"))
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
 	err := service.RemoveItem(ctx, itemID)
 
-	assert.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plaid error")
+	// Just as load-bearing as the error itself: the row must NOT be marked 'disconnected', because
+	// 'disconnected' is exactly the status the C2 guard reads as "Plaid side is done" and the
+	// pending-cleanup backstop reads as "nothing left to re-enqueue".
+	mockRepo.AssertNotCalled(t, "MarkItemsDisconnected", mock.Anything, mock.Anything)
+	mockPlaid.AssertExpectations(t)
+}
+
+// Test_RemoveItem_ItemNotFoundOnRetry_ConvergesInsteadOfStranding is #1486 follow-up part A's failing-first
+// test, and the reason A is a hard PREREQUISITE for B rather than a nicety.
+//
+// The scenario needs no Plaid outage at all to become permanent:
+//
+//  1. ItemCleanupWorker.Work removes the item and clears the schedule, then its best-effort row
+//     Delete fails on a transient DB blip. The row survives with cleanup_scheduled_at now NULL, so
+//     the daily sweep re-selects and re-enqueues it.
+//  2. On the second attempt Plaid answers ITEM_NOT_FOUND — the Item really is gone.
+//
+// With B's propagation but WITHOUT A, step 2 becomes a returned error: the worker never reaches
+// Delete, River exhausts its 5 attempts (ItemCleanupArgs sets no MaxAttempts, so it inherits
+// DefaultRetryPolicy's MaxAttempts=5), and the job dead-letters WITH cleanup_scheduled_at set.
+// cleanupCandidateSelectQuery requires cleanup_scheduled_at IS NULL, so no sweep can ever re-select
+// the row, while the C2 guard reads it as un-cleaned — DeleteUserCascade returns (false, nil)
+// forever and that user's GDPR erasure never completes. Propagating without this fix would convert
+// a self-healing case into a permanent compliance block.
+//
+// Both halves are asserted: the genuine failure propagates (B), and the ITEM_NOT_FOUND retry
+// converges to success AND records 'disconnected' (A).
+func Test_RemoveItem_ItemNotFoundOnRetry_ConvergesInsteadOfStranding(t *testing.T) {
+	ctx := context.Background()
+	itemID := "item-already-gone-at-plaid"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	item := &domain.LinkedItem{
+		ID:          itemID,
+		ItemID:      "plaid-item-abc",
+		AccessToken: "decrypted-token",
+	}
+	mockRepo.On("GetByID", ctx, itemID).Return(item, nil)
+
+	// Attempt 1: a genuine outage. Attempt 2: Plaid has forgotten the Item.
+	mockPlaid.On("RemoveItem", ctx, "decrypted-token").Return(errors.New("503 service unavailable")).Once()
+	mockPlaid.On("RemoveItem", ctx, "decrypted-token").Return(plaidItemNotFoundErr()).Once()
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{itemID}).Return(nil).Once()
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	require.Error(t, service.RemoveItem(ctx, itemID), "a genuine Plaid failure must propagate (part B)")
+
+	// The retry must be reported as SUCCESS, not as a fifth-attempt dead-letter.
+	require.NoError(t, service.RemoveItem(ctx, itemID),
+		"ITEM_NOT_FOUND means the Item is already gone from Plaid — billing has stopped, so this is a no-op success, not a failure")
+
+	mockRepo.AssertExpectations(t)
+	mockPlaid.AssertExpectations(t)
+}
+
+// Test_RemoveItem_MarksItemDisconnectedSoASurvivingRowIsNotReadAsUncleaned pins the SECOND half of
+// part A: marking the row 'disconnected' on success rather than relying on the worker's
+// best-effort Delete.
+//
+// This closes a strand that exists even with every Plaid call succeeding.
+// repository.linkedItemRepository.Delete is a deliberate NO-OP when any accounts row (any status)
+// still references the item — it must not cascade-delete historical 'replaced' accounts and their
+// balance_snapshots. So on a successful removal of an item that still has accounts, the row ALWAYS
+// survives. Without this marker it survives with its pre-removal status ('error'/'active'), which
+// uncleanedLinkedItemExistsClause reads as still needing Plaid cleanup — blocking that user's
+// DeleteUserCascade forever, even though Plaid billing genuinely stopped. With the marker,
+// 'disconnected' is excluded by that clause, by cleanupCandidateSelectQuery, and by
+// GetItemsPendingCleanup, so the surviving row is correctly inert on all three paths.
+func Test_RemoveItem_MarksItemDisconnectedSoASurvivingRowIsNotReadAsUncleaned(t *testing.T) {
+	ctx := context.Background()
+	itemID := "item-with-surviving-accounts"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	mockRepo.On("GetByID", ctx, itemID).Return(&domain.LinkedItem{
+		ID:          itemID,
+		Status:      domain.LinkedItemStatusError,
+		AccessToken: "decrypted-token",
+	}, nil)
+	mockPlaid.On("RemoveItem", ctx, "decrypted-token").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{itemID}).Return(nil)
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	require.NoError(t, service.RemoveItem(ctx, itemID))
+	mockRepo.AssertExpectations(t)
+}
+
+// Test_RemoveItem_MarkDisconnectedFailure_IsPropagated: losing the marker is NOT best-effort.
+// Returning nil here would clear the worker's path to ClearCleanupSchedule + Delete, and a row
+// that then survives Delete's accounts guard carries neither the stamp (so no sweep re-selects it)
+// nor 'disconnected' (so C2 reads it as un-cleaned) — the permanent-block state again. Propagating
+// costs one wasted /item/remove on retry, which ITEM_NOT_FOUND already maps to success.
+func Test_RemoveItem_MarkDisconnectedFailure_IsPropagated(t *testing.T) {
+	ctx := context.Background()
+	itemID := "item-123"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	mockRepo.On("GetByID", ctx, itemID).Return(&domain.LinkedItem{ID: itemID, AccessToken: "tok"}, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{itemID}).Return(errors.New("db blip"))
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveItem(ctx, itemID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "db blip")
+}
+
+// Test_RemoveItem_MarkDisconnectedZeroRows_IsSuccess: ErrNoLinkedItemsUpdated is an idempotent
+// no-op (the row was already 'disconnected'/'replaced'), not a failure — the same distinction
+// cleanupItems already draws on this sentinel. Escalating it would turn a converged state into a
+// permanent retry loop, since every retry would hit the same zero-row UPDATE.
+func Test_RemoveItem_MarkDisconnectedZeroRows_IsSuccess(t *testing.T) {
+	ctx := context.Background()
+	itemID := "item-already-disconnected"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	mockRepo.On("GetByID", ctx, itemID).Return(&domain.LinkedItem{ID: itemID, AccessToken: "tok"}, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{itemID}).
+		Return(fmt.Errorf("%w: 0 of 1 given id(s) matched", repository.ErrNoLinkedItemsUpdated))
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	require.NoError(t, service.RemoveItem(ctx, itemID))
 }
 
 // Test_RemoveItem_ItemNotFound verifies that RemoveItem handles missing items
