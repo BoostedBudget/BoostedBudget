@@ -1802,9 +1802,25 @@ func TestDisconnectInstitution_LinkedItemNotFound(t *testing.T) {
 	mockLinkedItemRepo.AssertExpectations(t)
 }
 
-// TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds tests when Plaid fails but DB deletion succeeds
-func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
-	// Setup mocks
+// TestDisconnectInstitution_GenuinePlaidFailure_DoesNotDeleteTheRow is Issue #1486 follow-up part F's
+// failing-first test. It replaces TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds, which
+// pinned the defect as intended behaviour ("should succeed even if Plaid fails").
+//
+// This is the SAME defect as parts A/B, on the MORE frequent path: DisconnectInstitution is
+// user-initiated, so it runs far more often than the daily cleanup sweep. It logged the Plaid failure
+// and then unconditionally DeleteByUser'd the row, which CASCADE-deletes the accounts too — leaving a
+// live, still-billing Plaid Item with no local record it ever existed, and DeleteUserCascade's C2
+// guard (an EXISTS over linked_items) with nothing left to see.
+//
+// The rationale it inherited from plaidService.RemoveItem's doc comment — "even if this call fails,
+// the Item should still be deleted from the database since the access token cannot be used anyway" —
+// is false for the purpose that matters: Plaid bills per ITEM, and an Item with an unusable token is
+// still an Item until /item/remove succeeds. That comment is corrected in the same change.
+//
+// Leaving the row is recoverable in the ordinary way: the user retries the disconnect. The item is
+// NOT automatically retried by the cleanup sweep (a healthy, recently-synced item is not a candidate),
+// which is exactly why the error must reach the user rather than being swallowed into a false success.
+func TestDisconnectInstitution_GenuinePlaidFailure_DoesNotDeleteTheRow(t *testing.T) {
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockPlaidService := &MockPlaidService{}
 
@@ -1818,7 +1834,6 @@ func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
 	userID := uuid.New().String()
 	accessToken := "access-sandbox-test-token"
 
-	// AccessToken is populated by the repository layer (repo-layer encryption)
 	linkedItem := &domain.LinkedItem{
 		ID:              linkedItemID,
 		UserID:          userID,
@@ -1828,16 +1843,48 @@ func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
 		InstitutionName: "Chase",
 	}
 
-	// Mock Plaid removal fails but database deletion succeeds
 	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
+	// A Plaid outage / rate limit / network failure — NOT ITEM_NOT_FOUND. The Item is still live and
+	// still billing.
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(assert.AnError)
-	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(nil)
 
-	// Execute
 	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
 
-	// Assert - Should succeed even if Plaid fails (we still clean up database)
-	require.NoError(t, err, "DisconnectInstitution should succeed even if Plaid fails")
+	require.Error(t, err, "a genuine Plaid /item/remove failure must not be reported as a successful disconnect")
+	// The load-bearing assertion: the local row is the ONLY remaining record that this Plaid Item
+	// exists, and the C2 guard reads exactly that row.
+	mockLinkedItemRepo.AssertNotCalled(t, "DeleteByUser", mock.Anything, mock.Anything, mock.Anything)
+	mockPlaidService.AssertExpectations(t)
+}
+
+// TestDisconnectInstitution_PlaidItemAlreadyGone_StillDeletesTheRow is part F's other half, and the
+// reason part F is not simply "propagate the error".
+//
+// ITEM_NOT_FOUND means Plaid has already forgotten this Item — billing has stopped and /item/remove
+// has nothing left to do. Treating it as a failure would make the disconnect button permanently
+// unusable for any item in that state: the row would never be deletable and the user could never
+// clear it from their UI. This is the same asymmetry parts A and B close in RemoveItem, applied here.
+func TestDisconnectInstitution_PlaidItemAlreadyGone_StillDeletesTheRow(t *testing.T) {
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockPlaidService := &MockPlaidService{}
+
+	service := &accountService{
+		linkedItemRepo: mockLinkedItemRepo,
+		plaidService:   mockPlaidService,
+	}
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	userID := uuid.New().String()
+	accessToken := "access-sandbox-test-token"
+
+	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).
+		Return(&domain.LinkedItem{ID: linkedItemID, UserID: userID, AccessToken: accessToken}, nil)
+	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(plaidItemNotFoundErr())
+	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(nil)
+
+	require.NoError(t, service.DisconnectInstitution(ctx, linkedItemID, userID),
+		"ITEM_NOT_FOUND means the Item is already gone from Plaid — billing has stopped, so the disconnect succeeded")
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockPlaidService.AssertExpectations(t)
 }
