@@ -1256,3 +1256,102 @@ func TestItemCleanupCheckWorker_Work_BackstopSkipsDuplicateLiveJobs(t *testing.T
 		"the backstop must use ItemCleanupUniqueOpts — the SAME dedup key and states the candidate sweep uses, or a job created by one would not deduplicate a job created by the other")
 	mockRepo.AssertNotCalled(t, "ClearCleanupSchedule", mock.Anything, mock.Anything)
 }
+
+// TestItemCleanupCheckWorker_Work_BackstopRecomputesReasonFromCurrentState pins the QUALIFICATION on
+// the backstop's dedup guarantee (fix round 1, item 5). The first version of
+// reenqueueStrandedCleanups's doc comment asserted "a row that still has a live job comes back
+// UniqueSkipped" unconditionally, and nothing tested the case where that is false.
+//
+// ItemCleanupUniqueOpts is ByArgs: true and Reason is a field of ItemCleanupArgs, so dedup matches
+// only on EXACT args. The backstop recomputes Reason from the row's CURRENT state, so if that state
+// changed since the original enqueue — the case below: an item enqueued as "long_term_error" whose
+// status has since become 'revoked' via a webhook while the job sat Retryable — the args differ and
+// dedup does not fire. That is a real, if rare, second live job for the same item.
+//
+// It is bounded to one wasted /item/remove, and ONLY because of part A: the second job's claim can
+// still be granted (ClaimItemForCleanup does not inspect job state), it calls Plaid again, and Plaid
+// answers ITEM_NOT_FOUND, which RemoveItem now maps to success. This test therefore pins the
+// mechanism that makes the caveat affordable, not just the caveat.
+//
+// Asserting the recomputed Reason rather than the dedup outcome is deliberate: the recomputation is
+// the production behaviour under test, and the dedup consequence follows from it plus ByArgs. A test
+// that stubbed UniqueSkipped either way would pin testify, not the worker.
+func TestItemCleanupCheckWorker_Work_BackstopRecomputesReasonFromCurrentState(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockQueue := new(MockJobQueue)
+	mockAccounts := new(MockAccountCountRepo)
+
+	// The row as it is NOW: 'revoked'. Whatever Reason the original job carried, the backstop must
+	// send the reason the CURRENT state implies.
+	stranded := newStrandedItem("item-status-changed", "user-5")
+	stranded.Status = "revoked"
+
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return([]domain.LinkedItem{}, nil)
+	mockRepo.On("GetItemsPendingCleanup", ctx).Return([]domain.LinkedItem{stranded}, nil)
+	// A surviving active account, so the zero-accounts leg does NOT pre-empt the status-based reason
+	// and this test actually exercises the status branch it claims to.
+	mockAccounts.On("CountActiveByLinkedItemID", ctx, "item-status-changed").Return(1, nil)
+
+	var gotReason string
+	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		cleanupArgs, ok := job.(ItemCleanupArgs)
+		if ok {
+			gotReason = cleanupArgs.Reason
+		}
+		return ok
+	}), mock.Anything, mock.Anything).Return(&queue.JobResult{ID: 3}, nil)
+
+	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
+		LinkedItemRepo: mockRepo, AccountRepo: mockAccounts, JobQueue: mockQueue,
+		Logger: newTestItemCleanupCheckLogger(), GracePeriodDays: 7,
+		ErrorDaysThreshold: 30, StaleDaysThreshold: 60,
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestItemCleanupCheckJob(ItemCleanupCheckArgs{TriggerSource: "periodic"})))
+
+	assert.Equal(t, "revoked", gotReason,
+		"the backstop must label the job from the row's CURRENT state — and because Reason is inside "+
+			"ItemCleanupArgs and ItemCleanupUniqueOpts is ByArgs, that is exactly why dedup can miss "+
+			"when the state changed since the original enqueue (see reenqueueStrandedCleanups's doc)")
+	mockAccounts.AssertExpectations(t)
+}
+
+// TestItemCleanupCheckWorker_Work_BackstopRecoversReplacedItems is the jobs-level companion to
+// TestGetItemsPendingCleanup_Integration_ReplacedItemIsRecoverable (fix round 1, item 1). The
+// predicate change is what makes a 'replaced' row reachable at all; this pins that the backstop
+// actually re-enqueues one once it is returned, rather than filtering it out again in Go.
+//
+// A 'replaced' item's Plaid Item is still live and still billing — the re-link path marks the old
+// item 'replaced' WITHOUT calling /item/remove — and the candidate sweep can never re-select it, so
+// this is the only recovery path it has. determineCleanupReasonAndTiming has no 'replaced' case and
+// falls through to "stale", which is the correct label here: the row IS stale, and Reason is a log
+// label, not an authorisation (ClaimItemForCleanup re-derives eligibility, and deliberately does not
+// veto 'replaced').
+func TestItemCleanupCheckWorker_Work_BackstopRecoversReplacedItems(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockQueue := new(MockJobQueue)
+
+	replaced := newStrandedItem("item-replaced-stranded", "user-6")
+	replaced.Status = domain.LinkedItemStatusReplaced
+
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return([]domain.LinkedItem{}, nil)
+	mockRepo.On("GetItemsPendingCleanup", ctx).Return([]domain.LinkedItem{replaced}, nil)
+	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		cleanupArgs, ok := job.(ItemCleanupArgs)
+		return ok && cleanupArgs.LinkedItemID == "item-replaced-stranded"
+	}), mock.Anything, mock.Anything).Return(&queue.JobResult{ID: 4}, nil)
+
+	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
+		LinkedItemRepo: mockRepo, JobQueue: mockQueue, Logger: newTestItemCleanupCheckLogger(),
+		GracePeriodDays: 7, ErrorDaysThreshold: 30, StaleDaysThreshold: 60,
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestItemCleanupCheckJob(ItemCleanupCheckArgs{TriggerSource: "periodic"})))
+
+	mockQueue.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "MarkForCleanup", mock.Anything, mock.Anything, mock.Anything)
+}

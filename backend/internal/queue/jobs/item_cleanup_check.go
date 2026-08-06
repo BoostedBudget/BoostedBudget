@@ -160,7 +160,12 @@ type LinkedItemCleanupRepository interface {
 	// makes the order total) and for the precise, cap-bounded statement of what the keyset cursor
 	// does and does not guarantee.
 	GetItemsForCleanupPage(ctx context.Context, errorDays, staleDays int, after *repository.ItemCleanupSweepCursor, limit int) ([]domain.LinkedItem, error)
-	// GetItemsPendingCleanup returns items where cleanup_scheduled_at < NOW()
+	// GetItemsPendingCleanup returns stamped, overdue items — cleanup_scheduled_at IS NOT NULL AND <
+	// NOW() — excluding 'disconnected' ONLY. This is reenqueueStrandedCleanups's selection query. It
+	// deliberately still returns 'replaced' items, unlike GetItemsForCleanupPage above: a 'replaced'
+	// item's Plaid Item is still live and still billing (the re-link path never calls /item/remove),
+	// and the sweep can never re-select it, so this is its only recovery path. See
+	// repository.linkedItemRepository.GetItemsPendingCleanup's doc comment.
 	GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error)
 	// MarkForCleanup marks an item for cleanup with the scheduled cleanup time
 	MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error
@@ -522,15 +527,29 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 	return nil
 }
 
-// reenqueueStrandedCleanups is the pending-cleanup BACKSTOP (Issue #1486 follow-up part C). It re-enqueues an
-// ItemCleanup job for every row that is stamped for cleanup, overdue, and whose Plaid side is not yet
-// done — i.e. every STRANDED row, whatever stranded it. Returns (requeued, errors) for logging.
+// reenqueueStrandedCleanups is the pending-cleanup BACKSTOP (Issue #1486 follow-up part C). It
+// re-enqueues an ItemCleanup job for every row that is stamped for cleanup, overdue, and whose Plaid
+// side is not yet done. Returns (requeued, errors) for logging.
 //
-// It wires up repository.GetItemsPendingCleanup (`WHERE cleanup_scheduled_at IS NOT NULL AND
-// cleanup_scheduled_at < NOW() AND status NOT IN ('replaced','disconnected')`), which was declared on
-// the wide repository.LinkedItemRepository interface AND on this worker's narrow
-// LinkedItemCleanupRepository, and implemented, with ZERO production callers before this. Its
-// predicate already described the recovery set exactly; nothing ever asked it.
+// It wires up repository.GetItemsPendingCleanup (`cleanup_scheduled_at IS NOT NULL AND
+// cleanup_scheduled_at < NOW() AND (status IS NULL OR status NOT IN ('disconnected'))`), which was
+// declared on the wide repository.LinkedItemRepository interface AND on this worker's narrow
+// LinkedItemCleanupRepository, and implemented, with ZERO production callers before this.
+//
+// SCOPE, stated exactly, because the first version of this comment overclaimed it as "every STRANDED
+// row, whatever stranded it" — which was false while that predicate still excluded 'replaced' (fixed
+// in the same follow-up round; see the query's own doc comment). What it covers now is every stamped,
+// overdue row whose Plaid side is NOT already recorded as done, which is the whole stranded set as
+// this codebase can currently define it. Two limits are worth naming rather than implying closure:
+//
+//   - An UNSTAMPED strand is out of scope by construction — the predicate is the stamp. That is not a
+//     gap in practice, because an unstamped row is exactly what the candidate sweep CAN re-select
+//     (that sweep requires cleanup_scheduled_at IS NULL), except for a 'replaced'/'disconnected' row,
+//     which the sweep excludes — see accountService.DeleteAccount's non-atomic-window disclosure for
+//     the one known way to reach that state.
+//   - A row whose /item/remove can NEVER succeed is re-enqueued here EVERY run, forever, and this
+//     backstop is not a fix for it — see ItemCleanupWorker.Work's note on permanently-failing
+//     removals for why that is fail-closed-but-permanent and what the escape hatch would have to be.
 //
 // THREE strand paths, one mechanism:
 //
@@ -555,10 +574,25 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 // ItemCleanupWorker.Work.
 //
 // SAFE because the irreversible decision is not made here: ItemCleanupWorker.Work re-verifies
-// eligibility via ClaimItemForCleanup immediately before /item/remove, and ItemCleanupUniqueOpts means
-// a row that still has a live job (Available/Scheduled/Running/Retryable/Pending) comes back
-// UniqueSkipped instead of gaining a second job. So re-enqueueing every pending row every run costs a
-// dedup check per row, not a duplicate removal.
+// eligibility via ClaimItemForCleanup immediately before /item/remove. That, not dedup, is what makes
+// this safe — which matters because the dedup half needs QUALIFYING, and the first version of this
+// comment stated it unconditionally:
+//
+// ItemCleanupUniqueOpts is `ByArgs: true`, and Reason is a field of ItemCleanupArgs, so dedup matches
+// only when the args match EXACTLY. This function RECOMPUTES Reason from the row's current state
+// (strandedCleanupReason, below), so if that state changed since the original enqueue — an
+// 'error'→'revoked' webhook while the job sat Retryable, or the account count dropping to zero and
+// flipping the leg to "zero_accounts" — the args differ, UniqueSkipped does NOT fire, and a SECOND
+// live job exists for the same item. The usual case (state unchanged) does come back UniqueSkipped, as
+// TestItemCleanupCheckWorker_Work_BackstopSkipsDuplicateLiveJobs pins; the changed-Reason case is
+// pinned by TestItemCleanupCheckWorker_Work_BackstopRecomputesReasonFromCurrentState.
+//
+// The cost of that duplicate is bounded to ONE wasted /item/remove, and only because of part A: the
+// second job's claim can still be granted (ClaimItemForCleanup does not check job state), it calls
+// Plaid again, and Plaid answers ITEM_NOT_FOUND, which RemoveItem now maps to SUCCESS. Before part A
+// that second call would have produced a spurious failure. Do not "fix" this by dropping Reason from
+// the dedup key or by persisting the original Reason: the label is what the logs and the dead-letter
+// record are read by, and the accurate current reason is worth more than a rarely-exercised dedup hit.
 //
 // NEVER fails the sweep. The candidate half's writes are already committed by the time this runs, and
 // returning an error would make River retry the WHOLE sweep, re-running the half that AUTHORISES

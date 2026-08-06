@@ -113,8 +113,12 @@ type LinkedItemRepository interface {
 
 	// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
 
-	// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due.
-	// Returns items where cleanup_scheduled_at < NOW().
+	// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due —
+	// cleanup_scheduled_at IS NOT NULL AND < NOW(), excluding 'disconnected' ONLY. It is the
+	// stranded-cleanup backstop's selection query (Issue #1486 follow-up part C). 'replaced' is
+	// deliberately INCLUDED (such an item is still live and still billing at Plaid) while
+	// 'disconnected' is deliberately excluded; see the implementation's doc comment, which is where
+	// that asymmetry with the sweep's candidacy predicate is argued.
 	GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error)
 
 	// MarkForCleanup marks an item for cleanup with notification and scheduled cleanup timestamp.
@@ -1094,11 +1098,41 @@ func (r *linkedItemRepository) queryCleanupCandidates(ctx context.Context, query
 	return items, nil
 }
 
-// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due.
+// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due. It is the
+// selection query for ItemCleanupCheckWorker's stranded-cleanup backstop (Issue #1486 follow-up
+// part C) — before that it had no production caller at all.
 //
-// Issue #1413 round-10 (#1444): NULL-safe status scan (see normalizeLinkedItemStatus) for
-// consistency with every other scan site in this file, even though `status NOT IN (...)` above
-// already structurally excludes a NULL-status row (SQL three-valued logic).
+// EXCLUDES 'disconnected' ONLY, and the asymmetry with the SWEEP's candidacy predicate
+// (cleanupCandidateSelectQuery, which excludes 'replaced' too) is DELIBERATE. It is the same
+// deliberate asymmetry ClaimItemForCleanup already has, and for the same reason — see
+// cleanupCandidateReasonPredicate's second "what is deliberately NOT in here" bullet:
+//
+//   - 'replaced' items are STILL LIVE AND STILL BILLING at Plaid. The re-link path
+//     (services/account_service.go, "re-link detected, soft-deleting old linked item") marks the OLD
+//     item 'replaced' WITHOUT ever calling /item/remove. A stamped 'replaced' row therefore needs
+//     recovery MORE than an ordinary one, not less: the candidate sweep can never re-select it
+//     (it requires cleanup_scheduled_at IS NULL and excludes 'replaced' on top of that), so this
+//     query is its ONLY recovery path. Issue #1486 follow-up fix round 1: this clause used to
+//     exclude 'replaced', copied from the sweep where it belongs, which left the exact terminal
+//     state the backstop exists for unreachable — a genuine Plaid failure propagates (part B),
+//     River exhausts its inherited 5 attempts, the job dead-letters with the stamp still set, and
+//     nothing could ever reach the row again. A live, billable Item with no live job, indefinitely.
+//     Pinned by TestGetItemsPendingCleanup_Integration_ReplacedItemIsRecoverable.
+//   - 'disconnected' stays excluded, and that exclusion is LOAD-BEARING: the status is set only
+//     AFTER Plaid removal succeeded (cleanupItems, and RemoveItem as of part A), so including it
+//     would make the backstop re-enqueue rows whose Plaid side is already done on every single run,
+//     forever.
+//
+// The `status IS NULL OR` arm is required for the same reason liveLinkedItemExistsClause and
+// uncleanedLinkedItemExistsClause (profile_repository.go) carry theirs, and #1444's rationale
+// applies verbatim: a bare `status NOT IN (...)` evaluates to NULL — not true — for a NULL-status
+// row under SQL three-valued logic, so such a row would be silently EXCLUDED, and every other
+// "is this item still live?" predicate on this branch treats NULL as live. Migration
+// 000126_set_linked_items_status_not_null makes this unreachable in practice today; it is written
+// NULL-safely so the predicate does not depend on that constraint staying in place.
+//
+// Issue #1413 round-10 (#1444): NULL-safe status SCAN as well (see normalizeLinkedItemStatus), for
+// consistency with every other scan site in this file.
 func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
 	query := `
 		SELECT id, user_id, item_id, access_token_encrypted,
@@ -1111,7 +1145,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 		FROM linked_items
 		WHERE cleanup_scheduled_at IS NOT NULL
 		  AND cleanup_scheduled_at < NOW()
-		  AND status NOT IN ('replaced', 'disconnected')
+		  AND (status IS NULL OR status NOT IN ('disconnected'))
 		ORDER BY cleanup_scheduled_at ASC
 	`
 
