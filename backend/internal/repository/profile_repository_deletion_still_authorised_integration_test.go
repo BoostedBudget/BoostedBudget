@@ -49,7 +49,7 @@ func TestDeletionStillAuthorised_Integration_UserRequested_Authorised_ReturnsTru
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
-	ctx := t.Context()
+	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	requestedAt := time.Now().Add(-24 * time.Hour) // elapsed grace period
@@ -74,7 +74,7 @@ func TestDeletionStillAuthorised_Integration_UserRequested_Cancelled_StaleObserv
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
-	ctx := t.Context()
+	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	requestedAt := time.Now().Add(-24 * time.Hour)
@@ -104,7 +104,7 @@ func TestDeletionStillAuthorised_Integration_UserRequested_Cancelled_CurrentNull
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
-	ctx := t.Context()
+	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	requestedAt := time.Now().Add(-24 * time.Hour)
@@ -128,7 +128,7 @@ func TestDeletionStillAuthorised_Integration_UserRequested_OccurrencePin_ReReque
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
-	ctx := t.Context()
+	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	requestedAt := time.Now().Add(-24 * time.Hour)
@@ -177,7 +177,7 @@ func TestDeletionStillAuthorised_Integration_Retention_Authorised_ReturnsTrue(t 
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
-	ctx := t.Context()
+	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	user := createClaimForDeletionFixtureUser(t, ctx, pool, repo, suffix, false, nil, nil, nil)
@@ -198,7 +198,7 @@ func TestDeletionStillAuthorised_Integration_Retention_OutstandingRequest_Return
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
-	ctx := t.Context()
+	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	user := createClaimForDeletionFixtureUser(t, ctx, pool, repo, suffix, false, nil, nil, nil)
@@ -223,7 +223,7 @@ func TestDeletionStillAuthorised_Integration_Retention_OverrideGranted_ReturnsFa
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
-	ctx := t.Context()
+	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	user := createClaimForDeletionFixtureUser(t, ctx, pool, repo, suffix, false, nil, nil, nil)
@@ -256,7 +256,7 @@ func TestDeletionStillAuthorised_Integration_Retention_RetentionClockCleared_Ret
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
-	ctx := t.Context()
+	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	user := createClaimForDeletionFixtureUser(t, ctx, pool, repo, suffix, false, nil, nil, nil)
@@ -284,7 +284,7 @@ func TestDeletionStillAuthorised_Integration_Retention_SubscriptionReactivated_R
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
-	ctx := t.Context()
+	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	user := createClaimForDeletionFixtureUser(t, ctx, pool, repo, suffix, false, nil, nil, nil)
@@ -313,7 +313,7 @@ func TestDeletionStillAuthorised_Integration_UnknownKind_FailsClosed(t *testing.
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
-	ctx := t.Context()
+	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	user := createClaimForDeletionFixtureUser(t, ctx, pool, repo, suffix, false, nil, nil, nil)
@@ -332,7 +332,7 @@ func TestDeletionStillAuthorised_Integration_MissingUser_ReturnsFalse(t *testing
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
-	ctx := t.Context()
+	ctx := context.Background()
 
 	authorised, err := repo.DeletionStillAuthorised(ctx, "00000000-0000-0000-0000-000000000000", DeletionKindRetention, nil)
 	require.NoError(t, err)
@@ -345,7 +345,7 @@ func TestDeletionStillAuthorised_Integration_AlreadyDeleted_ReturnsFalse(t *test
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
-	ctx := t.Context()
+	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	user := createClaimForDeletionFixtureUser(t, ctx, pool, repo, suffix, true, nil, nil, nil)
