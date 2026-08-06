@@ -921,8 +921,8 @@ export function useGetAdminPaymentFailures<TData = Awaited<ReturnType<typeof get
 
 
 /**
- * Fires a Plaid webhook for testing in QA environment. Requires Clerk authentication.
- * @summary Fire a Plaid webhook (QA only)
+ * Fires a Plaid webhook for testing. Requires Clerk authentication and admin authorization. Reachable in every environment, but only functions when PLAID_ENV=sandbox; it returns an error otherwise.
+ * @summary Fire a Plaid webhook (sandbox Plaid only)
  */
 export const fireWebhook = (
     fireWebhookRequestBody: BodyType<NonReadonly<FireWebhookRequestBody>>,
@@ -972,7 +972,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type FireWebhookMutationError = ErrorType<ErrorModel>
 
     /**
- * @summary Fire a Plaid webhook (QA only)
+ * @summary Fire a Plaid webhook (sandbox Plaid only)
  */
 export const useFireWebhook = <TError = ErrorType<ErrorModel>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof fireWebhook>>, TError,{data: BodyType<NonReadonly<FireWebhookRequestBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
@@ -1079,8 +1079,8 @@ export function useListAdminPlaidOrphanedItems<TData = Awaited<ReturnType<typeof
 
 
 /**
- * Grants a 60-day trial to the authenticated user. For E2E testing. Returns success if user already has trial.
- * @summary Grant trial subscription (QA only)
+ * Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial.
+ * @summary Grant trial subscription (admin)
  */
 export const grantTrial = (
 
@@ -1128,7 +1128,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type GrantTrialMutationError = ErrorType<ErrorModel>
 
     /**
- * @summary Grant trial subscription (QA only)
+ * @summary Grant trial subscription (admin)
  */
 export const useGrantTrial = <TError = ErrorType<ErrorModel>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof grantTrial>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}

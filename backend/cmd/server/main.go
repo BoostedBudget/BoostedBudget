@@ -1550,10 +1550,20 @@ func main() {
 			"admin_email_mode", adminEmailMode,
 			"effective_hardcoded_admin_emails", len(effectiveAdminEmails),
 			"non_production_admin_emails_in_file", len(adminEmailConfig.NonProductionAdminEmails))
-		if !cfg.EnvironmentExplicitlySet {
+		// Warn on BOTH ways of arriving at the production posture by accident, not just the
+		// unset one: ENVIRONMENT=" " or ENVIRONMENT=prod counts as explicitly set, so an
+		// `if !EnvironmentExplicitlySet` check alone would stay silent about a misconfigured
+		// value while still (correctly) refusing to load the test admins.
+		switch {
+		case !cfg.EnvironmentExplicitlySet:
 			appLogger.Warn("ENVIRONMENT is not set; the admin allowlist is resolving as production. "+
 				"Set ENVIRONMENT explicitly (development/qa/staging/production).",
 				"effective_environment", cfg.Environment)
+		case !domain.IsNonProductionEnvironment(allowlistEnv) && allowlistEnv != "production":
+			appLogger.Warn("ENVIRONMENT is set to a value this build does not recognise; the admin "+
+				"allowlist is resolving as production. Expected one of "+
+				"development/qa/staging/production.",
+				"environment", cfg.Environment)
 		}
 		// The admin allowlist is an ACL, so ADMIN_EMAILS_CONFIG is an authorization input.
 		// Issue #1498: outside a recognised non-production environment the loader REFUSES it and

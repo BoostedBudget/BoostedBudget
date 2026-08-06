@@ -8048,7 +8048,7 @@ paths:
         - Admin
   /api/v1/admin/plaid/fire-webhook:
     post:
-      description: Fires a Plaid webhook for testing in QA environment. Requires Clerk authentication.
+      description: Fires a Plaid webhook for testing. Requires Clerk authentication and admin authorization. Reachable in every environment, but only functions when PLAID_ENV=sandbox; it returns an error otherwise.
       operationId: fireWebhook
       requestBody:
         content:
@@ -8071,7 +8071,7 @@ paths:
           description: Error
       security:
         - clerk: []
-      summary: Fire a Plaid webhook (QA only)
+      summary: Fire a Plaid webhook (sandbox Plaid only)
       tags:
         - Admin
   /api/v1/admin/plaid/orphaned-items:
@@ -8120,7 +8120,7 @@ paths:
         - Admin
   /api/v1/admin/subscription/grant-trial:
     post:
-      description: Grants a 60-day trial to the authenticated user. For E2E testing. Returns success if user already has trial.
+      description: Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial.
       operationId: grantTrial
       responses:
         "200":
@@ -8137,7 +8137,7 @@ paths:
           description: Error
       security:
         - clerk: []
-      summary: Grant trial subscription (QA only)
+      summary: Grant trial subscription (admin)
       tags:
         - Admin
   /api/v1/admin/system/health:
