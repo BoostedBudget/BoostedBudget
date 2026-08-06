@@ -136,29 +136,8 @@ A value that is not a known name still fails safe.
 The effective set size and the active mode are logged at startup so an operator can see which
 posture is live. The addresses themselves are never logged.
 
-### `ADMIN_EMAILS_CONFIG` is refused outside non-production
-
-The loader honoured `ADMIN_EMAILS_CONFIG` unconditionally. Because the allowlist bypasses the role
-check, **whatever file that variable pointed at became an arbitrary set of role-check-free
-production admins** — a single environment variable, no code change, no review. The first
-remediation pass only *warned* about it at startup, which is detective, not preventive: it reports
-the substitution after it has already taken effect.
-
-`config.AdminEmailsConfigOverride` now honours the override **only** in a recognised
-non-production environment, and `LoadAdminEmailConfig` reads the committed
-`config/admin_emails.yaml` (baked into the image by `backend/Dockerfile`) everywhere else. The
-variable's only real purpose is relocating the file for tests, which always set it alongside a
-non-production `ENVIRONMENT`, so this costs nothing operationally.
-
-The predicate is deliberately the *same* one the list resolution uses —
-`domain.IsNonProductionEnvironment(cfg.AdminAllowlistEnvironment())`. Two differently-shaped
-notions of "is this production?" in one authorization path is how this class of bug survives, so
-resist adding a second test here. A *rejected* override is logged at **Error**: silently reading a
-different file than the operator asked for would be its own trap.
-
-A `schema_version` marker on the file was considered (validate the file's shape before trusting
-it) and rejected as strictly weaker — it validates a file's *shape*, not its *authority*, and an
-attacker who can set the variable can also write the marker.
+The file's *location* is also constrained, because a relocatable ACL is the same bypass by another
+route — see **Decision 4**.
 
 ## Decision 3 — `grant-trial` stays reachable in production, deliberately
 
@@ -179,10 +158,18 @@ to this handler; see the comment at `AdminHandler.GrantTrial`.
 ## Decision 4 — `ADMIN_EMAILS_CONFIG` is honoured only outside production
 
 `ADMIN_EMAILS_CONFIG` relocates the allowlist file. Because the allowlist bypasses the role check,
-whatever that variable points at becomes an arbitrary, role-check-free set of admins. The loader
-therefore **refuses** it unless `domain.IsNonProductionEnvironment(Config.AdminAllowlistEnvironment())`
-— the same predicate, and the same value, that decide which of the file's two lists load. One
-notion of "is this production?" for the whole authorization path, not two. A rejected override is
+whatever that variable points at becomes an arbitrary, role-check-free set of admins — a single
+environment variable, no code change, no review. The first remediation pass only *warned* about it
+at startup, which is detective, not preventive: it reports the substitution after it has already
+taken effect.
+
+`config.AdminEmailsConfigOverride` therefore **refuses** the override unless
+`domain.IsNonProductionEnvironment(Config.AdminAllowlistEnvironment())`, and `LoadAdminEmailConfig`
+reads the committed `config/admin_emails.yaml` (baked into the image by `backend/Dockerfile`)
+everywhere else. That is deliberately the same predicate — and the same value — that decides which
+of the file's two lists load. One notion of "is this production?" for the whole authorization path,
+not two, because two differently-shaped notions is how this class of bug survives; resist adding a
+second test here. A rejected override is
 logged at `Error` with the path and the reason, because silently reading a different file than the
 operator asked for is its own trap.
 
@@ -230,6 +217,9 @@ will fail loudly to confirm the change was intended.
 - **Infer intent from the trailing `# comment`** the file already carried on those two lines.
   Rejected for the same reason — a comment was the only signal before, which is precisely why
   this was easy to miss.
+- **A `schema_version` marker on the allowlist file**, validating its shape before trusting it
+  (Decision 4). Rejected as strictly weaker than refusing the override: it validates a file's
+  *shape*, not its *authority*, and anyone who can set the variable can also write the marker.
 - **Drop the test accounts from the file entirely** and provision them through Clerk roles.
   Rejected for now: it works, but it moves E2E/QA setup out of the repo and into manual Clerk
   state. Worth revisiting; it would let the hardcoded list shrink to owners only.
