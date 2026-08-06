@@ -585,14 +585,15 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// sequence from scratch instead.
 	//
 	// THIS LEG NOW RUNS AFTER THE PLAID LEG, not before it — see the ordering note above the first
-	// abortIfUnauthorised call for why the least-reversible external work goes last. The recheck
-	// immediately below is therefore the freshest one before anything at Paddle is touched, and
-	// cleanupPaddleResources takes the same callback so it can re-ask once more between its own two
-	// calls (cancelling a subscription and anonymising a customer are separately irreversible).
+	// abortIfUnauthorised call for why the least-reversible external work goes last.
+	//
+	// THERE IS DELIBERATELY NO abortIfUnauthorised CALL HERE. One was written and then removed as
+	// provably dead: cleanupPaddleResources gates each of its two irreversible calls individually,
+	// and those gates are strictly later and strictly finer than a check at this line would be. The
+	// redundancy was established by mutation, not by reading — deleting a check here killed no test,
+	// while deleting either inner gate kills exactly one. A check that cannot fail is not protection;
+	// it is a second place for the rule to drift.
 	if s.paddleCleanupSvc != nil {
-		if handled, err := abortIfUnauthorised("Paddle cleanup"); handled {
-			return err
-		}
 		if err := s.cleanupPaddleResources(ctx, userID, user, stillAuthorised); err != nil {
 			if errors.Is(err, ErrDeletionAuthorisationRevoked) {
 				releaseClaim("authorisation revoked mid Paddle cleanup")
