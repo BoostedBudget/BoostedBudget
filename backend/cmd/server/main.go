@@ -1496,8 +1496,11 @@ func main() {
 			jobHealthRepoForHealth, // Issue #1458: backs the 3 backlog gauges on /admin/health
 		)
 
-		// Issue #633: Dead letter queue admin service
-		deadLetterService := services.NewDeadLetterService(deadLetterJobRepo, jobQueue)
+		// Issue #633: Dead letter queue admin service.
+		// Issue #1492: jobs.UniqueOptsForKind gives the replay path the same uniqueness options each
+		// kind's real producers pass. It is injected here because internal/services cannot import
+		// internal/queue/jobs (jobs imports services), and this file already imports both.
+		deadLetterService := services.NewDeadLetterService(deadLetterJobRepo, jobQueue, jobs.UniqueOptsForKind)
 
 		// Apply Huma Admin middleware for admin routes (Issue #309)
 		humaAdminMiddleware := humamiddleware.NewAdminMiddleware(cfg, adminService)

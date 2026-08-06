@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -300,6 +301,40 @@ func TestAdminDLQ_Retry_NotFound(t *testing.T) {
 	assertHTTPStatus(t, err, http.StatusNotFound)
 }
 
+// TestAdminDLQ_Retry_Deduplicated: a replay River skipped as a duplicate enqueued NOTHING, so it must
+// not reach the client as a 200 — the admin UI fires its ADMIN_DLQ_RETRY analytics event on HTTP
+// success alone and never inspects the response's `success` field, so a 200 here would be reported to
+// the operator as a retry that is running.
+func TestAdminDLQ_Retry_Deduplicated(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	mockSvc.On("Retry", mock.Anything, int64(1)).Return(nil, services.ErrDeadLetterRetryDeduplicated)
+
+	_, err := h.RetryDLQJob(context.Background(), &RetryDLQJobInput{ID: 1})
+
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusConflict)
+	mockSvc.AssertExpectations(t)
+}
+
+// TestAdminDLQ_Retry_KindUnknown: the fail-closed refusal is a server-side gap (a kind missing from
+// jobs.uniqueOptsByKind), not anything the operator can fix by changing the request. 422 rather than
+// 400 (the request is well-formed) or 409 (nothing conflicts — the policy is simply absent).
+func TestAdminDLQ_Retry_KindUnknown(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	mockSvc.On("Retry", mock.Anything, int64(1)).
+		Return(nil, fmt.Errorf("%w: some_retired_kind", services.ErrDeadLetterRetryKindUnknown))
+
+	_, err := h.RetryDLQJob(context.Background(), &RetryDLQJobInput{ID: 1})
+
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusUnprocessableEntity)
+	mockSvc.AssertExpectations(t)
+}
+
 // --- AddDLQNotes ---
 
 func TestAdminDLQ_AddNotes_Success(t *testing.T) {
@@ -357,7 +392,11 @@ func TestAdminDLQ_BulkDelete_EmptyFilters_Returns400(t *testing.T) {
 
 	require.Error(t, err)
 	assertHTTPStatus(t, err, http.StatusBadRequest)
-	mockSvc.AssertNotCalled(t, "DeleteByFilters")
+	// Arity must match MockDeadLetterService.DeleteByFilters' m.Called(ctx, filters): the zero-argument
+	// form this replaced could never fail, because testify silently passes an AssertNotCalled whose
+	// argument count does not match the recorded call. Pre-existing (not part of #1492), fixed here
+	// because this file is already open and the same trap was measured in internal/services this round.
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
 }
 
 func TestAdminDLQ_BulkDelete_ServiceError(t *testing.T) {
