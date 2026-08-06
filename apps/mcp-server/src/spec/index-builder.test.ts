@@ -77,3 +77,23 @@ describe('buildSpecIndex param extraction (R8-2b regression)', () => {
     }
   })
 })
+
+// ── Issue #1503: unclassified operations must fail the build, not warn ───────
+
+describe('issue #1503: fail-closed on unclassified operations', () => {
+  it('builds without throwing, i.e. every operationId in the committed spec is classified', async () => {
+    // RED before #1503: listAdminPlaidOrphanedItems was absent from the capability
+    // manifest, so the builder silently dropped it and `make validate-mcp-artifacts`
+    // still exited 0 (the generated index was byte-identical to the committed one).
+    // buildSpecIndex now throws instead, so this assertion is the drift gate's
+    // fail-closed guarantee, not a tautology.
+    await expect(buildSpecIndex()).resolves.toBeDefined()
+  })
+
+  it('every entry carries a manifest classification', () => {
+    for (const entry of entries) {
+      expect(entry.manifestClass === 'read' || entry.manifestClass === 'write').toBe(true)
+      expect(typeof entry.excluded).toBe('boolean')
+    }
+  })
+})
