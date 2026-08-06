@@ -1123,6 +1123,18 @@ func (r *linkedItemRepository) queryCleanupCandidates(ctx context.Context, query
 //     would make the backstop re-enqueue rows whose Plaid side is already done on every single run,
 //     forever.
 //
+// ⚠ Those two bullets together do NOT add up to "every selected row still needs Plaid work" (fix
+// round 2, item 1). A 'replaced' row whose Plaid side IS already done is selected here anyway, and
+// unavoidably so: MarkItemsDisconnected must not overwrite 'replaced' (it is a terminal soft-delete
+// state from a re-link, carrying replaced_at/replaced_by_id), so there is nowhere on such a row to
+// record that removal happened — status is the only slot and the re-link fact already owns it. What
+// takes such a row out of this result set is ItemCleanupWorker.Work's ClearCleanupSchedule, which
+// removes the stamp; until that lands, the row is re-selected every run, costing one /item/remove
+// per run that answers ITEM_NOT_FOUND and is mapped to success. Self-healing and GDPR-neutral
+// (uncleanedLinkedItemExistsClause excludes 'replaced'), but it is a real limitation of this
+// predicate and not something the two bullets above rule out. A dedicated plaid_removed_at column
+// would let both facts coexist and is the proper fix.
+//
 // The `status IS NULL OR` arm is required for the same reason liveLinkedItemExistsClause and
 // uncleanedLinkedItemExistsClause (profile_repository.go) carry theirs, and #1444's rationale
 // applies verbatim: a bare `status NOT IN (...)` evaluates to NULL — not true — for a NULL-status
