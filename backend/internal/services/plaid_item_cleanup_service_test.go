@@ -425,7 +425,7 @@ func Test_RemoveItem_Success(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveItem(ctx, itemID)
+	err := service.RemoveItem(ctx, itemID, alwaysEligible)
 
 	assert.NoError(t, err)
 	mockRepo.AssertExpectations(t)
@@ -464,7 +464,7 @@ func Test_RemoveItem_GenuinePlaidError_IsPropagatedAndRowIsNotMarkedClean(t *tes
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveItem(ctx, itemID)
+	err := service.RemoveItem(ctx, itemID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "plaid error")
@@ -516,10 +516,10 @@ func Test_RemoveItem_ItemNotFoundOnRetry_ConvergesInsteadOfStranding(t *testing.
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	require.Error(t, service.RemoveItem(ctx, itemID), "a genuine Plaid failure must propagate (part B)")
+	require.Error(t, service.RemoveItem(ctx, itemID, alwaysEligible), "a genuine Plaid failure must propagate (part B)")
 
 	// The retry must be reported as SUCCESS, not as a fifth-attempt dead-letter.
-	require.NoError(t, service.RemoveItem(ctx, itemID),
+	require.NoError(t, service.RemoveItem(ctx, itemID, alwaysEligible),
 		"ITEM_NOT_FOUND means the Item is already gone from Plaid — billing has stopped, so this is a no-op success, not a failure")
 
 	mockRepo.AssertExpectations(t)
@@ -556,7 +556,7 @@ func Test_RemoveItem_MarksItemDisconnectedSoASurvivingRowIsNotReadAsUncleaned(t 
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	require.NoError(t, service.RemoveItem(ctx, itemID))
+	require.NoError(t, service.RemoveItem(ctx, itemID, alwaysEligible))
 	mockRepo.AssertExpectations(t)
 }
 
@@ -578,7 +578,7 @@ func Test_RemoveItem_MarkDisconnectedFailure_IsPropagated(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveItem(ctx, itemID)
+	err := service.RemoveItem(ctx, itemID, alwaysEligible)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db blip")
 }
@@ -601,7 +601,7 @@ func Test_RemoveItem_MarkDisconnectedZeroRows_IsSuccess(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	require.NoError(t, service.RemoveItem(ctx, itemID))
+	require.NoError(t, service.RemoveItem(ctx, itemID, alwaysEligible))
 }
 
 // Test_RemoveItem_ItemNotFound verifies that RemoveItem handles missing items
@@ -616,7 +616,7 @@ func Test_RemoveItem_ItemNotFound(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveItem(ctx, itemID)
+	err := service.RemoveItem(ctx, itemID, alwaysEligible)
 
 	assert.Error(t, err)
 }
@@ -1495,7 +1495,7 @@ func Test_RemoveItem_StampsPlaidRemovedBeforeMarkingDisconnected(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	require.NoError(t, service.RemoveItem(ctx, itemID))
+	require.NoError(t, service.RemoveItem(ctx, itemID, alwaysEligible))
 
 	assert.Equal(t, []string{itemID}, mockRepo.PlaidRemovedIDs,
 		"a successful Plaid removal must be recorded in plaid_removed_at — it is the ONLY fact "+
@@ -1528,7 +1528,7 @@ func Test_RemoveItem_ItemNotFound_StillStampsPlaidRemoved(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	require.NoError(t, service.RemoveItem(ctx, itemID))
+	require.NoError(t, service.RemoveItem(ctx, itemID, alwaysEligible))
 	assert.Equal(t, []string{itemID}, mockRepo.PlaidRemovedIDs,
 		"ITEM_NOT_FOUND means the Item is gone and billing has stopped — that is a removal, and it must "+
 			"be recorded, or C2 blocks this user's erasure forever over an Item that does not exist")
@@ -1550,7 +1550,7 @@ func Test_RemoveItem_GenuinePlaidError_DoesNotStamp(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	require.Error(t, service.RemoveItem(ctx, itemID))
+	require.Error(t, service.RemoveItem(ctx, itemID, alwaysEligible))
 	assert.Empty(t, mockRepo.PlaidRemovedIDs,
 		"a failed removal must NOT be recorded as done — the Item is still live and still billing")
 	assert.Empty(t, mockRepo.CallLog, "neither durable write may run when the Plaid call failed")
@@ -1579,7 +1579,7 @@ func Test_RemoveItem_StampFailure_IsPropagatedAndStatusNotMarked(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.RemoveItem(ctx, itemID)
+	err := service.RemoveItem(ctx, itemID, alwaysEligible)
 	require.Error(t, err, "losing the stamp after a successful Plaid removal must fail loudly — the row now "+
 		"carries no proof of removal, and silence would let the caller delete it")
 	assert.Contains(t, err.Error(), "plaid_removed_at")
@@ -1606,7 +1606,7 @@ func Test_RemoveItem_StampZeroRows_IsSuccess(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	require.NoError(t, service.RemoveItem(ctx, itemID))
+	require.NoError(t, service.RemoveItem(ctx, itemID, alwaysEligible))
 	mockRepo.AssertNotCalled(t, "MarkItemsDisconnected", mock.Anything, mock.Anything)
 }
 
@@ -1640,7 +1640,7 @@ func Test_RemoveItem_ReplacedRow_IsStampedEvenThoughStatusWriteIsANoOp(t *testin
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	require.NoError(t, service.RemoveItem(ctx, itemID))
+	require.NoError(t, service.RemoveItem(ctx, itemID, alwaysEligible))
 	assert.Equal(t, []string{itemID}, mockRepo.PlaidRemovedIDs,
 		"the 'replaced' row is EXACTLY the row status cannot speak for — if the stamp does not land here, "+
 			"nothing records that Plaid is done and C2 blocks this user's erasure forever")

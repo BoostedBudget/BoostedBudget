@@ -3,6 +3,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -82,15 +83,18 @@ func NewItemCleanupWorker(deps ItemCleanupWorkerDeps) *ItemCleanupWorker {
 // The worker:
 //  1. Re-verifies that the item is STILL a cleanup candidate (ClaimItemForCleanup) — Issue #1486.
 //     Until then this comment claimed a validation the body did not perform.
-//  2. Calls PlaidItemCleanupService.RemoveItem() to call Plaid /item/remove
+//  2. Calls PlaidItemCleanupService.RemoveItem() to call Plaid /item/remove, handing it that SAME
+//     eligibility question as a callback so it is asked again at the point of use (Codex pass-5
+//     Medium 2 — step 1's claim grants no exclusivity past its own statement, and RemoveItem does
+//     its own read before calling Plaid).
 //  3. Clears the cleanup schedule and hard-deletes the linked_items row (both best-effort)
 //  4. Logs the cleanup for audit
 //
 // If the item is no longer a candidate — the user reconnected it through Plaid Link update mode,
-// its accounts came back, or its error cleared — step 1 declines, the stale schedule is released,
-// and the job returns nil WITHOUT calling Plaid. What it does NOT do is check "is the grace period
-// expired": that is River's job, not this worker's (the sweep enqueues with WithScheduledAt), and
-// nothing here re-derives it.
+// its accounts came back, or its error cleared — EITHER check point declines, the stale schedule is
+// released (releaseDeclinedCleanupSchedule, one path for both), and the job returns nil WITHOUT
+// calling Plaid. What it does NOT do is check "is the grace period expired": that is River's job,
+// not this worker's (the sweep enqueues with WithScheduledAt), and nothing here re-derives it.
 func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanupArgs]) (err error) {
 	args := job.Args
 
@@ -125,7 +129,10 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 	// TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet (item_cleanup_test.go), which
 	// fails if this enumeration drifts again:
 	//   1. this function, after a successful RemoveItem (post-hoc state cleanup);
-	//   2. this function, releasing the stale schedule when this very claim declines (#1486);
+	//   2. this file's releaseDeclinedCleanupSchedule, releasing the stale schedule when the
+	//      eligibility question is answered "no" — by THIS claim at selection time (#1486) or by the
+	//      same predicate at the point of use inside RemoveItem (Codex pass-5 Medium 2). Two callers
+	//      of one helper, so still ONE call site in this file, which is what the guard test counts;
 	//   3. accountService.DeleteAccount (services/account_service.go), releasing the stamp it just
 	//      set when the zero-account cleanup enqueue fails;
 	//   4. ItemCleanupCheckWorker.Work (item_cleanup_check.go), releasing the stamp it just set when
@@ -148,37 +155,7 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 		return fmt.Errorf("failed to re-verify cleanup eligibility for item %s: %w", args.LinkedItemID, claimErr)
 	}
 	if !claimed {
-		w.logger.Info("item is no longer a cleanup candidate, skipping Plaid removal",
-			"job_id", job.ID,
-			"linked_item_id", args.LinkedItemID,
-			"user_id", args.UserID,
-			"reason", args.Reason,
-		)
-
-		// Release the now-stale schedule. Chosen over leaving it set: the sweep's candidate
-		// predicate requires cleanup_scheduled_at IS NULL, so an item that keeps a schedule it will
-		// never act on is invisible to every future sweep — if it degrades again later it would
-		// never be cleaned up, and Plaid would bill for it indefinitely. Keeping the row as an audit
-		// trail is not worth that: the audit record lives in this log line and in the completed
-		// River job, neither of which the clear touches.
-		//
-		// A failure here is RETURNED, not swallowed. Returning nil would let River record success
-		// and never come back, permanently creating the exact state the paragraph above calls
-		// unacceptable. The retry is not a pointless re-run of a no-op: the recheck it repeats is
-		// cheap and idempotent, and the clear — the part that actually failed — is what the retry
-		// is for. Removal stays off the table either way, because the claim will decline again.
-		if clearErr := w.linkedItemRepo.ClearCleanupSchedule(ctx, args.LinkedItemID); clearErr != nil {
-			w.logger.Error("failed to clear stale cleanup schedule for a no-longer-eligible item, retrying",
-				"job_id", job.ID,
-				"linked_item_id", args.LinkedItemID,
-				"error", clearErr,
-			)
-			return fmt.Errorf("failed to clear stale cleanup schedule for item %s: %w", args.LinkedItemID, clearErr)
-		}
-
-		// A no-longer-eligible item whose schedule was released is a SUCCESS with nothing to do,
-		// not a failure.
-		return nil
+		return w.releaseDeclinedCleanupSchedule(ctx, job.ID, args, "the claim declined at selection time")
 	}
 
 	// Call cleanup service to remove the item from Plaid.
@@ -190,8 +167,24 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 	// it made this worker delete the local row while the Item was still live and still billing,
 	// which is how a GDPR deletion could complete past DeleteUserCascade's C2 guard with an
 	// unfindable, still-billing Plaid Item left behind.
-	removeErr := w.plaidCleanupSvc.RemoveItem(ctx, args.LinkedItemID)
+	// The SAME eligibility question, asked again at the point of use (Codex pass-5 Medium 2). The
+	// claim above is a conditional UPDATE and grants no exclusivity beyond its own statement (see
+	// ClaimItemForCleanup's doc comment), and RemoveItem performs its own read before presenting the
+	// token to Plaid — so a connection repair or an active-account write can commit in between, and
+	// this worker would disconnect an item that had just become healthy. Passing the identical
+	// predicate (not a second notion of eligibility, and not with different thresholds) means the two
+	// check points cannot disagree; a repeat claim is safe to run because it consumes nothing and
+	// writes nothing when it declines.
+	removeErr := w.plaidCleanupSvc.RemoveItem(ctx, args.LinkedItemID, func(rctx context.Context) (bool, error) {
+		return w.linkedItemRepo.ClaimItemForCleanup(rctx, args.LinkedItemID, w.errorDaysThreshold, w.staleDaysThreshold)
+	})
 	if removeErr != nil {
+		// A use-time decline is NOT a Plaid failure: nothing was sent to Plaid and nothing was
+		// recorded (see ErrItemNoLongerEligible). It gets the identical handling as a decline at
+		// selection time — the same helper, so there is one behaviour here and not two.
+		if errors.Is(removeErr, services.ErrItemNoLongerEligible) {
+			return w.releaseDeclinedCleanupSchedule(ctx, job.ID, args, "the item stopped being a cleanup candidate between the claim and the removal")
+		}
 		// The LOCAL row is missing (repository.ErrLinkedItemNotFound, wrapped out of RemoveItem's
 		// GetByID) — note this is a DIFFERENT error from Plaid's ITEM_NOT_FOUND, which RemoveItem now
 		// handles itself as success and never surfaces here. With no row there is no access token to
@@ -315,6 +308,53 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 		"duration_ms", time.Since(startTime).Milliseconds(),
 	)
 
+	return nil
+}
+
+// releaseDeclinedCleanupSchedule is the single decline path for an item this worker has decided NOT
+// to remove, whichever of the TWO check points declined it (Issue #1486; Codex pass-5 Medium 2 added
+// the second):
+//
+//  1. ClaimItemForCleanup declining at selection time, before RemoveItem is called at all;
+//  2. the same predicate declining at the point of use, inside RemoveItem, immediately before the
+//     Plaid call — the window the claim's own statement cannot cover.
+//
+// Both mean the same thing (the user repaired the connection through Plaid Link update mode, its
+// accounts came back, or its error cleared) and both must do the same thing, which is why this is one
+// function and not two similar blocks that can drift apart.
+//
+// It releases the now-stale schedule. Chosen over leaving it set: the sweep's candidate predicate
+// requires cleanup_scheduled_at IS NULL, so an item that keeps a schedule it will never act on is
+// invisible to every future sweep — if it degrades again later it would never be cleaned up, and
+// Plaid would bill for it indefinitely. Keeping the row as an audit trail is not worth that: the
+// audit record lives in this log line and in the completed River job, neither of which the clear
+// touches.
+//
+// A failure here is RETURNED, not swallowed. Returning nil would let River record success and never
+// come back, permanently creating the exact state the paragraph above calls unacceptable. The retry
+// is not a pointless re-run of a no-op: the rechecks it repeats are cheap and idempotent, and the
+// clear — the part that actually failed — is what the retry is for. Removal stays off the table
+// either way, because both check points will decline again.
+func (w *ItemCleanupWorker) releaseDeclinedCleanupSchedule(ctx context.Context, jobID int64, args ItemCleanupArgs, declinedBecause string) error {
+	w.logger.Info("item is no longer a cleanup candidate, skipping Plaid removal",
+		"job_id", jobID,
+		"linked_item_id", args.LinkedItemID,
+		"user_id", args.UserID,
+		"reason", args.Reason,
+		"declined_because", declinedBecause,
+	)
+
+	if clearErr := w.linkedItemRepo.ClearCleanupSchedule(ctx, args.LinkedItemID); clearErr != nil {
+		w.logger.Error("failed to clear stale cleanup schedule for a no-longer-eligible item, retrying",
+			"job_id", jobID,
+			"linked_item_id", args.LinkedItemID,
+			"error", clearErr,
+		)
+		return fmt.Errorf("failed to clear stale cleanup schedule for item %s: %w", args.LinkedItemID, clearErr)
+	}
+
+	// A no-longer-eligible item whose schedule was released is a SUCCESS with nothing to do, not a
+	// failure.
 	return nil
 }
 

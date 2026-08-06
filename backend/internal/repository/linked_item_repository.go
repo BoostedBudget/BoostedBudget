@@ -971,8 +971,10 @@ const cleanupCandidateSelectQuery = `
 //     scheduled"). It is false by construction for every item ClaimItemForCleanup is ever asked
 //     about, because MarkForCleanup set it — so a recheck that reused it verbatim would deny every
 //     claim, and a recheck of "is it still scheduled" would be no recheck at all. Issue #1486 follow-up part E:
-//     there are FOUR production callers of ClearCleanupSchedule, not two, and only two are inside
-//     ItemCleanupWorker.Work — see that function's #1486 comment for the enumeration, and
+//     there are FOUR production callers of ClearCleanupSchedule, not two, and only two are in
+//     queue/jobs/item_cleanup.go (one in ItemCleanupWorker.Work itself, one in the
+//     releaseDeclinedCleanupSchedule helper both of that worker's decline points share — Codex
+//     pass-5 Medium 2) — see Work's #1486 comment for the enumeration, and
 //     jobs.TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet, which fails if it drifts
 //     again (grep `\.ClearCleanupSchedule(`). The half this bullet actually rests on is unchanged and
 //     still true: NOTHING clears cleanup_scheduled_at on reconnection, so a

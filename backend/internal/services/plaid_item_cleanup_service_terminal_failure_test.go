@@ -140,7 +140,7 @@ func Test_RemoveItem_InvalidAccessToken_RecordsVerdictAndNeverClaimsRemoval(t *t
 	mockPlaid.On("RemoveItem", ctx, "wrong-environment-token").Return(plaidInvalidAccessTokenErr())
 
 	svc := newTestPlaidCleanupService(mockRepo, mockPlaid)
-	err := svc.RemoveItem(ctx, itemID)
+	err := svc.RemoveItem(ctx, itemID, alwaysEligible)
 
 	require.Error(t, err, "the worker must keep failing and retrying: the row still exists and re-attempting it is harmless")
 	assert.ErrorIs(t, err, ErrPlaidRemovalUnrecoverable,
@@ -170,7 +170,7 @@ func Test_RemoveItem_TransientPlaidFailure_RecordsNoVerdict(t *testing.T) {
 	mockPlaid.On("RemoveItem", ctx, "perfectly-good-token").Return(plaidErrWithCode("API_ERROR", "INTERNAL_SERVER_ERROR"))
 
 	svc := newTestPlaidCleanupService(mockRepo, mockPlaid)
-	err := svc.RemoveItem(ctx, itemID)
+	err := svc.RemoveItem(ctx, itemID, alwaysEligible)
 
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrPlaidRemovalUnrecoverable,

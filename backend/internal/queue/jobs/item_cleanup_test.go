@@ -17,6 +17,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
@@ -37,7 +38,23 @@ func (m *MockPlaidCleanupService) RemoveAllUserItems(ctx context.Context, userID
 	return args.Error(0)
 }
 
-func (m *MockPlaidCleanupService) RemoveItem(ctx context.Context, linkedItemID string) error {
+// RemoveItem consults the use-time eligibility recheck exactly as the real service does (Codex
+// pass-5 Medium 2), because that is the only way a WORKER test can observe what Work does when the
+// item stops being a cleanup candidate between the claim and the removal. The recheck is
+// deliberately not part of the expectation arguments, so every pre-existing
+// `.On("RemoveItem", ctx, itemID)` call site stays valid; when the recheck declines, no Plaid work
+// happens and m.Called is never reached, which is the point.
+func (m *MockPlaidCleanupService) RemoveItem(ctx context.Context, linkedItemID string, recheck func(ctx context.Context) (bool, error)) error {
+	if recheck == nil {
+		return fmt.Errorf("RemoveItem: an eligibility recheck is required")
+	}
+	eligible, err := recheck(ctx)
+	if err != nil {
+		return fmt.Errorf("eligibility recheck failed for item %s: %w", linkedItemID, err)
+	}
+	if !eligible {
+		return fmt.Errorf("%w: item %s", services.ErrItemNoLongerEligible, linkedItemID)
+	}
 	args := m.Called(ctx, linkedItemID)
 	return args.Error(0)
 }
@@ -137,8 +154,9 @@ func newTestItemCleanupJob(args ItemCleanupArgs) *river.Job[ItemCleanupArgs] {
 // first test. The job was enqueued (and, for the deferred legs, sat behind a 7-day grace period)
 // while the item was a cleanup candidate; by the time it runs, the user has reconnected. Nothing
 // clears cleanup_scheduled_at on reconnect — Issue #1486 follow-up part E: there are FOUR
-// production callers of ClearCleanupSchedule, not two, and only two are inside
-// ItemCleanupWorker.Work (see its #1486
+// production callers of ClearCleanupSchedule, not two, and only two are in item_cleanup.go — one in
+// ItemCleanupWorker.Work itself and one in the releaseDeclinedCleanupSchedule helper that both of
+// that worker's decline points share (see Work's #1486
 // comment for the enumeration, and TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet
 // below); none of them is a reconnection hook, which is the part that matters here — so the ONLY
 // thing that can stop the irreversible Plaid /item/remove is an eligibility recheck at execution

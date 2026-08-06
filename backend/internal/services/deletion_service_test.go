@@ -734,7 +734,10 @@ func (m *MockPlaidItemCleanupService) RemoveAllUserItems(ctx context.Context, us
 	return args.Error(0)
 }
 
-func (m *MockPlaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID string) error {
+// RemoveItem's use-time eligibility recheck (Codex pass-5 Medium 2) is excluded from the expectation
+// arguments: DeletionService never calls RemoveItem at all, and the recheck's behaviour is asserted
+// where it lives (plaid_item_cleanup_removeitem_recheck_test.go and the worker's own tests).
+func (m *MockPlaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID string, _ func(ctx context.Context) (bool, error)) error {
 	args := m.Called(ctx, linkedItemID)
 	return args.Error(0)
 }
