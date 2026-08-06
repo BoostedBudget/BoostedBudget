@@ -36,6 +36,11 @@ type periodicJobsDeps struct {
 	budgetPeriodCloseCheckWorker        *jobs.BudgetPeriodCloseCheckWorker
 	savingsStatsWorker                  *jobs.SavingsStatsWorker
 	portfolioSnapshotWorker             *jobs.PortfolioSnapshotWorker
+	// plaidOrphanRetryWorker is Plaid-specific and nil when Plaid is not configured (Issue #1497).
+	// ⚠ There is deliberately NO field for the orphan-token PURGE worker: its registration is
+	// unconditional, so making it a nil-guardable dependency would be the first step towards it
+	// silently not running. See the spec below.
+	plaidOrphanRetryWorker *jobs.PlaidOrphanRetryWorker
 }
 
 // periodicJobSpec is an intermediate representation of a periodic job registration, captured
@@ -255,6 +260,39 @@ func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 		},
 		opts: jobs.IdempotencyCleanupPeriodicOpts(),
 	})
+
+	// Issue #1497: purge retained Plaid credentials at their retention deadline (daily).
+	//
+	// ⚠ UNCONDITIONAL, AND THAT IS THE POINT. Unlike every other Plaid-adjacent job here this one is NOT
+	// nil-guarded, because it must not be: DeleteUserCascade writes plaid_orphaned_items rows — with a
+	// retained credential — whether or not Plaid is configured at the time, and migration 000135's
+	// promise is that the credential dies at its deadline regardless of anything else. Guarding this on
+	// Plaid config would make a GDPR retention limit conditional on a feature flag. Its worker is
+	// constructed unconditionally in main() for the same reason; the registration needs only the Args
+	// type and Insert/PeriodicOpts, exactly like idempotency cleanup above.
+	specs = append(specs, periodicJobSpec{
+		name:       "plaid orphan token purge",
+		logMessage: "Plaid orphaned-item credential purge periodic job configured (daily)",
+		interval:   24 * time.Hour,
+		build: func() (river.JobArgs, *river.InsertOpts) {
+			return jobs.PlaidOrphanTokenPurgeArgs{TriggerSource: "periodic"}, jobs.PlaidOrphanTokenPurgeInsertOpts()
+		},
+		opts: jobs.PlaidOrphanTokenPurgePeriodicOpts(),
+	})
+
+	// Issue #1497: re-attempt /item/remove for Items stranded by an erasure (daily) — Plaid-specific,
+	// so nil-guarded, which is precisely why the purge above is not.
+	if deps.plaidOrphanRetryWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "plaid orphan retry",
+			logMessage: "Plaid orphaned-item removal retry periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.PlaidOrphanRetryArgs{TriggerSource: "periodic"}, jobs.PlaidOrphanRetryInsertOpts()
+			},
+			opts: jobs.PlaidOrphanRetryPeriodicOpts(),
+		})
+	}
 
 	return specs
 }

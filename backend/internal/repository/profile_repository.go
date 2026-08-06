@@ -1535,22 +1535,46 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// rest by the application layer (linked_item_repository.go's encryptLinkedItemPIIFields), and a
 	// SQL statement has no access to the key. Copying the encrypted values is therefore both the only
 	// option here and the right one: the destination columns are named *_encrypted and readers decrypt
-	// through the same FieldEncryptor. See migration 000134 for why the access token is NOT copied,
-	// and for why this table carries no user_id at all.
+	// through the same FieldEncryptor. The access token is copied on the same terms since Issue #1497
+	// (it was not, before — see the note on the INSERT below and migration 000135). See migration
+	// 000134 for why this table carries no user_id at all.
+	//
+	// Issue #1497: THE ACCESS TOKEN IS NOW COPIED TOO, WITH A DEADLINE. Migration 000134's prose said
+	// it deliberately was not, on the argument that this table's population is exactly the population
+	// whose token Plaid has already rejected. That argument is true of one leg and false of the table:
+	// the `plaid_removed_at IS NULL` scope above also copies 'replaced' re-link leftovers, whose
+	// /item/remove was NEVER ATTEMPTED, and for those a retry is the only automated path that has ever
+	// existed. See migration 000135 for the full reversal and the GDPR position it rests on.
+	//
+	// THE DEADLINE IS COMPUTED HERE, IN GO, from domain.OrphanedItemTokenRetention rather than as
+	// `NOW() + INTERVAL '30 days'` in the SQL, for two reasons: the constant is the single place the
+	// retention period is stated (and is pinned by a test), and a SQL interval literal would be a second
+	// copy of it that nothing could keep in step.
+	//
+	// NULLIF(access_token_encrypted, '') because linked_items.access_token_encrypted is NOT NULL and can
+	// legitimately hold '' (the NO_USABLE_ACCESS_TOKEN case, which is one of the two terminal verdicts
+	// that lands rows here). Storing '' would make the row look credential-bearing to every predicate
+	// that tests `IS NOT NULL` — including the retry selection, which would then present an empty token
+	// to Plaid on every run for thirty days. NULL is the honest encoding of "no credential".
+	//
+	// Ciphertext, verbatim, like the other four columns — access_token_encrypted is produced by
+	// FieldEncryptor in linked_item_repository.go and this statement has no key.
 	//
 	// ON CONFLICT DO NOTHING keys off plaid_orphaned_items_unique_linked_item, so this statement can
 	// never be the one that fails a retried cascade.
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO plaid_orphaned_items (
 			linked_item_id, plaid_item_id_encrypted, institution_id_encrypted,
-			institution_name_encrypted, linked_item_status, last_error_code, terminal_since
+			institution_name_encrypted, linked_item_status, last_error_code, terminal_since,
+			access_token_encrypted, token_expires_at
 		)
 		SELECT id, item_id, institution_id, institution_name, status,
-		       plaid_removal_error_code, plaid_removal_failed_at
+		       plaid_removal_error_code, plaid_removal_failed_at,
+		       NULLIF(access_token_encrypted, ''), $2
 		FROM linked_items
 		WHERE user_id = $1 AND plaid_removed_at IS NULL
 		ON CONFLICT (linked_item_id) DO NOTHING
-	`, userID); err != nil {
+	`, userID, time.Now().UTC().Add(domain.OrphanedItemTokenRetention)); err != nil {
 		return false, fmt.Errorf("DeleteUserCascade: preserve orphaned Plaid item records: %w", err)
 	}
 

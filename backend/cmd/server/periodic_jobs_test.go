@@ -1,6 +1,6 @@
 package main
 
-// Issue #1448: every one of the 14 periodic River jobs registered by main.go must carry
+// Issue #1448: every one of the 16 periodic River jobs registered by main.go must carry
 // (1) a real dedup guarantee (queue-level UniqueOpts, or — for BudgetPeriodCloseCheck — its
 // own documented DB-level exactly-once marker), (2) RunOnStart: true, and (3) a non-empty,
 // stable PeriodicJobOpts.ID so River restores nextRunAt across restarts/leader elections
@@ -24,7 +24,7 @@ import (
 
 // allNonNilPeriodicJobsDeps returns a periodicJobsDeps with every worker field populated by a
 // real (zero-configured) worker instance, so buildPeriodicJobSpecs produces the full set of
-// 14 specs — one per periodic job main.go registers when every dependency is present.
+// 16 specs — one per periodic job main.go registers when every dependency is present.
 func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 	return periodicJobsDeps{
 		scheduledDeletionCheckWorker:        jobs.NewScheduledDeletionCheckWorker(jobs.ScheduledDeletionCheckWorkerDeps{}),
@@ -40,17 +40,48 @@ func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 		budgetPeriodCloseCheckWorker:        jobs.NewBudgetPeriodCloseCheckWorker(jobs.BudgetPeriodCloseCheckWorkerDeps{}),
 		savingsStatsWorker:                  jobs.NewSavingsStatsWorker(jobs.SavingsStatsWorkerDeps{}),
 		portfolioSnapshotWorker:             jobs.NewPortfolioSnapshotWorker(jobs.PortfolioSnapshotWorkerDeps{}),
+		// Issue #1497. Only the RETRY worker appears here, because only it is nil-guardable: the
+		// orphan-token purge has no periodicJobsDeps field at all — its registration is unconditional
+		// on purpose, so there is nothing to set and nothing that could omit it. That asymmetry is
+		// what TestBuildPeriodicJobSpecs_PurgeSpecSurvivesEveryNilWorker below asserts.
+		plaidOrphanRetryWorker: jobs.NewPlaidOrphanRetryWorker(jobs.PlaidOrphanRetryWorkerDeps{}),
 	}
 }
 
-// TestBuildPeriodicJobSpecs_Count proves every nil-guarded worker (plus the always-on
-// idempotency cleanup job) produces exactly one spec when non-nil — 13 nil-guarded workers +
-// 1 unconditional job = 14, matching the ticket's verified count.
+// TestBuildPeriodicJobSpecs_Count proves every nil-guarded worker (plus the always-on jobs)
+// produces exactly one spec when non-nil — 14 nil-guarded workers + 2 unconditional jobs
+// (idempotency cleanup, and Issue #1497's orphan-token purge) = 16.
 func TestBuildPeriodicJobSpecs_Count(t *testing.T) {
 	specs := buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps())
 
-	if len(specs) != 14 {
-		t.Fatalf("expected 14 periodic job specs when every worker is non-nil, got %d", len(specs))
+	if len(specs) != 16 {
+		t.Fatalf("expected 16 periodic job specs when every worker is non-nil, got %d", len(specs))
+	}
+}
+
+// TestBuildPeriodicJobSpecs_PurgeSpecSurvivesEveryNilWorker is Issue #1497's registration guarantee,
+// and it is deliberately the most aggressive form of the question: with EVERY nil-guardable worker
+// absent — no Plaid, no retry sweep, nothing — the credential purge is still registered.
+//
+// That is the whole reason the purge is a separate job with no periodicJobsDeps field. Migration
+// 000135 promises a retained Plaid credential is destroyed at its 30-day deadline "whether or not the
+// retry job ever ran"; a registration that could be omitted by a nil worker would make that promise
+// conditional on configuration, which is not a promise.
+func TestBuildPeriodicJobSpecs_PurgeSpecSurvivesEveryNilWorker(t *testing.T) {
+	specs := buildPeriodicJobSpecs(periodicJobsDeps{})
+
+	var found bool
+	for _, s := range specs {
+		if s.name == "plaid orphan token purge" {
+			found = true
+		}
+		if s.name == "plaid orphan retry" {
+			t.Fatal("the Plaid-dependent retry sweep must NOT be registered with no worker to run it")
+		}
+	}
+	if !found {
+		t.Fatal("the orphaned-credential purge must be registered even with every optional worker nil — " +
+			"its retention deadline is not conditional on Plaid being configured")
 	}
 }
 
@@ -63,8 +94,8 @@ func TestBuildPeriodicJobSpecs_NilWorkerOmitsItsSpec(t *testing.T) {
 
 	specs := buildPeriodicJobSpecs(deps)
 
-	if len(specs) != 13 {
-		t.Fatalf("expected 13 specs with itemCleanupCheckWorker nil, got %d", len(specs))
+	if len(specs) != 15 {
+		t.Fatalf("expected 15 specs with itemCleanupCheckWorker nil, got %d", len(specs))
 	}
 	for _, s := range specs {
 		if s.name == "item cleanup check" {
