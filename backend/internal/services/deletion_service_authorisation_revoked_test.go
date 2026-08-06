@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -43,10 +44,21 @@ type revocationHarness struct {
 	subID      string
 	custID     string
 	userID     string
+	user       *domain.User
 	authorised *bool
 }
 
 func newRevocationHarness(t *testing.T, ctx context.Context) *revocationHarness {
+	t.Helper()
+	return newRevocationHarnessWithStatus(t, ctx, "active")
+}
+
+// newRevocationHarnessWithStatus builds the same fixture with a chosen RAW subscription status —
+// the value cleanupPaddleResources' own PinnedRaw branch reads to decide whether there is a
+// subscription to cancel at all. "active" (the default) reaches both Paddle calls; a status that is
+// neither active nor past_due reaches only the customer archive, which is how a test can exercise an
+// abort with NO subscription cancellation behind it.
+func newRevocationHarnessWithStatus(t *testing.T, ctx context.Context, status string) *revocationHarness {
 	t.Helper()
 
 	repo := new(MockProfileRepositoryForDeletion)
@@ -60,13 +72,16 @@ func newRevocationHarness(t *testing.T, ctx context.Context) *revocationHarness 
 	svc.SetPaddleCleanupService(paddle)
 	svc.SetWorkClaimsRepo(newAllowingClaimsRepo())
 
-	user, subID, custID := buildUserWithPaddle("active")
+	user, subID, custID := buildUserWithPaddle(status)
 	authorised := true
 	callOrder := []string{}
 
 	repo.AuthorisedFn = func(context.Context) (bool, error) { return authorised, nil }
 	repo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	repo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	// Issue #1504: permissive by default so tests whose subject is NOT the residue record are not
+	// forced to program it; the residue tests assert on it explicitly (deletion_service_residue_test.go).
+	repo.On("RecordDeletionResidue", mock.Anything, user.ID, mock.Anything).Return(nil).Maybe()
 	repo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil).Maybe().
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "DeleteUserCascade") })
 	paddle.On("CancelSubscriptionImmediately", ctx, subID).Return(nil).Maybe().
@@ -80,7 +95,7 @@ func newRevocationHarness(t *testing.T, ctx context.Context) *revocationHarness 
 
 	return &revocationHarness{
 		svc: svc, repo: repo, paddle: paddle, plaid: plaid, clerk: clerk,
-		callOrder: &callOrder, subID: subID, custID: custID, userID: user.ID,
+		callOrder: &callOrder, subID: subID, custID: custID, userID: user.ID, user: user,
 		authorised: &authorised,
 	}
 }

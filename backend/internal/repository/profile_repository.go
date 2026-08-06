@@ -201,6 +201,44 @@ type ProfileRepository interface {
 	// the next scheduled run re-evaluate from scratch — it must NOT treat this as an error.
 	DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error)
 
+	// RecordDeletionResidue writes the durable, queryable record that an account deletion performed
+	// an IRREVERSIBLE EXTERNAL EFFECT and then did not complete — so the user still exists, and
+	// something has been done to them that they did not ask for. Issue #1504.
+	//
+	// THE CASE IT EXISTS FOR is irreducible and cannot be engineered away: ExecuteDeletion gates
+	// every irreversible external call on a fresh authorisation read, but if the user revokes their
+	// deletion WHILE the Paddle subscription-cancel call is in flight, the cancel still lands. The
+	// gate passed a moment earlier and a network call cannot be recalled. The user keeps their
+	// account and every row of their data — with their subscription cancelled. Before this, the only
+	// trace was an Info log line: nobody was told and nothing was queryable.
+	//
+	// It records; it does NOT remediate. Re-subscribing someone automatically, from a flow that has
+	// just proven it does not know what state the world is in, is a worse failure than telling a
+	// human. An operator finds these with:
+	//
+	//	SELECT resource_id, created_at FROM audit_logs
+	//	 WHERE action LIKE 'user.deletion_residue.%' ORDER BY created_at DESC;
+	//
+	// WHY audit_logs AND NOT A NEW TABLE, and why keyed to the USER. plaid_orphaned_items is the
+	// precedent for the OPPOSITE case — a record that must outlive an ERASED subject, which is why
+	// it carries no user_id at all. This record is not that: its defining fact is that the deletion
+	// did NOT complete, so the users row is still there and the operator's entire task is to find
+	// that person. Keying it to the user is therefore the point, not a leak, and it means
+	// DeleteUserCascade's erasure redaction (`SET changes = NULL WHERE resource_id = $1 OR
+	// user_id = $1`) covers it if that user IS erased later — harmlessly, because by then the
+	// cancellation this record reports has become the intended outcome. audit_logs also already
+	// exists, is already erasure-aware, and needs no migration.
+	//
+	// ⚠ NOTHING IS WRITTEN TO `changes`. The effect is encoded in `action` — the column that is
+	// queryable and that redaction does not touch — and the subscription id an operator needs is
+	// still on the surviving users row, precisely because this record only exists when the user
+	// survived. A payload here would be PII that redaction would null out anyway, i.e. exactly the
+	// trap that disqualified audit_logs for plaid_orphaned_items.
+	//
+	// audit_logs.user_id is the ACTING party and is left NULL: this is a system action, matching the
+	// column's own documented convention (migration 000003).
+	RecordDeletionResidue(ctx context.Context, userID string, effect DeletionResidueEffect) error
+
 	// CountUncleanedLinkedItems counts the user's linked_items rows that DeleteUserCascade's C2
 	// guard would refuse to proceed past — those with neither a recorded Plaid removal nor a
 	// recorded unrecoverable removal failure. Shares the guard's own predicate
@@ -1757,6 +1795,45 @@ func (r *profileRepository) CountUncleanedLinkedItems(ctx context.Context, userI
 		return 0, fmt.Errorf("CountUncleanedLinkedItems: %w", err)
 	}
 	return count, nil
+}
+
+// DeletionResidueEffect names the irreversible external effect an account deletion had ALREADY
+// performed by the time it stopped without deleting the user (Issue #1504). It is a fixed, closed
+// vocabulary rather than a free-form string because it becomes part of audit_logs.action, which is
+// what an operator queries on: a typo'd or ad-hoc value would be a record nobody finds.
+type DeletionResidueEffect string
+
+// DeletionResiduePaddleSubscriptionCancelled is the one effect this can currently report, and the
+// only one that is IRREDUCIBLE: the Paddle subscription-cancel call landed and the deletion then
+// stopped (revocation caught by the customer-archive gate, or the cascade's own guard refusing), so
+// the user keeps their account with their subscription cancelled.
+//
+// The Plaid leg has no counterpart here on purpose: a disconnect is RECOVERABLE — the user relinks —
+// and it is already reported to the user in-product. This constant is for the effect nobody can undo
+// without a human intervening.
+const DeletionResiduePaddleSubscriptionCancelled DeletionResidueEffect = "paddle_subscription_cancelled"
+
+// deletionResidueActionPrefix is the audit_logs.action namespace these records live in. Kept as one
+// constant so the operator query in RecordDeletionResidue's doc comment
+// (action LIKE 'user.deletion_residue.%') cannot drift away from what is actually written.
+const deletionResidueActionPrefix = "user.deletion_residue."
+
+// RecordDeletionResidue implements ProfileRepository.RecordDeletionResidue — see that interface
+// method's doc comment for why this is an audit_logs row keyed to the user, and why it carries no
+// `changes` payload (Issue #1504).
+func (r *profileRepository) RecordDeletionResidue(ctx context.Context, userID string, effect DeletionResidueEffect) error {
+	if effect == "" {
+		// Refuse rather than write 'user.deletion_residue.' — a record whose action says nothing is
+		// worse than none, because it still looks like the operator has been told something.
+		return fmt.Errorf("RecordDeletionResidue: an effect is required for user %s", userID)
+	}
+	_, err := r.db.Exec(ctx,
+		`INSERT INTO audit_logs (user_id, action, resource_type, resource_id) VALUES (NULL, $1, 'user', $2)`,
+		deletionResidueActionPrefix+string(effect), userID)
+	if err != nil {
+		return fmt.Errorf("RecordDeletionResidue: %w", err)
+	}
+	return nil
 }
 
 // DeletionClaimKind names WHICH of the two mutually exclusive authorisations a hard-deletion claim
