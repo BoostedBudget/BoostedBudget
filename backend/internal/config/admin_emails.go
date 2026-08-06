@@ -60,6 +60,14 @@ func adminEmailsConfigPath(allowlistEnv string) string {
 // allowlistEnv is the environment the allowlist resolves against — always
 // Config.AdminAllowlistEnvironment(), never Config.Environment. It decides whether the
 // ADMIN_EMAILS_CONFIG relocation override is honoured; see adminEmailsConfigPath.
+//
+// ⚠️ allowlistEnv is only consulted on the FIRST call, because the result is cached by
+// sync.Once. Today there is exactly one production caller (cmd/server/main.go), so that is
+// safe. If a second call site is ever added, a caller passing a different allowlistEnv will
+// silently receive the file the first caller selected — including, in the worst ordering, an
+// override that would have been refused for the second caller's environment. Add a second
+// caller only alongside either an explicit mismatch check here or the removal of the
+// singleton. Tests must call ResetAdminEmailConfigForTesting between environments.
 func LoadAdminEmailConfig(allowlistEnv string) (*domain.AdminEmailConfig, error) {
 	adminConfigOnce.Do(func() {
 		globalAdminEmailConfig, adminConfigLoadError = loadAdminEmailConfigFromFile(allowlistEnv)
