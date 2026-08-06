@@ -500,7 +500,12 @@ func (h *AdminHandler) GetSystemHealth(ctx context.Context, input *GetSystemHeal
 // Safe to call with a nil plaidService/linkedItemRepo: FireWebhook is the only handler that
 // needs them and it returns 503 when they are absent.
 func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
-	// POST /api/v1/admin/plaid/fire-webhook - Fire a Plaid webhook (QA only)
+	// POST /api/v1/admin/plaid/fire-webhook - Fire a Plaid webhook
+	// The "(QA only)" in the Summary below is inaccurate about reachability (#1498): this is
+	// registered and admin-reachable in every environment. What confines it is
+	// plaidService.FireWebhook's PlaidEnv != "sandbox" check, not the environment. The
+	// summary text is left alone deliberately — editing it moves api/openapi.yaml and feeds
+	// the MCP capability-manifest drift test; tracked on #1498.
 	huma.Register(api, huma.Operation{
 		OperationID: "fireWebhook",
 		Method:      http.MethodPost,
@@ -511,8 +516,12 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.FireWebhook)
 
-	// POST /api/v1/admin/subscription/grant-trial - Grant trial to current user (QA only)
+	// POST /api/v1/admin/subscription/grant-trial - Grant trial to current user
 	// Issue #698: Used by E2E tests to ensure test user has active subscription.
+	// The "(QA only)" in the Summary below is inaccurate about reachability: this endpoint is
+	// DELIBERATELY reachable in production (#1498) — see the decision note on
+	// AdminHandler.GrantTrial. Summary text left alone for the same spec-churn reason as
+	// fire-webhook above.
 	huma.Register(api, huma.Operation{
 		OperationID: "grantTrial",
 		Method:      http.MethodPost,

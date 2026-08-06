@@ -211,8 +211,8 @@ export async function createSecondIdentityContext(
     }
 
     // Best-effort trial grant — same admin endpoint auth.setup.ts uses for the primary
-    // user. Not fatal if it fails (e.g. endpoint disabled outside ENVIRONMENT=qa, or the
-    // auto-grant on first profile fetch already succeeded) — let the caller's own
+    // user. Not fatal if it fails (e.g. the caller is not an admin, or the auto-grant on
+    // first profile fetch already succeeded) — let the caller's own
     // assertions be the source of truth on whether the invitee can reach protected routes.
     const doTrialGrant = async (authToken: string | null): Promise<boolean> => {
       try {
