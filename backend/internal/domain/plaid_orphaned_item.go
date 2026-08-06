@@ -98,10 +98,16 @@ type PlaidOrphanedItem struct {
 	LinkedItemStatus string
 	// LastErrorCode is the removal error code AT THE MOMENT OF ERASURE. Never overwritten by a retry —
 	// LastRetryErrorCode carries that, so the diagnostic explaining why the row exists is not lost.
-	LastErrorCode      string
-	TerminalSince      *time.Time
-	OrphanedAt         time.Time
-	AccessToken        string
+	LastErrorCode string
+	TerminalSince *time.Time
+	OrphanedAt    time.Time
+	AccessToken   string
+	// TokenUndecryptable is true when a credential IS stored but this process could not decrypt it —
+	// in practice an encryption-key rotation. Distinct from AccessToken == "" with this false, which
+	// means no credential is stored at all: one is "we have it and cannot use it", the other is "we do
+	// not have it". Both mean no retry can succeed right now; only the first can start working again on
+	// its own if the key comes back.
+	TokenUndecryptable bool
 	TokenExpiresAt     time.Time
 	TokenPurgedAt      *time.Time
 	RetryAttemptCount  int
@@ -117,6 +123,10 @@ type PlaidOrphanedItem struct {
 // The comparison is strict (`asOf.Before(TokenExpiresAt)`): AT the deadline the token is spent. This
 // is deliberately independent of whether the purge sweep has actually run — the deadline is the rule,
 // the purge is the enforcement, and code that reads a token must not wait for the enforcement.
+//
+// A record whose ciphertext would not decrypt reports false here too, because the repository leaves
+// AccessToken empty in that case (and sets TokenUndecryptable to say why). "Live" means presentable to
+// Plaid, and an undecryptable value is not.
 func (o PlaidOrphanedItem) TokenIsLive(asOf time.Time) bool {
 	return o.AccessToken != "" && asOf.Before(o.TokenExpiresAt)
 }
@@ -130,8 +140,11 @@ func (o PlaidOrphanedItem) TokenIsLive(asOf time.Time) bool {
 //  1. Resolved wins outright. A removed Item is not work, whatever its token or attempt history says.
 //  2. A dead token (absent, purged, or past its deadline) means manual intervention. This is the state
 //     the table exists to surface.
-//  3. An undecryptable token means manual intervention even though the token is nominally live — no
-//     retry can use it while the key is missing. See OrphanTokenUndecryptableCode.
+//  3. A token this process could not decrypt is already covered by (2) — the repository leaves
+//     AccessToken empty and sets TokenUndecryptable, so TokenIsLive is false. This third check is
+//     narrower and not redundant with it: it catches the row whose LAST RETRY could not decrypt even
+//     though the reader can, which is what a key rolled out to some processes and not others looks
+//     like. See OrphanTokenUndecryptableCode.
 //  4. A live token with no OBSERVED retry within OrphanedItemRetryStaleAfter means manual intervention:
 //     the row must not claim an automated retry it has no evidence of. See that constant.
 //  5. Only then: auto-retrying.
