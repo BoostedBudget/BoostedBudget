@@ -27,7 +27,8 @@ type TrialGranter interface {
 }
 
 // AdminHandler handles admin-only endpoints for testing and troubleshooting.
-// Routes are protected by AdminMiddleware with role validation and environment checks.
+// Routes are protected by AdminMiddleware, which authorizes by identity and admin role in
+// every environment (Issue #1499 removed its environment check).
 type AdminHandler struct {
 	plaidService          services.PlaidService
 	linkedItemRepo        repository.LinkedItemRepository
@@ -254,7 +255,16 @@ type GetSystemHealthOutput struct {
 //   - 403: Not an admin (checked by AdminMiddleware)
 //   - 404: Linked item not found
 //   - 500: Decryption failure or Plaid API error
+//   - 503: Plaid service not configured
 func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput) (*FireWebhookOutput, error) {
+	// Issue #1499: admin routes are now registered even when Plaid is unconfigured, so that a
+	// non-Plaid deployment still gets system health, user management, subscription admin, the
+	// dead-letter queue and the orphaned-items view. This is the one admin handler with a
+	// Plaid dependency, so it refuses the same way the other under-configured ones do.
+	if h.plaidService == nil || h.linkedItemRepo == nil {
+		return nil, huma.Error503ServiceUnavailable("Plaid service not configured")
+	}
+
 	// 1. Fetch linked item by Plaid item ID (not database primary key)
 	// Issue #331: item_id is the Plaid identifier, not the database primary key
 	linkedItem, err := h.linkedItemRepo.GetByItemID(ctx, input.Body.ItemID)
@@ -476,7 +486,9 @@ func (h *AdminHandler) GetSystemHealth(ctx context.Context, input *GetSystemHeal
 }
 
 // RegisterAdminRoutes registers admin routes with the Huma API.
-// Routes are protected by AdminMiddleware (environment and role validation).
+// Routes are protected by AdminMiddleware (role validation, all environments — Issue #1499).
+// Safe to call with a nil plaidService/linkedItemRepo: FireWebhook is the only handler that
+// needs them and it returns 503 when they are absent.
 func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 	// POST /api/v1/admin/plaid/fire-webhook - Fire a Plaid webhook (QA only)
 	huma.Register(api, huma.Operation{

@@ -1770,21 +1770,29 @@ func main() {
 		appLogger.Info("Huma category preview routes registered")
 
 		// Register Huma admin routes (Issue #559: Huma migration)
-		// Security: AdminMiddleware handles environment check (404 in non-qa) and role validation (Issue #309)
+		// Security: AdminMiddleware authorizes by identity and role — 401 unauthenticated,
+		// 403 without domain.RoleAdmin, 500 (refused) if the role lookup fails. Issue #1499
+		// removed its environment check, so this surface is reachable in production BY ADMINS;
+		// the role gate, not the deployment environment, is what keeps everyone else out.
 		// Issue #698: Pass trialService for E2E test trial grant endpoint
 		// Issue #638: Pass adminService for check-role endpoint
 		// Issue #639: Pass adminUserService for user management endpoints
 		// Issue #640: Pass systemHealthService for system health monitoring
-		if plaidService != nil {
-			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
-				WithPaddleTransactionRepo(paddleTransactionRepo).
-				WithPaddleWebhookRepo(paddleWebhookRepo).
-				WithJobQueue(jobQueue).
-				WithDeadLetterService(deadLetterService).
-				WithPlaidOrphanedItemRepo(plaidOrphanedItemRepo)
-			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
-			appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)")
-		}
+		//
+		// Issue #1499: registration is deliberately NOT gated on plaidService != nil. It used to
+		// be, which meant a deployment without Plaid credentials silently lost all 24 admin
+		// endpoints — system health, user management, subscription admin, the dead-letter queue
+		// and the orphaned-Plaid-Item view — none of which is Plaid-specific. plaidService and
+		// linkedItemRepo feed exactly one handler (FireWebhook, a QA webhook-firing helper),
+		// which returns 503 when either is nil rather than dereferencing it.
+		humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
+			WithPaddleTransactionRepo(paddleTransactionRepo).
+			WithPaddleWebhookRepo(paddleWebhookRepo).
+			WithJobQueue(jobQueue).
+			WithDeadLetterService(deadLetterService).
+			WithPlaidOrphanedItemRepo(plaidOrphanedItemRepo)
+		operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
+		appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)", "plaid_configured", plaidService != nil)
 
 		// Issue #821: QA auth bypass endpoint (QA/Staging only).
 		// Guard 1: Environment check here. Guard 2: Handler rejects production in Bypass().
