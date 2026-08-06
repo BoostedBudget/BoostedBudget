@@ -47,7 +47,6 @@ import (
 type Client struct {
 	client *river.Client[pgx.Tx]
 	pool   *pgxpool.Pool
-	config Config
 }
 
 // Ensure Client implements the interfaces
@@ -80,7 +79,6 @@ func NewClient(pool *pgxpool.Pool, workers *river.Workers, cfg Config) (*Client,
 	return &Client{
 		client: riverClient,
 		pool:   pool,
-		config: cfg,
 	}, nil
 }
 
