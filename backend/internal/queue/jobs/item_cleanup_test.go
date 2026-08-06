@@ -3,9 +3,12 @@ package jobs
 import (
 	"context"
 	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -653,8 +656,23 @@ func TestItemCleanupWorker_Work_DeleteErrorDoesNotFail(t *testing.T) {
 // third careful re-reading: this test fails if a caller is added or removed without the comments
 // being updated, and its failure message names the four comment sites to fix.
 //
-// Matches `.ClearCleanupSchedule(ctx,` rather than the bare method name so the comments that QUOTE
-// the grep (`\.ClearCleanupSchedule(`) are not themselves counted as callers.
+// AST-BASED, not a substring match — fix round 1, and the guard's own first version failed exactly
+// the standard it was written to enforce. It matched the literal `".ClearCleanupSchedule(ctx,"`, on
+// the theory that requiring `(ctx,` kept the comments QUOTING the grep from counting as callers. A
+// reviewer added a real fifth production caller written `ClearCleanupSchedule(c, linkedItemID)`; it
+// compiled, and this test PASSED with exit 0. So the claim "fails if a caller is added" was itself
+// false — any non-`ctx` context identifier, or a call split across lines, walked straight past it.
+//
+// Parsing instead of pattern-matching removes the whole class: a *ast.CallExpr whose Fun is a
+// *ast.SelectorExpr named ClearCleanupSchedule is a call however it is spelled, whitespace and
+// receiver and argument names included, and comments are not part of the AST at all so the
+// grep-quoting problem disappears rather than being worked around. Verified by re-applying that same
+// fifth caller and watching this test go red.
+//
+// Counts CALLS only, so an interface/method declaration (an *ast.Field name) and a method VALUE
+// passed without being invoked are both excluded. A method value would be a genuine miss, but it is
+// not a shape this codebase uses for repository methods; if one ever appears, widen this to bare
+// *ast.SelectorExpr rather than trusting the count.
 func TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet(t *testing.T) {
 	// Every production call site, keyed by path relative to backend/internal, with its call count.
 	// Each entry must correspond to a bullet in ItemCleanupWorker.Work's #1486 enumeration.
@@ -673,11 +691,23 @@ func TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet(t *testing.
 		if d.IsDir() || !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
 			return nil
 		}
-		src, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
+		// ParseComments is deliberately NOT set: comments must not influence the count, and this is
+		// the structural reason the substring version needed its `(ctx,` hack in the first place.
+		file, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if parseErr != nil {
+			return fmt.Errorf("parsing %s: %w", path, parseErr)
 		}
-		n := strings.Count(string(src), ".ClearCleanupSchedule(ctx,")
+		n := 0
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil && sel.Sel.Name == "ClearCleanupSchedule" {
+				n++
+			}
+			return true
+		})
 		if n == 0 {
 			return nil
 		}
