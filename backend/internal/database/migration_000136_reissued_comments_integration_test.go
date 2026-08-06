@@ -192,18 +192,34 @@ func TestMigration000136_ReapplyUpIsNoOp(t *testing.T) {
 // header. A comment-only migration that quietly altered a column would be the worst kind of surprise
 // in a file nobody expects to be structural, and the five OTHER column comments 000135 sets are
 // deliberately not re-issued — re-issuing unchanged text would obscure which two claims moved.
+//
+// ⚠ TWO THINGS THIS TEST GETS RIGHT ONLY BECAUSE THE FIRST VERSION GOT THEM WRONG (Codex, #1503
+// review):
+//
+//  1. It applies the DOWN migration before snapshotting. The test DB arrives fully migrated, i.e.
+//     with 000136 ALREADY APPLIED, so a snapshot taken before re-applying up would already contain
+//     any stray comment or structural change the migration makes — and comparing that state to
+//     itself would show no difference. Running down first makes the "before" state genuinely
+//     pre-000136. (down only rewrites the same two comments, so it cannot itself mask a
+//     third-object change.)
+//  2. It snapshots CONSTRAINTS, INDEXES, the table comment and the actual DEFAULT EXPRESSION —
+//     not merely "does a default exist". The first version checked four column attributes and
+//     claimed to guard the whole scope; several of the things 000136's own header forbids were
+//     invisible to it.
 func TestMigration000136_TouchesNothingButTheTwoComments(t *testing.T) {
 	tx := beginRolledBackTx(t)
+	ctx := context.Background()
 
 	type colShape struct {
 		dataType   string
 		isNullable string
-		hasDefault bool
+		colDefault string
 		comment    string
 	}
-	snapshot := func() map[string]colShape {
-		rows, err := tx.Query(context.Background(), `
-			SELECT c.column_name, c.data_type, c.is_nullable, c.column_default IS NOT NULL,
+	snapshotColumns := func() map[string]colShape {
+		rows, err := tx.Query(ctx, `
+			SELECT c.column_name, c.data_type, c.is_nullable,
+			       COALESCE(c.column_default, ''),
 			       COALESCE(col_description(a.attrelid, a.attnum), '')
 			FROM information_schema.columns c
 			JOIN pg_attribute a
@@ -218,29 +234,88 @@ func TestMigration000136_TouchesNothingButTheTwoComments(t *testing.T) {
 		for rows.Next() {
 			var name string
 			var s colShape
-			require.NoError(t, rows.Scan(&name, &s.dataType, &s.isNullable, &s.hasDefault, &s.comment))
+			require.NoError(t, rows.Scan(&name, &s.dataType, &s.isNullable, &s.colDefault, &s.comment))
 			out[name] = s
 		}
 		require.NoError(t, rows.Err())
 		return out
 	}
 
-	before := snapshot()
-	require.NotEmpty(t, before, "plaid_orphaned_items must exist once 000135 is applied")
+	// Every constraint on the table, by name, with its full definition — so a widened CHECK or a
+	// dropped NOT NULL is visible, not just an added/removed one.
+	snapshotConstraints := func() map[string]string {
+		rows, err := tx.Query(ctx, `
+			SELECT conname, pg_get_constraintdef(oid)
+			FROM pg_constraint
+			WHERE conrelid = 'plaid_orphaned_items'::regclass`)
+		require.NoError(t, err)
+		defer rows.Close()
+
+		out := map[string]string{}
+		for rows.Next() {
+			var name, def string
+			require.NoError(t, rows.Scan(&name, &def))
+			out[name] = def
+		}
+		require.NoError(t, rows.Err())
+		return out
+	}
+
+	// 000135's lock-cost argument rests on adding NO index. An index appearing here would falsify
+	// that argument silently.
+	snapshotIndexes := func() map[string]string {
+		rows, err := tx.Query(ctx, `
+			SELECT indexname, indexdef
+			FROM pg_indexes
+			WHERE schemaname = current_schema() AND tablename = 'plaid_orphaned_items'`)
+		require.NoError(t, err)
+		defer rows.Close()
+
+		out := map[string]string{}
+		for rows.Next() {
+			var name, def string
+			require.NoError(t, rows.Scan(&name, &def))
+			out[name] = def
+		}
+		require.NoError(t, rows.Err())
+		return out
+	}
+
+	rowCount := func() int64 {
+		var n int64
+		require.NoError(t, tx.QueryRow(ctx, `SELECT count(*) FROM plaid_orphaned_items`).Scan(&n))
+		return n
+	}
+
+	// Get to a genuinely pre-000136 state first — see note (1) above.
+	require.NoError(t, applyMigration000136Down(t, tx))
+
+	beforeCols := snapshotColumns()
+	beforeCons := snapshotConstraints()
+	beforeIdx := snapshotIndexes()
+	beforeRows := rowCount()
+	require.NotEmpty(t, beforeCols, "plaid_orphaned_items must exist once 000135 is applied")
 
 	require.NoError(t, applyMigration000136Up(t, tx))
-	after := snapshot()
 
-	require.Equal(t, len(before), len(after), "000136 must not add or drop a column")
-	for name, b := range before {
-		a, ok := after[name]
+	afterCols := snapshotColumns()
+	require.Equal(t, len(beforeCols), len(afterCols), "000136 must not add or drop a column")
+	for name, b := range beforeCols {
+		a, ok := afterCols[name]
 		require.True(t, ok, "column %s must survive", name)
 		assert.Equal(t, b.dataType, a.dataType, "column %s data type must not move", name)
 		assert.Equal(t, b.isNullable, a.isNullable, "column %s nullability must not move", name)
-		assert.Equal(t, b.hasDefault, a.hasDefault, "column %s default must not move", name)
+		assert.Equal(t, b.colDefault, a.colDefault, "column %s DEFAULT EXPRESSION must not move", name)
 		if name != "token_expires_at" {
 			assert.Equal(t, b.comment, a.comment,
 				"000136 must re-issue ONLY token_expires_at's comment, but %s's changed", name)
 		}
 	}
+
+	assert.Equal(t, beforeCons, snapshotConstraints(),
+		"000136 must not add, drop or redefine a constraint — including the "+
+			"plaid_orphaned_items_purged_token_is_null CHECK that 000135 spends its one constraint on")
+	assert.Equal(t, beforeIdx, snapshotIndexes(),
+		"000136 must add no index — 000135's lock-cost argument rests on there being none")
+	assert.Equal(t, beforeRows, rowCount(), "000136 must not touch a single row")
 }
