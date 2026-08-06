@@ -1,0 +1,20 @@
+-- Issue #1494: reverse 000134.
+--
+-- DATA LOSS, and it is the most consequential rollback on this branch: every record of a live,
+-- possibly-still-billing Plaid Item stranded by a completed GDPR erasure is destroyed, and there is
+-- nothing else anywhere that carries it — the linked_items rows those records came from were deleted
+-- by the same cascade that wrote them. After this rollback those Items are unfindable from this
+-- system, which is precisely the state 000134 exists to prevent.
+--
+-- DO NOT roll this back to "undo #1494" without first rolling back 000133 (or otherwise restoring
+-- C2's block), and export this table's contents somewhere first. In the other order — this table
+-- gone while plaid_removal_failed_at still stops C2 blocking — erasures would proceed and strand
+-- Items with no record at all: strictly worse than either endpoint.
+--
+-- ban-drop-table is an ENABLED Squawk rule, and .down.sql files are excluded from linting
+-- (excluded_paths in .squawk.toml) precisely so rollbacks can contain the DROP that reverses their
+-- .up.sql. This is that case.
+--
+-- Idempotent: DROP TABLE IF EXISTS. Dropping the table drops its constraint and all COMMENTs with
+-- it, so there is nothing else to undo.
+DROP TABLE IF EXISTS plaid_orphaned_items;

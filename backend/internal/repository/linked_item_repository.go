@@ -183,6 +183,35 @@ type LinkedItemRepository interface {
 	// it.
 	MarkPlaidRemoved(ctx context.Context, ids []string) error
 
+	// MarkPlaidRemovalFailed records, on the given items, that a Plaid /item/remove attempt failed
+	// with an error we judge UNRECOVERABLE — writing plaid_removal_failed_at and
+	// plaid_removal_error_code (migration 000133). Issue #1494.
+	//
+	// THIS IS THE OPPOSITE FACT FROM MarkPlaidRemoved, not a variant of it, and conflating the two
+	// would recreate the defect #1495 closed. plaid_removed_at means "the Plaid side is DONE, billing
+	// has stopped". This means "the credential we hold cannot remove this Item, so retrying with it
+	// cannot change the outcome" — the Item may still exist and may still bill. The only thing this
+	// mark is allowed to unlock is DeleteUserCascade's C2 guard (uncleanedLinkedItemExistsClause),
+	// and only because the cascade first copies the row into plaid_orphaned_items so the obligation
+	// survives the erasure. It must never be written for an item that might yet be removable: see
+	// services.terminalPlaidRemovalFailure for the deliberately narrow code set, and for why
+	// anything unrecognised stays recoverable.
+	//
+	// NOT idempotent in the "first write wins" sense MarkPlaidRemoved is: each call OVERWRITES both
+	// columns, so the row records the MOST RECENT terminal attempt. That is the useful reading for an
+	// operator ("when did we last try, and what did Plaid say"), and there is no history to preserve
+	// — the previous value was the same verdict from an earlier attempt.
+	//
+	// GUARDED BY `plaid_removed_at IS NULL`: a row already proved removed must never acquire a
+	// failure verdict afterwards (a late-arriving error from a retry that raced a success would
+	// otherwise contradict the stronger fact). This makes the zero-row case AMBIGUOUS BY DESIGN, and
+	// callers must treat it as benign: it means either the row no longer exists, or it has already
+	// been proved removed. Both are outcomes in which no caller needs this mark.
+	//
+	// Returns ErrNoLinkedItemsUpdated (errors.Is-checkable) for that zero-row case, despite a
+	// non-empty ids. A nil or empty ids is a no-op (not an error).
+	MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error
+
 	// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
 	GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
 
@@ -1465,6 +1494,46 @@ func (r *linkedItemRepository) MarkPlaidRemoved(ctx context.Context, ids []strin
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w (MarkPlaidRemoved): 0 of %d given id(s) matched", ErrNoLinkedItemsUpdated, len(ids))
+	}
+	return nil
+}
+
+// MarkPlaidRemovalFailed records an unrecoverable /item/remove failure — see the interface method's
+// doc comment (Issue #1494) for why this fact must stay separate from plaid_removed_at.
+//
+// DOES NOT clear plaid_removed_at, and DOES NOT touch status. Both omissions are deliberate: the
+// verdict recorded here is about our credential, not about the Item's existence, so it justifies no
+// other state change. In particular it must not write 'disconnected' — that status is read by the
+// cleanup loop's skip branch (services.cleanupItems), and a row that stopped being re-attempted
+// while still owing Plaid work is the exact "state marked, work never happened" shape this branch
+// has closed four times.
+//
+// The `plaid_removed_at IS NULL` guard is what makes the two columns non-contradictory in the one
+// direction that matters: a proved-removed row can never later be labelled unremovable. The reverse
+// IS allowed — MarkPlaidRemoved has no failure-column guard, so a row marked terminal here can
+// still be stamped removed later if the classification turns out to have been too wide, and the
+// failure columns are left in place as the only evidence that happened.
+func (r *linkedItemRepository) MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET plaid_removal_failed_at = $1,
+		    plaid_removal_error_code = $2,
+		    updated_at = $1
+		WHERE id = ANY($3)
+		  AND plaid_removed_at IS NULL
+	`
+
+	tag, err := r.db.Exec(ctx, query, now, errorCode, ids)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w (MarkPlaidRemovalFailed): 0 of %d given id(s) matched — row(s) gone, or already recorded as removed", ErrNoLinkedItemsUpdated, len(ids))
 	}
 	return nil
 }
