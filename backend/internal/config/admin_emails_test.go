@@ -36,9 +36,15 @@ var testAccountAdminEmails = []string{
 }
 
 // loadShippedAdminEmailConfig loads the real config/admin_emails.yaml from the repository.
+//
+// ADMIN_EMAILS_CONFIG is cleared deliberately: the loader honours it, so without this an
+// ambient override pointing at a compliant fixture would let every "shipped ACL" assertion
+// below pass while config/admin_emails.yaml itself had regressed.
 func loadShippedAdminEmailConfig(t *testing.T) *domain.AdminEmailConfig {
 	t.Helper()
+	t.Setenv("ADMIN_EMAILS_CONFIG", "")
 	ResetAdminEmailConfigForTesting()
+	t.Cleanup(ResetAdminEmailConfigForTesting)
 	cfg, err := LoadAdminEmailConfig()
 	require.NoError(t, err, "the shipped admin_emails.yaml must parse")
 	require.NotNil(t, cfg)
@@ -122,6 +128,104 @@ func TestEffectiveAdminEmails_UnrecognisedEnvironmentFailsSafe(t *testing.T) {
 			for _, email := range ownerAdminEmails {
 				assert.Contains(t, effective, email,
 					"unrecognised environment %q must still grant owner %s", env, email)
+			}
+		})
+	}
+}
+
+// RED 4b — the fail-safe as it is actually reached at startup, not as called directly.
+//
+// This is the test that matters, and its absence was a real defect: RED 4 above calls
+// EffectiveAdminEmails("") directly, but `Config.Environment` is NEVER "". getEnv
+// (config.go:262) maps both unset AND empty to the "development" default, and development
+// is on the non-production allowlist — so an operator who deploys production and simply
+// forgets to set ENVIRONMENT would have loaded both CI test accounts as production admins,
+// which is precisely the failure requirement 1 exists to prevent.
+//
+// The fix is that resolving the allowlist requires an EXPLICITLY set ENVIRONMENT. This test
+// goes through Config.Load() so it exercises the real startup path end to end.
+func TestConfigLoad_UnsetEnvironmentFailsSafeForAdminAllowlist(t *testing.T) {
+	adminCfg := loadShippedAdminEmailConfig(t)
+
+	t.Run("ENVIRONMENT unset", func(t *testing.T) {
+		// Cleared to "" rather than unset: getEnv treats the two identically
+		// (config.go:262-267), and t.Setenv restores any ambient export afterwards.
+		t.Setenv("ENVIRONMENT", "")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		// The effective environment still defaults to development — that behaviour is
+		// relied on elsewhere and is not changed here.
+		require.Equal(t, "development", cfg.Environment)
+		// But the ADMIN ALLOWLIST must not trust a defaulted value.
+		require.False(t, cfg.EnvironmentExplicitlySet,
+			"an unset ENVIRONMENT must not count as explicitly configured")
+
+		effective := adminCfg.EffectiveAdminEmails(cfg.AdminAllowlistEnvironment())
+		for _, email := range testAccountAdminEmails {
+			assert.NotContains(t, effective, email,
+				"a deployment that forgets ENVIRONMENT must not grant admin to %s", email)
+		}
+		for _, email := range ownerAdminEmails {
+			assert.Contains(t, effective, email,
+				"failing safe must not lock owner %s out", email)
+		}
+	})
+
+	// The sibling case, through Load() as well: an EXPLICIT non-production declaration still
+	// works, so local dev and the E2E suite are unaffected. Without this, the assertions
+	// above would also pass if AdminAllowlistEnvironment simply always returned "".
+	//
+	// Only development and qa go through Load() here — Validate() demands a full secret set
+	// for staging and production (DATABASE_URL, CLERK_SECRET_KEY, ENCRYPTION_KEY,
+	// CF_ORIGIN_SECRET, …), and stubbing all of them would test the validator, not this.
+	// Those two names are covered by the table below instead.
+	for _, env := range []string{"development", "qa"} {
+		t.Run("ENVIRONMENT="+env, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", env)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+			require.True(t, cfg.EnvironmentExplicitlySet)
+			require.Equal(t, env, cfg.AdminAllowlistEnvironment())
+
+			effective := adminCfg.EffectiveAdminEmails(cfg.AdminAllowlistEnvironment())
+			for _, email := range testAccountAdminEmails {
+				assert.Contains(t, effective, email,
+					"an explicit %s must still grant admin to %s", env, email)
+			}
+		})
+	}
+
+	// AdminAllowlistEnvironment across every declared environment, plus the defaulted case.
+	for _, tc := range []struct {
+		name             string
+		cfg              *Config
+		wantAllowlistEnv string
+		wantTestAdmins   bool
+	}{
+		{"explicit development", &Config{Environment: "development", EnvironmentExplicitlySet: true}, "development", true},
+		{"explicit qa", &Config{Environment: "qa", EnvironmentExplicitlySet: true}, "qa", true},
+		{"explicit staging", &Config{Environment: "staging", EnvironmentExplicitlySet: true}, "staging", true},
+		{"explicit production", &Config{Environment: "production", EnvironmentExplicitlySet: true}, "production", false},
+		// The defaulted case: Environment says development but nobody set ENVIRONMENT.
+		{"defaulted development", &Config{Environment: "development", EnvironmentExplicitlySet: false}, "", false},
+		{"nil config", nil, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.wantAllowlistEnv, tc.cfg.AdminAllowlistEnvironment())
+
+			effective := adminCfg.EffectiveAdminEmails(tc.cfg.AdminAllowlistEnvironment())
+			for _, email := range testAccountAdminEmails {
+				if tc.wantTestAdmins {
+					assert.Contains(t, effective, email)
+				} else {
+					assert.NotContains(t, effective, email)
+				}
+			}
+			// Owners are admins in every one of these cases, without exception.
+			for _, email := range ownerAdminEmails {
+				assert.Contains(t, effective, email)
 			}
 		})
 	}
