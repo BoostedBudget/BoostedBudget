@@ -1522,8 +1522,23 @@ func main() {
 			appLogger.Warn("Failed to load admin email config (using empty list)", "error", err)
 			adminEmailConfig = &domain.AdminEmailConfig{AdminEmails: []string{}}
 		}
-		adminService := services.NewAdminService(cfg.ClerkSecretKey, adminEmailConfig.AdminEmails)
-		appLogger.Info("Admin service initialized", "hardcoded_admin_emails", len(adminEmailConfig.AdminEmails))
+		// Issue #1498: resolve the two lists against the environment. The hardcoded list
+		// bypasses the role check, so the CI/QA entries in non_production_admin_emails must
+		// not load in production — nor under an unset/unrecognised ENVIRONMENT, which
+		// EffectiveAdminEmails treats as production. Never pass AdminEmails directly.
+		effectiveAdminEmails := adminEmailConfig.EffectiveAdminEmails(cfg.Environment)
+		adminService := services.NewAdminService(cfg.ClerkSecretKey, effectiveAdminEmails)
+		// Log the posture, never the addresses: an operator must be able to see from the
+		// startup log which of the two postures is live.
+		adminEmailMode := "production-safe (non-production admin entries excluded)"
+		if domain.IsNonProductionEnvironment(cfg.Environment) {
+			adminEmailMode = "non-production (test admin entries loaded)"
+		}
+		appLogger.Info("Admin service initialized",
+			"environment", cfg.Environment,
+			"admin_email_mode", adminEmailMode,
+			"effective_hardcoded_admin_emails", len(effectiveAdminEmails),
+			"non_production_admin_emails_in_file", len(adminEmailConfig.NonProductionAdminEmails))
 
 		// Issue #639: Admin user management - needs adminService for admin status checks
 		// Issue #1414: clerkService re-syncs Clerk metadata on tier-override removal;

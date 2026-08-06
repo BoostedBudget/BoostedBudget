@@ -83,9 +83,14 @@ func loadAdminEmailConfigFromFile() (*domain.AdminEmailConfig, error) {
 		return nil, fmt.Errorf("failed to parse admin emails config YAML: %w", err)
 	}
 
-	// Normalize emails to lowercase for case-insensitive matching
+	// Normalize emails to lowercase for case-insensitive matching.
+	// Both lists get the same treatment (Issue #1498) — a stray capital in the
+	// non-production list must not silently disable a QA/E2E admin.
 	for i, email := range config.AdminEmails {
 		config.AdminEmails[i] = strings.ToLower(strings.TrimSpace(email))
+	}
+	for i, email := range config.NonProductionAdminEmails {
+		config.NonProductionAdminEmails[i] = strings.ToLower(strings.TrimSpace(email))
 	}
 
 	return &config, nil
