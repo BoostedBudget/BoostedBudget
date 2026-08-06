@@ -1806,8 +1806,11 @@ func TestDisconnectInstitution_LinkedItemNotFound(t *testing.T) {
 // failing-first test. It replaces TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds, which
 // pinned the defect as intended behaviour ("should succeed even if Plaid fails").
 //
-// This is the SAME defect as parts A/B, on the MORE frequent path: DisconnectInstitution is
-// user-initiated, so it runs far more often than the daily cleanup sweep. It logged the Plaid failure
+// This is the SAME defect as parts A/B, on a second, user-initiated path. (An earlier version of this
+// comment called it "the MORE frequent path"; that was unsupported — `useDisconnectInstitution` has no
+// consumer in apps/web/src outside the test mocks — and is removed rather than softened. The defect
+// being identical and irreversible is the whole argument; frequency was never needed.)
+// It logged the Plaid failure
 // and then unconditionally DeleteByUser'd the row, which CASCADE-deletes the accounts too — leaving a
 // live, still-billing Plaid Item with no local record it ever existed, and DeleteUserCascade's C2
 // guard (an EXISTS over linked_items) with nothing left to see.

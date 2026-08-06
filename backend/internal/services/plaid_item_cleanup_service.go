@@ -361,6 +361,27 @@ func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 			// ItemCleanupWorker.Work while the Item was still live and still billing, and the
 			// worker's row Delete then erased the only local trace of it — after which
 			// DeleteUserCascade's C2 guard had nothing left to see.
+			//
+			// ⚠ A FAILURE MODE THIS PROPAGATION CONVERTED, disclosed rather than fixed. If
+			// /item/remove can NEVER succeed for this item — Plaid INVALID_ACCESS_TOKEN for a
+			// malformed or wrong-environment token, or plaidService.RemoveItem's own "access token
+			// cannot be empty" should decryption ever yield "" — then this error propagates on every
+			// attempt, the job dead-letters after its inherited 5, ItemCleanupCheckWorker's backstop
+			// re-enqueues it daily FOREVER, and uncleanedLinkedItemExistsClause holds
+			// DeleteUserCascade at (false, nil) for that user PERMANENTLY. Pre-fix the row was simply
+			// deleted and the erasure completed — over an Item that was, in this specific case,
+			// genuinely unusable — so this is a converted failure mode, not a pre-existing one.
+			//
+			// It is accepted here because it is FAIL-CLOSED and because the alternative is worse: no
+			// predicate available at this point can distinguish "token is permanently invalid, the
+			// Item is beyond our reach" from "token is fine, Plaid is having an outage", and guessing
+			// wrong in the other direction is exactly the orphaned-billing-Item bug this whole change
+			// exists to close. What it needs is an operator escape hatch (alerting on a repeatedly
+			// re-enqueued stranded item, plus an audited manual override), NOT a silent widening of
+			// the success set. Do not add INVALID_ACCESS_TOKEN to isPlaidItemAlreadyGone to make this
+			// go away without arguing the Plaid semantics explicitly first: ITEM_NOT_FOUND means the
+			// ITEM is gone (billing stopped), whereas an invalid TOKEN says nothing about whether the
+			// Item still exists or is still billable. Tracked as issue #1494.
 			s.logger.Error("failed to remove Plaid item; NOT reporting success",
 				"item_id", linkedItemID,
 				"plaid_item_id", item.ItemID,
@@ -383,11 +404,34 @@ func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 	}
 
 	// Record durably that this item's Plaid side is done, matching cleanupItems's per-item
-	// MarkItemsDisconnected. Propagated rather than best-effort: a retry re-runs the Plaid call,
-	// receives ITEM_NOT_FOUND (mapped to success just above) and lands here again, so failing loudly
-	// costs one wasted API call and CONVERGES — whereas swallowing it leaves a row that survives the
-	// caller's accounts-guarded Delete carrying neither the cleanup stamp nor 'disconnected', which
-	// is the permanent-block state.
+	// MarkItemsDisconnected. Propagated rather than best-effort: a retry re-runs the Plaid call and,
+	// PROVIDED the removal itself can still succeed or answer ITEM_NOT_FOUND, lands here again — so
+	// failing loudly costs one wasted API call and converges, whereas swallowing it leaves a row that
+	// survives the caller's accounts-guarded Delete carrying neither the cleanup stamp nor
+	// 'disconnected', which is the permanent-block state.
+	//
+	// That proviso is real, and the earlier version of this comment asserted convergence
+	// unconditionally, which was wrong — see the permanently-failing-removal note on the error branch
+	// above. This write's own convergence is not in doubt (a DB blip clears); the removal preceding it
+	// may never succeed, and in that case nothing here converges.
+	//
+	// USER-VISIBLE SIDE EFFECT, disclosed (fix round 1, item 7a). linkedItemRepository.Delete — which
+	// ItemCleanupWorker.Work calls next — is a deliberate no-op whenever any accounts row still
+	// references this item, which is routine for the error/login_required/stale/revoked legs. So the
+	// row commonly SURVIVES carrying 'disconnected', and the frontend renders that status as a
+	// "Disconnected" badge titled "Account disconnected - resubscribe to reconnect"
+	// (apps/web/src/features/accounts/AccountCard.tsx, components/AccountTable.tsx) — copy written for
+	// the subscription-expiry flow (#679/#680), which is MISLEADING for orphaned-item cleanup, where
+	// nothing about the user's subscription is at issue. Pre-fix those rows kept 'error'/'active'
+	// instead, so this is new.
+	//
+	// Accepted here rather than papered over: 'disconnected' is precisely correct as a DATA statement
+	// ("this item's Plaid side is done"), and three predicates depend on that meaning
+	// (uncleanedLinkedItemExistsClause, cleanupCandidateSelectQuery, GetItemsPendingCleanup). The
+	// defect is in the frontend's COPY, not in the status. A distinct status (e.g. 'removed') would
+	// mean auditing all three predicates plus every scan site, which is not a change to make as a
+	// side effect of a billing fix — if the badge copy is judged unacceptable, fix the copy, or make
+	// the status split a deliberate ticket of its own.
 	if markErr := s.linkedItemRepo.MarkItemsDisconnected(ctx, []string{linkedItemID}); markErr != nil {
 		if errors.Is(markErr, repository.ErrNoLinkedItemsUpdated) {
 			// A legitimate no-op: the row was already 'disconnected' or 'replaced'. Same distinction
