@@ -473,6 +473,14 @@ even for a credential this process cannot decrypt (a rotated key), because it is
   longer than an hour and that fact is itself the alarming signal `000134` named (the sweep logs a WARN
   when it hits the cap). This bullet exists because the earlier wording said the credential "must not
   exist" after the deadline, which the mechanism cannot deliver; an accurate hour beats a false zero.
+- **An hour is the bound per sweep, so a sweep that does not run extends it** to the next one that
+  does — a deploy window, a leader election, or a failed run. That is bounded in turn rather than
+  open-ended: the purge worker **returns an error** instead of logging and continuing precisely so
+  River retries it rather than recording a green run that purged nothing, and the same "state marked,
+  work never happened" reasoning is why `token_purged_at` is written in the same statement as the
+  `NULL`. What is *not* claimed is a hard ceiling across arbitrary infrastructure failure; what is
+  claimed is that no such failure can make the credential **usable**, because that half is enforced
+  at every read and never waits for this job.
 - **Pre-`000135` rows** hold no credential and, by the `DEFAULT NOW()` on `token_expires_at`, are
   already past their deadline. They are correctly reported as needing manual intervention.
 - **Application logs written BEFORE the erasure** name the Item id and the user id on the same line, so
