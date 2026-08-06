@@ -71,6 +71,12 @@ func TestPlaidCleanupService_Integration_TerminalFailure_UnblocksErasureAndPrese
 		IsActive:           true,
 	}
 	require.NoError(t, profileRepo.CreateUser(ctx, user))
+	// This user's erasure is authorised by the RETENTION rule (DeleteUserCascade is called below with
+	// a nil expectedDeletionRequestedAt, which forces deletionAuthorisationUnionPredicate's retention
+	// branch). Since #1440 T0-retention that branch re-verifies the retention clock and the
+	// subscription status, so the fixture must be a genuine expired-retention candidate — the
+	// property this test always implied and never established.
+	armElapsedRetentionClock(t, ctx, pool, profileRepo, user.ID)
 	item := &domain.LinkedItem{
 		UserID:          user.ID,
 		ItemID:          "plaid-item-e2e-" + suffix,
@@ -187,6 +193,12 @@ func TestPlaidCleanupService_Integration_TerminalFailure_ConfigFixInsideTheWindo
 		IsActive:           true,
 	}
 	require.NoError(t, profileRepo.CreateUser(ctx, user))
+	// This user's erasure is authorised by the RETENTION rule (DeleteUserCascade is called below with
+	// a nil expectedDeletionRequestedAt, which forces deletionAuthorisationUnionPredicate's retention
+	// branch). Since #1440 T0-retention that branch re-verifies the retention clock and the
+	// subscription status, so the fixture must be a genuine expired-retention candidate — the
+	// property this test always implied and never established.
+	armElapsedRetentionClock(t, ctx, pool, profileRepo, user.ID)
 	item := &domain.LinkedItem{
 		UserID:      user.ID,
 		ItemID:      "plaid-item-heal-" + suffix,

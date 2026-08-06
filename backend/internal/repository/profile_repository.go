@@ -1801,22 +1801,38 @@ const userRequestedDeletionClaimPredicate = `
 // retentionDeletionClaimPredicate authorises a hard delete on the strength of an expired retention
 // clock, for an account nobody asked to delete.
 //
-// It must agree with the query that selects these candidates, GetUsersWithExpiredRetentionPage, which
-// filters `deletion_requested_at IS NULL` and splices this same noManualOverrideAtAllPredicate.
-// Those two clauses are reproduced here rather than trusted to the candidate query, because the
-// claim's job is to re-verify against committed state at claim time what the candidate query
-// observed earlier.
+// It re-verifies EVERY condition that made the user a candidate in the first place, against
+// committed state at claim time: `deletion_requested_at IS NULL`, noManualOverrideAtAllPredicate,
+// and — since #1440 T0-retention — expiredRetentionClockPredicate, which is the very text
+// GetUsersWithExpiredRetentionPage selects on (spliced, not restated, so the two cannot drift).
 //
-// It re-verifies only those two, and this comment does not pretend otherwise. The candidate query
-// ALSO requires `retention_expires_at IS NOT NULL AND retention_expires_at <= NOW()` and
-// `subscription_status IN ('inactive', 'cancelled')`; this predicate checks neither. So a
-// retention-kind claim authorises any uncomped user with no outstanding deletion request,
-// regardless of their retention clock or subscription status. That breadth is PRE-EXISTING (the
-// pre-split predicate checked neither either) and is not reachable today, because the only
-// retention caller — RetentionCleanupCheckWorker.deleteExpiredAccounts — never asks for a claim on
-// a user the candidate query did not return. It is recorded here because a future second retention
-// caller would inherit that breadth silently; tightening the predicate to include the clock and
-// status is the fix if one ever appears.
+// #1440 T0-retention (Codex, High) is what expiredRetentionClockPredicate closes here, and the
+// defect was reachable rather than theoretical. This predicate used to check only the deletion-request and override rules, and
+// both of those stay TRUE for a user who RESUBSCRIBES: the reactivation webhook path
+// (UpdateSubscriptionFromPaddle with an active status, then ClearRetentionDates — see
+// subscription_webhook.go) writes subscription_status = 'active' and NULLs retention_started_at,
+// retention_expires_at and both notice stamps, and touches neither deletion_requested_at nor
+// manual_tier_override. The retention sweep selects a PAGE of candidates and then processes it row
+// by row in process (GetUsersWithExpiredRetentionPage →
+// RetentionCleanupCheckWorker.deleteExpiredAccounts → ExecuteDeletion), so the window between
+// selection and any one row's claim is real and unbounded. A resubscription inside that window
+// therefore used to end with ExecuteDeletion cancelling the customer's brand-new subscription
+// (cleanupPaddleResources acts on the row's raw status, which is now 'active') and hard-deleting
+// them. This is the same structural flaw as Issue #1440's T0 — an authorisation not re-checked
+// against the rule it was issued under — in the sibling path T0 did not touch.
+//
+// NOW() rather than a caller-supplied instant, deliberately, matching
+// userRequestedDeletionClaimPredicate's `deletion_scheduled_at <= NOW()` and the candidate query's
+// own `retention_expires_at <= NOW()`. Three reasons, in order of weight: (1) this is a write-side
+// guard inside a conditional UPDATE, and the convention this repo settled on in #1466 is that
+// read-side response predicates take the threaded asOf while write guards keep the transaction
+// clock — the "a write that no longer reflects reality must not win" rule wants the DATABASE's
+// committed now, not a Go clock captured before the I/O; (2) ClaimForDeletion is not given an
+// instant and does not need one, so threading one would add a parameter and a second clock
+// convention to a predicate whose sibling already uses NOW(); (3) this same constant is spliced
+// into deletionAuthorisationUnionPredicate, whose consumer (DeleteUserCascade) binds its own
+// positional parameters — a bind param here would have to be threaded through two unrelated
+// statements' argument lists, which is exactly how a predicate acquires a drift hazard.
 //
 // noManualOverrideAtAllPredicate — "no override AT ALL, live or already lapsed" — not
 // noActiveManualOverridePredicate ("live right now"). Issue #1413 Critical finding C1: a comp
@@ -1837,7 +1853,29 @@ const userRequestedDeletionClaimPredicate = `
 // Such a user is picked up by the user-requested path once their own window elapses.
 const retentionDeletionClaimPredicate = `
 	  AND deletion_requested_at IS NULL
-	` + noManualOverrideAtAllPredicate
+	` + expiredRetentionClockPredicate + noManualOverrideAtAllPredicate
+
+// expiredRetentionClockPredicate is the "this account's retention clock has actually run out, and
+// the account is still unsubscribed" test — the pair of facts that makes a user a retention
+// hard-delete candidate at all.
+//
+// Shared verbatim by GetUsersWithExpiredRetentionPage (candidate selection) and
+// retentionDeletionClaimPredicate (the claim that authorises the irreversible act), in the manner
+// uncleanedLinkedItemPredicate is shared by its two consumers, so the two can never disagree.
+// Drift between exactly these two was #1440 T0-retention: the candidate query required both
+// conditions and the claim required neither, so a resubscription between them was not noticed.
+// Restating this text in either place instead of splicing it re-opens that defect.
+//
+// NOT applied to GetUsersNeedingRetention30dNotice/7dNotice, which need a DIFFERENT clock test
+// (`retention_expires_at > NOW()` plus an interval window — the notice is sent BEFORE expiry, so
+// their bound is the opposite of this one) even though they share the status half. Nor to
+// GetUsersNeedingRetentionClockRepair, whose whole population is `retention_expires_at IS NULL`.
+// Sharing this constant with any of them would be a false generalisation.
+const expiredRetentionClockPredicate = `
+	  AND retention_expires_at IS NOT NULL
+	  AND retention_expires_at <= NOW()
+	  AND subscription_status IN ('inactive', 'cancelled')
+`
 
 // deletionAuthorisationUnionPredicate is satisfied when a claim of EITHER kind would be authorised.
 // It is composed from the two kind predicates above rather than restated, so it cannot drift away
@@ -1852,7 +1890,13 @@ const retentionDeletionClaimPredicate = `
 //   - a user-requested run has a non-NULL expected value, so the exact-value check forces the
 //     union's first branch (the second requires NULL) and thus re-checks deletion_scheduled_at;
 //   - a retention run has a NULL expected value, so it forces the second branch and thus re-checks
-//     the override rule.
+//     the override rule AND — since #1440 T0-retention — the retention clock and subscription status
+//     (expiredRetentionClockPredicate), which is what stops a resubscription landing in the
+//     external-cleanup window from being hard-deleted by the cascade after passing an earlier claim.
+//     That tightening reached this re-check for free, which is the entire point of composing this
+//     constant from the two kind predicates instead of restating them; verified by
+//     TestDeleteUserCascade_Integration_RetentionResubscribedAfterClaim_NotDeleted, which fails if
+//     the composition is replaced by a restatement that omits it.
 //
 // Nothing can change deletion_scheduled_at without also changing deletion_requested_at, so pinning
 // deletion_requested_at pins the whole episode, including its schedule.
@@ -2686,13 +2730,13 @@ func (r *profileRepository) GetUsersWithExpiredRetentionPage(ctx context.Context
 		limit = retentionSweepDefaultPageSize
 	}
 
+	// The retention/status half is SPLICED from expiredRetentionClockPredicate rather than written
+	// out here, so retentionDeletionClaimPredicate — which re-verifies it at claim time — cannot
+	// drift away from what this query actually selected (#1440 T0-retention). See that constant.
 	const predicate = `
-		WHERE retention_expires_at IS NOT NULL
-		  AND retention_expires_at <= NOW()
-		  AND subscription_status IN ('inactive', 'cancelled')
-		  AND is_deleted = FALSE
+		WHERE is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
-	`
+	` + expiredRetentionClockPredicate
 
 	var query string
 	var args []interface{}

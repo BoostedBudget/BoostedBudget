@@ -112,9 +112,69 @@ func createDeleteCascadeFixtureUser(
 	)
 	require.NoError(t, err)
 
+	// An ALREADY-ELAPSED retention clock, because the retention branch of
+	// deletionAuthorisationUnionPredicate now re-checks it (#1440 T0-retention): a retention-kind
+	// run — which is every fixture here with a nil deletionRequestedAt — is only authorised for a user the
+	// candidate query would still select. Armed through the production writer and then shifted
+	// backwards, i.e. simulating elapsed time rather than hand-writing the target row; no production
+	// writer of retention_expires_at ever computes a past instant (they all use
+	// clock_timestamp() + make_interval), production only gets there by waiting.
+	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, deleteCascadeRetentionMonths))
+	_, err = pool.Exec(ctx, `
+		UPDATE users
+		SET retention_started_at = retention_started_at - make_interval(months => $1::int),
+		    retention_expires_at = retention_expires_at - make_interval(months => $1::int)
+		WHERE id = $2`,
+		deleteCascadeRetentionMonths+1, user.ID,
+	)
+	require.NoError(t, err)
+
 	fresh, err := repo.GetUserByID(ctx, user.ID)
 	require.NoError(t, err)
 	return fresh
+}
+
+// deleteCascadeRetentionMonths matches RetentionCleanupCheckWorker's default retention window
+// (intOrDefault(deps.RetentionMonths, 6)) so the fixture row looks like a production one. Any
+// positive value works — the fixture shifts the resulting stamps rather than depending on the size.
+const deleteCascadeRetentionMonths = 6
+
+// TestDeleteUserCascade_Integration_RetentionResubscribedAfterClaim_NotDeleted proves the retention
+// conditions added to retentionDeletionClaimPredicate actually PROPAGATE to this method's
+// in-transaction re-check through deletionAuthorisationUnionPredicate's composition
+// (#1440 T0-retention) — the property that composition's doc comment claims and that nothing tested.
+//
+// This is the same window TestDeleteUserCascade_Integration_CompGrantedAfterClaim_NotDeleted covers,
+// with a resubscription instead of a comp: the claim succeeded, then the user resubscribed during
+// the external-cleanup window (status active, retention stamps NULLed — exactly what the
+// subscription webhook's UpdateSubscriptionFromPaddle + ClearRetentionDates pair does). The
+// exact-value deletion_requested_at guard cannot catch this on its own: it was NULL before the
+// resubscription and is NULL after, so it matches.
+func TestDeleteUserCascade_Integration_RetentionResubscribedAfterClaim_NotDeleted(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	// Retention-triggered path: no outstanding deletion request at claim time.
+	user := createDeleteCascadeFixtureUser(t, ctx, pool, repo, suffix, nil, nil, nil)
+
+	claimed, err := repo.ClaimForDeletion(ctx, user.ID, DeletionKindRetention)
+	require.NoError(t, err)
+	require.True(t, claimed, "sanity check: the user must be claimable before resubscribing")
+
+	// The user resubscribes during the external-cleanup window, through the production writers.
+	subID := "sub_cascade_" + suffix
+	startedAt := time.Now()
+	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "active", &startedAt, nil, &subID))
+	require.NoError(t, repo.ClearRetentionDates(ctx, user.ID))
+
+	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	require.NoError(t, err, "an aborted cascade is a normal outcome, not an error")
+	assert.False(t, deleted, "a resubscription landing after the claim but before the cascade must abort the deletion")
+
+	assertUserRowExists(t, ctx, pool, user.ID)
 }
 
 // TestDeleteUserCascade_Integration_OrdinaryEligibleUser_Deletes is the control/regression case:
