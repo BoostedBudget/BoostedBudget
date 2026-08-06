@@ -1040,7 +1040,7 @@ func newStrandedItem(id, userID string) domain.LinkedItem {
 // wires it in as a re-enqueue backstop.
 //
 // It covers three strand paths at once: a dead-lettered ItemCleanup job (ItemCleanupArgs sets no
-// MaxAttempts, so it inherits DefaultRetryPolicy's MaxAttempts=5, after which
+// MaxAttempts, so it inherits DefaultEnqueueOptions's MaxAttempts=5 (queue/options.go), after which
 // DeadLetterHandler.HandleError engages at job.Attempt >= job.MaxAttempts and nothing retries it —
 // DeadLetterService.Retry is admin-triggered and single-shot, an alerting path, not a recovery
 // path); a failed enqueue whose stamp release also failed (part D's second test above); and any

@@ -130,21 +130,32 @@ func (w *MyJobWorker) Work(ctx context.Context, job *river.Job[MyJobArgs]) error
 | `notifications` | Email, in-app notifications | 5 |
 | `low` | Deletions, analytics, digests | 3 |
 
-### Retry Policy
+### Retry budget and backoff
 
-Default exponential backoff: 30s → 2min → 8min → 32min → 2hr (5 attempts)
+Jobs get **5 attempts** by default. That number comes from `DefaultEnqueueOptions` in
+`internal/queue/options.go`, which `toRiverInsertOpts` copies into
+`river.InsertOpts.MaxAttempts`:
 
 ```go
-// internal/queue/river/config.go
-func DefaultRetryPolicy() *RetryPolicy {
-    return &RetryPolicy{
-        MaxAttempts:       5,
-        BackoffMultiplier: 4,
-        InitialBackoff:    30 * time.Second,
-        MaxBackoff:        2 * time.Hour,
+// internal/queue/options.go
+func DefaultEnqueueOptions() EnqueueOptions {
+    return EnqueueOptions{
+        Queue:       "default",
+        Priority:    2,
+        MaxAttempts: 5,
     }
 }
 ```
+
+Override per enqueue with `queue.WithMaxAttempts(n)`.
+
+⚠ **The backoff curve is River's own, not ours.** The `river.Config` that
+`NewClient` builds (`internal/queue/river/config.go` → `client.go`) sets no
+`RetryPolicy`, so River's default exponential-with-jitter policy schedules every retry.
+BoostedBudget owns no backoff curve. Issue #1501 deleted an unused `DefaultRetryPolicy`
+that looked like one — it was assigned to a `Config` field River never read, and it
+was twice mis-cited as the origin of the 5-attempt budget. Do not reintroduce a
+second source for either number.
 
 ## Enqueueing Jobs
 
