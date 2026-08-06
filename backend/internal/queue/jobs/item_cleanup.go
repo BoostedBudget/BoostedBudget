@@ -143,7 +143,13 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 	// scheduled" would authorise removing it. The recheck therefore re-asks the sweep's own
 	// question — "is this still a cleanup candidate?" — against the same shared SQL predicate the
 	// sweep selected it with (repository.cleanupCandidateReasonPredicate).
-	claimed, claimErr := w.linkedItemRepo.ClaimItemForCleanup(ctx, args.LinkedItemID, w.errorDaysThreshold, w.staleDaysThreshold)
+	//
+	// The recheck closure is defined once and reused for both the initial claim and the callback
+	// passed to RemoveItem, eliminating duplication of the eligibility question.
+	recheckEligibility := func(rctx context.Context) (bool, error) {
+		return w.linkedItemRepo.ClaimItemForCleanup(rctx, args.LinkedItemID, w.errorDaysThreshold, w.staleDaysThreshold)
+	}
+	claimed, claimErr := recheckEligibility(ctx)
 	if claimErr != nil {
 		// Fail CLOSED. "We could not tell" is not "still eligible", and /item/remove cannot be
 		// undone — returning an error leaves the schedule intact and lets River retry.
@@ -175,9 +181,7 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 	// predicate (not a second notion of eligibility, and not with different thresholds) means the two
 	// check points cannot disagree; a repeat claim is safe to run because it consumes nothing and
 	// writes nothing when it declines.
-	removeErr := w.plaidCleanupSvc.RemoveItem(ctx, args.LinkedItemID, func(rctx context.Context) (bool, error) {
-		return w.linkedItemRepo.ClaimItemForCleanup(rctx, args.LinkedItemID, w.errorDaysThreshold, w.staleDaysThreshold)
-	})
+	removeErr := w.plaidCleanupSvc.RemoveItem(ctx, args.LinkedItemID, recheckEligibility)
 	if removeErr != nil {
 		// A use-time decline is NOT a Plaid failure: nothing was sent to Plaid and nothing was
 		// recorded (see ErrItemNoLongerEligible). It gets the identical handling as a decline at
