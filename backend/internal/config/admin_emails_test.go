@@ -45,7 +45,7 @@ func loadShippedAdminEmailConfig(t *testing.T) *domain.AdminEmailConfig {
 	t.Setenv("ADMIN_EMAILS_CONFIG", "")
 	ResetAdminEmailConfigForTesting()
 	t.Cleanup(ResetAdminEmailConfigForTesting)
-	cfg, err := LoadAdminEmailConfig()
+	cfg, err := LoadAdminEmailConfig("qa")
 	require.NoError(t, err, "the shipped admin_emails.yaml must parse")
 	require.NotNil(t, cfg)
 	return cfg
@@ -233,6 +233,9 @@ func TestConfigLoad_UnsetEnvironmentFailsSafeForAdminAllowlist(t *testing.T) {
 
 // The ADMIN_EMAILS_CONFIG override relocates the file; nothing currently sets it, so it is
 // easy to break silently. This also pins that BOTH yaml keys are parsed.
+//
+// It passes a non-production allowlistEnv because that is the only place the override is
+// honoured at all — see TestLoadAdminEmailConfig_RejectsOverrideOutsideNonProduction.
 func TestLoadAdminEmailConfig_HonoursADMIN_EMAILS_CONFIGAndParsesBothLists(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "admin_emails.yaml")
@@ -246,7 +249,7 @@ non_production_admin_emails:
 	ResetAdminEmailConfigForTesting()
 	t.Cleanup(ResetAdminEmailConfigForTesting)
 
-	cfg, err := LoadAdminEmailConfig()
+	cfg, err := LoadAdminEmailConfig("qa")
 	require.NoError(t, err)
 
 	// Both lists are normalised to lowercase and trimmed, as the file's own comment promises.
@@ -256,4 +259,147 @@ non_production_admin_emails:
 	assert.Equal(t, []string{"owner@example.com"}, cfg.EffectiveAdminEmails("production"))
 	assert.ElementsMatch(t, []string{"owner@example.com", "tester@example.com"},
 		cfg.EffectiveAdminEmails("qa"))
+}
+
+// overrideFixture writes an admin-allowlist file whose entries are NOT in the shipped ACL,
+// and points ADMIN_EMAILS_CONFIG at it. Returns nothing: the two addresses below are the
+// contract.
+const (
+	overrideAttackerEmail             = "attacker@example.com"
+	overrideAttackerNonProdEmail      = "attacker-nonprod@example.com"
+	overrideAdminEmailsFixtureContent = `admin_emails:
+  - "attacker@example.com"
+non_production_admin_emails:
+  - "attacker-nonprod@example.com"
+`
+)
+
+func writeOverrideFixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "admin_emails.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(overrideAdminEmailsFixtureContent), 0o600))
+	return path
+}
+
+// RED 5 — ADMIN_EMAILS_CONFIG is an authorization input, and outside a recognised
+// non-production environment it must be refused outright.
+//
+// The allowlist bypasses the role check (middleware/admin.go's IsHardcodedAdmin branch
+// returns before HasRole is consulted), so whatever file this variable points at becomes an
+// arbitrary set of role-check-free production admins. The startup warning added earlier is
+// detective, not preventive: it reports the substitution after it has already taken effect.
+//
+// The decision uses the SAME primitive as the list resolution —
+// domain.IsNonProductionEnvironment(Config.AdminAllowlistEnvironment()) — so there is exactly
+// one notion of "is this production?" in this authorization path.
+func TestLoadAdminEmailConfig_RejectsOverrideOutsideNonProduction(t *testing.T) {
+	path := writeOverrideFixture(t)
+
+	// Every way the resolver reaches "treat as production": the word itself, the empty string
+	// AdminAllowlistEnvironment returns when ENVIRONMENT was never set, and unrecognised names.
+	for _, allowlistEnv := range []string{"production", "", "   ", "prod", "preprod", "unknown-env"} {
+		t.Run("allowlistEnv="+allowlistEnv, func(t *testing.T) {
+			t.Setenv("ADMIN_EMAILS_CONFIG", path)
+			ResetAdminEmailConfigForTesting()
+			t.Cleanup(ResetAdminEmailConfigForTesting)
+
+			cfg, err := LoadAdminEmailConfig(allowlistEnv)
+			require.NoError(t, err)
+			effective := cfg.EffectiveAdminEmails(allowlistEnv)
+
+			assert.NotContains(t, effective, overrideAttackerEmail,
+				"an ADMIN_EMAILS_CONFIG override must not supply production admins (env=%q)", allowlistEnv)
+			assert.NotContains(t, effective, overrideAttackerNonProdEmail,
+				"neither key of an overridden file may be honoured (env=%q)", allowlistEnv)
+
+			// Sibling 1 (mandatory): the shipped owners ARE still admins. Without this, the
+			// assertions above would pass just as well if config loading broke entirely and
+			// every list came back empty — certifying nothing.
+			for _, email := range ownerAdminEmails {
+				assert.Contains(t, effective, email,
+					"rejecting the override must fall back to the committed ACL, keeping owner %s", email)
+			}
+			assert.Len(t, effective, len(ownerAdminEmails),
+				"the committed ACL resolves to exactly the owner addresses in %q", allowlistEnv)
+
+			// And the loader must say so, for the startup log.
+			override, honoured := AdminEmailsConfigOverride(allowlistEnv)
+			assert.Equal(t, path, override)
+			assert.False(t, honoured, "the override must be reported as rejected in %q", allowlistEnv)
+		})
+	}
+
+	// Sibling 2 (mandatory): in a recognised non-production environment the override IS still
+	// honoured — the config tests above, and any local relocation of the file, depend on it.
+	// Without this the whole test would pass if the override were simply ignored everywhere.
+	for _, allowlistEnv := range []string{"development", "qa", "staging"} {
+		t.Run("honoured/allowlistEnv="+allowlistEnv, func(t *testing.T) {
+			t.Setenv("ADMIN_EMAILS_CONFIG", path)
+			ResetAdminEmailConfigForTesting()
+			t.Cleanup(ResetAdminEmailConfigForTesting)
+
+			cfg, err := LoadAdminEmailConfig(allowlistEnv)
+			require.NoError(t, err)
+			effective := cfg.EffectiveAdminEmails(allowlistEnv)
+
+			assert.Contains(t, effective, overrideAttackerEmail,
+				"the override must still relocate the file in %q", allowlistEnv)
+			assert.Contains(t, effective, overrideAttackerNonProdEmail,
+				"the overridden file's non-production key must still load in %q", allowlistEnv)
+			for _, email := range ownerAdminEmails {
+				assert.NotContains(t, effective, email,
+					"an honoured override REPLACES the committed ACL; %s must not leak in", email)
+			}
+
+			override, honoured := AdminEmailsConfigOverride(allowlistEnv)
+			assert.Equal(t, path, override)
+			assert.True(t, honoured, "the override must be reported as honoured in %q", allowlistEnv)
+		})
+	}
+
+	// And with no override set, nothing is reported in either direction.
+	t.Run("no override set", func(t *testing.T) {
+		t.Setenv("ADMIN_EMAILS_CONFIG", "")
+		override, honoured := AdminEmailsConfigOverride("qa")
+		assert.Empty(t, override)
+		assert.False(t, honoured)
+	})
+}
+
+// The production rejection must hold when reached the way main.go reaches it: through
+// Config.AdminAllowlistEnvironment(), not a literal. A bare launch with no ENVIRONMENT is the
+// realistic misconfiguration, and it must refuse the override too.
+func TestLoadAdminEmailConfig_RejectsOverrideViaAdminAllowlistEnvironment(t *testing.T) {
+	path := writeOverrideFixture(t)
+
+	for _, tc := range []struct {
+		name         string
+		cfg          *Config
+		wantHonoured bool
+	}{
+		{"explicit production", &Config{Environment: "production", EnvironmentExplicitlySet: true}, false},
+		{"ENVIRONMENT unset (defaults to development)", &Config{Environment: "development", EnvironmentExplicitlySet: false}, false},
+		{"explicit qa", &Config{Environment: "qa", EnvironmentExplicitlySet: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ADMIN_EMAILS_CONFIG", path)
+			ResetAdminEmailConfigForTesting()
+			t.Cleanup(ResetAdminEmailConfigForTesting)
+
+			allowlistEnv := tc.cfg.AdminAllowlistEnvironment()
+			cfg, err := LoadAdminEmailConfig(allowlistEnv)
+			require.NoError(t, err)
+			effective := cfg.EffectiveAdminEmails(allowlistEnv)
+
+			if tc.wantHonoured {
+				assert.Contains(t, effective, overrideAttackerEmail)
+				return
+			}
+			assert.NotContains(t, effective, overrideAttackerEmail,
+				"%s must read the committed ACL, not the override", tc.name)
+			for _, email := range ownerAdminEmails {
+				assert.Contains(t, effective, email, "owner %s must survive the rejection", email)
+			}
+		})
+	}
 }
