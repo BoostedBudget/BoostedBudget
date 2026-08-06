@@ -1358,9 +1358,11 @@ func (r *linkedItemRepository) MarkForCleanup(ctx context.Context, itemID string
 // SAME item are distinct unique keys and can coexist. What actually makes that benign is that the
 // loser of the race has nothing left to fail on, via two SEPARATE idempotency paths:
 //
-//   - Plaid-level: every error from /item/remove, ITEM_NOT_FOUND included, is logged and swallowed
-//     inside PlaidItemCleanupService.RemoveItem ("Don't return Plaid errors - graceful degradation"),
-//     so it never reaches the worker at all.
+//   - Plaid-level: since Issue #1486 follow-up part B, PlaidItemCleanupService.RemoveItem propagates
+//     every genuine /item/remove error to the worker — it no longer swallows them. But in THIS race,
+//     the loser calls /item/remove only after the winner's call already succeeded, so Plaid answers
+//     the loser with ITEM_NOT_FOUND — the one outcome isPlaidItemAlreadyGone still treats as success
+//     (RemoveItem returns nil) rather than propagating. It never reaches the worker as an error.
 //   - Repository-level: if the winner already deleted the local row, RemoveItem's GetByID returns
 //     ErrLinkedItemNotFound, and THAT is what ItemCleanupWorker.Work's IsItemNotFoundError branch
 //     recognises (IsItemNotFoundError is errors.Is(err, repository.ErrLinkedItemNotFound) — it has

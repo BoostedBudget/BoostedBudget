@@ -553,8 +553,10 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 //
 // THREE strand paths, one mechanism:
 //
-//  1. A dead-lettered ItemCleanup job. ItemCleanupArgs sets no MaxAttempts, so it inherits
-//     DefaultRetryPolicy's MaxAttempts=5 (queue/river/config.go); DeadLetterHandler.HandleError
+//  1. A dead-lettered ItemCleanup job. The enqueue call here passes no WithMaxAttempts option, so it
+//     inherits DefaultEnqueueOptions's MaxAttempts=5 (queue/options.go), copied into
+//     river.InsertOpts.MaxAttempts by toRiverInsertOpts (queue/river/client.go) — river.Config itself
+//     sets no RetryPolicy, so River's own default plays no part here. DeadLetterHandler.HandleError
 //     engages at job.Attempt >= job.MaxAttempts (queue/river/dead_letter.go) and nothing retries it
 //     afterwards. Keep the dead-letter record for VISIBILITY but never as recovery:
 //     DeadLetterService.Retry is admin-triggered and SINGLE-SHOT (job.RetriedAt != nil →
