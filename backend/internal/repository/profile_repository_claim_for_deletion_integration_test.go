@@ -30,6 +30,11 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
+// claimFixtureRetentionMonths matches RetentionCleanupCheckWorker's default retention window
+// (intOrDefault(deps.RetentionMonths, 6)) so the fixture row looks like a production one. Any
+// positive value works — the fixture shifts the resulting stamps rather than depending on the size.
+const claimFixtureRetentionMonths = 6
+
 // createClaimForDeletionFixtureUser inserts a plain user row, then sets is_deleted,
 // deletion_requested_at, manual_tier_override, and manual_tier_ends_at directly via UPDATE (the
 // same pattern used throughout this package's manual-override fixtures), and registers cleanup.
@@ -78,6 +83,29 @@ func createClaimForDeletionFixtureUser(
 	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) }) //nolint:errcheck
+
+	// An ALREADY-ELAPSED retention clock, on every fixture. #1440 T0-retention: the retention
+	// claim now re-verifies `retention_expires_at IS NOT NULL AND retention_expires_at <= NOW()` and
+	// `subscription_status IN ('inactive','cancelled')` (expiredRetentionClockPredicate), so a
+	// DeletionKindRetention claim is only granted for a user GetUsersWithExpiredRetentionPage would
+	// still select — which is what every retention-kind test here means by "an otherwise eligible
+	// user". Armed through the production writer and then shifted backwards, i.e. simulating elapsed
+	// time rather than hand-writing the target row: no production writer of retention_expires_at ever
+	// computes a past instant (all use clock_timestamp() + make_interval), production only gets there
+	// by waiting. Harmless for the user-requested fixtures, whose branch ignores these columns.
+	//
+	// Runs BEFORE the is_deleted write below, deliberately: SetRetentionDates (like every production
+	// writer here) is scoped `WHERE is_deleted = FALSE`, so arming it after an isDeleted=true fixture
+	// would fail with ErrUserNotFound.
+	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, claimFixtureRetentionMonths))
+	_, err = pool.Exec(ctx, `
+		UPDATE users
+		SET retention_started_at = retention_started_at - make_interval(months => $1::int),
+		    retention_expires_at = retention_expires_at - make_interval(months => $1::int)
+		WHERE id = $2`,
+		claimFixtureRetentionMonths+1, user.ID,
+	)
+	require.NoError(t, err)
 
 	_, err = pool.Exec(ctx, `
 		UPDATE users
