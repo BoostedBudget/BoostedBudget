@@ -142,7 +142,7 @@ const paddleCancelSideEffectLease = 10 * time.Minute
 
 // AuditLogger defines the interface for audit logging. repository.AuditLogRepository is the
 // production implementation and satisfies this structurally; see its doc comment for which
-// audit_logs column receives which value and why. Until Issue #1506 replaced it, the ONLY
+// audit_logs column receives which value and why. Until Issue #1505 replaced it, the ONLY
 // production implementation was cmd/server/main.go's mockAuditLogger, which logged a line and
 // persisted nothing — so every call below produced no durable record at all.
 //
@@ -155,7 +155,7 @@ const paddleCancelSideEffectLease = 10 * time.Minute
 // therefore writes user_id NULL rather than copying the subject into it, which would assert
 // "this person performed this action" and be flatly false for a retention deletion. If an
 // admin-initiated deletion path is ever added, this interface MUST gain an explicit actor first:
-// tracked in Issue #1507.
+// tracked in Issue #1506.
 //
 // ERRORS ARE REPORTED, NEVER SWALLOWED BY THE IMPLEMENTATION — but the deletion call sites below
 // deliberately do NOT abort on one. See the note at RequestDeletion's call for the reasoning.
@@ -165,7 +165,7 @@ type AuditLogger interface {
 
 // logAuditFailure surfaces an audit-write failure at ERROR level and returns. It exists so the
 // three deletion call sites cannot drift apart on how they treat one, and so that "the audit trail
-// silently recorded nothing" — the exact defect Issue #1506 closed — can never again be the quiet
+// silently recorded nothing" — the exact defect Issue #1505 closed — can never again be the quiet
 // default. A nil error is the overwhelmingly common case and costs nothing.
 func logAuditFailure(ctx context.Context, err error, action, subjectUserID string) {
 	if err == nil {
@@ -271,7 +271,7 @@ func (s *deletionService) RequestDeletion(ctx context.Context, userID, email str
 	// Create audit log.
 	//
 	// AN AUDIT-WRITE FAILURE DOES NOT ABORT THE DELETION, AND IS NOT DISCARDED EITHER. Both halves
-	// are deliberate (Issue #1506):
+	// are deliberate (Issue #1505):
 	//
 	//   - Not aborting: by the time this runs the state change has already committed (here,
 	//     MarkForDeletion; at the ExecuteDeletion call site, the entire irreversible cascade).
@@ -287,7 +287,7 @@ func (s *deletionService) RequestDeletion(ctx context.Context, userID, email str
 	// is the stronger design and is NOT available here: RequestDeletion's write and ExecuteDeletion's
 	// terminal entry both sit outside any transaction the service controls, and for `user.deleted`
 	// the transaction it would have to join is the cascade, which this change is explicitly not
-	// permitted to alter. Tracked in Issue #1508.
+	// permitted to alter. Tracked in Issue #1507.
 	logAuditFailure(ctx, s.auditLogger.Log(ctx, "user.deletion_requested", "user", userID),
 		"user.deletion_requested", userID)
 

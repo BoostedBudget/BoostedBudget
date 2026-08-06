@@ -2,7 +2,7 @@ package services
 
 // deletion_service_audit_log_integration_test.go — end-to-end proof, against a REAL Postgres
 // instance, that DeletionService wired with the REAL AuditLogger (repository.AuditLogRepository,
-// Issue #1506) writes a durable audit_logs row, and that the row outlives the person it describes.
+// Issue #1505) writes a durable audit_logs row, and that the row outlives the person it describes.
 //
 // WHY THIS IS SEPARATE FROM THE REPOSITORY-LEVEL TESTS. Those prove the INSERT is correct.
 // This proves the SERVICE is actually wired to something that persists — which is exactly what was

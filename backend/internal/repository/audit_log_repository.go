@@ -10,7 +10,7 @@ import (
 // mockAuditLogger — the only production implementation there has ever been, which wrote an
 // slog line and persisted NOTHING. Every `auditLogger.Log(...)` in the GDPR deletion path therefore
 // produced no durable record at all, while audit_logs existed, was queried elsewhere, and even had
-// erasure-redaction logic written against it. Issue #1506.
+// erasure-redaction logic written against it. Issue #1505.
 //
 // WHICH COLUMN GETS WHAT, and why it is not a matter of taste:
 //

@@ -2,7 +2,7 @@
 
 package repository
 
-// Integration tests for AuditLogRepository (Issue #1506) — the REAL implementation of
+// Integration tests for AuditLogRepository (Issue #1505) — the REAL implementation of
 // services.AuditLogger, replacing cmd/server/main.go's mockAuditLogger, which persisted nothing.
 //
 // A REAL DATABASE IS REQUIRED, AND NOT AS A FORMALITY. Every assertion below is about something a
