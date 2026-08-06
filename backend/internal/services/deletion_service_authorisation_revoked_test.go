@@ -259,6 +259,36 @@ func TestExecuteDeletion_AuthorisationRecheckFails_AbortsWithoutTouchingAnything
 	assert.Empty(t, *h.callOrder)
 }
 
+// Fail closed AT THE PADDLE GATE specifically, not merely at the first check of the run.
+//
+// TestExecuteDeletion_AuthorisationRecheckFails above makes the very first recheck fail, which aborts
+// before anything external happens — so it does NOT exercise cleanupPaddleResources' own gate error
+// path at all. Mutation confirmed that: making the gate treat an error as "proceed" survived that
+// test. Here the recheck succeeds for the pre-Plaid check and then starts erroring, so the failure
+// lands on the gate itself, with the Plaid leg already done.
+func TestExecuteDeletion_AuthorisationRecheckFailsAtThePaddleGate_AbortsBeforeCancelling(t *testing.T) {
+	ctx := context.Background()
+	h := newRevocationHarness(t, ctx)
+
+	calls := 0
+	h.repo.AuthorisedFn = func(context.Context) (bool, error) {
+		calls++
+		if calls == 1 {
+			return true, nil // the pre-Plaid check passes, so the run gets as far as Paddle
+		}
+		return false, errors.New("db down")
+	}
+
+	err := h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested)
+	require.Error(t, err, "an undetermined authorisation must not be read as permission to cancel a subscription")
+	assert.Contains(t, err.Error(), "db down")
+
+	assert.Equal(t, []string{"PlaidRemoveAll"}, *h.callOrder,
+		"the Plaid leg had already run; nothing at Paddle may be touched on an undetermined answer")
+	h.paddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
+	h.repo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything, mock.Anything)
+}
+
 // The recheck is asked the question ExecuteDeletion was authorised under — the same kind, and the same
 // deletion_requested_at occurrence the top-of-function read observed. A recheck that evaluated the
 // union of both authorisation kinds would let the retention rule (which allows any uncomped user with

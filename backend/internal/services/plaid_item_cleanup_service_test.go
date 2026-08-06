@@ -211,6 +211,46 @@ func Test_RemoveAllUserItems_NilRecheckIsRefusedBeforeTouchingPlaid(t *testing.T
 	mockPlaid.AssertCalled(t, "RemoveItem", ctx, "tok-1")
 }
 
+// The recheck is actually THREADED INTO THE LOOP, not merely accepted and discarded.
+//
+// Mutation confirmed this needs its own test: replacing `recheck` with `nil` in the cleanupItems call
+// survived every other test in this package, because none of them supplied a callback that ever says
+// no. This one does, on the second item, and asserts that the second item's token never reaches
+// Plaid.
+func Test_RemoveAllUserItems_RecheckIsConsultedBeforeEveryItem(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	items := []domain.LinkedItem{
+		{ID: "item-1", UserID: userID, AccessToken: "tok-1"},
+		{ID: "item-2", UserID: userID, AccessToken: "tok-2"},
+	}
+	mockRepo.On("GetByUserID", ctx, userID).Return(items, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	// tok-2 is deliberately NOT registered: reaching it is the failure this test detects.
+	mockRepo.On("MarkPlaidRemoved", ctx, []string{"item-1"}).Return(nil).Maybe()
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil)
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	calls := 0
+	recheck := func(context.Context) (bool, error) {
+		calls++
+		return calls == 1, nil // authorised for item 1, revoked before item 2
+	}
+
+	err := service.RemoveAllUserItems(ctx, userID, recheck)
+
+	require.ErrorIs(t, err, ErrCleanupAborted,
+		"stopping early is a partial completion the caller must be told about, not a silent success")
+	assert.Equal(t, 2, calls, "the recheck runs before EVERY remaining item, including the first")
+	mockPlaid.AssertCalled(t, "RemoveItem", ctx, "tok-1")
+	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-2")
+}
+
 // Test_RemoveAllUserItems_CallsPlaidRemoveForEachItem verifies that
 // RemoveAllUserItems calls Plaid /item/remove for each linked item.
 // AccessToken is populated by the repository layer (repo-layer encryption).
