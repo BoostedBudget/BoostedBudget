@@ -393,6 +393,37 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 		}
 	}
 
+	// RE-VERIFY AGAIN, BECAUSE STEP 1 WAS A NETWORK ROUND-TRIP. The re-check above is immediately
+	// before the Plaid call and is correct for that call, but Step 2 is a SECOND irreversible external
+	// call performed after Step 1 returns — and nothing used to re-verify in between. A user who paid
+	// their invoice while we were disconnecting their banks still had their subscription cancelled at
+	// Paddle, after which Step 3's CAS correctly refused to flip their local status: a paid-up customer
+	// with no subscription at Paddle and a local row saying nothing happened.
+	//
+	// This is the same defect shape as ExecuteDeletion's (a precondition checked at selection, work
+	// performed later, nothing re-checking in between) and it is fixed the same way — by asking again
+	// at the moment of use. It reuses reReadStillPastDue rather than introducing a second predicate, so
+	// the three re-verifications in this flow cannot disagree about what "still past due" means.
+	//
+	// Aborting HERE leaves the Plaid items disconnected. That is accepted for the reason the H2
+	// residual note above already gives: a disconnect is recoverable (the user relinks), the retention
+	// clock is not started (Step 3 never runs), and the alternative — cancelling a recovered customer's
+	// subscription — is worse. Ordering already puts the recoverable call first; see
+	// deletion_service.go's ordering note for the same argument made explicitly.
+	stillPastDue, err = s.reReadStillPastDue(ctx, user.ID, occurrence)
+	if err != nil {
+		// Fail closed: not knowing whether the user is still past due is not permission to cancel
+		// their subscription.
+		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, err.Error())
+		return fmt.Errorf("failed to re-verify user %s before cancelling their Paddle subscription: %w", user.ID, err)
+	}
+	if !stillPastDue {
+		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, "precondition lost during Plaid disconnect — not cancelling the subscription")
+		s.logger.Info("past_due user recovered or was comped during the Plaid disconnect; their subscription is NOT being cancelled and their status is left alone",
+			"user_id", user.ID)
+		return nil
+	}
+
 	// Step 2: Cancel Paddle subscription.
 	// Nil-guard: paddleClient is nil when PADDLE_API_KEY is unset (mirrors plaidCleanup convention).
 	// When Paddle is unconfigured, log a warning and skip — the subscription will eventually be
