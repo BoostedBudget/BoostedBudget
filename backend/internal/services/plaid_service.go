@@ -507,10 +507,24 @@ func (s *plaidService) TransactionsSync(
 // staging environments where webhooks cannot be delivered due to network restrictions
 // (e.g., Tailscale private network).
 //
-// Security: Triple-layer protection ensures this only works in sandbox:
-//   1. Route registration: Only registered when Environment=="staging" (main.go)
-//   2. AdminMiddleware: Returns 404 in non-staging environments
-//   3. This method: Returns error if PlaidEnv != "sandbox"
+// Security: the check below is the ONLY thing that confines this to sandbox.
+//
+// Issue #1498 — this comment used to claim triple-layer protection. Two of those three
+// layers do not exist:
+//   - "Only registered when Environment==\"staging\"": false. RegisterAdminRoutes
+//     registers fire-webhook unconditionally (internal/huma/operations/admin.go), and
+//     since #1499 registration is not gated on the environment or on plaidService either.
+//   - "AdminMiddleware returns 404 in non-staging environments": false since #1499, which
+//     deliberately removed the admin middleware's environment gate. The middleware
+//     authorizes by identity and admin role, in production too.
+//
+// What actually holds:
+//  1. Admin authorization — an admin role (or the hardcoded owner allowlist) is required
+//     to reach the handler at all, in every environment.
+//  2. The PlaidEnv != "sandbox" check below — production runs PLAID_ENV=production, so
+//     this returns an error there rather than firing anything.
+//
+// Do not restore the deleted layers in a comment without also implementing them.
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
@@ -535,10 +549,11 @@ func (s *plaidService) FireWebhook(
 		return nil, fmt.Errorf("webhook code cannot be empty")
 	}
 
-	// Sandbox-only validation (defense in depth - third layer of security)
-	// Layer 1: Route registration (main.go) only in staging environment
-	// Layer 2: AdminMiddleware returns 404 in production
-	// Layer 3: This check (prevents accidental misconfiguration)
+	// Sandbox-only validation. Per the security note on this method (#1498), this is the
+	// only environment-scoped guard that actually exists — the two "layers" this comment
+	// used to cite above it (staging-only route registration, and a 404 from
+	// AdminMiddleware outside staging) are both false. Admin authorization is the other
+	// real guard, but it does not distinguish environments.
 	if s.config.PlaidEnv != "sandbox" {
 		return nil, fmt.Errorf(
 			"FireWebhook is only available in sandbox environment, current environment: %s",
