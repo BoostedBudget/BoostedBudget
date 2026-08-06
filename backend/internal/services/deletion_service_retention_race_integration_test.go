@@ -193,6 +193,45 @@ func TestExecuteDeletion_Integration_RetentionCandidate_IsDeleted(t *testing.T) 
 	audit.AssertCalled(t, "Log", mock.Anything, "user.deleted", mock.Anything, mock.Anything)
 }
 
+// TestExecuteDeletion_Integration_RetentionResubscribedClockClearFailed_NotDeleted pins the
+// SUBSCRIPTION-STATUS conjunct on its own, and exists because mutation testing showed nothing else
+// did: in the headline test a resubscription clears the clock as well, so the clock conjuncts alone
+// refuse that claim and the status conjunct could be deleted with every other test still green.
+//
+// The state is reachable, not contrived. Both reactivation branches in subscription_webhook.go call
+// ClearRetentionDates on a BEST-EFFORT basis — its error is logged at Warn and swallowed, the
+// webhook still succeeds — so a user can be genuinely active with an expired retention clock still
+// on the row. Nothing re-arms the retention path against them except this predicate; the repair job
+// (GetUsersNeedingRetentionClockRepair) only looks at rows whose clock is NULL.
+func TestExecuteDeletion_Integration_RetentionResubscribedClockClearFailed_NotDeleted(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	ctx := context.Background()
+
+	userID := newRetentionRaceCandidate(t, ctx, f, "retention-clear-failed")
+
+	// The reactivation lands, but its best-effort ClearRetentionDates does not (deliberately not
+	// called here — that IS the failure being simulated).
+	subID := fmt.Sprintf("sub_x11_stale_%d", time.Now().UnixNano())
+	startedAt := time.Now()
+	require.NoError(t, f.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, "premium", "active", &startedAt, nil, &subID))
+
+	before, err := f.profileRepo.GetUserByID(ctx, userID)
+	require.NoError(t, err)
+	require.Equal(t, "active", before.SubscriptionStatus, "fixture precondition: the user is paying again")
+	require.NotNil(t, before.RetentionExpiresAt,
+		"fixture precondition: the stale expired clock must still be on the row, so this test isolates the status half")
+	require.False(t, before.RetentionExpiresAt.After(time.Now()),
+		"fixture precondition: the stale clock must still read as elapsed")
+
+	ds, clerk, audit, paddle := newRetentionRaceTestDeletionService(t, f)
+	require.NoError(t, ds.ExecuteDeletion(ctx, userID, repository.DeletionKindRetention))
+
+	paddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
+	requireDeletionSideEffectsNotRun(t, clerk, audit)
+	requireUserStillPresent(t, f, userID,
+		"an active, paying subscription must block a retention hard delete even when the stale retention clock survived")
+}
+
 // TestExecuteDeletion_Integration_RetentionClockCleared_StatusStillCancelled_NotDeleted pins the
 // NULL-clock half of the fix on its own: the status stays 'cancelled', so only the
 // retention_expires_at IS NOT NULL conjunct can refuse this claim.
