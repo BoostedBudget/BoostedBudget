@@ -68,11 +68,13 @@ const (
 //     Work now calls ClaimItemForCleanup first and skips the Plaid call when the item is no longer a
 //     candidate. What that does NOT change is this cap's derivation — see the ⚠ note below the
 //     bullet list.
-//   - The only production ClearCleanupSchedule calls are in item_cleanup.go: one after a successful
-//     RemoveItem (post-hoc state cleanup) and, as of #1486, one releasing the stale schedule when
-//     the recheck declines. Neither is a cancellation hook that anything ELSE calls — in particular,
-//     **nothing clears cleanup_scheduled_at on reconnection**, which is precisely why #1486's
-//     recheck had to re-evaluate ELIGIBILITY rather than re-read the schedule.
+//   - There are FOUR production ClearCleanupSchedule calls, not two (Issue #1486 follow-up part E corrected
+//     this count; see the enumeration in ItemCleanupWorker.Work's #1486 comment, and
+//     TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet, which fails if it drifts
+//     again). What matters for THIS cap is unchanged and still true: **none of the four is a
+//     cancellation hook** — each releases a stamp on a path that has just decided not to act, and in
+//     particular **nothing clears cleanup_scheduled_at on reconnection**, which is precisely why
+//     #1486's recheck had to re-evaluate ELIGIBILITY rather than re-read the schedule.
 //
 // So for the zero-accounts leg there is still no grace window and no external cancellation path — a
 // misclassification (account replacement in flight, a concurrent account create, an accounts row
@@ -404,12 +406,42 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 			uniqueOpts := ItemCleanupUniqueOpts()
 			result, enqueueErr := w.jobQueue.Enqueue(ctx, cleanupArgs, queue.WithUnique(*uniqueOpts), queue.WithScheduledAt(cleanupAt))
 			if enqueueErr != nil {
-				w.logger.Error("failed to enqueue item cleanup job",
+				w.logger.Error("failed to enqueue item cleanup job, releasing the cleanup stamp",
 					"job_id", job.ID,
 					"item_id", item.ID,
 					"error", enqueueErr,
 				)
 				errorCount++
+
+				// Issue #1486 follow-up part D: release the stamp MarkForCleanup just set. This is a THIRD
+				// instance of the class commit 24907762 fixed — whose message claims it covered "two
+				// paths"; there were three, and this was the one it missed.
+				//
+				// cleanup_scheduled_at is a DURABLE marker that HIDES a row from the sweep
+				// (cleanupCandidateSelectQuery requires cleanup_scheduled_at IS NULL), so a stamp left
+				// set with no job in flight is not a harmless leftover: River being briefly unavailable
+				// would remove a still-billing Plaid item from every future sweep permanently, and
+				// DeleteUserCascade's C2 guard would block that user's GDPR erasure forever. Before the
+				// stamp existed this path left the row untouched and the next daily sweep recovered it,
+				// so keeping it here made a transient queue error strictly WORSE than the old
+				// behaviour.
+				//
+				// Safe from the race the stamp guards against, for exactly the reason the identical
+				// release in accountService.DeleteAccount gives: that race is with a worker EXECUTING
+				// the job, and the enqueue that would have created that job just failed, so no worker
+				// can be mid-flight.
+				if clearErr := w.linkedItemRepo.ClearCleanupSchedule(ctx, item.ID); clearErr != nil {
+					// Both writes failed, so the row now keeps cleanup_scheduled_at with no job:
+					// invisible to the candidate sweep. Error-level because nothing downstream notices
+					// on its own — though as of part C the pending-cleanup backstop below DOES recover
+					// exactly this state on a later run, which is belt-and-braces rather than a reason
+					// to stop logging it.
+					w.logger.Error("failed to release the cleanup stamp after a failed enqueue; item is hidden from the candidate sweep until the pending-cleanup backstop or an operator recovers it",
+						"job_id", job.ID,
+						"item_id", item.ID,
+						"error", clearErr,
+					)
+				}
 				continue
 			}
 
@@ -462,7 +494,12 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 		}
 	}
 
-	if totalItems == 0 {
+	// Issue #1486 follow-up part C: recover STRANDED rows. Runs unconditionally — in particular it must not sit
+	// behind the "no items need cleanup" early return below, because a run with zero NEW candidates is
+	// exactly when a backlog of stranded rows is most likely to be all there is to do.
+	requeuedCount, requeueErrors := w.reenqueueStrandedCleanups(ctx, job.ID)
+
+	if totalItems == 0 && requeuedCount == 0 && requeueErrors == 0 {
 		w.logger.Info("no items need cleanup",
 			"job_id", job.ID,
 			"duration_ms", time.Since(startTime).Milliseconds(),
@@ -476,11 +513,132 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 		"scheduled", scheduledCount,
 		"skipped", skippedCount,
 		"errors", errorCount,
+		"requeued_stranded", requeuedCount,
+		"requeue_errors", requeueErrors,
 		"duration_ms", time.Since(startTime).Milliseconds(),
 	)
 
 	// Don't fail the job if some items failed - they'll be retried next check
 	return nil
+}
+
+// reenqueueStrandedCleanups is the pending-cleanup BACKSTOP (Issue #1486 follow-up part C). It re-enqueues an
+// ItemCleanup job for every row that is stamped for cleanup, overdue, and whose Plaid side is not yet
+// done — i.e. every STRANDED row, whatever stranded it. Returns (requeued, errors) for logging.
+//
+// It wires up repository.GetItemsPendingCleanup (`WHERE cleanup_scheduled_at IS NOT NULL AND
+// cleanup_scheduled_at < NOW() AND status NOT IN ('replaced','disconnected')`), which was declared on
+// the wide repository.LinkedItemRepository interface AND on this worker's narrow
+// LinkedItemCleanupRepository, and implemented, with ZERO production callers before this. Its
+// predicate already described the recovery set exactly; nothing ever asked it.
+//
+// THREE strand paths, one mechanism:
+//
+//  1. A dead-lettered ItemCleanup job. ItemCleanupArgs sets no MaxAttempts, so it inherits
+//     DefaultRetryPolicy's MaxAttempts=5 (queue/river/config.go); DeadLetterHandler.HandleError
+//     engages at job.Attempt >= job.MaxAttempts (queue/river/dead_letter.go) and nothing retries it
+//     afterwards. Keep the dead-letter record for VISIBILITY but never as recovery:
+//     DeadLetterService.Retry is admin-triggered and SINGLE-SHOT (job.RetriedAt != nil →
+//     ErrDeadLetterJobAlreadyRetried), and it can consume that one replay slot even when the enqueue
+//     fails. It is an alerting path, not a recovery path.
+//  2. A failed enqueue whose stamp release ALSO failed (the branch above).
+//  3. Any future stamp/enqueue asymmetry — the predicate is defined by the row's state, not by the
+//     cause.
+//
+// WHY THIS RATHER THAN RELEASING THE STAMP on terminal failure, which was the first design proposed
+// for this and was wrong: releasing the stamp hands the row back to the candidate sweep, which
+// re-marks it with cleanupAt = now + gracePeriodDays for every non-immediate leg (only
+// "zero_accounts" is immediate). Every terminal failure would therefore buy a fresh FULL grace window
+// of Plaid billing — that is daily SELECTION, not daily removal. Re-enqueueing PRESERVES the original
+// cleanup_scheduled_at, so this function deliberately calls neither MarkForCleanup nor
+// ClearCleanupSchedule. It also needs no `job.Attempt >= job.MaxAttempts` plumbing in
+// ItemCleanupWorker.Work.
+//
+// SAFE because the irreversible decision is not made here: ItemCleanupWorker.Work re-verifies
+// eligibility via ClaimItemForCleanup immediately before /item/remove, and ItemCleanupUniqueOpts means
+// a row that still has a live job (Available/Scheduled/Running/Retryable/Pending) comes back
+// UniqueSkipped instead of gaining a second job. So re-enqueueing every pending row every run costs a
+// dedup check per row, not a duplicate removal.
+//
+// NEVER fails the sweep. The candidate half's writes are already committed by the time this runs, and
+// returning an error would make River retry the WHOLE sweep, re-running the half that AUTHORISES
+// irreversible removals in order to retry the half that only recovers. Nothing about a stranded row
+// changes when this fails, so the next daily run selects it again.
+func (w *ItemCleanupCheckWorker) reenqueueStrandedCleanups(ctx context.Context, jobID int64) (requeued, errorCount int) {
+	pending, err := w.linkedItemRepo.GetItemsPendingCleanup(ctx)
+	if err != nil {
+		w.logger.Error("failed to query items pending cleanup; stranded rows are not recovered this run",
+			"job_id", jobID,
+			"error", err,
+		)
+		return 0, 1
+	}
+	if len(pending) == 0 {
+		return 0, 0
+	}
+
+	// GetItemsPendingCleanup has no LIMIT of its own, so bound the per-run re-enqueue volume.
+	// maxItemsPerSweep is reused as that bound WITHOUT changing its value or its derivation (see
+	// maxItemsPerCleanupSweep's doc comment): these are re-enqueues of work a PREVIOUS run already
+	// authorised and already counted against its own cap, not new authorisations, and each one is
+	// gated again by ItemCleanupUniqueOpts and ClaimItemForCleanup. The bound exists to cap per-run
+	// queue volume, not to re-derive the blast radius. A remainder is deferred to the next run, which
+	// re-selects it unchanged.
+	if len(pending) > w.maxItemsPerSweep {
+		w.logger.Warn("more stranded cleanup items than one run re-enqueues; deferring the remainder to the next periodic run",
+			"job_id", jobID, "pending", len(pending), "bound", w.maxItemsPerSweep)
+		pending = pending[:w.maxItemsPerSweep]
+	}
+
+	uniqueOpts := ItemCleanupUniqueOpts()
+	for _, item := range pending {
+		// The grace period is already spent — GetItemsPendingCleanup only returns overdue rows — so
+		// this is enqueued for immediate execution. No WithScheduledAt: deferring it again would add a
+		// second grace window on top of the one that already elapsed.
+		result, enqueueErr := w.jobQueue.Enqueue(ctx, ItemCleanupArgs{
+			LinkedItemID: item.ID,
+			UserID:       item.UserID,
+			// Recomputed rather than persisted: the row's CURRENT state is what
+			// ClaimItemForCleanup will re-evaluate anyway, and Reason is a label for logs and
+			// dedup args, not an authorisation.
+			Reason: w.strandedCleanupReason(ctx, item),
+		}, queue.WithUnique(*uniqueOpts))
+		if enqueueErr != nil {
+			// Deliberately NOT releasing the stamp here (unlike the candidate loop above, where THIS
+			// run set it): the stamp is what keeps this row selectable by this very backstop next run.
+			w.logger.Error("failed to re-enqueue a stranded item cleanup job; it stays selectable for the next run",
+				"job_id", jobID,
+				"item_id", item.ID,
+				"error", enqueueErr,
+			)
+			errorCount++
+			continue
+		}
+		if result.UniqueSkipped {
+			// Not stranded after all: a live job already exists for this item.
+			w.logger.Debug("stranded-cleanup backstop: item already has a live cleanup job",
+				"job_id", jobID, "item_id", item.ID)
+			continue
+		}
+		w.logger.Warn("re-enqueued a STRANDED item cleanup job — a previous attempt left this item stamped for cleanup with no job in flight, so Plaid was still billing for it",
+			"job_id", jobID,
+			"item_id", item.ID,
+			"user_id", item.UserID,
+			"cleanup_scheduled_at", item.CleanupScheduledAt,
+			"cleanup_job_id", result.ID,
+		)
+		requeued++
+	}
+	return requeued, errorCount
+}
+
+// strandedCleanupReason labels a re-enqueued stranded job. Wraps determineCleanupReasonAndTiming and
+// discards its isImmediate flag: a stranded row's grace period has already elapsed by construction
+// (GetItemsPendingCleanup requires cleanup_scheduled_at < NOW()), so every re-enqueue is immediate
+// regardless of leg, and reusing the flag would only invite a caller to re-defer it.
+func (w *ItemCleanupCheckWorker) strandedCleanupReason(ctx context.Context, item domain.LinkedItem) string {
+	reason, _ := w.determineCleanupReasonAndTiming(ctx, item)
+	return reason
 }
 
 // determineCleanupReasonAndTiming determines the reason for cleaning up an item

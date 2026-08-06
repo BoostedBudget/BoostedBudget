@@ -75,6 +75,23 @@ func (m *MockLinkedItemCleanupRepo) Delete(ctx context.Context, id string) error
 	return args.Error(0)
 }
 
+// newMockLinkedItemCleanupRepo is the constructor every test in this file that is NOT about the
+// pending-cleanup backstop uses. It pre-programs GetItemsPendingCleanup to return NO stranded rows,
+// with .Maybe() so the call is permitted but not required.
+//
+// Issue #1486 follow-up part C wired GetItemsPendingCleanup into ItemCleanupCheckWorker.Work (it had been
+// declared on two interfaces and implemented, with zero production callers). Without a default here,
+// every pre-existing test in this file would panic on an unregistered testify expectation, which
+// would say nothing about the behaviour those tests exist to pin. Tests that ARE about the backstop
+// construct the mock directly with new(MockLinkedItemCleanupRepo) and program this method
+// themselves — a .Maybe() registered here would otherwise win over their override, since testify
+// matches the first registered expectation.
+func newMockLinkedItemCleanupRepo() *MockLinkedItemCleanupRepo {
+	m := new(MockLinkedItemCleanupRepo)
+	m.On("GetItemsPendingCleanup", mock.Anything).Return([]domain.LinkedItem{}, nil).Maybe()
+	return m
+}
+
 // Test helpers
 func newTestItemCleanupCheckLogger() *slog.Logger {
 	return slog.Default()
@@ -98,7 +115,7 @@ func TestItemCleanupCheckArgs_Kind(t *testing.T) {
 func TestItemCleanupCheckWorker_Work_NoCleanupCandidates(t *testing.T) {
 	ctx := context.Background()
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 
 	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return([]domain.LinkedItem{}, nil)
@@ -126,7 +143,7 @@ func TestItemCleanupCheckWorker_Work_NoCleanupCandidates(t *testing.T) {
 func TestItemCleanupCheckWorker_Work_DetectsLongTermErrorItems(t *testing.T) {
 	ctx := context.Background()
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 
 	errorTime := time.Now().Add(-35 * 24 * time.Hour) // 35 days ago
@@ -169,7 +186,7 @@ func TestItemCleanupCheckWorker_Work_DetectsLongTermErrorItems(t *testing.T) {
 func TestItemCleanupCheckWorker_Work_DetectsRevokedItems(t *testing.T) {
 	ctx := context.Background()
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 
 	items := []domain.LinkedItem{
@@ -210,7 +227,7 @@ func TestItemCleanupCheckWorker_Work_DetectsRevokedItems(t *testing.T) {
 func TestItemCleanupCheckWorker_Work_DetectsStaleItems(t *testing.T) {
 	ctx := context.Background()
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 
 	lastSyncTime := time.Now().Add(-65 * 24 * time.Hour) // 65 days ago
@@ -253,7 +270,7 @@ func TestItemCleanupCheckWorker_Work_DetectsStaleItems(t *testing.T) {
 func TestItemCleanupCheckWorker_Work_RepositoryError(t *testing.T) {
 	ctx := context.Background()
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 
 	dbErr := errors.New("database connection error")
@@ -283,7 +300,7 @@ func TestItemCleanupCheckWorker_Work_RepositoryError(t *testing.T) {
 func TestItemCleanupCheckWorker_Work_SkipsAlreadyScheduledItems(t *testing.T) {
 	ctx := context.Background()
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 
 	scheduledTime := time.Now().Add(5 * 24 * time.Hour) // 5 days from now
@@ -324,7 +341,7 @@ func TestItemCleanupCheckWorker_Work_SkipsAlreadyScheduledItems(t *testing.T) {
 func TestItemCleanupCheckWorker_Work_MarkForCleanupErrorContinues(t *testing.T) {
 	ctx := context.Background()
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 
 	items := []domain.LinkedItem{
@@ -374,7 +391,7 @@ func TestItemCleanupCheckWorker_Work_MarkForCleanupErrorContinues(t *testing.T) 
 func TestItemCleanupCheckWorker_Work_EnqueueErrorContinues(t *testing.T) {
 	ctx := context.Background()
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 
 	items := []domain.LinkedItem{
@@ -403,6 +420,10 @@ func TestItemCleanupCheckWorker_Work_EnqueueErrorContinues(t *testing.T) {
 		cleanupArgs, ok := job.(ItemCleanupArgs)
 		return ok && cleanupArgs.LinkedItemID == "item-2"
 	}), mock.Anything).Return(&queue.JobResult{ID: 2}, nil)
+	// Issue #1486 follow-up part D: the failed enqueue now releases the stamp MarkForCleanup set for item-1,
+	// so it stays visible to the candidate sweep. See
+	// TestItemCleanupCheckWorker_Work_EnqueueFailure_ReleasesTheCleanupStamp for why.
+	mockRepo.On("ClearCleanupSchedule", ctx, "item-1").Return(nil)
 
 	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
 		LinkedItemRepo:     mockRepo,
@@ -423,12 +444,14 @@ func TestItemCleanupCheckWorker_Work_EnqueueErrorContinues(t *testing.T) {
 	require.NoError(t, err)
 	mockRepo.AssertExpectations(t)
 	mockQueue.AssertNumberOfCalls(t, "Enqueue", 2)
+	// Only the FAILED item's stamp is released; item-2's job exists and must keep its schedule.
+	mockRepo.AssertNotCalled(t, "ClearCleanupSchedule", ctx, "item-2")
 }
 
 func TestItemCleanupCheckWorker_Work_EnqueuesWithCorrectScheduledTime(t *testing.T) {
 	ctx := context.Background()
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 
 	items := []domain.LinkedItem{
@@ -499,7 +522,7 @@ func TestItemCleanupCheckUniqueOpts(t *testing.T) {
 }
 
 func TestNewItemCleanupCheckWorker_DefaultLogger(t *testing.T) {
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 
 	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
@@ -515,7 +538,7 @@ func TestNewItemCleanupCheckWorker_DefaultLogger(t *testing.T) {
 }
 
 func TestItemCleanupCheckWorker_SetJobQueue(t *testing.T) {
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 	newMockQueue := new(MockJobQueue)
 
@@ -547,7 +570,7 @@ func (m *MockAccountCountRepo) CountActiveByLinkedItemID(ctx context.Context, li
 func TestItemCleanupCheckWorker_Work_DetectsZeroAccountItems(t *testing.T) {
 	ctx := context.Background()
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockAccountRepo := new(MockAccountCountRepo)
 	mockQueue := new(MockJobQueue)
 
@@ -596,7 +619,7 @@ func TestItemCleanupCheckWorker_Work_DetectsZeroAccountItems(t *testing.T) {
 func TestItemCleanupCheckWorker_Work_ZeroAccountsImmediateCleanup(t *testing.T) {
 	ctx := context.Background()
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockAccountRepo := new(MockAccountCountRepo)
 	mockQueue := new(MockJobQueue)
 
@@ -647,7 +670,7 @@ func TestItemCleanupCheckWorker_Work_ZeroAccountsImmediateCleanup(t *testing.T) 
 func TestItemCleanupCheckWorker_Work_WithAccountsUsesGracePeriod(t *testing.T) {
 	ctx := context.Background()
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockAccountRepo := new(MockAccountCountRepo)
 	mockQueue := new(MockJobQueue)
 
@@ -800,7 +823,7 @@ func TestItemCleanupCheckWorker_Work_PagesPastFirstBatch(t *testing.T) {
 		}
 	}
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 
 	// ⚠ All THREE cursor components are asserted. An earlier version matched on ItemID alone, which
@@ -852,7 +875,7 @@ func TestItemCleanupCheckWorker_Work_StopsAtTotalProcessedCap(t *testing.T) {
 	const wantPageFetches = 3                  // ceil(25/10)
 	const safetyNetCalls = wantPageFetches + 5 // far more than a correct implementation ever needs
 
-	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockRepo := newMockLinkedItemCleanupRepo()
 	mockQueue := new(MockJobQueue)
 
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -904,4 +927,332 @@ func TestItemCleanupCheckWorker_Work_StopsAtTotalProcessedCap(t *testing.T) {
 			"stub's safety net runs out")
 	mockRepo.AssertNumberOfCalls(t, "MarkForCleanup", sweepCap)
 	mockQueue.AssertNumberOfCalls(t, "Enqueue", sweepCap)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Issue #1486 follow-up part D: the sweep's own strand
+// ---------------------------------------------------------------------------------------------
+
+// TestItemCleanupCheckWorker_Work_EnqueueFailure_ReleasesTheCleanupStamp is part D's failing-first
+// test, and a THIRD instance of the class commit 24907762 fixed — whose message claims it covered
+// "two paths"; there were three.
+//
+// Work marks the item (MarkForCleanup sets cleanup_scheduled_at) and only then enqueues. Before this
+// fix, an enqueue failure logged, incremented errorCount and `continue`d, leaving the stamp set with
+// no job in flight. cleanup_scheduled_at is a DURABLE marker that HIDES a row from the sweep —
+// repository.cleanupCandidateSelectQuery requires cleanup_scheduled_at IS NULL — so River being
+// briefly unavailable permanently removed a still-billing Plaid item from every future sweep, and
+// DeleteUserCascade's C2 guard blocked that user's GDPR erasure forever. Before the stamp existed
+// this path left the row untouched and the next daily sweep recovered it, so keeping the stamp made a
+// transient queue error strictly WORSE than the old behaviour.
+//
+// Safe from the race the stamp guards against, for the same reason as the identical release in
+// accountService.DeleteAccount: that race is with a worker executing the job, and the enqueue that
+// would have created that job just failed.
+//
+// This test failed on the ClearCleanupSchedule expectation before the fix.
+func TestItemCleanupCheckWorker_Work_EnqueueFailure_ReleasesTheCleanupStamp(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := newMockLinkedItemCleanupRepo()
+	mockQueue := new(MockJobQueue)
+
+	items := []domain.LinkedItem{{ID: "item-strand", UserID: "user-1", Status: "revoked"}}
+
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(items, nil)
+	mockRepo.On("MarkForCleanup", ctx, "item-strand", mock.Anything).Return(nil)
+	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return((*queue.JobResult)(nil), errors.New("river unavailable"))
+	mockRepo.On("ClearCleanupSchedule", ctx, "item-strand").Return(nil)
+
+	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
+	})
+
+	// A per-item failure still must not fail the whole sweep — the run continues and the next
+	// periodic run re-selects the (now unstamped) row.
+	require.NoError(t, worker.Work(ctx, newTestItemCleanupCheckJob(ItemCleanupCheckArgs{TriggerSource: "periodic"})))
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestItemCleanupCheckWorker_Work_EnqueueAndReleaseBothFail_DoesNotFailTheSweep: when the release
+// itself also fails the row IS stranded, and nothing downstream will notice on its own — hence the
+// Error-level log at the call site. It must still not fail the sweep for every other item, and part
+// C's backstop is what eventually recovers it, since the row keeps cleanup_scheduled_at.
+func TestItemCleanupCheckWorker_Work_EnqueueAndReleaseBothFail_DoesNotFailTheSweep(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := newMockLinkedItemCleanupRepo()
+	mockQueue := new(MockJobQueue)
+
+	items := []domain.LinkedItem{{ID: "item-doubly-stranded", UserID: "user-1", Status: "revoked"}}
+
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return(items, nil)
+	mockRepo.On("MarkForCleanup", ctx, "item-doubly-stranded", mock.Anything).Return(nil)
+	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return((*queue.JobResult)(nil), errors.New("river unavailable"))
+	mockRepo.On("ClearCleanupSchedule", ctx, "item-doubly-stranded").Return(errors.New("db blip"))
+
+	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestItemCleanupCheckJob(ItemCleanupCheckArgs{TriggerSource: "periodic"})))
+
+	mockRepo.AssertExpectations(t)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Issue #1486 follow-up part C: the pending-cleanup backstop
+// ---------------------------------------------------------------------------------------------
+
+// newStrandedItem builds a row in the exact state GetItemsPendingCleanup selects for: stamped
+// (cleanup_scheduled_at IS NOT NULL), overdue (< NOW()), and not yet disconnected/replaced.
+func newStrandedItem(id, userID string) domain.LinkedItem {
+	stampedAt := time.Now().Add(-3 * 24 * time.Hour)
+	return domain.LinkedItem{
+		ID:                 id,
+		UserID:             userID,
+		Status:             "revoked",
+		CleanupScheduledAt: &stampedAt,
+	}
+}
+
+// TestItemCleanupCheckWorker_Work_ReenqueuesStrandedPendingCleanupItems is part C's failing-first
+// test.
+//
+// repository.GetItemsPendingCleanup (`WHERE cleanup_scheduled_at IS NOT NULL AND
+// cleanup_scheduled_at < NOW() AND status NOT IN ('replaced','disconnected')`) was declared on the
+// wide repository.LinkedItemRepository interface AND on this worker's narrow
+// LinkedItemCleanupRepository, and implemented — with ZERO production callers. It selects precisely
+// "stamped, overdue, Plaid side not yet done" — i.e. every STRANDED row, from whatever cause. This
+// wires it in as a re-enqueue backstop.
+//
+// It covers three strand paths at once: a dead-lettered ItemCleanup job (ItemCleanupArgs sets no
+// MaxAttempts, so it inherits DefaultRetryPolicy's MaxAttempts=5, after which
+// DeadLetterHandler.HandleError engages at job.Attempt >= job.MaxAttempts and nothing retries it —
+// DeadLetterService.Retry is admin-triggered and single-shot, an alerting path, not a recovery
+// path); a failed enqueue whose stamp release also failed (part D's second test above); and any
+// future stamp/enqueue asymmetry.
+//
+// It is safe because ClaimItemForCleanup re-verifies eligibility inside ItemCleanupWorker.Work
+// before the irreversible /item/remove, and ItemCleanupUniqueOpts prevents a duplicate live job.
+//
+// This test failed on the Enqueue expectation before the fix — nothing called GetItemsPendingCleanup
+// at all.
+func TestItemCleanupCheckWorker_Work_ReenqueuesStrandedPendingCleanupItems(t *testing.T) {
+	ctx := context.Background()
+
+	// Programmed directly rather than via newMockLinkedItemCleanupRepo, whose .Maybe() default
+	// would win over this override.
+	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockQueue := new(MockJobQueue)
+
+	// No NEW candidates this run: the backstop must run independently of the candidate sweep, and in
+	// particular must not be skipped by Work's "no items need cleanup" early return.
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return([]domain.LinkedItem{}, nil)
+	mockRepo.On("GetItemsPendingCleanup", ctx).Return([]domain.LinkedItem{newStrandedItem("item-stranded", "user-9")}, nil)
+
+	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		cleanupArgs, ok := job.(ItemCleanupArgs)
+		return ok && cleanupArgs.LinkedItemID == "item-stranded" && cleanupArgs.UserID == "user-9"
+	}), mock.Anything, mock.Anything).Return(&queue.JobResult{ID: 42}, nil)
+
+	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestItemCleanupCheckJob(ItemCleanupCheckArgs{TriggerSource: "periodic"})))
+
+	mockRepo.AssertExpectations(t)
+	mockQueue.AssertExpectations(t)
+
+	// The load-bearing half of "why this beats releasing the stamp": the ORIGINAL
+	// cleanup_scheduled_at is PRESERVED. Re-marking would set cleanupAt = now + gracePeriodDays for
+	// every non-immediate leg (only "zero_accounts" is immediate), so each terminal failure would buy
+	// a fresh FULL grace window of Plaid billing — daily SELECTION, not daily removal.
+	mockRepo.AssertNotCalled(t, "MarkForCleanup", mock.Anything, mock.Anything, mock.Anything)
+	// And the stamp is not released either: releasing it is what would hand the row back to the
+	// candidate sweep and restart the grace period.
+	mockRepo.AssertNotCalled(t, "ClearCleanupSchedule", mock.Anything, mock.Anything)
+}
+
+// TestItemCleanupCheckWorker_Work_BackstopRunsAlongsideNewCandidates: the backstop must not replace
+// the candidate sweep, and the two must not interfere. Both items get exactly one job.
+func TestItemCleanupCheckWorker_Work_BackstopRunsAlongsideNewCandidates(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockQueue := new(MockJobQueue)
+
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).
+		Return([]domain.LinkedItem{{ID: "item-new", UserID: "user-1", Status: "revoked"}}, nil)
+	mockRepo.On("MarkForCleanup", ctx, "item-new", mock.Anything).Return(nil)
+	mockRepo.On("GetItemsPendingCleanup", ctx).
+		Return([]domain.LinkedItem{newStrandedItem("item-stranded", "user-2")}, nil)
+	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything, mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+
+	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
+		LinkedItemRepo:     mockRepo,
+		JobQueue:           mockQueue,
+		Logger:             newTestItemCleanupCheckLogger(),
+		GracePeriodDays:    7,
+		ErrorDaysThreshold: 30,
+		StaleDaysThreshold: 60,
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestItemCleanupCheckJob(ItemCleanupCheckArgs{TriggerSource: "periodic"})))
+
+	mockQueue.AssertNumberOfCalls(t, "Enqueue", 2)
+	mockRepo.AssertNumberOfCalls(t, "MarkForCleanup", 1) // the NEW candidate only
+	mockRepo.AssertExpectations(t)
+}
+
+// TestItemCleanupCheckWorker_Work_BackstopFailuresDoNotFailTheSweep: neither a failed
+// GetItemsPendingCleanup query nor a failed re-enqueue may fail the periodic job. The candidate
+// sweep's own work is already committed by the time the backstop runs, and failing the job would
+// make River retry the WHOLE sweep — re-running the irreversible-authorising half for no reason. The
+// next daily run re-selects the same stranded rows, since nothing about them changed.
+func TestItemCleanupCheckWorker_Work_BackstopFailuresDoNotFailTheSweep(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("query fails", func(t *testing.T) {
+		mockRepo := new(MockLinkedItemCleanupRepo)
+		mockQueue := new(MockJobQueue)
+		mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return([]domain.LinkedItem{}, nil)
+		mockRepo.On("GetItemsPendingCleanup", ctx).Return(nil, errors.New("db blip"))
+
+		worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
+			LinkedItemRepo: mockRepo, JobQueue: mockQueue, Logger: newTestItemCleanupCheckLogger(),
+			GracePeriodDays: 7, ErrorDaysThreshold: 30, StaleDaysThreshold: 60,
+		})
+
+		require.NoError(t, worker.Work(ctx, newTestItemCleanupCheckJob(ItemCleanupCheckArgs{TriggerSource: "periodic"})))
+		mockQueue.AssertNotCalled(t, "Enqueue")
+		mockRepo.AssertExpectations(t)
+	})
+
+	t.Run("re-enqueue fails", func(t *testing.T) {
+		mockRepo := new(MockLinkedItemCleanupRepo)
+		mockQueue := new(MockJobQueue)
+		mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return([]domain.LinkedItem{}, nil)
+		mockRepo.On("GetItemsPendingCleanup", ctx).
+			Return([]domain.LinkedItem{newStrandedItem("item-stranded", "user-2")}, nil)
+		mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything, mock.Anything).
+			Return((*queue.JobResult)(nil), errors.New("river unavailable"))
+
+		worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
+			LinkedItemRepo: mockRepo, JobQueue: mockQueue, Logger: newTestItemCleanupCheckLogger(),
+			GracePeriodDays: 7, ErrorDaysThreshold: 30, StaleDaysThreshold: 60,
+		})
+
+		require.NoError(t, worker.Work(ctx, newTestItemCleanupCheckJob(ItemCleanupCheckArgs{TriggerSource: "periodic"})))
+		// Critically: the stamp is NOT released on a failed re-enqueue here (unlike part D's path,
+		// where THIS run set the stamp). The stamp is what keeps the row selectable by the backstop
+		// on the next run; releasing it would hand the row back to the candidate sweep and restart a
+		// full grace window.
+		mockRepo.AssertNotCalled(t, "ClearCleanupSchedule", mock.Anything, mock.Anything)
+		mockRepo.AssertExpectations(t)
+	})
+}
+
+// TestItemCleanupCheckWorker_Work_BackstopRespectsPerRunBound bounds the backstop's re-enqueue
+// volume. GetItemsPendingCleanup has no LIMIT of its own, so without a bound here one run could
+// enqueue an unbounded number of jobs.
+//
+// It reuses maxItemsPerSweep as that bound WITHOUT changing the constant's value or its derivation:
+// these are re-enqueues of work a PREVIOUS run already authorised and already counted against its
+// own cap, not new authorisations, and ItemCleanupUniqueOpts plus ClaimItemForCleanup gate each one
+// again. The bound is here to cap per-run queue volume, not to re-derive the blast radius.
+func TestItemCleanupCheckWorker_Work_BackstopRespectsPerRunBound(t *testing.T) {
+	ctx := context.Background()
+
+	const bound = 3
+
+	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockQueue := new(MockJobQueue)
+
+	stranded := make([]domain.LinkedItem, bound+4)
+	for i := range stranded {
+		stranded[i] = newStrandedItem(uuid.New().String(), "user-1")
+	}
+
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return([]domain.LinkedItem{}, nil)
+	mockRepo.On("GetItemsPendingCleanup", ctx).Return(stranded, nil)
+	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything, mock.Anything).Return(&queue.JobResult{ID: 1}, nil)
+
+	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
+		LinkedItemRepo: mockRepo, JobQueue: mockQueue, Logger: newTestItemCleanupCheckLogger(),
+		GracePeriodDays: 7, ErrorDaysThreshold: 30, StaleDaysThreshold: 60,
+		MaxItemsPerCleanupSweep: bound,
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestItemCleanupCheckJob(ItemCleanupCheckArgs{TriggerSource: "periodic"})))
+
+	mockQueue.AssertNumberOfCalls(t, "Enqueue", bound)
+}
+
+// TestItemCleanupCheckWorker_Work_BackstopSkipsDuplicateLiveJobs: a stamped, overdue row whose
+// ItemCleanup job is still Available/Scheduled/Running/Retryable/Pending is NOT stranded, and
+// ItemCleanupUniqueOpts is what tells the two apart — the insert comes back UniqueSkipped rather
+// than creating a second job for the same item. This is why the backstop can afford to re-enqueue
+// every pending row without tracking job state itself.
+func TestItemCleanupCheckWorker_Work_BackstopSkipsDuplicateLiveJobs(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockLinkedItemCleanupRepo)
+	mockQueue := new(MockJobQueue)
+
+	mockRepo.On("GetItemsForCleanupPage", ctx, 30, 60, mock.Anything, mock.Anything).Return([]domain.LinkedItem{}, nil)
+	mockRepo.On("GetItemsPendingCleanup", ctx).
+		Return([]domain.LinkedItem{newStrandedItem("item-has-live-job", "user-3")}, nil)
+
+	// The options are APPLIED, not merely counted. MockJobQueue.Enqueue calls
+	// m.Called(ctx, job, opts) — always exactly three arguments regardless of how many options were
+	// passed — so any assertion on the argument COUNT is vacuously true and would pass even for an
+	// enqueue with no options at all. Resolving the option slice into an EnqueueOptions and reading
+	// .Unique is the only form of this check that can fail.
+	var appliedUnique *queue.UniqueOpts
+	var sawOpts bool
+	mockQueue.On("Enqueue", ctx, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			opts, ok := args.Get(2).([]queue.EnqueueOption)
+			require.True(t, ok, "MockJobQueue.Enqueue's third mock argument should be the option slice")
+			sawOpts = true
+			var resolved queue.EnqueueOptions
+			for _, opt := range opts {
+				opt(&resolved)
+			}
+			appliedUnique = resolved.Unique
+		}).
+		Return(&queue.JobResult{ID: 7, UniqueSkipped: true}, nil)
+
+	worker := NewItemCleanupCheckWorker(ItemCleanupCheckWorkerDeps{
+		LinkedItemRepo: mockRepo, JobQueue: mockQueue, Logger: newTestItemCleanupCheckLogger(),
+		GracePeriodDays: 7, ErrorDaysThreshold: 30, StaleDaysThreshold: 60,
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestItemCleanupCheckJob(ItemCleanupCheckArgs{TriggerSource: "periodic"})))
+	require.True(t, sawOpts, "the backstop must have enqueued once")
+	require.NotNil(t, appliedUnique,
+		"the backstop must pass uniqueness options, or it would create a duplicate cleanup job for the same item on every single daily run")
+	assert.Equal(t, ItemCleanupUniqueOpts(), appliedUnique,
+		"the backstop must use ItemCleanupUniqueOpts — the SAME dedup key and states the candidate sweep uses, or a job created by one would not deduplicate a job created by the other")
+	mockRepo.AssertNotCalled(t, "ClearCleanupSchedule", mock.Anything, mock.Anything)
 }
