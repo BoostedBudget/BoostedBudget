@@ -17,9 +17,9 @@ import (
 // retention deadline has passed. Issue #1497.
 //
 // ⚠ THIS JOB EXISTS SEPARATELY FROM THE RETRY JOB ON PURPOSE, AND THE SEPARATION IS THE FEATURE.
-// Migration 000135 promises that a token retained past its owner's GDPR erasure is destroyed when its
-// deadline passes "whether or not the removal ever succeeded and whether or not the retry job ever
-// ran". If purging were part of the retry job — the obvious design — then that promise would be
+// Migration 000135 promises that a token retained past its owner's GDPR erasure is purged at the first
+// sweep at or after its deadline "whether or not the removal ever succeeded and whether or not the
+// retry job ever ran". If purging were part of the retry job — the obvious design — then that promise would be
 // conditional on the retry job being registered, wired, leader-elected, holding a Plaid client, and not
 // starved behind a backlog. It is not conditional on any of those, so the purge is its own job with its
 // own registration and its own dependency: the database, and nothing else.

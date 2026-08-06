@@ -285,7 +285,8 @@ func main() {
 	//
 	//   - the token PURGE worker is ALWAYS ACTIVE. DeleteUserCascade retains a Plaid access token
 	//     on every plaid_orphaned_items row it writes, whether or not Plaid is configured at the
-	//     time, and migration 000135 promises that credential is destroyed at its 30-day deadline
+	//     time, and migration 000135 promises that credential is purged at its 30-day deadline (at the
+	//     first sweep at or after it — see domain.OrphanedItemTokenPurgeInterval for the bound)
 	//     regardless of anything else. Gating it on Plaid config would make a GDPR retention limit
 	//     conditional on a feature flag.
 	//   - the RETRY worker needs a Plaid client, so it is nil when Plaid is not configured — which

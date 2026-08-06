@@ -66,9 +66,9 @@ func TestBuildPeriodicJobSpecs_Count(t *testing.T) {
 // absent — no Plaid, no retry sweep, nothing — the credential purge is still registered.
 //
 // That is the whole reason the purge is a separate job with no periodicJobsDeps field. Migration
-// 000135 promises a retained Plaid credential is destroyed at its 30-day deadline "whether or not the
-// retry job ever ran"; a registration that could be omitted by a nil worker would make that promise
-// conditional on configuration, which is not a promise.
+// 000135 promises a retained Plaid credential is purged at its 30-day deadline — at the first sweep at
+// or after it — "whether or not the retry job ever ran"; a registration that could be omitted by a nil
+// worker would make that promise conditional on configuration, which is not a promise.
 func TestBuildPeriodicJobSpecs_PurgeSpecSurvivesEveryNilWorker(t *testing.T) {
 	specs := buildPeriodicJobSpecs(periodicJobsDeps{})
 
@@ -187,17 +187,20 @@ func TestBuildPeriodicJobSpecs_IDsAreUnique(t *testing.T) {
 // the bound is now stated numerically everywhere it appears AND shortened to an hour. This test is the
 // only place that shortening is falsifiable.
 //
-// ⚠ THREE ASSERTIONS, NONE OF THEM REDUNDANT:
+// ⚠ FOUR ASSERTIONS, NONE OF THEM REDUNDANT:
 //
 //  1. The value comes from the SPEC BUILDER, and is compared to a literal 1*time.Hour as well as to
 //     domain.OrphanedItemTokenPurgeInterval. Comparing only to the constant would be circular — the
 //     spec is built FROM that constant, so the pair would agree by construction at any value.
-//  2. UniqueOpts.ByPeriod must not EXCEED the interval. This is the trap: the dedup key includes
-//     JobStateCompleted (required by RunOnStart, Issue #1448), so a 24-hour ByPeriod would silently
-//     deduplicate all 23 extra hourly inserts against the run that already completed, leaving the
-//     effective cadence at 24 hours while the interval field read "1h". The interval change would have
-//     been inert and no other test would have noticed.
-//  3. SIBLING: the Plaid-dependent RETRY sweep is still daily. Without it this test passes just as
+//  2. UniqueOpts.ByPeriod must EQUAL the interval — both directions are real bugs. The dedup key
+//     includes JobStateCompleted (required by RunOnStart, Issue #1448), so a 24-hour ByPeriod would
+//     silently deduplicate all 23 extra hourly inserts against the run that already completed, leaving
+//     the effective cadence at 24 hours while the interval field read "1h" — the interval change would
+//     have been inert and no other test would have noticed. A ZERO ByPeriod is worse: uniqueness
+//     degrades to kind-only while Completed stays in ByState, so the first completed run suppresses
+//     every future insert and the sweep runs once, ever.
+//  3. ByPeriod must be at least a second, which River itself requires at insert time.
+//  4. SIBLING: the Plaid-dependent RETRY sweep is still daily. Without it this test passes just as
 //     well if someone set every periodic job on the branch to an hour, and domain.
 //     OrphanedItemRetryStaleAfter's "two cadences of the daily retry sweep" derivation would be
 //     quietly wrong.
@@ -216,9 +219,9 @@ func TestBuildPeriodicJobSpecs_PurgeRunsHourlyAndItsDedupDoesNotSuppressThat(t *
 	}
 
 	if purge.interval != 1*time.Hour {
-		t.Errorf("purge interval = %v, want 1h: it is the stated upper bound on how long a retained "+
-			"Plaid credential can exist past its deadline, and the schema comment, the domain constant "+
-			"and the ADR all quote it", purge.interval)
+		t.Errorf("purge interval = %v, want 1h: it is the stated per-sweep bound on how long a retained "+
+			"Plaid credential can still exist past its deadline, and the schema comment, the domain "+
+			"constant and the ADR all quote it", purge.interval)
 	}
 	if purge.interval != domain.OrphanedItemTokenPurgeInterval {
 		t.Errorf("purge interval = %v but domain.OrphanedItemTokenPurgeInterval = %v — the registration "+
@@ -230,12 +233,28 @@ func TestBuildPeriodicJobSpecs_PurgeRunsHourlyAndItsDedupDoesNotSuppressThat(t *
 	if insertOpts == nil {
 		t.Fatal("purge build() returned nil InsertOpts")
 	}
-	if insertOpts.UniqueOpts.ByPeriod > purge.interval {
-		t.Errorf("purge UniqueOpts.ByPeriod = %v exceeds its %v interval: the dedup key includes "+
-			"JobStateCompleted, so every insert inside that period is discarded against the run that "+
-			"already completed and the real cadence stays ByPeriod, not the interval",
+	// EQUALITY, not `<=`: see (2) above. Neither direction is caught by any other test —
+	// TestBuildPeriodicJobSpecs_AllHaveRunOnStartDedupAndID accepts non-zero ByPeriod OR a non-empty
+	// ByState, and ByState stays non-empty when ByPeriod is zeroed.
+	if insertOpts.UniqueOpts.ByPeriod != purge.interval {
+		t.Errorf("purge UniqueOpts.ByPeriod = %v, want exactly its %v interval: longer discards inserts "+
+			"against the already-completed run (the real cadence becomes ByPeriod); zero degrades dedup "+
+			"to kind-only, and with JobStateCompleted in ByState that means the sweep runs once, ever",
 			insertOpts.UniqueOpts.ByPeriod, purge.interval)
 	}
+	if insertOpts.UniqueOpts.ByPeriod < time.Second {
+		t.Errorf("purge UniqueOpts.ByPeriod = %v: River rejects anything below one second at insert "+
+			"time (river@v0.38.0 insert_opts.go:256), so this would fail in production, not here",
+			insertOpts.UniqueOpts.ByPeriod)
+	}
+
+	// ⚠ WHAT THIS TEST DOES NOT PROVE, recorded so nobody mistakes it for a proof of exact hourly
+	// execution: the dedup bucket is Truncate(ByPeriod) of an UNALIGNED wall-clock instant, computed
+	// BEFORE ScheduledAt is assigned (river@v0.38.0 client.go:1750 vs :1759-1767, and
+	// internal/dbunique/db_unique.go:117). Two runs one interval apart normally land in adjacent
+	// buckets, but a run enqueued marginally early can collide with the previous bucket and be
+	// suppressed. That — along with downtime, leader election and worker starvation — is why the
+	// documented bound is PER SWEEP rather than absolute. See domain.OrphanedItemTokenPurgeInterval.
 
 	var retry *periodicJobSpec
 	full := buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps())
