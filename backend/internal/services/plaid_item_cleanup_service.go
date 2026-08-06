@@ -276,7 +276,22 @@ type PlaidItemCleanupService interface {
 	// #1413 H1 residue (Codex review, PR #1443 follow-up): also returns ErrCleanupAborted
 	// (errors.Is-checkable, not a Plaid error) if a NEW linked item was created for this user
 	// after this call's initial fetch — see ErrCleanupAborted's doc comment.
-	RemoveAllUserItems(ctx context.Context, userID string) error
+	//
+	// recheck IS REQUIRED, NOT OPTIONAL, and that is the whole point of it being in the signature.
+	// This method used to pass a literal nil to cleanupItems' eligibility parameter — a parameter
+	// that exists for exactly this purpose and that DisconnectAllUserItemsIfEligible has always
+	// supplied — so no per-item recheck ever happened on the hard-deletion path. That path removes
+	// items for a user about to be irreversibly erased, and its one caller
+	// (DeletionService.ExecuteDeletion) makes one authorisation read and then one Plaid round-trip
+	// PER ITEM; a user who cancelled their deletion after item 1 still lost items 2..N. A nil
+	// recheck is REFUSED with an error rather than quietly meaning "no recheck", because the defect
+	// this closes was precisely a nil that read as intentional. Callers with genuinely nothing to
+	// recheck should not be using this method.
+	//
+	// When recheck reports ineligible partway through, ErrCleanupAborted is returned and the items
+	// not yet attempted are left connected — a legitimate partial completion. The caller must
+	// distinguish that from a Plaid failure; see ExecuteDeletion's ErrCleanupAborted branch.
+	RemoveAllUserItems(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error
 
 	// RemoveItem calls Plaid /item/remove for a single linked item.
 	// Used for individual item cleanup (orphaned items, subscription downgrade).
@@ -463,8 +478,13 @@ func (s *plaidItemCleanupService) SetWorkClaimsRepo(repo repository.WorkClaimsRe
 // Issue #1413 round-4 Critical finding C2: the item list is read INSIDE cleanupItems's claimed
 // closure — see that function's doc comment for why reading it here, before the claim, would
 // reopen the race a concurrent LinkAccounts call could exploit.
-func (s *plaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID string) error {
-	return s.cleanupItems(ctx, userID, s.linkedItemRepo.GetByUserID, nil)
+func (s *plaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
+	if recheck == nil {
+		// Fail closed rather than degrading to the old nil-recheck behaviour. See the interface
+		// method's doc comment: a nil here is the defect, not a configuration.
+		return fmt.Errorf("RemoveAllUserItems: an eligibility recheck is required before removing items for a user about to be erased")
+	}
+	return s.cleanupItems(ctx, userID, s.linkedItemRepo.GetByUserID, recheck)
 }
 
 // RemoveItem implements PlaidItemCleanupService.RemoveItem — see that interface method's doc

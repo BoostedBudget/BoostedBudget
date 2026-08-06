@@ -37,6 +37,27 @@ type MockProfileRepositoryForDeletion struct {
 	// UncleanedLinkedItemCountCalls counts the calls, so a test can pin that the Plaid-less branch
 	// actually consulted the count rather than reaching its conclusion some other way.
 	UncleanedLinkedItemCountCalls int
+
+	// AuthorisedFn answers DeletionStillAuthorised — ExecuteDeletion's use-time re-verification of
+	// the authorisation it was claimed under. Field-driven for the same reason as
+	// CountUncleanedLinkedItems above: every pre-existing test in this file reaches it, and a nil
+	// AuthorisedFn means "still authorised", which is exactly the behaviour they were written
+	// against. Tests that care flip it mid-flow.
+	AuthorisedFn func(ctx context.Context) (bool, error)
+	// AuthorisedKinds / AuthorisedOccurrences record what each recheck was ASKED, so a test can pin
+	// that the question matches the authorisation this run was claimed under rather than a union.
+	AuthorisedKinds       []repository.DeletionClaimKind
+	AuthorisedOccurrences []*time.Time
+}
+
+// DeletionStillAuthorised — the use-time recheck. See the struct's field comments.
+func (m *MockProfileRepositoryForDeletion) DeletionStillAuthorised(ctx context.Context, userID string, kind repository.DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	m.AuthorisedKinds = append(m.AuthorisedKinds, kind)
+	m.AuthorisedOccurrences = append(m.AuthorisedOccurrences, expectedDeletionRequestedAt)
+	if m.AuthorisedFn == nil {
+		return true, nil
+	}
+	return m.AuthorisedFn(ctx)
 }
 
 func (m *MockProfileRepositoryForDeletion) GetUserByID(ctx context.Context, userID string) (*domain.User, error) {
@@ -694,9 +715,21 @@ func TestExecuteDeletion_HandlesClerkError(t *testing.T) {
 // MockPlaidItemCleanupService is a mock for PlaidItemCleanupService
 type MockPlaidItemCleanupService struct {
 	mock.Mock
+
+	// LastRemoveAllRecheck is the eligibility callback the last RemoveAllUserItems call was handed.
+	// Captured in a FIELD rather than passed to m.Called so that every pre-existing two-argument
+	// `.On("RemoveAllUserItems", ctx, userID)` expectation in this package keeps matching — a func
+	// value is also not comparable, which makes it a poor testify argument regardless.
+	// TestExecuteDeletion_HandsPlaidCleanupALiveEligibilityRecheck reads it; nil here is the defect
+	// this parameter exists to prevent.
+	LastRemoveAllRecheck func(ctx context.Context) (bool, error)
+	// RemoveAllRecheckWasNil distinguishes "captured a nil callback" from "was never called".
+	RemoveAllRecheckWasNil bool
 }
 
-func (m *MockPlaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID string) error {
+func (m *MockPlaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
+	m.LastRemoveAllRecheck = recheck
+	m.RemoveAllRecheckWasNil = recheck == nil
 	args := m.Called(ctx, userID)
 	return args.Error(0)
 }
@@ -1343,9 +1376,23 @@ func TestSetPaddleCleanupService_WiresCorrectly(t *testing.T) {
 	mockPaddle.AssertExpectations(t)
 }
 
-// TestExecuteDeletion_PaddleRunsBeforePlaidAndDB verifies the execution order:
-// Paddle cleanup → Plaid cleanup → DB cascade. Issue #1006.
-func TestExecuteDeletion_PaddleRunsBeforePlaidAndDB(t *testing.T) {
+// TestExecuteDeletion_PlaidRunsBeforePaddleAndDB verifies the execution order:
+// Plaid cleanup → Paddle cleanup → DB cascade. Issue #1006 established the ordering; the ordering
+// itself was REVERSED afterwards, and this test's name and expectation were reversed with it.
+//
+// ⚠ IT USED TO ASSERT THE OPPOSITE (named "...PaddleRunsBeforePlaidAndDB"), and that expectation was
+// wrong in a way the test could not see, because it only ever exercised the all-succeeds path. The
+// two external legs are NOT equally reversible: a Plaid disconnect costs the user a re-link, whereas
+// ArchiveAndAnonymizeCustomer destroys PII at Paddle and cannot be undone by us or by Paddle. With
+// Paddle first, EVERY abort after it — a Plaid outage, the routine ErrSideEffectClaimBusy deferral,
+// or (the case that prompted this) the user cancelling their deletion mid-flight — left a user whose
+// deletion did not happen with their subscription already cancelled and their Paddle customer
+// already anonymised. Reversing the order means the widest exposure window carries the cheapest
+// possible loss, and the irreversible call is preceded by the freshest authorisation check.
+//
+// See deletion_service_authorisation_revoked_test.go for the tests that make the ordering
+// load-bearing rather than incidental.
+func TestExecuteDeletion_PlaidRunsBeforePaddleAndDB(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
@@ -1381,9 +1428,10 @@ func TestExecuteDeletion_PaddleRunsBeforePlaidAndDB(t *testing.T) {
 	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		[]string{"CancelSubscription", "ArchiveCustomer", "RemoveAllUserItems", "DeleteUserCascade"},
+		[]string{"RemoveAllUserItems", "CancelSubscription", "ArchiveCustomer", "DeleteUserCascade"},
 		callOrder,
-		"Execution order must be: Paddle cancel, Paddle archive, Plaid remove, DB cascade",
+		"Execution order must be: Plaid remove, Paddle cancel, Paddle archive, DB cascade — "+
+			"recoverable external work first, the irreversible anonymisation last",
 	)
 }
 

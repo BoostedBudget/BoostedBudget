@@ -221,6 +221,38 @@ type ProfileRepository interface {
 	// cascade runs. The guard inside the transaction is the authority; this is an explanation.
 	CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error)
 
+	// DeletionStillAuthorised reports whether a hard delete of userID is STILL authorised under
+	// `kind`, judged against committed state at the moment it is asked, for the deletion episode
+	// pinned by expectedDeletionRequestedAt.
+	//
+	// WHY THIS EXISTS SEPARATELY FROM ClaimForDeletion AND FROM DeleteUserCascade'S OWN GUARD.
+	// ExecuteDeletion wins the claim, then performs Paddle and Plaid cleanup — several external
+	// network calls, one per linked item on the Plaid side — and only afterwards reaches the
+	// cascade's in-transaction re-check. CancelDeletion can clear deletion_requested_at and
+	// deletion_scheduled_at anywhere inside that window without coordinating with the work claim
+	// (the claim gives EXCLUSIVITY between flows; it says nothing about whether this flow's own
+	// authorisation still holds). The cascade's guard then correctly refuses to delete — but by
+	// then the subscription is cancelled, the Paddle customer is archived and anonymised, and the
+	// bank connections are gone, for a user who explicitly asked to keep their account. This method
+	// is what lets each irreversible external call be preceded by a fresh answer instead of a stale
+	// snapshot.
+	//
+	// KIND-SPECIFIC, deliberately, where the cascade's guard uses the union of both kinds. The
+	// cascade is not told which kind authorised the run and compensates with the occurrence pin;
+	// ExecuteDeletion IS told, so asking the union here would re-open exactly the substitution
+	// #1440 T0 closed at claim time — the retention rule authorises any uncomped user with no
+	// outstanding request, which is precisely what a just-cancelled user looks like.
+	//
+	// READ-ONLY, and NOT a substitute for either write-side guard. It takes no lock, so its answer
+	// can be stale the instant it returns; the claim and the cascade's FOR UPDATE re-check remain
+	// the authorities. What it buys is that the WINDOW an irreversible external call is exposed to
+	// shrinks from "the whole cleanup sequence" to "one call".
+	//
+	// A false return is a legitimate, expected outcome — not an error. An ERROR means authorisation
+	// could not be established, which callers must treat as fail-closed: not knowing is not
+	// permission to proceed.
+	DeletionStillAuthorised(ctx context.Context, userID string, kind DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error)
+
 	// Dunning: past_due tracking methods (Issue #898)
 
 	// SetPastDueStartedAt sets the past_due_started_at timestamp for a user.
@@ -1998,6 +2030,43 @@ func (r *profileRepository) ClaimForDeletion(ctx context.Context, userID string,
 		return false, fmt.Errorf("ClaimForDeletion: %w", err)
 	}
 	return ct.RowsAffected() > 0, nil
+}
+
+// DeletionStillAuthorised implements ProfileRepository.DeletionStillAuthorised — see that interface
+// method's doc comment for why a read-only, kind-specific recheck exists alongside ClaimForDeletion
+// and DeleteUserCascade's in-transaction guard.
+//
+// THE PREDICATE IS SPLICED, NOT RESTATED. It is the same deletionClaimPredicateFor(kind) text
+// ClaimForDeletion enforces, plus DeleteUserCascade's own occurrence pin
+// (`deletion_requested_at IS NOT DISTINCT FROM $2`). Restating either here would create a third
+// hand-written variant of an authorisation rule — which is how #1440 T0 happened: the candidate query
+// and the claim drifted apart, and a resubscription between them went unnoticed. A recheck that can
+// disagree with the claim it is rechecking is worse than no recheck, because it reads as protection.
+//
+// NO `FOR UPDATE`, and no transaction. This is a read taken between external API calls, not a write
+// guard; taking a row lock here would hold it across a Plaid or Paddle round-trip, which is exactly
+// what DeleteUserCascade's lock is careful not to do. The spliced predicate's NOW() calls therefore
+// read the statement's own clock, which is the fresh answer this method exists to provide.
+func (r *profileRepository) DeletionStillAuthorised(ctx context.Context, userID string, kind DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	predicate, err := deletionClaimPredicateFor(kind)
+	if err != nil {
+		// Fail closed on an unrecognised kind, for the same reason deletionClaimPredicateFor does: an
+		// unknown authorisation must never read as permission to proceed to an irreversible call.
+		return false, fmt.Errorf("DeletionStillAuthorised: %w", err)
+	}
+	var authorised bool
+	err = r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM users
+			WHERE id = $1 AND is_deleted = FALSE
+			  AND deletion_requested_at IS NOT DISTINCT FROM $2
+	`+predicate+`
+		)
+	`, userID, expectedDeletionRequestedAt).Scan(&authorised)
+	if err != nil {
+		return false, fmt.Errorf("DeletionStillAuthorised: %w", err)
+	}
+	return authorised, nil
 }
 
 // UpdateTrialStatus updates trial-related fields for a user

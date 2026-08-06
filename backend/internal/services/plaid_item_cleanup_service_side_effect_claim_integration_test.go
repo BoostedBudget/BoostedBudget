@@ -137,12 +137,12 @@ func TestPlaidCleanupService_Integration_SideEffectClaim_TwoFlowsRacing_OnlyOneC
 
 	holderErrCh := make(chan error, 1)
 	go func() {
-		holderErrCh <- holderSvc.RemoveAllUserItems(ctx, userID)
+		holderErrCh <- holderSvc.RemoveAllUserItems(ctx, userID, alwaysEligible)
 	}()
 
 	<-holder.entered // block until the holder is genuinely inside the Plaid call, claim held
 
-	racerErr := racerSvc.RemoveAllUserItems(ctx, userID)
+	racerErr := racerSvc.RemoveAllUserItems(ctx, userID, alwaysEligible)
 	assert.ErrorIs(t, racerErr, ErrSideEffectClaimBusy,
 		"the racer must be told the side effect is busy, not proceed as though the disconnect already happened")
 	assert.Equal(t, 0, racer.callCount(), "the racer's Plaid collaborator must never be called while the holder is mid-flight")
@@ -154,7 +154,7 @@ func TestPlaidCleanupService_Integration_SideEffectClaim_TwoFlowsRacing_OnlyOneC
 	// After the holder releases the claim, the operation is legitimately reclaimable again (a
 	// Plaid disconnect is not a once-ever-per-user event — see claimSideEffectAndRun's doc
 	// comment) — proving Release, not Complete, was used.
-	racerErr = racerSvc.RemoveAllUserItems(ctx, userID)
+	racerErr = racerSvc.RemoveAllUserItems(ctx, userID, alwaysEligible)
 	assert.NoError(t, racerErr, "once the holder releases, the side-effect claim must be immediately reclaimable — Plaid disconnect can legitimately recur")
 	assert.Equal(t, 1, racer.callCount(), "the racer's retry must now succeed and call Plaid")
 }

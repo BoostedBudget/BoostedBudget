@@ -29,7 +29,10 @@ type MockPlaidCleanupService struct {
 	mock.Mock
 }
 
-func (m *MockPlaidCleanupService) RemoveAllUserItems(ctx context.Context, userID string) error {
+// RemoveAllUserItems now requires an eligibility recheck (deletion-authorisation use-time check).
+// The recheck is not part of what these job tests assert, so it is deliberately excluded from the
+// expectation arguments — the existing `.On("RemoveAllUserItems", ctx, userID)` call sites stay valid.
+func (m *MockPlaidCleanupService) RemoveAllUserItems(ctx context.Context, userID string, _ func(ctx context.Context) (bool, error)) error {
 	args := m.Called(ctx, userID)
 	return args.Error(0)
 }

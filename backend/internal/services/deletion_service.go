@@ -13,6 +13,19 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
+// ErrDeletionAuthorisationRevoked is returned by ExecuteDeletion's internal cleanup helpers when a
+// use-time recheck finds that the authorisation this run was claimed under no longer holds — in
+// practice, the user cancelled their own deletion request while the cleanup sequence was in flight.
+//
+// A SENTINEL RATHER THAN A BARE ERROR because the two dispositions are opposite: a Paddle or Plaid
+// FAILURE must abort loudly and be retried by the next run, whereas a revocation must abort QUIETLY
+// and never be retried — the user asked to keep their account. Without a distinguishable value the
+// caller has to either treat a cancellation as a Paddle outage (alarming, and it would re-attempt the
+// cleanup on every subsequent run against a user who is no longer eligible) or swallow real Paddle
+// failures. It is deliberately not exported beyond this package's own use; callers of ExecuteDeletion
+// see a clean nil, because a cancelled deletion is a completed decision, not an error.
+var ErrDeletionAuthorisationRevoked = errors.New("deletion authorisation revoked since the claim was taken")
+
 // DeletionService defines the interface for account deletion operations
 type DeletionService interface {
 	// RequestDeletion initiates account deletion with 30-day grace period
@@ -413,17 +426,63 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 		return nil
 	}
 
-	// Issue #1413 Critical finding C2: external cleanup failure now ABORTS the deletion
-	// instead of being swallowed. DeleteUserCascade (below) clears paddle_subscription_id and
-	// Plaid references, so proceeding to the cascade after a cleanup failure would destroy the
-	// local record of the very external resources that failed to clean up — orphaning them
-	// with nothing left to retry. Releasing the claim lets the NEXT run retry the whole
-	// sequence from scratch instead.
-	if s.paddleCleanupSvc != nil {
-		if err := s.cleanupPaddleResources(ctx, userID, user); err != nil {
+	// stillAuthorised re-asks, against committed state RIGHT NOW, the exact question
+	// ClaimForDeletion answered when this run started: is a hard delete of this user still
+	// authorised under `kind`, for the episode `user.DeletionRequestedAt` pins?
+	//
+	// WHY EVERY IRREVERSIBLE EXTERNAL CALL BELOW IS PRECEDED BY THIS. The claim above gives
+	// EXCLUSIVITY — it stops two flows doing this work at once. It says nothing about whether THIS
+	// flow's own authorisation still holds, and CancelDeletion (profile_repository.go) clears
+	// deletion_requested_at and deletion_scheduled_at without coordinating with the claim at all.
+	// Before this, a user who cancelled their deletion partway through the cleanup sequence still
+	// had their subscription cancelled, their Paddle customer archived and anonymised, and their
+	// bank connections severed — and only THEN did DeleteUserCascade's in-transaction guard
+	// correctly refuse to delete them, leaving an account stripped of everything, irreversibly, for
+	// someone who had explicitly asked to keep it.
+	//
+	// ⚠ THIS IS NOT ErrSideEffectClaimBusy AND DOES NOT DUPLICATE IT. That mechanism (#1413 H1)
+	// coordinates BETWEEN flows so two flows cannot both disconnect a user; this asks whether this
+	// flow may still act at all. Both are needed and neither implies the other.
+	//
+	// ⚠ IT DOES NOT CLOSE THE WINDOW, IT SHRINKS IT. A revocation landing between one of these
+	// checks and the call two lines later is not caught — no database mechanism can make that
+	// interval zero, and a worker already inside a Paddle call cannot be recalled. What changes is
+	// the size: from "the whole cleanup sequence, including one network round-trip per linked item"
+	// down to "one call". The same irreducible-TOCTOU argument cleanupItems makes for its own
+	// per-item recheck applies here verbatim.
+	stillAuthorised := func(c context.Context) (bool, error) {
+		return s.profileRepo.DeletionStillAuthorised(c, userID, kind, user.DeletionRequestedAt)
+	}
+	// abortIfUnauthorised returns a non-nil "handled" signal the caller returns directly. An
+	// undetermined answer (err != nil) FAILS CLOSED with an error, because not knowing whether the
+	// deletion is still authorised is not permission to perform an irreversible external call. A
+	// determined "no" is a legitimate outcome and returns nil, exactly like the !eligible branch
+	// above and the cascade's own (false, nil).
+	abortIfUnauthorised := func(stage string) (bool, error) {
+		authorised, err := stillAuthorised(ctx)
+		if err != nil {
 			releaseClaim(err.Error())
-			return fmt.Errorf("aborting deletion — Paddle cleanup failed: %w", err)
+			return true, fmt.Errorf("aborting deletion before %s — could not establish whether deletion is still authorised: %w", stage, err)
 		}
+		if !authorised {
+			releaseClaim("authorisation revoked since the claim — aborting before " + stage)
+			slog.Default().Info("aborting deletion — the authorisation this run was claimed under no longer holds",
+				"user_id", userID, "claim_kind", string(kind), "stage", stage)
+			return true, nil
+		}
+		return false, nil
+	}
+
+	// ⚠ ORDERING IS DELIBERATE AND WAS CHANGED: PLAID FIRST, PADDLE SECOND. It used to be the other
+	// way round. The two legs are not equally reversible — a Plaid disconnect costs the user a
+	// re-link through Plaid Link, whereas ArchiveAndAnonymizeCustomer destroys PII at Paddle and
+	// cannot be undone by anyone. Putting the least-reversible call LAST means the widest exposure
+	// window carries the cheapest possible loss, and it means an abort or failure in the Plaid leg
+	// (including the routine ErrSideEffectClaimBusy deferral) no longer leaves a still-subscribed
+	// user's subscription cancelled with the deletion abandoned — which is what the old order did on
+	// every Plaid failure, not merely on a revocation.
+	if handled, err := abortIfUnauthorised("Plaid cleanup"); handled {
+		return err
 	}
 
 	// Issue #668: Remove Plaid items BEFORE database deletion to stop billing. This is
@@ -462,7 +521,28 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 		slog.Default().Info("Plaid cleanup service not configured; user has no linked items with unproven Plaid removal, so deletion proceeds",
 			"user_id", userID)
 	} else {
-		if err := s.plaidCleanupSvc.RemoveAllUserItems(ctx, userID); err != nil {
+		// stillAuthorised is the per-item eligibility callback, and passing it is the point: this call
+		// site passed a literal nil until now, so cleanupItems' recheck — a parameter that exists for
+		// exactly this and that DisconnectAllUserItemsIfEligible has always used — never fired for the
+		// deletion flow. On an account with 200 linked items that meant 200 sequential Plaid
+		// round-trips after a single authorisation read. Now a revocation landing partway through
+		// stops the loop at the next item (cleanupItems returns ErrCleanupAborted; see the abort
+		// branch below for how that is distinguished from a genuine Plaid failure).
+		if err := s.plaidCleanupSvc.RemoveAllUserItems(ctx, userID, stillAuthorised); err != nil {
+			// A revocation-triggered abort is not a Plaid failure and must not be reported as one. The
+			// recheck is asked once more to decide which of ErrCleanupAborted's two causes this was:
+			// authorisation genuinely gone (a legitimate, expected stop — release and return nil, and
+			// notably WITHOUT proceeding to the Paddle leg) versus a new linked item having appeared
+			// mid-pass (retryable; falls through to the error path below). An error from the recheck
+			// itself falls through too, which is the fail-closed direction.
+			if errors.Is(err, ErrCleanupAborted) {
+				if authorised, checkErr := stillAuthorised(ctx); checkErr == nil && !authorised {
+					releaseClaim("authorisation revoked mid Plaid cleanup — remaining items left connected")
+					slog.Default().Info("aborting deletion mid Plaid cleanup — the authorisation this run was claimed under no longer holds; the user keeps their account and any items not yet disconnected",
+						"user_id", userID, "claim_kind", string(kind))
+					return nil
+				}
+			}
 			// Issue #1413 H1: RemoveAllUserItems can return ErrSideEffectClaimBusy when another
 			// flow (past_due grace-cancel, the subscription-cancellation webhook, or another
 			// deletion attempt) currently holds ActionPlaidDisconnectUser for this user. This is a
@@ -494,6 +574,34 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 				releaseClaim(err.Error())
 				return fmt.Errorf("aborting deletion — Plaid cleanup failed: %w", err)
 			}
+		}
+	}
+
+	// Issue #1413 Critical finding C2: external cleanup failure now ABORTS the deletion
+	// instead of being swallowed. DeleteUserCascade (below) clears paddle_subscription_id and
+	// Plaid references, so proceeding to the cascade after a cleanup failure would destroy the
+	// local record of the very external resources that failed to clean up — orphaning them
+	// with nothing left to retry. Releasing the claim lets the NEXT run retry the whole
+	// sequence from scratch instead.
+	//
+	// THIS LEG NOW RUNS AFTER THE PLAID LEG, not before it — see the ordering note above the first
+	// abortIfUnauthorised call for why the least-reversible external work goes last. The recheck
+	// immediately below is therefore the freshest one before anything at Paddle is touched, and
+	// cleanupPaddleResources takes the same callback so it can re-ask once more between its own two
+	// calls (cancelling a subscription and anonymising a customer are separately irreversible).
+	if s.paddleCleanupSvc != nil {
+		if handled, err := abortIfUnauthorised("Paddle cleanup"); handled {
+			return err
+		}
+		if err := s.cleanupPaddleResources(ctx, userID, user, stillAuthorised); err != nil {
+			if errors.Is(err, ErrDeletionAuthorisationRevoked) {
+				releaseClaim("authorisation revoked mid Paddle cleanup")
+				slog.Default().Info("aborting deletion mid Paddle cleanup — the authorisation this run was claimed under no longer holds",
+					"user_id", userID, "claim_kind", string(kind))
+				return nil
+			}
+			releaseClaim(err.Error())
+			return fmt.Errorf("aborting deletion — Paddle cleanup failed: %w", err)
 		}
 	}
 
@@ -686,8 +794,24 @@ func (s *deletionService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository
 // the resource that needs cleanup. Nothing would ever retry it. Returning the first failure lets
 // the caller Release the claim so the whole sequence retries on the next run, while the IDs are
 // still present in the database to retry against.
-func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID string, user *domain.User) error {
+func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID string, user *domain.User, stillAuthorised func(ctx context.Context) (bool, error)) error {
 	anonymizedEmail := fmt.Sprintf("deleted_%s@deleted.local", userID)
+
+	// gate re-asks the authorisation question immediately before one specific irreversible call. It
+	// is called before EACH of the two below rather than once for the pair, because they are
+	// separately irreversible and the first is a network round-trip: a revocation landing during the
+	// subscription cancellation must still stop the customer anonymisation, which is the one action
+	// here that destroys data nobody can restore.
+	gate := func(stage string) error {
+		authorised, err := stillAuthorised(ctx)
+		if err != nil {
+			return fmt.Errorf("could not establish whether deletion is still authorised before %s: %w", stage, err)
+		}
+		if !authorised {
+			return fmt.Errorf("%w before %s", ErrDeletionAuthorisationRevoked, stage)
+		}
+		return nil
+	}
 
 	// Cancel active subscriptions
 	// #1413 PinnedRaw: deliberately reads the RAW user.SubscriptionStatus, not
@@ -700,6 +824,9 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 	if user.PaddleSubscriptionID != nil {
 		status := domain.SubscriptionStatus(user.SubscriptionStatus)
 		if status.IsActiveSubscription() || status == domain.SubscriptionStatusPastDue {
+			if err := gate("cancelling the Paddle subscription"); err != nil {
+				return err
+			}
 			// Issue #1413 H1: claim the OPERATION-keyed ActionPaddleCancelSubscription side-effect
 			// claim before calling Paddle, nested inside the ActionAccountDeletion flow claim
 			// already held by ExecuteDeletion. Without this, a concurrent past_due grace-cancel
@@ -727,6 +854,11 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 
 	// Archive customer and anonymize email (GDPR PII erasure)
 	if user.PaddleCustomerID != nil {
+		// THE LAST CHECK BEFORE THE ONE ACTION NOTHING CAN UNDO. A cancelled subscription can be
+		// re-created; an anonymised Paddle customer cannot be recovered by us or by Paddle.
+		if err := gate("archiving and anonymising the Paddle customer"); err != nil {
+			return err
+		}
 		if err := s.paddleCleanupSvc.ArchiveAndAnonymizeCustomer(ctx, *user.PaddleCustomerID, anonymizedEmail); err != nil {
 			if s.analytics != nil {
 				s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "archive_customer"})

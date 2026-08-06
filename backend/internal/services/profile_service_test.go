@@ -209,6 +209,14 @@ func (m *MockProfileRepository) ClaimForDeletion(ctx context.Context, userID str
 	return false, nil
 }
 
+// DeletionStillAuthorised (ExecuteDeletion's use-time authorisation recheck) is likewise not
+// exercised by these profile-service tests. It returns TRUE — matching ClaimForDeletion's stub
+// returning false, both are "whatever keeps this unreachable path uninteresting" — so a future test
+// that did reach it would take the proceed path rather than be silently short-circuited.
+func (m *MockProfileRepository) DeletionStillAuthorised(ctx context.Context, userID string, kind repository.DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	return true, nil
+}
+
 func (m *MockProfileRepository) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	// If no expectation registered, return safe default (no pre-encryption user found).
 	// This avoids needing to add GetUserByEmail mocks to all tests that don't care about
