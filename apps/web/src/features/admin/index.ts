@@ -43,6 +43,7 @@ export { WebhooksPage } from './components/WebhooksPage'
 export { WebhookDetailModal } from './components/WebhookDetailModal'
 export { DeadLetterPage } from './components/DeadLetterPage'
 export { DeadLetterDetailModal } from './components/DeadLetterDetailModal'
+export { PlaidOrphanedItemsPage } from './components/PlaidOrphanedItemsPage'
 
 // Hooks for user management (Issue #644)
 export { useUserFilters } from './hooks/useUserFilters'

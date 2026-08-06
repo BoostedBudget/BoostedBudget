@@ -113,6 +113,15 @@ export const mockUseBulkDeleteAdminDeadLetterJobs = mock(() => ({
   isPending: false,
 }))
 
+// === Orphaned Plaid Items (Issue #1497) ===
+export const mockRefetchListAdminPlaidOrphanedItems = mock(() => Promise.resolve())
+export const mockUseListAdminPlaidOrphanedItems = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+  refetch: mockRefetchListAdminPlaidOrphanedItems,
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/admin/admin', () => ({
   ...RealAdminModule,
@@ -132,4 +141,5 @@ mock.module('@boostedbudget/api-client/endpoints/admin/admin', () => ({
   useAddAdminDeadLetterJobNotes: mockUseAddAdminDeadLetterJobNotes,
   useDeleteAdminDeadLetterJob: mockUseDeleteAdminDeadLetterJob,
   useBulkDeleteAdminDeadLetterJobs: mockUseBulkDeleteAdminDeadLetterJobs,
+  useListAdminPlaidOrphanedItems: mockUseListAdminPlaidOrphanedItems,
 }))
