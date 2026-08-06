@@ -453,8 +453,11 @@ func main() {
 		consentChecker := phclient.NewPrivacyConsentAdapter(privacyRepo)
 		gdprClient := phclient.NewGDPRClient(phClient, consentChecker, appLogger)
 
-		// Create mock audit logger (will be replaced with real implementation later)
-		auditLogger := &mockAuditLogger{}
+		// GDPR audit trail. Until Issue #1506 this was &mockAuditLogger{} — a stub that logged a
+		// line and persisted nothing, while audit_logs existed and was already being queried and
+		// redacted elsewhere. repository.AuditLogRepository satisfies services.AuditLogger
+		// structurally; see its doc comment for the column semantics.
+		auditLogger := repository.NewAuditLogRepository(db)
 
 		// Clerk Backend API service — used by deletion service and email propagation worker
 		clerkService := services.NewClerkService(cfg.ClerkSecretKey)
@@ -2079,15 +2082,6 @@ func main() {
 	}
 
 	appLogger.Info("Server stopped gracefully")
-}
-
-// mockAuditLogger is a placeholder audit logger for deletion operations
-// TODO: Replace with real audit logging implementation
-type mockAuditLogger struct{}
-
-func (m *mockAuditLogger) Log(ctx context.Context, action, resourceType, resourceID string) error {
-	slog.Info("AUDIT", "action", action, "resource_type", resourceType, "resource_id", resourceID)
-	return nil
 }
 
 // dbPoolAdapter adapts *pgxpool.Pool to services.DatabasePool interface (Issue #640)
