@@ -453,7 +453,7 @@ func main() {
 		consentChecker := phclient.NewPrivacyConsentAdapter(privacyRepo)
 		gdprClient := phclient.NewGDPRClient(phClient, consentChecker, appLogger)
 
-		// GDPR audit trail. Until Issue #1506 this was &mockAuditLogger{} — a stub that logged a
+		// GDPR audit trail. Until Issue #1505 this was &mockAuditLogger{} — a stub that logged a
 		// line and persisted nothing, while audit_logs existed and was already being queried and
 		// redacted elsewhere. repository.AuditLogRepository satisfies services.AuditLogger
 		// structurally; see its doc comment for the column semantics.

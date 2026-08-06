@@ -1,6 +1,6 @@
 package services
 
-// deletion_service_audit_failure_test.go — pins the DECISION taken in Issue #1506 about what an
+// deletion_service_audit_failure_test.go — pins the DECISION taken in Issue #1505 about what an
 // audit-write failure does to a GDPR deletion: it is reported at ERROR level and the deletion
 // PROCEEDS. Both halves are asserted here, because both are choices someone could reasonably make
 // differently, and an undocumented choice is worse than either.
