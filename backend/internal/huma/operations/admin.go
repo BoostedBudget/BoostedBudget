@@ -245,9 +245,14 @@ type GetSystemHealthOutput struct {
 
 // --- Handler Methods ---
 
-// FireWebhook fires a Plaid webhook for testing in QA environment.
+// FireWebhook fires a Plaid webhook for testing.
 //
 // POST /api/v1/admin/plaid/fire-webhook
+//
+// Issue #1498: this is registered and admin-reachable in EVERY environment — #1499 removed
+// the admin middleware's environment gate. What actually confines it is
+// plaidService.FireWebhook's PlaidEnv != "sandbox" check, so in production (PLAID_ENV=production)
+// it returns an error rather than firing anything. Do not describe it as "QA only".
 //
 // Error Responses:
 //   - 400: Invalid request body or validation failure
@@ -501,35 +506,37 @@ func (h *AdminHandler) GetSystemHealth(ctx context.Context, input *GetSystemHeal
 // needs them and it returns 503 when they are absent.
 func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 	// POST /api/v1/admin/plaid/fire-webhook - Fire a Plaid webhook
-	// The "(QA only)" in the Summary below is inaccurate about reachability (#1498): this is
-	// registered and admin-reachable in every environment. What confines it is
-	// plaidService.FireWebhook's PlaidEnv != "sandbox" check, not the environment. The
-	// summary text is left alone deliberately — editing it moves api/openapi.yaml and feeds
-	// the MCP capability-manifest drift test; tracked on #1498.
+	// Issue #1498: the summary/description used to say "QA only", which misstated the security
+	// boundary in the generated contract (api/openapi.yaml, and from there the MCP capability
+	// manifest and the TS client). This endpoint is admin-reachable in every environment; what
+	// confines it is the sandbox-only check in plaidService.FireWebhook.
 	huma.Register(api, huma.Operation{
 		OperationID: "fireWebhook",
 		Method:      http.MethodPost,
 		Path:        "/api/v1/admin/plaid/fire-webhook",
-		Summary:     "Fire a Plaid webhook (QA only)",
-		Description: "Fires a Plaid webhook for testing in QA environment. Requires Clerk authentication.",
-		Tags:        []string{"Admin"},
-		Security:    []map[string][]string{{"clerk": {}}},
+		Summary:     "Fire a Plaid webhook (sandbox Plaid only)",
+		Description: "Fires a Plaid webhook for testing. Requires Clerk authentication and admin " +
+			"authorization. Reachable in every environment, but only functions when PLAID_ENV=sandbox; " +
+			"it returns an error otherwise.",
+		Tags:     []string{"Admin"},
+		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.FireWebhook)
 
 	// POST /api/v1/admin/subscription/grant-trial - Grant trial to current user
 	// Issue #698: Used by E2E tests to ensure test user has active subscription.
-	// The "(QA only)" in the Summary below is inaccurate about reachability: this endpoint is
-	// DELIBERATELY reachable in production (#1498) — see the decision note on
-	// AdminHandler.GrantTrial. Summary text left alone for the same spec-churn reason as
-	// fire-webhook above.
+	// Issue #1498: the summary used to say "QA only". This endpoint is DELIBERATELY reachable in
+	// production — see the decision note on AdminHandler.GrantTrial — so that wording misstated
+	// the security boundary in the generated contract. Do not re-add it.
 	huma.Register(api, huma.Operation{
 		OperationID: "grantTrial",
 		Method:      http.MethodPost,
 		Path:        "/api/v1/admin/subscription/grant-trial",
-		Summary:     "Grant trial subscription (QA only)",
-		Description: "Grants a 60-day trial to the authenticated user. For E2E testing. Returns success if user already has trial.",
-		Tags:        []string{"Admin"},
-		Security:    []map[string][]string{{"clerk": {}}},
+		Summary:     "Grant trial subscription (admin)",
+		Description: "Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but " +
+			"deliberately available in every environment — any admin can already change subscriptions " +
+			"through the other admin endpoints. Returns success if the user already has or had a trial.",
+		Tags:     []string{"Admin"},
+		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.GrantTrial)
 
 	// GET /api/v1/admin/check-role - Check if current user is admin
