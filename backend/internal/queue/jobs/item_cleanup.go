@@ -215,7 +215,17 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 		// the local row — the row and its cleanup_scheduled_at are the only remaining evidence the
 		// Item exists, and the C2 guard reads exactly that row to refuse an orphaning deletion.
 		// River retries; if all attempts are exhausted, ItemCleanupCheckWorker's pending-cleanup
-		// backstop (#1486 follow-up part C) re-enqueues from the still-stamped row on the next daily sweep.
+		// backstop (#1486 follow-up part C) re-enqueues from the still-stamped row on the next daily
+		// sweep.
+		//
+		// ⚠ That is RECOVERY FOR A TRANSIENT FAILURE ONLY, and the first version of this comment
+		// stopped at the sentence above as though it covered every case. It does not. If the removal
+		// can NEVER succeed for this item — a permanently invalid or empty access token, see
+		// PlaidItemCleanupService.RemoveItem's ⚠ note and issue #1494 — then "River retries, the
+		// backstop re-enqueues" describes an INDEFINITE daily loop, not a recovery, and
+		// uncleanedLinkedItemExistsClause holds that user's DeleteUserCascade at (false, nil)
+		// permanently. Fail-closed and deliberate, but permanent, and it needs an operator escape
+		// hatch rather than a quieter comment.
 		w.logger.Error("item cleanup failed",
 			"job_id", job.ID,
 			"linked_item_id", args.LinkedItemID,

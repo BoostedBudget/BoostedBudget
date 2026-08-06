@@ -739,11 +739,25 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 					// executing the job, and the enqueue that would have created it just failed, so
 					// no worker can be mid-flight.
 					if clearErr := s.linkedItemRepo.ClearCleanupSchedule(ctx, linkedItemID); clearErr != nil && s.logger != nil {
-						// Both writes failed. The row now keeps cleanup_scheduled_at with no job:
-						// invisible to every future sweep, and Plaid keeps billing for it until an
-						// operator clears the column by hand. Logged at Error precisely because
-						// nothing downstream will notice on its own.
-						s.logger.Error("failed to release cleanup stamp after a failed enqueue; item is now hidden from the cleanup sweep and still billing until cleanup_scheduled_at is cleared manually",
+						// Both writes failed. The row keeps cleanup_scheduled_at with no job, so it is
+						// invisible to the CANDIDATE sweep (cleanupCandidateSelectQuery requires
+						// cleanup_scheduled_at IS NULL) and Plaid keeps billing for it.
+						//
+						// Issue #1486 follow-up part C corrected this comment, which used to say the
+						// item stays hidden "until cleanup_scheduled_at is cleared manually". That is
+						// no longer true: stamped-and-overdue with no live job is EXACTLY the state
+						// ItemCleanupCheckWorker's stranded-cleanup backstop selects for
+						// (GetItemsPendingCleanup), so the next daily sweep re-enqueues it without any
+						// operator involvement. This same correction was applied to the structurally
+						// identical release in ItemCleanupCheckWorker.Work; this site was missed in
+						// that pass and is fixed in fix round 1.
+						//
+						// Still logged at Error, on narrower grounds: recovery is now automatic but
+						// DELAYED by up to one sweep interval, during which Plaid keeps billing, and a
+						// double write failure is a signal about the database worth surfacing on its
+						// own. Do not downgrade it to Warn on the argument that the backstop handles
+						// it — the backstop bounds the damage, it does not make it free.
+						s.logger.Error("failed to release cleanup stamp after a failed enqueue; item is hidden from the candidate sweep and still billing until the stranded-cleanup backstop re-enqueues it on a later run",
 							"linked_item_id", linkedItemID,
 							"user_id", userID,
 							"error", clearErr,
@@ -799,10 +813,19 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 // 3. Call Plaid /item/remove to stop monthly billing (critical for cost control - Issue #226)
 // 4. Delete the linked item from database (CASCADE deletes all associated accounts)
 //
-// Issue #1486 follow-up part F: step 4 is CONDITIONAL on step 3 having succeeded. Until this fix a Plaid
-// failure was logged and the row deleted anyway, which is the same defect as parts A/B
-// (PlaidItemCleanupService.RemoveItem) on a MORE frequent path — this one is user-initiated, so it
-// runs far more often than the daily cleanup sweep. Deleting here CASCADE-deletes the accounts too,
+// Issue #1486 follow-up part F: step 4 is CONDITIONAL on step 3 having succeeded. Until this fix a
+// Plaid failure was logged and the row deleted anyway, which is the same defect as parts A/B
+// (PlaidItemCleanupService.RemoveItem) on a second, user-initiated path.
+//
+// On FREQUENCY, since an earlier version of this comment claimed this path "runs far more often than
+// the daily cleanup sweep": that was asserted, not measured, and it is currently FALSE. The frontend
+// hook `useDisconnectInstitution` has no consumer in apps/web/src outside test/mocks/accounts-api.ts,
+// and no E2E spec exercises disconnect — the endpoint exists and is reachable by API, but nothing in
+// the shipped UI calls it. The claim is removed rather than softened; the fix stands on the defect
+// being identical and irreversible, which needs no frequency argument. Do not reintroduce a frequency
+// claim here without a measurement.
+//
+// Deleting here CASCADE-deletes the accounts too,
 // leaving a live, still-billing Plaid Item with no local record it ever existed, and
 // DeleteUserCascade's C2 guard (repository.uncleanedLinkedItemExistsClause, an EXISTS over
 // linked_items) with nothing left to see.
