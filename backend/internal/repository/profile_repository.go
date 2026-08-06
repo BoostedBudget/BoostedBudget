@@ -1866,6 +1866,24 @@ const retentionDeletionClaimPredicate = `
 // conditions and the claim required neither, so a resubscription between them was not noticed.
 // Restating this text in either place instead of splicing it re-opens that defect.
 //
+// Which of the three conjuncts is load-bearing, established by removing each one separately rather
+// than assumed — the same honesty the userRequestedDeletionClaimPredicate comment above applies to
+// its own clauses:
+//
+//   - `retention_expires_at <= NOW()` and the status test are each independently load-bearing.
+//     Removing the first lets a RESTARTED retention window be deleted before it elapses
+//     (TestExecuteDeletion_Integration_RetentionExpiryInFuture_NotDeleted reddens alone); removing
+//     the second lets an ACTIVE, paying subscriber whose stale expired clock survived a
+//     best-effort ClearRetentionDates failure be deleted
+//     (TestExecuteDeletion_Integration_RetentionResubscribedClockClearFailed_NotDeleted reddens
+//     alone).
+//   - `retention_expires_at IS NOT NULL` is NOT independently load-bearing today, and removing it
+//     alone reddens nothing: `NULL <= NOW()` is NULL, a NULL in a WHERE clause is not true, so the
+//     comparison already refuses a cleared clock. It is kept because it states the intent in a form
+//     a reader does not have to reason about three-valued logic to verify, and because the candidate
+//     query it is shared with genuinely needs it for the same reason. Do not read its presence as
+//     the thing that protects a resubscribed user — the comparison is.
+//
 // NOT applied to GetUsersNeedingRetention30dNotice/7dNotice, which need a DIFFERENT clock test
 // (`retention_expires_at > NOW()` plus an interval window — the notice is sent BEFORE expiry, so
 // their bound is the opposite of this one) even though they share the status half. Nor to
