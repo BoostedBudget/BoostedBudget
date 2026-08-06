@@ -487,7 +487,8 @@ func Test_RemoveItem_GenuinePlaidError_IsPropagatedAndRowIsNotMarkedClean(t *tes
 //
 // With B's propagation but WITHOUT A, step 2 becomes a returned error: the worker never reaches
 // Delete, River exhausts its 5 attempts (ItemCleanupArgs sets no MaxAttempts, so it inherits
-// DefaultRetryPolicy's MaxAttempts=5), and the job dead-letters WITH cleanup_scheduled_at set.
+// DefaultEnqueueOptions's MaxAttempts=5 — queue/options.go), and the job dead-letters WITH
+// cleanup_scheduled_at set.
 // cleanupCandidateSelectQuery requires cleanup_scheduled_at IS NULL, so no sweep can ever re-select
 // the row, while the C2 guard reads it as un-cleaned — DeleteUserCascade returns (false, nil)
 // forever and that user's GDPR erasure never completes. Propagating without this fix would convert
