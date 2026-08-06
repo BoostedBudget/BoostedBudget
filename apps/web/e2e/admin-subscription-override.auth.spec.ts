@@ -7,10 +7,11 @@
  * audited reason reliably reaches the handler — the body assertion in the removal test
  * is the point of that design choice, not incidental.
  *
- * Note: the admin API is only mounted in qa/staging environments (middleware/admin.go
- * returns 404 otherwise), so this mocks the admin responses rather than expecting a live
- * admin surface — the same approach admin-sort.auth.spec.ts and
- * admin-users-search.auth.spec.ts already use.
+ * Note: this mocks the admin responses rather than expecting a live admin surface — the same
+ * approach admin-sort.auth.spec.ts and admin-users-search.auth.spec.ts already use. The
+ * reason is now purely that the local E2E run has no admin-role Clerk user, not the
+ * environment: Issue #1499 removed the admin middleware's environment check, so the admin
+ * API is mounted in every environment and gated on the caller's admin role alone.
  */
 
 import { test, expect, type Page } from '@playwright/test'

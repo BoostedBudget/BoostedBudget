@@ -317,6 +317,63 @@ func TestFireWebhook_PlaidAPIError(t *testing.T) {
 	assert.Contains(t, err.Error(), "Internal server error")
 }
 
+// TestFireWebhook_PlaidServiceNotConfigured pins 503 rather than a panic when Plaid is
+// unconfigured.
+//
+// Issue #1499: main.go used to wrap the ENTIRE admin route registration in
+// `if plaidService != nil`, so a deployment without Plaid credentials lost all 24 admin
+// endpoints — system health, user management, subscription admin, the dead-letter queue,
+// the orphaned-items view — none of which is Plaid-specific. The registration is now
+// unconditional, which makes this handler the only one that can be reached with a nil
+// plaidService, so it has to refuse the way every other under-configured admin handler in
+// this file does (GrantTrial, GetSystemHealth: 503) instead of dereferencing nil.
+func TestFireWebhook_PlaidServiceNotConfigured(t *testing.T) {
+	// GIVEN: a handler built with no Plaid service (Plaid credentials absent at startup)
+	mockRepo := &mockLinkedItemRepo{item: createTestLinkedItem()}
+	handler := NewAdminHandler(nil, mockRepo, nil, nil, nil, nil, nil, nil)
+
+	input := &FireWebhookInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+	input.Body = FireWebhookRequestBody{
+		ItemID:      "plaid-item-123",
+		WebhookCode: "DEFAULT_UPDATE",
+	}
+
+	// WHEN: an admin fires a webhook anyway
+	output, err := handler.FireWebhook(context.Background(), input)
+
+	// THEN: refused cleanly with 503, not a nil dereference
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Plaid service not configured")
+}
+
+// TestAdminRouteRegistration_NoPlaidDependencies pins that the non-Plaid admin surface
+// mounts with nil Plaid dependencies (Issue #1499). It exercises the registration path
+// main.go now takes when Plaid is unconfigured: a 404 here would mean the endpoint is not
+// mounted at all, which is exactly the failure this batch removed. 401 is the correct
+// answer for an unauthenticated call to a route that DOES exist.
+func TestAdminRouteRegistration_NoPlaidDependencies(t *testing.T) {
+	_, api := humatest.New(t)
+	// nil plaidService AND nil linkedItemRepo — both are Plaid-only dependencies.
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	RegisterAdminRoutes(api, handler)
+
+	for _, path := range []string{
+		"/api/v1/admin/system/health",
+		"/api/v1/admin/users",
+		"/api/v1/admin/plaid/orphaned-items",
+	} {
+		resp := api.Get(path)
+		assert.NotEqual(t, http.StatusNotFound, resp.Code, "route %s must be mounted without Plaid", path)
+		assert.Equal(t, http.StatusUnauthorized, resp.Code, "unauthenticated call to %s", path)
+	}
+}
+
 // TestAdminRouteRegistration tests that routes are properly registered.
 func TestAdminRouteRegistration(t *testing.T) {
 	mockPlaid := &mockPlaidServiceForAdmin{}
