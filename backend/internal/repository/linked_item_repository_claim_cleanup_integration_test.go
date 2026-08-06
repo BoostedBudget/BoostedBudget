@@ -333,3 +333,65 @@ func TestClaimItemForCleanup_Integration_MatchesSweepPredicate(t *testing.T) {
 				"cleanup would be silently declined", id)
 	}
 }
+
+// TestGetItemsPendingCleanup_Integration_ReplacedItemIsRecoverable is the fix-round-1 counterpart to
+// TestClaimItemForCleanup_Integration_ReplacedItemStaysClaimable above, and it closes the same
+// asymmetry class this branch keeps producing: two predicates disagreeing about whether 'replaced'
+// matters, so the RECOVERY path cannot reach the rows the CLAIM path was deliberately widened to
+// handle.
+//
+// GetItemsPendingCleanup is the pending-cleanup backstop's selection query (Issue #1486 follow-up
+// part C). It carried `status NOT IN ('replaced', 'disconnected')`, copied from the SWEEP's
+// candidacy predicate where 'replaced' genuinely belongs. But a 'replaced' item's Plaid Item is
+// STILL LIVE AND STILL BILLING — the re-link path (services/account_service.go, "re-link detected,
+// soft-deleting old linked item") marks the old item 'replaced' WITHOUT ever calling
+// /item/remove — which is exactly why ClaimItemForCleanup omits that clause on purpose.
+//
+// So the terminal state the backstop exists to recover was unreachable for precisely the rows most
+// in need of it: genuine Plaid failure → the error propagates (part B) → River exhausts its
+// inherited 5 attempts → the job dead-letters WITH cleanup_scheduled_at set. The candidate sweep
+// cannot re-select it (it requires cleanup_scheduled_at IS NULL, and excludes 'replaced' twice
+// over) and the backstop could not see it either. A live, billable Item with no live job,
+// indefinitely.
+//
+// 'disconnected' is still excluded, and must stay excluded: that status is set only AFTER Plaid
+// removal succeeded (cleanupItems, and RemoveItem as of part A), so including it would make the
+// backstop re-enqueue rows whose Plaid side is already done, forever.
+//
+// This test failed before the predicate change — the 'replaced' row was absent from the result.
+func TestGetItemsPendingCleanup_Integration_ReplacedItemIsRecoverable(t *testing.T) {
+	ctx := context.Background()
+	tx, repo, profileRepo := newCleanupPageTestTx(t, ctx)
+
+	// Three rows, one per status, all stamped and overdue — so the assertions below distinguish the
+	// status predicate from the stamp/overdue predicate rather than merely from row existence.
+	replacedID := seedClaimCleanupItem(t, ctx, tx, repo, profileRepo)
+	disconnectedID := seedClaimCleanupItem(t, ctx, tx, repo, profileRepo)
+	liveID := seedClaimCleanupItem(t, ctx, tx, repo, profileRepo)
+
+	// Exactly what a re-link leaves behind on the OLD item: 'replaced', Plaid never called.
+	_, err := tx.Exec(ctx, `
+		UPDATE linked_items SET status = 'replaced', replaced_at = NOW() WHERE id = $1`, replacedID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE linked_items SET status = 'disconnected' WHERE id = $1`, disconnectedID)
+	require.NoError(t, err)
+
+	items, err := repo.GetItemsPendingCleanup(ctx)
+	require.NoError(t, err)
+
+	ids := make(map[string]domain.LinkedItemStatus, len(items))
+	for _, it := range items {
+		ids[it.ID] = it.Status
+	}
+
+	assert.Contains(t, ids, replacedID,
+		"a stamped, overdue 'replaced' item is STILL LIVE at Plaid (the re-link path never calls "+
+			"/item/remove) and the candidate sweep can never re-select it, so the backstop is its only "+
+			"recovery path — excluding it here left a billable Item with no live job indefinitely")
+	assert.Contains(t, ids, liveID,
+		"precondition: an ordinary stamped, overdue live item must still be selected, or the "+
+			"assertions above and below pass for the wrong reason")
+	assert.NotContains(t, ids, disconnectedID,
+		"'disconnected' is set only AFTER Plaid removal succeeded, so re-enqueueing such a row would "+
+			"spin forever on work that is already done — this exclusion is load-bearing and must stay")
+}
