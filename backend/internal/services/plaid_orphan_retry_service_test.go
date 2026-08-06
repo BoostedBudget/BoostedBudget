@@ -75,10 +75,16 @@ func (f *fakeOrphanRepo) RecordRetryFailure(_ context.Context, id, code string, 
 type fakeRemover struct {
 	errByToken map[string]error
 	tokens     []string
+	// onCall runs after the call is recorded, so a test can advance a clock by the cost of the
+	// round-trip this stands in for.
+	onCall func()
 }
 
 func (f *fakeRemover) RemoveItem(_ context.Context, accessToken string) error {
 	f.tokens = append(f.tokens, accessToken)
+	if f.onCall != nil {
+		f.onCall()
+	}
 	return f.errByToken[accessToken]
 }
 
@@ -188,6 +194,69 @@ func TestPlaidOrphanRetryService_Sweep_EmptyTokenIsSkippedNotSent(t *testing.T) 
 	require.NoError(t, err)
 	assert.Empty(t, remover.tokens)
 	assert.Equal(t, 1, res.Skipped)
+}
+
+// ─── the retention deadline is enforced AT THE MOMENT OF USE ─────────────────────────────────────
+
+// A sweep may present up to maxOrphanRetriesPerSweep (1,000) credentials to Plaid sequentially, each a
+// network round-trip, so a run that BEGINS inside a token's retention window can reach that token many
+// minutes after its token_expires_at has passed. Migration 000135 and domain.TokenIsLive both promise a
+// HARD deadline on the credential's USE, not merely on when a sweep may start, so the deadline must be
+// re-evaluated against a fresh clock reading immediately before the token is handed to Plaid.
+//
+// ⚠ THE VICTIM ROW IS DELIBERATELY STILL LIVE AT SELECTION, and the first assertion below proves it. A
+// row already past its deadline when the page is read is never returned by GetRetryablePage at all
+// (`token_expires_at > asOf`), so a test seeded with a pre-expired row exercises nothing — it would pass
+// against the unfixed code. The deadline here elapses BETWEEN selection and this row's own attempt,
+// which is the only window that actually exists in production.
+func TestPlaidOrphanRetryService_Sweep_DeadlineElapsingMidRunStopsTheTokenReachingPlaid(t *testing.T) {
+	t0 := time.Now().UTC()
+
+	// Each RemoveItem round-trip costs four seconds of wall clock. That is what makes the window real.
+	clock := t0
+	remover := &fakeRemover{errByToken: map[string]error{}, onCall: func() { clock = clock.Add(4 * time.Second) }}
+
+	before := liveOrphan("before", "tok-before")
+	victim := liveOrphan("victim", "tok-victim")
+	victim.TokenExpiresAt = t0.Add(3 * time.Second) // live at t0, dead by the time its turn comes
+	after := liveOrphan("after", "tok-after")
+
+	require.True(t, victim.TokenIsLive(t0),
+		"the victim must be genuinely selectable at asOf — a pre-expired row is never returned by "+
+			"GetRetryablePage, so seeding one would prove nothing about the use-time check")
+
+	repo := newFakeOrphanRepo([]domain.PlaidOrphanedItem{before, victim, after})
+	svc := newRetryService(repo, remover)
+	svc.SetClock(func() time.Time { return clock })
+
+	res, err := svc.Sweep(context.Background(), t0, 10, 100)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"tok-before", "tok-after"}, remover.tokens,
+		"the expired credential must never be presented to Plaid; the other two must still be")
+	assert.Equal(t, 1, res.DeadlineElapsed)
+	assert.Equal(t, 0, res.Failed, "an elapsed deadline is a skip, not a removal failure")
+	assert.NotContains(t, repo.failures, "victim",
+		"skipping is not failing: recording a retry failure would misdescribe an attempt that never happened")
+
+	// SIBLING ASSERTIONS — without these this test passes just as well if retrying broke entirely.
+	assert.Equal(t, []string{"before", "after"}, repo.resolved,
+		"a row still inside its window IS attempted and resolved, including one AFTER the skip")
+	assert.Equal(t, 2, res.Resolved)
+	assert.Equal(t, 3, res.Attempted, "every row still gets a decision")
+}
+
+// The frozen asOf is not a clock. Rechecking the page's own selection instant would satisfy the shape of
+// a use-time check while closing none of the window, so the default clock must advance with wall time.
+func TestPlaidOrphanRetryService_DefaultClockIsWallTimeNotTheSweepsAsOf(t *testing.T) {
+	svc := NewPlaidOrphanRetryService(newFakeOrphanRepo(), &fakeRemover{errByToken: map[string]error{}})
+	first := svc.now()
+	assert.WithinDuration(t, time.Now().UTC(), first, time.Minute)
+	assert.Equal(t, time.UTC, first.Location(), "UTC, matching every other asOf on this branch")
+
+	svc.SetClock(nil)
+	assert.WithinDuration(t, time.Now().UTC(), svc.now(), time.Minute,
+		"a nil clock must leave the wall clock in place rather than installing a zero-time one")
 }
 
 // ─── bounding ────────────────────────────────────────────────────────────────────────────────────

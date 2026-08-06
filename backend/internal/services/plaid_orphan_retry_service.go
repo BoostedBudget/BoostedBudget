@@ -53,6 +53,11 @@ type OrphanRetrySweepResult struct {
 	// RecordErrors counts rows whose OUTCOME could not be written back. Non-zero means the attempt
 	// happened and the record does not know it, which is worth an operator's attention.
 	RecordErrors int
+	// DeadlineElapsed counts rows that were live when the page was read but whose token_expires_at had
+	// passed by the time their own turn came. Distinct from Skipped (which means "no credential at all")
+	// and from Failed (no Plaid call was made), because it is the only counter that says a retention
+	// deadline was actually reached mid-run — the signal that a sweep is running long enough to matter.
+	DeadlineElapsed int
 	// CapHit reports that the per-sweep cap stopped this run early and a remainder was deferred.
 	CapHit bool
 }
@@ -68,8 +73,12 @@ type OrphanRetrySweepResult struct {
 //
 // WHAT IT DELIBERATELY CANNOT DO: purge. See orphanRetryRepo.
 type PlaidOrphanRetryService interface {
-	// Sweep processes up to maxAttempts records in pages of pageSize and reports the tally. asOf is the
-	// instant every liveness decision in the run is made against.
+	// Sweep processes up to maxAttempts records in pages of pageSize and reports the tally.
+	//
+	// asOf is the SELECTION instant: it fixes the keyset page and stamps the outcome writes. It is NOT
+	// the instant the retention deadline is judged at — that is re-read from the wall clock immediately
+	// before each credential is presented to Plaid, because a run can outlive a deadline it started
+	// inside. See retryOne.
 	Sweep(ctx context.Context, asOf time.Time, pageSize, maxAttempts int) (OrphanRetrySweepResult, error)
 }
 
@@ -77,13 +86,32 @@ type plaidOrphanRetryService struct {
 	repo         orphanRetryRepo
 	plaidService plaidServiceForCleanup
 	logger       *slog.Logger
+	// now is READ AGAIN FOR EVERY ROW, and it is deliberately NOT the sweep's asOf. asOf is the
+	// selection instant and must stay frozen for the keyset page to be stable; the retention deadline,
+	// by contrast, has to be judged against the clock as it stands when the credential is used. A
+	// function rather than a value because "read the clock again" is untestable otherwise.
+	now func() time.Time
 }
 
 // NewPlaidOrphanRetryService builds the sweep. plaidService may be nil — that is the "Plaid not
 // configured" deployment — and Sweep then refuses with an error rather than panicking or, worse,
 // reporting a successful run in which nothing was retried.
 func NewPlaidOrphanRetryService(repo orphanRetryRepo, plaidService plaidServiceForCleanup) *plaidOrphanRetryService { //nolint:revive // deliberate: unexported return mirrors this package's other constructors whose tests reach for the concrete type
-	return &plaidOrphanRetryService{repo: repo, plaidService: plaidService, logger: slog.Default()}
+	return &plaidOrphanRetryService{
+		repo:         repo,
+		plaidService: plaidService,
+		logger:       slog.Default(),
+		now:          func() time.Time { return time.Now().UTC() },
+	}
+}
+
+// SetClock overrides the wall clock the per-row retention deadline is judged against. Tests only: a
+// sweep of up to 1,000 sequential Plaid round-trips cannot otherwise be made to cross a deadline
+// without sleeping through one. A nil clock is ignored, matching SetLogger.
+func (s *plaidOrphanRetryService) SetClock(clock func() time.Time) {
+	if clock != nil {
+		s.now = clock
+	}
 }
 
 // SetLogger overrides the default logger. Setter rather than a constructor parameter to match this
@@ -191,6 +219,37 @@ func (s *plaidOrphanRetryService) retryOne(ctx context.Context, row domain.Plaid
 		res.Skipped++
 		s.logger.Warn("orphaned Item record holds no usable credential; skipping",
 			"orphan_record_id", row.ID, "plaid_item_id", row.PlaidItemID)
+		return
+	}
+
+	// THE RETENTION DEADLINE IS RE-JUDGED HERE, AGAINST THE CLOCK AS IT STANDS NOW — not against asOf.
+	//
+	// GetRetryablePage already applied `token_expires_at > asOf`, but asOf is the instant the PAGE was
+	// selected, and one run may make up to maxOrphanRetriesPerSweep (1,000) sequential Plaid round-trips
+	// after that instant. So a row that was live at selection can be minutes past its deadline by the
+	// time its own turn arrives, and re-testing it against the same frozen asOf would not notice: it is
+	// the identical comparison that already passed. Migration 000135 and domain.TokenIsLive promise a
+	// HARD deadline on the credential's USE ("NEVER read this column without checking
+	// token_expires_at"), and the entire GDPR defensibility of retaining an erased user's bank
+	// credential rests on that promise binding the use rather than the sweep's start.
+	//
+	// THE ROW IS NOT RE-READ, deliberately. token_expires_at is written exactly once, by
+	// DeleteUserCascade's INSERT (profile_repository.go), and no statement anywhere updates it — so the
+	// snapshot's deadline is already the authoritative value and only the clock has moved. A re-read
+	// would cost a query per row, widen the deliberately-narrow orphanRetryRepo interface, and STILL not
+	// close this window (the row could expire between the re-read and the call). Advancing the clock is
+	// the only thing that closes it. A concurrent purge NULLing the ciphertext is bounded by the same
+	// deadline this check enforces, and a duplicate in-flight retry is already bounded to one wasted
+	// ITEM_NOT_FOUND by MarkResolved's first-wins.
+	//
+	// SKIPPED, NOT FAILED: no call was made, so RecordRetryFailure would attribute an error code to an
+	// attempt that never happened. The row needs no write — the purge sweep owns the row from here, and
+	// its predicate is this same elapsed deadline.
+	if useAt := s.now(); !row.TokenIsLive(useAt) {
+		res.DeadlineElapsed++
+		s.logger.Warn("an orphaned Item's retained credential reached its retention deadline mid-sweep; it was NOT presented to Plaid and the Item stays outstanding for manual intervention",
+			"orphan_record_id", row.ID, "plaid_item_id", row.PlaidItemID,
+			"token_expires_at", row.TokenExpiresAt, "checked_at", useAt, "selected_at", asOf)
 		return
 	}
 

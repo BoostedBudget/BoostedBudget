@@ -111,6 +111,9 @@ func (w *PlaidOrphanRetryWorker) Work(ctx context.Context, job *river.Job[PlaidO
 		"failed", res.Failed,
 		"undecryptable", res.Undecryptable,
 		"skipped", res.Skipped,
+		// Non-zero means this run was long enough for a retention deadline to pass while it ran. Worth
+		// an operator's eye: those Items are now unremovable by any automated path.
+		"deadline_elapsed", res.DeadlineElapsed,
 		"record_errors", res.RecordErrors,
 		"cap_hit", res.CapHit,
 		"duration_ms", time.Since(start).Milliseconds(),
