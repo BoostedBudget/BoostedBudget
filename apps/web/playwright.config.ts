@@ -190,7 +190,14 @@ export default defineConfig({
     {
       // Pass env vars to backend for E2E testing:
       // - PORT: Dynamic port allocation
-      // - ENVIRONMENT: Set to "qa" to enable admin endpoints
+      // - ENVIRONMENT: Set to "qa". DO NOT REMOVE — since #1499 admin endpoints are
+      //   reachable in every environment, so this is no longer what "enables" them; but
+      //   since #1498 it IS what grants this suite's user admin. "qa" is on the
+      //   non-production allowlist (backend/internal/domain/admin.go), which is the only
+      //   reason e2e+clerk_test@boostedbudget.com resolves as an admin — it lives in
+      //   config/admin_emails.yaml's non_production_admin_emails list, which is excluded
+      //   under production AND whenever ENVIRONMENT is unset. Dropping this var makes every
+      //   admin spec 403.
       // - DATABASE_URL: PostgreSQL connection (set by run-e2e-with-ports.sh)
       // - CLERK_SECRET_KEY: For Clerk API calls (admin role verification)
       // - CLERK_PUBLISHABLE_KEY: For JWT validation

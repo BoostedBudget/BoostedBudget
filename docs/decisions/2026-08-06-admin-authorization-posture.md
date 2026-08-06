@@ -62,6 +62,42 @@ misspelled, or newly-introduced `ENVIRONMENT` value would silently load CI crede
 production admins. With the allowlist, an unrecognised value gets the production treatment: the
 test entries are excluded, and the platform owners still work.
 
+### An allowlist alone was not enough: the resolution requires an *explicit* ENVIRONMENT
+
+The allowlist was necessary but insufficient, and this is the subtlest part of the decision. An
+independent adversarial review caught it before this shipped.
+
+`getEnv` (`internal/config/config.go`) maps an unset **and** an empty `ENVIRONMENT` to the
+`"development"` default, so `cfg.Environment` is never `""`. And `development` is *on* the
+non-production allowlist. So the failure the allowlist was built to prevent still occurred by a
+different route: a production deployment that simply forgot to set `ENVIRONMENT` would resolve as
+`development` and load both CI test accounts as role-check-free production admins.
+
+The first version of the test suite asserted `EffectiveAdminEmails("")` fails safe. That is true,
+and unreachable — nothing in the startup path ever passes `""`. The test passed while the real
+path was broken.
+
+Resolution therefore requires an **explicitly set** `ENVIRONMENT`:
+
+- `Config.EnvironmentExplicitlySet` records whether the variable was actually present.
+  `Environment` alone cannot distinguish a dev box from a misconfigured production deploy.
+- `Config.AdminAllowlistEnvironment()` returns `Environment` only when it was explicitly set,
+  and `""` otherwise — not a recognised non-production name, so the extra entries are excluded.
+- `main.go` resolves against `AdminAllowlistEnvironment()`, never `Environment`, and warns at
+  startup when `ENVIRONMENT` is unset.
+
+`Environment` itself still defaults to `"development"`; that behaviour is relied on elsewhere and
+is unchanged. Only the ACL decision is stricter.
+
+Every real deployment sets `ENVIRONMENT` explicitly, so this costs nothing in practice. A bare
+`go run ./cmd/server` with no `ENVIRONMENT` loses the two test admins and keeps the owners, which
+is the correct direction to fail.
+
+**The general lesson, worth carrying to the next security predicate in this codebase:** a
+defaulted config value cannot carry a fail-safe. If a decision must be safe when an operator omits
+a variable, it has to be able to observe the omission — and the test has to go through the real
+loader, not call the predicate directly.
+
 The allowlist covers every non-production value this codebase actually produces:
 
 | Value | Where it comes from |
@@ -100,9 +136,14 @@ to this handler; see the comment at `AdminHandler.GrantTrial`.
 - The admin dashboard works in production, for actual admins.
 - `config/admin_emails.yaml` must be reviewed as an access control list. Adding an address to
   `admin_emails` grants permanent, role-check-free access to live customer data.
-- The E2E suite is unaffected: its backend runs with `ENVIRONMENT=qa`
+- The E2E suite is unaffected: its backend runs with an explicit `ENVIRONMENT=qa`
   (`apps/web/playwright.config.ts`), which is in the non-production allowlist, so
-  `e2e+clerk_test@boostedbudget.com` keeps admin access.
+  `e2e+clerk_test@boostedbudget.com` keeps admin access. That `ENVIRONMENT=qa` is now
+  load-bearing for a different reason than its old comment claimed — it is what grants the E2E
+  user admin, not what "enables" admin endpoints — and the comment there says so, because
+  removing it as obsolete would 403 every admin spec.
+- `ADMIN_EMAILS_CONFIG` relocates the ACL. Nothing sets it, and startup now warns when it is
+  set, so an overridden file cannot silently replace the reviewed, committed one.
 - The QA auth-bypass endpoint's own two guards (#821) are untouched and still restrict it to
   `qa`/`staging` with a shared secret.
 
