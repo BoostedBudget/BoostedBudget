@@ -201,6 +201,26 @@ type ProfileRepository interface {
 	// the next scheduled run re-evaluate from scratch — it must NOT treat this as an error.
 	DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error)
 
+	// CountUncleanedLinkedItems counts the user's linked_items rows that DeleteUserCascade's C2
+	// guard would refuse to proceed past — those with neither a recorded Plaid removal nor a
+	// recorded unrecoverable removal failure. Shares the guard's own predicate
+	// (uncleanedLinkedItemPredicate) so the two can never disagree. Issue #1494.
+	//
+	// EXISTS FOR DIAGNOSIS, NOT FOR CONTROL FLOW AROUND THE GUARD. Its one caller is
+	// DeletionService.ExecuteDeletion's Plaid-less branch: when plaidCleanupSvc is nil (a legitimate
+	// deployment — main.go wires it only when Plaid credentials are configured), nothing can ever
+	// record a removal, so a user WITH such items can never be erased and the cascade would return
+	// (false, nil) with no statement of why, three layers from the real cause. The count turns that
+	// into a named error that says how many items and what is missing. A user with ZERO such items is
+	// unaffected and proceeds normally, which is why this counts the guard's exact population rather
+	// than "has any linked item at all": refusing on an already-cleaned item would block deletions the
+	// guard itself would have allowed.
+	//
+	// Do NOT use this as a pre-check to decide whether to call DeleteUserCascade: it runs outside the
+	// cascade's transaction and its FOR UPDATE lock, so its answer can be stale by the time the
+	// cascade runs. The guard inside the transaction is the authority; this is an explanation.
+	CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error)
+
 	// Dunning: past_due tracking methods (Issue #898)
 
 	// SetPastDueStartedAt sets the past_due_started_at timestamp for a user.
@@ -1484,6 +1504,56 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return false, fmt.Errorf("DeleteUserCascade: redact audit log PII: %w", err)
 	}
 
+	// Issue #1494: PRESERVE THE OBLIGATION BEFORE DESTROYING ITS ONLY RECORD.
+	//
+	// The DELETE below removes this user's linked_items rows (via user_id's ON DELETE CASCADE). Every
+	// marker those rows carry — plaid_removed_at, plaid_removal_failed_at, the Plaid Item id itself —
+	// goes with them. For a row that was PROVED removed that is correct and complete: Plaid billing
+	// has stopped and nothing is owed. For any row we could NOT prove removed, the Item may still
+	// exist and may still bill, and after this statement no part of this system would know it ever
+	// existed. That is the exact outcome the C2 guard above exists to prevent, and the guard alone
+	// cannot prevent it any more: since #1494 it deliberately stops blocking on a row marked
+	// plaid_removal_failed_at, so that a permanently-unremovable Item cannot block a GDPR erasure
+	// forever. THIS INSERT IS THE PRICE OF THAT ESCAPE. Without it the escape is a silent leak.
+	//
+	// ORDER AND ATOMICITY, both load-bearing. It runs BEFORE the delete and in the SAME transaction,
+	// so there is no interleaving in which the linked_items rows are gone and the record is not
+	// written: a failure here returns an error, the deferred rollback discards everything, and the
+	// user is still deletable on a later attempt. The reverse order (or a separate transaction, or a
+	// best-effort log-and-continue) would reintroduce the "irreversible step taken, durable record
+	// missing, nothing left to retry from" shape that four earlier fixes on this branch each closed.
+	// Pinned by TestDeleteUserCascade_Integration_OrphanRecordInsertFailure_AbortsTheWholeCascade.
+	//
+	// SCOPE: `plaid_removed_at IS NULL`, deliberately WIDER than the guard's own predicate. The guard
+	// waves through rows marked plaid_removal_failed_at; this copies those AND any row that is merely
+	// unresolved. In a cascade that actually proceeds the two sets coincide (the guard would have
+	// blocked otherwise), so the difference is only reachable if a future change loosens the guard
+	// further — in which case recording MORE than is strictly required is the safe direction, and the
+	// only one that cannot silently lose an Item.
+	//
+	// CIPHERTEXT IS COPIED VERBATIM. item_id / institution_id / institution_name are encrypted at
+	// rest by the application layer (linked_item_repository.go's encryptLinkedItemPIIFields), and a
+	// SQL statement has no access to the key. Copying the encrypted values is therefore both the only
+	// option here and the right one: the destination columns are named *_encrypted and readers decrypt
+	// through the same FieldEncryptor. See migration 000134 for why the access token is NOT copied,
+	// and for why this table carries no user_id at all.
+	//
+	// ON CONFLICT DO NOTHING keys off plaid_orphaned_items_unique_linked_item, so this statement can
+	// never be the one that fails a retried cascade.
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO plaid_orphaned_items (
+			linked_item_id, plaid_item_id_encrypted, institution_id_encrypted,
+			institution_name_encrypted, linked_item_status, last_error_code, last_attempted_at
+		)
+		SELECT id, item_id, institution_id, institution_name, status,
+		       plaid_removal_error_code, plaid_removal_failed_at
+		FROM linked_items
+		WHERE user_id = $1 AND plaid_removed_at IS NULL
+		ON CONFLICT (linked_item_id) DO NOTHING
+	`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: preserve orphaned Plaid item records: %w", err)
+	}
+
 	// Hard-delete the user row. 37 foreign keys into users are ON DELETE CASCADE and 2 are ON
 	// DELETE SET NULL (audit_logs.user_id, household_invites.accepted_user_id) — every user-scoped
 	// table these cover is cleaned up by the schema itself rather than by an incomplete,
@@ -1613,6 +1683,24 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	}
 
 	return true, nil
+}
+
+// CountUncleanedLinkedItems implements ProfileRepository.CountUncleanedLinkedItems — see that
+// interface method's doc comment (Issue #1494) for why this exists and what it must not be used for.
+//
+// Shares uncleanedLinkedItemPredicate with the C2 guard verbatim rather than restating it. A COUNT is
+// used instead of the guard's EXISTS because the whole value of this call is the NUMBER it puts in an
+// operator-facing error message; the extra cost is a count over rows a single user_id equality has
+// already narrowed to at most a handful.
+func (r *profileRepository) CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error) {
+	var count int
+	err := r.db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM linked_items WHERE user_id = $1 AND `+uncleanedLinkedItemPredicate,
+		userID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("CountUncleanedLinkedItems: %w", err)
+	}
+	return count, nil
 }
 
 // DeletionClaimKind names WHICH of the two mutually exclusive authorisations a hard-deletion claim
@@ -3205,9 +3293,43 @@ const anyLinkedItemExistsClause = `EXISTS (
 // user's erasure, and this change ADDS 'replaced' rows to that population. Accepted: fail-closed is
 // the correct direction for an irreversible hard delete, production has zero users today, and
 // issue #1494 tracks the operator escape hatch (alerting plus an audited manual override).
+//
+// Issue #1494 — THE PERMANENT-BLOCK ESCAPE, and it is the narrowest one available. The paragraph
+// above described the accepted cost: an item whose /item/remove can NEVER succeed (a token that is
+// invalid or absent, not a Plaid outage) blocks its user's GDPR erasure FOREVER. That cost is no
+// longer accepted, and the way out is NOT a wider notion of "removed" — nothing here now believes an
+// unremovable Item is gone. It is a SECOND, separately-recorded fact: plaid_removal_failed_at (see
+// LinkedItemRepository.MarkPlaidRemovalFailed and services.terminalPlaidRemovalFailure). A row
+// carrying it stops blocking, because the cascade has a durable place to put the obligation instead.
+//
+// ⚠ THIS PREDICATE IS ONLY SAFE IN THE PRESENCE OF THE plaid_orphaned_items WRITE. DeleteUserCascade
+// copies every row matching `plaid_removed_at IS NULL` into plaid_orphaned_items, in the SAME
+// transaction, BEFORE any delete (see the call site). Remove or reorder that INSERT and this
+// predicate becomes a silent leak: erasure completing over a live, billing Plaid Item with no record
+// anywhere — the precise outcome the #1495 tightening above exists to prevent, reached from the
+// other side. The two changes are one change; pinned by
+// TestDeleteUserCascade_Integration_OrphanRecordInsertFailure_AbortsTheWholeCascade.
+//
+// Note what is deliberately NOT here: no status arm (see the NULL-safety paragraph above), and no
+// reading of plaid_removal_failed_at by any predicate that SELECTS cleanup work. A terminally-marked
+// row keeps being re-attempted by the sweep and the backstop for as long as it exists — this clause
+// grants permission to PROCEED, never permission to STOP TRYING. See migration 000133.
 const uncleanedLinkedItemExistsClause = `EXISTS (
-	SELECT 1 FROM linked_items WHERE user_id = $1 AND plaid_removed_at IS NULL
+	SELECT 1 FROM linked_items WHERE user_id = $1 AND ` + uncleanedLinkedItemPredicate + `
 )`
+
+// uncleanedLinkedItemPredicate is the row-level test shared by uncleanedLinkedItemExistsClause (the
+// C2 guard) and CountUncleanedLinkedItems (DeletionService's diagnosis for a Plaid-less deployment,
+// Issue #1494). Extracted so the two can never drift: the guard decides whether the cascade may
+// proceed, and the count explains to an operator why it would not. A hand-written second copy of
+// this predicate would be the fifth independently-worded spelling of a "is this item outstanding"
+// question in this file — #1444 (Site C) was caused by exactly that, and the wording that diverged
+// was the one nobody re-read.
+//
+// Reads as: we have neither proved this Item's Plaid removal succeeded, nor proved we can never
+// achieve it. Only in that state is there still recoverable work owed, and only then must an
+// irreversible erasure wait.
+const uncleanedLinkedItemPredicate = `(plaid_removed_at IS NULL AND plaid_removal_failed_at IS NULL)`
 
 // householdOwnerBlocksDeletionClause is DeleteUserCascade's guard predicate for "deleting this
 // user would destroy another real user's data via households.owner_user_id's CASCADE" — Issue
