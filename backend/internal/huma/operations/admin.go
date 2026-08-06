@@ -308,8 +308,8 @@ func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput)
 // legitimate admin action, and any real admin can already change a user's subscription
 // through the other admin subscription endpoints (see AdminUserService's tier-override
 // and subscription-management paths). Gating this one endpoint would buy no security
-// while breaking the E2E flow. The endpoint's "QA only" wording in its OpenAPI summary
-// describes who normally calls it, not an enforced restriction.
+// while breaking the E2E flow. The OpenAPI summary used to say "QA only"; it now says
+// "(admin)" and states the every-environment availability, so the contract matches reality.
 // Recorded in docs/decisions/2026-08-06-admin-authorization-posture.md.
 //
 // Error Responses:

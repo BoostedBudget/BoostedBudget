@@ -163,14 +163,15 @@ attacker who can set the variable can also write the marker.
 ## Decision 3 — `grant-trial` stays reachable in production, deliberately
 
 `POST /api/v1/admin/subscription/grant-trial` (#698) exists so the E2E suite can put its test
-user into an active subscription. Its OpenAPI summary says "QA only", and with the environment
-gate gone that wording no longer describes an enforced restriction.
+user into an active subscription. Its OpenAPI summary *used to* say "QA only", which described
+neither an enforced restriction nor, after #1499, the truth about reachability. The summary now
+reads "Grant trial subscription (admin)" and its description says the endpoint is deliberately
+available in every environment.
 
 **A gate was considered and declined.** Granting a trial is a legitimate admin action: any real
 admin can already change a user's subscription through the other admin subscription endpoints
 (tier overrides, subscription management in `AdminUserService`). Gating this one endpoint would
-buy no security while breaking the E2E flow. The "QA only" wording describes who normally calls
-it, not who may.
+buy no security while breaking the E2E flow.
 
 This is recorded because it looks like an oversight and is not. Do not add an environment gate
 to this handler; see the comment at `AdminHandler.GrantTrial`.

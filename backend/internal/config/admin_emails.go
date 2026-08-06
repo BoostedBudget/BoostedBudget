@@ -29,7 +29,8 @@ const defaultAdminEmailsConfigPath = "config/admin_emails.yaml"
 // allowlist bypasses the role check entirely (middleware/admin.go returns from the
 // IsHardcodedAdmin branch before HasRole is consulted), so an honoured override is an
 // arbitrary, role-check-free set of admins. Its only real purpose is relocating the file for
-// tests, and there it is always set alongside a non-production ENVIRONMENT.
+// tests, which pass a non-production allowlistEnv to LoadAdminEmailConfig directly rather than
+// going through ENVIRONMENT.
 //
 // "Is this production?" is answered by domain.IsNonProductionEnvironment(allowlistEnv) — the
 // SAME predicate that decides which of the file's two lists load, and allowlistEnv is always

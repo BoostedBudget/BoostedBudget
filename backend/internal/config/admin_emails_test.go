@@ -98,6 +98,14 @@ func TestEffectiveAdminEmails_NonProductionIncludesTestAccounts(t *testing.T) {
 				assert.Contains(t, effective, email,
 					"%s must be an admin in %s too", email, env)
 			}
+			// EXACT, not merely containing. Containment alone would let an extra address
+			// appear in non_production_admin_emails unnoticed — and while such an entry
+			// cannot reach production, it would still be an unreviewed admin in QA and
+			// staging, which hold real Plaid sandbox data and real Clerk identities.
+			assert.ElementsMatch(t,
+				append(append([]string{}, ownerAdminEmails...), testAccountAdminEmails...),
+				effective,
+				"%s must resolve to exactly the owners plus the two known test accounts", env)
 		})
 	}
 }
