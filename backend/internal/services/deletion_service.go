@@ -593,14 +593,47 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// redundancy was established by mutation, not by reading — deleting a check here killed no test,
 	// while deleting either inner gate kills exactly one. A check that cannot fail is not protection;
 	// it is a second place for the rule to drift.
+	//
+	// Issue #1504: subscriptionCancelled is the one fact this leg reports back, and it exists because
+	// a Paddle subscription-cancel that has LANDED cannot be recalled by any later gate. Every path
+	// below that ends with the user still existing (a gate declining after the cancel, and the
+	// cascade's own guard refusing) records the residue, so the two ways the same harm happens cannot
+	// diverge — see recordPaddleCancelResidue.
+	subscriptionCancelled := false
+	// recordPaddleCancelResidue makes a post-gate external effect visible to an operator when the
+	// deletion it belonged to did not complete. It is deliberately NOT remediation: nothing here
+	// re-creates the subscription (see ProfileRepository.RecordDeletionResidue's doc comment). A
+	// failed write cannot change the outcome of a deletion that is already over, so it is logged at
+	// Error rather than propagated — but it is never swallowed silently, which was the whole finding.
+	recordPaddleCancelResidue := func(reason string) {
+		if !subscriptionCancelled {
+			return
+		}
+		slog.Default().Error("account deletion stopped after the user's Paddle subscription had already been cancelled — the user KEEPS their account and data but has NO subscription; this needs a human",
+			"user_id", userID, "claim_kind", string(kind), "reason", reason)
+		if recErr := s.profileRepo.RecordDeletionResidue(ctx, userID, repository.DeletionResiduePaddleSubscriptionCancelled); recErr != nil {
+			slog.Default().Error("failed to record the post-gate external-effect residue — this user's cancelled subscription is now visible ONLY in logs",
+				"user_id", userID, "error", recErr)
+		}
+	}
 	if s.paddleCleanupSvc != nil {
-		if err := s.cleanupPaddleResources(ctx, userID, user, stillAuthorised); err != nil {
+		cancelled, err := s.cleanupPaddleResources(ctx, userID, user, stillAuthorised)
+		subscriptionCancelled = cancelled
+		if err != nil {
 			if errors.Is(err, ErrDeletionAuthorisationRevoked) {
 				releaseClaim("authorisation revoked mid Paddle cleanup")
 				slog.Default().Info("aborting deletion mid Paddle cleanup — the authorisation this run was claimed under no longer holds",
 					"user_id", userID, "claim_kind", string(kind))
+				// Only fires when the revocation was caught by the SECOND gate, after the cancel had
+				// already landed; a revocation caught by the first gate cancels nothing and so leaves
+				// nothing to report.
+				recordPaddleCancelResidue("authorisation revoked between the subscription cancel and the customer archive")
 				return nil
 			}
+			// A Paddle FAILURE (as opposed to a revocation) deliberately records nothing: the claim is
+			// released and the next run retries the whole sequence, so the deletion is still expected
+			// to complete and the user is not being left in the state this record describes. Only a
+			// run that ends with the user surviving qualifies.
 			releaseClaim(err.Error())
 			return fmt.Errorf("aborting deletion — Paddle cleanup failed: %w", err)
 		}
@@ -630,6 +663,10 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 		releaseClaim("cascade aborted — eligibility lost, or un-cleaned Plaid items remain, since the claim was taken")
 		slog.Default().Info("skipping deletion cascade — re-verification inside the cascade transaction found the user no longer eligible",
 			"user_id", userID)
+		// Issue #1504: the SECOND way a user survives a run whose Paddle cancel already landed. The
+		// harm is identical to the gate-decline case above — account kept, subscription gone — so the
+		// record must be identical too; covering only the gate would silently miss this half.
+		recordPaddleCancelResidue("the cascade's own re-verification refused after the subscription had been cancelled")
 		return nil
 	}
 
@@ -795,7 +832,13 @@ func (s *deletionService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository
 // the resource that needs cleanup. Nothing would ever retry it. Returning the first failure lets
 // the caller Release the claim so the whole sequence retries on the next run, while the IDs are
 // still present in the database to retry against.
-func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID string, user *domain.User, stillAuthorised func(ctx context.Context) (bool, error)) error {
+//
+// Returns subscriptionCancelled = true once CancelSubscriptionImmediately has SUCCEEDED, and that
+// return value is load-bearing rather than informational (Issue #1504): it is the only thing that
+// distinguishes an abort which cost the user nothing from one that left them with no subscription,
+// and the caller records the residue on exactly that distinction. It is reported alongside the error
+// on the abort paths precisely because those are the paths where it matters.
+func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID string, user *domain.User, stillAuthorised func(ctx context.Context) (bool, error)) (subscriptionCancelled bool, err error) {
 	anonymizedEmail := fmt.Sprintf("deleted_%s@deleted.local", userID)
 
 	// gate re-asks the authorisation question immediately before one specific irreversible call. It
@@ -826,7 +869,7 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 		status := domain.SubscriptionStatus(user.SubscriptionStatus)
 		if status.IsActiveSubscription() || status == domain.SubscriptionStatusPastDue {
 			if err := gate("cancelling the Paddle subscription"); err != nil {
-				return err
+				return false, err
 			}
 			// Issue #1413 H1: claim the OPERATION-keyed ActionPaddleCancelSubscription side-effect
 			// claim before calling Paddle, nested inside the ActionAccountDeletion flow claim
@@ -848,8 +891,11 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 				if s.analytics != nil {
 					s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "cancel_subscription"})
 				}
-				return fmt.Errorf("cancel Paddle subscription %s: %w", *user.PaddleSubscriptionID, err)
+				return false, fmt.Errorf("cancel Paddle subscription %s: %w", *user.PaddleSubscriptionID, err)
 			}
+			// From here on the cancellation has LANDED at Paddle. Nothing below can undo it, which is
+			// what every `return subscriptionCancelled, ...` after this line is carrying to the caller.
+			subscriptionCancelled = true
 		}
 	}
 
@@ -858,15 +904,15 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 		// THE LAST CHECK BEFORE THE ONE ACTION NOTHING CAN UNDO. A cancelled subscription can be
 		// re-created; an anonymised Paddle customer cannot be recovered by us or by Paddle.
 		if err := gate("archiving and anonymising the Paddle customer"); err != nil {
-			return err
+			return subscriptionCancelled, err
 		}
 		if err := s.paddleCleanupSvc.ArchiveAndAnonymizeCustomer(ctx, *user.PaddleCustomerID, anonymizedEmail); err != nil {
 			if s.analytics != nil {
 				s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "archive_customer"})
 			}
-			return fmt.Errorf("archive Paddle customer %s: %w", *user.PaddleCustomerID, err)
+			return subscriptionCancelled, fmt.Errorf("archive Paddle customer %s: %w", *user.PaddleCustomerID, err)
 		}
 	}
 
-	return nil
+	return subscriptionCancelled, nil
 }

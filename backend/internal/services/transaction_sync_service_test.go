@@ -1825,6 +1825,13 @@ func (m *mockProfileRepoForCursorTests) CancelDeletion(ctx context.Context, user
 	return args.Error(0)
 }
 
+// RecordDeletionResidue (Issue #1504) records that a deletion performed an irreversible external
+// effect and then did not complete. See repository.ProfileRepository for the contract.
+func (m *mockProfileRepoForCursorTests) RecordDeletionResidue(ctx context.Context, userID string, effect repository.DeletionResidueEffect) error {
+	args := m.Called(ctx, userID, effect)
+	return args.Error(0)
+}
+
 func (m *mockProfileRepoForCursorTests) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
 	return args.Bool(0), args.Error(1)

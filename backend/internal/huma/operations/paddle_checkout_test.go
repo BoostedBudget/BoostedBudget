@@ -148,6 +148,13 @@ func (m *mockProfileRepo) UpdateSubscriptionFromPaddle(ctx context.Context, user
 func (m *mockProfileRepo) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error {
 	return nil
 }
+// RecordDeletionResidue (Issue #1504) records that a deletion performed an irreversible external
+// effect and then did not complete. See repository.ProfileRepository for the contract.
+func (m *mockProfileRepo) RecordDeletionResidue(ctx context.Context, userID string, effect repository.DeletionResidueEffect) error {
+	args := m.Called(ctx, userID, effect)
+	return args.Error(0)
+}
+
 func (m *mockProfileRepo) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	return true, nil
 }
