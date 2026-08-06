@@ -173,3 +173,71 @@ func (o PlaidOrphanedItem) AdminState(asOf time.Time) OrphanedItemAdminState {
 	}
 	return OrphanedItemAutoRetrying
 }
+
+// PlaidOrphanedItemAdminView is one row as the admin API exposes it. Issue #1497.
+//
+// ⚠ IT HAS NO ACCESS-TOKEN FIELD, AND MUST NEVER GAIN ONE. The retained credential is the whole
+// sensitivity of this table: it is a live capability against a third party, and an admin endpoint is
+// exactly the wrong place for it — nothing an operator does needs the token, because the manual remedy
+// is performed in Plaid's own dashboard using plaid_item_id. TokenRetained answers the only question a
+// human has about it ("is something still able to try?"), as a boolean.
+// TestPlaidOrphanedItemAdminView_NeverSerialisesTheCredential fails if a field ever carries it.
+//
+// AdminState is computed, not stored (see AdminState), so this view cannot disagree with the row.
+type PlaidOrphanedItemAdminView struct {
+	ID          string `json:"id"`
+	PlaidItemID string `json:"plaid_item_id"`
+	// AdminState is what an operator must DO: "auto_retrying" (nothing — work is in flight),
+	// "manual_intervention_required" (remove this Item in Plaid's dashboard, or it may keep billing),
+	// or "resolved" (history).
+	AdminState      OrphanedItemAdminState `json:"admin_state"`
+	InstitutionID   string                 `json:"institution_id,omitempty"`
+	InstitutionName string                 `json:"institution_name,omitempty"`
+	// LinkedItemStatusAtErasure distinguishes a 'replaced' re-link leftover, whose removal was never
+	// attempted, from an 'active' row whose removal was attempted and failed. Different operator stories.
+	LinkedItemStatusAtErasure string `json:"linked_item_status_at_erasure,omitempty"`
+	// ErasureErrorCode is the code that made removal terminal at the moment of erasure; never overwritten.
+	ErasureErrorCode string `json:"erasure_error_code,omitempty"`
+	// LastRetryErrorCode is the most recent automated attempt's failure code, including the local
+	// sentinels ORPHAN_TOKEN_UNDECRYPTABLE and ORPHAN_RETRY_TRANSPORT_ERROR.
+	LastRetryErrorCode string     `json:"last_retry_error_code,omitempty"`
+	RetryAttemptCount  int        `json:"retry_attempt_count"`
+	OrphanedAt         time.Time  `json:"orphaned_at"`
+	TerminalSince      *time.Time `json:"terminal_since,omitempty"`
+	LastRetryAt        *time.Time `json:"last_retry_at,omitempty"`
+	// TokenExpiresAt is the retention deadline. TokenRetained reports whether a credential is actually
+	// held right now; TokenPurgedAt records when one was destroyed, and is null on a record that never
+	// held one (rows written before migration 000135) — never-retained and purged are different facts.
+	TokenExpiresAt time.Time  `json:"token_expires_at"`
+	TokenPurgedAt  *time.Time `json:"token_purged_at,omitempty"`
+	TokenRetained  bool       `json:"token_retained"`
+	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+}
+
+// AdminView projects the record for the admin API, computing AdminState against asOf.
+//
+// TokenRetained is deliberately `AccessToken != "" || TokenUndecryptable` — i.e. "a credential is
+// stored", not "a credential is usable". An undecryptable token IS retained personal data and must be
+// reported as retained; reporting it as absent would understate what this system holds, which is the
+// one direction a compliance surface must never err in. The AdminState beside it already says the
+// record needs a human.
+func (o PlaidOrphanedItem) AdminView(asOf time.Time) PlaidOrphanedItemAdminView {
+	return PlaidOrphanedItemAdminView{
+		ID:                        o.ID,
+		PlaidItemID:               o.PlaidItemID,
+		AdminState:                o.AdminState(asOf),
+		InstitutionID:             o.InstitutionID,
+		InstitutionName:           o.InstitutionName,
+		LinkedItemStatusAtErasure: o.LinkedItemStatus,
+		ErasureErrorCode:          o.LastErrorCode,
+		LastRetryErrorCode:        o.LastRetryErrorCode,
+		RetryAttemptCount:         o.RetryAttemptCount,
+		OrphanedAt:                o.OrphanedAt,
+		TerminalSince:             o.TerminalSince,
+		LastRetryAt:               o.LastRetryAt,
+		TokenExpiresAt:            o.TokenExpiresAt,
+		TokenPurgedAt:             o.TokenPurgedAt,
+		TokenRetained:             o.AccessToken != "" || o.TokenUndecryptable,
+		ResolvedAt:                o.ResolvedAt,
+	}
+}

@@ -3902,6 +3902,52 @@ components:
         - expiration
         - request_id
       type: object
+    ListPlaidOrphanedItemsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/ListPlaidOrphanedItemsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        as_of:
+          type: string
+        auto_retrying:
+          format: int64
+          type: integer
+        items:
+          items:
+            $ref: "#/components/schemas/PlaidOrphanedItemAdminView"
+          type:
+            - array
+            - "null"
+        limit:
+          format: int64
+          type: integer
+        manual_intervention_required:
+          format: int64
+          type: integer
+        offset:
+          format: int64
+          type: integer
+        resolved:
+          format: int64
+          type: integer
+        total:
+          format: int64
+          type: integer
+      required:
+        - items
+        - total
+        - manual_intervention_required
+        - auto_retrying
+        - resolved
+        - limit
+        - offset
+        - as_of
+      type: object
     LogContributionRequest:
       additionalProperties: false
       properties:
@@ -4593,6 +4639,57 @@ components:
       required:
         - status
         - environment
+      type: object
+    PlaidOrphanedItemAdminView:
+      additionalProperties: false
+      properties:
+        admin_state:
+          type: string
+        erasure_error_code:
+          type: string
+        id:
+          type: string
+        institution_id:
+          type: string
+        institution_name:
+          type: string
+        last_retry_at:
+          format: date-time
+          type: string
+        last_retry_error_code:
+          type: string
+        linked_item_status_at_erasure:
+          type: string
+        orphaned_at:
+          format: date-time
+          type: string
+        plaid_item_id:
+          type: string
+        resolved_at:
+          format: date-time
+          type: string
+        retry_attempt_count:
+          format: int64
+          type: integer
+        terminal_since:
+          format: date-time
+          type: string
+        token_expires_at:
+          format: date-time
+          type: string
+        token_purged_at:
+          format: date-time
+          type: string
+        token_retained:
+          type: boolean
+      required:
+        - id
+        - plaid_item_id
+        - admin_state
+        - retry_attempt_count
+        - orphaned_at
+        - token_expires_at
+        - token_retained
       type: object
     PlaidWebhookResponseBody:
       additionalProperties: false
@@ -7975,6 +8072,50 @@ paths:
       security:
         - clerk: []
       summary: Fire a Plaid webhook (QA only)
+      tags:
+        - Admin
+  /api/v1/admin/plaid/orphaned-items:
+    get:
+      description: "Returns Plaid Items whose local record was deleted by a completed GDPR erasure before removal could be proved, labelled with the action required: 'auto_retrying' (an automated retry holds a live credential — no action), 'manual_intervention_required' (remove the Item in Plaid's dashboard using plaid_item_id, or it may keep billing), or 'resolved' (history). Never returns the retained access token. Requires admin role."
+      operationId: listAdminPlaidOrphanedItems
+      parameters:
+        - description: Number of records to return
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 50
+            description: Number of records to return
+            format: int64
+            maximum: 200
+            minimum: 1
+            type: integer
+        - description: Number of records to skip
+          explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            description: Number of records to skip
+            format: int64
+            minimum: 0
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListPlaidOrphanedItemsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List orphaned Plaid Items (admin)
       tags:
         - Admin
   /api/v1/admin/subscription/grant-trial:

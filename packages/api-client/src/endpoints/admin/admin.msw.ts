@@ -56,6 +56,7 @@ import type {
   GetAdminDeadLetterJobArgs200,
   GetPaymentFailuresOutputBody,
   GrantTrialResponseBody,
+  ListPlaidOrphanedItemsOutputBody,
   PaddleWebhookEvent,
   SystemHealthResponse,
   WebhookEventListResponse,
@@ -85,6 +86,8 @@ export const getRetryAdminDeadLetterJobResponseMock = (overrideResponse: Partial
 export const getGetAdminPaymentFailuresResponseMock = (overrideResponse: Partial<Extract<GetPaymentFailuresOutputBody, object>> = {}): GetPaymentFailuresOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), limit: faker.number.int(), offset: faker.number.int(), total: faker.number.int(), transactions: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({amount: faker.number.float({fractionDigits: 2}), billing_period_end: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), billing_period_start: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', currency: faker.string.alpha({length: {min: 10, max: 20}}), customer_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), payload: {}, payment_method_type: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), subscription_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), transaction_id: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), ...overrideResponse})
 
 export const getFireWebhookResponseMock = (overrideResponse: Partial<Extract<FireWebhookResponseBody, object>> = {}): FireWebhookResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), item_id: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), webhook_code: faker.string.alpha({length: {min: 10, max: 20}}), webhook_fired: faker.datatype.boolean(), ...overrideResponse})
+
+export const getListAdminPlaidOrphanedItemsResponseMock = (overrideResponse: Partial<Extract<ListPlaidOrphanedItemsOutputBody, object>> = {}): ListPlaidOrphanedItemsOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), as_of: faker.string.alpha({length: {min: 10, max: 20}}), auto_retrying: faker.number.int(), items: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({admin_state: faker.string.alpha({length: {min: 10, max: 20}}), erasure_error_code: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), institution_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), institution_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), last_retry_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), last_retry_error_code: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), linked_item_status_at_erasure: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), orphaned_at: faker.date.past().toISOString().slice(0, 19) + 'Z', plaid_item_id: faker.string.alpha({length: {min: 10, max: 20}}), resolved_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), retry_attempt_count: faker.number.int(), terminal_since: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), token_expires_at: faker.date.past().toISOString().slice(0, 19) + 'Z', token_purged_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), token_retained: faker.datatype.boolean()})), null]), limit: faker.number.int(), manual_intervention_required: faker.number.int(), offset: faker.number.int(), resolved: faker.number.int(), total: faker.number.int(), ...overrideResponse})
 
 export const getGrantTrialResponseMock = (overrideResponse: Partial<Extract<GrantTrialResponseBody, object>> = {}): GrantTrialResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), success: faker.datatype.boolean(), ...overrideResponse})
 
@@ -233,6 +236,18 @@ export const getFireWebhookMockHandler = (overrideResponse?: FireWebhookResponse
   }, options)
 }
 
+export const getListAdminPlaidOrphanedItemsMockHandler = (overrideResponse?: ListPlaidOrphanedItemsOutputBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<ListPlaidOrphanedItemsOutputBody> | ListPlaidOrphanedItemsOutputBody), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/admin/plaid/orphaned-items', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getListAdminPlaidOrphanedItemsResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
 export const getGrantTrialMockHandler = (overrideResponse?: GrantTrialResponseBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<GrantTrialResponseBody> | GrantTrialResponseBody), options?: RequestHandlerOptions) => {
   return http.post('*/api/v1/admin/subscription/grant-trial', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
 
@@ -340,6 +355,7 @@ export const getAdminMock = () => [
   getRetryAdminDeadLetterJobMockHandler(),
   getGetAdminPaymentFailuresMockHandler(),
   getFireWebhookMockHandler(),
+  getListAdminPlaidOrphanedItemsMockHandler(),
   getGrantTrialMockHandler(),
   getGetSystemHealthMockHandler(),
   getListAdminUsersMockHandler(),

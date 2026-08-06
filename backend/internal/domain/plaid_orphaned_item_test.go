@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -144,4 +145,49 @@ func TestOrphanedItemTokenRetention_IsThirtyDays(t *testing.T) {
 func TestOrphanedItemTokenRetention_IsNotTheC2CoolingOffWindow(t *testing.T) {
 	assert.NotEqual(t, 7*24*time.Hour, OrphanedItemTokenRetention,
 		"the C2 window bounds how long an erasure waits; this bounds how long a credential outlives one")
+}
+
+// TestPlaidOrphanedItemAdminView_NeverSerialisesTheCredential is the assertion that has to exist
+// because the mistake it guards against is a single struct field away and would be invisible in
+// review: the admin API must never emit the retained access token. Asserted against the actual JSON
+// encoding rather than by inspecting field names, so a field added with any tag is caught.
+func TestPlaidOrphanedItemAdminView_NeverSerialisesTheCredential(t *testing.T) {
+	o := newOrphan()
+	o.AccessToken = "access-sandbox-SUPER-SECRET"
+
+	encoded, err := json.Marshal(o.AdminView(orphanStateAsOf))
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(encoded), "SUPER-SECRET",
+		"the retained credential is a live capability against Plaid and no operator needs it — the manual "+
+			"remedy is performed in Plaid's dashboard with plaid_item_id")
+	assert.NotContains(t, string(encoded), "access_token")
+	assert.Contains(t, string(encoded), `"token_retained":true`,
+		"the boolean is what answers the only question a human has about the credential")
+}
+
+// An undecryptable token is still RETAINED personal data. Reporting it as absent would understate what
+// this system holds, which is the one direction a compliance surface must never err in.
+func TestPlaidOrphanedItemAdminView_UndecryptableTokenStillCountsAsRetained(t *testing.T) {
+	o := newOrphan()
+	o.AccessToken = ""
+	o.TokenUndecryptable = true
+
+	view := o.AdminView(orphanStateAsOf)
+	assert.True(t, view.TokenRetained)
+	assert.Equal(t, OrphanedItemManualInterventionRequired, view.AdminState,
+		"retained but unusable: the state must still send a human to Plaid")
+}
+
+// A purged record reports no retained credential and carries the timestamp proving it.
+func TestPlaidOrphanedItemAdminView_PurgedRecordReportsNoRetainedCredential(t *testing.T) {
+	o := newOrphan()
+	o.AccessToken = ""
+	purged := orphanStateAsOf.Add(-time.Hour)
+	o.TokenPurgedAt = &purged
+
+	view := o.AdminView(orphanStateAsOf)
+	assert.False(t, view.TokenRetained)
+	require.NotNil(t, view.TokenPurgedAt)
+	assert.Equal(t, OrphanedItemManualInterventionRequired, view.AdminState)
 }
