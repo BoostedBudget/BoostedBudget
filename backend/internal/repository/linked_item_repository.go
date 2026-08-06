@@ -197,10 +197,13 @@ type LinkedItemRepository interface {
 	// services.terminalPlaidRemovalFailure for the deliberately narrow code set, and for why
 	// anything unrecognised stays recoverable.
 	//
-	// NOT idempotent in the "first write wins" sense MarkPlaidRemoved is: each call OVERWRITES both
-	// columns, so the row records the MOST RECENT terminal attempt. That is the useful reading for an
-	// operator ("when did we last try, and what did Plaid say"), and there is no history to preserve
-	// — the previous value was the same verdict from an earlier attempt.
+	// SPLIT SEMANTICS, and the timestamp half is load-bearing. plaid_removal_failed_at is written
+	// COALESCE(existing, now) — FIRST occurrence wins, exactly like MarkPlaidRemoved — because C2 does
+	// not unblock on the mark's presence but on the verdict having PERSISTED for a cooling-off window
+	// (uncleanedLinkedItemPredicate). Overwriting it on every attempt would push that deadline forward on
+	// each daily retry and the guard would block forever, which is #1494 again with extra steps.
+	// plaid_removal_error_code IS overwritten, so it names the most recent code — that one has no history
+	// worth keeping and an operator wants the latest answer Plaid gave.
 	//
 	// GUARDED BY `plaid_removed_at IS NULL`: a row already proved removed must never acquire a
 	// failure verdict afterwards (a late-arriving error from a retry that raced a success would
@@ -1521,7 +1524,7 @@ func (r *linkedItemRepository) MarkPlaidRemovalFailed(ctx context.Context, ids [
 
 	query := `
 		UPDATE linked_items
-		SET plaid_removal_failed_at = $1,
+		SET plaid_removal_failed_at = COALESCE(plaid_removal_failed_at, $1),
 		    plaid_removal_error_code = $2,
 		    updated_at = $1
 		WHERE id = ANY($3)

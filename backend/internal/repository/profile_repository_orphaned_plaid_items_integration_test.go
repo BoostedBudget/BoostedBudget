@@ -45,8 +45,25 @@ type orphanRecord struct {
 	InstitutionName string
 	Status          *string
 	LastErrorCode   *string
-	LastAttemptedAt *time.Time
+	TerminalSince   *time.Time
 	OrphanedAt      time.Time
+}
+
+// terminalVerdictAgeBeyondCoolingOff is how far into the past a test pushes
+// linked_items.plaid_removal_failed_at when it wants a verdict that has already OUTLIVED C2's 7-day
+// cooling-off window (uncleanedLinkedItemPredicate). Written as a raw UPDATE because no production code
+// may backdate a verdict — the whole value of the window is that only elapsed time can satisfy it.
+const terminalVerdictAgeBeyondCoolingOff = 8 * 24 * time.Hour
+
+// ageTerminalVerdict backdates an item's plaid_removal_failed_at by d, simulating a verdict that has
+// persisted for that long while daily retries kept answering the same way.
+func ageTerminalVerdict(t *testing.T, ctx context.Context, pool *pgxpool.Pool, itemID string, d time.Duration) {
+	t.Helper()
+	tag, err := pool.Exec(ctx,
+		`UPDATE linked_items SET plaid_removal_failed_at = plaid_removal_failed_at - $2::interval WHERE id = $1`,
+		itemID, fmt.Sprintf("%d seconds", int(d.Seconds())))
+	require.NoError(t, err)
+	require.EqualValues(t, 1, tag.RowsAffected(), "the fixture row must exist and already carry a verdict")
 }
 
 // readOrphanRecords returns every plaid_orphaned_items row for the given linked_items ids.
@@ -55,7 +72,7 @@ func readOrphanRecords(t *testing.T, ctx context.Context, pool *pgxpool.Pool, en
 	rows, err := pool.Query(ctx, `
 		SELECT linked_item_id, plaid_item_id_encrypted, institution_id_encrypted,
 		       institution_name_encrypted, linked_item_status, last_error_code,
-		       last_attempted_at, orphaned_at
+		       terminal_since, orphaned_at
 		FROM plaid_orphaned_items
 		WHERE linked_item_id = ANY($1)
 		ORDER BY orphaned_at`, linkedItemIDs)
@@ -67,7 +84,7 @@ func readOrphanRecords(t *testing.T, ctx context.Context, pool *pgxpool.Pool, en
 		var rec orphanRecord
 		var instID, instName *string
 		require.NoError(t, rows.Scan(&rec.LinkedItemID, &rec.PlaidItemID, &instID, &instName,
-			&rec.Status, &rec.LastErrorCode, &rec.LastAttemptedAt, &rec.OrphanedAt))
+			&rec.Status, &rec.LastErrorCode, &rec.TerminalSince, &rec.OrphanedAt))
 		plainItemID, err := enc.DecryptString(rec.PlaidItemID)
 		require.NoError(t, err, "the copied plaid_item_id must still decrypt — the cascade copies ciphertext verbatim")
 		rec.PlaidItemID = plainItemID
@@ -121,6 +138,10 @@ func TestDeleteUserCascade_Integration_OrphanTerminallyFailedItemUnblocksAndIsPr
 	// The state a real INVALID_ACCESS_TOKEN failure leaves behind — via the production writer, not a
 	// hand-written UPDATE, so this test also covers MarkPlaidRemovalFailed against real Postgres.
 	require.NoError(t, linkedItemRepo.MarkPlaidRemovalFailed(ctx, []string{item.ID}, "INVALID_ACCESS_TOKEN"))
+	// …and then aged past C2's cooling-off window, because a FRESH verdict deliberately does not unblock
+	// (see TestDeleteUserCascade_Integration_OrphanFreshTerminalVerdictStillBlocks, which is the same
+	// fixture minus this line).
+	ageTerminalVerdict(t, ctx, pool, item.ID, terminalVerdictAgeBeyondCoolingOff)
 
 	// Before the cascade there is nothing to act on yet — the fact lives on the linked_items row.
 	require.Empty(t, readOrphanRecords(t, ctx, pool, enc, item.ID),
@@ -147,7 +168,10 @@ func TestDeleteUserCascade_Integration_OrphanTerminallyFailedItemUnblocksAndIsPr
 	require.NotNil(t, rec.LastErrorCode)
 	assert.Equal(t, "INVALID_ACCESS_TOKEN", *rec.LastErrorCode,
 		"the code that justified calling this hopeless must survive, so a too-wide classification stays auditable")
-	assert.NotNil(t, rec.LastAttemptedAt, "when we last tried is what tells an operator this was tried at all")
+	require.NotNil(t, rec.TerminalSince, "when the verdict was first reached is what tells an operator it was tried at all")
+	assert.True(t, rec.OrphanedAt.Sub(*rec.TerminalSince) >= 7*24*time.Hour,
+		"terminal_since must predate the erasure by at least the cooling-off window — the pair is the audit "+
+			"trail showing the verdict was OBSERVED rather than guessed")
 	assert.WithinDuration(t, time.Now(), rec.OrphanedAt, time.Minute)
 	require.NotNil(t, rec.Status)
 	assert.Equal(t, string(domain.LinkedItemStatusActive), *rec.Status)
@@ -161,6 +185,18 @@ func TestDeleteUserCascade_Integration_OrphanTerminallyFailedItemUnblocksAndIsPr
 	`).Scan(&userColumns))
 	assert.Equal(t, 0, userColumns,
 		"plaid_orphaned_items outlives an erased user and must carry no identifier for them (migration 000134)")
+
+	// And no foreign key of any kind. This is the structural half of the same property: an FK to users
+	// would give the cascade a CASCADE path straight through this table, destroying the record it was
+	// created to preserve — the failure would be invisible in this test's earlier assertions, because
+	// the deletion order would still leave the record written and then remove it.
+	var fkCount int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM information_schema.table_constraints
+		WHERE table_name = 'plaid_orphaned_items' AND constraint_type = 'FOREIGN KEY'
+	`).Scan(&fkCount))
+	assert.Equal(t, 0, fkCount,
+		"plaid_orphaned_items must have no foreign key at all — the cascade must not be able to reach it")
 }
 
 // TestDeleteUserCascade_Integration_OrphanUnresolvedItemStillBlocksAndWritesNothing is the falsifying
@@ -196,6 +232,63 @@ func TestDeleteUserCascade_Integration_OrphanUnresolvedItemStillBlocksAndWritesN
 	assertUserRowExists(t, ctx, pool, user.ID)
 	assert.Empty(t, readOrphanRecords(t, ctx, pool, enc, item.ID),
 		"an aborted cascade must leave no orphan record: the linked_items row still exists and is still being retried")
+}
+
+// TestDeleteUserCascade_Integration_OrphanFreshTerminalVerdictStillBlocks is the cooling-off window,
+// and it is the answer to the sharpest objection against this whole change: the terminal verdict is an
+// INFERENCE, not something Plaid stated. Plaid returns INVALID_ACCESS_TOKEN both for a genuinely dead
+// token and when a token is used against the wrong environment or client_id — a deployment-level
+// misconfiguration, curable by an ops fix. Unblocking the moment the verdict is written would let ONE
+// bad deploy mark every Item in the estate hopeless and then erase over all of them, destroying the
+// tokens on the way out.
+//
+// So a verdict written just now must NOT unblock. Only elapsed time can satisfy the guard, and nothing
+// stops retrying during it, which is what turns the inference into an observation. This test is the
+// headline test's fixture minus the backdating.
+func TestDeleteUserCascade_Integration_OrphanFreshTerminalVerdictStillBlocks(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := createDeleteCascadeFixtureUser(t, ctx, pool, repo, suffix, nil, nil, nil)
+
+	item := &domain.LinkedItem{
+		UserID:      user.ID,
+		ItemID:      "plaid-item-fresh-verdict-" + suffix,
+		AccessToken: "wrong-environment-token-" + suffix,
+		Provider:    "plaid",
+	}
+	require.NoError(t, linkedItemRepo.Create(ctx, item))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE id = $1", item.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM plaid_orphaned_items WHERE linked_item_id = $1", item.ID)
+	})
+	require.NoError(t, linkedItemRepo.MarkPlaidRemovalFailed(ctx, []string{item.ID}, "INVALID_ACCESS_TOKEN"))
+
+	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	require.NoError(t, err, "waiting out the window is a normal outcome, not an error")
+	assert.False(t, deleted,
+		"a verdict reached moments ago has not been OBSERVED to persist — an environment misconfiguration "+
+			"looks exactly like this and is fixed within hours")
+	assertUserRowExists(t, ctx, pool, user.ID)
+	assert.Empty(t, readOrphanRecords(t, ctx, pool, enc, item.ID),
+		"no erasure means no orphan: the Item is still findable locally and still being retried")
+
+	// One more day inside the window still blocks — the boundary is the window, not "any elapsed time".
+	ageTerminalVerdict(t, ctx, pool, item.ID, 6*24*time.Hour)
+	deleted, err = repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	require.NoError(t, err)
+	assert.False(t, deleted, "6 days is inside the 7-day window")
+
+	// Past it, the same row goes through — proving the block was the window and nothing else.
+	ageTerminalVerdict(t, ctx, pool, item.ID, 2*24*time.Hour)
+	deleted, err = repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	require.NoError(t, err)
+	assert.True(t, deleted, "once the verdict has held for longer than the window, the erasure may complete")
+	assert.Len(t, readOrphanRecords(t, ctx, pool, enc, item.ID), 1)
 }
 
 // TestDeleteUserCascade_Integration_OrphanProvedRemovedItemWritesNothing pins the other boundary of
@@ -267,6 +360,9 @@ func TestDeleteUserCascade_Integration_OrphanRecordInsertFailure_AbortsTheWholeC
 		_, _ = pool.Exec(ctx, "DELETE FROM plaid_orphaned_items WHERE linked_item_id = $1", item.ID)
 	})
 	require.NoError(t, linkedItemRepo.MarkPlaidRemovalFailed(ctx, []string{item.ID}, "INVALID_ACCESS_TOKEN"))
+	// Aged past the cooling-off window, so the cascade actually reaches the INSERT this test is about —
+	// otherwise C2 blocks first and the test would pass for the wrong reason.
+	ageTerminalVerdict(t, ctx, pool, item.ID, terminalVerdictAgeBeyondCoolingOff)
 
 	_, err := pool.Exec(ctx, `
 		CREATE OR REPLACE FUNCTION x2_block_orphan_insert() RETURNS trigger AS $$
@@ -295,6 +391,91 @@ func TestDeleteUserCascade_Integration_OrphanRecordInsertFailure_AbortsTheWholeC
 	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM linked_items WHERE id = $1", item.ID).Scan(&itemsLeft))
 	assert.Equal(t, 1, itemsLeft,
 		"the linked_items row must survive: while it exists the Item is still findable and still being retried")
+}
+
+// TestMarkPlaidRemovalFailed_Integration_NeverLabelsAProvedRemovedRow pins MarkPlaidRemovalFailed's
+// `plaid_removed_at IS NULL` guard, which is load-bearing in two places and was added by this change:
+//
+//   - It keeps the two columns from contradicting each other in the direction that would matter. A
+//     retry racing a success (removal proved by one attempt, an error arriving from another) must not
+//     be able to stamp "unremovable" onto a row we have PROVED is removed — the weaker fact must never
+//     overwrite the stronger one.
+//   - It is why the zero-row result is benign, which plaidItemCleanupService.
+//     recordTerminalPlaidRemovalFailure depends on: zero rows means the row is gone or already proved
+//     removed, and in neither case is a verdict needed. Drop the guard and that reasoning becomes
+//     false while every service-level test still passes, because a mock cannot evaluate a WHERE clause.
+//
+// This test lives beside the #1494 cascade tests rather than with the other linked-item repository
+// tests because the guard exists for the cascade's benefit.
+func TestMarkPlaidRemovalFailed_Integration_NeverLabelsAProvedRemovedRow(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := createDeleteCascadeFixtureUser(t, ctx, pool, repo, suffix, nil, nil, nil)
+
+	item := &domain.LinkedItem{
+		UserID:      user.ID,
+		ItemID:      "plaid-item-guard-" + suffix,
+		AccessToken: "token-" + suffix,
+		Provider:    "plaid",
+	}
+	require.NoError(t, linkedItemRepo.Create(ctx, item))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE id = $1", item.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	readVerdict := func() (*time.Time, *string) {
+		var at *time.Time
+		var code *string
+		require.NoError(t, pool.QueryRow(ctx,
+			"SELECT plaid_removal_failed_at, plaid_removal_error_code FROM linked_items WHERE id = $1",
+			item.ID).Scan(&at, &code))
+		return at, code
+	}
+
+	// A first verdict lands. The TIMESTAMP is first-wins and the CODE is latest-wins, and the split is
+	// load-bearing: C2's cooling-off window measures how long the verdict has held, so refreshing the
+	// timestamp on each daily retry would push the deadline forward forever and restore the permanent
+	// block #1494 is about. The code has no such role and an operator wants Plaid's latest answer.
+	require.NoError(t, linkedItemRepo.MarkPlaidRemovalFailed(ctx, []string{item.ID}, "NO_USABLE_ACCESS_TOKEN"))
+	firstAt, firstCode := readVerdict()
+	require.NotNil(t, firstAt)
+	require.NotNil(t, firstCode)
+	assert.Equal(t, "NO_USABLE_ACCESS_TOKEN", *firstCode)
+
+	require.NoError(t, linkedItemRepo.MarkPlaidRemovalFailed(ctx, []string{item.ID}, "INVALID_ACCESS_TOKEN"))
+	secondAt, secondCode := readVerdict()
+	require.NotNil(t, secondCode)
+	assert.Equal(t, "INVALID_ACCESS_TOKEN", *secondCode,
+		"the error code is overwritten: the row answers 'what did Plaid say most recently'")
+	require.NotNil(t, secondAt)
+	assert.Equal(t, firstAt.UTC(), secondAt.UTC(),
+		"the timestamp must NOT move: it is when the verdict was FIRST reached, and the cooling-off window "+
+			"depends on it never being refreshed by a retry")
+
+	// Now the removal is PROVED. From here the verdict must be unwritable, and the attempt must report
+	// the zero-row sentinel rather than silently succeeding.
+	require.NoError(t, linkedItemRepo.MarkPlaidRemoved(ctx, []string{item.ID}))
+	err := linkedItemRepo.MarkPlaidRemovalFailed(ctx, []string{item.ID}, "INVALID_ACCESS_TOKEN")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoLinkedItemsUpdated,
+		"a proved-removed row matches nothing, and the caller must be able to tell that apart from a write")
+
+	afterAt, afterCode := readVerdict()
+	assert.Equal(t, secondAt.UTC(), afterAt.UTC(),
+		"the earlier verdict is retained as evidence, but nothing new may be written over a proved removal")
+	require.NotNil(t, afterCode)
+	assert.Equal(t, *secondCode, *afterCode)
+
+	// And the guard now lets the erasure through on the strength of plaid_removed_at alone.
+	count, err := repo.CountUncleanedLinkedItems(ctx, user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
 }
 
 // TestCountUncleanedLinkedItems_Integration_CountsExactlyWhatTheGuardBlocksOn covers the count
@@ -327,14 +508,18 @@ func TestCountUncleanedLinkedItems_Integration_CountsExactlyWhatTheGuardBlocksOn
 	outstanding := newItem("outstanding")
 	removed := newItem("removed")
 	terminal := newItem("terminal")
+	fresh := newItem("fresh")
 	require.NoError(t, linkedItemRepo.MarkPlaidRemoved(ctx, []string{removed.ID}))
 	require.NoError(t, linkedItemRepo.MarkPlaidRemovalFailed(ctx, []string{terminal.ID}, "NO_USABLE_ACCESS_TOKEN"))
+	ageTerminalVerdict(t, ctx, pool, terminal.ID, terminalVerdictAgeBeyondCoolingOff)
+	require.NoError(t, linkedItemRepo.MarkPlaidRemovalFailed(ctx, []string{fresh.ID}, "INVALID_ACCESS_TOKEN"))
 
 	count, err := repo.CountUncleanedLinkedItems(ctx, user.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count,
-		"only the row with neither fact recorded is outstanding: %s counts, %s is proved removed, %s is proved unremovable",
-		outstanding.ID, removed.ID, terminal.ID)
+	assert.Equal(t, 2, count,
+		"outstanding (%s) and a verdict still inside the cooling-off window (%s) both count; %s is proved "+
+			"removed and %s has been proved unremovable for longer than the window",
+		outstanding.ID, fresh.ID, removed.ID, terminal.ID)
 
 	// And the guard agrees, on the same rows, in the same database — the two must never diverge.
 	var blocked bool
@@ -342,6 +527,8 @@ func TestCountUncleanedLinkedItems_Integration_CountsExactlyWhatTheGuardBlocksOn
 	assert.True(t, blocked)
 
 	require.NoError(t, linkedItemRepo.MarkPlaidRemovalFailed(ctx, []string{outstanding.ID}, "INVALID_ACCESS_TOKEN"))
+	ageTerminalVerdict(t, ctx, pool, outstanding.ID, terminalVerdictAgeBeyondCoolingOff)
+	ageTerminalVerdict(t, ctx, pool, fresh.ID, terminalVerdictAgeBeyondCoolingOff)
 	count, err = repo.CountUncleanedLinkedItems(ctx, user.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
