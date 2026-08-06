@@ -1,0 +1,13 @@
+-- Issue #1495: reverse 000131.
+--
+-- Dropping the column also drops its COMMENT, so there is nothing else to undo here.
+--
+-- DATA LOSS, stated plainly: every recorded "Plaid /item/remove succeeded" instant is destroyed by
+-- this rollback, and there is no other slot that carries the fact (that is the whole reason 000131
+-- exists — see its comment). After rolling back, the three predicates that read the column revert to
+-- their status-based spellings, which means DeleteUserCascade once again treats a 'replaced' row as
+-- already-clean. Rolling back therefore re-opens the defect 000131 closed; it is safe as a schema
+-- operation and unsafe as a policy choice.
+--
+-- Idempotent: DROP COLUMN IF EXISTS.
+ALTER TABLE linked_items DROP COLUMN IF EXISTS plaid_removed_at;
