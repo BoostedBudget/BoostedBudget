@@ -226,6 +226,19 @@ func (h *AdminHandler) RetryDLQJob(ctx context.Context, input *RetryDLQJobInput)
 		if errors.Is(err, services.ErrDeadLetterJobAlreadyRetried) {
 			return nil, huma.Error409Conflict("dead letter job has already been retried")
 		}
+		// Issue #1492: with uniqueness restored on the replay path, a replay can be deduplicated away
+		// — nothing was enqueued, so this must not return 200. The service attempts to release the row's
+		// retry slot, so the same request should succeed once the live job finishes or the kind's period
+		// elapses (unless that release itself failed, which the service logs at Error).
+		if errors.Is(err, services.ErrDeadLetterRetryDeduplicated) {
+			return nil, huma.Error409Conflict("a matching job already exists for this kind; retry was deduplicated and not enqueued")
+		}
+		// Fail-closed refusal: no uniqueness policy is registered for this job kind, so replaying it
+		// would silently drop the dedup guarantee the kind was designed around. Nothing about the
+		// request can fix it — jobs.uniqueOptsByKind needs the entry.
+		if errors.Is(err, services.ErrDeadLetterRetryKindUnknown) {
+			return nil, huma.Error422UnprocessableEntity("this job kind has no registered uniqueness policy; retry refused")
+		}
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 	return &RetryDLQJobOutput{Body: resp}, nil

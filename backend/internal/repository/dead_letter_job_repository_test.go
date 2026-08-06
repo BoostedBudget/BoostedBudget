@@ -309,6 +309,24 @@ func TestDeadLetterJobRepository_AtomicMarkRetried_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// --- ReleaseRetryClaim ---
+
+// TestDeadLetterJobRepository_ReleaseRetryClaim_Success checks only that the statement is issued with
+// the row id and nothing else — pgxmock matches SQL as text and cannot evaluate the WHERE clause, so
+// the retry_job_id = 0 guard is proved in
+// TestDeadLetterJobRepository_ReleaseRetryClaim_Integration against a real planner instead.
+func TestDeadLetterJobRepository_ReleaseRetryClaim_Success(t *testing.T) {
+	mock, repo := setupDLQMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE dead_letter_jobs`)).
+		WithArgs(int64(7)).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	require.NoError(t, repo.ReleaseRetryClaim(context.Background(), 7))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestDeadLetterJobRepository_AtomicMarkRetried_AlreadyRetried(t *testing.T) {
 	mock, repo := setupDLQMockDB(t)
 	defer mock.Close()

@@ -240,6 +240,33 @@ func (r *DeadLetterJobRepository) AtomicMarkRetried(ctx context.Context, id int6
 	return true, nil
 }
 
+// ReleaseRetryClaim un-stamps a retry claim taken by AtomicMarkRetried for a replay that then
+// enqueued nothing (a queue error, or a River UniqueSkipped dedup), making the row retryable again.
+//
+// The claim-then-act ORDER in DeadLetterService.Retry is deliberate — claiming after a successful
+// enqueue would re-open the concurrent double-enqueue race the CAS exists to close — so the only
+// safe fix for a replay that did not happen is to undo the claim, which is what this does.
+//
+// retry_job_id = 0 is the discriminator: 0 is the placeholder AtomicMarkRetried writes, and the
+// success path overwrites it with the new River job ID (MarkRetried). River job IDs come from a
+// bigserial starting at 1 (migrations/000030_add_river_queue.up.sql), so 0 is never a real one.
+//
+// What that guard does and does not prove. It DOES prevent this statement from un-retrying a row whose
+// retry_job_id has been recorded. It does NOT prove that a row still at 0 has no live job: there is a
+// window between a successful Enqueue and MarkRetried, and if MarkRetried fails (it is best-effort) the
+// row stays at 0 permanently with a real job behind it. Nothing calls this method on either of those
+// paths — the service calls it only where the insert did not happen — so the guard is a second line of
+// defence, not the reason correctness holds.
+func (r *DeadLetterJobRepository) ReleaseRetryClaim(ctx context.Context, id int64) error {
+	query := `
+		UPDATE dead_letter_jobs
+		SET retried_at = NULL, retry_job_id = NULL
+		WHERE id = $1 AND retried_at IS NOT NULL AND retry_job_id = 0`
+
+	_, err := r.db.Exec(ctx, query, id)
+	return err
+}
+
 // ListUnnotified returns dead letter jobs where users haven't been notified yet.
 func (r *DeadLetterJobRepository) ListUnnotified(ctx context.Context, limit int) ([]*domain.DeadLetterJob, error) {
 	query := `
