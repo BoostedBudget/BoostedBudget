@@ -79,7 +79,17 @@ type SubscriptionPaddleTransactionRepository interface {
 // Issue #896: Disconnects all Plaid items on subscription cancellation. Pause is not a supported
 // product feature (#933); subscription.paused is treated as cancellation and uses this same path.
 type PlaidItemCleanupForWebhook interface {
-	DisconnectAllUserItems(ctx context.Context, userID string) error
+	// DisconnectAllUserItemsIfEligible disconnects every one of the user's Plaid items, invoking
+	// recheck immediately before EVERY remaining item; the first (false, nil) stops the loop and
+	// reports services.ErrCleanupAborted. See
+	// services.PlaidItemCleanupService.DisconnectAllUserItemsIfEligible for the full contract.
+	//
+	// THERE IS DELIBERATELY NO nil-RECHECK COUNTERPART (Issue #1500). This interface used to declare
+	// DisconnectAllUserItems and processSubscriptionCanceled was one of its last two callers
+	// anywhere; both the declaration and the underlying service method are gone rather than merely
+	// unused, because the failure mode being closed is silence — while a recheck-free entry point
+	// exists, a future caller gets no per-item recheck by default and nothing complains.
+	DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error
 }
 
 // HouseholdOverCapacityRepository defines the single, non-transactional household
@@ -965,7 +975,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// so this can be safely retried (Release makes it immediately reclaimable) rather than
 	// orphaning a still-connected, still-billing Plaid item with no automatic retry.
 	//
-	// Issue #1413 H1: DisconnectAllUserItems can return services.ErrSideEffectClaimBusy when
+	// Issue #1413 H1: the disconnect can return services.ErrSideEffectClaimBusy when
 	// another flow (the past-due grace-cancel cron, the Plaid-disconnect window pass, or another
 	// cancellation webhook delivery) currently holds the OPERATION-keyed
 	// ActionPlaidDisconnectUser claim for this user. Logged distinctly at Info — this is expected
@@ -973,8 +983,45 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// cron jobs), so it must still release this flow claim and return an ERROR so River retries
 	// the whole webhook, exactly like the ClaimHeldByOther handling above for the flow claim
 	// itself.
+	//
+	// Issue #1500: stillEligible is the PER-ITEM recheck, and passing it is the point. This call site
+	// used the nil-recheck entry point until now, so the comp re-verification directly above covered
+	// the whole loop rather than each item in it — and the loop is one Plaid /item/remove per linked
+	// item, so a comp granted after the first item was removed still cost the user every remaining
+	// bank connection.
+	//
+	// IT RE-ASKS THIS FLOW'S OWN PREDICATE — the comp/entitlement question `reVerified.
+	// HasActiveManualOverride()` answers immediately above — NOT the past-due question the dunning
+	// flows re-ask. Nothing in this flow selects on past_due (it CLEARS past_due_started_at
+	// unconditionally, further up), so re-asking that here would be inventing an authorisation rule
+	// rather than re-asking the one this call was authorised under. A read error is fail-closed:
+	// cleanupItems stops the loop and surfaces the error rather than continuing.
 	if w.plaidCleanupSvc != nil {
-		if err := w.plaidCleanupSvc.DisconnectAllUserItems(ctx, userID); err != nil {
+		stillEligible := func(rctx context.Context) (bool, error) {
+			fresh, readErr := w.profileRepo.GetUserByID(rctx, userID)
+			if readErr != nil {
+				return false, fmt.Errorf("failed to re-read user %s during Plaid disconnect: %w", userID, readErr)
+			}
+			return !fresh.HasActiveManualOverride(), nil
+		}
+		if err := w.plaidCleanupSvc.DisconnectAllUserItemsIfEligible(ctx, userID, stillEligible); err != nil {
+			// A comp-triggered abort is not a Plaid failure and must not be reported as one.
+			// services.ErrCleanupAborted has TWO causes (see its doc comment) demanding opposite
+			// handling, so the predicate is asked once more to say which: a comp was granted mid-loop
+			// (a legitimate stop — release the claim and return nil, WITHOUT starting the retention
+			// clock below, exactly as the pre-loop comp branch above returns nil without it) versus a
+			// new linked item having appeared mid-pass (genuinely incomplete work — falls through to
+			// the error path, so River retries the whole webhook). An error from the recheck itself
+			// falls through too, which is the fail-closed direction. Same shape as
+			// PastDueService.processGraceExpiry and DeletionService.ExecuteDeletion.
+			if errors.Is(err, services.ErrCleanupAborted) {
+				if eligible, checkErr := stillEligible(ctx); checkErr == nil && !eligible {
+					w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, "comp granted mid Plaid disconnect — remaining items left connected")
+					w.logger.Info("subscription-cancelled cleanup stopped partway through the Plaid disconnect — a comp was granted; the remaining items stay connected and no retention clock is started",
+						"user_id", userID)
+					return nil
+				}
+			}
 			if errors.Is(err, services.ErrSideEffectClaimBusy) {
 				w.logger.Info("subscription-cancelled Plaid disconnect deferred — side-effect claim held by another flow",
 					"user_id", userID)

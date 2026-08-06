@@ -783,7 +783,7 @@ func TestPlaidCleanup_ItemAlreadyGone_DisconnectPath(t *testing.T) {
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.DisconnectAllUserItems(ctx, userID)
+	err := service.DisconnectAllUserItemsIfEligible(ctx, userID, alwaysEligible)
 
 	assert.NoError(t, err)
 }
@@ -813,7 +813,7 @@ func TestPlaidCleanup_DisconnectAllUserItems_GenuineFailure_AggregatesError(t *t
 
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
-	err := service.DisconnectAllUserItems(ctx, userID)
+	err := service.DisconnectAllUserItemsIfEligible(ctx, userID, alwaysEligible)
 
 	require.Error(t, err, "a genuine Plaid failure must now be surfaced, not silently swallowed")
 	assert.ErrorIs(t, err, plaidErr)
@@ -950,34 +950,49 @@ func contains(ss []string, s string) bool {
 // re-invoking a caller-supplied recheck callback immediately before EACH item, aborting the
 // remainder the first time it reports ineligible.
 
-// TestPlaidCleanup_DisconnectIfEligible_NilRecheck_BehavesLikeDisconnectAllUserItems proves a nil
-// recheck reproduces DisconnectAllUserItems' existing behavior exactly — every other caller
-// (deletion, past-due dunning, the subscription-cancellation webhook) is unaffected by this
-// method's existence.
-func TestPlaidCleanup_DisconnectIfEligible_NilRecheck_BehavesLikeDisconnectAllUserItems(t *testing.T) {
+// TestPlaidCleanup_DisconnectIfEligible_NilRecheck_IsRefused inverts what this test used to assert.
+// It read "a nil recheck reproduces DisconnectAllUserItems' existing behavior exactly" — which was
+// true, and was the problem: it pinned "no per-item recheck" as a supported, silent default. Issue
+// #1500 deleted the nil-recheck twin and made a nil here a REFUSAL, so the assertion that used to
+// prove the old behaviour now proves it is gone.
+//
+// Nothing may be touched before the refusal: no repository read, no Plaid call. Both mocks are left
+// entirely unprogrammed, so any contact with either would surface as a testify panic rather than a
+// quiet pass.
+func TestPlaidCleanup_DisconnectIfEligible_NilRecheck_IsRefused(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-nil-recheck"
 
 	mockRepo := new(MockLinkedItemRepoForCleanup)
 	mockPlaid := new(MockPlaidServiceForCleanup)
 
-	items := []domain.LinkedItem{
-		{ID: "item-1", UserID: userID, AccessToken: "tok-1"},
-		{ID: "item-2", UserID: userID, AccessToken: "tok-2"},
-	}
-	mockRepo.On("GetActiveItemsByUserID", ctx, userID).Return(items, nil)
-	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
-	mockPlaid.On("RemoveItem", ctx, "tok-2").Return(nil)
-	mockRepo.On("MarkItemsDisconnected", ctx, mock.MatchedBy(func(ids []string) bool {
-		return len(ids) == 2 && contains(ids, "item-1") && contains(ids, "item-2")
-	})).Return(nil)
-
 	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
 
 	err := service.DisconnectAllUserItemsIfEligible(ctx, userID, nil)
 
-	require.NoError(t, err)
-	mockPlaid.AssertNumberOfCalls(t, "RemoveItem", 2)
+	require.Error(t, err, "a nil recheck is the defect this method refuses, not a configuration meaning 'no recheck'")
+	assert.Contains(t, err.Error(), "eligibility recheck is required")
+	mockRepo.AssertNotCalled(t, "GetActiveItemsByUserID", mock.Anything, mock.Anything)
+	mockPlaid.AssertNotCalled(t, "RemoveItem", mock.Anything, mock.Anything)
+}
+
+// TestPlaidCleanup_RemoveAllUserItems_NilRecheck_IsRefused is the sibling refusal on the other
+// public entry point. Without it, "nil is refused" is proven for one of the two methods that share
+// cleanupItems and merely assumed for the other.
+func TestPlaidCleanup_RemoveAllUserItems_NilRecheck_IsRefused(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, "user-nil-recheck-remove-all", nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "eligibility recheck is required")
+	mockRepo.AssertNotCalled(t, "GetByUserID", mock.Anything, mock.Anything)
+	mockPlaid.AssertNotCalled(t, "RemoveItem", mock.Anything, mock.Anything)
 }
 
 // TestPlaidCleanup_DisconnectIfEligible_BecomesIneligibleMidLoop_RemainingItemsSpared is the round-7

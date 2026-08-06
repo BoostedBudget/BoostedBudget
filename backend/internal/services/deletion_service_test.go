@@ -742,22 +742,16 @@ func (m *MockPlaidItemCleanupService) RemoveItem(ctx context.Context, linkedItem
 	return args.Error(0)
 }
 
-// Issue #679, #680: DisconnectAllUserItems for trial expiration
-func (m *MockPlaidItemCleanupService) DisconnectAllUserItems(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
-}
-
-// DisconnectAllUserItemsIfEligible (Issue #1413 round-7) is never called through this mock —
-// DeletionService only calls RemoveAllUserItems/DisconnectAllUserItems on its plaidCleanupSvc
-// field; the per-item recheck variant is used solely by the retention-cleanup Plaid-disconnect
-// repair pass. Bare no-op stubbed only to satisfy the widened PlaidItemCleanupService interface.
+// DisconnectAllUserItemsIfEligible is never called through this mock — DeletionService only calls
+// RemoveAllUserItems on its plaidCleanupSvc field. Bare no-op stubbed only to satisfy the
+// PlaidItemCleanupService interface. (Its nil-recheck twin, DisconnectAllUserItems, was deleted
+// outright by Issue #1500 and no longer needs stubbing here.)
 func (m *MockPlaidItemCleanupService) DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
 	return nil
 }
 
 // SetWorkClaimsRepo (Issue #1413 H1) is never called through this mock — DeletionService only
-// calls RemoveAllUserItems/DisconnectAllUserItems on its plaidCleanupSvc field; the claims repo
+// calls RemoveAllUserItems on its plaidCleanupSvc field; the claims repo
 // is wired directly onto the concrete PlaidItemCleanupService in main.go, not via DeletionService.
 // Bare no-op (no m.Called) to avoid an unregistered-expectation panic; stubbed only to satisfy
 // the widened PlaidItemCleanupService interface.

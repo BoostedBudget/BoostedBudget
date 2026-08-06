@@ -59,17 +59,10 @@ func (m *MockPlaidCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 	return args.Error(0)
 }
 
-// Issue #679, #680: DisconnectAllUserItems for trial expiration
-func (m *MockPlaidCleanupService) DisconnectAllUserItems(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
-}
-
-// DisconnectAllUserItemsIfEligible (Issue #1413 round-7) is never called through this mock —
-// item-cleanup job tests exercise Work() paths that only use RemoveAllUserItems/
-// DisconnectAllUserItems; the per-item recheck variant is used solely by the retention-cleanup
-// Plaid-disconnect repair pass. Bare no-op stubbed only to satisfy the widened
-// services.PlaidItemCleanupService interface.
+// DisconnectAllUserItemsIfEligible is never called through this mock — item-cleanup job tests
+// exercise Work() paths that only use RemoveItem/RemoveAllUserItems. Bare no-op stubbed only to
+// satisfy the services.PlaidItemCleanupService interface. (Its nil-recheck twin,
+// DisconnectAllUserItems, was deleted outright by Issue #1500 — see that interface's doc comment.)
 func (m *MockPlaidCleanupService) DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
 	return nil
 }

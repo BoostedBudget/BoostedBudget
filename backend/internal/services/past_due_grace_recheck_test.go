@@ -37,15 +37,14 @@ type fakePerItemPlaidCleanup struct {
 	itemIDs []string
 	// removed records, in order, the items actually sent to Plaid /item/remove.
 	removed []string
-	// ifEligibleCalls / plainCalls record WHICH entry point production used, so a test can pin that
-	// the recheck-carrying variant is the one being called at all.
+	// ifEligibleCalls records that production called the disconnect at all. There is no longer a
+	// nil-recheck entry point to count alongside it: Issue #1500 deleted DisconnectAllUserItems
+	// outright, so "disconnect without a per-item recheck" is not something a caller can express.
 	ifEligibleCalls int
-	plainCalls      int
-}
-
-func (f *fakePerItemPlaidCleanup) DisconnectAllUserItems(ctx context.Context, userID string) error {
-	f.plainCalls++
-	return f.loop(ctx, nil)
+	// onRemoved, if set, runs immediately after each item is "sent to Plaid". It is how a test
+	// makes the world change PARTWAY THROUGH the loop — the only moment at which the difference
+	// between a per-call and a per-item recheck is observable.
+	onRemoved func(itemID string)
 }
 
 func (f *fakePerItemPlaidCleanup) DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
@@ -54,19 +53,25 @@ func (f *fakePerItemPlaidCleanup) DisconnectAllUserItemsIfEligible(ctx context.C
 }
 
 func (f *fakePerItemPlaidCleanup) loop(ctx context.Context, recheck func(ctx context.Context) (bool, error)) error {
+	if recheck == nil {
+		// Mirrors the real service, which refuses a nil recheck before touching the repository
+		// (Issue #1500) rather than treating it as "no recheck wanted".
+		return fmt.Errorf("DisconnectAllUserItemsIfEligible: an eligibility recheck is required")
+	}
 	attempted := 0
 	for _, id := range f.itemIDs {
-		if recheck != nil {
-			eligible, err := recheck(ctx)
-			if err != nil {
-				return fmt.Errorf("eligibility recheck failed before item %s: %w", id, err)
-			}
-			if !eligible {
-				break
-			}
+		eligible, err := recheck(ctx)
+		if err != nil {
+			return fmt.Errorf("eligibility recheck failed before item %s: %w", id, err)
+		}
+		if !eligible {
+			break
 		}
 		f.removed = append(f.removed, id)
 		attempted++
+		if f.onRemoved != nil {
+			f.onRemoved(id)
+		}
 	}
 	if attempted < len(f.itemIDs) {
 		return fmt.Errorf("%w for the fake's user (%d of %d item(s) not attempted)",
@@ -126,8 +131,6 @@ func TestPastDueService_GraceExpiry_RecoveryMidLoop_StopsRemainingRemovals(t *te
 		"only the item removed before the recovery may be gone; the remaining two must stay connected")
 	assert.Equal(t, 1, plaid.ifEligibleCalls,
 		"the grace-cancel flow must use the recheck-carrying entry point")
-	assert.Zero(t, plaid.plainCalls,
-		"the nil-recheck entry point must not be used by a flow whose authorisation can be revoked mid-loop")
 	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "CancelIfPastDueOccurrenceWithRetention",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)

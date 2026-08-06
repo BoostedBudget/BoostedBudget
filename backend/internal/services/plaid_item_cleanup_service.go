@@ -387,36 +387,26 @@ type PlaidItemCleanupService interface {
 	// recoverable exposure for persistent state that can be orphaned.
 	RemoveItem(ctx context.Context, linkedItemID string, recheck func(ctx context.Context) (bool, error)) error
 
-	// DisconnectAllUserItems calls Plaid /item/remove for all items, then marks
-	// them as 'disconnected' in the database. This preserves transaction history
-	// while stopping Plaid billing.
+	// DisconnectAllUserItemsIfEligible calls Plaid /item/remove for all of the user's ACTIVE items,
+	// then marks them as 'disconnected' in the database — preserving transaction history while
+	// stopping Plaid billing (Issue #679, #680) — invoking recheck immediately before EACH item's
+	// removal rather than once for the whole per-user call (Issue #1413 round-7). A disconnect makes
+	// one Plaid call per linked item; a caller that only re-verifies eligibility once, before the
+	// whole call, leaves every item after the first exposed to becoming stale mid-loop (e.g. the user
+	// resubscribes, pays their invoice, or is comped between item 1 and item 2).
 	//
-	// Issue #679, #680: Used when trial/subscription expires to:
-	// 1. Stop Plaid billing by calling /item/remove
-	// 2. Preserve accounts and transactions by NOT deleting from database
-	// 3. Mark items as 'disconnected' status
+	// recheck IS REQUIRED, NOT OPTIONAL. A nil is REFUSED with an error before the repository is
+	// touched, exactly as RemoveAllUserItems and RemoveItem refuse theirs. Until Issue #1500 this
+	// method had a nil-recheck twin, DisconnectAllUserItems, and two of the five entry points into
+	// this loop still used it; the twin is DELETED rather than deprecated, because the failure mode
+	// being closed is SILENCE — while "no per-item recheck" is expressible, a future caller gets it
+	// by DEFAULT and nothing complains. Every caller of this loop (deletion via RemoveAllUserItems,
+	// both past-due windows, the subscription-cancellation webhook, the retention-cleanup
+	// Plaid-disconnect repair pass) now re-asks its own selection predicate per item; a caller with
+	// genuinely nothing to re-ask should not be disconnecting a user's banks.
 	//
-	// Returns error only if the initial repository query fails.
-	// Plaid API errors are logged but processing continues.
-	// Issue #1413 H1 residue (Codex review, PR #1443 follow-up): also returns ErrCleanupAborted
-	// (errors.Is-checkable, not a Plaid error) if a NEW linked item was created for this user
-	// after this call's initial fetch — see ErrCleanupAborted's doc comment.
-	DisconnectAllUserItems(ctx context.Context, userID string) error
-
-	// DisconnectAllUserItemsIfEligible behaves exactly like DisconnectAllUserItems, except recheck
-	// is invoked immediately before EACH item's removal, not once for the whole per-user call —
-	// Issue #1413 round-7. DisconnectAllUserItems can make one Plaid call per linked item; a
-	// caller that only re-verifies eligibility once, before the whole call, leaves every item
-	// after the first exposed to becoming stale mid-loop (e.g. the user resubscribes between item
-	// 1 and item 2). The retention-cleanup Plaid-disconnect repair pass
-	// (RetentionCleanupCheckWorker.repairPlaidDisconnects) is this method's motivating caller: its
-	// grace window makes a mid-loop resubscribe unlikely, but the recheck is cheap and bounds the
-	// residual exposure to at most one item rather than all of them.
-	//
-	// recheck may be nil, in which case this behaves exactly like DisconnectAllUserItems (no
-	// per-item check) — every other caller (deletion, past-due dunning, the
-	// subscription-cancellation webhook, RemoveAllUserItems) is unaffected by this method's
-	// existence.
+	// Returns a non-nil error if the initial repository query fails, or if one or more items failed
+	// to be removed from Plaid (each underlying error wrapped via errors.Join).
 	//
 	// The first time recheck reports ineligible (false, nil), the loop stops immediately: no
 	// further items are attempted, and this is a legitimate partial completion — but, as of Issue
@@ -435,12 +425,12 @@ type PlaidItemCleanupService interface {
 	// after the initial fetch (e.g. by LinkAccounts, which does not participate in this call's
 	// side-effect claim). See ErrCleanupAborted's doc comment and
 	// plaidItemCleanupService.verifyNoNewLinkedItemAppeared for the full contract. This applies to
-	// all three methods on this interface, not just this one — RemoveAllUserItems and
-	// DisconnectAllUserItems share the same cleanupItems implementation.
+	// RemoveAllUserItems too, not just this method — the two share the same cleanupItems
+	// implementation.
 	DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error
 
 	// SetWorkClaimsRepo wires the durable work-claims mechanism RemoveAllUserItems and
-	// DisconnectAllUserItems require for EXCLUSIVITY on repository.ActionPlaidDisconnectUser
+	// DisconnectAllUserItemsIfEligible require for EXCLUSIVITY on repository.ActionPlaidDisconnectUser
 	// before any Plaid /item/remove call (Issue #1413 Codex round-3 finding H1). Mirrors
 	// DeletionService/PastDueService/SubscriptionWebhookWorker's SetWorkClaimsRepo — like theirs,
 	// this is NOT an optional capability: a nil claims repo makes both methods fail loudly rather
@@ -450,7 +440,7 @@ type PlaidItemCleanupService interface {
 	// past-due dunning (both windows), the subscription-cancellation webhook, and trial
 	// expiration all share ONE PlaidItemCleanupService instance in production (see main.go), so
 	// wiring it here closes the H1 race for all of them at once rather than requiring each
-	// caller to duplicate the claim/release ceremony around its own DisconnectAllUserItems call.
+	// caller to duplicate the claim/release ceremony around its own disconnect call.
 	SetWorkClaimsRepo(repo repository.WorkClaimsRepository)
 }
 
@@ -818,18 +808,20 @@ func IsItemNotFoundError(err error) bool {
 	return errors.Is(err, repository.ErrLinkedItemNotFound)
 }
 
-// DisconnectAllUserItems implements PlaidItemCleanupService.DisconnectAllUserItems
-// Issue #679, #680: Trial expiration - disconnect items while preserving history
+// DisconnectAllUserItemsIfEligible implements PlaidItemCleanupService.DisconnectAllUserItemsIfEligible
+// — see the interface doc comment for the full contract (Issue #1413 round-7, Issue #1500).
+//
+// Issue #679, #680: trial/subscription expiration — disconnect items while preserving history.
 //
 // Issue #1413 round-4 Critical finding C2: the item list is read INSIDE cleanupItems's claimed
-// closure — see that function's doc comment.
-func (s *plaidItemCleanupService) DisconnectAllUserItems(ctx context.Context, userID string) error {
-	return s.cleanupItems(ctx, userID, s.linkedItemRepo.GetActiveItemsByUserID, nil)
-}
-
-// DisconnectAllUserItemsIfEligible implements PlaidItemCleanupService.DisconnectAllUserItemsIfEligible
-// — see the interface doc comment for the full contract (Issue #1413 round-7).
+// closure — see that function's doc comment for why reading it here, before the claim, would reopen
+// the race a concurrent LinkAccounts call could exploit.
 func (s *plaidItemCleanupService) DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
+	if recheck == nil {
+		// Fail closed, exactly as RemoveAllUserItems and RemoveItem do: a nil here is the defect, not
+		// a configuration. See the interface method's doc comment (Issue #1500).
+		return fmt.Errorf("DisconnectAllUserItemsIfEligible: an eligibility recheck is required before disconnecting user %s's Plaid items", userID)
+	}
 	return s.cleanupItems(ctx, userID, s.linkedItemRepo.GetActiveItemsByUserID, recheck)
 }
 
@@ -837,9 +829,9 @@ func (s *plaidItemCleanupService) DisconnectAllUserItemsIfEligible(ctx context.C
 // the two ways cleanupItems's callers select which items are in scope.
 type fetchLinkedItemsFn func(ctx context.Context, userID string) ([]domain.LinkedItem, error)
 
-// cleanupItems is the shared per-item Plaid-removal loop used by RemoveAllUserItems,
-// DisconnectAllUserItems, and DisconnectAllUserItemsIfEligible (Issue #1413 H1/H2/round-4 C2/
-// round-7):
+// cleanupItems is the shared per-item Plaid-removal loop used by RemoveAllUserItems and
+// DisconnectAllUserItemsIfEligible — its only two callers as of Issue #1500 (Issue #1413 H1/H2/
+// round-4 C2/round-7):
 //
 //   - Claims repository.ActionPlaidDisconnectUser (the OPERATION-keyed side-effect claim)
 //     BEFORE any external call, so at most one flow is ever mid-disconnect for this user at a
@@ -855,27 +847,30 @@ type fetchLinkedItemsFn func(ctx context.Context, userID string) ([]domain.Linke
 //   - Skips items already marked 'disconnected' by a PRIOR attempt (durable per-item state, H2)
 //     without calling Plaid again for them — a retry after a partial failure only attempts the
 //     items still outstanding.
-//   - Issue #1413 round-7: if recheck is non-nil, it is invoked immediately before EVERY
-//     remaining item (including the first) — not just once for the whole call. The first time it
-//     reports ineligible (false, nil), the loop stops without attempting any further items; this
-//     is a legitimate partial completion, not a failure — but (round-14 H1) it is also not silent
-//     success: the function returns ErrCleanupAborted (see that sentinel's doc comment) rather
-//     than nil, so a caller cannot mistake "stopped early, work remains" for "nothing left to do".
-//     If recheck itself errors, the loop also stops (fail-closed), and that error IS surfaced to
-//     the caller — via the same errors.Join aggregation as a genuine per-item failure, taking
-//     priority over ErrCleanupAborted (see the return logic at the bottom of this function).
-//     recheck is nil for RemoveAllUserItems/DisconnectAllUserItems, preserving their exact
-//     pre-round-7 loop behavior — but (see the next bullet) this does NOT mean those two never
-//     return ErrCleanupAborted at all; they can, for the separate reason below.
+//   - Issue #1413 round-7: recheck is invoked immediately before EVERY remaining item (including
+//     the first) — not just once for the whole call. The first time it reports ineligible
+//     (false, nil), the loop stops without attempting any further items; this is a legitimate
+//     partial completion, not a failure — but (round-14 H1) it is also not silent success: the
+//     function returns ErrCleanupAborted (see that sentinel's doc comment) rather than nil, so a
+//     caller cannot mistake "stopped early, work remains" for "nothing left to do". If recheck
+//     itself errors, the loop also stops (fail-closed), and that error IS surfaced to the caller —
+//     via the same errors.Join aggregation as a genuine per-item failure, taking priority over
+//     ErrCleanupAborted (see the return logic at the bottom of this function).
+//   - Issue #1500: recheck is REQUIRED and both public entry points refuse a nil before reaching
+//     here. The guard below is the third, last-resort copy of that refusal, kept because this
+//     function's whole contract above is written on the assumption that a recheck exists — a nil
+//     reaching it would silently restore the exact "one authorisation read covers N Plaid calls"
+//     behaviour #1500 deleted. It is deliberately unreachable from the two callers, not dead: the
+//     cost of it being wrong is a defect no test would notice.
 //   - Issue #1413 H1 residue (Codex review, PR #1443 follow-up): AFTER the loop (or the "no items"
 //     branch) finishes with no genuine per-item failure and no recheck-triggered abort, this
 //     function re-fetches ONE more time and checks for any item whose ID was not part of the
 //     ORIGINAL fetch above — i.e. one created (by a path outside this claim, such as LinkAccounts)
 //     after cleanupItems started. If one is found, ErrCleanupAborted is returned here too, even
-//     though there was no recheck to trigger the round-7/round-14 abort path — so, unlike the
-//     stale pre-this-fix assumption, RemoveAllUserItems and DisconnectAllUserItems (recheck == nil)
-//     CAN return ErrCleanupAborted, via this check specifically. See ErrCleanupAborted's doc
-//     comment and verifyNoNewLinkedItemAppeared (below) for the full contract.
+//     though the recheck never reported ineligible — so ErrCleanupAborted has TWO causes and a
+//     caller that wants to tell them apart must re-ask its own predicate (every caller does; see
+//     ExecuteDeletion's branch for the canonical shape). See ErrCleanupAborted's doc comment and
+//     verifyNoNewLinkedItemAppeared (below) for the full contract.
 //   - Issue #1413 round-14 (Codex review): a residual, IRREDUCIBLE TOCTOU remains between a
 //     per-item recheck reporting eligible and the actual Plaid /item/remove call two lines later
 //     — a comp could be granted in that exact window and this item would still be disconnected.
@@ -896,6 +891,11 @@ type fetchLinkedItemsFn func(ctx context.Context, userID string) ([]domain.Linke
 func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID string, fetch fetchLinkedItemsFn, recheck func(ctx context.Context) (bool, error)) error {
 	if s.claimsRepo == nil {
 		return fmt.Errorf("plaidItemCleanupService: work claims repository not configured")
+	}
+	// Issue #1500: see the doc comment's "recheck is REQUIRED" bullet for why this third copy of the
+	// refusal exists even though both entry points already made it.
+	if recheck == nil {
+		return fmt.Errorf("plaidItemCleanupService.cleanupItems: an eligibility recheck is required before removing user %s's Plaid items", userID)
 	}
 
 	return claimSideEffectAndRun(ctx, s.claimsRepo, repository.ActionPlaidDisconnectUser, userID, plaidDisconnectSideEffectLease, func() error {
@@ -943,29 +943,27 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 				skippedCount++
 				continue
 			}
-			if recheck != nil {
-				eligible, recheckErr := recheck(ctx)
-				if recheckErr != nil {
-					s.logger.Warn("aborting Plaid item cleanup — eligibility recheck failed",
-						"user_id", userID, "item_id", item.ID, "error", recheckErr)
-					itemErrs = append(itemErrs, fmt.Errorf("eligibility recheck failed before item %s: %w", item.ID, recheckErr))
-					break itemLoop
-				}
-				if !eligible {
-					s.logger.Info("aborting remaining Plaid item cleanup — no longer eligible",
-						"user_id", userID, "item_id", item.ID)
-					break itemLoop
-				}
-				// Issue #1413 round-14 (Codex review): irreducible TOCTOU — recheck just reported
-				// eligible, but the actual Plaid call is still two lines away. A comp granted in
-				// this exact window is not caught: this item is disconnected anyway. Accepted
-				// deliberately (see cleanupItems's doc comment) because a Plaid disconnect is
-				// RECOVERABLE (the user relinks), unlike the irreversible operations (hard
-				// deletion) this branch's other TOCTOU-adjacent guards exist to protect. No
-				// tightening is attempted here — closing a gap that spans an external API call
-				// would require either blocking Plaid on a DB lock (not possible) or re-reading
-				// AFTER the call too (which only moves the gap, it does not close it).
+			eligible, recheckErr := recheck(ctx)
+			if recheckErr != nil {
+				s.logger.Warn("aborting Plaid item cleanup — eligibility recheck failed",
+					"user_id", userID, "item_id", item.ID, "error", recheckErr)
+				itemErrs = append(itemErrs, fmt.Errorf("eligibility recheck failed before item %s: %w", item.ID, recheckErr))
+				break itemLoop
 			}
+			if !eligible {
+				s.logger.Info("aborting remaining Plaid item cleanup — no longer eligible",
+					"user_id", userID, "item_id", item.ID)
+				break itemLoop
+			}
+			// Issue #1413 round-14 (Codex review): irreducible TOCTOU — recheck just reported
+			// eligible, but the actual Plaid call is still two lines away. A comp granted in
+			// this exact window is not caught: this item is disconnected anyway. Accepted
+			// deliberately (see cleanupItems's doc comment) because a Plaid disconnect is
+			// RECOVERABLE (the user relinks), unlike the irreversible operations (hard
+			// deletion) this branch's other TOCTOU-adjacent guards exist to protect. No
+			// tightening is attempted here — closing a gap that spans an external API call
+			// would require either blocking Plaid on a DB lock (not possible) or re-reading
+			// AFTER the call too (which only moves the gap, it does not close it).
 			if err := s.removeItemInternal(ctx, &item); err != nil {
 				if isPlaidItemAlreadyGone(err) {
 					s.logger.Info("Plaid item already gone, treating as success",

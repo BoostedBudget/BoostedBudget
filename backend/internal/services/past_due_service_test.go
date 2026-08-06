@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -64,20 +65,20 @@ type mockPastDuePlaidCleanup struct {
 	mock.Mock
 }
 
-func (m *mockPastDuePlaidCleanup) DisconnectAllUserItems(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
-}
-
-// DisconnectAllUserItemsIfEligible is the recheck-carrying variant processGraceExpiry now uses
-// (Codex pass-5 Medium 1). It deliberately records itself under the "DisconnectAllUserItems"
+// DisconnectAllUserItemsIfEligible is the only entry point PastDuePlaidCleanup has left: its
+// nil-recheck twin, DisconnectAllUserItems, was deleted outright by Issue #1500 once BOTH callers
+// in this service (processGraceExpiry, then processPlaidDisconnectWindow) had been converted. It
+// deliberately records itself under the "DisconnectAllUserItems"
 // expectation name via MethodCalled: every pre-existing expectation and assertion in this file
 // asserts "the flow does / does not disconnect this user's Plaid items", which is equally true of
 // both entry points, and re-keying a dozen call sites would say nothing new. What this mock cannot
 // show is the per-item behaviour the recheck exists for — a mock that treats a disconnect as one
 // atomic call cannot — so THAT is asserted against a loop-simulating fake in
 // past_due_grace_recheck_test.go instead.
-func (m *mockPastDuePlaidCleanup) DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, _ func(ctx context.Context) (bool, error)) error {
+func (m *mockPastDuePlaidCleanup) DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
+	if recheck == nil {
+		return fmt.Errorf("DisconnectAllUserItemsIfEligible: an eligibility recheck is required")
+	}
 	args := m.MethodCalled("DisconnectAllUserItems", ctx, userID)
 	return args.Error(0)
 }

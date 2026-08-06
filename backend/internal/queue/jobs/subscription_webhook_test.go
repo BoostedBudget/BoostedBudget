@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -29,8 +30,21 @@ type mockPlaidItemCleanupService struct {
 	mock.Mock
 }
 
-func (m *mockPlaidItemCleanupService) DisconnectAllUserItems(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
+// DisconnectAllUserItemsIfEligible is the only entry point PlaidItemCleanupForWebhook has as of
+// Issue #1500. It deliberately records itself under the "DisconnectAllUserItems" expectation name
+// via MethodCalled: every pre-existing expectation and assertion in this file asserts "the
+// cancellation flow does / does not disconnect this user's Plaid items", which is equally true of
+// the recheck-carrying entry point, and re-keying two dozen call sites would say nothing new.
+//
+// It does NOT invoke recheck — a mock that treats a disconnect as one atomic call cannot show the
+// per-item behaviour the recheck exists for, so THAT is asserted against a loop-simulating fake in
+// subscription_webhook_cancel_recheck_test.go instead. What it does enforce is that a recheck was
+// supplied at all, matching the real service's own nil refusal.
+func (m *mockPlaidItemCleanupService) DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
+	if recheck == nil {
+		return fmt.Errorf("DisconnectAllUserItemsIfEligible: an eligibility recheck is required")
+	}
+	args := m.MethodCalled("DisconnectAllUserItems", ctx, userID)
 	return args.Error(0)
 }
 
