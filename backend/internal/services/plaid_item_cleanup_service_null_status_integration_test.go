@@ -100,7 +100,7 @@ func TestPlaidCleanupService_Integration_NullStatusItem_ActuallyDisconnectedAndM
 	svc := NewPlaidItemCleanupService(linkedItemRepo, fakePlaid)
 	svc.SetWorkClaimsRepo(claimsRepo)
 
-	err = svc.DisconnectAllUserItems(ctx, user.ID)
+	err = svc.DisconnectAllUserItemsIfEligible(ctx, user.ID, alwaysEligible)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, fakePlaid.callCount(),

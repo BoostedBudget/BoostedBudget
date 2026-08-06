@@ -1007,7 +1007,7 @@ func main() {
 					linkedItemRepo,
 					plaidService,
 				)
-				// Issue #1413 H1: required for RemoveAllUserItems/DisconnectAllUserItems to gain
+				// Issue #1413 H1: required for RemoveAllUserItems/DisconnectAllUserItemsIfEligible to gain
 				// EXCLUSIVITY on ActionPlaidDisconnectUser before any Plaid /item/remove call —
 				// closes the race where deletion, past-due dunning, the subscription-cancellation
 				// webhook, and trial expiration (all sharing this one service instance) could each
