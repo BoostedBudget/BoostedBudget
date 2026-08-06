@@ -11,10 +11,18 @@ import (
 // Config holds application configuration
 type Config struct {
 	// Server
-	Port               string
-	Environment        string
-	Version            string
-	CORSAllowedOrigins string
+	Port        string
+	Environment string
+	// EnvironmentExplicitlySet reports whether ENVIRONMENT was actually present in the
+	// process environment, as opposed to Environment holding the "development" default.
+	//
+	// Issue #1498: getEnv maps an unset AND an empty ENVIRONMENT to "development", so
+	// Environment alone cannot distinguish "this is a dev box" from "somebody deployed
+	// production and forgot to set ENVIRONMENT". Any security decision that must fail safe
+	// on a missing variable has to consult this flag — see AdminAllowlistEnvironment.
+	EnvironmentExplicitlySet bool
+	Version                  string
+	CORSAllowedOrigins       string
 
 	// HTTP server timeouts and limits
 	ReadTimeout  time.Duration
@@ -105,10 +113,11 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		// Server defaults
-		Port:               getEnv("PORT", "8080"),
-		Environment:        getEnv("ENVIRONMENT", "development"),
-		Version:            getEnv("VERSION", "0.1.0"),
-		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),
+		Port:                     getEnv("PORT", "8080"),
+		Environment:              getEnv("ENVIRONMENT", "development"),
+		EnvironmentExplicitlySet: os.Getenv("ENVIRONMENT") != "",
+		Version:                  getEnv("VERSION", "0.1.0"),
+		CORSAllowedOrigins:       getEnv("CORS_ALLOWED_ORIGINS", "*"),
 
 		// HTTP server timeouts and limits
 		ReadTimeout:  getEnvAsDuration("SERVER_READ_TIMEOUT", 30*time.Second),
@@ -259,6 +268,32 @@ func (c *Config) validate() error {
 }
 
 // getEnv retrieves an environment variable or returns a default value
+// AdminAllowlistEnvironment returns the environment name that the hardcoded admin
+// allowlist (config/admin_emails.yaml) must be resolved against — see
+// domain.AdminEmailConfig.EffectiveAdminEmails.
+//
+// Issue #1498: it returns the configured Environment ONLY when ENVIRONMENT was explicitly
+// set, and "" otherwise. That empty string is not a recognised non-production name, so the
+// allowlist's non_production_admin_emails entries are excluded.
+//
+// This exists because Environment defaults to "development", which IS a recognised
+// non-production environment. Resolving the allowlist against Environment directly would
+// mean a production deployment that forgot to set ENVIRONMENT silently loaded the CI and QA
+// test accounts as production admins — a role-check-free bypass. Failing safe on a missing
+// variable is the whole point; do not "simplify" this back to cfg.Environment.
+//
+// Every real deployment sets ENVIRONMENT explicitly (backend/fly.toml,
+// backend/fly.staging.toml, docker-compose.yml, docker-compose.qa.yml,
+// .github/workflows/deploy-qa.yml, apps/web/playwright.config.ts), so this costs nothing in
+// practice. A bare `go run ./cmd/server` with no ENVIRONMENT loses the two test admins and
+// keeps the owner accounts, which is the correct direction to fail.
+func (c *Config) AdminAllowlistEnvironment() string {
+	if c == nil || !c.EnvironmentExplicitlySet {
+		return ""
+	}
+	return c.Environment
+}
+
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value

@@ -1524,21 +1524,42 @@ func main() {
 		}
 		// Issue #1498: resolve the two lists against the environment. The hardcoded list
 		// bypasses the role check, so the CI/QA entries in non_production_admin_emails must
-		// not load in production — nor under an unset/unrecognised ENVIRONMENT, which
-		// EffectiveAdminEmails treats as production. Never pass AdminEmails directly.
-		effectiveAdminEmails := adminEmailConfig.EffectiveAdminEmails(cfg.Environment)
+		// not load in production — nor under an unset or unrecognised ENVIRONMENT, both of
+		// which EffectiveAdminEmails treats as production. Never pass AdminEmails directly.
+		//
+		// cfg.AdminAllowlistEnvironment(), NOT cfg.Environment: the latter defaults to
+		// "development" when ENVIRONMENT is unset, and development is a recognised
+		// non-production environment, so using it would load the test admins on a
+		// production deployment that forgot the variable.
+		allowlistEnv := cfg.AdminAllowlistEnvironment()
+		effectiveAdminEmails := adminEmailConfig.EffectiveAdminEmails(allowlistEnv)
 		adminService := services.NewAdminService(cfg.ClerkSecretKey, effectiveAdminEmails)
+
 		// Log the posture, never the addresses: an operator must be able to see from the
-		// startup log which of the two postures is live.
+		// startup log which of the two postures is live, and why.
 		adminEmailMode := "production-safe (non-production admin entries excluded)"
-		if domain.IsNonProductionEnvironment(cfg.Environment) {
+		if domain.IsNonProductionEnvironment(allowlistEnv) {
 			adminEmailMode = "non-production (test admin entries loaded)"
 		}
 		appLogger.Info("Admin service initialized",
 			"environment", cfg.Environment,
+			"environment_explicitly_set", cfg.EnvironmentExplicitlySet,
 			"admin_email_mode", adminEmailMode,
 			"effective_hardcoded_admin_emails", len(effectiveAdminEmails),
 			"non_production_admin_emails_in_file", len(adminEmailConfig.NonProductionAdminEmails))
+		if !cfg.EnvironmentExplicitlySet {
+			appLogger.Warn("ENVIRONMENT is not set; the admin allowlist is resolving as production. "+
+				"Set ENVIRONMENT explicitly (development/qa/staging/production).",
+				"effective_environment", cfg.Environment)
+		}
+		// The admin allowlist is an ACL. If it has been relocated, say so loudly — otherwise
+		// an overridden file silently replaces the reviewed, committed one.
+		if override := os.Getenv("ADMIN_EMAILS_CONFIG"); override != "" {
+			appLogger.Warn("Admin email allowlist loaded from an ADMIN_EMAILS_CONFIG override, "+
+				"not the committed config/admin_emails.yaml",
+				"path", override,
+				"effective_hardcoded_admin_emails", len(effectiveAdminEmails))
+		}
 
 		// Issue #639: Admin user management - needs adminService for admin status checks
 		// Issue #1414: clerkService re-syncs Clerk metadata on tier-override removal;
