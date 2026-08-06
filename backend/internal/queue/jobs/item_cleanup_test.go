@@ -3,7 +3,11 @@ package jobs
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,10 +130,13 @@ func newTestItemCleanupJob(args ItemCleanupArgs) *river.Job[ItemCleanupArgs] {
 // TestItemCleanupWorker_Work_NoLongerEligible_SkipsIrreversibleRemoval is Issue #1486's failing-
 // first test. The job was enqueued (and, for the deferred legs, sat behind a 7-day grace period)
 // while the item was a cleanup candidate; by the time it runs, the user has reconnected. Nothing
-// clears cleanup_scheduled_at on reconnect — the only production callers of ClearCleanupSchedule are
-// both inside ItemCleanupWorker.Work, one after a successful removal and one releasing the stale
-// schedule when the claim declines (grep `\.ClearCleanupSchedule(`) — so the ONLY thing that can
-// stop the irreversible Plaid /item/remove is an eligibility recheck at execution time.
+// clears cleanup_scheduled_at on reconnect — Issue #1486 follow-up part E: there are FOUR
+// production callers of ClearCleanupSchedule, not two, and only two are inside
+// ItemCleanupWorker.Work (see its #1486
+// comment for the enumeration, and TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet
+// below); none of them is a reconnection hook, which is the part that matters here — so the ONLY
+// thing that can stop the irreversible Plaid /item/remove is an eligibility recheck at execution
+// time.
 //
 // Before the fix, Work called RemoveItem unconditionally and this test failed on
 // AssertNotCalled(RemoveItem).
@@ -633,4 +640,64 @@ func TestItemCleanupWorker_Work_DeleteErrorDoesNotFail(t *testing.T) {
 	require.NoError(t, err)
 	mockCleanupSvc.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
+}
+
+// TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet makes the ClearCleanupSchedule
+// caller enumeration FALSIFIABLE rather than merely asserted (Issue #1486 follow-up part E).
+//
+// Four comments in this codebase claimed there were exactly two production callers, both inside
+// ItemCleanupWorker.Work. There were three — and commit 24907762, whose own message says it corrects
+// this very claim and that "there are two as of this branch", ADDED the third (in
+// accountService.DeleteAccount) in the same diff. Part D adds a fourth, in
+// ItemCleanupCheckWorker.Work. A prose claim that has already drifted twice needs a check, not a
+// third careful re-reading: this test fails if a caller is added or removed without the comments
+// being updated, and its failure message names the four comment sites to fix.
+//
+// Matches `.ClearCleanupSchedule(ctx,` rather than the bare method name so the comments that QUOTE
+// the grep (`\.ClearCleanupSchedule(`) are not themselves counted as callers.
+func TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet(t *testing.T) {
+	// Every production call site, keyed by path relative to backend/internal, with its call count.
+	// Each entry must correspond to a bullet in ItemCleanupWorker.Work's #1486 enumeration.
+	want := map[string]int{
+		"queue/jobs/item_cleanup.go":       2, // after a successful RemoveItem; releasing a declined claim's stale stamp
+		"queue/jobs/item_cleanup_check.go": 1, // #1486 follow-up part D: releasing the stamp after a failed sweep enqueue
+		"services/account_service.go":      1, // releasing the stamp after a failed zero-account enqueue
+	}
+
+	internalRoot := filepath.Join("..", "..")
+	got := map[string]int{}
+	err := filepath.WalkDir(internalRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
+			return nil
+		}
+		src, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		n := strings.Count(string(src), ".ClearCleanupSchedule(ctx,")
+		if n == 0 {
+			return nil
+		}
+		rel, relErr := filepath.Rel(internalRoot, path)
+		if relErr != nil {
+			return relErr
+		}
+		got[filepath.ToSlash(rel)] = n
+		return nil
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, want, got,
+		"the set of production ClearCleanupSchedule callers changed. Four comments enumerate it and "+
+			"must be updated together, or they become false the way they were before #1486 follow-up part E: "+
+			"queue/jobs/item_cleanup.go (ItemCleanupWorker.Work's #1486 comment), "+
+			"queue/jobs/item_cleanup_check.go (maxItemsPerCleanupSweep's third bullet), "+
+			"repository/linked_item_repository.go (cleanupCandidateReasonPredicate's first bullet), "+
+			"and queue/jobs/item_cleanup_test.go "+
+			"(TestItemCleanupWorker_Work_NoLongerEligible_SkipsIrreversibleRemoval's comment). "+
+			"The load-bearing half — NOTHING clears cleanup_scheduled_at on reconnection — must be "+
+			"re-verified, not assumed, if a new caller appears.")
 }

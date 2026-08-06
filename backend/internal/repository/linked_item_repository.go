@@ -880,10 +880,12 @@ const cleanupCandidateSelectQuery = `
 //   - `li.cleanup_scheduled_at IS NULL` is a CANDIDACY condition for the sweep only ("not already
 //     scheduled"). It is false by construction for every item ClaimItemForCleanup is ever asked
 //     about, because MarkForCleanup set it — so a recheck that reused it verbatim would deny every
-//     claim, and a recheck of "is it still scheduled" would be no recheck at all: the only
-//     production callers of ClearCleanupSchedule are both inside ItemCleanupWorker.Work — one after
-//     a successful RemoveItem, and, as of #1486, one releasing the stale schedule when this very
-//     claim declines (grep `\.ClearCleanupSchedule(`). NOTHING clears it on reconnection, so a
+//     claim, and a recheck of "is it still scheduled" would be no recheck at all. Issue #1486 follow-up part E:
+//     there are FOUR production callers of ClearCleanupSchedule, not two, and only two are inside
+//     ItemCleanupWorker.Work — see that function's #1486 comment for the enumeration, and
+//     jobs.TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet, which fails if it drifts
+//     again (grep `\.ClearCleanupSchedule(`). The half this bullet actually rests on is unchanged and
+//     still true: NOTHING clears cleanup_scheduled_at on reconnection, so a
 //     reconnected, fully repaired item still carries its schedule.
 //     ClaimItemForCleanup therefore requires the INVERSE (IS NOT NULL) and adds it itself.
 //   - `li.status NOT IN ('replaced', 'disconnected')` is also sweep-only, and including it in a

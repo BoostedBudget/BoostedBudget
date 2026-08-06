@@ -183,12 +183,40 @@ type PlaidItemCleanupService interface {
 	// RemoveItem calls Plaid /item/remove for a single linked item.
 	// Used for individual item cleanup (orphaned items, subscription downgrade).
 	//
-	// Returns error if:
-	// - Item is not found in the database
-	// - Access token decryption fails
+	// Returns a non-nil error if:
+	//   - the item is not found in the database, or the lookup otherwise fails;
+	//   - the Plaid /item/remove call fails for any reason OTHER than ITEM_NOT_FOUND;
+	//   - the per-item 'disconnected' marker could not be persisted.
 	//
-	// Plaid API errors are logged but not returned (graceful degradation).
-	// This is because the access token may already be invalid.
+	// Issue #1486 follow-up: Plaid errors are NOT swallowed. Until this fix they were, justified as "graceful
+	// degradation... the access token may already be invalid" — a rationale that was half right and
+	// half catastrophic, and the half that was right is now the justification for the ITEM_NOT_FOUND
+	// branch rather than for a blanket swallow:
+	//
+	//   - Right: an access token that is unusable because Plaid has FORGOTTEN the Item is a genuine
+	//     no-op. That case is now identified precisely — isPlaidItemAlreadyGone, matching Plaid's
+	//     ITEM_NOT_FOUND — and reported as SUCCESS. It is also what makes RETRYING this method safe,
+	//     and it MUST NOT be regressed into a returned error: doing so turns a self-healing case
+	//     into a permanent GDPR block (see the failure chain in
+	//     Test_RemoveItem_ItemNotFoundOnRetry_ConvergesInsteadOfStranding).
+	//   - Catastrophic: every OTHER Plaid failure (outage, rate limit, network) leaves the Item LIVE
+	//     AND STILL BILLING while telling the caller removal succeeded. The only caller,
+	//     ItemCleanupWorker.Work, then hard-deleted the local linked_items row; DeleteUserCascade's
+	//     round-4 C2 guard (repository.uncleanedLinkedItemExistsClause) is an EXISTS over
+	//     linked_items, so with the row gone the guard passed and a GDPR deletion completed while a
+	//     live, still-billing Plaid Item survived with no local record it ever existed — verbatim the
+	//     outcome that guard's own comment says it exists to prevent.
+	//
+	// On success (INCLUDING the already-gone case) the item is marked 'disconnected' via
+	// MarkItemsDisconnected BEFORE returning, so "Plaid billing is stopped" is recorded durably on
+	// the row instead of depending on the caller's best-effort row Delete — which is a deliberate
+	// no-op whenever accounts still reference the item, so the row frequently survives. That marker
+	// is what keeps the C2 guard correct on a surviving row (it excludes 'disconnected'), and what
+	// keeps ItemCleanupCheckWorker's pending-cleanup backstop from re-enqueueing an item whose Plaid
+	// side is already done (GetItemsPendingCleanup excludes 'disconnected' too).
+	//
+	// ErrNoLinkedItemsUpdated from that marker write is an idempotent no-op, not a failure — see the
+	// implementation, which draws the same distinction cleanupItems already does.
 	RemoveItem(ctx context.Context, linkedItemID string) error
 
 	// DisconnectAllUserItems calls Plaid /item/remove for all items, then marks
@@ -317,7 +345,9 @@ func (s *plaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID
 	return s.cleanupItems(ctx, userID, s.linkedItemRepo.GetByUserID, nil)
 }
 
-// RemoveItem implements PlaidItemCleanupService.RemoveItem
+// RemoveItem implements PlaidItemCleanupService.RemoveItem — see that interface method's doc
+// comment (Issue #1486 follow-up) for the full contract, and in particular for why ITEM_NOT_FOUND is success
+// while every other Plaid error is a propagated failure.
 func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID string) error {
 	// Get the linked item
 	item, err := s.linkedItemRepo.GetByID(ctx, linkedItemID)
@@ -325,14 +355,52 @@ func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 		return fmt.Errorf("failed to get linked item %s: %w", linkedItemID, err)
 	}
 
-	// Remove the item (logs Plaid errors but doesn't return them)
-	if err := s.removeItemInternal(ctx, item); err != nil {
-		s.logger.Warn("failed to remove Plaid item",
+	if removeErr := s.removeItemInternal(ctx, item); removeErr != nil {
+		if !isPlaidItemAlreadyGone(removeErr) {
+			// Issue #1486 follow-up part B: PROPAGATE. Swallowing this reported "Plaid billing is stopped" to
+			// ItemCleanupWorker.Work while the Item was still live and still billing, and the
+			// worker's row Delete then erased the only local trace of it — after which
+			// DeleteUserCascade's C2 guard had nothing left to see.
+			s.logger.Error("failed to remove Plaid item; NOT reporting success",
+				"item_id", linkedItemID,
+				"plaid_item_id", item.ItemID,
+				"error", removeErr,
+			)
+			return fmt.Errorf("failed to remove Plaid item %s: %w", linkedItemID, removeErr)
+		}
+		// Issue #1486 follow-up part A: ITEM_NOT_FOUND — Plaid has already forgotten this Item, so
+		// /item/remove has nothing left to do and billing has already stopped. This is the ONLY
+		// Plaid failure treated as success, and treating it so is a hard PREREQUISITE for the
+		// propagation above: without it, a retry after a transient DB failure elsewhere in the
+		// worker dead-letters with cleanup_scheduled_at still set, which no sweep can re-select and
+		// the C2 guard reads as un-cleaned — a permanent block on that user's GDPR erasure. Mirrors
+		// the identical branch cleanupItems has always had at its own removeItemInternal call site;
+		// the asymmetry between the two was the defect.
+		s.logger.Info("Plaid item already gone, treating as success",
 			"item_id", linkedItemID,
 			"plaid_item_id", item.ItemID,
-			"error", err,
 		)
-		// Don't return Plaid errors - graceful degradation
+	}
+
+	// Record durably that this item's Plaid side is done, matching cleanupItems's per-item
+	// MarkItemsDisconnected. Propagated rather than best-effort: a retry re-runs the Plaid call,
+	// receives ITEM_NOT_FOUND (mapped to success just above) and lands here again, so failing loudly
+	// costs one wasted API call and CONVERGES — whereas swallowing it leaves a row that survives the
+	// caller's accounts-guarded Delete carrying neither the cleanup stamp nor 'disconnected', which
+	// is the permanent-block state.
+	if markErr := s.linkedItemRepo.MarkItemsDisconnected(ctx, []string{linkedItemID}); markErr != nil {
+		if errors.Is(markErr, repository.ErrNoLinkedItemsUpdated) {
+			// A legitimate no-op: the row was already 'disconnected' or 'replaced'. Same distinction
+			// cleanupItems draws on this sentinel — escalating an idempotent zero-row UPDATE into a
+			// hard failure would turn an already-converged state into a permanent retry loop, since
+			// every retry would produce the identical zero-row result.
+			s.logger.Warn("MarkItemsDisconnected updated zero rows — item was likely already disconnected/replaced",
+				"item_id", linkedItemID,
+				"error", markErr,
+			)
+			return nil
+		}
+		return fmt.Errorf("failed to persist 'disconnected' state for item %s after Plaid removal: %w", linkedItemID, markErr)
 	}
 
 	return nil
