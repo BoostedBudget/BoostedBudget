@@ -297,6 +297,16 @@ func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput)
 //
 // POST /api/v1/admin/subscription/grant-trial
 //
+// Issue #1498 — DELIBERATE DECISION, do not "fix" this by adding an environment gate.
+// Issue #1499 removed the admin middleware's environment gate, so this endpoint is now
+// reachable in production. That was reviewed and accepted: granting a trial is a
+// legitimate admin action, and any real admin can already change a user's subscription
+// through the other admin subscription endpoints (see AdminUserService's tier-override
+// and subscription-management paths). Gating this one endpoint would buy no security
+// while breaking the E2E flow. The endpoint's "QA only" wording in its OpenAPI summary
+// describes who normally calls it, not an enforced restriction.
+// Recorded in docs/decisions/2026-08-06-admin-authorization-posture.md.
+//
 // Error Responses:
 //   - 401: Not authenticated
 //   - 403: Not an admin (checked by AdminMiddleware)
