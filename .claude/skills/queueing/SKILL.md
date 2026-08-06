@@ -132,9 +132,11 @@ func (w *MyJobWorker) Work(ctx context.Context, job *river.Job[MyJobArgs]) error
 
 ### Retry budget and backoff
 
-Jobs get **5 attempts** by default. That number comes from `DefaultEnqueueOptions` in
-`internal/queue/options.go`, which `toRiverInsertOpts` copies into
-`river.InsertOpts.MaxAttempts`:
+⚠ **There are TWO attempt budgets, and which one you get depends on how the job was inserted.**
+
+**Jobs enqueued through this repo's wrapper (`Client.Enqueue` / `EnqueueTx`) get 5 attempts.**
+That number comes from `DefaultEnqueueOptions` in `internal/queue/options.go`, which
+`toRiverInsertOpts` copies into `river.InsertOpts.MaxAttempts`:
 
 ```go
 // internal/queue/options.go
@@ -148,6 +150,13 @@ func DefaultEnqueueOptions() EnqueueOptions {
 ```
 
 Override per enqueue with `queue.WithMaxAttempts(n)`.
+
+**Periodic jobs get 25, not 5.** They bypass the wrapper entirely: `cmd/server/periodic_jobs.go`
+registers them with a raw `*river.InsertOpts` built by `riverInsertOptsFromUnique`
+(`internal/queue/jobs/periodic_job_opts.go`), which sets only `Queue` and `UniqueOpts`. With
+`MaxAttempts` left zero, River falls back to its own client default —
+`rivercommon.MaxAttemptsDefault = 25`. Do not reason about when a periodic job is discarded or
+reaches the dead-letter queue using the number 5.
 
 ⚠ **The backoff curve is River's own, not ours.** The `river.Config` that
 `NewClient` builds (`internal/queue/river/config.go` → `client.go`) sets no

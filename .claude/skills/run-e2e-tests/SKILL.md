@@ -81,7 +81,8 @@ bash scripts/run-e2e-with-ports.sh --project=chromium-no-auth
 
 1. Finds available ports (frontend 30000-34900, backend 35000-39900, postgres 40000-44900)
 2. Starts PostgreSQL container (if Docker available)
-3. Runs Atlas migrations
+3. Runs database migrations via the **golang-migrate** CLI (`run_migrations` in
+   `apps/web/scripts/e2e-postgres.sh`)
 4. Seeds test data (accounts, transactions, tags) for E2E user
 5. Builds backend binary (if missing)
 6. Starts frontend (Vite) and backend servers
@@ -147,6 +148,10 @@ Test user credentials are stored in `.env.e2e`:
 - **With Docker**: Script auto-starts PostgreSQL container, runs migrations, passes DATABASE_URL to backend
 - **Without Docker**: Backend runs in degraded mode (use `E2E_SKIP_POSTGRES=true` to skip explicitly)
 - **Backend auto-build**: Script builds `backend/bin/server` if missing
-- **Requires Atlas CLI**: Install via `brew install ariga/tap/atlas` (macOS) or https://atlasgo.io
+- **Requires the golang-migrate CLI**: Install via `brew install golang-migrate` (macOS) or from
+  https://github.com/golang-migrate/migrate/releases. ⚠ NOT Atlas — this repo dropped Atlas in
+  #631, and `e2e-postgres.sh`'s `run_migrations` shells out to `migrate`. Earlier revisions of
+  this file told readers to `brew install ariga/tap/atlas`, which installs a tool nothing here
+  uses.
 - E2E tests mock API responses via `page.route()` for non-auth tests
 - Dynamic ports avoid conflicts in parallel execution

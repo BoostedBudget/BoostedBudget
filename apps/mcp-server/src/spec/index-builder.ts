@@ -73,6 +73,17 @@ export async function buildSpecIndex(): Promise<SpecIndex> {
   // Dereference all $refs (inline — no remote refs in this spec)
   const spec = (await $RefParser.dereference(rawSpec as object)) as OpenAPISpec
 
+  return indexFromSpec(spec)
+}
+
+/**
+ * The flattening + classification pass, split out from buildSpecIndex so the
+ * UNCLASSIFIED-OPERATION FAILURE PATH CAN BE TESTED. buildSpecIndex reads the committed
+ * api/openapi.yaml, in which every operation is classified by definition, so a test that only
+ * calls buildSpecIndex can never reach the throw below — it would stay green if the throw were
+ * reverted to the old warn-and-drop. Tests feed a synthetic spec here instead.
+ */
+export function indexFromSpec(spec: OpenAPISpec): SpecIndex {
   const entries: SpecEntry[] = []
   const unclassified: string[] = []
 
