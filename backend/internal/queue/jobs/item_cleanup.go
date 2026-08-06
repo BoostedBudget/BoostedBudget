@@ -239,12 +239,31 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 
 	// Clear the cleanup schedule since cleanup is complete (best-effort).
 	//
-	// Best-effort is safe here specifically because RemoveItem has already marked the row
-	// 'disconnected' (#1486 follow-up part A). A stamp left set on a 'disconnected' row is inert rather than
-	// hazardous: cleanupCandidateSelectQuery excludes 'disconnected', GetItemsPendingCleanup excludes
-	// it too (so part C's backstop will not spin on it), and uncleanedLinkedItemExistsClause excludes
-	// it, so DeleteUserCascade is not blocked. That was NOT true before the marker existed, when a
-	// swallowed failure here left a row the sweep could never re-select.
+	// Best-effort is safe for a row RemoveItem actually marked 'disconnected' (#1486 follow-up part
+	// A): a stamp left set on such a row is inert rather than hazardous, because
+	// cleanupCandidateSelectQuery, GetItemsPendingCleanup and uncleanedLinkedItemExistsClause ALL
+	// exclude 'disconnected' — so no sweep re-selects it, part C's backstop does not spin on it, and
+	// DeleteUserCascade is not blocked. That was NOT true before the marker existed, when a swallowed
+	// failure here left a row the sweep could never re-select.
+	//
+	// ⚠ ONE EXCEPTION, and fix round 1 is what created it (fix round 2, item 1). For a 'replaced' row
+	// the marker never lands: MarkItemsDisconnected's WHERE guard excludes 'replaced'
+	// (deliberately — it is a terminal soft-delete state from a re-link, pinned by
+	// TestLinkedItemRepository_MarkItemsDisconnected_AlreadyReplacedIsNotReverted), so the write
+	// affects zero rows, RemoveItem treats ErrNoLinkedItemsUpdated as the legitimate no-op it is and
+	// returns success, and the row keeps 'replaced'. Round 1 then made GetItemsPendingCleanup INCLUDE
+	// 'replaced' (correctly — such an item is still live at Plaid until removed). So for a 'replaced'
+	// row the inertness above depends on THIS clear succeeding: if it fails, the backstop re-selects
+	// the row on every subsequent run until a later clear succeeds.
+	//
+	// Accepted, not fixed, and bounded: each loop is one /item/remove that answers ITEM_NOT_FOUND and
+	// is mapped to success by part A, followed by a retried clear — so it self-heals the moment the
+	// clear lands, and uncleanedLinkedItemExistsClause excludes 'replaced', so no GDPR erasure is
+	// blocked. The root cause is structural rather than a missing branch: a 'replaced' row has
+	// NOWHERE to record "Plaid side done", because the single status column already holds the re-link
+	// fact. A dedicated column (a plaid_removed_at timestamp, say) would let both facts coexist and
+	// is the real fix; overwriting 'replaced' with 'disconnected' is NOT (it would destroy
+	// replaced_at/replaced_by_id's meaning and reverse the pinned decision named above).
 	if clearErr := w.linkedItemRepo.ClearCleanupSchedule(ctx, args.LinkedItemID); clearErr != nil {
 		w.logger.Warn("failed to clear cleanup schedule",
 			"linked_item_id", args.LinkedItemID,
@@ -259,7 +278,9 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 	// contract (success means removed-or-already-gone at Plaid). Best-effort is likewise safe now:
 	// Delete is a deliberate no-op whenever accounts still reference the item, so the row often
 	// survives regardless, and it survives carrying 'disconnected' — which every downstream predicate
-	// reads correctly (see the ClearCleanupSchedule note just above).
+	// reads correctly. For the 'replaced' exception to that last clause, and why it is bounded, see
+	// the ⚠ note on ClearCleanupSchedule just above; the survival itself is harmless either way, since
+	// C2 excludes 'replaced' as well as 'disconnected'.
 	if deleteErr := w.linkedItemRepo.Delete(ctx, args.LinkedItemID); deleteErr != nil {
 		w.logger.Warn("failed to delete linked item from database after Plaid removal",
 			"linked_item_id", args.LinkedItemID,

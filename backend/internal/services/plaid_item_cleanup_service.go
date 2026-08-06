@@ -217,6 +217,16 @@ type PlaidItemCleanupService interface {
 	//
 	// ErrNoLinkedItemsUpdated from that marker write is an idempotent no-op, not a failure — see the
 	// implementation, which draws the same distinction cleanupItems already does.
+	//
+	// ⚠ The previous paragraph SILENTLY ASSUMED the marker write lands, and for a 'replaced' row it
+	// does not (fix round 2, item 1): MarkItemsDisconnected's WHERE guard excludes 'replaced', so the
+	// write is a zero-row no-op, this method still reports success, and the row keeps 'replaced'. It
+	// is therefore NOT true for that case that the backstop will leave the item alone — round 1 made
+	// GetItemsPendingCleanup include 'replaced' on purpose, since such an item is still live at Plaid
+	// until removed. What actually stops the re-enqueue loop there is the CALLER's
+	// ClearCleanupSchedule succeeding. Bounded and self-healing; see ItemCleanupWorker.Work's ⚠ note
+	// on that call for the full argument and for why the real fix is a separate column rather than
+	// overwriting 'replaced'.
 	RemoveItem(ctx context.Context, linkedItemID string) error
 
 	// DisconnectAllUserItems calls Plaid /item/remove for all items, then marks
@@ -438,6 +448,23 @@ func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 			// cleanupItems draws on this sentinel — escalating an idempotent zero-row UPDATE into a
 			// hard failure would turn an already-converged state into a permanent retry loop, since
 			// every retry would produce the identical zero-row result.
+			//
+			// ⚠ THIS IS THE BRANCH the 'replaced' caveat in the interface doc is about (fix round 2,
+			// item 1), and the two cases it covers are NOT symmetric even though both are correctly
+			// reported as success here:
+			//
+			//   - 'disconnected' — the row already records "Plaid side done", so it is inert on every
+			//     downstream predicate, and nothing more is needed.
+			//   - 'replaced' — the row records the RE-LINK, and there is nowhere left to record that
+			//     Plaid is done, because status is the only slot and MarkItemsDisconnected must not
+			//     overwrite a terminal soft-delete state (pinned by
+			//     TestLinkedItemRepository_MarkItemsDisconnected_AlreadyReplacedIsNotReverted). Since
+			//     round 1, GetItemsPendingCleanup INCLUDES 'replaced', so this row stays selectable by
+			//     the backstop until the caller's ClearCleanupSchedule succeeds.
+			//
+			// Returning nil is still right for both: the Plaid side genuinely IS done, and an error
+			// here would stop the caller from ever reaching the clear that ends the loop — making the
+			// permanent version of exactly the problem this note describes.
 			s.logger.Warn("MarkItemsDisconnected updated zero rows — item was likely already disconnected/replaced",
 				"item_id", linkedItemID,
 				"error", markErr,
