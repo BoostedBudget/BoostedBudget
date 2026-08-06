@@ -23,15 +23,32 @@
 -- pointer to an erased person. The GDPR position taken here, and it is narrow on purpose: ONE
 -- opaque vendor resource identifier (plus the institution that issued it) outlives the erasure
 -- because we remain obliged to act on that resource — to get the Item removed and the billing
--- stopped. Nothing else about the person is retained. linked_item_id is a random UUID that no
--- longer resolves to any row and identifies no person.
+-- stopped. Nothing else about the person is retained.
 --
--- CIPHERTEXT, NOT PLAINTEXT, and the column names say so. linked_items.item_id, institution_id and
--- institution_name are encrypted at rest by the application (repository.FieldEncryptor —
--- linked_item_repository.go's encryptLinkedItemPIIFields), so the cascade's INSERT ... SELECT copies
--- the ENCRYPTED values verbatim. That is the point: the copy neither weakens nor strengthens the
--- protection those values already had, and it needs no key material inside a SQL statement. Readers
--- decrypt through the same FieldEncryptor. Do NOT "fix" these columns by storing plaintext.
+-- linked_item_id is a random UUID that no longer resolves to any row. Precisely: it contains no personal
+-- data and this table offers no path from it to a person. It is NOT an unlinkability claim, and an
+-- earlier draft of this comment overstated it — application logs written BEFORE the erasure name the
+-- item id and the user id in the same line (see plaid_item_cleanup_service.go's cleanup log lines), so
+-- anyone holding those logs could correlate. That is a property of log retention, which is governed
+-- separately, not something this table can undo; the column is kept because it is the only handle that
+-- ties this record to those pre-erasure log lines when an operator investigates.
+--
+-- THE SOURCE COLUMN'S BYTES, VERBATIM — which is ciphertext for every row the current code writes.
+-- linked_items.item_id, institution_id and institution_name are encrypted at rest by the application
+-- (repository.FieldEncryptor — linked_item_repository.go's encryptLinkedItemPIIFields), so the cascade's
+-- INSERT ... SELECT copies ENCRYPTED values: the copy neither weakens nor strengthens the protection
+-- those values already had, and it needs no key material inside a SQL statement. Readers decrypt through
+-- the same FieldEncryptor. Do NOT "fix" these columns by storing plaintext.
+--
+-- ⚠ THE `_encrypted` SUFFIX IS AN ASSERTION ABOUT THE SOURCE, NOT A GUARANTEE ABOUT EVERY ROW, and an
+-- adversarial review was right to press on it. FieldEncryptor.EncryptString prefixes 'ENC$' and
+-- DecryptString PASSES THROUGH any value lacking that prefix — deliberate dual-read support for rows
+-- predating migration 000053's encryption rollout (see cmd/encrypt-migrate). A pre-000053 linked_items
+-- row whose item_id is still plaintext would therefore be copied here as plaintext, and encrypt-migrate
+-- does not know about this table, so nothing would later repair it. Accepted rather than hidden: the
+-- read path is correct either way (the same passthrough handles both), and the value at issue is an
+-- opaque Plaid Item identifier rather than personal data. What would NOT be acceptable is a reader that
+-- assumed ciphertext and failed, or a comment that claimed a guarantee the encoding cannot give.
 --
 -- WHAT IS DELIBERATELY NOT STORED: the access token. It is the one field that would let an automated
 -- re-attempt call /item/remove after the erasure, and it is still the wrong thing to keep. First,
@@ -73,7 +90,7 @@ CREATE TABLE IF NOT EXISTS plaid_orphaned_items (
     institution_name_encrypted    TEXT,
     linked_item_status            VARCHAR(50),
     last_error_code               VARCHAR(100),
-    last_attempted_at             TIMESTAMPTZ,
+    terminal_since                TIMESTAMPTZ,
     orphaned_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     CONSTRAINT plaid_orphaned_items_unique_linked_item
@@ -123,16 +140,24 @@ COMMENT ON COLUMN plaid_orphaned_items.last_error_code IS
     'that made removal terminal, or NULL if removal was never attempted for this row (the '
     '''replaced'' case above). Fixed-vocabulary diagnostic, not user data.';
 
-COMMENT ON COLUMN plaid_orphaned_items.last_attempted_at IS
-    'linked_items.plaid_removal_failed_at at the moment of erasure -- when the last terminal '
-    'removal attempt happened, or NULL if removal was never attempted.';
+COMMENT ON COLUMN plaid_orphaned_items.terminal_since IS
+    'linked_items.plaid_removal_failed_at at the moment of erasure -- when removal FIRST failed '
+    'unrecoverably for this Item, not when it was last attempted (that column is first-wins by '
+    'design; see migration 000133). NULL if removal was never attempted, which is the ''replaced'' '
+    'case. Together with orphaned_at it shows how long the verdict held before the erasure was '
+    'allowed to proceed -- at least the 7-day cooling-off window C2 requires.';
 
 COMMENT ON COLUMN plaid_orphaned_items.orphaned_at IS
     'When the erasure that stranded this Item ran. The only timestamp here that is a '
     'measurement of this table''s own write.';
 
 COMMENT ON CONSTRAINT plaid_orphaned_items_unique_linked_item ON plaid_orphaned_items IS
-    'Makes the cascade''s INSERT ... ON CONFLICT DO NOTHING idempotent. A second erasure for the '
-    'same linked_items row cannot normally happen (the row is gone after the first), so this is '
-    'a cheap guarantee against a partial-retry shape rather than a routine path -- and it means '
-    'the INSERT can never be the statement that fails a retried cascade.';
+    'The constraint the cascade''s ON CONFLICT (linked_item_id) DO NOTHING targets -- without a '
+    'matching constraint that clause is a RUNTIME ERROR, so this is what keeps the INSERT from '
+    'being the statement that fails an erasure. A conflict is in fact unreachable in the current '
+    'code: the INSERT and the DELETE are in one transaction, so a rolled-back attempt leaves no '
+    'row behind, and linked_items.id is a randomly generated UUID that is never reused. DO '
+    'NOTHING is therefore belt-and-braces; note that if a conflict ever DID occur it would keep '
+    'the EARLIER record, so a restored-and-re-erased linked_items row would retain the older '
+    'Item ciphertext. That trade is acceptable only while conflicts stay unreachable -- revisit '
+    'this clause, not just this comment, if that ever changes.';

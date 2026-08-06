@@ -23,15 +23,37 @@
 -- inside the SAME transaction, before deleting anything. The knowledge of the live vendor resource
 -- outlives the erasure; that is what makes unblocking something other than a silent leak.
 --
+-- A VERDICT MUST BE OBSERVED, NOT GUESSED — WHICH IS WHY THIS RECORDS THE FIRST SUCH FAILURE, NOT THE
+-- LATEST. The motivating error is not unambiguous evidence about one row. Plaid documents
+-- INVALID_ACCESS_TOKEN as also arising when a token is used against the wrong Plaid environment or
+-- client_id — a property of the DEPLOYMENT's configuration, not of the row, and cured by an ops fix.
+-- Classifying it terminal on first sight would let one misconfigured deploy label every Item in the
+-- estate hopeless and then erase over all of them. (Identical to the argument that keeps
+-- INVALID_API_KEYS out of the terminal set; an adversarial review was right that it applies here too.)
+--
+-- So C2 does not unblock on this column's PRESENCE. It unblocks only once the verdict has PERSISTED
+-- for a cooling-off window (uncleanedLinkedItemPredicate — 7 days), during which the cleanup sweep, the
+-- stranded-cleanup backstop and the deletion flow all keep making real /item/remove attempts every day.
+-- A configuration problem is fixed inside that window and the row converges on plaid_removed_at with no
+-- orphan record and no erasure over a live Item; a genuinely dead credential answers the same way every
+-- day for a week and is then, and only then, allowed past the guard.
+--
+-- The value written is therefore COALESCE(plaid_removal_failed_at, now()) — FIRST occurrence wins —
+-- because the window measures how long the verdict has held, and refreshing the timestamp on every
+-- attempt would reset that clock forever, making the block permanent again. The consequence, stated
+-- plainly: this column is NOT "when we last tried". Latest-attempt detail lives in the log line and the
+-- River job history; plaid_removal_error_code IS overwritten, so that one is the most recent code.
+--
 -- IT IS NOT A LICENCE TO STOP TRYING. Nothing that SELECTS work reads this column: the cleanup
 -- sweep (linked_item_repository.cleanupCandidateSelectQuery) and the stranded-cleanup backstop
 -- (GetItemsPendingCleanup) both still key off plaid_removed_at IS NULL alone, so a row marked here
--- keeps being re-attempted for as long as it exists. That is deliberate, and it is the self-healing
--- property that makes a MISCLASSIFICATION survivable: if the error was in truth transient, a later
--- attempt succeeds, stamps plaid_removed_at, and every predicate stops caring about this column's
--- value (all of them test plaid_removed_at first). A column that both marked the work hopeless AND
--- removed it from every work queue would be the "state marked, work never happened, mark survives
--- forever" shape that four consecutive fixes on this branch each had to close.
+-- keeps being re-attempted for as long as it exists. That is deliberate, and together with the window
+-- above it is what makes a MISCLASSIFICATION survivable rather than merely regrettable: the retries are
+-- not a theoretical comfort, they are the thing the window exists to give time for. If the error was in
+-- truth transient, a later attempt succeeds, stamps plaid_removed_at, and every predicate stops caring
+-- about this column's value (all of them test plaid_removed_at first). A column that both marked the
+-- work hopeless AND removed it from every work queue would be the "state marked, work never happened,
+-- mark survives forever" shape that four consecutive fixes on this branch each had to close.
 --
 -- plaid_removal_failed_at is therefore NOT cleared on a later success — it is retained as evidence
 -- that a code we classified unrecoverable eventually succeeded, which is the only signal that would
@@ -70,7 +92,7 @@ ALTER TABLE linked_items ADD COLUMN IF NOT EXISTS plaid_removal_failed_at TIMEST
 ALTER TABLE linked_items ADD COLUMN IF NOT EXISTS plaid_removal_error_code VARCHAR(100);
 
 COMMENT ON COLUMN linked_items.plaid_removal_failed_at IS
-    'When a Plaid /item/remove attempt for this item failed with an error we judge UNRECOVERABLE (see services.terminalPlaidRemovalFailure for the exact, deliberately narrow code set). Means "the credential we hold cannot remove this Item, so retrying with it cannot change the outcome" — it does NOT mean the Item is gone, and it does NOT mean billing stopped; only plaid_removed_at means that. Overwritten by each later terminal attempt, so it is the MOST RECENT such attempt. Read by DeleteUserCascade''s C2 guard (uncleanedLinkedItemExistsClause) to stop blocking a GDPR erasure forever, which is only safe because the cascade first copies the row into plaid_orphaned_items. Deliberately NOT read by any predicate that selects cleanup work, so a marked row keeps being re-attempted while it exists — and is deliberately NOT cleared when a later attempt succeeds, so a too-wide classification stays visible. Issue #1494.';
+    'When a Plaid /item/remove attempt for this item FIRST failed with an error we judge UNRECOVERABLE (see services.terminalPlaidRemovalFailure for the exact, deliberately narrow code set). Means "the credential we hold cannot remove this Item, so retrying with it cannot change the outcome" — it does NOT mean the Item is gone, and it does NOT mean billing stopped; only plaid_removed_at means that. FIRST occurrence, not latest: written as COALESCE(plaid_removal_failed_at, now()) because DeleteUserCascade''s C2 guard (uncleanedLinkedItemExistsClause) only stops blocking once the verdict has PERSISTED for a cooling-off window, and refreshing this on every attempt would reset that clock forever. It is therefore NOT "when we last tried" — that lives in the logs and the River job history; plaid_removal_error_code IS the most recent code. Deliberately NOT read by any predicate that selects cleanup work, so a marked row keeps being re-attempted throughout the window and beyond — and deliberately NOT cleared when a later attempt succeeds, so a too-wide classification stays visible. Issue #1494.';
 
 COMMENT ON COLUMN linked_items.plaid_removal_error_code IS
     'The Plaid error_code (e.g. ''INVALID_ACCESS_TOKEN'') that caused plaid_removal_failed_at to be set, or the local sentinel ''NO_USABLE_ACCESS_TOKEN'' when this row carries no access token to send at all. Fixed-vocabulary diagnostic, not user data — it is copied into plaid_orphaned_items, which survives the user''s erasure. NULL whenever plaid_removal_failed_at is NULL. Issue #1494.';

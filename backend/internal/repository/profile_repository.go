@@ -1543,7 +1543,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO plaid_orphaned_items (
 			linked_item_id, plaid_item_id_encrypted, institution_id_encrypted,
-			institution_name_encrypted, linked_item_status, last_error_code, last_attempted_at
+			institution_name_encrypted, linked_item_status, last_error_code, terminal_since
 		)
 		SELECT id, item_id, institution_id, institution_name, status,
 		       plaid_removal_error_code, plaid_removal_failed_at
@@ -3299,8 +3299,11 @@ const anyLinkedItemExistsClause = `EXISTS (
 // invalid or absent, not a Plaid outage) blocks its user's GDPR erasure FOREVER. That cost is no
 // longer accepted, and the way out is NOT a wider notion of "removed" — nothing here now believes an
 // unremovable Item is gone. It is a SECOND, separately-recorded fact: plaid_removal_failed_at (see
-// LinkedItemRepository.MarkPlaidRemovalFailed and services.terminalPlaidRemovalFailure). A row
-// carrying it stops blocking, because the cascade has a durable place to put the obligation instead.
+// LinkedItemRepository.MarkPlaidRemovalFailed and services.terminalPlaidRemovalFailure). A row carrying
+// it stops blocking — but only once it has carried it for 7 days, and only because the cascade has a
+// durable place to put the obligation instead. Both conditions live in uncleanedLinkedItemPredicate
+// below; read its comment before touching either, since the window is what stops one misconfigured
+// deployment from erasing over every Item it holds.
 //
 // ⚠ THIS PREDICATE IS ONLY SAFE IN THE PRESENCE OF THE plaid_orphaned_items WRITE. DeleteUserCascade
 // copies every row matching `plaid_removed_at IS NULL` into plaid_orphaned_items, in the SAME
@@ -3326,10 +3329,40 @@ const uncleanedLinkedItemExistsClause = `EXISTS (
 // question in this file — #1444 (Site C) was caused by exactly that, and the wording that diverged
 // was the one nobody re-read.
 //
-// Reads as: we have neither proved this Item's Plaid removal succeeded, nor proved we can never
-// achieve it. Only in that state is there still recoverable work owed, and only then must an
-// irreversible erasure wait.
-const uncleanedLinkedItemPredicate = `(plaid_removed_at IS NULL AND plaid_removal_failed_at IS NULL)`
+// Reads as: we have neither proved this Item's Plaid removal succeeded, nor OBSERVED for long enough
+// that we can never achieve it. Only in that state is there still recoverable work owed, and only then
+// must an irreversible erasure wait.
+//
+// THE COOLING-OFF WINDOW IS THE POINT OF THE SECOND CLAUSE, and it exists because the terminal verdict
+// is an inference, not a fact Plaid stated. Plaid returns INVALID_ACCESS_TOKEN both for a token that is
+// genuinely dead AND when a token is used against the wrong Plaid environment or client_id — a property
+// of the DEPLOYMENT's configuration, curable by an ops fix, and identical in kind to INVALID_API_KEYS,
+// which services.terminalPlaidRemovalFailure deliberately refuses to treat as terminal. Unblocking on
+// first sight would therefore let ONE misconfigured deploy mark every Item in the estate hopeless and
+// then erase over all of them — irreversibly, since the erasure destroys the token.
+//
+// Requiring the verdict to be 7 days old converts the inference into an OBSERVATION. Nothing stops
+// retrying during that week (no work-selecting predicate reads plaid_removal_failed_at — see migration
+// 000133), so the cleanup sweep, the stranded-cleanup backstop and the deletion flow each keep making
+// real /item/remove calls daily. A config problem is fixed inside the window and the row converges on
+// plaid_removed_at with no orphan record at all; a genuinely dead credential answers identically every
+// day for a week and only then passes. That is also what makes migration 000133's self-healing claim
+// true rather than aspirational: for a user being deleted, the erasure would otherwise consume the
+// verdict on the same pass that produced it, leaving the retries no time to occur.
+//
+// 7 days is a judgement, and here is its basis: a Plaid environment/credential misconfiguration is an
+// operations incident measured in hours to days, while a dead token persists indefinitely; and the
+// deletion this delays has already waited out a 30-day grace period, so a further week on a pathological
+// row is a far smaller harm than erasing over a recoverable, still-billing Item. The window is written
+// as an INTERVAL literal rather than a parameter because both readers of this predicate are guards, not
+// tunables — changing it should be a code change with this argument re-read.
+//
+// The comparison is between two timestamptz values, so it is an absolute-instant comparison and immune
+// to the session-time-zone hazard .claude/skills/db-migration-guide documents for migrations.
+const uncleanedLinkedItemPredicate = `(
+	plaid_removed_at IS NULL
+	AND (plaid_removal_failed_at IS NULL OR plaid_removal_failed_at > now() - INTERVAL '7 days')
+)`
 
 // householdOwnerBlocksDeletionClause is DeleteUserCascade's guard predicate for "deleting this
 // user would destroy another real user's data via households.owner_user_id's CASCADE" — Issue
