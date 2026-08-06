@@ -146,6 +146,10 @@ type AccountService interface {
 	// This also calls Plaid /item/remove to stop monthly billing.
 	// Only the institution owner can disconnect it.
 	// Returns repository.ErrLinkedItemNotFound if item doesn't exist or user doesn't own it.
+	//
+	// Issue #1486 follow-up part F: returns a non-nil error, WITHOUT deleting anything, if /item/remove fails
+	// for any reason other than ITEM_NOT_FOUND — the Item would still be live and still billing, and
+	// the local row is the only record of it. See the implementation's doc comment.
 	DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error
 
 	// SetJobQueue sets the job queue for auto-sync after linking (Issue #658).
@@ -795,8 +799,30 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 // 3. Call Plaid /item/remove to stop monthly billing (critical for cost control - Issue #226)
 // 4. Delete the linked item from database (CASCADE deletes all associated accounts)
 //
-// Note: If Plaid removal fails, we still delete from database since the access token
-// is likely already invalid. This prevents orphaned database records.
+// Issue #1486 follow-up part F: step 4 is CONDITIONAL on step 3 having succeeded. Until this fix a Plaid
+// failure was logged and the row deleted anyway, which is the same defect as parts A/B
+// (PlaidItemCleanupService.RemoveItem) on a MORE frequent path — this one is user-initiated, so it
+// runs far more often than the daily cleanup sweep. Deleting here CASCADE-deletes the accounts too,
+// leaving a live, still-billing Plaid Item with no local record it ever existed, and
+// DeleteUserCascade's C2 guard (repository.uncleanedLinkedItemExistsClause, an EXISTS over
+// linked_items) with nothing left to see.
+//
+// The inherited rationale — "the access token is likely already invalid, so delete anyway; this
+// prevents orphaned database records" — traded a harmless orphan (a local row) for a harmful one (a
+// billing Plaid Item nobody can find), and rested on plaidService.RemoveItem's doc comment, which
+// asserted the same thing and is corrected alongside this. Plaid bills per ITEM: an Item with an
+// unusable token is still an Item until /item/remove succeeds.
+//
+// The ONE Plaid failure still treated as success is ITEM_NOT_FOUND (isPlaidItemAlreadyGone): Plaid
+// has already forgotten the Item, so billing has stopped and there is nothing left to remove.
+// Without that branch this method would refuse forever for any such item and the user could never
+// clear it from their UI — the same asymmetry parts A and B close in RemoveItem.
+//
+// On a genuine failure the row and its accounts are LEFT IN PLACE and the error is returned to the
+// caller (a 500 via the handler). Recovery is the ordinary one: the user retries the disconnect.
+// Note the cleanup sweep will NOT retry it automatically — a healthy, recently-synced item is not a
+// cleanup candidate — which is precisely why the failure must surface rather than be swallowed into
+// a false success.
 //
 // Returns repository.ErrLinkedItemNotFound if item doesn't exist or user doesn't own it.
 func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error {
@@ -806,20 +832,29 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 		return err // Returns ErrLinkedItemNotFound if not found or not owned
 	}
 
-	// Step 3: Call Plaid to remove the item (stops monthly billing)
-	// This is critical for cost control per Issue #226
-	// Log the error but continue - access token may already be invalid
-	// We still want to clean up our database even if Plaid call fails
-	if err := s.plaidService.RemoveItem(ctx, linkedItem.AccessToken); err != nil {
+	// Step 3: Call Plaid to remove the item (stops monthly billing).
+	// This is critical for cost control per Issue #226.
+	if removeErr := s.plaidService.RemoveItem(ctx, linkedItem.AccessToken); removeErr != nil {
+		if !isPlaidItemAlreadyGone(removeErr) {
+			if s.logger != nil {
+				s.logger.Error("plaid RemoveItem failed; NOT deleting the linked item, which is the only local record of a still-billing Plaid Item",
+					"item_id", linkedItemID,
+					"user_id", userID,
+					"error", removeErr,
+				)
+			}
+			return fmt.Errorf("failed to remove Plaid item %s; the institution was not disconnected: %w", linkedItemID, removeErr)
+		}
 		if s.logger != nil {
-			s.logger.Warn("plaid RemoveItem failed for item",
+			s.logger.Info("plaid item already gone (ITEM_NOT_FOUND), treating the disconnect as successful",
 				"item_id", linkedItemID,
-				"error", err,
+				"user_id", userID,
 			)
 		}
 	}
 
-	// Step 4: Delete from database (CASCADE deletes all accounts)
+	// Step 4: Delete from database (CASCADE deletes all accounts). Reached only when Plaid billing
+	// really has stopped — see the doc comment.
 	return s.linkedItemRepo.DeleteByUser(ctx, linkedItemID, userID)
 }
 
