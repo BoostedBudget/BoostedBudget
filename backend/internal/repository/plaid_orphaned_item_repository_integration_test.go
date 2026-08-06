@@ -462,3 +462,71 @@ func TestPlaidOrphanedItems_Integration_PurgedTokenIsNullIsEnforcedByTheDatabase
 	require.Error(t, err, "the database must refuse a purge stamp that leaves the credential in place")
 	assert.Contains(t, err.Error(), "plaid_orphaned_items_purged_token_is_null")
 }
+
+// TestPlaidOrphanedItemRepository_Integration_PurgeExpiredTokens_IsBoundedByOneSweepInterval pins the
+// half of the retention deadline that is BOUNDED rather than instantaneous, and it exists because that
+// distinction was previously overstated in prose: migration 000135's column comment and the domain
+// constant both said the credential "must not exist" after token_expires_at, full stop, which a
+// periodic capped sweep cannot deliver. Unusability IS exact (TokenIsLive, GetRetryablePage, and the
+// retry sweep's per-row recheck all refuse an expired token whether or not any purge has run);
+// destruction lands at the FIRST SWEEP AT OR AFTER the deadline.
+//
+// So the assertion is the BOUND, expressed against domain.OrphanedItemTokenPurgeInterval — the latest
+// instant the next sweep can occur after a deadline — not "eventually".
+//
+// ⚠ THE SECOND ROW IS NOT DECORATION. Without it this test passes just as well against a sweep that
+// ignored asOf entirely and purged every credential in the table, which is the exact mutation that
+// would make the bound meaningless in the other direction.
+func TestPlaidOrphanedItemRepository_Integration_PurgeExpiredTokens_IsBoundedByOneSweepInterval(t *testing.T) {
+	repo, ctx := newOrphanRepo(t)
+	base := time.Now().UTC()
+	interval := domain.OrphanedItemTokenPurgeInterval
+
+	// Its deadline is `base`: the next sweep at or after it happens no later than base+interval.
+	overdue := seedOrphanRow(t, ctx, repo, orphanFixture{
+		plaidItemID:    "item-at-deadline-" + uuid.NewString(),
+		accessToken:    "access-sandbox-at-deadline",
+		orphanedAt:     base.Add(-domain.OrphanedItemTokenRetention),
+		tokenExpiresAt: base,
+	})
+	// Still two intervals inside its window at the sweep instant below.
+	insideWindow := seedOrphanRow(t, ctx, repo, orphanFixture{
+		plaidItemID:    "item-inside-window-" + uuid.NewString(),
+		accessToken:    "access-sandbox-inside-window",
+		orphanedAt:     base.Add(-domain.OrphanedItemTokenRetention),
+		tokenExpiresAt: base.Add(2 * interval),
+	})
+
+	for _, id := range []string{overdue, insideWindow} {
+		tok, purgedAt := tokenState(t, ctx, repo, id)
+		require.NotNil(t, tok, "fixture must actually hold a credential, or this test proves nothing")
+		require.Nil(t, purgedAt)
+	}
+
+	// The next sweep, at the latest instant it can be: one whole interval past the overdue deadline.
+	_, err := repo.PurgeExpiredTokens(ctx, base.Add(interval), 100)
+	require.NoError(t, err)
+
+	tok, purgedAt := tokenState(t, ctx, repo, overdue)
+	assert.Nil(t, tok, "a credential whose deadline passed must be gone by the NEXT sweep — at most "+
+		"domain.OrphanedItemTokenPurgeInterval after the deadline, which is the bound the schema and "+
+		"the ADR now state")
+	require.NotNil(t, purgedAt, "and the purge must be recorded, not merely performed")
+	// Stamped with asOf, not the database's NOW(): the recorded overrun must be the real one, or the
+	// audit trail understates how long the credential outlived its deadline.
+	assert.WithinDuration(t, base.Add(interval), *purgedAt, time.Second,
+		"token_purged_at must be stamped with the sweep instant that decided the purge")
+
+	tok, purgedAt = tokenState(t, ctx, repo, insideWindow)
+	assert.NotNil(t, tok, "SIBLING ASSERTION: a credential still inside its retention window must "+
+		"survive that same sweep — without this, a sweep that ignored asOf and purged the whole table "+
+		"would satisfy the assertion above")
+	assert.Nil(t, purgedAt)
+
+	// And it goes on the first sweep at or after its own deadline, by the same rule.
+	_, err = repo.PurgeExpiredTokens(ctx, base.Add(3*interval), 100)
+	require.NoError(t, err)
+	tok, purgedAt = tokenState(t, ctx, repo, insideWindow)
+	assert.Nil(t, tok, "the same bound applies to every row; nothing about the first row's purge was special")
+	assert.NotNil(t, purgedAt)
+}

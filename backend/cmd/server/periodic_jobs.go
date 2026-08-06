@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
 	"github.com/riverqueue/river"
 )
@@ -261,7 +262,7 @@ func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 		opts: jobs.IdempotencyCleanupPeriodicOpts(),
 	})
 
-	// Issue #1497: purge retained Plaid credentials at their retention deadline (daily).
+	// Issue #1497: purge retained Plaid credentials at their retention deadline (hourly).
 	//
 	// ⚠ UNCONDITIONAL, AND THAT IS THE POINT. Unlike every other Plaid-adjacent job here this one is NOT
 	// nil-guarded, because it must not be: DeleteUserCascade writes plaid_orphaned_items rows — with a
@@ -270,10 +271,19 @@ func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 	// Plaid config would make a GDPR retention limit conditional on a feature flag. Its worker is
 	// constructed unconditionally in main() for the same reason; the registration needs only the Args
 	// type and Insert/PeriodicOpts, exactly like idempotency cleanup above.
+	//
+	// ⚠ THE INTERVAL IS PART OF THE PUBLISHED GUARANTEE, so it is domain.OrphanedItemTokenPurgeInterval
+	// and not a literal here. Unconditional is not instantaneous: a credential ceases to EXIST at the
+	// first sweep at or after its deadline, so this interval IS the stated upper bound on how long one
+	// outlives its deadline (its unusability is exact and independent of this job — see
+	// domain.TokenIsLive). It was 24 hours while the schema comment claimed the credential could not
+	// exist past the deadline at all; one hour, plus honest prose, is that fix. PlaidOrphanTokenPurge-
+	// UniqueOpts().ByPeriod reads the same constant — with a longer ByPeriod, River would deduplicate
+	// every extra insert against the already-Completed run and this interval would be inert.
 	specs = append(specs, periodicJobSpec{
 		name:       "plaid orphan token purge",
-		logMessage: "Plaid orphaned-item credential purge periodic job configured (daily)",
-		interval:   24 * time.Hour,
+		logMessage: "Plaid orphaned-item credential purge periodic job configured (hourly)",
+		interval:   domain.OrphanedItemTokenPurgeInterval,
 		build: func() (river.JobArgs, *river.InsertOpts) {
 			return jobs.PlaidOrphanTokenPurgeArgs{TriggerSource: "periodic"}, jobs.PlaidOrphanTokenPurgeInsertOpts()
 		},

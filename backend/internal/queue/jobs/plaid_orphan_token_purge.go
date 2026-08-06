@@ -8,6 +8,7 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 )
@@ -147,10 +148,19 @@ func (w *PlaidOrphanTokenPurgeWorker) Work(ctx context.Context, job *river.Job[P
 // correctness. Completed is included because the periodic registration uses RunOnStart: true, so
 // without it every deploy or leader election enqueues a duplicate of a run that finished minutes ago —
 // the Issue #1448 lesson.
+//
+// ⚠ ByPeriod IS THE SWEEP INTERVAL AND MUST NOT EXCEED IT. Because Completed is in ByState, River
+// discards any insert falling in the same period as a run that already finished — so a ByPeriod longer
+// than cmd/server's registration interval silently throttles the sweep back to ByPeriod and the
+// interval becomes decorative. It was 24 hours when the interval was; both now read
+// domain.OrphanedItemTokenPurgeInterval, and TestBuildPeriodicJobSpecs_PurgeRunsHourlyAndItsDedupDoes-
+// NotSuppressThat (cmd/server) fails if they diverge in that direction. This matters more here than for
+// most jobs: this interval is the published upper bound on how long an erased user's bank credential
+// can still exist past its retention deadline.
 func PlaidOrphanTokenPurgeUniqueOpts() *queue.UniqueOpts {
 	return &queue.UniqueOpts{
 		ByArgs:   false,
-		ByPeriod: 24 * time.Hour,
+		ByPeriod: domain.OrphanedItemTokenPurgeInterval,
 		ByState: []queue.JobState{
 			queue.JobStateAvailable,
 			queue.JobStateScheduled,

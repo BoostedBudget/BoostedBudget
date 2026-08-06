@@ -97,6 +97,14 @@ const orphanSelectColumns = `
 // is simply deferred to the next run, which finds it unchanged (an expired deadline does not un-expire).
 // Ordered by the deadline so the most overdue credential is always taken first — the direction that
 // minimises worst-case retention if the cap is ever actually reached.
+//
+// ⚠ WHAT THIS THEREFORE DOES AND DOES NOT PROMISE. It destroys the credential at the FIRST CALL AT OR
+// AFTER the deadline, which — given its caller runs every domain.OrphanedItemTokenPurgeInterval (1
+// hour) — means the credential can still EXIST for up to an hour past its deadline, and longer only if
+// limit is ever actually reached. It does NOT make the credential unusable at the deadline; nothing
+// waits for this statement for that. GetRetryablePage below and the retry sweep's per-row recheck
+// enforce unusability exactly, on a fresh clock, independently of this having ever run. Two halves of
+// one deadline, deliberately of different strength: state the bound, do not round it to zero.
 func (r *plaidOrphanedItemRepository) PurgeExpiredTokens(ctx context.Context, asOf time.Time, limit int) (int, error) {
 	if limit <= 0 {
 		return 0, fmt.Errorf("PurgeExpiredTokens: limit must be positive, got %d", limit)
