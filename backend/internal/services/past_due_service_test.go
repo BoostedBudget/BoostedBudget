@@ -1,5 +1,5 @@
 // Package services provides business logic and external service integrations.
-// Tests for PastDueService — Issue #898: dunning grace-expiry logic.
+// Tests for PastDueService â Issue #898: dunning grace-expiry logic.
 package services
 
 import (
@@ -38,7 +38,7 @@ func (m *mockPastDueProfileRepo) GetUserByID(ctx context.Context, userID string)
 
 // CancelIfPastDueOccurrenceWithRetention replaces the earlier separate CancelIfPastDue +
 // SetRetentionDates pair (Issue #1413 round-3 finding H5 residual) and is itself the
-// occurrence-scoped successor to CancelIfPastDueWithRetention (Issue #1413 round-4 finding H1) —
+// occurrence-scoped successor to CancelIfPastDueWithRetention (Issue #1413 round-4 finding H1) â
 // see PastDueProfileRepository's doc comment.
 func (m *mockPastDueProfileRepo) CancelIfPastDueOccurrenceWithRetention(ctx context.Context, userID string, expectedPastDueStartedAt, retentionStarted time.Time, retentionMonths int) (bool, error) {
 	args := m.Called(ctx, userID, expectedPastDueStartedAt, retentionStarted, retentionMonths)
@@ -46,7 +46,7 @@ func (m *mockPastDueProfileRepo) CancelIfPastDueOccurrenceWithRetention(ctx cont
 }
 
 // ClearPastDueStartedAtIfMatches is ClearPastDueStartedAt's occurrence-scoped sibling (Issue
-// #1413 round-4 finding H3) — see PastDueProfileRepository's doc comment.
+// #1413 round-4 finding H3) â see PastDueProfileRepository's doc comment.
 func (m *mockPastDueProfileRepo) ClearPastDueStartedAtIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error) {
 	args := m.Called(ctx, userID, expected)
 	return args.Bool(0), args.Error(1)
@@ -54,7 +54,7 @@ func (m *mockPastDueProfileRepo) ClearPastDueStartedAtIfMatches(ctx context.Cont
 
 // ClearPlaidCleanupPendingIfMatches is Issue #1413 round-12 Fix 1's CAS-guarded marker clear,
 // called after processGraceExpiry's synchronous Plaid disconnect (Step 1) plus CAS flip
-// (Steps 3-4) both succeed — see PastDueProfileRepository's doc comment.
+// (Steps 3-4) both succeed â see PastDueProfileRepository's doc comment.
 func (m *mockPastDueProfileRepo) ClearPlaidCleanupPendingIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error) {
 	args := m.Called(ctx, userID, expected)
 	return args.Bool(0), args.Error(1)
@@ -125,8 +125,8 @@ func newTestPastDueService(
 const testPastDueClaimToken = "test-past-due-claim-token"
 
 // newAllowingPastDueClaimsRepo returns a MockWorkClaimsRepository (defined in
-// deletion_service_test.go — same package) stubbed to always grant and complete BOTH past_due
-// work claims (ActionPlaidDisconnectPastDue, ActionPastDueGraceCancel) — for tests that exercise
+// deletion_service_test.go â same package) stubbed to always grant and complete BOTH past_due
+// work claims (ActionPlaidDisconnectPastDue, ActionPastDueGraceCancel) â for tests that exercise
 // PastDueService's OTHER behavior and aren't themselves testing the claim mechanism. userID is
 // wildcarded so one instance works across this file's whole fixture matrix. Mirrors
 // deletion_service_test.go's newAllowingClaimsRepo.
@@ -142,8 +142,8 @@ func newAllowingPastDueClaimsRepo() *MockWorkClaimsRepository {
 	}
 
 	// Issue #1413 H1: processGraceExpiry's Paddle-cancel step nests ActionPaddleCancelSubscription
-	// inside the ActionPastDueGraceCancel flow claim above — permissive so tests exercising
-	// OTHER behavior aren't forced to plumb this through. Never Completed, only Released — see
+	// inside the ActionPastDueGraceCancel flow claim above â permissive so tests exercising
+	// OTHER behavior aren't forced to plumb this through. Never Completed, only Released â see
 	// claimSideEffectAndRun's doc comment (plaid_item_cleanup_service.go) for why.
 	m.On("Claim", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
 		Return(testPastDuePaddleCancelSideEffectToken, true, nil).Maybe()
@@ -157,7 +157,7 @@ func newAllowingPastDueClaimsRepo() *MockWorkClaimsRepository {
 const testPastDuePaddleCancelSideEffectToken = "test-past-due-paddle-cancel-side-effect-token"
 
 // pastDueOccurrenceResourceID computes the composite work_claims.resource_id expected for a
-// past_due-cycle occurrence (Issue #1413 P5) — mirrors production's
+// past_due-cycle occurrence (Issue #1413 P5) â mirrors production's
 // repository.OccurrenceResourceID(userID, repository.FormatOccurrenceTimestamp(user.PastDueStartedAt)),
 // which processGraceExpiry/processPlaidDisconnectWindow now use instead of the bare userID, so
 // that a completed grace-cancel/Plaid-disconnect in ONE dunning cycle does not permanently block
@@ -204,7 +204,7 @@ func userWithPastDueOverride(userID string, pastDueStartedAt time.Time, override
 
 // ---- Tests ----
 
-// Test 1: Full grace expiry flow — all steps called in correct order
+// Test 1: Full grace expiry flow â all steps called in correct order
 func TestPastDueService_ProcessUser_GraceExpiry_FullFlow(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -258,13 +258,13 @@ func TestPastDueService_ProcessUser_GraceExpiry_FullFlow(t *testing.T) {
 
 // TestPastDueService_ProcessUser_GraceExpiry_SuccessfulDisconnect_ClearsPlaidMarker is the Issue
 // #1413 round-12 Fix 1 (Blocker) RED test for the past-due path. Ordering here is Plaid disconnect
-// FIRST (Step 1), then the CAS flip that WRITES plaid_cleanup_pending_at (Steps 3-4) — so by the
+// FIRST (Step 1), then the CAS flip that WRITES plaid_cleanup_pending_at (Steps 3-4) â so by the
 // time the flip succeeds, a synchronous disconnect has ALREADY completed cleanup for this episode.
 // Before this fix, the marker the flip just wrote was never cleared, leaving the invariant violated
 // even though nothing is actually outstanding.
 //
 // Falsifiability: reverting processGraceExpiry to omit the post-flip clear step makes this test
-// fail — ClearPlaidCleanupPendingIfMatches would never be called.
+// fail â ClearPlaidCleanupPendingIfMatches would never be called.
 func TestPastDueService_ProcessUser_GraceExpiry_SuccessfulDisconnect_ClearsPlaidMarker(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -285,10 +285,17 @@ func TestPastDueService_ProcessUser_GraceExpiry_SuccessfulDisconnect_ClearsPlaid
 	postFlipUser.SubscriptionStatus = string(domain.SubscriptionStatusCancelled)
 	postFlipUser.PlaidCleanupPendingAt = &pendingSince
 
-	// The two reReadStillPastDue calls (pre-claim, post-claim re-verify) must see the user as
-	// STILL past_due to proceed; the clear step's OWN read (after the CAS flip) sees the row as it
-	// stands AFTER CancelIfPastDueOccurrenceWithRetention's real SQL would have written it.
-	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil).Twice()
+	// The THREE reReadStillPastDue calls (pre-claim, post-claim re-verify, and â since the past_due
+	// sibling fix â one more immediately before the Paddle cancel, because Step 1 is a network
+	// round-trip) must all see the user as STILL past_due to proceed; the clear step's OWN read
+	// (after the CAS flip) sees the row as it stands AFTER
+	// CancelIfPastDueOccurrenceWithRetention's real SQL would have written it.
+	//
+	// ⚠ THE COUNT IS LOAD-BEARING, which is why it is Times(3) and not mock.Anything: this stub
+	// ordering is what makes the post-flip read see the CANCELLED row. If a future change adds or
+	// removes a pre-flip re-read, this test fails loudly rather than silently feeding the wrong
+	// snapshot to a re-check.
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil).Times(3)
 	repo.On("GetUserByID", mock.Anything, userID).Return(&postFlipUser, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
@@ -306,7 +313,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_SuccessfulDisconnect_ClearsPlaid
 
 // TestPastDueService_ProcessUser_GraceExpiry_ClearMarkerFails_RetriesThenLogsErrorNotEscalated is
 // the Issue #1413 #1453 (Codex review, PR #1443 follow-up) RED test: before this fix, a SINGLE
-// failed ClearPlaidCleanupPendingIfMatches attempt here was logged at Warn and swallowed — a
+// failed ClearPlaidCleanupPendingIfMatches attempt here was logged at Warn and swallowed â a
 // transient DB error at exactly this moment left plaid_cleanup_pending_at stuck non-NULL forever,
 // since the disconnect that just succeeded already removed the live linked item
 // GetUsersNeedingPlaidDisconnectRepair's own predicate requires to ever reselect this user again.
@@ -316,7 +323,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_SuccessfulDisconnect_ClearsPlaid
 //
 // Falsifiability: reverting processGraceExpiry's clear step to a single unretried attempt makes
 // this test fail on the AssertNumberOfCalls assertion below (1 call, not
-// plaidCleanupMarkerClearMaxAttempts) and on the log-level assertion (no "level=ERROR" line — the
+// plaidCleanupMarkerClearMaxAttempts) and on the log-level assertion (no "level=ERROR" line â the
 // single-attempt code logs the failure at Warn only).
 func TestPastDueService_ProcessUser_GraceExpiry_ClearMarkerFails_RetriesThenLogsErrorNotEscalated(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
@@ -340,7 +347,8 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClearMarkerFails_RetriesThenLogs
 	postFlipUser.SubscriptionStatus = string(domain.SubscriptionStatusCancelled)
 	postFlipUser.PlaidCleanupPendingAt = &pendingSince
 
-	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil).Twice()
+	// Times(3), not Twice: see the sibling test above for why the pre-flip re-read count is three.
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil).Times(3)
 	repo.On("GetUserByID", mock.Anything, userID).Return(&postFlipUser, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
@@ -353,7 +361,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClearMarkerFails_RetriesThenLogs
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 
-	require.NoError(t, err, "a persistently-failing marker clear is best-effort tidying, not correctness-critical for THIS cycle — it must not fail the whole grace-expiry flow")
+	require.NoError(t, err, "a persistently-failing marker clear is best-effort tidying, not correctness-critical for THIS cycle â it must not fail the whole grace-expiry flow")
 	repo.AssertNumberOfCalls(t, "ClearPlaidCleanupPendingIfMatches", plaidCleanupMarkerClearMaxAttempts)
 
 	logOutput := logBuf.String()
@@ -361,7 +369,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClearMarkerFails_RetriesThenLogs
 	assert.Contains(t, logOutput, userID, "the ERROR log must carry the identifying user_id")
 }
 
-// Test 2: Plaid failure stops the flow — no cancel, no status flip
+// Test 2: Plaid failure stops the flow â no cancel, no status flip
 func TestPastDueService_ProcessUser_GraceExpiry_PlaidFails_DoesNotCancel(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -389,12 +397,12 @@ func TestPastDueService_ProcessUser_GraceExpiry_PlaidFails_DoesNotCancel(t *test
 	clerk.AssertNotCalled(t, "UpdateUserMetadata", mock.Anything, mock.Anything, mock.Anything)
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 	// Issue #1413 round-12 Fix 1 positive control: a FAILED disconnect must leave
-	// plaid_cleanup_pending_at untouched (still set, once the flip even runs) — the clear only ever
+	// plaid_cleanup_pending_at untouched (still set, once the flip even runs) â the clear only ever
 	// follows a SUCCESSFUL disconnect AND CAS flip, neither of which happen here.
 	repo.AssertNotCalled(t, "ClearPlaidCleanupPendingIfMatches", mock.Anything, mock.Anything, mock.Anything)
 }
 
-// Test 3: Paddle already-cancelled error is tolerated — flow continues
+// Test 3: Paddle already-cancelled error is tolerated â flow continues
 func TestPastDueService_ProcessUser_GraceExpiry_PaddleCancelFails_Tolerated(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -412,7 +420,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_PaddleCancelFails_Tolerated(t *t
 
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
-	// Paddle returns already-cancelled error — should be tolerated
+	// Paddle returns already-cancelled error â should be tolerated
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(ErrPaddleAlreadyCancelled)
 	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
 	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
@@ -430,7 +438,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_PaddleCancelFails_Tolerated(t *t
 // ActionPaddleCancelSubscription claim is held by another flow (e.g. a concurrent account
 // deletion), processGraceExpiry must never call the Paddle collaborator, must release its OWN
 // ActionPastDueGraceCancel flow claim, and must propagate the error so the daily job logs it and
-// retries tomorrow — exactly like any other Step 2 failure.
+// retries tomorrow â exactly like any other Step 2 failure.
 func TestPastDueService_ProcessUser_GraceExpiry_PaddleSideEffectClaimBusy_Aborts_ReleasesFlowClaim(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -453,13 +461,13 @@ func TestPastDueService_ProcessUser_GraceExpiry_PaddleSideEffectClaimBusy_Aborts
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	// Another flow (e.g. account deletion) already holds the side-effect claim. Side-effect
-	// claims stay keyed on the BARE userID (unchanged by #1413 P5) — see
+	// claims stay keyed on the BARE userID (unchanged by #1413 P5) â see
 	// plaid_item_cleanup_service.go's claimSideEffectAndRun.
 	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
 		Return("", false, nil)
 	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
-	// paddle.CancelSubscription is deliberately left unstubbed — an unstubbed testify mock call
+	// paddle.CancelSubscription is deliberately left unstubbed â an unstubbed testify mock call
 	// panics, proving the collaborator is never reached.
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
@@ -472,7 +480,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_PaddleSideEffectClaimBusy_Aborts
 	mockClaims.AssertNotCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, mock.Anything, mock.Anything)
 }
 
-// Test 4: Plaid-only window (14 <= age < 21) — DisconnectAllUserItems called
+// Test 4: Plaid-only window (14 <= age < 21) â DisconnectAllUserItems called
 func TestPastDueService_ProcessUser_PlaidDisconnect_AgeInWindow(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -502,7 +510,7 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_AgeInWindow(t *testing.T) {
 	repo.AssertNotCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
-// Test 4b (H6a): reReadStillPastDue passes, but the work claim itself is lost — e.g. an admin
+// Test 4b (H6a): reReadStillPastDue passes, but the work claim itself is lost â e.g. an admin
 // granted a comp, or the user recovered, in the narrow window between the re-read and this call,
 // or another worker already holds/completed the claim. Proves the race reReadStillPastDue alone
 // cannot close: DisconnectAllUserItems must NOT run.
@@ -524,7 +532,7 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimLost_SkipsDisconnect(t 
 	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
 
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	// The claim reports false — another worker holds it, or it's already completed.
+	// The claim reports false â another worker holds it, or it's already completed.
 	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
 		Return("", false, nil)
 
@@ -540,7 +548,7 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimLost_SkipsDisconnect(t 
 // TestPastDueService_ProcessUser_PlaidDisconnect_ClaimWon_PlaidFails_ReleasesClaim proves H6a's
 // "claim won + external failure" direction: the claim must be Released (not left to expire, not
 // silently swallowed) and the failure must propagate so the daily job retries. Regression target:
-// the OLD processPlaidDisconnectWindow logged this error and continued — the exact swallowed-
+// the OLD processPlaidDisconnectWindow logged this error and continued â the exact swallowed-
 // failure anti-pattern #1413 replaces the guard mechanism to fix.
 func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimWon_PlaidFails_ReleasesClaim(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
@@ -612,7 +620,7 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimWon_Success_CompletesCl
 
 // TestPastDueService_ProcessUser_PlaidDisconnect_CompleteReturnsFalse_LoggedNotSwallowed proves a
 // lost lease at Complete time (another worker reclaimed this tuple while we were mid-flight) does
-// not silently pass as success and is not reported as a processing failure — mirrors
+// not silently pass as success and is not reported as a processing failure â mirrors
 // deletion_service_test.go's TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed. Unlike
 // that test, PastDueService's logger is a stored field (captured from slog.Default() at
 // construction), so it's swapped for a buffer-backed logger here and the resulting ERROR-level log
@@ -656,7 +664,7 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_CompleteReturnsFalse_LoggedN
 	assert.Contains(t, logOutput, userID, "the ERROR log must carry the identifying user_id")
 }
 
-// Test 5: Plaid-only window but re-read shows recovered — no-op
+// Test 5: Plaid-only window but re-read shows recovered â no-op
 func TestPastDueService_ProcessUser_PlaidDisconnect_AlreadyRecovered(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -682,7 +690,7 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_AlreadyRecovered(t *testing.
 	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
 }
 
-// Test 6: Age below Plaid threshold — no action taken
+// Test 6: Age below Plaid threshold â no action taken
 func TestPastDueService_ProcessUser_TooEarly(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -708,7 +716,7 @@ func TestPastDueService_ProcessUser_TooEarly(t *testing.T) {
 }
 
 // Test 7: Grace expiry but CancelIfPastDueOccurrenceWithRetention returns false (user recovered between
-// Plaid disconnect and the CAS flip) — no retention, no notification, returns nil.
+// Plaid disconnect and the CAS flip) â no retention, no notification, returns nil.
 func TestPastDueService_ProcessUser_GraceExpiry_UserRecovered_SkipsCancel(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -727,7 +735,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_UserRecovered_SkipsCancel(t *tes
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
-	// CAS returns false — user paid between Plaid disconnect and this call
+	// CAS returns false â user paid between Plaid disconnect and this call
 	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(false, nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
@@ -740,7 +748,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_UserRecovered_SkipsCancel(t *tes
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 }
 
-// Test 8 (GAP2): Grace expiry but user recovered between GetUsersInPastDue and processing —
+// Test 8 (GAP2): Grace expiry but user recovered between GetUsersInPastDue and processing â
 // re-read guard must prevent destructive Plaid/Paddle/CAS calls.
 // Regression: processGraceExpiry lacked the status re-read that processPlaidDisconnectWindow
 // already had (lines 236-249). A user who paid between the batch-read and this call would lose
@@ -774,7 +782,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_RecoveredBeforeProcessing_SkipsD
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 }
 
-// Test 8b (GAP3): Nil paddleClient — no panic, CAS flip still occurs, Paddle never called.
+// Test 8b (GAP3): Nil paddleClient â no panic, CAS flip still occurs, Paddle never called.
 // Regression: main.go constructs PastDueService unconditionally with paddleService (nil when
 // PADDLE_API_KEY unset). Before the nil guard, a user carrying a PaddleSubscriptionID would
 // trigger a nil-pointer dereference panic inside processGraceExpiry step 2.
@@ -812,7 +820,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_NilPaddleClient_NoPanic(t *testi
 	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
 }
 
-// Test 9: GetUsersInPastDue — delegates to repo correctly
+// Test 9: GetUsersInPastDue â delegates to repo correctly
 func TestPastDueService_GetUsersInPastDue(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -837,9 +845,9 @@ func TestPastDueService_GetUsersInPastDue(t *testing.T) {
 	assert.Equal(t, "user-b", result[1].ID)
 }
 
-// ─── #1413: comped users are exempt from past_due destructive actions ──
+// âââ #1413: comped users are exempt from past_due destructive actions ââ
 
-// Test 10: comped user at the grace threshold — no Paddle cancel, no Plaid disconnect, no CAS flip.
+// Test 10: comped user at the grace threshold â no Paddle cancel, no Plaid disconnect, no CAS flip.
 func TestPastDueService_ProcessUser_GraceExpiry_ActiveOverride_Skipped(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -863,7 +871,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ActiveOverride_Skipped(t *testin
 	repo.AssertNotCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
-// Test 11: comped user at the Plaid-disconnect threshold — no disconnect.
+// Test 11: comped user at the Plaid-disconnect threshold â no disconnect.
 func TestPastDueService_ProcessUser_PlaidDisconnect_ActiveOverride_Skipped(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -884,7 +892,7 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_ActiveOverride_Skipped(t *te
 	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
 }
 
-// Test 12: comp applied mid-run — the batch-read user was not comped, but reReadStillPastDue's
+// Test 12: comp applied mid-run â the batch-read user was not comped, but reReadStillPastDue's
 // re-read shows the user was comped between GetUsersInPastDue and this call. Grace expiry must abort.
 func TestPastDueService_ProcessUser_GraceExpiry_CompedMidRun_Aborts(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
@@ -912,9 +920,9 @@ func TestPastDueService_ProcessUser_GraceExpiry_CompedMidRun_Aborts(t *testing.T
 	repo.AssertNotCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
-// ─── Issue #1413 round-4 finding H1: a stale past-due occurrence must not act during a newer one ──
+// âââ Issue #1413 round-4 finding H1: a stale past-due occurrence must not act during a newer one ââ
 //
-// reReadStillPastDue previously checked only current status and HasActiveManualOverride() — a
+// reReadStillPastDue previously checked only current status and HasActiveManualOverride() â a
 // worker holding cycle A's batch snapshot would pass both checks against cycle B's row (cycle B
 // is ALSO past_due with no override) and proceed to disconnect Plaid / cancel Paddle / flip status
 // during cycle B, before cycle B's own grace period had expired. The fix threads the CLAIMED
@@ -923,7 +931,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_CompedMidRun_Aborts(t *testing.T
 
 // TestPastDueService_ProcessUser_GraceExpiry_OccurrenceChangedMidRun_Aborts is the H1 regression
 // proof: the batch snapshot captured cycle A; the re-read shows the SAME user, still past_due,
-// still uncomped, but a DIFFERENT past_due_started_at (cycle B) — a stale worker must abort rather
+// still uncomped, but a DIFFERENT past_due_started_at (cycle B) â a stale worker must abort rather
 // than act on cycle B under cycle A's authority.
 func TestPastDueService_ProcessUser_GraceExpiry_OccurrenceChangedMidRun_Aborts(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
@@ -936,10 +944,10 @@ func TestPastDueService_ProcessUser_GraceExpiry_OccurrenceChangedMidRun_Aborts(t
 
 	userID := "user-grace-occurrence-changed"
 	now := time.Now()
-	cycleA := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour) // the batch snapshot's cycle — at grace
+	cycleA := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour) // the batch snapshot's cycle â at grace
 	user := userWithPastDue(userID, cycleA)
 
-	// The re-read shows a DIFFERENT, genuinely newer cycle (B) — still past_due, still uncomped,
+	// The re-read shows a DIFFERENT, genuinely newer cycle (B) â still past_due, still uncomped,
 	// but not yet at cycle A's grace age. A stale worker holding cycle A's claim must not treat
 	// this as "still eligible".
 	cycleB := now.Add(-time.Duration(testPlaidDisconnectDays) * 24 * time.Hour)
@@ -1002,7 +1010,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_OccurrenceUnchanged_Proceeds(t *
 	user := userWithPastDue(userID, pastDueStarted)
 	subID := *user.PaddleSubscriptionID
 
-	// The re-read returns a user with the EXACT SAME past_due_started_at — the ordinary case.
+	// The re-read returns a user with the EXACT SAME past_due_started_at â the ordinary case.
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
@@ -1018,7 +1026,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_OccurrenceUnchanged_Proceeds(t *
 	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
 }
 
-// Test 13: expired override — proceeds to grace expiry normally.
+// Test 13: expired override â proceeds to grace expiry normally.
 func TestPastDueService_ProcessUser_GraceExpiry_ExpiredOverride_Proceeds(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -1076,7 +1084,7 @@ func TestPastDueService_ProcessUser_CoveredByHousehold_Skipped(t *testing.T) {
 	repo.AssertNotCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
-// Test 15: household checker not covered — proceeds normally.
+// Test 15: household checker not covered â proceeds normally.
 func TestPastDueService_ProcessUser_NotCoveredByHousehold_Proceeds(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -1109,7 +1117,7 @@ func TestPastDueService_ProcessUser_NotCoveredByHousehold_Proceeds(t *testing.T)
 	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int"))
 }
 
-// Test 16: household checker fails — fail closed (skip destructive action) but propagate the
+// Test 16: household checker fails â fail closed (skip destructive action) but propagate the
 // error, mirroring TrialService.ExpireTrial's fail-closed-with-error-propagation semantics
 // (see trial_service.go:197-204 for why swallowing would hide an operational failure).
 func TestPastDueService_ProcessUser_HouseholdCheckFails_SkipsDefensivelyButPropagatesError(t *testing.T) {
@@ -1136,12 +1144,12 @@ func TestPastDueService_ProcessUser_HouseholdCheckFails_SkipsDefensivelyButPropa
 	repo.AssertNotCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
-// ─── #1413 H6b (Codex review round 4): the work claim must be won, and re-verified, BEFORE any
-// Plaid/Paddle destructive work — the whole point of the finding is that ordering, not merely a
-// wider predicate, closes the "CAS correctly refuses after the irreversible work already ran" bug. ──
+// âââ #1413 H6b (Codex review round 4): the work claim must be won, and re-verified, BEFORE any
+// Plaid/Paddle destructive work â the whole point of the finding is that ordering, not merely a
+// wider predicate, closes the "CAS correctly refuses after the irreversible work already ran" bug. ââ
 
 // TestPastDueService_ProcessUser_GraceExpiry_ClaimWonBeforeDestructiveWork proves H6b's ordering
-// fix directly by recording the actual call order via .Run() hooks — an ordering regression
+// fix directly by recording the actual call order via .Run() hooks â an ordering regression
 // wouldn't change WHETHER each mock is called, only WHEN, so plain AssertCalled assertions
 // (already covered by Test 1) cannot catch it.
 func TestPastDueService_ProcessUser_GraceExpiry_ClaimWonBeforeDestructiveWork(t *testing.T) {
@@ -1192,7 +1200,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClaimWonBeforeDestructiveWork(t 
 	require.NoError(t, err)
 
 	require.Equal(t, []string{"claim", "plaid_disconnect", "paddle_cancel", "cas_flip"}, callOrder,
-		"the claim must be won BEFORE any Paddle cancel or Plaid disconnect — H6b's ordering fix")
+		"the claim must be won BEFORE any Paddle cancel or Plaid disconnect â H6b's ordering fix")
 }
 
 // TestPastDueService_ProcessUser_GraceExpiry_ClaimLost_SkipsDestructive proves H6b's "claim not
@@ -1266,7 +1274,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClaimWon_PlaidFails_ReleasesClai
 
 // TestPastDueService_ProcessUser_GraceExpiry_CASMiss_ReleasesNotCompletes proves that when the
 // final CancelIfPastDueOccurrenceWithRetention CAS misses (comp/recovery landed during the Plaid/Paddle calls), the claim
-// is Released — NOT Completed. Completing here would permanently block reclaiming per the
+// is Released â NOT Completed. Completing here would permanently block reclaiming per the
 // work_claims contract ("a completed claim is never re-granted"), stranding a user who must still
 // be cancelled once a mid-flight comp lapses.
 func TestPastDueService_ProcessUser_GraceExpiry_CASMiss_ReleasesNotCompletes(t *testing.T) {
@@ -1296,7 +1304,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_CASMiss_ReleasesNotCompletes(t *
 	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, testPastDuePaddleCancelSideEffectToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
-	// CAS misses — recovered or comped during the external calls above.
+	// CAS misses â recovered or comped during the external calls above.
 	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(false, nil)
 	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
@@ -1362,11 +1370,11 @@ func TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSw
 }
 
 // TestPastDueService_ProcessUser_GraceExpiry_ClearStep_TimestampMovedOn_NotAnError is the H3
-// regression proof at the SERVICE (caller) level — Issue #1413 round-4 finding H3. By the time
+// regression proof at the SERVICE (caller) level â Issue #1413 round-4 finding H3. By the time
 // Step 5 runs, the CAS above has already flipped THIS cycle to 'cancelled'; if
-// ClearPastDueStartedAtIfMatches reports (false, nil) — the column has already moved on to a
+// ClearPastDueStartedAtIfMatches reports (false, nil) â the column has already moved on to a
 // NEWER cycle's timestamp, e.g. a recover -> re-enter-past-due race that landed during the
-// Plaid/Paddle calls — that must be a logged skip, NOT a processing failure: the newer cycle's
+// Plaid/Paddle calls â that must be a logged skip, NOT a processing failure: the newer cycle's
 // timestamp must be left alone so a future run can still process it, and this flow's OWN
 // cancellation (which already succeeded) must still be reported as a success and still Complete
 // its claim.
@@ -1409,7 +1417,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClearStep_TimestampMovedOn_NotAn
 
 	assert.NoError(t, err, "a newer cycle's timestamp surviving the clear step is a legitimate skip, not a processing failure")
 	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken)
-	// This flow's own cancellation and notification still went through — the clear-step skip does
+	// This flow's own cancellation and notification still went through â the clear-step skip does
 	// not undo or block anything that already succeeded.
 	clerk.AssertCalled(t, "UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything)
 	notif.AssertCalled(t, "Create", mock.Anything, mock.Anything)
@@ -1419,10 +1427,10 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClearStep_TimestampMovedOn_NotAn
 // is the regression test for #1413 round-3 finding H5's residual: the CAS flip and the
 // retention-clock write used to be two SEPARATE calls (CancelIfPastDue, then SetRetentionDates),
 // so a lost/failed retention write after a successful CAS left the user cancelled with NO clock
-// — and because GetUsersInPastDue only selects subscription_status = 'past_due', the daily job
+// â and because GetUsersInPastDue only selects subscription_status = 'past_due', the daily job
 // could never re-reach that user to retry. CancelIfPastDueOccurrenceWithRetention closes this STRUCTURALLY:
 // both writes are now the SAME statement, so "CAS succeeds but retention fails" is no longer a
-// reachable state — the only failure mode left is the WHOLE call erroring (e.g. a DB error),
+// reachable state â the only failure mode left is the WHOLE call erroring (e.g. a DB error),
 // which this test proves still aborts (releases the claim, propagates the error) rather than
 // silently completing.
 func TestPastDueService_ProcessUser_GraceExpiry_CancelIfPastDueOccurrenceWithRetentionError_Aborts_ReleasesClaim(t *testing.T) {
@@ -1474,9 +1482,9 @@ func TestPastDueService_ProcessUser_GraceExpiry_CancelIfPastDueOccurrenceWithRet
 // processGraceExpiry/processPlaidDisconnectWindow directly to exercise the defensive path a
 // caller bug (or a future code change removing that guard) could otherwise reach. The decision
 // pinned here: refuse via repository.ErrMissingOccurrenceDiscriminator rather than silently
-// collapsing to the bare userID — see work_claims_occurrence.go's doc comment for why a silent
+// collapsing to the bare userID â see work_claims_occurrence.go's doc comment for why a silent
 // collapse would reintroduce the exact permanent-block bug this task fixes. mockClaims has NO
-// expectations registered, so any Claim/Complete/Release call would panic — proving the claim
+// expectations registered, so any Claim/Complete/Release call would panic â proving the claim
 // layer is never reached at all on this path.
 
 func TestPastDueService_ProcessGraceExpiry_NilPastDueStartedAt_ReturnsErrorWithoutClaiming(t *testing.T) {
@@ -1523,4 +1531,98 @@ func TestPastDueService_ProcessPlaidDisconnectWindow_NilPastDueStartedAt_Returns
 
 	require.Error(t, err, "a missing occurrence discriminator must fail loudly, not silently claim on the bare userID")
 	assert.ErrorIs(t, err, repository.ErrMissingOccurrenceDiscriminator)
+}
+
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// THE SIBLING OF ExecuteDeletion'S DEFECT, in the past_due grace-cancel flow.
+//
+// processGraceExpiry re-verifies the dunning precondition immediately before Step 1 (the Plaid
+// disconnect) â "already as late as the code can make this check", as its own comment says, and true
+// of that call. But Step 2 (cancelling the Paddle subscription) is a SECOND external call, performed
+// after Step 1's network round-trip, and nothing re-verified in between. A user who pays their invoice
+// while we are disconnecting their banks therefore still had their subscription cancelled at Paddle,
+// after which Step 3's CAS correctly refused to flip their local status â leaving a paid-up customer
+// with no subscription at Paddle and a local row that says nothing happened.
+//
+// This is the same sentence as the deletion defect with different nouns, so it is fixed rather than
+// deferred. What it is NOT is the same severity: nothing here hard-deletes, and no PII is destroyed.
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+
+// RED: recovery lands BETWEEN the Plaid disconnect and the Paddle cancel. A user who is already
+// recovered at the pre-Step-1 re-read never reaches Step 1 at all, so seeding one would prove
+// nothing â the recovery has to happen inside the window that actually exists.
+func TestPastDueService_ProcessUser_GraceExpiry_RecoveryDuringPlaidDisconnect_DoesNotCancelPaddle(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	userID := "user-grace-recovers-mid-flight"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
+
+	// current is what every reReadStillPastDue re-read sees. It starts past_due â so the flow gets
+	// as far as Step 1 â and the Plaid mock flips it to active, standing in for the invoice being
+	// paid during that call.
+	current := userWithPastDue(userID, pastDueStarted)
+	repo.On("GetUserByID", mock.Anything, userID).Return(&current, nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+		Return(testPastDueClaimToken, true, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil).Run(func(mock.Arguments) {
+		current.SubscriptionStatus = string(domain.SubscriptionStatusActive)
+	})
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err, "a mid-flight recovery is a legitimate skip, not a failure")
+
+	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// SIBLING ASSERTION, mandatory: the check above must not be satisfied by a flow that stopped
+// cancelling subscriptions altogether. Same shape, no mid-flight recovery, and Step 2 plus the CAS
+// still run.
+//
+// TestPastDueService_ProcessUser_GraceExpiry_FullFlow covers the same ground; this pairing exists so
+// the RED test is falsifiable on its own terms rather than depending on a test written for another
+// purpose. Verified by mutation: forcing the new pre-Step-2 re-check to report "not past due" reddens
+// both this and FullFlow.
+func TestPastDueService_ProcessUser_GraceExpiry_NoRecovery_StillCancelsPaddle(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+
+	userID := "user-grace-no-recovery"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+	subID := *user.PaddleSubscriptionID
+
+	current := userWithPastDue(userID, pastDueStarted)
+	repo.On("GetUserByID", mock.Anything, userID).Return(&current, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
+	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
+	clerk.On("UpdateUserMetadata", mock.Anything, current.ClerkUserID, mock.Anything).Return(nil)
+	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
+
+	require.NoError(t, svc.ProcessPastDueUser(context.Background(), user, now))
+	paddle.AssertCalled(t, "CancelSubscription", mock.Anything, subID)
+	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int"))
 }
