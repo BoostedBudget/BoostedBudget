@@ -74,6 +74,7 @@ export async function buildSpecIndex(): Promise<SpecIndex> {
   const spec = (await $RefParser.dereference(rawSpec as object)) as OpenAPISpec
 
   const entries: SpecEntry[] = []
+  const unclassified: string[] = []
 
   for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
     for (const method of HTTP_METHODS) {
@@ -82,11 +83,11 @@ export async function buildSpecIndex(): Promise<SpecIndex> {
 
       const { operationId, summary = '', description, tags = [], parameters: rawParams } = operation
 
-      // Look up capability classification; skip operations not in the manifest
+      // Look up capability classification. An operation absent from the manifest is a
+      // BUILD FAILURE, not a warning — see the throw below.
       const capability = getCapability(operationId)
       if (capability === undefined) {
-        // Unknown operation — omit from index (it'll surface in the CI completeness check)
-        console.warn(`[spec-index-builder] Unknown operationId: ${operationId} — not in manifest`)
+        unclassified.push(`${method.toUpperCase()} ${path} → ${operationId}`)
         continue
       }
 
@@ -122,6 +123,22 @@ export async function buildSpecIndex(): Promise<SpecIndex> {
 
       entries.push(entry)
     }
+  }
+
+  // Issue #1503: previously an unclassified operationId was merely `console.warn`ed and
+  // dropped. The drift gate (`make validate-mcp-artifacts`) compares the GENERATED index
+  // against the committed one, so a dropped operation leaves the artifact byte-identical
+  // and the gate exits 0 with the warning scrolling past. listAdminPlaidOrphanedItems sat
+  // omitted behind exactly that green tick. Throwing makes the drift gate fail closed on
+  // an unclassified operation too, instead of relying solely on
+  // scripts/check-manifest-completeness.ts (which does catch it, but only runs in
+  // `make test-fast` / `make test-all` / CI).
+  if (unclassified.length > 0) {
+    throw new Error(
+      `Unclassified operations in api/openapi.yaml (add each to src/manifest/capability-manifest.ts ` +
+        `as read/write/excluded — deny-by-default means all must be explicit):\n` +
+        unclassified.map((o) => `   ${o}`).join('\n')
+    )
   }
 
   const index: SpecIndex = {
