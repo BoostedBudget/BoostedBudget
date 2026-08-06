@@ -234,6 +234,15 @@ func (m *MockLinkedItemRepository) MarkItemsDisconnected(ctx context.Context, id
 	return args.Error(0)
 }
 
+// MarkPlaidRemoved (Issue #1495) is not exercised by these account-service tests; stubbed to
+// satisfy the widened LinkedItemRepository interface. NOTE for anyone extending these tests: the
+// re-link path under test here deliberately does NOT stamp plaid_removed_at — a re-link never calls
+// Plaid /item/remove, so the old item's Plaid Item is still live. That is the defect #1495 closed.
+func (m *MockLinkedItemRepository) MarkPlaidRemoved(ctx context.Context, ids []string) error {
+	args := m.Called(ctx, ids)
+	return args.Error(0)
+}
+
 func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
 	args := m.Called(ctx, id, date)
 	return args.Error(0)

@@ -155,6 +155,13 @@ func (m *MockLinkedItemRepository) MarkItemsDisconnected(ctx context.Context, id
 	return args.Error(0)
 }
 
+// MarkPlaidRemoved (Issue #1495) is not exercised by these worker tests; stubbed to satisfy the
+// widened LinkedItemRepository interface.
+func (m *MockLinkedItemRepository) MarkPlaidRemoved(ctx context.Context, ids []string) error {
+	args := m.Called(ctx, ids)
+	return args.Error(0)
+}
+
 func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
 	args := m.Called(ctx, id, date)
 	return args.Error(0)

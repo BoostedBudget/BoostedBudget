@@ -165,3 +165,75 @@ func sweepSelects(t *testing.T, ctx context.Context, repo *linkedItemRepository,
 	}
 	return false
 }
+
+// TestGetItemsForCleanupPage_Integration_PlaidRemovedAtExcludesCandidate pins the half of
+// cleanupCandidateSelectQuery's WHERE that Issue #1495 re-pointed: "is the Plaid side already done?"
+// is now answered by plaid_removed_at, not by `status NOT IN ('replaced', 'disconnected')`.
+//
+// The row is made a genuine candidate first (via the 'revoked' leg — unconditional, so the assertion
+// cannot be confused with a duration threshold), then STAMPED, and must drop out. Both directions are
+// asserted in one test so it cannot pass because the row was never selectable in the first place.
+//
+// Note the stamp is applied WITHOUT touching status, which is the whole point: under the old predicate
+// this row would still be 'revoked' and therefore still a candidate, so the second assertion fails
+// against it. Verified by reverting the clause to `li.status NOT IN ('replaced', 'disconnected')`.
+func TestGetItemsForCleanupPage_Integration_PlaidRemovedAtExcludesCandidate(t *testing.T) {
+	ctx := context.Background()
+	tx, repo, profileRepo := newCleanupPageTestTx(t, ctx)
+	itemID := seedUnscheduledIneligibleItem(t, ctx, tx, repo, profileRepo)
+
+	_, err := tx.Exec(ctx, `UPDATE linked_items SET status = 'revoked' WHERE id = $1`, itemID)
+	require.NoError(t, err)
+	require.True(t, sweepSelects(t, ctx, repo, itemID),
+		"precondition: the row must be a real candidate before the stamp, or the assertion below proves nothing")
+
+	_, err = tx.Exec(ctx, `UPDATE linked_items SET plaid_removed_at = NOW() WHERE id = $1`, itemID)
+	require.NoError(t, err)
+
+	assert.False(t, sweepSelects(t, ctx, repo, itemID),
+		"an item whose Plaid /item/remove is recorded must not be swept for cleanup again — scheduling it "+
+			"would spend an /item/remove per sweep on work already done. status is deliberately left "+
+			"'revoked' here: the exclusion must come from plaid_removed_at, not from a status value")
+}
+
+// TestGetItemsForCleanupPage_Integration_NullStatusCandidateIsSelected pins the NULL-safe spelling of
+// the OTHER half of that WHERE — the 'replaced' exclusion, which is candidacy rather than Plaid state
+// and was retained (Issue #1495).
+//
+// The previous bare `li.status NOT IN ('replaced', 'disconnected')` was NULL-UNSAFE: for a NULL-status
+// row it evaluates to UNKNOWN, not TRUE, so such a row was silently excluded from the sweep — the
+// opposite of how every sibling liveness predicate in this codebase treats NULL (as live). Now spelled
+// `li.status IS NULL OR li.status <> 'replaced'`.
+//
+// ⚠ UNREACHABLE IN PRODUCTION TODAY: migration 000126 made linked_items.status NOT NULL, so this row
+// cannot exist against the real schema — the constraint is dropped inside this test's own transaction
+// and never committed. Do not read a failure here as an outage. The row is selectable via the
+// zero-active-accounts leg, since a NULL status matches no status-based leg.
+//
+// Falsifiability: restoring the bare `li.status NOT IN ('replaced')` form makes this test fail while
+// every other test in this file still passes.
+func TestGetItemsForCleanupPage_Integration_NullStatusCandidateIsSelected(t *testing.T) {
+	ctx := context.Background()
+	tx, repo, profileRepo := newCleanupPageTestTx(t, ctx)
+
+	// Must precede the seed: the item is created with a non-NULL status and only then relaxed.
+	_, err := tx.Exec(ctx, "ALTER TABLE linked_items ALTER COLUMN status DROP NOT NULL")
+	require.NoError(t, err)
+
+	itemID := seedUnscheduledIneligibleItem(t, ctx, tx, repo, profileRepo)
+	// NULL status matches no status-based leg, so give the row the zero-active-accounts reason.
+	_, err = tx.Exec(ctx, `DELETE FROM accounts WHERE linked_item_id = $1`, itemID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE linked_items SET status = NULL WHERE id = $1`, itemID)
+	require.NoError(t, err)
+
+	var statusIsNull bool
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT status IS NULL FROM linked_items WHERE id = $1`, itemID).Scan(&statusIsNull))
+	require.True(t, statusIsNull, "fixture precondition: the row must genuinely have a NULL status")
+
+	assert.True(t, sweepSelects(t, ctx, repo, itemID),
+		"a NULL-status item with zero active accounts must be SELECTED: NULL is not 'replaced', the item is "+
+			"still live at Plaid, and every other liveness predicate here treats NULL as live. A bare "+
+			"`status NOT IN ('replaced')` is UNKNOWN for such a row and silently drops it")
+}

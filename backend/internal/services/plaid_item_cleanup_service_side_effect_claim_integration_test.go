@@ -50,6 +50,9 @@ func (f *fakeLinkedItemRepoForRace) MarkAllUserItemsDisconnected(ctx context.Con
 func (f *fakeLinkedItemRepoForRace) MarkItemsDisconnected(ctx context.Context, ids []string) error {
 	return nil
 }
+func (f *fakeLinkedItemRepoForRace) MarkPlaidRemoved(ctx context.Context, ids []string) error {
+	return nil
+}
 
 // blockingPlaidCollaborator is a plaidServiceForCleanup stub whose RemoveItem call signals
 // `entered` (once) and then blocks on `release` — used to hold the side-effect claim open long

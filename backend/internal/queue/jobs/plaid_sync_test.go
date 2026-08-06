@@ -184,6 +184,13 @@ func (m *MockLinkedItemRepository) MarkItemsDisconnected(ctx context.Context, id
 	return args.Error(0)
 }
 
+// MarkPlaidRemoved (Issue #1495) is not exercised by these sync-job tests either; stubbed for the
+// same compile-only reason as MarkItemsDisconnected above.
+func (m *MockLinkedItemRepository) MarkPlaidRemoved(ctx context.Context, ids []string) error {
+	args := m.Called(ctx, ids)
+	return args.Error(0)
+}
+
 // UpdateInvestmentsLastSyncedDate - Issue #659: Plaid Investments
 func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
 	args := m.Called(ctx, id, date)

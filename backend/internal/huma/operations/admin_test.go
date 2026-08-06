@@ -175,6 +175,12 @@ func (m *mockLinkedItemRepo) MarkItemsDisconnected(ctx context.Context, ids []st
 	return nil
 }
 
+// MarkPlaidRemoved (Issue #1495) is not exercised by these admin-handler tests; stubbed to satisfy
+// the widened LinkedItemRepository interface.
+func (m *mockLinkedItemRepo) MarkPlaidRemoved(ctx context.Context, ids []string) error {
+	return nil
+}
+
 // mockEncryptionService is a mock implementation of services.EncryptionService
 type mockEncryptionService struct {
 	decryptedToken string

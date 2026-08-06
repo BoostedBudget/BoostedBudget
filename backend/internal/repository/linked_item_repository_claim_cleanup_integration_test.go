@@ -334,46 +334,51 @@ func TestClaimItemForCleanup_Integration_MatchesSweepPredicate(t *testing.T) {
 	}
 }
 
-// TestGetItemsPendingCleanup_Integration_ReplacedItemIsRecoverable is the fix-round-1 counterpart to
-// TestClaimItemForCleanup_Integration_ReplacedItemStaysClaimable above, and it closes the same
-// asymmetry class this branch keeps producing: two predicates disagreeing about whether 'replaced'
-// matters, so the RECOVERY path cannot reach the rows the CLAIM path was deliberately widened to
-// handle.
+// TestGetItemsPendingCleanup_Integration_ReplacedItemIsRecoverable proves the stranded-cleanup
+// backstop can still reach the rows most in need of it, now that its selection predicate reads
+// plaid_removed_at instead of status (Issue #1495).
 //
-// GetItemsPendingCleanup is the pending-cleanup backstop's selection query (Issue #1486 follow-up
-// part C). It carried `status NOT IN ('replaced', 'disconnected')`, copied from the SWEEP's
-// candidacy predicate where 'replaced' genuinely belongs. But a 'replaced' item's Plaid Item is
-// STILL LIVE AND STILL BILLING — the re-link path (services/account_service.go, "re-link detected,
-// soft-deleting old linked item") marks the old item 'replaced' WITHOUT ever calling
-// /item/remove — which is exactly why ClaimItemForCleanup omits that clause on purpose.
+// A 'replaced' item's Plaid Item is STILL LIVE AND STILL BILLING — the re-link path
+// (services/account_service.go, "re-link detected, soft-deleting old linked item") marks the OLD item
+// 'replaced' WITHOUT ever calling /item/remove — and this query is its ONLY recovery path: the
+// candidate sweep requires cleanup_scheduled_at IS NULL and excludes 'replaced' on top of that. So a
+// stamped, overdue 'replaced' row with no recorded Plaid removal must be selected. That half is
+// unchanged from Issue #1486 follow-up fix round 1, which introduced this test.
 //
-// So the terminal state the backstop exists to recover was unreachable for precisely the rows most
-// in need of it: genuine Plaid failure → the error propagates (part B) → River exhausts its
-// inherited 5 attempts → the job dead-letters WITH cleanup_scheduled_at set. The candidate sweep
-// cannot re-select it (it requires cleanup_scheduled_at IS NULL, and excludes 'replaced' twice
-// over) and the backstop could not see it either. A live, billable Item with no live job,
-// indefinitely.
-//
-// 'disconnected' is still excluded, and must stay excluded: that status is set only AFTER Plaid
-// removal succeeded (cleanupItems, and RemoveItem as of part A), so including it would make the
-// backstop re-enqueue rows whose Plaid side is already done, forever.
-//
-// This test failed before the predicate change — the 'replaced' row was absent from the result.
+// WHAT ISSUE #1495 ADDED, and why the fourth row below matters. The predicate used to exclude
+// 'disconnected' by status, which was a proxy for "Plaid is already done" — a proxy that could not
+// express the fact for a 'replaced' row at all (MarkItemsDisconnected refuses to overwrite
+// 'replaced'), so such a row was re-selected on every single run even when its Plaid side WAS done,
+// costing one /item/remove per run that answers ITEM_NOT_FOUND. The predicate now reads the fact
+// directly, so the fourth row — 'replaced' AND stamped — must be EXCLUDED. Without that row this test
+// would still pass against the old status-based predicate and would prove nothing about the change.
 func TestGetItemsPendingCleanup_Integration_ReplacedItemIsRecoverable(t *testing.T) {
 	ctx := context.Background()
 	tx, repo, profileRepo := newCleanupPageTestTx(t, ctx)
 
-	// Three rows, one per status, all stamped and overdue — so the assertions below distinguish the
-	// status predicate from the stamp/overdue predicate rather than merely from row existence.
+	// Four rows, all stamped for cleanup and overdue — so the assertions below distinguish the
+	// plaid_removed_at predicate from the stamp/overdue predicate rather than merely from row existence.
 	replacedID := seedClaimCleanupItem(t, ctx, tx, repo, profileRepo)
 	disconnectedID := seedClaimCleanupItem(t, ctx, tx, repo, profileRepo)
 	liveID := seedClaimCleanupItem(t, ctx, tx, repo, profileRepo)
+	replacedAndRemovedID := seedClaimCleanupItem(t, ctx, tx, repo, profileRepo)
 
-	// Exactly what a re-link leaves behind on the OLD item: 'replaced', Plaid never called.
+	// Exactly what a re-link leaves behind on the OLD item: 'replaced', Plaid never called, so
+	// plaid_removed_at stays NULL.
 	_, err := tx.Exec(ctx, `
 		UPDATE linked_items SET status = 'replaced', replaced_at = NOW() WHERE id = $1`, replacedID)
 	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `UPDATE linked_items SET status = 'disconnected' WHERE id = $1`, disconnectedID)
+	// A completed cleanup, written the way production writes it (MarkPlaidRemoved then
+	// MarkItemsDisconnected): both the stamp and the status.
+	_, err = tx.Exec(ctx, `
+		UPDATE linked_items SET status = 'disconnected', plaid_removed_at = NOW() WHERE id = $1`, disconnectedID)
+	require.NoError(t, err)
+	// Issue #1495's new case, and the one the old status-based predicate could not express: a re-link
+	// leftover whose Plaid removal HAS since been recorded. 'replaced' is retained (the re-link chain
+	// must survive) and the stamp is present.
+	_, err = tx.Exec(ctx, `
+		UPDATE linked_items SET status = 'replaced', replaced_at = NOW(), plaid_removed_at = NOW() WHERE id = $1`,
+		replacedAndRemovedID)
 	require.NoError(t, err)
 
 	items, err := repo.GetItemsPendingCleanup(ctx)
@@ -392,42 +397,53 @@ func TestGetItemsPendingCleanup_Integration_ReplacedItemIsRecoverable(t *testing
 		"precondition: an ordinary stamped, overdue live item must still be selected, or the "+
 			"assertions above and below pass for the wrong reason")
 	assert.NotContains(t, ids, disconnectedID,
-		"'disconnected' is set only AFTER Plaid removal succeeded, so re-enqueueing such a row would "+
-			"spin forever on work that is already done — this exclusion is load-bearing and must stay")
+		"a row whose Plaid removal is recorded must not be re-enqueued — it would spin forever on work "+
+			"that is already done. This exclusion is load-bearing and must stay; only its BASIS changed, "+
+			"from the 'disconnected' status to the plaid_removed_at stamp that status stood in for")
+	assert.NotContains(t, ids, replacedAndRemovedID,
+		"Issue #1495: a 'replaced' row whose Plaid removal IS recorded must now be excluded too. Under the "+
+			"old status-based predicate this row was re-selected on every run forever, because status had no "+
+			"slot left to record the removal — that is the loop this column closed, and this assertion is "+
+			"what distinguishes the new predicate from the old one")
 }
 
-// TestGetItemsPendingCleanup_Integration_NullStatusItemIsSelected pins the `status IS NULL OR` arm of
-// GetItemsPendingCleanup's predicate (fix round 2, item 2).
+// TestGetItemsPendingCleanup_Integration_NullStatusItemIsSelected pins that GetItemsPendingCleanup is
+// STATUS-AGNOSTIC: a stamped, overdue row is selected while its Plaid removal is unrecorded, whatever
+// its status — including NULL.
+//
+// ⚠ ISSUE #1495 CHANGED WHAT THIS TEST PINS, and the honest statement of that matters more than
+// keeping the old wording. It was written (fix round 2, item 2) to pin the `status IS NULL OR` arm of
+// the predicate `(status IS NULL OR status NOT IN ('disconnected'))`: without that arm, `NULL NOT IN
+// ('disconnected')` is UNKNOWN rather than TRUE under SQL three-valued logic, so a NULL-status row
+// silently vanished from the stranded-cleanup backstop — still stamped, still billing at Plaid, and
+// invisible to its only recovery path. THAT ARM NO LONGER EXISTS: the predicate is now
+// `plaid_removed_at IS NULL`, which reads no status at all and is a two-valued IS NULL test, so the
+// three-valued-logic hole cannot arise here in any spelling.
+//
+// The test is KEPT, not deleted, because the property it now pins is still worth pinning and is
+// cheap: nothing about a row's status may re-enter this predicate. A future "consistency" edit that
+// re-added a status filter here would exclude NULL-status rows again (if written bare) or reintroduce
+// the 'disconnected'-as-proxy-for-done confusion (if written NULL-safely), and this test fails on the
+// first of those. What it can no longer claim is to be the guard for an arm that has been removed.
 //
 // ⚠ READ THIS BEFORE CONCLUDING ANYTHING ABOUT PRODUCTION: since migration
 // 000126_set_linked_items_status_not_null (Issue #1444), linked_items.status is NOT NULL, so a
 // genuinely NULL-status row CANNOT be constructed against the real schema and this state is
-// UNREACHABLE today. This test is defence against a FUTURE migration that relaxes the constraint, or
-// a manual/out-of-band write, and against a "simplification" of the predicate — NOT a live bug. Do
-// not read a failure here as an outage.
-//
-// What it guards is a silent-undercount class this branch has already been bitten by. A bare
-// `status NOT IN ('disconnected')` evaluates to NULL — not TRUE — for a NULL-status row under SQL
-// three-valued logic, so such a row would be silently EXCLUDED from the stranded-cleanup backstop's
-// selection: still stamped, still billing at Plaid, and now invisible to its only recovery path.
-// Every sibling liveness predicate in this codebase treats NULL as LIVE
-// (liveLinkedItemExistsClause, uncleanedLinkedItemExistsClause, MarkItemsDisconnected's WHERE
-// guard), so a hand-copy that dropped the arm would be inconsistent with all of them while passing
-// every other test in this package — which is exactly what happened before this test existed: a
-// reviewer deleted the arm and ./internal/repository stayed green in both unit and integration mode.
+// UNREACHABLE today. Do not read a failure here as an outage.
 //
 // The DROP NOT NULL / rollback technique is borrowed verbatim from
 // TestJobHealthRepository_Integration_MarkedUserWithNullStatusLiveItem_Counted
-// (job_health_repository_plaid_cleanup_integration_test.go), which faced the identical problem for
-// the identical reason. The constraint is dropped INSIDE this test's own transaction and never
-// committed, so the real schema is never permanently altered — and the user, the item and the query
-// under test must all live in that SAME transaction, or a query on another connection could not see
-// the uncommitted NULL-status row. newCleanupPageTestTx already builds its repositories on the tx and
-// registers the rollback, so that requirement is satisfied by construction here.
+// (job_health_repository_plaid_cleanup_integration_test.go). The constraint is dropped INSIDE this
+// test's own transaction and never committed, so the real schema is never permanently altered — and
+// the user, the item and the query under test must all live in that SAME transaction, or a query on
+// another connection could not see the uncommitted NULL-status row. newCleanupPageTestTx already
+// builds its repositories on the tx and registers the rollback, so that requirement is satisfied by
+// construction here.
 //
-// Falsifiability: replacing `(status IS NULL OR status NOT IN ('disconnected'))` with the bare
-// `status NOT IN ('disconnected')` form makes this test fail while every other test in this package
-// still passes. Verified by doing exactly that.
+// Falsifiability: adding `AND (status IS NULL OR status NOT IN ('disconnected'))` back to the query is
+// NOT enough to fail this test (the row's status is NULL, which that arm admits); adding the bare
+// `AND status NOT IN ('disconnected')` form IS, and so is any `AND status = ...` filter. Verified with
+// the bare form.
 func TestGetItemsPendingCleanup_Integration_NullStatusItemIsSelected(t *testing.T) {
 	ctx := context.Background()
 	tx, repo, profileRepo := newCleanupPageTestTx(t, ctx)
