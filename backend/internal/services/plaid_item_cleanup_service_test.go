@@ -19,6 +19,17 @@ import (
 // MockLinkedItemRepoForCleanup is a mock for LinkedItemRepository
 type MockLinkedItemRepoForCleanup struct {
 	mock.Mock
+
+	// Issue #1495 — MarkPlaidRemoved's recording fields. See that method for why it is not driven by
+	// testify expectations like every other method on this mock.
+	//
+	// PlaidRemovedIDs is every id passed to MarkPlaidRemoved, flattened, in call order.
+	PlaidRemovedIDs []string
+	// MarkPlaidRemovedErr is what MarkPlaidRemoved returns (nil unless a test sets it).
+	MarkPlaidRemovedErr error
+	// CallLog names the two durable writes in the order they happened, so a test can pin that the
+	// plaid_removed_at stamp precedes the 'disconnected' status write.
+	CallLog []string
 }
 
 func (m *MockLinkedItemRepoForCleanup) GetByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
@@ -52,9 +63,29 @@ func (m *MockLinkedItemRepoForCleanup) MarkAllUserItemsDisconnected(ctx context.
 }
 
 // MarkItemsDisconnected persists per-item cleanup outcome (Issue #1413 H2).
+//
+// Issue #1495: also appends to CallLog, so a test can assert the ORDER of the two durable writes
+// (MarkPlaidRemoved must come FIRST — see the call sites in plaid_item_cleanup_service.go for why
+// the reverse order is unrecoverable). testify's mock.Mock records call order internally but exposes
+// no assertion for "A before B", hence the explicit log.
 func (m *MockLinkedItemRepoForCleanup) MarkItemsDisconnected(ctx context.Context, ids []string) error {
+	m.CallLog = append(m.CallLog, "MarkItemsDisconnected")
 	args := m.Called(ctx, ids)
 	return args.Error(0)
+}
+
+// MarkPlaidRemoved records the plaid_removed_at stamp (Issue #1495).
+//
+// DELIBERATELY NOT a testify expectation-driven method. Every existing test in this file that drives
+// a success path would otherwise need a new .On("MarkPlaidRemoved", ...) line purely to avoid
+// testify's "mock: I don't know what to return" panic — thirty-odd mechanical edits that would say
+// nothing about behaviour. Instead the calls are recorded on the struct (PlaidRemovedIDs, CallLog)
+// and the return value is set by the field, so the tests that DO care assert on the recording and
+// the rest are untouched.
+func (m *MockLinkedItemRepoForCleanup) MarkPlaidRemoved(ctx context.Context, ids []string) error {
+	m.CallLog = append(m.CallLog, "MarkPlaidRemoved")
+	m.PlaidRemovedIDs = append(m.PlaidRemovedIDs, ids...)
+	return m.MarkPlaidRemovedErr
 }
 
 // MockPlaidServiceForCleanup is a mock for PlaidService
@@ -1320,4 +1351,240 @@ func TestPlaidCleanup_MarkItemsDisconnected_GenuineError_StillEscalated(t *testi
 
 	require.Error(t, err, "a genuine MarkItemsDisconnected database error must still be escalated as a per-item failure")
 	assert.ErrorIs(t, err, dbErr)
+}
+
+// ─── Issue #1495: plaid_removed_at — "Plaid removal succeeded" gets a slot of its own ───────────
+
+// Test_RemoveItem_StampsPlaidRemovedBeforeMarkingDisconnected pins the ORDER of the two durable
+// writes, which is the property that stops this new piece of state from becoming the fifth "state
+// marked, work never happened, mark survives forever" defect on this branch.
+//
+// The stamp must come FIRST. If it fails, status is still live, so ItemCleanupWorker.Work's retry
+// re-calls Plaid (ITEM_NOT_FOUND → success) and reaches the stamp again: converges, at the cost of one
+// wasted API call, while DeleteUserCascade's C2 guard keeps blocking — fail-closed. In the REVERSE
+// order the row would already say 'disconnected', cleanupItems skips 'disconnected' rows without
+// calling Plaid, and no retry would ever reach the stamp again: a row claiming cleanup happened,
+// carrying no proof of it, permanently blocking that user's erasure.
+//
+// Falsifiability, and stated as what was actually run rather than as what sounds convincing: removing
+// the MarkPlaidRemoved call from RemoveItem makes this test RED (verified — CallLog becomes
+// ["MarkItemsDisconnected"] and PlaidRemovedIDs empty). A reordering is caught by the same assertion by
+// construction, since it compares the exact sequence rather than membership.
+func Test_RemoveItem_StampsPlaidRemovedBeforeMarkingDisconnected(t *testing.T) {
+	ctx := context.Background()
+	itemID := "item-order"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	mockRepo.On("GetByID", ctx, itemID).Return(&domain.LinkedItem{ID: itemID, AccessToken: "tok"}, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{itemID}).Return(nil)
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	require.NoError(t, service.RemoveItem(ctx, itemID))
+
+	assert.Equal(t, []string{itemID}, mockRepo.PlaidRemovedIDs,
+		"a successful Plaid removal must be recorded in plaid_removed_at — it is the ONLY fact "+
+			"DeleteUserCascade's C2 guard, GetItemsPendingCleanup and the cleanup sweep now read")
+	assert.Equal(t, []string{"MarkPlaidRemoved", "MarkItemsDisconnected"}, mockRepo.CallLog,
+		"the stamp must precede the status write: the reverse order leaves a 'disconnected' row with no "+
+			"proof of removal that nothing will ever re-attempt")
+}
+
+// Test_RemoveItem_ItemNotFound_StillStampsPlaidRemoved: the ITEM_NOT_FOUND / already-gone case is a
+// SUCCESS — Plaid has forgotten the Item, so billing has stopped — and it must therefore stamp too.
+//
+// This is not a cosmetic detail. With C2 now demanding the stamp, an already-gone item that did NOT
+// get stamped would block its user's GDPR erasure forever over an Item that provably no longer exists.
+// It is also the case that makes retries converge at all: a retry after any downstream failure meets
+// ITEM_NOT_FOUND, and only because that answers "success" does it reach the stamp.
+//
+// Falsifiability: moving the MarkPlaidRemoved call inside an `if removeErr == nil` branch makes this
+// test fail while Test_RemoveItem_StampsPlaidRemovedBeforeMarkingDisconnected still passes.
+func Test_RemoveItem_ItemNotFound_StillStampsPlaidRemoved(t *testing.T) {
+	ctx := context.Background()
+	itemID := "item-already-gone"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	mockRepo.On("GetByID", ctx, itemID).Return(&domain.LinkedItem{ID: itemID, AccessToken: "tok"}, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok").Return(plaidItemNotFoundErr())
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{itemID}).Return(nil)
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	require.NoError(t, service.RemoveItem(ctx, itemID))
+	assert.Equal(t, []string{itemID}, mockRepo.PlaidRemovedIDs,
+		"ITEM_NOT_FOUND means the Item is gone and billing has stopped — that is a removal, and it must "+
+			"be recorded, or C2 blocks this user's erasure forever over an Item that does not exist")
+}
+
+// Test_RemoveItem_GenuinePlaidError_DoesNotStamp is the sibling that stops the two tests above from
+// passing for the wrong reason: a stamp written unconditionally would satisfy both. A genuine Plaid
+// failure leaves the Item LIVE, so recording a removal would be a lie — and precisely the lie that
+// lets a GDPR erasure complete over a billing Item.
+func Test_RemoveItem_GenuinePlaidError_DoesNotStamp(t *testing.T) {
+	ctx := context.Background()
+	itemID := "item-plaid-down"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	mockRepo.On("GetByID", ctx, itemID).Return(&domain.LinkedItem{ID: itemID, AccessToken: "tok"}, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok").Return(errors.New("plaid 500"))
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	require.Error(t, service.RemoveItem(ctx, itemID))
+	assert.Empty(t, mockRepo.PlaidRemovedIDs,
+		"a failed removal must NOT be recorded as done — the Item is still live and still billing")
+	assert.Empty(t, mockRepo.CallLog, "neither durable write may run when the Plaid call failed")
+}
+
+// Test_RemoveItem_StampFailure_IsPropagatedAndStatusNotMarked pins the failed-column-write case
+// explicitly, because it is the one that decides whether this new state can become the fifth
+// "mark survives forever" defect:
+//
+//   - the error PROPAGATES (so the worker retries rather than believing cleanup finished), and
+//   - MarkItemsDisconnected is NOT called, so status stays live and the retry actually re-attempts the
+//     item instead of being skipped as already-done.
+//
+// Falsifiability: changing the stamp failure to a Warn-and-continue makes the CallLog assertion fail;
+// returning nil makes the require.Error fail.
+func Test_RemoveItem_StampFailure_IsPropagatedAndStatusNotMarked(t *testing.T) {
+	ctx := context.Background()
+	itemID := "item-stamp-fails"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+	mockRepo.MarkPlaidRemovedErr = errors.New("db blip")
+
+	mockRepo.On("GetByID", ctx, itemID).Return(&domain.LinkedItem{ID: itemID, AccessToken: "tok"}, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok").Return(nil)
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveItem(ctx, itemID)
+	require.Error(t, err, "losing the stamp after a successful Plaid removal must fail loudly — the row now "+
+		"carries no proof of removal, and silence would let the caller delete it")
+	assert.Contains(t, err.Error(), "plaid_removed_at")
+	assert.Equal(t, []string{"MarkPlaidRemoved"}, mockRepo.CallLog,
+		"status must NOT be marked 'disconnected' when the stamp failed: cleanupItems skips 'disconnected' "+
+			"rows without calling Plaid, so writing it here would make the row permanently unreachable")
+	mockRepo.AssertNotCalled(t, "MarkItemsDisconnected", mock.Anything, mock.Anything)
+}
+
+// Test_RemoveItem_StampZeroRows_IsSuccess: ErrNoLinkedItemsUpdated from the stamp means the row no
+// longer exists (MarkPlaidRemoved has no status guard that could filter a live row out), so there is
+// nothing left to record and nothing left for C2's EXISTS to block on. Escalating it would spin a
+// worker forever on a row that is gone.
+func Test_RemoveItem_StampZeroRows_IsSuccess(t *testing.T) {
+	ctx := context.Background()
+	itemID := "item-vanished"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+	mockRepo.MarkPlaidRemovedErr = fmt.Errorf("%w (MarkPlaidRemoved): 0 of 1 given id(s) matched", repository.ErrNoLinkedItemsUpdated)
+
+	mockRepo.On("GetByID", ctx, itemID).Return(&domain.LinkedItem{ID: itemID, AccessToken: "tok"}, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok").Return(nil)
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	require.NoError(t, service.RemoveItem(ctx, itemID))
+	mockRepo.AssertNotCalled(t, "MarkItemsDisconnected", mock.Anything, mock.Anything)
+}
+
+// Test_RemoveItem_ReplacedRow_IsStampedEvenThoughStatusWriteIsANoOp is the service-level statement of
+// the defect this change closes. A 'replaced' row reaching RemoveItem gets:
+//
+//   - a zero-row MarkItemsDisconnected (the guard refuses to overwrite 'replaced' — deliberately), and
+//   - a SUCCESSFUL stamp, which is the fact everything downstream reads.
+//
+// Before #1495 the first bullet was the only durable write attempted, so nothing recorded that Plaid
+// was done and the row was re-enqueued by the backstop on every run while C2 waved the erasure through
+// on the strength of the 'replaced' status alone. Both halves are asserted here so neither can regress
+// alone. The real-Postgres proof of the stamp landing on such a row is
+// TestLinkedItemRepository_MarkPlaidRemoved_Integration_StampsReplacedRowWithoutRevertingStatus.
+func Test_RemoveItem_ReplacedRow_IsStampedEvenThoughStatusWriteIsANoOp(t *testing.T) {
+	ctx := context.Background()
+	itemID := "item-replaced"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	mockRepo.On("GetByID", ctx, itemID).Return(&domain.LinkedItem{
+		ID:          itemID,
+		AccessToken: "tok",
+		Status:      domain.LinkedItemStatusReplaced,
+	}, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok").Return(nil)
+	// What the real MarkItemsDisconnected does to a 'replaced' row: nothing, reported as the sentinel.
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{itemID}).
+		Return(fmt.Errorf("%w (MarkItemsDisconnected): 0 of 1 given id(s) matched", repository.ErrNoLinkedItemsUpdated))
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	require.NoError(t, service.RemoveItem(ctx, itemID))
+	assert.Equal(t, []string{itemID}, mockRepo.PlaidRemovedIDs,
+		"the 'replaced' row is EXACTLY the row status cannot speak for — if the stamp does not land here, "+
+			"nothing records that Plaid is done and C2 blocks this user's erasure forever")
+}
+
+// TestPlaidCleanup_CleanupItems_StampsPlaidRemovedForEverySuccess covers the OTHER Plaid-removal path,
+// and it is not mere symmetry with RemoveItem: cleanupItems (via RemoveAllUserItems) is the DELETION
+// flow's only Plaid cleanup path, so without this call tightening C2 would block every account
+// deletion rather than only the 'replaced' ones.
+func TestPlaidCleanup_CleanupItems_StampsPlaidRemovedForEverySuccess(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-1"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	mockRepo.On("GetByUserID", ctx, userID).Return([]domain.LinkedItem{
+		{ID: "item-1", UserID: userID, AccessToken: "tok-1"},
+	}, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil)
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	require.NoError(t, service.RemoveAllUserItems(ctx, userID))
+	assert.Equal(t, []string{"item-1"}, mockRepo.PlaidRemovedIDs,
+		"cleanupItems must stamp every successfully-removed item, or DeleteUserCascade's C2 guard blocks "+
+			"the deletion it was just asked to prepare for")
+	assert.Equal(t, []string{"MarkPlaidRemoved", "MarkItemsDisconnected"}, mockRepo.CallLog,
+		"same ordering rule as RemoveItem, for the same reason")
+}
+
+// TestPlaidCleanup_CleanupItems_StampFailure_SkipsMarkDisconnectedAndFails is cleanupItems's version of
+// the failed-column-write case. A genuine stamp failure must abort the status write for that batch —
+// writing 'disconnected' would make the loop's own skip branch decline to ever re-attempt those items —
+// and must surface as a per-item failure so the pass is retried.
+func TestPlaidCleanup_CleanupItems_StampFailure_SkipsMarkDisconnectedAndFails(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-2"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+	mockRepo.MarkPlaidRemovedErr = errors.New("db blip")
+
+	mockRepo.On("GetByUserID", ctx, userID).Return([]domain.LinkedItem{
+		{ID: "item-1", UserID: userID, AccessToken: "tok-1"},
+	}, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plaid_removed_at")
+	assert.Equal(t, []string{"MarkPlaidRemoved"}, mockRepo.CallLog,
+		"'disconnected' must not be written when the stamp failed — cleanupItems skips 'disconnected' rows "+
+			"without calling Plaid, so it would strand them")
+	mockRepo.AssertNotCalled(t, "MarkItemsDisconnected", mock.Anything, mock.Anything)
 }

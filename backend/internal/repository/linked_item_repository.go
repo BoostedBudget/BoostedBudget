@@ -37,7 +37,11 @@ var (
 	// checkable) rather than a genuine per-item failure — turning an idempotent no-op into a hard
 	// abort would reproduce the exact false-positive failure mode Issue #1413 #1453's sibling
 	// finding (verifyNoNewLinkedItemAppeared) exists to avoid.
-	ErrNoLinkedItemsUpdated = errors.New("MarkItemsDisconnected: update affected zero rows (all given ids already disconnected/replaced?)")
+	// Issue #1495: also returned by MarkPlaidRemoved, whose zero-row case means something DIFFERENT
+	// (the ids do not exist — that method has no status guard that could filter a live row out), so
+	// the message is worded method-neutrally rather than naming MarkItemsDisconnected. The two
+	// callers wrap it with their own method name and count, which is what a log actually shows.
+	ErrNoLinkedItemsUpdated = errors.New("linked_items update affected zero rows (given ids already terminal, or no longer present?)")
 )
 
 // normalizeLinkedItemStatus treats a NULL linked_items.status value as
@@ -150,6 +154,34 @@ type LinkedItemRepository interface {
 	// legitimate no-op (not automatically a bug) and must not be conflated with a genuine
 	// database error.
 	MarkItemsDisconnected(ctx context.Context, ids []string) error
+
+	// MarkPlaidRemoved stamps linked_items.plaid_removed_at (migration 000131) for the given
+	// SPECIFIC linked items — the durable record that Plaid /item/remove has succeeded for them
+	// (including Plaid answering ITEM_NOT_FOUND, which means the Item is already gone and billing
+	// has already stopped). Issue #1495.
+	//
+	// WHY THIS EXISTS ALONGSIDE MarkItemsDisconnected, which looks like it already says this.
+	// It does not, for one row shape, and that row shape is the defect: MarkItemsDisconnected's
+	// WHERE guard REFUSES to overwrite 'replaced' (deliberately — overwriting it would destroy the
+	// replaced_at/replaced_by_id re-link chain; pinned by
+	// TestLinkedItemRepository_MarkItemsDisconnected_AlreadyReplacedIsNotReverted), yet a
+	// 'replaced' item's Plaid Item is STILL LIVE AND STILL BILLING because the re-link path
+	// (services/account_service.go) never calls /item/remove. status is a single slot and the
+	// re-link fact owns it, so before this column there was nowhere to record "Plaid is done" for
+	// such a row. This method has NO status filter at all and therefore CAN stamp a 'replaced'
+	// row — that is the entire point. See migration 000131's comment for the full rationale.
+	//
+	// Idempotent, and the FIRST stamp wins: the value is written as
+	// COALESCE(plaid_removed_at, <now>), so a re-run neither errors nor moves an
+	// already-recorded instant later. A nil or empty ids is a no-op (not an error).
+	//
+	// Returns ErrNoLinkedItemsUpdated (errors.Is-checkable) if the UPDATE matched zero rows despite
+	// a non-empty ids. Unlike MarkItemsDisconnected, where zero rows is the ROUTINE
+	// already-terminal case, zero rows here can only mean the ids do not exist (the row was
+	// deleted concurrently) — there is no status guard left to filter them out. Callers must still
+	// not escalate it into a permanent retry loop; see RemoveItem/cleanupItems for how each treats
+	// it.
+	MarkPlaidRemoved(ctx context.Context, ids []string) error
 
 	// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
 	GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
@@ -857,6 +889,27 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 // consumer — but the constant stays split out because ClaimItemForCleanup shares its inner
 // cleanupCandidateReasonPredicate (#1486). $1 is the errorDays interval, $2 the staleDays interval; a
 // caller appending its own clauses must start numbering at $3.
+//
+// Issue #1495: the single `li.status NOT IN ('replaced', 'disconnected')` clause was SPLIT into two,
+// because it was doing two unrelated jobs under one spelling:
+//
+//   - the 'disconnected' half was an "is the Plaid side already done?" test, and status is not a
+//     sound answer to that question (a re-link writes 'replaced' without calling Plaid, and
+//     MarkItemsDisconnected refuses to overwrite 'replaced', so "done" was unrecordable for those
+//     rows). It is now `li.plaid_removed_at IS NULL`, the column that records the fact directly.
+//     Strictly wider AND strictly narrower than before, both in the right direction: a 'replaced'
+//     row whose Plaid side IS done is now excluded (it was already excluded, by the other half), and
+//     a 'disconnected' row whose Plaid side is somehow NOT recorded as done is now a candidate again
+//     instead of being permanently invisible.
+//   - the 'replaced' half is CANDIDACY, not Plaid state, and is unchanged in effect: the SWEEP still
+//     does not schedule cleanups for re-link leftovers (ClaimItemForCleanup and
+//     GetItemsPendingCleanup, the recovery paths, deliberately do not share this exclusion — see
+//     cleanupCandidateReasonPredicate's second bullet). It is now spelled NULL-safely
+//     (`status IS NULL OR status <> 'replaced'`) to match every sibling liveness predicate in this
+//     file; the previous bare `NOT IN` form silently EXCLUDED a NULL-status row from the sweep under
+//     SQL three-valued logic, the opposite of how every other predicate here treats NULL.
+//     Unreachable in practice since 000126 made status NOT NULL; corrected anyway, for the same
+//     reason its siblings are written that way.
 const cleanupCandidateSelectQuery = `
 	SELECT li.id, li.user_id, li.item_id, li.access_token_encrypted,
 	       li.institution_id, li.institution_name, li.provider, li.cursor, li.last_synced_at,
@@ -867,7 +920,8 @@ const cleanupCandidateSelectQuery = `
 	       li.status_changed_at
 	FROM linked_items li
 	WHERE li.cleanup_scheduled_at IS NULL
-	  AND li.status NOT IN ('replaced', 'disconnected')
+	  AND li.plaid_removed_at IS NULL
+	  AND (li.status IS NULL OR li.status <> 'replaced')
 	  AND ` + cleanupCandidateReasonPredicate + `
 `
 
@@ -892,15 +946,17 @@ const cleanupCandidateSelectQuery = `
 //     still true: NOTHING clears cleanup_scheduled_at on reconnection, so a
 //     reconnected, fully repaired item still carries its schedule.
 //     ClaimItemForCleanup therefore requires the INVERSE (IS NOT NULL) and adds it itself.
-//   - `li.status NOT IN ('replaced', 'disconnected')` is also sweep-only, and including it in a
-//     recheck would be actively harmful: the re-link path (services/account_service.go, "re-link
-//     detected, soft-deleting old linked item") marks the OLD item 'replaced' WITHOUT calling Plaid
-//     /item/remove, so a 'replaced' item's Plaid item is still live and still billing. Declining to
-//     remove it would strand it forever — the sweep excludes 'replaced' too, so it would never be
-//     re-selected. A 'disconnected' item is the harmless direction: that path removes the item from
-//     Plaid first and only then marks the status (services/plaid_item_cleanup_service.go's
-//     cleanupItems), so a second /item/remove is a wasted API call that PlaidItemCleanupService
-//     already swallows, not a lost one.
+//   - The sweep's own `li.plaid_removed_at IS NULL AND (li.status IS NULL OR li.status <> 'replaced')`
+//     pair is also sweep-only (Issue #1495 split what was one `li.status NOT IN ('replaced',
+//     'disconnected')` clause; see cleanupCandidateSelectQuery for why), and including the 'replaced'
+//     half in a recheck would be actively harmful: the re-link path (services/account_service.go,
+//     "re-link detected, soft-deleting old linked item") marks the OLD item 'replaced' WITHOUT calling
+//     Plaid /item/remove, so a 'replaced' item's Plaid item is still live and still billing. Declining
+//     to remove it would strand it forever — the sweep excludes 'replaced' too, so it would never be
+//     re-selected. Re-checking `plaid_removed_at IS NULL` would be harmless but pointless here for the
+//     same reason the 'disconnected' exclusion was: the item RemoveItem is about to remove has not
+//     been stamped yet by definition, and a second /item/remove against an already-removed Item is a
+//     wasted API call that PlaidItemCleanupService already maps to success, not a lost one.
 const cleanupCandidateReasonPredicate = `(
 	      -- Items in error state for > errorDays
 	      (li.status IN ('error', 'login_required') AND li.last_error_at < NOW() - $1::interval)
@@ -1102,46 +1158,35 @@ func (r *linkedItemRepository) queryCleanupCandidates(ctx context.Context, query
 // selection query for ItemCleanupCheckWorker's stranded-cleanup backstop (Issue #1486 follow-up
 // part C) — before that it had no production caller at all.
 //
-// EXCLUDES 'disconnected' ONLY, and the asymmetry with the SWEEP's candidacy predicate
-// (cleanupCandidateSelectQuery, which excludes 'replaced' too) is DELIBERATE. It is the same
-// deliberate asymmetry ClaimItemForCleanup already has, and for the same reason — see
-// cleanupCandidateReasonPredicate's second "what is deliberately NOT in here" bullet:
+// SELECTS ON plaid_removed_at, NOT ON status (Issue #1495), and that single change dissolves both
+// halves of the mess this predicate used to document:
 //
-//   - 'replaced' items are STILL LIVE AND STILL BILLING at Plaid. The re-link path
-//     (services/account_service.go, "re-link detected, soft-deleting old linked item") marks the OLD
-//     item 'replaced' WITHOUT ever calling /item/remove. A stamped 'replaced' row therefore needs
-//     recovery MORE than an ordinary one, not less: the candidate sweep can never re-select it
-//     (it requires cleanup_scheduled_at IS NULL and excludes 'replaced' on top of that), so this
-//     query is its ONLY recovery path. Issue #1486 follow-up fix round 1: this clause used to
-//     exclude 'replaced', copied from the sweep where it belongs, which left the exact terminal
-//     state the backstop exists for unreachable — a genuine Plaid failure propagates (part B),
-//     River exhausts its inherited 5 attempts, the job dead-letters with the stamp still set, and
-//     nothing could ever reach the row again. A live, billable Item with no live job, indefinitely.
-//     Pinned by TestGetItemsPendingCleanup_Integration_ReplacedItemIsRecoverable.
-//   - 'disconnected' stays excluded, and that exclusion is LOAD-BEARING: the status is set only
-//     AFTER Plaid removal succeeded (cleanupItems, and RemoveItem as of part A), so including it
-//     would make the backstop re-enqueue rows whose Plaid side is already done on every single run,
-//     forever.
+//   - It used to exclude 'disconnected' and NOT 'replaced' — a deliberate asymmetry with the SWEEP's
+//     candidacy predicate (cleanupCandidateSelectQuery), because a 'replaced' item is STILL LIVE AND
+//     STILL BILLING at Plaid (the re-link path in services/account_service.go marks the OLD item
+//     'replaced' WITHOUT ever calling /item/remove) and this query is its ONLY recovery path: the
+//     candidate sweep requires cleanup_scheduled_at IS NULL and excludes 'replaced' on top of that.
+//     That reasoning is unchanged and still load-bearing — a 'replaced' row with no recorded Plaid
+//     removal is still selected here. Pinned by
+//     TestGetItemsPendingCleanup_Integration_ReplacedItemIsRecoverable.
+//   - But those exclusions did NOT add up to "every selected row still needs Plaid work", and could
+//     not be made to: MarkItemsDisconnected must not overwrite 'replaced', so a 'replaced' row whose
+//     Plaid side WAS already done had nowhere to say so and was re-selected on every run, costing one
+//     /item/remove per run that answers ITEM_NOT_FOUND. The prior version of this comment called that
+//     an accepted, self-healing limitation and named the fix: a dedicated plaid_removed_at column.
+//     That column now exists (migration 000131) and this predicate reads it, so the loop is closed at
+//     its cause rather than waiting on ItemCleanupWorker.Work's ClearCleanupSchedule to end it.
 //
-// ⚠ Those two bullets together do NOT add up to "every selected row still needs Plaid work" (fix
-// round 2, item 1). A 'replaced' row whose Plaid side IS already done is selected here anyway, and
-// unavoidably so: MarkItemsDisconnected must not overwrite 'replaced' (it is a terminal soft-delete
-// state from a re-link, carrying replaced_at/replaced_by_id), so there is nowhere on such a row to
-// record that removal happened — status is the only slot and the re-link fact already owns it. What
-// takes such a row out of this result set is ItemCleanupWorker.Work's ClearCleanupSchedule, which
-// removes the stamp; until that lands, the row is re-selected every run, costing one /item/remove
-// per run that answers ITEM_NOT_FOUND and is mapped to success. Self-healing and GDPR-neutral
-// (uncleanedLinkedItemExistsClause excludes 'replaced'), but it is a real limitation of this
-// predicate and not something the two bullets above rule out. A dedicated plaid_removed_at column
-// would let both facts coexist and is the proper fix.
+// 'disconnected' is no longer named here, and it does not need to be: MarkPlaidRemoved is called
+// immediately BEFORE MarkItemsDisconnected on every success path (RemoveItem and cleanupItems), and
+// migration 000132 backfilled pre-existing 'disconnected' rows, so a row carrying that status carries
+// a stamp too and is excluded by `plaid_removed_at IS NULL` for the reason that actually matters.
 //
-// The `status IS NULL OR` arm is required for the same reason liveLinkedItemExistsClause and
-// uncleanedLinkedItemExistsClause (profile_repository.go) carry theirs, and #1444's rationale
-// applies verbatim: a bare `status NOT IN (...)` evaluates to NULL — not true — for a NULL-status
-// row under SQL three-valued logic, so such a row would be silently EXCLUDED, and every other
-// "is this item still live?" predicate on this branch treats NULL as live. Migration
-// 000126_set_linked_items_status_not_null makes this unreachable in practice today; it is written
-// NULL-safely so the predicate does not depend on that constraint staying in place.
+// NULL-safety: `plaid_removed_at IS NULL` is a two-valued IS NULL test, so the three-valued-logic
+// hole that required the old `status IS NULL OR` arm (#1444 — a bare `status NOT IN (...)` is UNKNOWN
+// rather than TRUE for a NULL-status row, silently excluding it from this backstop) cannot arise
+// here at all. The arm was not dropped as a simplification; the predicate it guarded is gone. Its
+// sibling in cleanupCandidateSelectQuery, which still reads status, keeps the NULL-safe spelling.
 //
 // Issue #1413 round-10 (#1444): NULL-safe status SCAN as well (see normalizeLinkedItemStatus), for
 // consistency with every other scan site in this file.
@@ -1157,7 +1202,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 		FROM linked_items
 		WHERE cleanup_scheduled_at IS NOT NULL
 		  AND cleanup_scheduled_at < NOW()
-		  AND (status IS NULL OR status NOT IN ('disconnected'))
+		  AND plaid_removed_at IS NULL
 		ORDER BY cleanup_scheduled_at ASC
 	`
 
@@ -1382,7 +1427,44 @@ func (r *linkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: 0 of %d given id(s) matched", ErrNoLinkedItemsUpdated, len(ids))
+		return fmt.Errorf("%w (MarkItemsDisconnected): 0 of %d given id(s) matched", ErrNoLinkedItemsUpdated, len(ids))
+	}
+	return nil
+}
+
+// MarkPlaidRemoved stamps plaid_removed_at for the given items — see the interface method's doc
+// comment (Issue #1495) for why this cannot be folded into MarkItemsDisconnected.
+//
+// NO STATUS FILTER, deliberately, and this is the one line the whole change rests on: a 'replaced'
+// row MUST be stampable here, because that is precisely the row MarkItemsDisconnected refuses and
+// therefore the row that had no way to record "Plaid is done" at all. Adding a status guard here
+// would recreate the deadlock this column exists to break. Proved against real Postgres by
+// TestLinkedItemRepository_MarkPlaidRemoved_Integration_StampsReplacedRowWithoutRevertingStatus.
+//
+// COALESCE(plaid_removed_at, $1) rather than a bare assignment, plus no `plaid_removed_at IS NULL`
+// in the WHERE: the two together make the write idempotent (an already-stamped row keeps its
+// earlier, closer-to-the-truth instant) while keeping RowsAffected a statement about whether the
+// ROWS EXIST rather than about whether they were already stamped. With the WHERE guard instead, a
+// legitimate re-run would report zero rows and be indistinguishable from a vanished row.
+func (r *linkedItemRepository) MarkPlaidRemoved(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET plaid_removed_at = COALESCE(plaid_removed_at, $1),
+		    updated_at = $1
+		WHERE id = ANY($2)
+	`
+
+	tag, err := r.db.Exec(ctx, query, now, ids)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w (MarkPlaidRemoved): 0 of %d given id(s) matched", ErrNoLinkedItemsUpdated, len(ids))
 	}
 	return nil
 }

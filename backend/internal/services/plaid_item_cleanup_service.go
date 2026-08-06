@@ -207,26 +207,30 @@ type PlaidItemCleanupService interface {
 	//     live, still-billing Plaid Item survived with no local record it ever existed — verbatim the
 	//     outcome that guard's own comment says it exists to prevent.
 	//
-	// On success (INCLUDING the already-gone case) the item is marked 'disconnected' via
-	// MarkItemsDisconnected BEFORE returning, so "Plaid billing is stopped" is recorded durably on
-	// the row instead of depending on the caller's best-effort row Delete — which is a deliberate
-	// no-op whenever accounts still reference the item, so the row frequently survives. That marker
-	// is what keeps the C2 guard correct on a surviving row (it excludes 'disconnected'), and what
-	// keeps ItemCleanupCheckWorker's pending-cleanup backstop from re-enqueueing an item whose Plaid
-	// side is already done (GetItemsPendingCleanup excludes 'disconnected' too).
+	// On success (INCLUDING the already-gone case) TWO writes happen BEFORE returning, in this order,
+	// and both are propagated rather than best-effort:
 	//
-	// ErrNoLinkedItemsUpdated from that marker write is an idempotent no-op, not a failure — see the
-	// implementation, which draws the same distinction cleanupItems already does.
+	//  1. MarkPlaidRemoved stamps linked_items.plaid_removed_at (Issue #1495). This is the write that
+	//     records "Plaid billing is stopped" for EVERY row shape, including a 'replaced' one, and it is
+	//     the ONLY fact the three downstream predicates read — DeleteUserCascade's C2 guard
+	//     (uncleanedLinkedItemExistsClause), ItemCleanupCheckWorker's pending-cleanup backstop
+	//     (GetItemsPendingCleanup) and the cleanup sweep (cleanupCandidateSelectQuery). Recording it on
+	//     the ROW matters because the caller's row Delete is a deliberate no-op whenever accounts still
+	//     reference the item, so the row frequently survives.
+	//  2. MarkItemsDisconnected then moves status to 'disconnected'. ErrNoLinkedItemsUpdated from THIS
+	//     write is an idempotent no-op, not a failure (the row was already 'disconnected', or is
+	//     'replaced' and must keep that status) — see the implementation.
 	//
-	// ⚠ The previous paragraph SILENTLY ASSUMED the marker write lands, and for a 'replaced' row it
-	// does not (fix round 2, item 1): MarkItemsDisconnected's WHERE guard excludes 'replaced', so the
-	// write is a zero-row no-op, this method still reports success, and the row keeps 'replaced'. It
-	// is therefore NOT true for that case that the backstop will leave the item alone — round 1 made
-	// GetItemsPendingCleanup include 'replaced' on purpose, since such an item is still live at Plaid
-	// until removed. What actually stops the re-enqueue loop there is the CALLER's
-	// ClearCleanupSchedule succeeding. Bounded and self-healing; see ItemCleanupWorker.Work's ⚠ note
-	// on that call for the full argument and for why the real fix is a separate column rather than
-	// overwriting 'replaced'.
+	// The ORDER is deliberate and is argued in full at the call site: if the stamp fails, status must
+	// still be live so a retry re-attempts the item and reaches the stamp again. The reverse order
+	// could leave a 'disconnected' row carrying no proof of removal, which nothing would ever
+	// re-attempt.
+	//
+	// This REPLACES a caveat that used to live here (fix round 2, item 1) about MarkItemsDisconnected
+	// being a zero-row no-op for a 'replaced' row, leaving nowhere to record that Plaid was done and
+	// making the backstop re-enqueue such a row until the CALLER's ClearCleanupSchedule landed. That
+	// gap is closed at its cause: plaid_removed_at is writable on a 'replaced' row, so the row leaves
+	// the backstop's result set as soon as removal is recorded.
 	RemoveItem(ctx context.Context, linkedItemID string) error
 
 	// DisconnectAllUserItems calls Plaid /item/remove for all items, then marks
@@ -307,6 +311,11 @@ type linkedItemRepoForCleanup interface {
 	// repository.LinkedItemRepository's doc comment for why this differs from
 	// MarkAllUserItemsDisconnected.
 	MarkItemsDisconnected(ctx context.Context, ids []string) error
+	// MarkPlaidRemoved stamps linked_items.plaid_removed_at — the ONLY durable record that Plaid
+	// /item/remove succeeded, and the only one that works for a 'replaced' row (Issue #1495). See
+	// repository.LinkedItemRepository's doc comment for why MarkItemsDisconnected cannot carry
+	// this fact, and RemoveItem/cleanupItems below for why this write must come FIRST.
+	MarkPlaidRemoved(ctx context.Context, ids []string) error
 }
 
 // plaidServiceForCleanup is a minimal interface for the Plaid operations
@@ -435,13 +444,64 @@ func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 	// nothing about the user's subscription is at issue. Pre-fix those rows kept 'error'/'active'
 	// instead, so this is new.
 	//
-	// Accepted here rather than papered over: 'disconnected' is precisely correct as a DATA statement
-	// ("this item's Plaid side is done"), and three predicates depend on that meaning
-	// (uncleanedLinkedItemExistsClause, cleanupCandidateSelectQuery, GetItemsPendingCleanup). The
-	// defect is in the frontend's COPY, not in the status. A distinct status (e.g. 'removed') would
-	// mean auditing all three predicates plus every scan site, which is not a change to make as a
-	// side effect of a billing fix — if the badge copy is judged unacceptable, fix the copy, or make
-	// the status split a deliberate ticket of its own.
+	// Accepted here rather than papered over: 'disconnected' is still a true DATA statement about such
+	// a row. Issue #1495 CORRECTS the reason this paragraph used to give, which was that "three
+	// predicates depend on that meaning (uncleanedLinkedItemExistsClause, cleanupCandidateSelectQuery,
+	// GetItemsPendingCleanup)". They no longer do — all three now read plaid_removed_at, precisely
+	// because status could not express the fact for a 'replaced' row. So the argument against a
+	// distinct status ("it would mean auditing all three predicates") is now WEAKER, not stronger: the
+	// predicates are decoupled from status here. What remains true is that the defect is in the
+	// frontend's COPY, not in the status, and that changing the status would still mean auditing every
+	// scan site and every OTHER status-reading predicate (GetActiveItemsByUserID,
+	// liveLinkedItemExistsClause, MarkItemsDisconnected's own guard). Still not a change to make as a
+	// side effect of a billing fix — but if the badge copy is judged unacceptable, that ticket is now
+	// cheaper than this comment used to claim.
+	// Issue #1495: STAMP plaid_removed_at FIRST, before MarkItemsDisconnected, and the order is
+	// load-bearing rather than stylistic.
+	//
+	// THE ORDER IS WHAT KEEPS THIS FROM BECOMING THE FIFTH "state marked, work never happened, mark
+	// survives forever" defect on this branch. Consider the write failing right here, after a
+	// successful Plaid removal:
+	//
+	//   - In THIS order, status is still live, so nothing downstream believes any work was done.
+	//     ItemCleanupWorker.Work sees the error and retries; the retry re-reads the row, calls
+	//     /item/remove again (Plaid answers ITEM_NOT_FOUND, which isPlaidItemAlreadyGone maps to
+	//     SUCCESS), and reaches this line again. The DB blip clears and the stamp lands. The cost of
+	//     the failure is one wasted API call; the state converges. Meanwhile
+	//     uncleanedLinkedItemExistsClause still BLOCKS that user's erasure — fail-closed, which is
+	//     the safe direction: we may not yet be able to prove Plaid is done, so we do not proceed to
+	//     an irreversible hard delete.
+	//   - In the REVERSE order it would be unrecoverable. MarkItemsDisconnected would have already
+	//     written 'disconnected', and cleanupItems SKIPS 'disconnected' rows without calling Plaid,
+	//     so no retry would ever reach this line again — leaving a row that claims cleanup happened,
+	//     carries no proof of it, and permanently blocks that user's GDPR erasure. Exactly the
+	//     failure shape the preceding four fixes on this branch each closed.
+	//
+	// The proviso from the paragraph above still applies unchanged: convergence depends on the Plaid
+	// removal itself being able to succeed or answer ITEM_NOT_FOUND. If it can never succeed, nothing
+	// here converges — see the permanently-failing-removal note on the error branch, and #1494.
+	if stampErr := s.linkedItemRepo.MarkPlaidRemoved(ctx, []string{linkedItemID}); stampErr != nil {
+		if errors.Is(stampErr, repository.ErrNoLinkedItemsUpdated) {
+			// Zero rows here means something DIFFERENT from the MarkItemsDisconnected case below:
+			// MarkPlaidRemoved has no status guard, so no live row can be filtered out of it. The only
+			// way to match nothing is for the row to no longer exist — deleted concurrently between
+			// this method's GetByID and now. Nothing left to record, and nothing left for any
+			// predicate to read: uncleanedLinkedItemExistsClause is an EXISTS over linked_items, so an
+			// absent row cannot block anything. Success, logged.
+			s.logger.Warn("MarkPlaidRemoved matched zero rows — linked item row no longer exists",
+				"item_id", linkedItemID,
+				"error", stampErr,
+			)
+			return nil
+		}
+		s.logger.Error("Plaid removal succeeded but recording plaid_removed_at failed",
+			"item_id", linkedItemID,
+			"plaid_item_id", item.ItemID,
+			"error", stampErr,
+		)
+		return fmt.Errorf("failed to record plaid_removed_at for item %s after Plaid removal: %w", linkedItemID, stampErr)
+	}
+
 	if markErr := s.linkedItemRepo.MarkItemsDisconnected(ctx, []string{linkedItemID}); markErr != nil {
 		if errors.Is(markErr, repository.ErrNoLinkedItemsUpdated) {
 			// A legitimate no-op: the row was already 'disconnected' or 'replaced'. Same distinction
@@ -475,6 +535,21 @@ func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 	}
 
 	return nil
+}
+
+// markItemsDisconnectedWhenStamped is cleanupItems's guarded MarkItemsDisconnected call (Issue
+// #1495). It exists only so the "don't write 'disconnected' when the plaid_removed_at stamp genuinely
+// failed" rule is a single expression rather than an indentation level wrapped around forty lines of
+// existing sentinel handling.
+//
+// Returns nil when stamped is false — the caller has ALREADY appended the stamp failure to itemErrs,
+// so the pass fails and retries; adding a second error for a write that was deliberately not
+// attempted would only obscure the real cause.
+func (s *plaidItemCleanupService) markItemsDisconnectedWhenStamped(ctx context.Context, ids []string, stamped bool) error {
+	if !stamped {
+		return nil
+	}
+	return s.linkedItemRepo.MarkItemsDisconnected(ctx, ids)
 }
 
 // removeItemInternal handles the actual Plaid /item/remove call for a single item.
@@ -567,7 +642,8 @@ type fetchLinkedItemsFn func(ctx context.Context, userID string) ([]domain.Linke
 //   - Treats Plaid's ITEM_NOT_FOUND response (the item was already removed, at Plaid or by an
 //     earlier attempt of this very operation) as success, not a failure — H2's idempotency fix,
 //     the single highest-value change in this task.
-//   - Persists per-item success (including "already gone") via MarkItemsDisconnected BEFORE
+//   - Persists per-item success (including "already gone") via MarkPlaidRemoved and then
+//     MarkItemsDisconnected (Issue #1495 — in that order; see the call site) BEFORE
 //     returning, so the durable state survives even when other items in the same batch failed.
 //   - Aggregates genuine per-item failures into a non-nil returned error — every item attempted
 //     before an abort is still attempted regardless of an earlier failure (a single bad item must
@@ -662,7 +738,38 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 		}
 
 		if len(successIDs) > 0 {
-			if markErr := s.linkedItemRepo.MarkItemsDisconnected(ctx, successIDs); markErr != nil {
+			// Issue #1495: stamp plaid_removed_at BEFORE MarkItemsDisconnected, for the same
+			// order-is-load-bearing reason spelled out at RemoveItem's call site — if this write fails,
+			// status must still be live so the retry re-attempts the item and reaches this line again.
+			// The reverse order would leave 'disconnected' rows with no proof of removal, which
+			// cleanupItems's own skip branch above then declines to re-attempt, permanently.
+			//
+			// THIS CALL IS ALSO WHAT KEEPS DELETION WORKING AT ALL, and it is not merely symmetry with
+			// RemoveItem: DeleteUserCascade's C2 guard now demands plaid_removed_at on every one of the
+			// user's rows, and cleanupItems (via RemoveAllUserItems) is the deletion flow's ONLY Plaid
+			// cleanup path — RemoveItem is the per-item worker path. Without this call, tightening C2
+			// would block every account deletion, not just the 'replaced' ones.
+			stamped := true
+			if stampErr := s.linkedItemRepo.MarkPlaidRemoved(ctx, successIDs); stampErr != nil {
+				if errors.Is(stampErr, repository.ErrNoLinkedItemsUpdated) {
+					// Zero rows means every id vanished from linked_items between the fetch and now
+					// (MarkPlaidRemoved has no status guard that could filter a live row out — see its
+					// doc comment). An absent row cannot block anything: uncleanedLinkedItemExistsClause
+					// is an EXISTS over linked_items. Logged, not escalated, for the same reason the
+					// MarkItemsDisconnected no-op below is not escalated.
+					s.logger.Warn("MarkPlaidRemoved matched zero rows — linked item row(s) no longer exist",
+						"user_id", userID, "ids_count", len(successIDs), "error", stampErr)
+				} else {
+					// GENUINE failure: do NOT fall through to MarkItemsDisconnected. Writing
+					// 'disconnected' now would produce the exact unrecoverable state the ordering above
+					// exists to prevent — a row asserting cleanup happened, carrying no proof of it, that
+					// this loop's own skip branch then refuses to re-attempt forever. Leaving status live
+					// is what makes the retry come back here.
+					stamped = false
+					itemErrs = append(itemErrs, fmt.Errorf("failed to record plaid_removed_at for %d item(s): %w", len(successIDs), stampErr))
+				}
+			}
+			if markErr := s.markItemsDisconnectedWhenStamped(ctx, successIDs, stamped); markErr != nil {
 				if errors.Is(markErr, repository.ErrNoLinkedItemsUpdated) {
 					// Issue #1413 Medium finding (PR #1443 Codex review round 4): a legitimate
 					// no-op, not a genuine per-item failure — every id in successIDs was already

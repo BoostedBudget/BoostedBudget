@@ -184,8 +184,9 @@ type ProfileRepository interface {
 	// above.
 	//
 	// Also refuses to proceed while any of the user's linked_items rows still need Plaid-side
-	// cleanup (uncleanedLinkedItemExistsClause — status IS NULL OR status NOT IN ('disconnected',
-	// 'replaced'), Issue #1444) — Issue #1413 round-4 Critical finding C2: deleting the
+	// cleanup (uncleanedLinkedItemExistsClause — `plaid_removed_at IS NULL` since Issue #1495; it
+	// tested status until then, which trusted 'replaced' and so let this very outcome happen —
+	// see that const's own comment) — Issue #1413 round-4 Critical finding C2: deleting the
 	// local linked_items rows (Step 3 below) while any remain un-cleaned would orphan a live,
 	// still-billing Plaid access token with no local record it ever existed. See
 	// plaid_item_cleanup_service.go's cleanupItems for the companion fix (re-reading the item
@@ -3175,8 +3176,37 @@ const anyLinkedItemExistsClause = `EXISTS (
 // user_id) rather than correlated against `users.id` like liveLinkedItemExistsClause/
 // anyLinkedItemExistsClause, because DeleteUserCascade's guard query is not already joined to
 // `users`.
+// Issue #1495 — THE STATUS TEST IS GONE, replaced by plaid_removed_at IS NULL, and this is a
+// deliberate TIGHTENING, not a rewording. The paragraph above is preserved because its NULL-safety
+// history is still the reason this const exists at all, but its second half was WRONG: it asserted
+// that 'replaced' items "no longer need Plaid-side cleanup". They do. The re-link path
+// (services/account_service.go, "re-link detected, soft-deleting old linked item") sets the OLD
+// item's status to 'replaced' WITHOUT ever calling Plaid /item/remove, so a 'replaced' Item is
+// still live and still billing — and because 'replaced' was the one status this guard TRUSTED, a
+// GDPR erasure could complete over exactly such an Item, hard-deleting the only local pointer to
+// it. That is verbatim the outcome this guard's call-site comment says it exists to prevent,
+// reached through the guard itself. Two independent reviewers rated it Critical.
+//
+// It now FAILS CLOSED on the one fact that actually answers the question: block while
+// plaid_removed_at IS NULL, regardless of status. Only a recorded, successful Plaid removal
+// (LinkedItemRepository.MarkPlaidRemoved, or migration 000132's explicitly-assumed backfill of
+// pre-existing 'disconnected' rows) lets the cascade past this point.
+//
+// NULL-SAFETY, and why the sibling `status IS NULL OR` arm is not merely dropped but MOOT here:
+// `plaid_removed_at IS NULL` is an IS NULL test, which is two-valued — it returns TRUE or FALSE,
+// never UNKNOWN — so the three-valued-logic hole that made `status <> 'disconnected'` silently
+// exclude NULL-status rows cannot arise. The sibling predicates that still READ status
+// (liveLinkedItemExistsClause here, cleanupCandidateSelectQuery in linked_item_repository.go) keep
+// their NULL-safe spelling for the original reason; this one has nothing left to make NULL-safe.
+// Do NOT "restore symmetry" by re-adding a status arm: any status arm here is an OR-ed escape from
+// a guard whose entire job is to have none.
+//
+// WIDENED POPULATION, disclosed. Items whose Plaid removal can never succeed now block their
+// user's erasure, and this change ADDS 'replaced' rows to that population. Accepted: fail-closed is
+// the correct direction for an irreversible hard delete, production has zero users today, and
+// issue #1494 tracks the operator escape hatch (alerting plus an audited manual override).
 const uncleanedLinkedItemExistsClause = `EXISTS (
-	SELECT 1 FROM linked_items WHERE user_id = $1 AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))
+	SELECT 1 FROM linked_items WHERE user_id = $1 AND plaid_removed_at IS NULL
 )`
 
 // householdOwnerBlocksDeletionClause is DeleteUserCascade's guard predicate for "deleting this
