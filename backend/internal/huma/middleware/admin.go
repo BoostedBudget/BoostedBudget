@@ -18,13 +18,20 @@ import (
 //
 // Security Strategy:
 //  1. Only applies to routes starting with /api/v1/admin
-//  2. Environment check FIRST: Returns 404 in non-qa environments (hides endpoint existence)
-//  3. Authentication check: Returns 401 if no Clerk user ID in context
-//  4. Hardcoded email check: Allows access if email is in hardcoded admin list
-//  5. Role check: Returns 403 if user doesn't have admin role in Clerk privateMetadata
+//  2. Authentication check: Returns 401 if no Clerk user ID in context
+//  3. Hardcoded email check: Allows access if email is in hardcoded admin list
+//  4. Role check: Returns 403 if user doesn't have admin role in Clerk privateMetadata
+//     (and 500, i.e. refused, if the role lookup itself fails — fail closed)
+//
+// Issue #1499: there is deliberately NO environment check. Admin endpoints used to return
+// 404 outside qa/staging, which made the admin dashboard — system health, user management,
+// subscription admin, the dead-letter queue — unreachable in production for actual admins.
+// Identity and role are now the whole gate, in every environment. The consequence worth
+// keeping in mind: the hardcoded admin email list is now a live production ACL.
 //
 // Parameters:
-//   - cfg: Application config (for environment check)
+//   - cfg: Application config (retained for callers and future per-environment policy;
+//     no longer consulted for authorization)
 //   - adminService: Service for role verification
 func NewAdminMiddleware(
 	cfg *config.Config,
@@ -52,22 +59,14 @@ func NewAdminMiddleware(
 			return
 		}
 
-		// 1. Environment check FIRST: Only allow qa and staging environments
-		// Returns 404 instead of 403 for security through obscurity
-		// (prevents revealing endpoint existence to unauthorized users)
-		if cfg.Environment != "qa" && cfg.Environment != "staging" {
-			writeAdminJSONError(ctx, http.StatusNotFound, "Endpoint not available")
-			return
-		}
-
-		// 2. Get Clerk user ID from context (set by Clerk middleware)
+		// 1. Get Clerk user ID from context (set by Clerk middleware)
 		clerkUserID, ok := ctx.Context().Value(inputs.ClerkUserIDKey).(string)
 		if !ok || clerkUserID == "" {
 			writeAdminJSONError(ctx, http.StatusUnauthorized, "User not authenticated")
 			return
 		}
 
-		// 3. Get email from Clerk claims (with fallback to Clerk API if needed)
+		// 2. Get email from Clerk claims (with fallback to Clerk API if needed)
 		email := extractEmailFromContext(ctx)
 		if email == "" {
 			// Fallback: Fetch from Clerk API if JWT claims don't include email
@@ -76,13 +75,15 @@ func NewAdminMiddleware(
 			}
 		}
 
-		// 4. Check hardcoded admin list first (bypasses Clerk API call for role)
+		// 3. Check hardcoded admin list first (bypasses Clerk API call for role).
+		// Issue #1499: with the environment gate gone this list is a PRODUCTION ACL —
+		// it is loaded from config/admin_emails.yaml, which ships inside the image.
 		if email != "" && adminService.IsHardcodedAdmin(email) {
 			next(ctx)
 			return
 		}
 
-		// 5. Check admin role via Clerk privateMetadata
+		// 4. Check admin role via Clerk privateMetadata
 		hasAdminRole, err := adminService.HasRole(ctx.Context(), clerkUserID, domain.RoleAdmin)
 		if err != nil {
 			writeAdminJSONError(ctx, http.StatusInternalServerError, "Failed to verify admin role")
