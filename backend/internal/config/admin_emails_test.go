@@ -103,14 +103,14 @@ func TestEffectiveAdminEmails_UnrecognisedEnvironmentFailsSafe(t *testing.T) {
 	cfg := loadShippedAdminEmailConfig(t)
 
 	for _, env := range []string{
-		"",             // ENVIRONMENT unset and no default applied
-		"   ",          // whitespace only
-		"prod",         // plausible abbreviation that is not a known name
-		"produciton",   // misspelling of production
-		"stagng",       // misspelling of staging
-		"q a",          // mangled qa
-		"preprod",      // an environment nobody has declared
-		"unknown-env",  // anything else
+		"",            // ENVIRONMENT unset and no default applied
+		"   ",         // whitespace only
+		"prod",        // plausible abbreviation that is not a known name
+		"produciton",  // misspelling of production
+		"stagng",      // misspelling of staging
+		"q a",         // mangled qa
+		"preprod",     // an environment nobody has declared
+		"unknown-env", // anything else
 	} {
 		t.Run("env="+env, func(t *testing.T) {
 			effective := cfg.EffectiveAdminEmails(env)
