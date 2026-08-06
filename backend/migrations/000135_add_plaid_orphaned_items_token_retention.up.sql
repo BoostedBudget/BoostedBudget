@@ -17,9 +17,12 @@
 --   2. It argued a bank-connection credential belonging to an erased user is a larger retention
 --      commitment than an opaque item id, and that 000134's narrow GDPR argument would not cover it.
 --      THAT REMAINS TRUE, and it is why this migration does not simply add a nullable column: the
---      retention is given a HARD DEADLINE in the schema (token_expires_at, NOT NULL) and an
---      unconditional purge sweep keyed on nothing but that deadline. The defensibility comes entirely
---      from the bound, not from the purpose.
+--      retention is given a DEADLINE IN THE SCHEMA (token_expires_at, NOT NULL, so "retained
+--      indefinitely" is not expressible) and an unconditional purge sweep keyed on nothing but that
+--      deadline. The defensibility comes entirely from the bound, not from the purpose -- so the bound
+--      is stated as it is actually kept: unusable from the deadline exactly, destroyed by the first
+--      sweep at or after it (at most domain.OrphanedItemTokenPurgeInterval, 1 hour, later). See the
+--      token_expires_at column comment; do not restate this as "cannot exist past the deadline".
 --
 -- THE GDPR POSITION, restated because it CHANGED with this migration and a table comment is not the
 -- place a controller should have to discover that (see docs/decisions/2026-08-01-gdpr-erasure-hard-
@@ -44,6 +47,12 @@
 --     never ran, whose retry job was never registered, or whose Item is still live and still billing
 --     loses its token on schedule and becomes an operator's problem at Plaid. That is the whole
 --     bargain: the retention is bounded by a clock, not by success.
+--     ⚠ REGARDLESS OF OUTCOME, NOT INSTANTANEOUSLY. The purge is a periodic sweep running every
+--     domain.OrphanedItemTokenPurgeInterval (1 hour), so the credential is destroyed by the FIRST
+--     sweep at or after the deadline — at most an hour past it. Its USE stops at the deadline itself,
+--     enforced separately and exactly at every read (see the token_expires_at column comment). Both
+--     halves are real; they are not the same strength, and saying otherwise would overstate the one
+--     guarantee this feature's GDPR defensibility rests on.
 --   * WHAT SURVIVES the purge: the record, indefinitely — plaid_item_id_encrypted, institution,
 --     status, error codes, timestamps. No credential and no user PII. That is 000134's original,
 --     unchanged position, and it is what the admin "manual intervention required in Plaid" state reads.
@@ -112,8 +121,10 @@ COMMENT ON TABLE plaid_orphaned_items IS
     'the erased user and must not be a surviving pointer to them. Issues #1494, #1497. '
     'SINCE #1497 IT ALSO CARRIES A CREDENTIAL, BOUNDED: access_token_encrypted holds the '
     'erased user''s Plaid access token until token_expires_at (30 days from the erasure), so an '
-    'automated retry can finish the removal; a sweep keyed on NOTHING BUT that deadline purges '
-    'it whether or not the removal ever succeeded and whether or not the retry job ever ran. '
+    'automated retry can finish the removal; an hourly sweep keyed on NOTHING BUT that deadline '
+    'purges it at the first run at or after the deadline, whether or not the removal ever '
+    'succeeded and whether or not the retry job ever ran (the token stops being USABLE at the '
+    'deadline itself -- see the token_expires_at column comment for the two halves). '
     'After the purge the row keeps no credential and no user PII, and is the admin dashboard''s '
     '"manual intervention required in Plaid" work item. 000134''s prose saying the token is '
     'deliberately not stored describes the position as of #1494 and is superseded -- see '
@@ -131,8 +142,18 @@ COMMENT ON COLUMN plaid_orphaned_items.access_token_encrypted IS
     'run. Issue #1497.';
 
 COMMENT ON COLUMN plaid_orphaned_items.token_expires_at IS
-    'HARD DEADLINE on the credential above: after this instant the token must not exist and must not '
-    'be used. Set by DeleteUserCascade to orphaned_at + domain.OrphanedItemTokenRetention (30 days, '
+    'RETENTION DEADLINE on the credential above, in two parts of DIFFERENT STRENGTH -- keeping them '
+    'distinct is the point, because an earlier version of this comment claimed both and only one '
+    'holds. (1) THE TOKEN MUST NOT BE USED FROM THIS INSTANT, exactly: every reader re-checks the '
+    'deadline against a fresh clock and refuses an expired value (domain.TokenIsLive is strict at the '
+    'boundary, GetRetryablePage selects token_expires_at > asOf, and the retry sweep re-checks per row '
+    'immediately before each Plaid call), so this half does not wait for any purge. (2) THE TOKEN '
+    'CEASES TO EXIST AT THE FIRST PURGE SWEEP AT OR AFTER THIS INSTANT -- so at most '
+    'domain.OrphanedItemTokenPurgeInterval (1 hour) later, and longer only if a single run''s 1,000-row '
+    'cap is reached and defers the remainder to the next run. The purge is unconditional and '
+    'independent of whether Plaid is configured, which is the load-bearing property; it is not '
+    'instantaneous, and this comment states the bound numerically rather than overstating it. '
+    'Set by DeleteUserCascade to orphaned_at + domain.OrphanedItemTokenRetention (30 days, '
     'matching the account-deletion grace period this system already operates -- NOT the 7-day C2 '
     'cooling-off window, which is a different clock for a different purpose). NOT NULL so that '
     '"retained indefinitely" is not expressible. DEFAULT NOW() so that a writer which forgets to set '

@@ -418,7 +418,8 @@ anonymous form, and this paragraph exists so the proposal is not re-made.
 | **Retention period** | **30 days** from the erasure — `domain.OrphanedItemTokenRetention`, stored per row as `plaid_orphaned_items.token_expires_at`, which is `NOT NULL` so that "retained indefinitely" is not expressible |
 | **Why 30 days** | it is the account-deletion grace period this system already documents and operates (`config.DeletionGracePeriodDays`' default), so the retention reuses a boundary already defended rather than inventing one. It is a **constant, not a reference** to that config: an operator lengthening `DELETION_GRACE_PERIOD_DAYS` must not silently lengthen how long erased users' bank credentials are held |
 | **Not** the 7-day C2 window | two clocks, two purposes: that one bounds how long an **erasure waits**; this one bounds how long a **credential outlives** one |
-| **When it is destroyed** | on a proved removal (immediately — the purpose is spent), **and at `token_expires_at` regardless of outcome** |
+| **When it stops being usable** | **at `token_expires_at`, exactly.** Enforced at every read against a fresh clock — `domain.TokenIsLive` is strict at the boundary, `GetRetryablePage` selects `token_expires_at > asOf`, and the retry sweep re-checks per row immediately before each Plaid call. This half waits for nothing |
+| **When it is destroyed** | on a proved removal (immediately — the purpose is spent), **and otherwise at the first purge sweep at or after `token_expires_at` regardless of outcome: at most `domain.OrphanedItemTokenPurgeInterval` (1 hour) past the deadline**, and longer only if one run's 1,000-row cap were reached and deferred the remainder. The purge is unconditional, not instantaneous, and the bound is stated here numerically rather than as "cannot exist past the deadline", which is what an earlier version of this record and of `000135`'s column comment claimed and no periodic capped sweep can deliver |
 | **What survives afterwards** | the record, indefinitely: Item identifier, institution, status, error codes, timestamps. No credential, no user PII |
 
 #### The purge fires regardless of outcome, and that is enforced structurally
@@ -428,7 +429,11 @@ achieved. Three properties make that a property of the system rather than of any
 
 1. **The purge is its own River job** (`plaid_orphan_token_purge`), whose predicate is
    `token_expires_at <= asOf` and **nothing else** — not resolution, not attempt count, not retry
-   state. It takes no Plaid client and no service; its only dependency is the database.
+   state. It takes no Plaid client and no service; its only dependency is the database. It runs every
+   `domain.OrphanedItemTokenPurgeInterval` (**1 hour**), and that interval — not zero — is the stated
+   bound on continued existence; `PlaidOrphanTokenPurgeUniqueOpts().ByPeriod` reads the same constant,
+   because a longer dedup period would silently throttle the sweep back to it (the dedup key includes
+   `JobStateCompleted`, which `RunOnStart: true` requires).
 2. **Its periodic registration is unconditional.** It has no field in `periodicJobsDeps`, so there is
    nothing a nil worker could omit, and `TestBuildPeriodicJobSpecs_PurgeSpecSurvivesEveryNilWorker`
    builds the spec list from an entirely empty dependency struct and demands the purge is still there.
@@ -456,6 +461,18 @@ even for a credential this process cannot decrypt (a rotated key), because it is
   cadences of the daily sweep) the record reports `manual_intervention_required` regardless of cause.
   Over-reporting manual work costs one look at a healthy row; under-reporting it costs a live Plaid
   Item billing for a month behind a green label.
+- **The credential can still EXIST for up to an hour past its deadline**, because the purge is a
+  periodic sweep and not a trigger. It cannot still be *used*: unusability is enforced at every read
+  against a fresh clock, independently of the sweep, so the residual exposure is a ciphertext at rest
+  that no code path in this system will present to Plaid — not a live capability. The window is
+  `domain.OrphanedItemTokenPurgeInterval`, and it is an hour rather than the day it originally was
+  because the table holds single digits of rows by construction (`000134`/`000135` both argue this
+  explicitly, and are why no index exists for either sweep), so an hourly scan of it is close to free
+  and the 1,000-row per-run cap stays unreachable. **The cap was deliberately not raised or removed** —
+  it bounds a destructive statement's blast radius, and if it were ever reached the overrun would be
+  longer than an hour and that fact is itself the alarming signal `000134` named (the sweep logs a WARN
+  when it hits the cap). This bullet exists because the earlier wording said the credential "must not
+  exist" after the deadline, which the mechanism cannot deliver; an accurate hour beats a false zero.
 - **Pre-`000135` rows** hold no credential and, by the `DEFAULT NOW()` on `token_expires_at`, are
   already past their deadline. They are correctly reported as needing manual intervention.
 - **Application logs written BEFORE the erasure** name the Item id and the user id on the same line, so

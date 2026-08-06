@@ -18,7 +18,9 @@ package main
 // end-marker string that silently breaks the moment the very thing being fixed here changes).
 import (
 	"testing"
+	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
 )
 
@@ -174,5 +176,80 @@ func TestBuildPeriodicJobSpecs_IDsAreUnique(t *testing.T) {
 			continue
 		}
 		seen[s.opts.ID] = s.name
+	}
+}
+
+// TestBuildPeriodicJobSpecs_PurgeRunsHourlyAndItsDedupDoesNotSuppressThat makes the sweep interval —
+// the thing that BOUNDS how long a retained Plaid credential can outlive its deadline — observable.
+//
+// The interval was 24 hours, while migration 000135 and domain.OrphanedItemTokenRetention both claimed
+// the credential "must not exist" after token_expires_at. A daily capped sweep cannot deliver that, so
+// the bound is now stated numerically everywhere it appears AND shortened to an hour. This test is the
+// only place that shortening is falsifiable.
+//
+// ⚠ THREE ASSERTIONS, NONE OF THEM REDUNDANT:
+//
+//  1. The value comes from the SPEC BUILDER, and is compared to a literal 1*time.Hour as well as to
+//     domain.OrphanedItemTokenPurgeInterval. Comparing only to the constant would be circular — the
+//     spec is built FROM that constant, so the pair would agree by construction at any value.
+//  2. UniqueOpts.ByPeriod must not EXCEED the interval. This is the trap: the dedup key includes
+//     JobStateCompleted (required by RunOnStart, Issue #1448), so a 24-hour ByPeriod would silently
+//     deduplicate all 23 extra hourly inserts against the run that already completed, leaving the
+//     effective cadence at 24 hours while the interval field read "1h". The interval change would have
+//     been inert and no other test would have noticed.
+//  3. SIBLING: the Plaid-dependent RETRY sweep is still daily. Without it this test passes just as
+//     well if someone set every periodic job on the branch to an hour, and domain.
+//     OrphanedItemRetryStaleAfter's "two cadences of the daily retry sweep" derivation would be
+//     quietly wrong.
+func TestBuildPeriodicJobSpecs_PurgeRunsHourlyAndItsDedupDoesNotSuppressThat(t *testing.T) {
+	// Empty deps on purpose: the purge registration is unconditional, so this also re-proves it is
+	// present at the interval being asserted rather than at some other code path's.
+	var purge *periodicJobSpec
+	unconditional := buildPeriodicJobSpecs(periodicJobsDeps{})
+	for i, s := range unconditional {
+		if s.name == "plaid orphan token purge" {
+			purge = &unconditional[i]
+		}
+	}
+	if purge == nil {
+		t.Fatal("no 'plaid orphan token purge' spec — see TestBuildPeriodicJobSpecs_PurgeSpecSurvivesEveryNilWorker")
+	}
+
+	if purge.interval != 1*time.Hour {
+		t.Errorf("purge interval = %v, want 1h: it is the stated upper bound on how long a retained "+
+			"Plaid credential can exist past its deadline, and the schema comment, the domain constant "+
+			"and the ADR all quote it", purge.interval)
+	}
+	if purge.interval != domain.OrphanedItemTokenPurgeInterval {
+		t.Errorf("purge interval = %v but domain.OrphanedItemTokenPurgeInterval = %v — the registration "+
+			"must be derived from the constant the prose quotes, or the two can drift",
+			purge.interval, domain.OrphanedItemTokenPurgeInterval)
+	}
+
+	_, insertOpts := purge.build()
+	if insertOpts == nil {
+		t.Fatal("purge build() returned nil InsertOpts")
+	}
+	if insertOpts.UniqueOpts.ByPeriod > purge.interval {
+		t.Errorf("purge UniqueOpts.ByPeriod = %v exceeds its %v interval: the dedup key includes "+
+			"JobStateCompleted, so every insert inside that period is discarded against the run that "+
+			"already completed and the real cadence stays ByPeriod, not the interval",
+			insertOpts.UniqueOpts.ByPeriod, purge.interval)
+	}
+
+	var retry *periodicJobSpec
+	full := buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps())
+	for i, s := range full {
+		if s.name == "plaid orphan retry" {
+			retry = &full[i]
+		}
+	}
+	if retry == nil {
+		t.Fatal("no 'plaid orphan retry' spec with every worker non-nil — test setup bug")
+	}
+	if retry.interval != 24*time.Hour {
+		t.Errorf("SIBLING ASSERTION: the Plaid-dependent retry sweep interval = %v, want 24h. The purge "+
+			"was shortened, the retry deliberately was not — domain.OrphanedItemRetryStaleAfter (48h) is "+
+			"documented as two cadences of THIS sweep", retry.interval)
 	}
 }

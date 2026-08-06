@@ -2,8 +2,25 @@ package domain
 
 import "time"
 
-// OrphanedItemTokenRetention is the HARD TTL on a Plaid access token retained past its owner's GDPR
-// erasure — the single number this feature's legal defensibility rests on. Issue #1497.
+// OrphanedItemTokenRetention is the retention deadline on a Plaid access token retained past its
+// owner's GDPR erasure — the single number this feature's legal defensibility rests on. Issue #1497.
+//
+// ⚠ WHAT THE DEADLINE GUARANTEES, IN TWO PARTS OF DIFFERENT STRENGTH. Keeping them distinct is the
+// point, because a mechanism-independent claim was previously made for both and only one of them holds:
+//
+//   - USE stops exactly at the deadline. No expired credential is ever presented to Plaid: TokenIsLive
+//     below is strict at the boundary, GetRetryablePage selects on `token_expires_at > asOf`, and the
+//     retry sweep re-checks against a fresh clock per row immediately before every call. None of that
+//     waits for a purge to have run.
+//   - EXISTENCE ends at the first purge sweep at or after the deadline — so at most
+//     OrphanedItemTokenPurgeInterval (1 hour) past it, and longer only in the case where one run's
+//     1,000-row cap is reached and defers the remainder to the next run.
+//
+// It is therefore NOT correct to say the credential cannot exist after this instant, and this comment
+// used to say so ("HARD TTL"), as did migration 000135's column comment. The purge is unconditional and
+// independent of Plaid configuration, which is the load-bearing property — but unconditional is not
+// instantaneous, and the whole defensibility of retaining a credential past an erasure rests on this
+// deadline being stated as it is actually kept. An overstated guarantee is worse than an accurate bound.
 //
 // WHY 30 DAYS, and why this particular 30 days. It is the account-deletion grace period this system
 // already documents, operates and tells users about (config.DeletionGracePeriodDays, default 30). The
@@ -23,6 +40,38 @@ import "time"
 // Conflating them is the kind of coupling this branch keeps having to unpick, so
 // TestOrphanedItemTokenRetention_IsNotTheC2CoolingOffWindow fails if anyone tries.
 const OrphanedItemTokenRetention = 30 * 24 * time.Hour
+
+// OrphanedItemTokenPurgeInterval is how often the unconditional purge sweep runs, and therefore the
+// UPPER BOUND on how long a retained credential can still EXIST past OrphanedItemTokenRetention.
+// Issue #1497.
+//
+// It lives here, beside the retention it bounds, rather than only in the job registration, because it
+// is quoted in the guarantee itself — migration 000135's token_expires_at comment, the ADR, and
+// OrphanedItemTokenRetention above all state the bound numerically, and a number stated in four places
+// and defined in none of them is a number that drifts. cmd/server/periodic_jobs.go's registration and
+// the purge job's UniqueOpts.ByPeriod both read it, and
+// TestBuildPeriodicJobSpecs_PurgeRunsHourlyAndItsDedupDoesNotSuppressThat asserts the spec the builder
+// produces carries this value and a literal one hour, so the two cannot agree vacuously.
+//
+// WHY ONE HOUR AND NOT THE DAY IT WAS. The exposure this bounds is a bank credential belonging to an
+// erased user sitting in the database past a documented deadline, so the bound wants to be small. The
+// cost of making it small is nil in this case, and that is checkable rather than assumed: migrations
+// 000134 and 000135 both argue explicitly that this table holds SINGLE DIGITS OF ROWS (it takes a
+// permanently-unremovable Plaid Item *and* a completed erasure to make one), which is why they
+// deliberately create no index for either sweep to use. An hourly sequential scan of single digits of
+// rows is 24 scans a day of essentially nothing, and the per-run cap of 1,000 rows
+// (maxOrphanTokenPurgesPerSweep) stays unreachable at that size — reaching it is itself the alarming
+// signal 000134 named. Shortening the interval therefore tightens the bound without weakening the cap.
+//
+// ⚠ NOT the retry sweep's cadence, which stays daily. That sweep is nil-guarded on Plaid being
+// configured and OrphanedItemRetryStaleAfter below is derived from it (48 hours = two of its cadences);
+// this one is unconditional and must stay a separate number. Coupling them is the mistake this branch
+// keeps having to unpick.
+//
+// ⚠ IF THIS VALUE CHANGES, every sentence quoting the bound changes with it: this file, migration
+// 000135's token_expires_at column comment, PurgeExpiredTokens' doc comment, and
+// docs/decisions/2026-08-01-gdpr-erasure-hard-delete.md § "Plaid orphaned items".
+const OrphanedItemTokenPurgeInterval = 1 * time.Hour
 
 // OrphanedItemRetryStaleAfter is how long a retained token may sit WITHOUT an observed retry before
 // the record stops claiming that something automated is working on it. Issue #1497.
