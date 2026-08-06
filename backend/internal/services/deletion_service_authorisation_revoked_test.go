@@ -138,6 +138,74 @@ func TestExecuteDeletion_AuthorisationHolds_StillPerformsEveryCleanupLeastRevers
 	h.clerk.AssertCalled(t, "DeleteUser", ctx, "user_123")
 }
 
+// The narrowest and most valuable window: revocation lands BETWEEN the two Paddle calls, i.e. during
+// the subscription cancellation's own network round-trip. The customer must NOT then be archived and
+// anonymised.
+//
+// ⚠ THIS IS THE ONE IRREVERSIBLE ACT WITH NO RECOVERY AT ALL. A cancelled subscription can be
+// re-created; an anonymised Paddle customer cannot be restored by us or by Paddle. That is why
+// cleanupPaddleResources re-asks before EACH of its two calls rather than once for the pair — a
+// single check for the pair would satisfy every other test in this file and still lose the customer
+// record here. Established by mutation: deleting the archive-side gate kills only this test.
+//
+// It also documents the residue this batch does NOT recover: the subscription IS already cancelled
+// when we stop. See the report's "what remains unrecoverable" section.
+func TestExecuteDeletion_AuthorisationRevokedBetweenPaddleCalls_DoesNotAnonymiseTheCustomer(t *testing.T) {
+	ctx := context.Background()
+	h := newRevocationHarness(t, ctx)
+
+	h.paddle.ExpectedCalls = nil
+	h.paddle.On("CancelSubscriptionImmediately", ctx, h.subID).Return(nil).
+		Run(func(mock.Arguments) {
+			*h.callOrder = append(*h.callOrder, "PaddleCancel")
+			*h.authorised = false // the user cancels their deletion while Paddle is answering
+		})
+	h.paddle.On("ArchiveAndAnonymizeCustomer", ctx, h.custID, expectedAnonymizedEmail).Return(nil).Maybe().
+		Run(func(mock.Arguments) { *h.callOrder = append(*h.callOrder, "PaddleArchive") })
+
+	err := h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested)
+	require.NoError(t, err, "a cancelled deletion is a legitimate outcome, not a Paddle failure")
+
+	assert.Equal(t, []string{"PlaidRemoveAll", "PaddleCancel"}, *h.callOrder,
+		"the customer must NOT be anonymised, and the cascade must not be reached")
+	h.paddle.AssertNotCalled(t, "ArchiveAndAnonymizeCustomer", mock.Anything, mock.Anything, mock.Anything)
+	h.repo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The ErrCleanupAborted disposition. When the per-item recheck stops the Plaid loop partway,
+// cleanupItems returns ErrCleanupAborted — the SAME sentinel it returns when a new linked item
+// appeared mid-pass, which is retryable. ExecuteDeletion must tell the two apart: a revocation is a
+// quiet, final stop (nil, no Paddle work, no cascade), whereas the other cause must keep behaving like
+// a failure so the next run retries.
+func TestExecuteDeletion_PlaidCleanupAbortedByRevocation_StopsQuietlyWithoutTouchingPaddle(t *testing.T) {
+	ctx := context.Background()
+	h := newRevocationHarness(t, ctx)
+
+	h.plaid.ExpectedCalls = nil
+	h.plaid.On("RemoveAllUserItems", ctx, h.userID).Return(ErrCleanupAborted).
+		Run(func(mock.Arguments) {
+			*h.callOrder = append(*h.callOrder, "PlaidRemoveAll")
+			*h.authorised = false
+		})
+
+	err := h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested)
+	require.NoError(t, err,
+		"a revocation-triggered abort is not a Plaid failure and must not be reported as one")
+	assert.Equal(t, []string{"PlaidRemoveAll"}, *h.callOrder)
+
+	// SIBLING ASSERTION: the same sentinel from the OTHER cause (a new item appeared, authorisation
+	// intact) must still abort loudly, or the branch above would swallow every retryable abort.
+	h2 := newRevocationHarness(t, ctx)
+	h2.plaid.ExpectedCalls = nil
+	h2.plaid.On("RemoveAllUserItems", ctx, h2.userID).Return(ErrCleanupAborted).
+		Run(func(mock.Arguments) { *h2.callOrder = append(*h2.callOrder, "PlaidRemoveAll") })
+
+	err = h2.svc.ExecuteDeletion(ctx, h2.userID, repository.DeletionKindUserRequested)
+	require.Error(t, err, "authorisation still holds, so this abort is the retryable kind")
+	assert.ErrorIs(t, err, ErrCleanupAborted)
+	assert.Equal(t, []string{"PlaidRemoveAll"}, *h2.callOrder, "and it still stops before Paddle")
+}
+
 // Revoked before ANY external call: nothing external happens at all. This is the cheapest abort and
 // the one with no residue whatsoever.
 func TestExecuteDeletion_AuthorisationRevokedBeforeAnyExternalCall_TouchesNothing(t *testing.T) {

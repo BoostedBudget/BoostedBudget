@@ -177,6 +177,40 @@ func plaidItemNotFoundErr() error {
 	)
 }
 
+// A nil eligibility recheck is REFUSED, not silently accepted as "no recheck wanted".
+//
+// This is the fail-closed half of the fix for the literal nil this method used to pass to
+// cleanupItems. Making the parameter required is worth nothing on its own — a caller can pass nil to
+// a required parameter just as easily as it can omit an optional one — so the refusal is what
+// actually prevents the defect recurring. It must refuse BEFORE reaching Plaid or the repository,
+// because a partially-completed pass with no recheck is exactly what was wrong.
+func Test_RemoveAllUserItems_NilRecheckIsRefusedBeforeTouchingPlaid(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID, nil)
+
+	require.Error(t, err, "a nil recheck on the hard-deletion path is the defect, not a configuration")
+	assert.Contains(t, err.Error(), "eligibility recheck is required")
+	mockPlaid.AssertNotCalled(t, "RemoveItem", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "GetByUserID", mock.Anything, mock.Anything)
+
+	// SIBLING ASSERTION: the refusal is about nil specifically, not about the method being broken.
+	// A real callback on the same service, with the same fixtures, still does the work.
+	items := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	mockRepo.On("GetByUserID", ctx, userID).Return(items, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	mockRepo.On("MarkPlaidRemoved", ctx, []string{"item-1"}).Return(nil).Maybe()
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil)
+
+	require.NoError(t, service.RemoveAllUserItems(ctx, userID, alwaysEligible))
+	mockPlaid.AssertCalled(t, "RemoveItem", ctx, "tok-1")
+}
+
 // Test_RemoveAllUserItems_CallsPlaidRemoveForEachItem verifies that
 // RemoveAllUserItems calls Plaid /item/remove for each linked item.
 // AccessToken is populated by the repository layer (repo-layer encryption).
