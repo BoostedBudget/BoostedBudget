@@ -1,0 +1,247 @@
+package services
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/plaid/plaid-go/v23/plaid"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+)
+
+// orphanRetryTransportErrorCode is the LOCAL sentinel recorded when /item/remove failed with something
+// that carries no Plaid error_code at all — a DNS failure, a reset connection, a context deadline.
+// Issue #1497.
+//
+// It exists because the alternative is writing "" into last_retry_error_code, and "" already means
+// something else in that column: "no retry has ever failed". Recording an attempt that DID fail as one
+// that never happened is the kind of quiet lie that makes an operator trust a row they should not.
+// Spelled outside Plaid's vocabulary, like NO_USABLE_ACCESS_TOKEN and ORPHAN_TOKEN_UNDECRYPTABLE.
+const orphanRetryTransportErrorCode = "ORPHAN_RETRY_TRANSPORT_ERROR"
+
+// orphanRetryRepo is the narrow slice of PlaidOrphanedItemRepository this sweep needs.
+//
+// ⚠ PurgeExpiredTokens IS DELIBERATELY ABSENT. This service must not be able to purge, because a purge
+// reachable only through the Plaid-dependent retry path is a purge that does not happen when Plaid is
+// unconfigured, when this service is nil, or when its job is unregistered — which is precisely the
+// failure the separate purge sweep exists to make impossible. Keeping it out of this interface makes
+// that a compile-time property rather than a convention.
+type orphanRetryRepo interface {
+	GetRetryablePage(ctx context.Context, asOf time.Time, after *repository.OrphanRetryCursor, limit int) ([]domain.PlaidOrphanedItem, error)
+	MarkResolved(ctx context.Context, id string, asOf time.Time) (bool, error)
+	RecordRetryFailure(ctx context.Context, id, errorCode string, asOf time.Time) error
+}
+
+// OrphanRetrySweepResult is one run's tally, returned so the worker can log it and so tests can assert
+// which of several mutually exclusive dispositions each row got.
+type OrphanRetrySweepResult struct {
+	// Attempted counts rows the sweep actually took a decision about, including skipped ones.
+	Attempted int
+	// Resolved counts Items proved gone from Plaid (a successful /item/remove, or ITEM_NOT_FOUND).
+	Resolved int
+	// Failed counts rows whose /item/remove failed recoverably and will be retried next run.
+	Failed int
+	// Undecryptable counts rows whose retained ciphertext could not be decrypted.
+	Undecryptable int
+	// Skipped counts rows the repository returned with no usable credential at all — defensive, since
+	// the SQL predicate excludes them.
+	Skipped int
+	// RecordErrors counts rows whose OUTCOME could not be written back. Non-zero means the attempt
+	// happened and the record does not know it, which is worth an operator's attention.
+	RecordErrors int
+	// CapHit reports that the per-sweep cap stopped this run early and a remainder was deferred.
+	CapHit bool
+}
+
+// PlaidOrphanRetryService re-attempts Plaid /item/remove for records in plaid_orphaned_items that still
+// hold a live, unexpired credential. Issue #1497.
+//
+// WHY THIS IS WORTH DOING AT ALL, since migration 000134 argued it was not: the population reaching
+// that table is NOT only items whose token Plaid has already rejected. DeleteUserCascade copies every
+// row with `plaid_removed_at IS NULL`, which includes 'replaced' re-link leftovers whose /item/remove
+// was NEVER ATTEMPTED — the re-link path does not call it. For those rows this sweep is the only
+// automated path that has ever existed, and each one is a Plaid Item that may still be billing.
+//
+// WHAT IT DELIBERATELY CANNOT DO: purge. See orphanRetryRepo.
+type PlaidOrphanRetryService interface {
+	// Sweep processes up to maxAttempts records in pages of pageSize and reports the tally. asOf is the
+	// instant every liveness decision in the run is made against.
+	Sweep(ctx context.Context, asOf time.Time, pageSize, maxAttempts int) (OrphanRetrySweepResult, error)
+}
+
+type plaidOrphanRetryService struct {
+	repo         orphanRetryRepo
+	plaidService plaidServiceForCleanup
+	logger       *slog.Logger
+}
+
+// NewPlaidOrphanRetryService builds the sweep. plaidService may be nil — that is the "Plaid not
+// configured" deployment — and Sweep then refuses with an error rather than panicking or, worse,
+// reporting a successful run in which nothing was retried.
+func NewPlaidOrphanRetryService(repo orphanRetryRepo, plaidService plaidServiceForCleanup) *plaidOrphanRetryService { //nolint:revive // deliberate: unexported return mirrors this package's other constructors whose tests reach for the concrete type
+	return &plaidOrphanRetryService{repo: repo, plaidService: plaidService, logger: slog.Default()}
+}
+
+// SetLogger overrides the default logger. Setter rather than a constructor parameter to match this
+// package's existing convention (SetAnalytics, SetWorkClaimsRepo).
+func (s *plaidOrphanRetryService) SetLogger(logger *slog.Logger) {
+	if logger != nil {
+		s.logger = logger
+	}
+}
+
+// Sweep walks the retryable records in keyset order and re-attempts each one's removal.
+//
+// PER-ROW FAILURES ARE RECORDED AND STEPPED OVER; A PAGE-QUERY FAILURE ABORTS. The asymmetry is the
+// same one item_cleanup_check.go draws: one bad Item must not stop the others, but a sweep that cannot
+// read its work list has not done its work and must say so, because River retrying it is the recovery.
+//
+// BOUNDED TWICE, like every other sweep on this branch: pageSize bounds one query's result set,
+// maxAttempts bounds the total decisions one run makes. Hitting the cap logs a WARN and defers the
+// remainder to the next run — nothing is dropped, because nothing about a deferred row changes.
+//
+// THE CURSOR ADVANCES PAST ROWS THAT FAILED, not merely past rows that succeeded. That is the whole
+// reason it is a keyset cursor rather than a re-run of the same predicate: a row whose removal keeps
+// failing (or whose outcome cannot be written back) must not occupy the oldest slot of every subsequent
+// page within this run and starve everything behind it. Across runs there is no persisted cursor, so a
+// permanently-failing row IS re-attempted every run — which is correct, since only the deadline ends
+// the retrying, and is bounded by the cap.
+func (s *plaidOrphanRetryService) Sweep(ctx context.Context, asOf time.Time, pageSize, maxAttempts int) (OrphanRetrySweepResult, error) {
+	var res OrphanRetrySweepResult
+
+	if s.plaidService == nil {
+		// Not a panic and not a silent success: a run that could not retry anything must be
+		// distinguishable from one that found nothing to retry. The purge sweep is deliberately
+		// independent of this service, so credentials are still bounded while this is true.
+		return res, errors.New("plaid orphan retry sweep: no Plaid client configured; nothing was retried")
+	}
+	if pageSize <= 0 || maxAttempts <= 0 {
+		return res, fmt.Errorf("plaid orphan retry sweep: pageSize and maxAttempts must be positive, got %d/%d", pageSize, maxAttempts)
+	}
+
+	var cursor *repository.OrphanRetryCursor
+	for {
+		remaining := maxAttempts - res.Attempted
+		if remaining <= 0 {
+			res.CapHit = true
+			s.logger.Warn("plaid orphan retry sweep hit its per-run cap; the remainder is deferred to the next run",
+				"attempted", res.Attempted, "cap", maxAttempts)
+			break
+		}
+		limit := pageSize
+		if remaining < limit {
+			limit = remaining
+		}
+
+		page, err := s.repo.GetRetryablePage(ctx, asOf, cursor, limit)
+		if err != nil {
+			return res, fmt.Errorf("plaid orphan retry sweep: read retryable page: %w", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		// Truncate defensively rather than trusting the query's LIMIT, so the cap is a property of THIS
+		// loop and not of a repository that happens to honour it — the same reason
+		// ItemCleanupCheckWorker.Work truncates its page before processing it. Without this the cap
+		// becomes "cap, rounded up to a page", which is not what "at most maxAttempts" means.
+		if len(page) > limit {
+			page = page[:limit]
+		}
+
+		for _, row := range page {
+			res.Attempted++
+			s.retryOne(ctx, row, asOf, &res)
+		}
+
+		last := page[len(page)-1]
+		cursor = &repository.OrphanRetryCursor{OrphanedAt: last.OrphanedAt, ID: last.ID}
+
+		if len(page) < limit {
+			break
+		}
+	}
+
+	return res, nil
+}
+
+// retryOne decides and records the disposition of a single record. It never returns an error: every
+// outcome, including "we could not write the outcome down", is a counter on res so the run's log line
+// is a complete account of what happened.
+func (s *plaidOrphanRetryService) retryOne(ctx context.Context, row domain.PlaidOrphanedItem, asOf time.Time, res *OrphanRetrySweepResult) {
+	// The rotated-key case, and it is checked BEFORE the empty-token check because it is a different
+	// fact with a different remedy: the credential is present and unusable, rather than absent. Plaid is
+	// deliberately not called — presenting "" would produce a misleading "access token cannot be empty"
+	// error attributed to Plaid — and the sentinel is recorded so the record stops reading as
+	// auto-retrying (domain.PlaidOrphanedItem.AdminState). The token is NOT purged here; see
+	// domain.OrphanTokenUndecryptableCode for why a missing key is treated as recoverable.
+	if row.TokenUndecryptable {
+		res.Undecryptable++
+		s.logger.Error("retained Plaid credential for an orphaned Item could not be decrypted; no automated retry can succeed until the key is restored, and the record now asks for manual intervention",
+			"orphan_record_id", row.ID, "plaid_item_id", row.PlaidItemID)
+		s.record(ctx, row, domain.OrphanTokenUndecryptableCode, asOf, res)
+		return
+	}
+	if row.AccessToken == "" {
+		// Defensive: GetRetryablePage's predicate requires a non-NULL ciphertext, so reaching here means
+		// a stored value that decrypted to the empty string. There is nothing to send.
+		res.Skipped++
+		s.logger.Warn("orphaned Item record holds no usable credential; skipping",
+			"orphan_record_id", row.ID, "plaid_item_id", row.PlaidItemID)
+		return
+	}
+
+	err := s.plaidService.RemoveItem(ctx, row.AccessToken)
+	if err == nil || isPlaidItemAlreadyGone(err) {
+		// ITEM_NOT_FOUND is the same OUTCOME as a successful removal — Plaid has no such Item, so nothing
+		// is billing for it. The identical rule already governs the pre-erasure path
+		// (isPlaidItemAlreadyGone, Issue #1413 H2); recording it as a failure here would re-attempt an
+		// Item Plaid has forgotten on every run until the deadline.
+		updated, resolveErr := s.repo.MarkResolved(ctx, row.ID, asOf)
+		if resolveErr != nil {
+			res.RecordErrors++
+			s.logger.Error("removed an orphaned Plaid Item but could not record the resolution; the retained credential is still on the record and will be purged at its deadline",
+				"orphan_record_id", row.ID, "plaid_item_id", row.PlaidItemID, "error", resolveErr)
+			return
+		}
+		res.Resolved++
+		s.logger.Info("removed an orphaned Plaid Item after its owner's erasure; the retained credential is purged with the same statement",
+			"orphan_record_id", row.ID, "plaid_item_id", row.PlaidItemID,
+			"already_gone_at_plaid", err != nil, "first_resolution", updated)
+		return
+	}
+
+	res.Failed++
+	code := plaidErrorCodeOrTransport(err)
+	s.logger.Warn("retrying removal of an orphaned Plaid Item failed; it stays outstanding until it succeeds or its credential expires",
+		"orphan_record_id", row.ID, "plaid_item_id", row.PlaidItemID, "error_code", code, "error", err)
+	s.record(ctx, row, code, asOf, res)
+}
+
+// record writes one failure outcome and counts the case where even that write failed.
+func (s *plaidOrphanRetryService) record(ctx context.Context, row domain.PlaidOrphanedItem, code string, asOf time.Time, res *OrphanRetrySweepResult) {
+	if err := s.repo.RecordRetryFailure(ctx, row.ID, code, asOf); err != nil {
+		res.RecordErrors++
+		s.logger.Error("could not record the outcome of an orphaned-Item retry; the attempt happened and the record does not know it",
+			"orphan_record_id", row.ID, "error_code", code, "error", err)
+	}
+}
+
+// plaidErrorCodeOrTransport extracts Plaid's error_code, falling back to a local sentinel rather than
+// to the empty string — see orphanRetryTransportErrorCode for why "" is not an acceptable value here.
+//
+// Spelled out rather than reusing domain.ClassifyPlaidError because that function's job is to decide
+// retryability for the SYNC path and it maps several codes onto its own taxonomy; what is wanted here
+// is the code itself, verbatim, for an operator to read.
+func plaidErrorCodeOrTransport(err error) string {
+	var apiErr plaid.GenericOpenAPIError
+	if errors.As(err, &apiErr) {
+		if plaidErr, convErr := plaid.ToPlaidError(apiErr); convErr == nil && plaidErr.ErrorCode != "" {
+			return plaidErr.ErrorCode
+		}
+	}
+	return orphanRetryTransportErrorCode
+}

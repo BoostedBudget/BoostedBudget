@@ -535,3 +535,83 @@ func TestCountUncleanedLinkedItems_Integration_CountsExactlyWhatTheGuardBlocksOn
 	require.NoError(t, pool.QueryRow(ctx, `SELECT `+uncleanedLinkedItemExistsClause, user.ID).Scan(&blocked))
 	assert.False(t, blocked, "once every row carries one of the two facts, the guard must let the erasure through")
 }
+
+// TestDeleteUserCascade_Integration_OrphanRetainsTheAccessTokenWithADeadline is Issue #1497's write
+// side, and it asserts the two halves that only make sense together: the credential SURVIVES the
+// erasure (so an automated retry has something to present to Plaid) and it survives WITH A DEADLINE
+// (so the retention is bounded by the schema rather than by anyone's diligence).
+//
+// It reads access_token_encrypted back and DECRYPTS it, which is the load-bearing part: the cascade
+// copies ciphertext verbatim, so a copy that double-encrypted, truncated or re-keyed the value would
+// pass a NOT NULL assertion and still be useless to the retry sweep — the one and only reason the
+// column exists.
+//
+// Falsifiability: dropping `access_token_encrypted` from the INSERT's column list (i.e. restoring
+// migration 000134's position) leaves the column NULL and reddens this test; dropping the
+// token_expires_at argument leaves the column's DEFAULT NOW() in place and reddens the deadline
+// assertion, which is exactly the fail-safe that default was chosen for.
+func TestDeleteUserCascade_Integration_OrphanRetainsTheAccessTokenWithADeadline(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := createDeleteCascadeFixtureUser(t, ctx, pool, repo, suffix, nil, nil, nil)
+
+	// A 'replaced' re-link leftover: the leg whose /item/remove was NEVER attempted, and therefore the
+	// leg that proves migration 000134's "the token is known unusable anyway" argument was wrong. Its
+	// token has never been rejected by anything.
+	plaintextToken := "access-sandbox-retained-" + suffix
+	item := &domain.LinkedItem{
+		UserID:          user.ID,
+		ItemID:          "plaid-item-" + suffix,
+		AccessToken:     plaintextToken,
+		InstitutionID:   "ins_" + suffix,
+		InstitutionName: "Still Billing Bank",
+		Provider:        "plaid",
+	}
+	require.NoError(t, linkedItemRepo.Create(ctx, item))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE id = $1", item.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM plaid_orphaned_items WHERE linked_item_id = $1", item.ID)
+	})
+
+	require.NoError(t, linkedItemRepo.MarkPlaidRemovalFailed(ctx, []string{item.ID}, "INVALID_ACCESS_TOKEN"))
+	ageTerminalVerdict(t, ctx, pool, item.ID, terminalVerdictAgeBeyondCoolingOff)
+
+	before := time.Now().UTC()
+	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	require.NoError(t, err)
+	require.True(t, deleted)
+
+	var encToken *string
+	var expiresAt time.Time
+	var purgedAt *time.Time
+	var attempts int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT access_token_encrypted, token_expires_at, token_purged_at, retry_attempt_count
+		FROM plaid_orphaned_items WHERE linked_item_id = $1`, item.ID).
+		Scan(&encToken, &expiresAt, &purgedAt, &attempts))
+
+	require.NotNil(t, encToken, "without the credential the retry sweep has nothing to present to Plaid, "+
+		"and #1497 does not exist")
+	plain, err := enc.DecryptString(*encToken)
+	require.NoError(t, err, "the copy must be decryptable through the same FieldEncryptor — a mangled "+
+		"ciphertext would satisfy NOT NULL and still be worthless")
+	assert.Equal(t, plaintextToken, plain,
+		"the retained value must be the SAME credential, byte for byte; anything else cannot be presented to Plaid")
+
+	assert.Nil(t, purgedAt, "nothing has been purged yet — the deadline is 30 days out")
+	assert.Equal(t, 0, attempts)
+
+	// The deadline: 30 days out, bounded on both sides so neither a missing argument (which would leave
+	// DEFAULT NOW(), i.e. immediately expired) nor a wrong constant passes.
+	wanted := before.Add(domain.OrphanedItemTokenRetention)
+	assert.WithinDuration(t, wanted, expiresAt.UTC(), 2*time.Minute,
+		"token_expires_at must be orphaned_at + domain.OrphanedItemTokenRetention (30 days) — the boundary the "+
+			"GDPR argument for retaining this credential at all rests on")
+	assert.True(t, expiresAt.UTC().After(before.Add(29*24*time.Hour)),
+		"an already-expired or short deadline means the retry window never really existed")
+}

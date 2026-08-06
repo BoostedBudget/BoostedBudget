@@ -280,6 +280,19 @@ func main() {
 	// Issue #1087 R4-7: Declare idempotency cleanup worker (always active)
 	var idempotencyCleanupWorker *jobs.IdempotencyCleanupWorker
 
+	// Issue #1497: Declare the two orphaned-Plaid-Item sweeps. They are declared TOGETHER and
+	// gated DIFFERENTLY on purpose, and the difference is the compliance property:
+	//
+	//   - the token PURGE worker is ALWAYS ACTIVE. DeleteUserCascade retains a Plaid access token
+	//     on every plaid_orphaned_items row it writes, whether or not Plaid is configured at the
+	//     time, and migration 000135 promises that credential is destroyed at its 30-day deadline
+	//     regardless of anything else. Gating it on Plaid config would make a GDPR retention limit
+	//     conditional on a feature flag.
+	//   - the RETRY worker needs a Plaid client, so it is nil when Plaid is not configured — which
+	//     is exactly why the purge is not allowed to live inside it.
+	var plaidOrphanTokenPurgeWorker *jobs.PlaidOrphanTokenPurgeWorker
+	var plaidOrphanRetryWorker *jobs.PlaidOrphanRetryWorker
+
 	// Issue #1007: Declare email change propagation worker.
 	// Issue #1015: Created unconditionally (before Plaid block); registered with River after.
 	var emailChangePropagationWorker *jobs.EmailChangePropagationWorker
@@ -408,6 +421,7 @@ func main() {
 		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)                                // Issue #639: Admin user management
 		systemHealthRepo := repository.NewSystemHealthRepository(db)                                          // Issue #640: System health monitoring
 		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)                                        // Issue #640: Dead letter queue metrics
+		plaidOrphanedItemRepo := repository.NewPlaidOrphanedItemRepository(db, fieldEncryptor)                // Issue #1497: orphaned Plaid Items surviving a GDPR erasure (enc: every identifying column is ciphertext)
 		// Issue #1458: a second, bound JobHealthRepository instance for systemHealthService below —
 		// distinct from the one constructed inline at startJobHealthMetricsCollector's call site
 		// above, which is unbound (passed directly as an argument, never stored) and so can't be
@@ -1212,6 +1226,20 @@ func main() {
 				})
 				appLogger.Info("Item cleanup worker created")
 
+				// Issue #1497: re-attempt /item/remove for Items stranded by a completed GDPR erasure,
+				// using the credential retained on the orphan record until its 30-day deadline.
+				//
+				// It takes plaidService (not plaidCleanupService): the linked_items row those helpers
+				// operate on no longer exists — that is what makes the Item an orphan — so the only
+				// operation available is the raw /item/remove with the retained token.
+				plaidOrphanRetrySvc := services.NewPlaidOrphanRetryService(plaidOrphanedItemRepo, plaidService)
+				plaidOrphanRetrySvc.SetLogger(appLogger)
+				plaidOrphanRetryWorker = jobs.NewPlaidOrphanRetryWorker(jobs.PlaidOrphanRetryWorkerDeps{
+					Service: plaidOrphanRetrySvc,
+					Logger:  appLogger,
+				})
+				appLogger.Info("Plaid orphaned-item retry worker created")
+
 				appLogger.Info("Transaction sync service initialized")
 				appLogger.Info("Item error service initialized")
 			}
@@ -1253,6 +1281,7 @@ func main() {
 				budgetPeriodCloseCheckWorker:        budgetPeriodCloseCheckWorker,
 				savingsStatsWorker:                  savingsStatsWorker,
 				portfolioSnapshotWorker:             portfolioSnapshotWorker,
+				plaidOrphanRetryWorker:              plaidOrphanRetryWorker,
 			}, appLogger)
 
 			if len(periodicJobs) > 0 {
@@ -1267,6 +1296,15 @@ func main() {
 				Logger: appLogger,
 			})
 			appLogger.Info("Idempotency cleanup worker created (River)")
+
+			// Issue #1497: constructed HERE, unconditionally, alongside idempotency cleanup rather than
+			// inside the Plaid block above — see this worker's var declaration for why its activation must
+			// not depend on Plaid being configured. Its only dependency is the database.
+			plaidOrphanTokenPurgeWorker = jobs.NewPlaidOrphanTokenPurgeWorker(jobs.PlaidOrphanTokenPurgeWorkerDeps{
+				Repo:   plaidOrphanedItemRepo,
+				Logger: appLogger,
+			})
+			appLogger.Info("Plaid orphaned-item credential purge worker created (River)")
 
 			// Register ALL workers with nil-guards.
 			// Non-Plaid workers are always non-nil when their config gates are met.
@@ -1326,6 +1364,17 @@ func main() {
 			if idempotencyCleanupWorker != nil {
 				river.AddWorker(riverWorkers, idempotencyCleanupWorker)
 				appLogger.Info("Idempotency cleanup worker registered with River")
+			}
+			// Issue #1497: the credential purge. Registered in the NON-Plaid block deliberately — its
+			// periodic registration is unconditional (periodic_jobs.go), so a job would be enqueued with
+			// no worker to run it if this registration ever moved inside the Plaid gate below.
+			if plaidOrphanTokenPurgeWorker != nil {
+				river.AddWorker(riverWorkers, plaidOrphanTokenPurgeWorker)
+				appLogger.Info("Plaid orphaned-item credential purge worker registered with River")
+			}
+			if plaidOrphanRetryWorker != nil {
+				river.AddWorker(riverWorkers, plaidOrphanRetryWorker)
+				appLogger.Info("Plaid orphaned-item retry worker registered with River")
 			}
 			if subscriptionWebhookWorker != nil {
 				river.AddWorker(riverWorkers, subscriptionWebhookWorker)
