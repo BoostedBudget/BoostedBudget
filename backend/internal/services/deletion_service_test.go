@@ -25,6 +25,18 @@ type MockProfileRepositoryForDeletion struct {
 	// LastClaimKind records the repository.DeletionClaimKind the last ClaimForDeletion call passed
 	// (Issue #1440, T0). Asserted by TestExecuteDeletion_ThreadsClaimKindToRepository.
 	LastClaimKind repository.DeletionClaimKind
+
+	// Issue #1494 — CountUncleanedLinkedItems's fields. Field-driven rather than testify-driven on
+	// purpose: this method is reached ONLY on ExecuteDeletion's Plaid-less branch, which several
+	// pre-existing tests in this file exercise (they construct the service with a nil
+	// plaidCleanupSvc), and an unmatched testify expectation panics. The zero value is 0/nil — "no
+	// outstanding Plaid work" — which is exactly the behaviour those tests were written against.
+	UncleanedLinkedItemCount int
+	// UncleanedLinkedItemCountErr, when set, makes the count fail — the fail-closed case.
+	UncleanedLinkedItemCountErr error
+	// UncleanedLinkedItemCountCalls counts the calls, so a test can pin that the Plaid-less branch
+	// actually consulted the count rather than reaching its conclusion some other way.
+	UncleanedLinkedItemCountCalls int
 }
 
 func (m *MockProfileRepositoryForDeletion) GetUserByID(ctx context.Context, userID string) (*domain.User, error) {
@@ -84,6 +96,16 @@ func (m *MockProfileRepositoryForDeletion) CancelDeletion(ctx context.Context, u
 func (m *MockProfileRepositoryForDeletion) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
 	return args.Bool(0), args.Error(1)
+}
+
+// CountUncleanedLinkedItems — Issue #1494. See the struct's field comments for why this is
+// field-driven rather than a testify expectation.
+func (m *MockProfileRepositoryForDeletion) CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error) {
+	m.UncleanedLinkedItemCountCalls++
+	if m.UncleanedLinkedItemCountErr != nil {
+		return 0, m.UncleanedLinkedItemCountErr
+	}
+	return m.UncleanedLinkedItemCount, nil
 }
 
 // Issue #679, #680: Trial expiration methods

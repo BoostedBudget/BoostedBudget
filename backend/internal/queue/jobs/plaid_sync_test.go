@@ -191,6 +191,12 @@ func (m *MockLinkedItemRepository) MarkPlaidRemoved(ctx context.Context, ids []s
 	return args.Error(0)
 }
 
+// MarkPlaidRemovalFailed records an unrecoverable Plaid removal verdict — Issue #1494.
+func (m *MockLinkedItemRepository) MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error {
+	args := m.Called(ctx, ids, errorCode)
+	return args.Error(0)
+}
+
 // UpdateInvestmentsLastSyncedDate - Issue #659: Plaid Investments
 func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
 	args := m.Called(ctx, id, date)

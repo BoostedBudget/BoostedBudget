@@ -221,17 +221,26 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 		// ⚠ That is RECOVERY FOR A TRANSIENT FAILURE ONLY, and the first version of this comment
 		// stopped at the sentence above as though it covered every case. It does not. If the removal
 		// can NEVER succeed for this item — a permanently invalid or empty access token, see
-		// PlaidItemCleanupService.RemoveItem's ⚠ note and issue #1494 — then "River retries, the
-		// backstop re-enqueues" describes an INDEFINITE daily loop, not a recovery, and
-		// uncleanedLinkedItemExistsClause holds that user's DeleteUserCascade at (false, nil)
-		// permanently. Fail-closed and deliberate, but permanent, and it needs an operator escape
-		// hatch rather than a quieter comment.
+		// PlaidItemCleanupService.RemoveItem's ⚠ note — then "River retries, the backstop re-enqueues"
+		// describes an INDEFINITE daily loop, not a recovery.
+		//
+		// ISSUE #1494 CHANGED WHAT THAT LOOP COSTS, and this is the correction: it used to also hold
+		// that user's DeleteUserCascade at (false, nil) PERMANENTLY. It no longer does. RemoveItem now
+		// records the verdict (plaid_removal_failed_at) for the narrow set of failures that prove the
+		// credential unusable, uncleanedLinkedItemExistsClause stops blocking on such a row, and the
+		// cascade preserves the Item in plaid_orphaned_items before deleting anything. What survives
+		// unchanged — deliberately — is THIS loop: the row keeps being re-attempted for as long as it
+		// exists, because a recorded verdict is permission for the erasure to proceed, never permission
+		// to stop trying. So the daily re-enqueue is now the self-healing mechanism against a
+		// misclassification, and its residual cost is one wasted /item/remove per day plus a
+		// dead-lettered job per pass — visible, bounded, and no longer a GDPR block. Tracked as the
+		// remaining #1494 follow-up: alerting on a repeatedly re-enqueued item, and the admin view of
+		// plaid_orphaned_items.
 		//
 		// Issue #1495 WIDENED the population this paragraph is about: uncleanedLinkedItemExistsClause
-		// now blocks on plaid_removed_at rather than status, so 'replaced' rows (which it previously
-		// waved through, letting an erasure complete over a live, billing Item) are inside it too.
-		// That is the intended, fail-closed direction; #1494 remains the escape hatch, and it lands
-		// after this change.
+		// blocks on plaid_removed_at rather than status, so 'replaced' rows (which it previously waved
+		// through, letting an erasure complete over a live, billing Item) are inside it too. That is
+		// the intended, fail-closed direction.
 		w.logger.Error("item cleanup failed",
 			"job_id", job.ID,
 			"linked_item_id", args.LinkedItemID,
@@ -283,8 +292,14 @@ func (w *ItemCleanupWorker) Work(ctx context.Context, job *river.Job[ItemCleanup
 	// Delete is a deliberate no-op whenever accounts still reference the item, so the row often
 	// survives regardless, and it survives carrying 'disconnected' — which every downstream predicate
 	// reads correctly. For the 'replaced' exception to that last clause, and why it is bounded, see
-	// the ⚠ note on ClearCleanupSchedule just above; the survival itself is harmless either way, since
-	// C2 excludes 'replaced' as well as 'disconnected'.
+	// the ⚠ note on ClearCleanupSchedule just above.
+	//
+	// ⚠ THE LAST CLAUSE OF THAT SENTENCE USED TO READ "since C2 excludes 'replaced' as well as
+	// 'disconnected'", and Issue #1495 made it FALSE — uncleanedLinkedItemExistsClause reads no status
+	// at all now, and a 'replaced' row blocks like any other until its removal is recorded. Corrected
+	// rather than deleted because the survival IS still harmless, for a different and stronger reason:
+	// this line is reached only after RemoveItem stamped plaid_removed_at, which is the fact every
+	// downstream predicate keys off, whatever status the surviving row carries.
 	if deleteErr := w.linkedItemRepo.Delete(ctx, args.LinkedItemID); deleteErr != nil {
 		w.logger.Warn("failed to delete linked item from database after Plaid removal",
 			"linked_item_id", args.LinkedItemID,

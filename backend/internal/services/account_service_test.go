@@ -243,6 +243,12 @@ func (m *MockLinkedItemRepository) MarkPlaidRemoved(ctx context.Context, ids []s
 	return args.Error(0)
 }
 
+// MarkPlaidRemovalFailed records an unrecoverable Plaid removal verdict — Issue #1494.
+func (m *MockLinkedItemRepository) MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error {
+	args := m.Called(ctx, ids, errorCode)
+	return args.Error(0)
+}
+
 func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
 	args := m.Called(ctx, id, date)
 	return args.Error(0)
@@ -454,6 +460,13 @@ func (m *MockUserRepository) CancelDeletion(ctx context.Context, userID string) 
 func (m *MockUserRepository) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
 	return args.Bool(0), args.Error(1)
+}
+
+// CountUncleanedLinkedItems — Issue #1494. Only DeletionService's Plaid-less branch calls this; these
+// tests never reach it, so this is a plain stub rather than a testify expectation (which would panic
+// unmatched).
+func (m *MockUserRepository) CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error) {
+	return 0, nil
 }
 
 // Issue #679, #680: Trial expiration methods

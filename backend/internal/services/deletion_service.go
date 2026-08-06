@@ -430,7 +430,38 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// critical for cost control — Plaid charges monthly per Item. A failure here now also
 	// aborts (see the Paddle cleanup comment above for why) rather than proceeding to a
 	// cascade that would strand an un-removed, still-billing Plaid item with no local record.
-	if s.plaidCleanupSvc != nil {
+	//
+	// Issue #1494: the nil branch is REACHABLE and no longer silent. main.go constructs this service
+	// with nil for plaidCleanupSvc and calls SetPlaidCleanupService later only inside
+	// `if cfg.PlaidClientID != "" && cfg.PlaidSecret != ""` (verified at the two call sites), so a
+	// Plaid-less deployment runs with it nil for the process's whole life — which is legitimate and
+	// must keep working, so the check belongs here rather than as a startup assertion. What it must not
+	// do is skip silently: nothing in such a deployment can ever record a Plaid removal, so a user WITH
+	// items whose removal is unproven hits DeleteUserCascade's C2 guard and gets (false, nil) — an
+	// erasure that never completes, reported as "not deleted yet", with the actual cause (no Plaid
+	// wiring) three layers away and stated nowhere.
+	if s.plaidCleanupSvc == nil {
+		// Counts the guard's EXACT population (uncleanedLinkedItemPredicate — neither removal proved
+		// nor removal proved impossible), not "any linked item at all". A user whose items are all
+		// already accounted for would sail through C2, and refusing THEM would be a self-inflicted
+		// block on erasures that were fine — the failure mode this branch exists to expose, inverted.
+		uncleanedCount, countErr := s.profileRepo.CountUncleanedLinkedItems(ctx, userID)
+		if countErr != nil {
+			// Fail closed: not knowing whether Plaid work is owed is not permission to proceed to an
+			// irreversible erasure.
+			releaseClaim(countErr.Error())
+			return fmt.Errorf("aborting deletion — Plaid cleanup service not configured and the outstanding linked-item count could not be established: %w", countErr)
+		}
+		if uncleanedCount > 0 {
+			releaseClaim(fmt.Sprintf("Plaid cleanup service not configured but user has %d linked item(s) with unproven Plaid removal", uncleanedCount))
+			return fmt.Errorf("aborting deletion — Plaid cleanup service not configured but user has %d linked item(s) whose Plaid removal is unproven — refusing to delete", uncleanedCount)
+		}
+		// Zero outstanding items: there is no Plaid work to do, so a Plaid-less deployment erasing this
+		// user is correct and safe. Proceed to the cascade, whose C2 guard re-checks this inside its
+		// own transaction anyway (this count is diagnosis, not the authority — see its doc comment).
+		slog.Default().Info("Plaid cleanup service not configured; user has no linked items with unproven Plaid removal, so deletion proceeds",
+			"user_id", userID)
+	} else {
 		if err := s.plaidCleanupSvc.RemoveAllUserItems(ctx, userID); err != nil {
 			// Issue #1413 H1: RemoveAllUserItems can return ErrSideEffectClaimBusy when another
 			// flow (past_due grace-cancel, the subscription-cancellation webhook, or another
@@ -442,8 +473,27 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 				slog.Default().Info("deletion Plaid disconnect deferred — side-effect claim held by another flow",
 					"user_id", userID)
 			}
-			releaseClaim(err.Error())
-			return fmt.Errorf("aborting deletion — Plaid cleanup failed: %w", err)
+			// Issue #1494: ONE failure kind does not abort, and this is the only caller in the codebase
+			// that treats it that way. ErrPlaidRemovalUnrecoverable means every item that failed did so
+			// in a way no retry can fix, AND that verdict is durably recorded on each row (the sentinel
+			// is not returned otherwise — see its doc comment). Aborting here is what made #1494
+			// permanent: the next run fails identically, forever, and the user's GDPR erasure never
+			// completes.
+			//
+			// Proceeding is safe only because two INDEPENDENT things stand between this line and an
+			// erased Item: DeleteUserCascade's C2 guard re-reads each row and still blocks unless the
+			// verdict really is recorded there, and the same transaction copies every
+			// not-provably-removed row into plaid_orphaned_items before deleting anything. So a bug in
+			// this branch alone cannot lose an Item — it can only fail to unblock. Logged at Error, not
+			// Info: we are completing an erasure while a live Plaid Item may still be billing, which is
+			// an operator's problem the moment it happens, not a routine event.
+			if errors.Is(err, ErrPlaidRemovalUnrecoverable) {
+				slog.Default().Error("proceeding with deletion despite Plaid item(s) that can never be removed — the obligation is recorded and will be preserved in plaid_orphaned_items; the Item(s) may still exist and still bill at Plaid",
+					"user_id", userID, "error", err)
+			} else {
+				releaseClaim(err.Error())
+				return fmt.Errorf("aborting deletion — Plaid cleanup failed: %w", err)
+			}
 		}
 	}
 

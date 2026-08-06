@@ -1830,6 +1830,13 @@ func (m *mockProfileRepoForCursorTests) DeleteUserCascade(ctx context.Context, u
 	return args.Bool(0), args.Error(1)
 }
 
+// CountUncleanedLinkedItems — Issue #1494. Only DeletionService's Plaid-less branch calls this; these
+// tests never reach it, so this is a plain stub rather than a testify expectation (which would panic
+// unmatched).
+func (m *mockProfileRepoForCursorTests) CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error) {
+	return 0, nil
+}
+
 // Issue #679, #680: Trial expiration - methods for trial management
 func (m *mockProfileRepoForCursorTests) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
 	args := m.Called(ctx)

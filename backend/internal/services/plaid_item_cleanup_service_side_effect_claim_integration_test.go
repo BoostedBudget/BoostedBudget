@@ -54,6 +54,12 @@ func (f *fakeLinkedItemRepoForRace) MarkPlaidRemoved(ctx context.Context, ids []
 	return nil
 }
 
+// MarkPlaidRemovalFailed — Issue #1494. This fixture's Plaid stub never fails, so no terminal
+// verdict is ever recorded; present to satisfy the interface.
+func (f *fakeLinkedItemRepoForRace) MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error {
+	return nil
+}
+
 // blockingPlaidCollaborator is a plaidServiceForCleanup stub whose RemoveItem call signals
 // `entered` (once) and then blocks on `release` — used to hold the side-effect claim open long
 // enough for a concurrent second attempt to observe it as busy, without relying on sleep-based

@@ -30,6 +30,23 @@ type MockLinkedItemRepoForCleanup struct {
 	// CallLog names the two durable writes in the order they happened, so a test can pin that the
 	// plaid_removed_at stamp precedes the 'disconnected' status write.
 	CallLog []string
+
+	// Issue #1494 — MarkPlaidRemovalFailed's recording fields, same non-testify rationale as
+	// MarkPlaidRemoved's above.
+	//
+	// PlaidRemovalFailures is every (item id, error code) pair passed to MarkPlaidRemovalFailed, in
+	// call order.
+	PlaidRemovalFailures []recordedPlaidRemovalFailure
+	// MarkPlaidRemovalFailedErr is what MarkPlaidRemovalFailed returns (nil unless a test sets it).
+	MarkPlaidRemovalFailedErr error
+}
+
+// recordedPlaidRemovalFailure is one MarkPlaidRemovalFailed call as observed by the mock — the pair a
+// test needs in order to assert that the verdict was recorded for the RIGHT item with the RIGHT Plaid
+// error code, rather than merely that some call happened. Issue #1494.
+type recordedPlaidRemovalFailure struct {
+	ItemID    string
+	ErrorCode string
 }
 
 func (m *MockLinkedItemRepoForCleanup) GetByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
@@ -86,6 +103,18 @@ func (m *MockLinkedItemRepoForCleanup) MarkPlaidRemoved(ctx context.Context, ids
 	m.CallLog = append(m.CallLog, "MarkPlaidRemoved")
 	m.PlaidRemovedIDs = append(m.PlaidRemovedIDs, ids...)
 	return m.MarkPlaidRemovedErr
+}
+
+// MarkPlaidRemovalFailed records the unrecoverable-removal verdict (Issue #1494). Recorded on the
+// struct rather than driven by testify expectations for the SAME reason MarkPlaidRemoved above is:
+// every existing failure-path test in this file would otherwise need a new .On(...) line purely to
+// avoid a "mock: I don't know what to return" panic, and none of them are about this call.
+func (m *MockLinkedItemRepoForCleanup) MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error {
+	m.CallLog = append(m.CallLog, "MarkPlaidRemovalFailed")
+	for _, id := range ids {
+		m.PlaidRemovalFailures = append(m.PlaidRemovalFailures, recordedPlaidRemovalFailure{ItemID: id, ErrorCode: errorCode})
+	}
+	return m.MarkPlaidRemovalFailedErr
 }
 
 // MockPlaidServiceForCleanup is a mock for PlaidService

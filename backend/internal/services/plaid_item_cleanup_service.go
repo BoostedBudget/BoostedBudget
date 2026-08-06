@@ -141,6 +141,104 @@ func isPlaidItemAlreadyGone(err error) bool {
 	return plaidErr.ErrorCode == "ITEM_NOT_FOUND"
 }
 
+// ErrPlaidRemovalUnrecoverable is returned by cleanupItems (via RemoveAllUserItems,
+// DisconnectAllUserItems, DisconnectAllUserItemsIfEligible) and by RemoveItem when the ONLY thing
+// that went wrong in the pass is one or more items whose Plaid /item/remove can NEVER succeed with
+// the credential we hold — and, critically, only AFTER that verdict has been durably recorded on
+// every affected row (LinkedItemRepository.MarkPlaidRemovalFailed). Issue #1494.
+//
+// IT DOES NOT MEAN THE ITEMS ARE GONE. Plaid told us our token is unusable, not that the Item ceased
+// to exist; it may still be live and still billing. What the sentinel means is precisely: "no further
+// automated attempt with this credential can change the outcome, and that fact is now on the row."
+//
+// WHY IT IS SEPARATE FROM A GENUINE FAILURE, and it is the one distinction this whole change turns
+// on. A genuine failure (outage, rate limit, DB error) means retry later, and every caller already
+// treats any non-nil error that way. This one means retrying will not help — so a caller that must
+// eventually converge may proceed, PROVIDED proceeding preserves the obligation. Exactly one caller
+// does that: DeletionService.ExecuteDeletion, which treats this sentinel as permission to continue to
+// DeleteUserCascade, whose C2 guard independently re-checks that each row really is marked and whose
+// transaction copies every not-provably-removed row into plaid_orphaned_items before deleting
+// anything. Two independent conditions, so a bug in this sentinel's plumbing alone cannot erase over
+// an unrecorded Item.
+//
+// ⚠ NEVER return this sentinel when the recording write failed. An unmarked row is indistinguishable
+// from a transient failure to every downstream predicate — C2 will (correctly) still block — so a
+// pass in that state must report a genuine failure and be retried, not hand out permission to
+// proceed. Both call sites append the recording failure to itemErrs for exactly this reason, and
+// Test_RemoveAllUserItems_TerminalFailureRecordingFails_DoesNotGrantPermissionToProceed pins it.
+//
+// Callers with no convergence obligation (past-due dunning, the cancellation webhook,
+// repairPlaidDisconnects) need no change: they treat any non-nil error as "not done, try again next
+// run", which stays correct — an unremovable item is legitimately never done, and the cleanup sweep
+// and stranded-cleanup backstop go on re-attempting it for as long as the row exists.
+var ErrPlaidRemovalUnrecoverable = errors.New("plaid item removal is unrecoverable with the credential on file (recorded on the item; the Item may still exist and still bill)")
+
+// plaidRemovalNoUsableTokenCode is the LOCAL sentinel recorded in
+// linked_items.plaid_removal_error_code when the failure was not Plaid rejecting our token but our
+// having no token to send at all. Not a Plaid error code — deliberately spelled in a shape Plaid's
+// vocabulary does not use, so nobody mistakes it for one when reading the column or the orphan record.
+const plaidRemovalNoUsableTokenCode = "NO_USABLE_ACCESS_TOKEN"
+
+// plaidRemovalInvalidAccessTokenCode is Plaid's error_code for a token that cannot be used, quoted as
+// a literal for the same reason isPlaidItemAlreadyGone quotes ITEM_NOT_FOUND: plaid-go v23 exposes no
+// typed constant for it.
+const plaidRemovalInvalidAccessTokenCode = "INVALID_ACCESS_TOKEN"
+
+// terminalPlaidRemovalFailure classifies a failed /item/remove attempt as UNRECOVERABLE (retrying
+// with the credential on file cannot change the outcome) or, by default, recoverable. Issue #1494.
+//
+// THE DEFAULT IS RECOVERABLE, AND THAT IS THE SAFETY PROPERTY. Anything unrecognised keeps being
+// retried and keeps blocking the user's erasure — fail-closed. Calling a recoverable error terminal
+// is the expensive mistake: it strands a live, still-billing Plaid Item in plaid_orphaned_items
+// labelled hopeless, and (because the row is then erasable) removes the automated retry that would
+// have fixed it. So this set is as narrow as it can be while still closing #1494, and every member is
+// named with its argument:
+//
+//   - Plaid INVALID_ACCESS_TOKEN. This is a verdict on the CREDENTIAL, not on Plaid's availability:
+//     the token is malformed, was minted for a different Plaid environment, or has been rotated. The
+//     access token stored on the row is the only one we will ever have for this Item, so every future
+//     attempt sends the same rejected value and receives the same answer. Distinct from ITEM_NOT_FOUND
+//     (isPlaidItemAlreadyGone) in the one way that matters: ITEM_NOT_FOUND is Plaid saying the ITEM is
+//     gone, which licenses plaid_removed_at; this says nothing whatever about the Item, which is why
+//     it licenses only plaid_removal_failed_at. #1494 asks explicitly that these not be conflated.
+//   - No usable access token at all (item.AccessToken == ""). There is nothing to send. plaidService.
+//     RemoveItem's own guard rejects this before any HTTP call ("access token cannot be empty"), which
+//     is why this is checked as a PROPERTY OF THE ROW rather than by matching that error's text: the
+//     row's stored ciphertext is empty, no code path can repopulate it (the plaintext token existed
+//     only inside the original Plaid Link exchange), and so no retry can succeed. NOT the same as a
+//     token that fails to DECRYPT: that error surfaces from the repository's fetch, before any removal
+//     is attempted, and never reaches this function — a key/rotation problem is an operations problem
+//     and must stay recoverable.
+//
+// DELIBERATELY ABSENT: everything else, and two in particular. INVALID_API_KEYS is an operator
+// misconfiguration that a config fix cures — treating it as terminal would strand every one of a
+// deployment's Items on a typo. Rate limits, 5xx, and network errors are the textbook transient cases
+// this must never claim.
+//
+// err is assumed to have already failed isPlaidItemAlreadyGone (both call sites check that first), so
+// ITEM_NOT_FOUND cannot reach here; item is the row the attempt was made for, and a nil item or nil
+// err is classified recoverable so a mis-wired caller fails closed.
+func terminalPlaidRemovalFailure(item *domain.LinkedItem, err error) (code string, terminal bool) {
+	if err == nil || item == nil {
+		return "", false
+	}
+	if item.AccessToken == "" {
+		return plaidRemovalNoUsableTokenCode, true
+	}
+	var apiErr plaid.GenericOpenAPIError
+	if !errors.As(err, &apiErr) {
+		return "", false
+	}
+	plaidErr, convErr := plaid.ToPlaidError(apiErr)
+	if convErr != nil {
+		return "", false
+	}
+	if plaidErr.ErrorCode == plaidRemovalInvalidAccessTokenCode {
+		return plaidRemovalInvalidAccessTokenCode, true
+	}
+	return "", false
+}
+
 // PlaidItemCleanupService handles removal of Plaid items to minimize billing costs.
 // It calls Plaid's /item/remove endpoint to invalidate access tokens and stop
 // monthly subscription billing for Items.
@@ -316,6 +414,11 @@ type linkedItemRepoForCleanup interface {
 	// repository.LinkedItemRepository's doc comment for why MarkItemsDisconnected cannot carry
 	// this fact, and RemoveItem/cleanupItems below for why this write must come FIRST.
 	MarkPlaidRemoved(ctx context.Context, ids []string) error
+	// MarkPlaidRemovalFailed records the OPPOSITE fact from MarkPlaidRemoved — "we can never remove
+	// this Item with the credential on file" (Issue #1494). See repository.LinkedItemRepository's doc
+	// comment for why the two facts need separate columns, and terminalPlaidRemovalFailure below for
+	// which failures qualify.
+	MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error
 }
 
 // plaidServiceForCleanup is a minimal interface for the Plaid operations
@@ -401,6 +504,26 @@ func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 			// go away without arguing the Plaid semantics explicitly first: ITEM_NOT_FOUND means the
 			// ITEM is gone (billing stopped), whereas an invalid TOKEN says nothing about whether the
 			// Item still exists or is still billable. Tracked as issue #1494.
+			// Issue #1494 lands the escape hatch the paragraph above asked for, and it is narrower
+			// than the "audited manual override" that issue proposed: a failure Plaid's own answer
+			// proves cannot be retried away is RECORDED as such (plaid_removal_failed_at), which is
+			// what lets C2 stop blocking that user's erasure forever — without ever claiming the Item
+			// was removed. The ⚠ paragraph above is retained because its argument still holds for
+			// every OTHER failure: nothing here widens isPlaidItemAlreadyGone, and an outage or a rate
+			// limit still blocks, still retries, still fails closed.
+			//
+			// The error is STILL returned, unchanged in kind: this method's caller
+			// (ItemCleanupWorker.Work) must keep failing, retrying and dead-lettering, because the row
+			// still exists and re-attempting it is free of harm — the recorded verdict is permission
+			// for the ERASURE to proceed, never permission to stop trying. If the recording write
+			// itself fails, no sentinel is attached (see ErrPlaidRemovalUnrecoverable's ⚠ note): an
+			// unrecorded verdict must not grant anyone permission to proceed.
+			if code, terminal := terminalPlaidRemovalFailure(item, removeErr); terminal {
+				if recErr := s.recordTerminalPlaidRemovalFailure(ctx, linkedItemID, code); recErr == nil {
+					return fmt.Errorf("failed to remove Plaid item %s (%w, %s): %w",
+						linkedItemID, ErrPlaidRemovalUnrecoverable, code, removeErr)
+				}
+			}
 			s.logger.Error("failed to remove Plaid item; NOT reporting success",
 				"item_id", linkedItemID,
 				"plaid_item_id", item.ItemID,
@@ -534,6 +657,36 @@ func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 		return fmt.Errorf("failed to persist 'disconnected' state for item %s after Plaid removal: %w", linkedItemID, markErr)
 	}
 
+	return nil
+}
+
+// recordTerminalPlaidRemovalFailure persists the "unremovable with the credential on file" verdict
+// for one item, and returns nil ONLY when that verdict is durably recorded (or provably no longer
+// needed). Issue #1494.
+//
+// Its return value is what both call sites use to decide whether they may report
+// ErrPlaidRemovalUnrecoverable — i.e. hand a caller permission to proceed to an irreversible erasure —
+// so the rule is: no record, no permission. A genuine write failure is returned and the pass reports a
+// normal failure instead, which leaves C2 blocking and brings the retry back here.
+//
+// ErrNoLinkedItemsUpdated is NOT a failure, and its two causes are both benign (see
+// MarkPlaidRemovalFailed's guard): the row no longer exists — an EXISTS-based guard cannot block on an
+// absent row, and there is no Item record left to preserve — or the row already carries
+// plaid_removed_at, i.e. some other attempt PROVED the removal succeeded, which is strictly better
+// news than the verdict being written here and already unblocks everything.
+func (s *plaidItemCleanupService) recordTerminalPlaidRemovalFailure(ctx context.Context, itemID, code string) error {
+	if err := s.linkedItemRepo.MarkPlaidRemovalFailed(ctx, []string{itemID}, code); err != nil {
+		if errors.Is(err, repository.ErrNoLinkedItemsUpdated) {
+			s.logger.Warn("MarkPlaidRemovalFailed matched zero rows — item row is gone, or removal was already recorded as successful",
+				"item_id", itemID, "error_code", code, "error", err)
+			return nil
+		}
+		s.logger.Error("failed to record an unrecoverable Plaid removal failure; treating the pass as a retryable failure so the erasure stays blocked",
+			"item_id", itemID, "error_code", code, "error", err)
+		return err
+	}
+	s.logger.Error("Plaid item removal is unrecoverable with the credential on file; recorded on the item",
+		"item_id", itemID, "error_code", code)
 	return nil
 }
 
@@ -682,6 +835,13 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 
 		var successIDs []string
 		var itemErrs []error
+		// terminalErrs holds per-item failures that are UNRECOVERABLE and have been durably recorded
+		// as such (Issue #1494). Kept apart from itemErrs because the two demand opposite things of the
+		// caller: itemErrs means "retry, this may yet work", terminalErrs means "retrying cannot help,
+		// and the obligation is on the row". A recording failure is appended to itemErrs, never here —
+		// see ErrPlaidRemovalUnrecoverable's ⚠ note. Both are counted in failCount, so abortedCount's
+		// arithmetic below is unchanged by this split.
+		var terminalErrs []error
 		var successCount, failCount, skippedCount int
 
 	itemLoop:
@@ -721,6 +881,22 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 						"item_id", item.ID, "plaid_item_id", item.ItemID, "user_id", userID)
 					successIDs = append(successIDs, item.ID)
 					successCount++
+					continue
+				}
+				// Issue #1494: an unrecoverable failure is recorded on the row and tracked apart from
+				// the retryable ones. It still counts as a failure (failCount, and no MarkPlaidRemoved
+				// stamp — nothing here believes the Item is gone); what changes is only what the
+				// CALLER is told at the end of the pass. If the recording write fails, it falls
+				// through to the ordinary retryable path below, deliberately: an unrecorded verdict
+				// must leave C2 blocking and the pass retryable.
+				if code, terminal := terminalPlaidRemovalFailure(&item, err); terminal {
+					recErr := s.recordTerminalPlaidRemovalFailure(ctx, item.ID, code)
+					failCount++
+					if recErr != nil {
+						itemErrs = append(itemErrs, fmt.Errorf("failed to record the unrecoverable removal failure for item %s (%s): %w", item.ID, code, recErr))
+					} else {
+						terminalErrs = append(terminalErrs, fmt.Errorf("item %s cannot be removed (%s): %w", item.ID, code, err))
+					}
 					continue
 				}
 				s.logger.Warn("failed to remove Plaid item",
@@ -807,6 +983,15 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 			// A genuine per-item failure (or a recheck error, which is appended to itemErrs above)
 			// always takes priority over ErrCleanupAborted below — the caller needs to know a real
 			// failure occurred, not just that the pass stopped early.
+			//
+			// Issue #1494: it also takes priority over ErrPlaidRemovalUnrecoverable, and that
+			// precedence is the important half. Any retryable failure in the pass means the pass is not
+			// finished, so no caller may treat it as permission to proceed to an irreversible erasure —
+			// even if some OTHER item in the same pass was correctly judged unremovable. The terminal
+			// errors are folded in for diagnosis, and doing so is safe: an entry in terminalErrs wraps
+			// the underlying Plaid error only — ErrPlaidRemovalUnrecoverable is attached at the final
+			// return below and nowhere else, so no errors.Is check can find the sentinel on this path.
+			itemErrs = append(itemErrs, terminalErrs...)
 			return fmt.Errorf("failed to remove %d of %d Plaid item(s) for user %s: %w",
 				failCount, len(items), userID, errors.Join(itemErrs...))
 		}
@@ -822,7 +1007,24 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 			return fmt.Errorf("%w for user %s (%d of %d item(s) not attempted)",
 				ErrCleanupAborted, userID, abortedCount, len(items))
 		}
-		return s.verifyNoNewLinkedItemAppeared(ctx, userID, fetch, knownItemIDs)
+		if newItemErr := s.verifyNoNewLinkedItemAppeared(ctx, userID, fetch, knownItemIDs); newItemErr != nil {
+			// Issue #1494: this check keeps its priority over the unrecoverable-removal sentinel below,
+			// and the ordering is not cosmetic. A live item that appeared after the initial fetch was
+			// never attempted at all, so the pass is genuinely incomplete — reporting the sentinel
+			// instead would tell DeletionService it may proceed to an irreversible erasure over an item
+			// nobody has even tried to remove and nothing has recorded a verdict for.
+			return newItemErr
+		}
+		if len(terminalErrs) > 0 {
+			// Issue #1494: every item that failed did so unrecoverably, AND every one of those verdicts
+			// is durably on its row (a recording failure would have gone to itemErrs and returned
+			// above). Only now may a caller with a convergence obligation proceed — see
+			// ErrPlaidRemovalUnrecoverable's doc comment for who does, and for the two independent
+			// conditions that still stand between this return and an actual erasure.
+			return fmt.Errorf("%w: %d of %d Plaid item(s) for user %s: %w",
+				ErrPlaidRemovalUnrecoverable, len(terminalErrs), len(items), userID, errors.Join(terminalErrs...))
+		}
+		return nil
 	})
 }
 

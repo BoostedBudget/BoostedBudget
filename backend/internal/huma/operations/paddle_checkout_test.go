@@ -151,6 +151,12 @@ func (m *mockProfileRepo) CreateUserTx(ctx context.Context, tx pgx.Tx, user *dom
 func (m *mockProfileRepo) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	return true, nil
 }
+
+// CountUncleanedLinkedItems — Issue #1494. Only DeletionService's Plaid-less branch calls this;
+// these tests never reach it. Zero is the "nothing outstanding" answer, i.e. the non-blocking one.
+func (m *mockProfileRepo) CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error) {
+	return 0, nil
+}
 func (m *mockProfileRepo) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error {
 	return nil
 }

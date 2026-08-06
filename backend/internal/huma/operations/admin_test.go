@@ -181,6 +181,11 @@ func (m *mockLinkedItemRepo) MarkPlaidRemoved(ctx context.Context, ids []string)
 	return nil
 }
 
+// MarkPlaidRemovalFailed — Issue #1494. Unused by these tests; present to satisfy the interface.
+func (m *mockLinkedItemRepo) MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error {
+	return nil
+}
+
 // mockEncryptionService is a mock implementation of services.EncryptionService
 type mockEncryptionService struct {
 	decryptedToken string
