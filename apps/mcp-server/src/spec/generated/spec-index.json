@@ -276,25 +276,25 @@
       "operationId": "fireWebhook",
       "method": "POST",
       "path": "/api/v1/admin/plaid/fire-webhook",
-      "summary": "Fire a Plaid webhook (QA only)",
+      "summary": "Fire a Plaid webhook (sandbox Plaid only)",
       "tags": [
         "Admin"
       ],
       "manifestClass": "read",
       "excluded": true,
-      "description": "Fires a Plaid webhook for testing in QA environment. Requires Clerk authentication."
+      "description": "Fires a Plaid webhook for testing. Requires Clerk authentication and admin authorization. Reachable in every environment, but only functions when PLAID_ENV=sandbox; it returns an error otherwise."
     },
     {
       "operationId": "grantTrial",
       "method": "POST",
       "path": "/api/v1/admin/subscription/grant-trial",
-      "summary": "Grant trial subscription (QA only)",
+      "summary": "Grant trial subscription (admin)",
       "tags": [
         "Admin"
       ],
       "manifestClass": "read",
       "excluded": true,
-      "description": "Grants a 60-day trial to the authenticated user. For E2E testing. Returns success if user already has trial."
+      "description": "Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial."
     },
     {
       "operationId": "getSystemHealth",

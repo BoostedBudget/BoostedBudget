@@ -13,8 +13,12 @@ type Config struct {
 	// Server
 	Port        string
 	Environment string
-	// EnvironmentExplicitlySet reports whether ENVIRONMENT was actually present in the
-	// process environment, as opposed to Environment holding the "development" default.
+	// EnvironmentExplicitlySet reports whether ENVIRONMENT was set to a NON-EMPTY value in
+	// the process environment, as opposed to Environment holding the "development" default.
+	// It is `os.Getenv("ENVIRONMENT") != ""`, deliberately not `os.LookupEnv` — an
+	// explicitly blank ENVIRONMENT= (a blanked Fly secret, an empty compose interpolation)
+	// gets the same defaulted treatment from getEnv, so it must not count as explicit here
+	// either.
 	//
 	// Issue #1498: getEnv maps an unset AND an empty ENVIRONMENT to "development", so
 	// Environment alone cannot distinguish "this is a dev box" from "somebody deployed
