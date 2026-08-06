@@ -72,6 +72,27 @@ var ErrSideEffectClaimBusy = errors.New("side-effect claim held by another flow"
 // sentinel.
 var ErrCleanupAborted = errors.New("plaid item cleanup aborted before completion: some linked item(s) were not attempted")
 
+// ErrItemNoLongerEligible is RemoveItem's answer when its use-time eligibility recheck reports that
+// this single item has stopped being a cleanup candidate — the user repaired the connection through
+// Plaid Link update mode, its accounts came back, or its error cleared — after the caller selected
+// it and before the Plaid /item/remove.
+//
+// It is the single-item analogue of ErrCleanupAborted, kept SEPARATE from it because the two say
+// different things: ErrCleanupAborted means "a per-user pass left work outstanding" (its own doc
+// comment enumerates the two ways that happens, both about a multi-item loop), whereas this means
+// "there is no work to do for this item, and there was none by the time we looked". Folding them
+// together would make errors.Is checks on either one ambiguous.
+//
+// Like ErrCleanupAborted it is neither success nor failure but an EXPECTED outcome: callers must not
+// log it at Warn or count it against a failure metric, and must NOT treat it as permission to record
+// anything about the Plaid side — nothing was sent to Plaid. ItemCleanupWorker.Work, the only
+// caller, handles it exactly as it handles a claim declined at selection time: release the stale
+// cleanup schedule and report success, returning an error only if that release fails.
+//
+// Never returned when the recheck itself errors: an undetermined eligibility is fail-closed and
+// surfaces as a genuine, retryable error, because "we could not tell" is not "still eligible".
+var ErrItemNoLongerEligible = errors.New("linked item is no longer a cleanup candidate: nothing was sent to Plaid")
+
 // plaidDisconnectSideEffectLease is the lease requested for repository.ActionPlaidDisconnectUser.
 // Shorter than the 15-minute FLOW-claim leases (accountDeletionClaimLease, pastDueClaimLease,
 // subscriptionCancelledCleanupClaimLease): this claim only needs to outlive the Plaid calls in
@@ -344,7 +365,27 @@ type PlaidItemCleanupService interface {
 	// making the backstop re-enqueue such a row until the CALLER's ClearCleanupSchedule landed. That
 	// gap is closed at its cause: plaid_removed_at is writable on a 'replaced' row, so the row leaves
 	// the backstop's result set as soon as removal is recorded.
-	RemoveItem(ctx context.Context, linkedItemID string) error
+	// recheck is the USE-TIME eligibility re-verification, and it is REQUIRED — a nil is refused
+	// before the repository is touched, not treated as "no recheck wanted" (Codex pass-5 Medium 2).
+	// It is asked immediately after this method's own read of the row and immediately before the
+	// Plaid call, and it must answer the caller's own selection question: whatever made this item a
+	// candidate must still hold.
+	//
+	// WHY IT CANNOT LIVE IN THE CALLER. ItemCleanupWorker.Work already re-verifies with
+	// LinkedItemRepository.ClaimItemForCleanup, but that claim is a conditional UPDATE whose
+	// guarantee ends with its own statement — it is a re-verification, not a lease, as its doc
+	// comment states — and this method then performs a SEPARATE read before presenting the access
+	// token to Plaid. A connection repair (Plaid Link update mode) or an active-account write can
+	// commit in that gap, so an item that just became healthy was still disconnected. The caller
+	// cannot close a window that opens inside the callee.
+	//
+	// (false, nil) returns ErrItemNoLongerEligible and NOTHING is written or sent: no Plaid call, no
+	// plaid_removed_at stamp, no status change. A recheck ERROR is fail-closed and surfaces as a
+	// genuine, retryable error without the sentinel. What remains after this is the same irreducible
+	// check-to-call window every other flow in this file documents and accepts: no further database
+	// read can eliminate the final external-call boundary, and a lease would only trade this
+	// recoverable exposure for persistent state that can be orphaned.
+	RemoveItem(ctx context.Context, linkedItemID string, recheck func(ctx context.Context) (bool, error)) error
 
 	// DisconnectAllUserItems calls Plaid /item/remove for all items, then marks
 	// them as 'disconnected' in the database. This preserves transaction history
@@ -490,11 +531,41 @@ func (s *plaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID
 // RemoveItem implements PlaidItemCleanupService.RemoveItem — see that interface method's doc
 // comment (Issue #1486 follow-up) for the full contract, and in particular for why ITEM_NOT_FOUND is success
 // while every other Plaid error is a propagated failure.
-func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID string) error {
+func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID string, recheck func(ctx context.Context) (bool, error)) error {
+	if recheck == nil {
+		// Fail closed, exactly as RemoveAllUserItems does: a nil here is the defect, not a
+		// configuration, and refusing before the repository is touched keeps a caller from getting the
+		// old unchecked behaviour back by passing nil to a required parameter.
+		return fmt.Errorf("RemoveItem: an eligibility recheck is required before removing item %s from Plaid", linkedItemID)
+	}
+
 	// Get the linked item
 	item, err := s.linkedItemRepo.GetByID(ctx, linkedItemID)
 	if err != nil {
 		return fmt.Errorf("failed to get linked item %s: %w", linkedItemID, err)
+	}
+
+	// USE-TIME RE-VERIFICATION (Codex pass-5 Medium 2). This sits between the read above and the
+	// Plaid call below — the latest point at which anything can still be learned — because the
+	// caller's own claim (ClaimItemForCleanup) grants no exclusivity past its own statement and this
+	// method's read is a separate transaction from it. See the interface method's doc comment for the
+	// full argument, including why this is a recheck and not a lease.
+	eligible, recheckErr := recheck(ctx)
+	if recheckErr != nil {
+		// Fail closed: "we could not tell" is not "still eligible", and /item/remove cannot be undone.
+		// Deliberately NOT wrapped in ErrItemNoLongerEligible — an undetermined eligibility must be
+		// retried, and that sentinel means "there was nothing to do".
+		s.logger.Error("failed to re-verify item cleanup eligibility at the point of use, not removing item",
+			"item_id", linkedItemID, "error", recheckErr)
+		return fmt.Errorf("failed to re-verify cleanup eligibility for item %s: %w", linkedItemID, recheckErr)
+	}
+	if !eligible {
+		// Nothing has been sent to Plaid and nothing is recorded — see ErrItemNoLongerEligible's doc
+		// comment for what the caller must do with this (release its now-stale schedule and report
+		// success), and why that is the SAME handling as a claim declined at selection time.
+		s.logger.Info("linked item is no longer a cleanup candidate at the point of use; not calling Plaid",
+			"item_id", linkedItemID, "plaid_item_id", item.ItemID)
+		return fmt.Errorf("%w: item %s", ErrItemNoLongerEligible, linkedItemID)
 	}
 
 	if removeErr := s.removeItemInternal(ctx, item); removeErr != nil {
