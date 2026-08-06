@@ -367,6 +367,101 @@ comment for the citation back to this record.
 
 See the dedicated section below.
 
+### 12. Plaid orphaned items: bounded credential retention after erasure (#1494, #1497)
+
+**This is the only decision in this record under which personal data deliberately OUTLIVES an
+erasure.** It is recorded here, and not only in migration comments, because it is a controller-level
+retention decision and a reader auditing what BoostedBudget keeps about a deleted user must find it
+in the deletion record.
+
+#### What outlives the erasure, and why anything does
+
+`DeleteUserCascade` deletes the user's `linked_items` rows. For a Plaid Item we PROVED was removed
+(`plaid_removed_at IS NOT NULL`) that is complete and nothing is owed. For any Item we could not prove
+removed, the Item may still exist at Plaid and may still be BILLING — and after the delete no part of
+this system would know it ever existed. That is why the cascade copies every not-provably-removed row
+into `plaid_orphaned_items` (migration `000134`), inside its own transaction, before deleting anything.
+
+Two populations reach that table, and the difference matters for the retention argument:
+
+- an Item whose `/item/remove` failed unrecoverably (`INVALID_ACCESS_TOKEN`, or no usable token at
+  all), aged past the 7-day cooling-off window the C2 guard requires; and
+- a `'replaced'` re-link leftover whose `/item/remove` was **never attempted** — the re-link path does
+  not call it. For these, nothing has ever been tried.
+
+`plaid_orphaned_items` deliberately carries **no `user_id` and no foreign key of any kind**: it must
+outlive the erased user and must not be a surviving pointer to them. What it holds is one opaque vendor
+resource identifier, the institution that issued it, a fixed-vocabulary status and error code, and
+timestamps.
+
+#### The credential, and why it cannot be anonymised (#1497)
+
+Re-attempting a removal requires the Item's **access token**, which the cascade erases as user
+credential data. So until #1497 a post-erasure orphan could only be resolved by hand in Plaid's
+dashboard, including for the `'replaced'` population where nothing had ever been tried.
+
+The question asked was whether the token could be stored "fully anonymised". **It cannot, and the
+reason is structural rather than procedural: an access token is a CAPABILITY, not an identifier.** Its
+only value is that it still works when presented to Plaid. Hash it or mask it and it stops working,
+which destroys the reason to keep it; leave it working and it is inherently linkable — presenting it
+reveals the institution and Item, and Plaid's own records tie that Item to the person. It is therefore
+**pseudonymised at best, and pseudonymised data is still personal data.** There is no usable-but-
+anonymous form, and this paragraph exists so the proposal is not re-made.
+
+#### The decision: retain, but bounded in the schema
+
+| what | value |
+|---|---|
+| **What is retained** | one Plaid access token, encrypted at rest with the same `FieldEncryptor` key as `linked_items.access_token_encrypted` (the cascade copies the ciphertext verbatim; a SQL statement has no key) |
+| **Purpose** | terminating a vendor billing relationship we are obliged to end and cannot end without it |
+| **Lawful basis for the retention** | storage limitation (Art. 5(1)(e)) permits purpose-bound, time-limited retention; the purpose is narrow and the limit is hard |
+| **Retention period** | **30 days** from the erasure — `domain.OrphanedItemTokenRetention`, stored per row as `plaid_orphaned_items.token_expires_at`, which is `NOT NULL` so that "retained indefinitely" is not expressible |
+| **Why 30 days** | it is the account-deletion grace period this system already documents and operates (`config.DeletionGracePeriodDays`' default), so the retention reuses a boundary already defended rather than inventing one. It is a **constant, not a reference** to that config: an operator lengthening `DELETION_GRACE_PERIOD_DAYS` must not silently lengthen how long erased users' bank credentials are held |
+| **Not** the 7-day C2 window | two clocks, two purposes: that one bounds how long an **erasure waits**; this one bounds how long a **credential outlives** one |
+| **When it is destroyed** | on a proved removal (immediately — the purpose is spent), **and at `token_expires_at` regardless of outcome** |
+| **What survives afterwards** | the record, indefinitely: Item identifier, institution, status, error codes, timestamps. No credential, no user PII |
+
+#### The purge fires regardless of outcome, and that is enforced structurally
+
+The retention is defensible **only** because the deadline fires whether or not the purpose was
+achieved. Three properties make that a property of the system rather than of anyone's diligence:
+
+1. **The purge is its own River job** (`plaid_orphan_token_purge`), whose predicate is
+   `token_expires_at <= asOf` and **nothing else** — not resolution, not attempt count, not retry
+   state. It takes no Plaid client and no service; its only dependency is the database.
+2. **Its periodic registration is unconditional.** It has no field in `periodicJobsDeps`, so there is
+   nothing a nil worker could omit, and `TestBuildPeriodicJobSpecs_PurgeSpecSurvivesEveryNilWorker`
+   builds the spec list from an entirely empty dependency struct and demands the purge is still there.
+   The retry job, which needs a Plaid client, IS nil-guarded — which is exactly why the purge is not
+   allowed to live inside it. A deployment with Plaid switched off still keeps this promise.
+3. **The database refuses to record a purge that did not happen.** The CHECK constraint
+   `plaid_orphaned_items_purged_token_is_null` makes `token_purged_at IS NOT NULL` with a non-NULL
+   ciphertext unrepresentable, and both purge paths move the two columns in one statement.
+
+#### Who can see it
+
+Nobody, through this system. The admin listing (`GET /api/v1/admin/plaid/orphaned-items`) reports
+`token_retained` as a boolean and **never the token** — an operator does not need it, because the
+manual remedy is performed in Plaid's own dashboard using `plaid_item_id`. `token_retained` is true
+even for a credential this process cannot decrypt (a rotated key), because it is still retained data.
+
+#### Residual risks, stated rather than implied
+
+- **A rotated encryption key** makes a retained token permanently unusable. It is deliberately NOT
+  purged early on that basis (a missing key is usually a bad deploy, and purging on the first decrypt
+  failure would destroy every recoverable credential in the table irreversibly); the record instead
+  stops claiming to be auto-retrying and asks for a human. The credential still dies on its deadline.
+- **A claim of "auto-retrying" is a claim about a job**, and a row cannot see whether that job runs. So
+  the claim DECAYS: with no retry observed for `domain.OrphanedItemRetryStaleAfter` (48 hours, two
+  cadences of the daily sweep) the record reports `manual_intervention_required` regardless of cause.
+  Over-reporting manual work costs one look at a healthy row; under-reporting it costs a live Plaid
+  Item billing for a month behind a green label.
+- **Pre-`000135` rows** hold no credential and, by the `DEFAULT NOW()` on `token_expires_at`, are
+  already past their deadline. They are correctly reported as needing manual intervention.
+- **Application logs written BEFORE the erasure** name the Item id and the user id on the same line, so
+  a holder of those logs can correlate an orphan record back to a person. That is a property of log
+  retention, governed separately, and `000134` already states it. This decision does not change it.
+
 ---
 
 ## #1464 Production-Exposure Query (Task G7)
