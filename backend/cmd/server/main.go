@@ -1517,11 +1517,7 @@ func main() {
 		appLogger.Info("Huma read-only enforcement middleware applied")
 
 		// Load admin email config and create AdminService (Issue #309)
-		adminEmailConfig, err := config.LoadAdminEmailConfig()
-		if err != nil {
-			appLogger.Warn("Failed to load admin email config (using empty list)", "error", err)
-			adminEmailConfig = &domain.AdminEmailConfig{AdminEmails: []string{}}
-		}
+		//
 		// Issue #1498: resolve the two lists against the environment. The hardcoded list
 		// bypasses the role check, so the CI/QA entries in non_production_admin_emails must
 		// not load in production — nor under an unset or unrecognised ENVIRONMENT, both of
@@ -1530,8 +1526,15 @@ func main() {
 		// cfg.AdminAllowlistEnvironment(), NOT cfg.Environment: the latter defaults to
 		// "development" when ENVIRONMENT is unset, and development is a recognised
 		// non-production environment, so using it would load the test admins on a
-		// production deployment that forgot the variable.
+		// production deployment that forgot the variable. The same value also decides whether
+		// the ADMIN_EMAILS_CONFIG relocation override is honoured at all — one notion of
+		// "is this production?" for the whole authorization path, not two.
 		allowlistEnv := cfg.AdminAllowlistEnvironment()
+		adminEmailConfig, err := config.LoadAdminEmailConfig(allowlistEnv)
+		if err != nil {
+			appLogger.Warn("Failed to load admin email config (using empty list)", "error", err)
+			adminEmailConfig = &domain.AdminEmailConfig{AdminEmails: []string{}}
+		}
 		effectiveAdminEmails := adminEmailConfig.EffectiveAdminEmails(allowlistEnv)
 		adminService := services.NewAdminService(cfg.ClerkSecretKey, effectiveAdminEmails)
 
@@ -1552,13 +1555,26 @@ func main() {
 				"Set ENVIRONMENT explicitly (development/qa/staging/production).",
 				"effective_environment", cfg.Environment)
 		}
-		// The admin allowlist is an ACL. If it has been relocated, say so loudly — otherwise
-		// an overridden file silently replaces the reviewed, committed one.
-		if override := os.Getenv("ADMIN_EMAILS_CONFIG"); override != "" {
-			appLogger.Warn("Admin email allowlist loaded from an ADMIN_EMAILS_CONFIG override, "+
-				"not the committed config/admin_emails.yaml",
-				"path", override,
-				"effective_hardcoded_admin_emails", len(effectiveAdminEmails))
+		// The admin allowlist is an ACL, so ADMIN_EMAILS_CONFIG is an authorization input.
+		// Issue #1498: outside a recognised non-production environment the loader REFUSES it and
+		// reads the committed config/admin_emails.yaml instead — a warning after the fact would
+		// be detective, not preventive. Say either outcome loudly; a silently-ignored override is
+		// its own trap.
+		if override, honoured := config.AdminEmailsConfigOverride(allowlistEnv); override != "" {
+			if honoured {
+				appLogger.Warn("Admin email allowlist loaded from an ADMIN_EMAILS_CONFIG override, "+
+					"not the committed config/admin_emails.yaml",
+					"path", override,
+					"effective_hardcoded_admin_emails", len(effectiveAdminEmails))
+			} else {
+				appLogger.Error("ADMIN_EMAILS_CONFIG was set and REJECTED: the admin allowlist may "+
+					"only be relocated in a recognised non-production environment. Loaded the "+
+					"committed config/admin_emails.yaml instead.",
+					"rejected_path", override,
+					"admin_allowlist_environment", allowlistEnv,
+					"environment_explicitly_set", cfg.EnvironmentExplicitlySet,
+					"effective_hardcoded_admin_emails", len(effectiveAdminEmails))
+			}
 		}
 
 		// Issue #639: Admin user management - needs adminService for admin status checks
