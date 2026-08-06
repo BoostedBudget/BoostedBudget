@@ -20,9 +20,10 @@
 --      retention is given a DEADLINE IN THE SCHEMA (token_expires_at, NOT NULL, so "retained
 --      indefinitely" is not expressible) and an unconditional purge sweep keyed on nothing but that
 --      deadline. The defensibility comes entirely from the bound, not from the purpose -- so the bound
---      is stated as it is actually kept: unusable from the deadline exactly, destroyed by the first
---      sweep at or after it (at most domain.OrphanedItemTokenPurgeInterval, 1 hour, later). See the
---      token_expires_at column comment; do not restate this as "cannot exist past the deadline".
+--      is stated as it is actually kept: unusable from the deadline exactly, purged by the first sweep
+--      at or after it (normally within domain.OrphanedItemTokenPurgeInterval, 1 hour -- a bound per
+--      sweep, not an absolute ceiling). See the token_expires_at column comment; do not restate this
+--      as "cannot exist past the deadline".
 --
 -- THE GDPR POSITION, restated because it CHANGED with this migration and a table comment is not the
 -- place a controller should have to discover that (see docs/decisions/2026-08-01-gdpr-erasure-hard-
@@ -47,12 +48,15 @@
 --     never ran, whose retry job was never registered, or whose Item is still live and still billing
 --     loses its token on schedule and becomes an operator's problem at Plaid. That is the whole
 --     bargain: the retention is bounded by a clock, not by success.
---     ⚠ REGARDLESS OF OUTCOME, NOT INSTANTANEOUSLY. The purge is a periodic sweep running every
---     domain.OrphanedItemTokenPurgeInterval (1 hour), so the credential is destroyed by the FIRST
---     sweep at or after the deadline — at most an hour past it. Its USE stops at the deadline itself,
---     enforced separately and exactly at every read (see the token_expires_at column comment). Both
---     halves are real; they are not the same strength, and saying otherwise would overstate the one
---     guarantee this feature's GDPR defensibility rests on.
+--     ⚠ REGARDLESS OF OUTCOME, NOT INSTANTANEOUSLY, AND NOT A GUARANTEE OF EXECUTION. The purge is a
+--     periodic sweep running every domain.OrphanedItemTokenPurgeInterval (1 hour), so the credential
+--     is taken by the FIRST sweep that runs at or after the deadline — normally within an hour, but
+--     that is a bound per sweep and a sweep that does not run or does not drain extends it (per-run
+--     cap, downtime, leader election, worker starvation, a failed run before River retries it). Its
+--     USE stops at the deadline itself, enforced separately and exactly on every path that could
+--     present it to Plaid (see the token_expires_at column comment). Both halves are real; they are
+--     not the same strength, and saying otherwise would overstate the one guarantee this feature's
+--     GDPR defensibility rests on.
 --   * WHAT SURVIVES the purge: the record, indefinitely — plaid_item_id_encrypted, institution,
 --     status, error codes, timestamps. No credential and no user PII. That is 000134's original,
 --     unchanged position, and it is what the admin "manual intervention required in Plaid" state reads.
@@ -144,15 +148,21 @@ COMMENT ON COLUMN plaid_orphaned_items.access_token_encrypted IS
 COMMENT ON COLUMN plaid_orphaned_items.token_expires_at IS
     'RETENTION DEADLINE on the credential above, in two parts of DIFFERENT STRENGTH -- keeping them '
     'distinct is the point, because an earlier version of this comment claimed both and only one '
-    'holds. (1) THE TOKEN MUST NOT BE USED FROM THIS INSTANT, exactly: every reader re-checks the '
-    'deadline against a fresh clock and refuses an expired value (domain.TokenIsLive is strict at the '
-    'boundary, GetRetryablePage selects token_expires_at > asOf, and the retry sweep re-checks per row '
-    'immediately before each Plaid call), so this half does not wait for any purge. (2) THE TOKEN '
-    'CEASES TO EXIST AT THE FIRST PURGE SWEEP AT OR AFTER THIS INSTANT -- so at most '
-    'domain.OrphanedItemTokenPurgeInterval (1 hour) later, and longer only if a single run''s 1,000-row '
-    'cap is reached and defers the remainder to the next run. The purge is unconditional and '
-    'independent of whether Plaid is configured, which is the load-bearing property; it is not '
-    'instantaneous, and this comment states the bound numerically rather than overstating it. '
+    'holds. (1) THE TOKEN MUST NOT BE USED FROM THIS INSTANT, exactly: every path that could present '
+    'it to Plaid re-checks this deadline against a fresh clock and refuses an expired value '
+    '(domain.TokenIsLive is strict at the boundary, GetRetryablePage selects token_expires_at > asOf, '
+    'and the retry sweep re-checks per row immediately before each Plaid call), so this half does not '
+    'wait for any purge. The admin List read deliberately does NOT filter on the deadline -- it must '
+    'show expired rows, that being the whole manual-intervention work list -- but it cannot leak the '
+    'credential either: PlaidOrphanedItemAdminView has no token field and must never gain one. (2) '
+    'THE TOKEN '
+    'CEASES TO EXIST AT THE FIRST PURGE SWEEP AT OR AFTER THIS INSTANT -- normally '
+    'domain.OrphanedItemTokenPurgeInterval (1 hour) later. That is a bound PER SWEEP, not an absolute '
+    'ceiling: it is exceeded whenever a sweep does not run or does not drain (the 1,000-row per-run '
+    'cap, downtime, leader election, worker starvation, a failed run before River retries it). The '
+    'purge is unconditional and independent of whether Plaid is configured, which is the load-bearing '
+    'property -- but unconditional is neither instantaneous nor a guarantee of execution, and this '
+    'comment states the bound as it is actually kept rather than overstating it. '
     'Set by DeleteUserCascade to orphaned_at + domain.OrphanedItemTokenRetention (30 days, '
     'matching the account-deletion grace period this system already operates -- NOT the 7-day C2 '
     'cooling-off window, which is a different clock for a different purpose). NOT NULL so that '

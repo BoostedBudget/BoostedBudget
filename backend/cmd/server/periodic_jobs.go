@@ -267,7 +267,8 @@ func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 	// ⚠ UNCONDITIONAL, AND THAT IS THE POINT. Unlike every other Plaid-adjacent job here this one is NOT
 	// nil-guarded, because it must not be: DeleteUserCascade writes plaid_orphaned_items rows — with a
 	// retained credential — whether or not Plaid is configured at the time, and migration 000135's
-	// promise is that the credential dies at its deadline regardless of anything else. Guarding this on
+	// promise is that the credential is purged at its deadline regardless of anything else — at the
+	// first sweep at or after it, the interval below being the bound. Guarding this on
 	// Plaid config would make a GDPR retention limit conditional on a feature flag. Its worker is
 	// constructed unconditionally in main() for the same reason; the registration needs only the Args
 	// type and Insert/PeriodicOpts, exactly like idempotency cleanup above.

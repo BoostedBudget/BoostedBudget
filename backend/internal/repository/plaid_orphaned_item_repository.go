@@ -99,9 +99,11 @@ const orphanSelectColumns = `
 // minimises worst-case retention if the cap is ever actually reached.
 //
 // ⚠ WHAT THIS THEREFORE DOES AND DOES NOT PROMISE. It destroys the credential at the FIRST CALL AT OR
-// AFTER the deadline, which — given its caller runs every domain.OrphanedItemTokenPurgeInterval (1
-// hour) — means the credential can still EXIST for up to an hour past its deadline, and longer only if
-// limit is ever actually reached. It does NOT make the credential unusable at the deadline; nothing
+// AFTER the deadline — so, given its caller runs every domain.OrphanedItemTokenPurgeInterval (1 hour),
+// the credential normally still EXISTS for up to an hour past its deadline, and longer whenever a sweep
+// does not run or does not drain (limit reached, downtime, leader election, a failed run). See that
+// constant for the full list; the bound is per sweep, not absolute. It does NOT make the credential
+// unusable at the deadline; nothing
 // waits for this statement for that. GetRetryablePage below and the retry sweep's per-row recheck
 // enforce unusability exactly, on a fresh clock, independently of this having ever run. Two halves of
 // one deadline, deliberately of different strength: state the bound, do not round it to zero.

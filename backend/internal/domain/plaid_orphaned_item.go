@@ -11,10 +11,21 @@ import "time"
 //   - USE stops exactly at the deadline. No expired credential is ever presented to Plaid: TokenIsLive
 //     below is strict at the boundary, GetRetryablePage selects on `token_expires_at > asOf`, and the
 //     retry sweep re-checks against a fresh clock per row immediately before every call. None of that
-//     waits for a purge to have run.
-//   - EXISTENCE ends at the first purge sweep at or after the deadline — so at most
-//     OrphanedItemTokenPurgeInterval (1 hour) past it, and longer only in the case where one run's
-//     1,000-row cap is reached and defers the remainder to the next run.
+//     waits for a purge to have run. Note the precise scope: it is every path that could USE the
+//     credential, not every path that reads the column — the admin List read deliberately does not
+//     filter on the deadline, because expired rows are exactly what that surface exists to show, and
+//     PlaidOrphanedItemAdminView's lack of a token field is what keeps that safe.
+//   - EXISTENCE ends at the first purge sweep at or after the deadline. The bound is therefore ONE
+//     SWEEP, normally OrphanedItemTokenPurgeInterval (1 hour) — and it is a bound per sweep, not an
+//     absolute ceiling. It is exceeded whenever a sweep does not run or does not finish the backlog:
+//     a run's 1,000-row cap deferring the remainder, downtime or a deploy window, leader election,
+//     worker starvation on the low-priority queue, a failed run before River retries it, or a run
+//     enqueued marginally early colliding with the previous dedup bucket (the bucket is
+//     Truncate(ByPeriod) of an unaligned instant — river client.go:1750 computes the unique key before
+//     ScheduledAt is assigned). ⚠ DO NOT restate this as an unconditional "at most one hour": nothing
+//     here can promise successful execution, only that the credential is taken by the first sweep that
+//     does run at or after the deadline. What IS unconditional is the half above — no failure of this
+//     job can make the credential usable, because that check never consults this job.
 //
 // It is therefore NOT correct to say the credential cannot exist after this instant, and this comment
 // used to say so ("HARD TTL"), as did migration 000135's column comment. The purge is unconditional and
