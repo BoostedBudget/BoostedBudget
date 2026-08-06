@@ -39,6 +39,10 @@ type AdminHandler struct {
 	paddleTransactionRepo repository.PaddleTransactionRepository
 	paddleWebhookRepo     repository.PaddleWebhookRepository
 	deadLetterService     services.DeadLetterService
+	// plaidOrphanedItemRepo backs the orphaned-Plaid-Item admin listing (Issue #1497). Read-only:
+	// there is no admin re-attempt action, because the automated retry sweep already re-attempts every
+	// unresolved record on its own cadence and a button would only duplicate it.
+	plaidOrphanedItemRepo repository.PlaidOrphanedItemRepository
 	jobQueue              queue.JobQueue
 	config                *config.Config
 }
@@ -88,6 +92,13 @@ func (h *AdminHandler) WithJobQueue(q queue.JobQueue) *AdminHandler {
 // WithDeadLetterService sets the DeadLetterService on the handler (builder pattern).
 func (h *AdminHandler) WithDeadLetterService(svc services.DeadLetterService) *AdminHandler {
 	h.deadLetterService = svc
+	return h
+}
+
+// WithPlaidOrphanedItemRepo sets the PlaidOrphanedItemRepository on the handler (builder pattern).
+// Issue #1497.
+func (h *AdminHandler) WithPlaidOrphanedItemRepo(repo repository.PlaidOrphanedItemRepository) *AdminHandler {
+	h.plaidOrphanedItemRepo = repo
 	return h
 }
 
@@ -548,4 +559,7 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 
 	// --- Admin Dead Letter Queue Routes (Issue #633) ---
 	RegisterAdminDeadLetterOperations(api, handler)
+
+	// --- Orphaned Plaid Items surviving a GDPR erasure (Issue #1497) ---
+	RegisterAdminPlaidOrphanedItemOperations(api, handler)
 }

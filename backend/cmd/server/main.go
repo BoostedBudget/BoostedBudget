@@ -1780,7 +1780,8 @@ func main() {
 				WithPaddleTransactionRepo(paddleTransactionRepo).
 				WithPaddleWebhookRepo(paddleWebhookRepo).
 				WithJobQueue(jobQueue).
-				WithDeadLetterService(deadLetterService)
+				WithDeadLetterService(deadLetterService).
+				WithPlaidOrphanedItemRepo(plaidOrphanedItemRepo)
 			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
 			appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)")
 		}

@@ -70,7 +70,9 @@ import type {
   GrantTrialResponseBody,
   ListAdminDeadLetterJobsParams,
   ListAdminPaddleWebhooksParams,
+  ListAdminPlaidOrphanedItemsParams,
   ListAdminUsersParams,
+  ListPlaidOrphanedItemsOutputBody,
   PaddleWebhookEvent,
   SystemHealthResponse,
   WebhookEventListResponse,
@@ -983,6 +985,100 @@ export const useFireWebhook = <TError = ErrorType<ErrorModel>,
       return useMutation(getFireWebhookMutationOptions(options), queryClient);
     }
     /**
+ * Returns Plaid Items whose local record was deleted by a completed GDPR erasure before removal could be proved, labelled with the action required: 'auto_retrying' (an automated retry holds a live credential — no action), 'manual_intervention_required' (remove the Item in Plaid's dashboard using plaid_item_id, or it may keep billing), or 'resolved' (history). Never returns the retained access token. Requires admin role.
+ * @summary List orphaned Plaid Items (admin)
+ */
+export const listAdminPlaidOrphanedItems = (
+    params?: ListAdminPlaidOrphanedItemsParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<ListPlaidOrphanedItemsOutputBody>(
+      {url: `/api/v1/admin/plaid/orphaned-items`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getListAdminPlaidOrphanedItemsQueryKey = (params?: ListAdminPlaidOrphanedItemsParams,) => {
+    return [
+    `/api/v1/admin/plaid/orphaned-items`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListAdminPlaidOrphanedItemsQueryOptions = <TData = Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>, TError = ErrorType<ErrorModel>>(params?: ListAdminPlaidOrphanedItemsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListAdminPlaidOrphanedItemsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>> = ({ signal }) => listAdminPlaidOrphanedItems(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListAdminPlaidOrphanedItemsQueryResult = NonNullable<Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>>
+export type ListAdminPlaidOrphanedItemsQueryError = ErrorType<ErrorModel>
+
+
+export function useListAdminPlaidOrphanedItems<TData = Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>, TError = ErrorType<ErrorModel>>(
+ params: undefined |  ListAdminPlaidOrphanedItemsParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListAdminPlaidOrphanedItems<TData = Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>, TError = ErrorType<ErrorModel>>(
+ params?: ListAdminPlaidOrphanedItemsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListAdminPlaidOrphanedItems<TData = Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>, TError = ErrorType<ErrorModel>>(
+ params?: ListAdminPlaidOrphanedItemsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List orphaned Plaid Items (admin)
+ */
+
+export function useListAdminPlaidOrphanedItems<TData = Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>, TError = ErrorType<ErrorModel>>(
+ params?: ListAdminPlaidOrphanedItemsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminPlaidOrphanedItems>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListAdminPlaidOrphanedItemsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+/**
  * Grants a 60-day trial to the authenticated user. For E2E testing. Returns success if user already has trial.
  * @summary Grant trial subscription (QA only)
  */
