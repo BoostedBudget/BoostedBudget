@@ -395,3 +395,80 @@ func TestGetItemsPendingCleanup_Integration_ReplacedItemIsRecoverable(t *testing
 		"'disconnected' is set only AFTER Plaid removal succeeded, so re-enqueueing such a row would "+
 			"spin forever on work that is already done — this exclusion is load-bearing and must stay")
 }
+
+// TestGetItemsPendingCleanup_Integration_NullStatusItemIsSelected pins the `status IS NULL OR` arm of
+// GetItemsPendingCleanup's predicate (fix round 2, item 2).
+//
+// ⚠ READ THIS BEFORE CONCLUDING ANYTHING ABOUT PRODUCTION: since migration
+// 000126_set_linked_items_status_not_null (Issue #1444), linked_items.status is NOT NULL, so a
+// genuinely NULL-status row CANNOT be constructed against the real schema and this state is
+// UNREACHABLE today. This test is defence against a FUTURE migration that relaxes the constraint, or
+// a manual/out-of-band write, and against a "simplification" of the predicate — NOT a live bug. Do
+// not read a failure here as an outage.
+//
+// What it guards is a silent-undercount class this branch has already been bitten by. A bare
+// `status NOT IN ('disconnected')` evaluates to NULL — not TRUE — for a NULL-status row under SQL
+// three-valued logic, so such a row would be silently EXCLUDED from the stranded-cleanup backstop's
+// selection: still stamped, still billing at Plaid, and now invisible to its only recovery path.
+// Every sibling liveness predicate in this codebase treats NULL as LIVE
+// (liveLinkedItemExistsClause, uncleanedLinkedItemExistsClause, MarkItemsDisconnected's WHERE
+// guard), so a hand-copy that dropped the arm would be inconsistent with all of them while passing
+// every other test in this package — which is exactly what happened before this test existed: a
+// reviewer deleted the arm and ./internal/repository stayed green in both unit and integration mode.
+//
+// The DROP NOT NULL / rollback technique is borrowed verbatim from
+// TestJobHealthRepository_Integration_MarkedUserWithNullStatusLiveItem_Counted
+// (job_health_repository_plaid_cleanup_integration_test.go), which faced the identical problem for
+// the identical reason. The constraint is dropped INSIDE this test's own transaction and never
+// committed, so the real schema is never permanently altered — and the user, the item and the query
+// under test must all live in that SAME transaction, or a query on another connection could not see
+// the uncommitted NULL-status row. newCleanupPageTestTx already builds its repositories on the tx and
+// registers the rollback, so that requirement is satisfied by construction here.
+//
+// Falsifiability: replacing `(status IS NULL OR status NOT IN ('disconnected'))` with the bare
+// `status NOT IN ('disconnected')` form makes this test fail while every other test in this package
+// still passes. Verified by doing exactly that.
+func TestGetItemsPendingCleanup_Integration_NullStatusItemIsSelected(t *testing.T) {
+	ctx := context.Background()
+	tx, repo, profileRepo := newCleanupPageTestTx(t, ctx)
+
+	// Rolled back with the transaction — see the doc comment. Must come before the seed, because the
+	// item is inserted with a non-NULL status and only then relaxed to NULL.
+	_, err := tx.Exec(ctx, "ALTER TABLE linked_items ALTER COLUMN status DROP NOT NULL")
+	require.NoError(t, err)
+
+	itemID := seedClaimCleanupItem(t, ctx, tx, repo, profileRepo)
+	// A control row in the same transaction, left at its seeded 'revoked' status, so a failure below
+	// distinguishes "the NULL arm is missing" from "this query returned nothing at all".
+	controlID := seedClaimCleanupItem(t, ctx, tx, repo, profileRepo)
+
+	_, err = tx.Exec(ctx, `UPDATE linked_items SET status = NULL WHERE id = $1`, itemID)
+	require.NoError(t, err)
+
+	// Confirm the fixture really is NULL at the column level. domain.LinkedItem cannot express it —
+	// normalizeLinkedItemStatus maps NULL to 'active' during the scan — so asserting on the returned
+	// struct could never tell a NULL row from an 'active' one, and this test would pass for the wrong
+	// reason without this check.
+	var statusIsNull bool
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT status IS NULL FROM linked_items WHERE id = $1`, itemID).Scan(&statusIsNull))
+	require.True(t, statusIsNull, "fixture precondition: the row must genuinely have a NULL status, or "+
+		"this test cannot exercise the arm it exists to pin")
+
+	items, err := repo.GetItemsPendingCleanup(ctx)
+	require.NoError(t, err)
+
+	ids := make(map[string]struct{}, len(items))
+	for _, it := range items {
+		ids[it.ID] = struct{}{}
+	}
+
+	assert.Contains(t, ids, itemID,
+		"a stamped, overdue NULL-status item must be SELECTED: NULL is not 'disconnected', the row is "+
+			"still live and still billing at Plaid, and the backstop is its only recovery path. Without "+
+			"the `status IS NULL OR` arm, `NULL NOT IN ('disconnected')` is UNKNOWN rather than TRUE and "+
+			"the row silently vanishes from that path")
+	assert.Contains(t, ids, controlID,
+		"control: an ordinary stamped, overdue row must still be selected, so the assertion above "+
+			"cannot pass or fail for reasons unrelated to the NULL arm")
+}
