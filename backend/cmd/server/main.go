@@ -2148,7 +2148,8 @@ func createClerkCheck() func() error {
 // startJobHealthMetricsCollector runs a goroutine that periodically refreshes
 // observability.ManualTierOverrideOldestUnclearedExpiredSeconds and, since Issue #1413's
 // Plaid-cleanup-backlog follow-up, observability.PlaidCleanupOutstandingUsers/
-// PlaidCleanupOldestOutstandingSeconds from the database. Lives here — not in the observability
+// PlaidCleanupOldestOutstandingSeconds and, since Issue #1504, observability.DeletionResidueRecords/
+// DeletionResidueNewestSeconds from the database. Lives here — not in the observability
 // package alongside observability.StartDBMetricsCollector, which it otherwise mirrors — because it
 // needs repository.JobHealthRepository, and internal/repository already imports
 // internal/observability; putting this collector there would create an import cycle. A failed
@@ -2177,6 +2178,18 @@ func startJobHealthMetricsCollector(ctx context.Context, repo repository.JobHeal
 				} else {
 					observability.PlaidCleanupOutstandingUsers.Set(float64(plaidCount))
 					observability.PlaidCleanupOldestOutstandingSeconds.Set(plaidOldestAge.Seconds())
+				}
+
+				// Issue #1504: the deletion-residue pair. Same per-metric error isolation as the two
+				// above — a failure here logs and leaves both gauges at their last-known value rather
+				// than zeroing them, because a zeroed monotonic gauge would read as "the residue went
+				// away", which is the one thing it can never mean.
+				residueCount, residueNewestAge, err := repo.GetDeletionResidueStats(ctx)
+				if err != nil {
+					logger.Warn("failed to refresh deletion-residue gauges", "error", err)
+				} else {
+					observability.DeletionResidueRecords.Set(float64(residueCount))
+					observability.DeletionResidueNewestSeconds.Set(residueNewestAge.Seconds())
 				}
 			}
 		}

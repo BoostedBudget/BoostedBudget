@@ -118,6 +118,38 @@ var (
 		Help: "Age in seconds of the oldest outstanding Plaid-disconnect cleanup (plaid_cleanup_pending_at with a live linked item); 0 when none exist.",
 	})
 
+	// DeletionResidueRecords and DeletionResidueNewestSeconds are Issue #1504's alerting half. One
+	// residue record means a GDPR deletion was revoked AFTER the user's Paddle subscription-cancel call
+	// had already landed: the user keeps their account and all their data and has NO subscription.
+	// Nothing automated can restore it — re-subscribing somebody automatically would be a worse failure
+	// than telling a human, which is why this is a metric and not a repair job.
+	//
+	// Both are refreshed together from repository.JobHealthRepository.GetDeletionResidueStats (see
+	// cmd/server/main.go's startJobHealthMetricsCollector, for the same import-cycle reason the two
+	// gauges above live there), and the same numbers appear on /admin/health via
+	// domain.DeletionResidueMetrics — one query, one derivation, so the dashboard and the alert cannot
+	// come to disagree.
+	//
+	// ⚠ ALERT ON ANY INCREASE, NOT ON ANY NON-ZERO VALUE. This gauge is monotonic by construction:
+	// nothing resolves a residue record, nothing prunes audit_logs, and no column anywhere records that
+	// the affected user was made whole (inventing one would be recording a claim as a proof). So a
+	// permanently non-zero DeletionResidueRecords is the expected steady state after the first
+	// occurrence, and `> 0` would be an alert that fires forever and gets muted. `increase(...) > 0` is
+	// the actionable signal, and DeletionResidueNewestSeconds is its human-readable companion: a small
+	// value means it just happened.
+	//
+	// ⚠ DeletionResidueNewestSeconds IS 0 BOTH WHEN THERE ARE NO RECORDS AND WHEN ONE WAS JUST WRITTEN.
+	// Any rule using it must gate on DeletionResidueRecords > 0 first. Unlike
+	// PlaidCleanupOldestOutstandingSeconds above, a zero here is not unambiguous good news.
+	DeletionResidueRecords = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "deletion_residue_records",
+		Help: "All-time number of GDPR deletions revoked AFTER the user's Paddle subscription had already been cancelled (audit_logs action prefix user.deletion_residue.). Every one is a user who kept their account and lost their subscription. Monotonic — alert on increase(), not on > 0.",
+	})
+	DeletionResidueNewestSeconds = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "deletion_residue_newest_seconds",
+		Help: "Age in seconds of the MOST RECENT deletion-residue record; 0 both when none exist and when one was just written, so gate on deletion_residue_records > 0 before reading it.",
+	})
+
 	// PlaidDisconnectRepairUserFailuresTotal counts per-user failures inside
 	// RetentionCleanupCheckWorker.repairPlaidDisconnects's per-user loop (retention_cleanup_check.go)
 	// — Issue #1413. Incremented at THREE per-user failure sites within that worker (Finding 4, Codex

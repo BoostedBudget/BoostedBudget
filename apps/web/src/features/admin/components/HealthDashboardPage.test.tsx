@@ -90,6 +90,14 @@ const mockHealthData = {
     max_unresolved_retry_attempt_count: 0,
     available: true,
   },
+  // Issue #1504: the post-gate external-effect residue. `available: true` with a zero count is a
+  // VERIFIED "this has never happened", the reading this gauge exists to be able to make — the
+  // failed-read and absent-section cases are exercised separately below.
+  deletion_residue: {
+    records: 0,
+    newest_record_seconds: 0,
+    available: true,
+  },
 }
 
 const renderWithQueryClient = (component: React.ReactElement) => {
@@ -633,6 +641,123 @@ describe('HealthDashboardPage', () => {
       })
 
       expect(orphanCardValue('Needs Manual Removal At Plaid')).toBe('Unavailable')
+    })
+  })
+
+  // Issue #1504. A residue record means a GDPR deletion was revoked AFTER the user's Paddle
+  // subscription-cancel had already landed: they keep their account and all their data, and have no
+  // subscription. Before this section, that row was read by nothing anywhere in the product.
+  describe('Deletion Residue section (Issue #1504)', () => {
+    function residueCardValue(title: string): string {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card.querySelector('[data-slot="stat-value"]')?.textContent ?? ''
+    }
+
+    const RECORDS_CARD = 'Subscriptions Cancelled By A Revoked Deletion'
+    const RECENT_CARD = 'Most Recent Occurrence'
+
+    // THE RED TEST: a residue record is visible to an operator.
+    it('surfaces a seeded residue count and the age of the most recent record', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          deletion_residue: {
+            records: 3,
+            newest_record_seconds: 7500,
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Deletion Residue/i)).toBeInTheDocument()
+      })
+
+      // 3, not the fixture's 0 and not the 7500 beside it — a card wired to the wrong field fails.
+      expect(residueCardValue(RECORDS_CARD)).toBe('3')
+      expect(residueCardValue(RECENT_CARD)).toBe('2h 5m ago')
+    })
+
+    // THE MANDATORY SIBLING. Without it the count card could render a constant and the test above
+    // would still pass. This is the ordinary-successful-deletion case: no residue at all.
+    it('reports a verified zero — and "None", never "0s" — when no deletion left residue', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData, // records: 0, newest_record_seconds: 0, available: true
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(RECORDS_CARD)).toBeInTheDocument()
+      })
+
+      expect(residueCardValue(RECORDS_CARD)).toBe('0')
+      // ⚠ THE WHOLE POINT OF THIS ASSERTION. The backend sends 0 seconds both for "never happened"
+      // and for "happened this instant", so a card that formatted the number unconditionally would
+      // render '0s ago' here — telling an operator this just happened when it never has.
+      expect(residueCardValue(RECENT_CARD)).toBe('None')
+      expect(residueCardValue(RECENT_CARD)).not.toBe('0s ago')
+    })
+
+    it('renders "Unavailable" rather than a confident zero when the residue query failed', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          deletion_residue: {
+            records: 0,
+            newest_record_seconds: 0,
+            available: false,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(RECORDS_CARD)).toBeInTheDocument()
+      })
+
+      expect(residueCardValue(RECORDS_CARD)).toBe('Unavailable')
+      expect(residueCardValue(RECENT_CARD)).toBe('Unavailable')
+    })
+
+    // A rolling deploy or an older cached response can omit `deletion_residue` entirely; an unguarded
+    // read throws and blanks the WHOLE dashboard. Same defect class as R3-7 for job_backlog.
+    it('degrades to "Unavailable" (not a crash) when `deletion_residue` is entirely absent', async () => {
+      const withoutResidue: Record<string, unknown> = { ...mockHealthData }
+      delete withoutResidue.deletion_residue
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: withoutResidue,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/System Health/i)).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(screen.getByText(RECORDS_CARD)).toBeInTheDocument()
+      })
+
+      expect(residueCardValue(RECORDS_CARD)).toBe('Unavailable')
+      expect(residueCardValue(RECENT_CARD)).toBe('Unavailable')
     })
   })
 

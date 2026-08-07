@@ -35,6 +35,67 @@ type SystemHealthResponse struct {
 	// full read via domain.SummarisePlaidOrphanedItems; see that function for why one of
 	// AdminState's four checks makes a SQL COUNT impossible.
 	PlaidOrphanedItems PlaidOrphanedItemMetrics `json:"plaid_orphaned_items"`
+	// DeletionResidue is the count of GDPR deletions that were revoked AFTER already cancelling the
+	// user's Paddle subscription (Issue #1504) — users who kept their account and all their data and
+	// have no subscription. Derived by a single indexed COUNT over the audit_logs rows
+	// repository.ProfileRepository.RecordDeletionResidue writes; see
+	// repository.JobHealthRepository.GetDeletionResidueStats.
+	DeletionResidue DeletionResidueMetrics `json:"deletion_residue"`
+}
+
+// DeletionResidueMetrics is the post-gate external-effect residue as /admin/health reports it, and as
+// observability.DeletionResidueRecords / observability.DeletionResidueNewestSeconds publish it.
+// Issue #1504.
+//
+// WHAT ONE RECORD MEANS. A GDPR deletion request was revoked while the Paddle subscription-cancel
+// call was already in flight. The authorisation gate had passed a moment earlier and a network call
+// cannot be recalled, so the cancel landed; the cascade then correctly refused to delete anything.
+// The user keeps their account and every byte of their data, and has no subscription. Nothing in the
+// product tells them, nothing automated restores it, and before this section existed the ONLY trace
+// was one audit_logs row that no code anywhere read.
+//
+// ⚠ ITS OWN SECTION, NOT A FIELD ON JobBacklogMetrics, and the reason is the one Available bool that
+// struct documents at length: JobBacklogMetrics covers all three of its numbers with a single
+// availability flag, so folding this in would make a failure of EITHER Plaid-cleanup query blank out
+// the residue count too, and vice versa. These measure unrelated things with unrelated queries. A
+// separate struct with its own flag is the same choice PlaidOrphanedItemMetrics made above.
+//
+// ⚠ THIS IS A GAUGE THAT NEVER GOES BACK DOWN, ON PURPOSE. There is no resolution column for a
+// residue record, nothing prunes audit_logs, and no automated process can restore a cancelled
+// subscription. So once this has happened once, Records stays non-zero. That is not a defect to be
+// smoothed over with a time window or a "handled" flag: no record anywhere proves the affected user
+// was ever made whole, and a surface that implied one would be conflating a claim with a proof.
+// NewestRecordSeconds is the field that carries the "is this happening NOW?" signal instead.
+//
+// ⚠ DELIBERATELY NOT FED INTO SystemHealthResponse.Status, matching the JobBacklog and
+// PlaidOrphanedItems sections: whether outstanding residue should degrade overall health is a product
+// decision #1504 never asked for, and only making it VISIBLE is in scope.
+type DeletionResidueMetrics struct {
+	// Records is the all-time number of residue records — one per OCCURRENCE, not per user: two
+	// revocations against the same user are two subscriptions somebody has to restore. Every one of
+	// these is a specific, identifiable person whose subscription was cancelled without their
+	// consent. Healthy is 0 and, in a system that has never hit the race, stays 0 forever.
+	Records int64 `json:"records"`
+	// NewestRecordSeconds is how long ago the MOST RECENT residue record was written, in seconds.
+	//
+	// ⚠ MEANINGFUL ONLY ALONGSIDE Records, which must be read FIRST. This is 0 both when there are no
+	// records at all and when one was written this very instant — the two readings that could not
+	// matter more differently. Records is the disambiguator. (The sibling backlog gauges above have no
+	// such hazard, because their zero age is unambiguous good news; this one is not, which is exactly
+	// why it is called out here rather than left for a consumer to discover.)
+	//
+	// It is the NEWEST record's age and not the oldest's because nothing ever clears a residue record,
+	// so the oldest one's age climbs with wall-clock time forever and carries no information. See
+	// repository.JobHealthRepository.GetDeletionResidueStats.
+	NewestRecordSeconds int64 `json:"newest_record_seconds"`
+	// Available distinguishes "queried successfully and found a real (possibly zero) residue count"
+	// from "the query failed or the repository is unwired, so there is no number to report". Same
+	// reasoning as JobBacklogMetrics.Available and PlaidOrphanedItemMetrics.Available below, and it
+	// bites harder here than on either: the thing a falsely-confident zero would be denying is
+	// "somebody's subscription was cancelled by a bug and nobody has been told". Defaults to the Go
+	// zero value (false), the fail-closed direction — any path that forgets to claim success reads as
+	// unknown, never as a green zero.
+	Available bool `json:"available"`
 }
 
 // PlaidOrphanedItemMetrics is the aggregate state of plaid_orphaned_items as /admin/health reports

@@ -82,7 +82,8 @@ func (m *MockDeadLetterJobRepository) GetOldestJobAge(ctx context.Context) (int6
 }
 
 // MockJobHealthRepository mocks repository.JobHealthRepository — the two backlog gauge queries
-// backing SystemHealthResponse.JobBacklog (Issue #1458).
+// backing SystemHealthResponse.JobBacklog (Issue #1458), plus the deletion-residue count backing
+// SystemHealthResponse.DeletionResidue (Issue #1504).
 type MockJobHealthRepository struct {
 	mock.Mock
 }
@@ -93,6 +94,12 @@ func (m *MockJobHealthRepository) GetOldestUnclearedExpiredManualTierOverrideAge
 }
 
 func (m *MockJobHealthRepository) GetOutstandingPlaidCleanupStats(ctx context.Context) (int, time.Duration, error) {
+	args := m.Called(ctx)
+	return args.Int(0), args.Get(1).(time.Duration), args.Error(2)
+}
+
+// GetDeletionResidueStats backs SystemHealthResponse.DeletionResidue (Issue #1504).
+func (m *MockJobHealthRepository) GetDeletionResidueStats(ctx context.Context) (int, time.Duration, error) {
 	args := m.Called(ctx)
 	return args.Int(0), args.Get(1).(time.Duration), args.Error(2)
 }
@@ -539,6 +546,10 @@ func TestGetSystemHealth_JobBacklogMetricsPopulated(t *testing.T) {
 	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
 	mockPool := new(MockPool)
 	mockJobHealthRepo := new(MockJobHealthRepository)
+	// Issue #1504: these tests predate the deletion-residue gauge and assert nothing about it, but
+	// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
+	// call it does not care about, nor demand one.
+	mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
 
 	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(3, 2*time.Hour, nil)
@@ -599,6 +610,10 @@ func TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues(t *testing.T) {
 	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
 	mockPool := new(MockPool)
 	mockJobHealthRepo := new(MockJobHealthRepository)
+	// Issue #1504: these tests predate the deletion-residue gauge and assert nothing about it, but
+	// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
+	// call it does not care about, nor demand one.
+	mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
 
 	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), errors.New("db error"))
@@ -638,6 +653,10 @@ func TestGetSystemHealth_JobBacklogMetrics_SecondQueryError_DiscardsFirstQuerysG
 	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
 	mockPool := new(MockPool)
 	mockJobHealthRepo := new(MockJobHealthRepository)
+	// Issue #1504: these tests predate the deletion-residue gauge and assert nothing about it, but
+	// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
+	// call it does not care about, nor demand one.
+	mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
 
 	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 	// First query succeeds with real, non-zero data.
@@ -685,6 +704,10 @@ func TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguisha
 		mockDeadLetterRepo := new(MockDeadLetterJobRepository)
 		mockPool := new(MockPool)
 		mockJobHealthRepo := new(MockJobHealthRepository)
+		// Issue #1504: these tests predate the deletion-residue gauge and assert nothing about it, but
+		// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
+		// call it does not care about, nor demand one.
+		mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
 
 		setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 		mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), nil)
@@ -711,6 +734,10 @@ func TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguisha
 		mockDeadLetterRepo := new(MockDeadLetterJobRepository)
 		mockPool := new(MockPool)
 		mockJobHealthRepo := new(MockJobHealthRepository)
+		// Issue #1504: these tests predate the deletion-residue gauge and assert nothing about it, but
+		// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
+		// call it does not care about, nor demand one.
+		mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
 
 		setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 		mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), errors.New("db error"))
