@@ -759,6 +759,12 @@ func main() {
 			DeletionService: deletionService,
 			RetentionMonths: cfg.RetentionPeriodMonths,
 			Logger:          appLogger,
+			// Issue #1497 item 4: Step 0e publishes the orphaned-Plaid-Item state gauges and the
+			// worst unresolved retry_attempt_count. Wired unconditionally for the same reason as
+			// the /admin/health derivation below: the manual-intervention population is largest
+			// exactly when Plaid is unconfigured, so gating this on plaidService would silence the
+			// signal in the deployment that needs it most.
+			PlaidOrphanedItemRepo: plaidOrphanedItemRepo,
 		})
 		// Issue #1413 Medium finding M9 (Codex review round 3): required for
 		// send30dNotices/send7dNotices to gain EXCLUSIVITY on ActionRetentionNotice30d/7d
@@ -1609,6 +1615,14 @@ func main() {
 			&dbPoolAdapter{db},
 			cfg.PlaidEnv,
 			jobHealthRepoForHealth, // Issue #1458: backs the 3 backlog gauges on /admin/health
+			// Issue #1497 item 5: backs the orphaned-Plaid-Item state counts on /admin/health.
+			// The SAME repository the admin list view and both sweeps use, narrowed at the
+			// interface to List alone (services.PlaidOrphanedItemLister) so a read surface cannot
+			// purge a retained credential. NOT gated on plaidService != nil, for the reason #1499
+			// ungated the admin routes themselves: these rows exist because a GDPR erasure
+			// happened, whether or not this deployment can talk to Plaid, and a deployment without
+			// Plaid credentials is precisely the one where nothing automated will ever clear them.
+			plaidOrphanedItemRepo,
 		)
 
 		// Issue #633: Dead letter queue admin service.

@@ -1172,12 +1172,23 @@ func TestRetentionCleanupCheck_MonitorOrphanedFKlessRows_ZeroFound_SetsGaugesToZ
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 
+	// Issue #1497 item 4: Step 0e is wired with an EMPTY table rather than left nil, because this
+	// test's assertion is "nothing at all is logged at Warn on a healthy pass" — a global claim over
+	// the whole log buffer, which an unwired Step 0e would break with its own (correct)
+	// "no plaid_orphaned_items repository is wired" Warn. Wiring it keeps the assertion about the
+	// FK-less-rows pass this test is named for, and makes the fixture match production, where
+	// main.go wires that repository unconditionally.
+	emptyOrphanLister := new(MockOrphanedPlaidItemLister)
+	emptyOrphanLister.On("List", mock.Anything, mock.Anything, mock.Anything).
+		Return([]domain.PlaidOrphanedItem(nil), 0, nil).Maybe()
+
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
-		ProfileRepo:     mockRepo,
-		DeletionService: mockDeletion,
-		EmailService:    mockEmail,
-		RetentionMonths: 6,
-		Logger:          logger,
+		ProfileRepo:           mockRepo,
+		DeletionService:       mockDeletion,
+		EmailService:          mockEmail,
+		RetentionMonths:       6,
+		Logger:                logger,
+		PlaidOrphanedItemRepo: emptyOrphanLister,
 	})
 	worker.SetPlaidCleanup(mockPlaid)
 	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
@@ -1889,12 +1900,21 @@ func TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_MarkerLeftSetAndNotCoun
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 
+	// Issue #1497 item 4: wired with an EMPTY table for the same reason as
+	// TestRetentionCleanupCheck_MonitorOrphanedFKlessRows_ZeroFound_SetsGaugesToZeroNoWarnLog — this
+	// test's "no level=WARN anywhere" assertion is global over the log buffer, and an unwired Step 0e
+	// would break it with its own correct unconfigured-check Warn.
+	emptyOrphanLister := new(MockOrphanedPlaidItemLister)
+	emptyOrphanLister.On("List", mock.Anything, mock.Anything, mock.Anything).
+		Return([]domain.PlaidOrphanedItem(nil), 0, nil).Maybe()
+
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
-		ProfileRepo:     mockRepo,
-		DeletionService: mockDeletion,
-		EmailService:    mockEmail,
-		RetentionMonths: 6,
-		Logger:          logger,
+		ProfileRepo:           mockRepo,
+		DeletionService:       mockDeletion,
+		EmailService:          mockEmail,
+		RetentionMonths:       6,
+		Logger:                logger,
+		PlaidOrphanedItemRepo: emptyOrphanLister,
 	})
 	worker.SetPlaidCleanup(mockPlaid)
 	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})

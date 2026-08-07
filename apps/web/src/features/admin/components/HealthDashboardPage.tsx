@@ -20,6 +20,19 @@ const formatBacklogAge = (seconds: number): string => {
   return `${Math.round(seconds)}s`;
 };
 
+// Issue #1497 item 4/5: above this many failed automated removal attempts on a single unresolved
+// orphan record, the card turns warning. Mirrors the threshold in
+// observability.PlaidOrphanedItemMaxRetryAttempts's intended alert rule (backend), and is derived
+// the same way: the retry sweep runs daily and the retained credential expires after 30 days, so no
+// single row can ever accumulate much more than ~30 attempts before it becomes
+// manual-intervention work anyway. 20 therefore lights up with roughly a third of the retention
+// window left — early enough for a human to act at Plaid before the automated path runs out.
+//
+// ⚠ A HIGH COUNT IS NOT A STATE. The backend's AdminState deliberately ignores retry_attempt_count
+// (nothing in this system gives up on an attempt count), so this card answers a question the state
+// cards beside it cannot — "is the retrying futile?" — and the two must not be conflated.
+const ORPHAN_RETRY_ATTEMPT_WARN_THRESHOLD = 20;
+
 const statusToVariant = (status: string): 'success' | 'warning' | 'error' => {
   if (status === 'up' || status === 'healthy') return 'success';
   if (status === 'degraded') return 'warning';
@@ -85,6 +98,18 @@ export function HealthDashboardPage() {
   // (e.g. `jobBacklogAvailable ? data.job_backlog.x : 'Unavailable'`), so once this flag safely
   // resolves to `undefined` (falsy) for a missing `job_backlog`, none of those reads are reached.
   const jobBacklogAvailable = data.job_backlog?.available;
+
+  // Issue #1497 item 5. Same fail-closed shape, and the same optional-chaining guard, as
+  // jobBacklogAvailable above and for the same two reasons: a FAILED derivation and a genuinely
+  // EMPTY table both arrive as identical zero-valued fields, so this flag is the only signal that
+  // tells them apart; and `plaid_orphaned_items` itself can be absent entirely on an older cached
+  // response or a rolling deploy, where an unguarded read would throw and blank the whole
+  // dashboard.
+  //
+  // ⚠ IT MATTERS MORE HERE THAN FOR ANY OTHER GAUGE ON THIS PAGE. A green "0 needs manual removal"
+  // produced by a failed read tells an operator that no erased user's Plaid Item is still billing —
+  // a compliance claim nothing actually checked.
+  const orphanedItemsAvailable = data.plaid_orphaned_items?.available;
 
   return (
     <div className="p-8 max-w-[1400px] mx-auto max-md:p-4">
@@ -248,6 +273,46 @@ export function HealthDashboardPage() {
             value={jobBacklogAvailable ? formatBacklogAge(data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds) : 'Unavailable'}
             icon={<Timer size={24} />}
             status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds > 0 ? 'warning' : 'success')}
+          />
+        </div>
+      </section>
+
+      {/* Orphaned Plaid Items Section (Issue #1497 item 5) — Plaid Items that survived a GDPR
+          erasure. Placed immediately after Job Backlog because it is the same class of signal
+          ("how much stuck work is there, and does a human have to do it?") and reuses the same
+          SummaryCard grid.
+
+          ⚠ THE TWO ACTIONABLE STATES ARE TWO CARDS AND MUST STAY TWO CARDS. They call for OPPOSITE
+          responses: "Needs Manual Removal At Plaid" means go remove the Item in Plaid's own
+          dashboard or it may keep billing an erased user; "Auto-Retrying" means do nothing, a sweep
+          holds a live credential and is working on it. A single "unresolved" number — the obvious
+          shorter rendering — erases exactly that distinction. Resolved rows are history and are
+          deliberately not shown: they are never work, and nothing prunes them, so the count only
+          ever grows and would dominate the section visually while meaning nothing.
+
+          Scope discipline, matching the Job Backlog section: this only makes the state VISIBLE.
+          Whether outstanding orphans should degrade `data.status` is a product decision #1497 never
+          asked for, so it is untouched. */}
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Orphaned Plaid Items</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
+          <SummaryCard
+            title="Needs Manual Removal At Plaid"
+            value={orphanedItemsAvailable ? data.plaid_orphaned_items.manual_intervention_required.toString() : 'Unavailable'}
+            icon={<AlertTriangle size={24} />}
+            status={!orphanedItemsAvailable ? 'warning' : (data.plaid_orphaned_items.manual_intervention_required > 0 ? 'warning' : 'success')}
+          />
+          <SummaryCard
+            title="Auto-Retrying"
+            value={orphanedItemsAvailable ? data.plaid_orphaned_items.auto_retrying.toString() : 'Unavailable'}
+            icon={<RefreshCw size={24} />}
+            status={!orphanedItemsAvailable ? 'warning' : 'success'}
+          />
+          <SummaryCard
+            title="Worst Retry Attempt Count"
+            value={orphanedItemsAvailable ? data.plaid_orphaned_items.max_unresolved_retry_attempt_count.toString() : 'Unavailable'}
+            icon={<Timer size={24} />}
+            status={!orphanedItemsAvailable ? 'warning' : (data.plaid_orphaned_items.max_unresolved_retry_attempt_count > ORPHAN_RETRY_ATTEMPT_WARN_THRESHOLD ? 'warning' : 'success')}
           />
         </div>
       </section>

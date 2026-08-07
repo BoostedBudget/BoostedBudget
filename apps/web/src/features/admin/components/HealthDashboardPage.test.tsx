@@ -79,6 +79,16 @@ const mockHealthData = {
     manual_tier_override_oldest_uncleared_expired_seconds: 0,
     available: true,
   },
+  // Issue #1497 item 5: the orphaned-Plaid-Item state counts. `available: true` with all-zero
+  // counts is a VERIFIED empty table, not an unknown — the failed-read case is exercised
+  // separately below.
+  plaid_orphaned_items: {
+    auto_retrying: 0,
+    manual_intervention_required: 0,
+    resolved: 0,
+    max_unresolved_retry_attempt_count: 0,
+    available: true,
+  },
 }
 
 const renderWithQueryClient = (component: React.ReactElement) => {
@@ -412,4 +422,153 @@ describe('HealthDashboardPage', () => {
       expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('Unavailable')
     })
   })
+
+  // ─── Issue #1497 item 5: the Orphaned Plaid Items section ──────────────────────────────────────
+  //
+  // WHAT THIS SECTION IS FOR. Each `manual_intervention_required` row is a Plaid Item that survived
+  // a GDPR erasure, that nothing automated will ever finish removing, and that MAY STILL BE BILLING.
+  // Every assertion below names a NUMBER from a seeded fixture, and the two operator states are
+  // seeded to DIFFERENT numbers, so a UI that showed one "unresolved" total for both cannot pass —
+  // "auto-retrying" means do nothing, "needs manual removal" means go act at Plaid.
+  describe('Orphaned Plaid Items section (Issue #1497 item 5)', () => {
+    function orphanCardValue(title: string): string {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card.querySelector('[data-slot="stat-value"]')?.textContent ?? ''
+    }
+
+    it('renders each admin state as its own number, not one unresolved total', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          plaid_orphaned_items: {
+            auto_retrying: 2,
+            manual_intervention_required: 5,
+            resolved: 9,
+            max_unresolved_retry_attempt_count: 23,
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Orphaned Plaid Items/i)).toBeInTheDocument()
+      })
+
+      // 2, 5 and 7 (the unresolved total) are all distinct, so a conflated implementation fails.
+      expect(orphanCardValue('Needs Manual Removal At Plaid')).toBe('5')
+      expect(orphanCardValue('Auto-Retrying')).toBe('2')
+      expect(orphanCardValue('Worst Retry Attempt Count')).toBe('23')
+      expect(orphanCardValue('Needs Manual Removal At Plaid')).not.toBe('7')
+      expect(orphanCardValue('Auto-Retrying')).not.toBe('7')
+    })
+
+    // THE SIBLING: an outstanding manual-intervention count must NOT read as healthy, and a genuine
+    // zero must. Without both directions, a card hardcoded to one accent would pass.
+    it('accents an outstanding manual-intervention count as a warning and a verified zero as success', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          plaid_orphaned_items: {
+            auto_retrying: 0,
+            manual_intervention_required: 3,
+            resolved: 0,
+            max_unresolved_retry_attempt_count: 4,
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      const { unmount } = renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText('Needs Manual Removal At Plaid')).toBeInTheDocument()
+      })
+      const warnCard = screen.getByText('Needs Manual Removal At Plaid').closest('[data-slot="card"]')
+      expect(warnCard?.className ?? '').toMatch(/warning/i)
+      unmount()
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData, // verified zero
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText('Needs Manual Removal At Plaid')).toBeInTheDocument()
+      })
+      expect(orphanCardValue('Needs Manual Removal At Plaid')).toBe('0')
+      const okCard = screen.getByText('Needs Manual Removal At Plaid').closest('[data-slot="card"]')
+      expect(okCard?.className ?? '').not.toMatch(/warning/i)
+    })
+
+    // ⚠ THE FAIL-CLOSED PATH. A green "0" produced by a FAILED read would tell an operator that no
+    // erased user's Plaid Item is still billing — a claim nothing checked. Must read "Unavailable".
+    it('renders "Unavailable", not a green zero, when the derivation failed', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          plaid_orphaned_items: {
+            auto_retrying: 0,
+            manual_intervention_required: 0,
+            resolved: 0,
+            max_unresolved_retry_attempt_count: 0,
+            available: false,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Needs Manual Removal At Plaid')).toBeInTheDocument()
+      })
+
+      expect(orphanCardValue('Needs Manual Removal At Plaid')).toBe('Unavailable')
+      expect(orphanCardValue('Auto-Retrying')).toBe('Unavailable')
+      expect(orphanCardValue('Worst Retry Attempt Count')).toBe('Unavailable')
+
+      const card = screen.getByText('Needs Manual Removal At Plaid').closest('[data-slot="card"]')
+      expect(card?.className ?? '').not.toMatch(/success/i)
+    })
+
+    // A rolling deploy, or an older cached response, can omit `plaid_orphaned_items` ENTIRELY. An
+    // unguarded read throws and blanks the WHOLE dashboard — the opposite of fail-closed. Same
+    // defect class as R3-7 for job_backlog above.
+    it('degrades to "Unavailable" (not a crash) when `plaid_orphaned_items` is entirely absent', async () => {
+      const withoutOrphans: Record<string, unknown> = { ...mockHealthData }
+      delete withoutOrphans.plaid_orphaned_items
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: withoutOrphans,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/System Health/i)).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(screen.getByText('Needs Manual Removal At Plaid')).toBeInTheDocument()
+      })
+
+      expect(orphanCardValue('Needs Manual Removal At Plaid')).toBe('Unavailable')
+    })
+  })
+
 })

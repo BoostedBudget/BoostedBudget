@@ -4691,6 +4691,30 @@ components:
         - token_expires_at
         - token_retained
       type: object
+    PlaidOrphanedItemMetrics:
+      additionalProperties: false
+      properties:
+        auto_retrying:
+          format: int64
+          type: integer
+        available:
+          type: boolean
+        manual_intervention_required:
+          format: int64
+          type: integer
+        max_unresolved_retry_attempt_count:
+          format: int64
+          type: integer
+        resolved:
+          format: int64
+          type: integer
+      required:
+        - auto_retrying
+        - manual_intervention_required
+        - resolved
+        - max_unresolved_retry_attempt_count
+        - available
+      type: object
     PlaidWebhookResponseBody:
       additionalProperties: false
       properties:
@@ -5978,6 +6002,8 @@ components:
           type: object
         paddle_status:
           $ref: "#/components/schemas/PaddleStatusMetrics"
+        plaid_orphaned_items:
+          $ref: "#/components/schemas/PlaidOrphanedItemMetrics"
         services:
           $ref: "#/components/schemas/ServiceHealthStatuses"
         status:
@@ -5996,6 +6022,7 @@ components:
         - dead_letter_queue
         - paddle_status
         - job_backlog
+        - plaid_orphaned_items
       type: object
     TagSource:
       additionalProperties: false

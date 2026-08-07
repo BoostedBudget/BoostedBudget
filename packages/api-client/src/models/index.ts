@@ -275,6 +275,7 @@ export * from './paddleWebhookResponseBody';
 export * from './periodComparisonData';
 export * from './plaidHealth';
 export * from './plaidOrphanedItemAdminView';
+export * from './plaidOrphanedItemMetrics';
 export * from './plaidWebhookResponseBody';
 export * from './portfolioHistoryPoint';
 export * from './portfolioSummary';

@@ -436,6 +436,22 @@ type RetentionCleanupCheckWorker struct {
 	// #1478). See the two constants of the same names for the rationale and the derivation.
 	expiredRetentionPageSize  int
 	maxUsersPerRetentionSweep int
+	// plaidOrphanedItemRepo backs the orphaned-Plaid-Item alerting pass, Step 0e (Issue #1497 item
+	// 4). Optional/nil-safe, and the nil case SKIPS rather than publishing zeroes.
+	plaidOrphanedItemRepo OrphanedPlaidItemLister
+}
+
+// OrphanedPlaidItemLister is the ONE verb monitorOrphanedPlaidItems needs from
+// repository.PlaidOrphanedItemRepository. Issue #1497 item 4.
+//
+// ⚠ NARROW ON PURPOSE, for the reason services.orphanRetryRepo excludes PurgeExpiredTokens: this is
+// an observability pass and must be structurally incapable of writing. Handing it MarkResolved or
+// PurgeExpiredTokens would make "a monitoring step destroyed a retained credential" a bug that is
+// merely absent rather than one that cannot compile. List is also the read that FILTERS NOTHING —
+// resolved and purged rows both appear — which is exactly what a derivation over all three
+// AdminStates requires.
+type OrphanedPlaidItemLister interface {
+	List(ctx context.Context, limit, offset int) ([]domain.PlaidOrphanedItem, int, error)
 }
 
 // RetentionCleanupCheckWorkerDeps contains the dependencies for RetentionCleanupCheckWorker.
@@ -453,6 +469,10 @@ type RetentionCleanupCheckWorkerDeps struct {
 	// the production default. Exists so tests can exercise the total-processed safety cap without
 	// seeding thousands of fixture users — production should never set this.
 	MaxUsersPerRetentionSweep int
+	// PlaidOrphanedItemRepo backs the orphaned-Plaid-Item alerting pass, Step 0e (Issue #1497 item
+	// 4). Optional/nil-safe: an unwired repo SKIPS the pass and publishes nothing, rather than
+	// publishing zeroes that would read as a clean bill of health — see monitorOrphanedPlaidItems.
+	PlaidOrphanedItemRepo OrphanedPlaidItemLister
 }
 
 // NewRetentionCleanupCheckWorker creates a new retention cleanup check worker.
@@ -469,6 +489,7 @@ func NewRetentionCleanupCheckWorker(deps RetentionCleanupCheckWorkerDeps) *Reten
 		logger:                    logger,
 		expiredRetentionPageSize:  intOrDefault(deps.ExpiredRetentionPageSize, expiredRetentionPageSize),
 		maxUsersPerRetentionSweep: intOrDefault(deps.MaxUsersPerRetentionSweep, maxUsersPerRetentionSweep),
+		plaidOrphanedItemRepo:     deps.PlaidOrphanedItemRepo,
 	}
 }
 
@@ -607,6 +628,20 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 	// check, not a repair, and must never block GDPR notices or expired-account deletion.
 	if monitorErr := w.monitorOrphanedFKlessRows(ctx, job.ID); monitorErr != nil {
 		w.logger.Error("failed to check for orphaned FK-less user-scoped rows",
+			"job_id", job.ID,
+			"error", monitorErr,
+		)
+		// Don't fail job — continue with other steps
+	}
+
+	// Step 0e: Issue #1497 item 4 monitoring pass — publish how many plaid_orphaned_items rows are
+	// in each admin state, and the worst UNRESOLVED retry_attempt_count. See
+	// monitorOrphanedPlaidItems's own doc comment for why this pass lives here rather than in the
+	// retry sweep (the manual-intervention population is invisible to that sweep by construction).
+	// Non-fatal for the same reason Steps 0c/0d are: this is an observability check that makes no
+	// write, and must never block GDPR notices or expired-account deletion.
+	if monitorErr := w.monitorOrphanedPlaidItems(ctx, job.ID); monitorErr != nil {
+		w.logger.Error("failed to check the orphaned-Plaid-Item queue",
 			"job_id", job.ID,
 			"error", monitorErr,
 		)
@@ -1480,6 +1515,94 @@ func (w *RetentionCleanupCheckWorker) monitorOrphanedFKlessRows(ctx context.Cont
 		"dead_letter_jobs_orphaned", counts.DeadLetterJobs,
 		"idempotency_keys_orphaned", counts.IdempotencyKeys,
 		"mcp_audit_log_orphaned", counts.MCPAuditLog,
+	)
+	return nil
+}
+
+// monitorOrphanedPlaidItems is Issue #1497 item 4's monitoring pass — THE ITEM #1497'S OWN TITLE
+// NAMES ("alerting on repeated re-attempts"), which two earlier passes over that ticket both missed.
+//
+// WHAT WAS MISSING. plaid_orphaned_items.retry_attempt_count is incremented by
+// plaidOrphanedItemRepository.RecordRetryFailure on every failed automated removal, and until this
+// pass it was read by NO METRIC ANYWHERE: jobs/plaid_orphan_retry.go emits only the generic
+// JobsCompleted / JobDuration every River worker emits, both of which report a HEALTHY sweep for a
+// run in which every single Item failed. So an erased user's Plaid Item could be re-attempted daily
+// for a month, or sit needing a human indefinitely, with nothing anywhere reporting either fact.
+//
+// ⚠ WHY THIS PASS LIVES HERE AND NOT IN THE RETRY SWEEP, which is where the ticket's own wording
+// points. It is forced, not chosen: the manual-intervention population is INVISIBLE to that sweep by
+// construction. GetRetryablePage selects only rows holding a live, unexpired credential, which is
+// exactly the COMPLEMENT of "nothing automated will finish this" — a gauge published from the sweep
+// could never read anything but zero for the number that matters most. The whole-table read this
+// needs is repository.List, and this worker is already where this codebase publishes DB-derived
+// monitoring gauges (Step 0c monitorMalformedTierOverrides, Step 0d monitorOrphanedFKlessRows). Its
+// cadence also matches the retry sweep's own daily cadence, so a gauge over attempt counts is
+// refreshed exactly as often as those counts can change. This pass touches neither sweep, neither
+// deadline, and makes no write.
+//
+// ⚠ THE DERIVATION IS SHARED, NOT DUPLICATED. domain.SummarisePlaidOrphanedItems is the same
+// function SystemHealthService.getPlaidOrphanedItemMetrics calls for /admin/health's JSON. Two
+// derivations of one state is how a dashboard and an alert come to disagree — and see that function
+// for why the state cannot be a SQL COUNT at all (one of AdminState's four checks depends on whether
+// THIS PROCESS can decrypt the ciphertext, which no predicate over the table can see).
+//
+// ⚠ NOTHING IS PUBLISHED ON A FAILED OR TRUNCATED READ. Setting the gauges to 0 in either case would
+// tell an alert "no erased user's Plaid Item needs a human", which is a claim nothing checked — the
+// Prometheus-side twin of domain.PlaidOrphanedItemMetrics.Available, and the same "unknown != zero"
+// rule Step 0c already applies to its own unconfigured case. The gauges keep their last reading, so
+// staleness/absent() plus the Error log are what report the breakage. See
+// observability.PlaidOrphanedItemsByAdminState for the intended alert rules, which live in prose
+// because this repo has no alert-rule file to put them in.
+//
+// Deliberately GAUGES, not counters, and deliberately reset to 0 on a clean table: an operator who
+// actually removes every outstanding Item must see the alert CLEAR. A counter, or a gauge only ever
+// written when non-zero, would latch forever — this branch's signature defect (a mark that outlives
+// the work) in alerting form.
+func (w *RetentionCleanupCheckWorker) monitorOrphanedPlaidItems(ctx context.Context, jobID int64) error {
+	if w.plaidOrphanedItemRepo == nil {
+		// Unwired, not clean. Publishing zeroes here would be a green reading produced by the absence
+		// of a check — exactly what Step 0c refuses for its own unconfigured case.
+		w.logger.Warn("skipping the orphaned-Plaid-Item monitoring pass — no plaid_orphaned_items repository is wired, so the state and re-attempt gauges are left unpublished rather than reported as zero",
+			"job_id", jobID)
+		return nil
+	}
+
+	items, total, err := w.plaidOrphanedItemRepo.List(ctx, domain.PlaidOrphanedItemHealthScanCap, 0)
+	if err != nil {
+		return fmt.Errorf("failed to read plaid_orphaned_items for the state/re-attempt gauges: %w", err)
+	}
+	// Bounded by the SAME cap check the /admin/health derivation uses (see
+	// domain.SummarisePlaidOrphanedItemsBounded). Past the cap nothing is published at all: a count
+	// over the first 500 of N rows would UNDERSTATE the manual-intervention population, which is the
+	// one direction this gauge must never err in.
+	summary, err := domain.SummarisePlaidOrphanedItemsBounded(items, total, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+
+	observability.PlaidOrphanedItemsByAdminState.
+		WithLabelValues(string(domain.OrphanedItemAutoRetrying)).Set(float64(summary.AutoRetrying))
+	observability.PlaidOrphanedItemsByAdminState.
+		WithLabelValues(string(domain.OrphanedItemManualInterventionRequired)).Set(float64(summary.ManualInterventionRequired))
+	observability.PlaidOrphanedItemsByAdminState.
+		WithLabelValues(string(domain.OrphanedItemResolved)).Set(float64(summary.Resolved))
+	observability.PlaidOrphanedItemMaxRetryAttempts.Set(float64(summary.MaxUnresolvedRetryAttemptCount))
+
+	if summary.ManualInterventionRequired == 0 {
+		return nil
+	}
+
+	// Logged as well as gauged, because a gauge nobody has wired an alert to is still invisible —
+	// and this repo has no alert-rule file yet (see observability.PlaidOrphanedItemsByAdminState).
+	// plaid_item_id is deliberately NOT logged: it is the identifier an operator needs, and the admin
+	// view at /api/v1/admin/plaid-orphaned-items is the authenticated surface that carries it. A log
+	// line is not that surface.
+	w.logger.Warn("Plaid Items stranded by a GDPR erasure need MANUAL removal in Plaid's dashboard — nothing automated will finish these, and each one may still be billing",
+		"job_id", jobID,
+		"manual_intervention_required", summary.ManualInterventionRequired,
+		"auto_retrying", summary.AutoRetrying,
+		"resolved", summary.Resolved,
+		"max_unresolved_retry_attempts", summary.MaxUnresolvedRetryAttemptCount,
 	)
 	return nil
 }

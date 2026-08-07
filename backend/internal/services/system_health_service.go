@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -56,6 +58,22 @@ type systemHealthService struct {
 	// are never duplicated here. Optional/nil-safe: an unwired jobHealthRepo (e.g. an older test
 	// construction of this struct) degrades to zero-value JobBacklogMetrics rather than panicking.
 	jobHealthRepo repository.JobHealthRepository
+	// plaidOrphanRepo backs SystemHealthResponse.PlaidOrphanedItems (Issue #1497 item 5).
+	// Optional/nil-safe: an unwired repo reports "unavailable", never a confident zero — see
+	// domain.PlaidOrphanedItemMetrics.Available.
+	plaidOrphanRepo PlaidOrphanedItemLister
+}
+
+// PlaidOrphanedItemLister is the ONE verb the health derivation needs from
+// repository.PlaidOrphanedItemRepository. Issue #1497 item 5.
+//
+// ⚠ NARROW ON PURPOSE, for the same reason services.orphanRetryRepo excludes PurgeExpiredTokens:
+// /admin/health is a read surface, and giving it MarkResolved or PurgeExpiredTokens would make
+// "an admin page destroyed a credential" a bug that is merely absent rather than one that cannot
+// compile. List is also the read that deliberately FILTERS NOTHING — resolved and purged rows both
+// appear — which is exactly what a derivation over all three AdminStates requires.
+type PlaidOrphanedItemLister interface {
+	List(ctx context.Context, limit, offset int) ([]domain.PlaidOrphanedItem, int, error)
 }
 
 // NewSystemHealthService creates a new system health service
@@ -65,13 +83,15 @@ func NewSystemHealthService(
 	pool DatabasePool,
 	plaidEnv string,
 	jobHealthRepo repository.JobHealthRepository,
+	plaidOrphanRepo PlaidOrphanedItemLister,
 ) SystemHealthService {
 	return &systemHealthService{
-		healthRepo:     healthRepo,
-		deadLetterRepo: deadLetterRepo,
-		pool:           pool,
-		plaidEnv:       plaidEnv,
-		jobHealthRepo:  jobHealthRepo,
+		healthRepo:      healthRepo,
+		deadLetterRepo:  deadLetterRepo,
+		pool:            pool,
+		plaidEnv:        plaidEnv,
+		jobHealthRepo:   jobHealthRepo,
+		plaidOrphanRepo: plaidOrphanRepo,
 	}
 }
 
@@ -137,6 +157,24 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		response.JobBacklog = domain.JobBacklogMetrics{}
 	} else {
 		response.JobBacklog = *jobBacklogMetrics
+	}
+
+	// Orphaned Plaid Items (Issue #1497 item 5). response.Timestamp is reused as the derivation
+	// instant rather than a second time.Now(): two of AdminState's four checks are time-dependent, so
+	// a second clock read would let the counts describe an instant the response does not claim.
+	//
+	// Same "partial data over none" convention as every gauge above — a failure leaves the zero
+	// struct, whose Available is false, so an operator sees "Unavailable" rather than a green zero
+	// asserting that no erased user's Plaid Item is still billing. Also deliberately NOT fed into
+	// calculateOverallStatus: whether outstanding orphans should degrade overall health is a product
+	// decision #1497 never asked for, and only making them VISIBLE is in scope.
+	orphanMetrics, err := s.getPlaidOrphanedItemMetrics(ctx, response.Timestamp)
+	if err != nil {
+		slog.Error("could not derive the orphaned-Plaid-Item state for /admin/health; the counts are reported as unavailable rather than as zero",
+			"error", err)
+		response.PlaidOrphanedItems = domain.PlaidOrphanedItemMetrics{}
+	} else {
+		response.PlaidOrphanedItems = orphanMetrics
 	}
 
 	// Calculate overall status
@@ -322,6 +360,54 @@ func (s *systemHealthService) getJobBacklogMetrics(ctx context.Context) (*domain
 		// zero), not an unknown. Issue #1458 follow-up G16.
 		Available: true,
 	}, nil
+}
+
+// getPlaidOrphanedItemMetrics derives the aggregate state of plaid_orphaned_items for /admin/health.
+// Issue #1497 item 5.
+//
+// ⚠ WHY THIS IS A FULL READ AND NOT A `COUNT(*) FILTER (WHERE ...)`, precisely stated: of
+// domain.PlaidOrphanedItem.AdminState's four checks, exactly ONE resists SQL — check 2 (TokenIsLive),
+// which depends on whether THIS PROCESS can decrypt the stored ciphertext, a fact the database cannot
+// see because the key lives in the application. Checks 1, 3 and 4 are all SQL-expressible (resolved_at,
+// the plaintext last_retry_error_code, and an interval comparison). One irreducible check is enough:
+// the derivation has to happen in Go, so it happens ONCE, in the domain, shared with the periodic
+// monitoring pass that publishes the same numbers to Prometheus. Two derivations of one state is how
+// a dashboard and an alert come to disagree.
+//
+// ⚠ AND WHY A FULL READ IS ACCEPTABLE, WITH THE HONEST CAVEAT. Migrations 000134 and 000135 both argue
+// this table holds single digits of rows, and that argument is about the arrival rate — it takes a
+// permanently-unremovable Plaid Item AND a completed erasure (which the C2 guard makes wait out a
+// 7-day terminal-failure window) to write one. It is NOT a bound: nothing prunes this table, so the
+// population only ever grows. domain.PlaidOrphanedItemHealthScanCap is that gap closed mechanically —
+// past the cap this refuses to report anything at all rather than publishing a truncated scan as a
+// total. See that constant.
+//
+// Nil-safe, matching getJobBacklogMetrics: an unwired repo is "unknown", never "zero".
+func (s *systemHealthService) getPlaidOrphanedItemMetrics(ctx context.Context, asOf time.Time) (domain.PlaidOrphanedItemMetrics, error) {
+	if s.plaidOrphanRepo == nil {
+		// Not wired, not failed — but equally not a verified reading, so Available stays at its zero
+		// value. An /admin/health that reported "0 Items need manual intervention" because nobody
+		// wired the repository would be this branch's signature defect on its most compliance-sensitive
+		// surface.
+		return domain.PlaidOrphanedItemMetrics{}, nil
+	}
+
+	items, total, err := s.plaidOrphanRepo.List(ctx, domain.PlaidOrphanedItemHealthScanCap, 0)
+	if err != nil {
+		return domain.PlaidOrphanedItemMetrics{}, fmt.Errorf("list plaid_orphaned_items: %w", err)
+	}
+	// The cap check lives inside SummarisePlaidOrphanedItemsBounded so this reader and the periodic
+	// Prometheus pass share one bound as well as one derivation — the tripwire migration 000134 asked
+	// for in prose ("revisit if it ever grows, which would itself be the alarming signal").
+	m, err := domain.SummarisePlaidOrphanedItemsBounded(items, total, asOf)
+	if err != nil {
+		return domain.PlaidOrphanedItemMetrics{}, err
+	}
+	// The read covered the whole table — this is a VERIFIED state snapshot, possibly a real zero.
+	// Claimed here and nowhere else: the domain summariser deliberately leaves this false so that
+	// every path has to say so explicitly. See domain.PlaidOrphanedItemMetrics.Available.
+	m.Available = true
+	return m, nil
 }
 
 // calculateOverallStatus determines the overall system health status
