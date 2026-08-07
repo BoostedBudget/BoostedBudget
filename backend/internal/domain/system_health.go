@@ -29,6 +29,66 @@ type SystemHealthResponse struct {
 	// JobLastSuccessTimestamp heartbeat) deliberately stay Prometheus-only — see
 	// JobBacklogMetrics's own doc comment for why.
 	JobBacklog JobBacklogMetrics `json:"job_backlog"`
+	// PlaidOrphanedItems is the aggregate operator picture of plaid_orphaned_items (Issue #1497
+	// item 5) — Plaid Items that may still exist and may still BILL, whose local linked_items row
+	// was destroyed by a GDPR erasure before removal could be proved. Derived in Go over a bounded
+	// full read via domain.SummarisePlaidOrphanedItems; see that function for why one of
+	// AdminState's four checks makes a SQL COUNT impossible.
+	PlaidOrphanedItems PlaidOrphanedItemMetrics `json:"plaid_orphaned_items"`
+}
+
+// PlaidOrphanedItemMetrics is the aggregate state of plaid_orphaned_items as /admin/health reports
+// it, and as observability.PlaidOrphanedItemsByAdminState /
+// observability.PlaidOrphanedItemMaxRetryAttempts publish it. Issue #1497 items 4 and 5.
+//
+// ⚠ THE TWO ACTIONABLE COUNTS ARE SEPARATE FIELDS AND MUST STAY SEPARATE. The whole reason
+// OrphanedItemAdminState exists as three states rather than a resolved/unresolved boolean is that
+// auto_retrying and manual_intervention_required demand OPPOSITE human responses: the first means
+// "do nothing, a sweep is working on it", the second means "go remove this Item in Plaid's dashboard
+// using plaid_item_id, or it may keep billing an erased user's account". A single "unresolved" total
+// — the obvious and much shorter implementation — erases exactly that distinction and would make this
+// gauge worse than absent, because an operator would believe they had been told something.
+//
+// Resolved is carried too, but only as history: it is the count of rows an automated retry PROVED
+// gone at Plaid. It is never work.
+type PlaidOrphanedItemMetrics struct {
+	// AutoRetrying is the number of rows holding a live, decryptable credential with a retry
+	// observed inside domain.OrphanedItemRetryStaleAfter. No operator action.
+	AutoRetrying int64 `json:"auto_retrying"`
+	// ManualInterventionRequired is the number of rows nothing automated will finish — a dead,
+	// purged or undecryptable credential, or a live one nothing has retried for
+	// domain.OrphanedItemRetryStaleAfter. Every one of these is a Plaid Item a human must remove in
+	// Plaid's own dashboard. This is the number the whole feature exists to surface.
+	ManualInterventionRequired int64 `json:"manual_intervention_required"`
+	// Resolved is the number of rows an automated retry proved removed at Plaid. History, not work —
+	// and it never leaves the table, because nothing prunes plaid_orphaned_items.
+	Resolved int64 `json:"resolved"`
+	// MaxUnresolvedRetryAttemptCount is the highest retry_attempt_count among UNRESOLVED rows —
+	// Issue #1497 item 4, the item named in that issue's own title. retry_attempt_count has been
+	// written by RecordRetryFailure since #1497 landed and, until this field, was read by no metric
+	// at all: a row could be re-attempted indefinitely with nothing anywhere reporting it.
+	//
+	// The MAXIMUM rather than a sum or a mean, deliberately: the question an operator has is "is
+	// something being retried into the ground?", which is a property of the WORST row. A sum grows
+	// with population size and a mean is diluted by healthy rows, so both can hide a single Item
+	// that has failed two hundred times.
+	//
+	// Nothing in this system gives up on an attempt count (see AdminState's own note on why
+	// RetryAttemptCount is absent from that derivation), so this is information for a human and an
+	// alerting signal, never a state.
+	MaxUnresolvedRetryAttemptCount int64 `json:"max_unresolved_retry_attempt_count"`
+	// Available distinguishes "read the table successfully and derived a real (possibly zero) state"
+	// from "the read failed, or the table has outgrown the bounded in-Go derivation, so there is no
+	// number to report". Same reasoning as JobBacklogMetrics.Available above, and the same
+	// fail-closed direction: it defaults to the Go zero value (false), so any path that forgets to
+	// explicitly claim success reports "unknown" rather than a falsely confident green zero.
+	//
+	// ⚠ THAT DIRECTION MATTERS MORE HERE THAN ANYWHERE ELSE ON THIS RESPONSE. A false
+	// manual_intervention_required: 0 tells an operator that no erased user's Plaid Item is still
+	// billing — which, if the read actually failed, is a claim nothing checked. Pinned against a
+	// REAL repository error (not a struct literal) by
+	// TestGetSystemHealth_PlaidOrphanedItems_ListError_IsUnavailableNotAConfidentZero.
+	Available bool `json:"available"`
 }
 
 // JobBacklogMetrics represents point-in-time DB snapshots of two operational backlogs PR #1443

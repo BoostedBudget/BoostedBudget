@@ -297,6 +297,84 @@ var (
 		Help: "Current count, per table, of rows in dead_letter_jobs/idempotency_keys/mcp_audit_log whose user_id/actor_user_id no longer names a real user — residue of a concurrent write racing DeleteUserCascade's own erasure of these FK-less tables. idempotency_keys self-heals within 24h via its own TTL sweep; the other two do not and require manual cleanup.",
 	}, []string{"table"})
 
+	// PlaidOrphanedItemsByAdminState is Issue #1497 item 4's state gauge: how many
+	// plaid_orphaned_items rows are currently in each domain.OrphanedItemAdminState, labeled by
+	// state. Published by RetentionCleanupCheckWorker.monitorOrphanedPlaidItems (Step 0e) on every
+	// pass, from the SAME derivation (domain.SummarisePlaidOrphanedItems) that backs
+	// /admin/health's plaid_orphaned_items block — one derivation, so a dashboard and an alert
+	// cannot disagree about how many Items need a human.
+	//
+	// ⚠ LABELED BY STATE, NOT ONE "UNRESOLVED" NUMBER, and the label is the whole point.
+	// admin_state="manual_intervention_required" is a Plaid Item that NOTHING AUTOMATED WILL EVER
+	// FINISH and that may still be BILLING an erased user's bank account; somebody has to remove it
+	// in Plaid's own dashboard using plaid_item_id. admin_state="auto_retrying" is the opposite
+	// instruction — a sweep holds a live credential and is working on it, so acting at Plaid now
+	// duplicates work in flight. admin_state="resolved" is history. Collapsing these into one
+	// unresolved total would make the gauge worse than absent, because an operator would believe
+	// they had been told something.
+	//
+	// ⚠ A GAUGE, NOT A COUNTER, mirroring MalformedManualTierOverrideCount and
+	// OrphanedFKlessUserScopedRowsCount above: this is how many rows are in each state RIGHT NOW,
+	// each pass. A counter would only ever grow and would misrepresent one persistent stuck Item as
+	// "many failures" the longer it went unnoticed — and, worse here, would never clear after an
+	// operator actually fixed something.
+	//
+	// ⚠ THIS REPO HAS NO ALERT-RULE FILE (no Prometheus/Alertmanager rule group, no PrometheusRule
+	// manifest, no scrape config is checked in), so the alerting intent lives here and in the Help
+	// string, as it does for HouseholdOwnerDeletionBlockedTotal above. The intended rules:
+	//
+	//	# Somebody must act at Plaid; nothing automated will finish these.
+	//	plaid_orphaned_items_by_admin_state{admin_state="manual_intervention_required"} > 0
+	//	  for: 1h
+	//	# The publishing pass itself has stopped reporting — unknown is not zero.
+	//	absent(plaid_orphaned_items_by_admin_state{admin_state="manual_intervention_required"})
+	//	  for: 48h
+	//
+	// The second rule is load-bearing: monitorOrphanedPlaidItems deliberately publishes NOTHING on a
+	// failed or truncated read rather than publishing a reassuring 0, so staleness/absence is the
+	// only signal that the check itself is broken.
+	PlaidOrphanedItemsByAdminState = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "plaid_orphaned_items_by_admin_state",
+		Help: "Current count of plaid_orphaned_items rows per admin state. admin_state=\"manual_intervention_required\" means a Plaid Item survived a GDPR erasure, nothing automated can finish removing it, and it may still be billing — a human must remove it in Plaid's dashboard; alert on any sustained non-zero. auto_retrying means a sweep holds a live credential and is working on it (no action). resolved is history. Not published at all on a failed or over-cap read, so alert on absence too.",
+	}, []string{"admin_state"})
+
+	// PlaidOrphanedItemMaxRetryAttempts is Issue #1497 item 4's re-attempt gauge — THE METRIC THAT
+	// ITEM EXISTS FOR, and the one two earlier passes over #1497 both missed.
+	// plaid_orphaned_items.retry_attempt_count has been incremented by
+	// plaidOrphanedItemRepository.RecordRetryFailure since #1497 landed and, until this gauge, was
+	// read by no metric anywhere: jobs/plaid_orphan_retry.go emits only the generic JobsCompleted /
+	// JobDuration every River worker emits, so an Item could be re-attempted every day forever with
+	// nothing reporting it.
+	//
+	// ⚠ THE MAXIMUM OVER UNRESOLVED ROWS, and every word of that is deliberate.
+	//   * MAXIMUM, not a sum or a mean: the question is "is something being retried into the
+	//     ground?", which is a property of the WORST row. A sum grows with population size and a
+	//     mean is diluted by healthy rows, so both can hide one Item that has failed 200 times.
+	//   * UNRESOLVED, because a resolved row's attempt history is finished. Letting it drive this
+	//     gauge would latch an alert forever on work that actually succeeded — the "mark outlives
+	//     the work" defect this branch has closed five times, in alerting form.
+	//
+	// ⚠ A HIGH VALUE IS NOT A STATE. domain.PlaidOrphanedItem.AdminState deliberately ignores
+	// RetryAttemptCount, because nothing in this system gives up on an attempt count: a row on
+	// attempt 200 with a live credential really is still auto-retrying. So this gauge answers a
+	// question the state cannot ("is the retrying futile?"), and the two must not be conflated.
+	//
+	// Intended rule, given this repo has no alert-rule file (see PlaidOrphanedItemsByAdminState):
+	//
+	//	# Re-attempts are piling up on an Item the sweep cannot finish.
+	//	plaid_orphaned_item_max_retry_attempts > 20
+	//	  for: 6h
+	//
+	// The threshold is a judgement, not a derivation: the retry sweep runs daily, and
+	// domain.OrphanedItemTokenRetention is 30 days, so ~30 is the most attempts any single row can
+	// ever accumulate before its credential expires and the row becomes
+	// manual_intervention_required anyway. 20 therefore fires with roughly a third of the retention
+	// window left — early enough for a human to act at Plaid before the automated path runs out.
+	PlaidOrphanedItemMaxRetryAttempts = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "plaid_orphaned_item_max_retry_attempts",
+		Help: "Highest retry_attempt_count among UNRESOLVED plaid_orphaned_items rows — the worst single Plaid Item whose automated removal keeps failing after its owner's GDPR erasure. The maximum (not a sum or mean) because the signal is one Item retried into the ground; unresolved-only so a succeeded row's history cannot latch the alert. The daily sweep plus the 30-day credential retention caps any row near 30, so a reading above ~20 means a human should act at Plaid before the automated path expires.",
+	})
+
 	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.
 	// Issue #659: Plaid Investments
 	InvestmentHoldingsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{

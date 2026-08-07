@@ -33,6 +33,7 @@
 import type { DeadLetterMetrics } from './deadLetterMetrics';
 import type { JobBacklogMetrics } from './jobBacklogMetrics';
 import type { PaddleStatusMetrics } from './paddleStatusMetrics';
+import type { PlaidOrphanedItemMetrics } from './plaidOrphanedItemMetrics';
 import type { ServiceHealthStatuses } from './serviceHealthStatuses';
 import type { SyncStatusMetrics } from './syncStatusMetrics';
 import type { SystemHealthResponseJobQueues } from './systemHealthResponseJobQueues';
@@ -44,6 +45,7 @@ export interface SystemHealthResponse {
   job_backlog: JobBacklogMetrics;
   job_queues: SystemHealthResponseJobQueues;
   paddle_status: PaddleStatusMetrics;
+  plaid_orphaned_items: PlaidOrphanedItemMetrics;
   services: ServiceHealthStatuses;
   status: string;
   sync_status: SyncStatusMetrics;

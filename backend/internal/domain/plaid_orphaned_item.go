@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // OrphanedItemTokenRetention is the retention deadline on a Plaid access token retained past its
 // owner's GDPR erasure — the single number this feature's legal defensibility rests on. Issue #1497.
@@ -300,4 +303,105 @@ func (o PlaidOrphanedItem) AdminView(asOf time.Time) PlaidOrphanedItemAdminView 
 		TokenRetained:             o.AccessToken != "" || o.TokenUndecryptable,
 		ResolvedAt:                o.ResolvedAt,
 	}
+}
+
+// PlaidOrphanedItemHealthScanCap bounds how many plaid_orphaned_items rows the /admin/health state
+// derivation (SystemHealthService) and the periodic monitoring pass (RetentionCleanupCheckWorker)
+// will load in one pass. Issue #1497 items 4 and 5.
+//
+// WHY A CAP AT ALL, GIVEN THIS DERIVATION IS SUPPOSED TO BE BOUNDED BY THE TABLE'S OWN SIZE.
+// Migrations 000134 and 000135 both argue this table holds SINGLE DIGITS OF ROWS, and that argument
+// is why the state counts are derived in Go over a full read instead of as a SQL COUNT ... FILTER.
+// The argument is sound about the RATE rows arrive at — it takes a permanently-unremovable Plaid
+// Item AND a completed erasure to write one, and the C2 guard makes the erasure wait out a 7-day
+// terminal-failure window first — but it is NOT a bound. Nothing prunes this table: there is no
+// DELETE FROM plaid_orphaned_items anywhere in production code, and MarkResolved only STAMPS
+// resolved_at, so resolved rows accumulate as history forever. The population is therefore
+// monotonically non-decreasing in the number of stuck-Item erasures over the product's lifetime.
+//
+// So the cap is the honest encoding of the size argument rather than a restatement of it: at single
+// digits it can never be reached, and IF IT IS REACHED the readers refuse to report a number at all
+// (Available stays false, and an Error is logged naming this constant) instead of silently reporting
+// a partial scan as a total. That refusal is the signal migration 000134 asked for in prose — "revisit
+// if it ever grows, which would itself be the alarming signal" — made mechanical. The remedy at that
+// point is server-side totals by state, NOT a bigger number here.
+//
+// ⚠ THE CAP IS NOT THE SEVEN-ROW POPULATION IT GUARDS. 500 leaves four orders of magnitude of
+// headroom over "single digits", so a legitimately growing-but-healthy table does not trip it on a
+// slow news day; it is a tripwire, not a routine limit.
+const PlaidOrphanedItemHealthScanCap = 500
+
+// SummarisePlaidOrphanedItems derives the aggregate operator picture of plaid_orphaned_items: how
+// many rows are in each AdminState, plus the worst unresolved retry_attempt_count. Issue #1497
+// items 4 and 5.
+//
+// ⚠ WHY THIS IS A GO DERIVATION AND NOT A SQL `COUNT(*) FILTER (WHERE ...)`, stated precisely
+// because an earlier version of this justification overstated it and the overstatement was caught.
+// Of AdminState's four checks, exactly ONE resists SQL: check 2, TokenIsLive, which depends on
+// whether THIS PROCESS, RIGHT NOW, can decrypt the stored ciphertext — the repository reports an
+// undecryptable token as AccessToken == "", a fact no predicate over the table can see because the
+// key lives in the application. Check 1 (resolved_at IS NULL), check 3 (last_retry_error_code, which
+// is plaintext) and check 4 (a plain interval comparison over last_retry_at/orphaned_at) are ALL
+// SQL-expressible. So the accurate statement is "one of the four checks forces a Go derivation",
+// not "no COUNT can reproduce this state" — the conclusion survives, the reasoning is narrower than
+// it was first written.
+//
+// ⚠ THE THREE STATE COUNTS ARE NOT ONE "UNRESOLVED" TOTAL, and collapsing them would defeat the
+// feature. auto_retrying means DO NOTHING — acting at Plaid now duplicates work in flight — while
+// manual_intervention_required means GO REMOVE THIS ITEM IN PLAID'S DASHBOARD OR IT MAY KEEP
+// BILLING. One number covering both tells an operator neither thing.
+//
+// asOf is taken rather than read from the clock, for the reason #1466 threaded it through every
+// liveness predicate: two of AdminState's checks are time-dependent, so a derivation that read the
+// clock internally could not be tested at the boundaries it exists to enforce.
+//
+// Available is deliberately LEFT AT ITS ZERO VALUE (false) here. This function cannot know whether
+// the slice it was handed is a complete read or the truncated remains of a failed one, so marking a
+// summary trustworthy is the CALLER's act, made explicitly, once, on the success path — the
+// fail-closed direction: any future path that forgets to say "this is a real reading" reports
+// "unknown", never a falsely confident zero. See PlaidOrphanedItemMetrics.Available.
+func SummarisePlaidOrphanedItems(items []PlaidOrphanedItem, asOf time.Time) PlaidOrphanedItemMetrics {
+	var m PlaidOrphanedItemMetrics
+	for _, item := range items {
+		switch item.AdminState(asOf) {
+		case OrphanedItemAutoRetrying:
+			m.AutoRetrying++
+		case OrphanedItemManualInterventionRequired:
+			m.ManualInterventionRequired++
+		case OrphanedItemResolved:
+			m.Resolved++
+		}
+		// UNRESOLVED ONLY. A resolved row's attempt history is finished, so letting it drive this
+		// gauge would latch an alert forever on work that actually succeeded — the "mark outlives the
+		// work" shape this branch has closed five times already. Read straight off ResolvedAt rather
+		// than off the AdminState above, because a row can be unresolved AND manual-intervention, and
+		// a row being retried into the ground is exactly the case this gauge exists for.
+		if item.ResolvedAt == nil && int64(item.RetryAttemptCount) > m.MaxUnresolvedRetryAttemptCount {
+			m.MaxUnresolvedRetryAttemptCount = int64(item.RetryAttemptCount)
+		}
+	}
+	return m
+}
+
+// SummarisePlaidOrphanedItemsBounded is SummarisePlaidOrphanedItems plus the cap check, so the two
+// readers of this state — SystemHealthService.getPlaidOrphanedItemMetrics (the /admin/health JSON)
+// and RetentionCleanupCheckWorker.monitorOrphanedPlaidItems (the Prometheus gauges) — share ONE
+// definition of both the derivation and its bound. Issue #1497 items 4 and 5.
+//
+// It takes `total` (the repository's own COUNT, alongside the page it returned) rather than deriving
+// the population size from len(items), because len(items) cannot distinguish "the whole table" from
+// "the first PlaidOrphanedItemHealthScanCap rows of a larger one" — which is precisely the case that
+// must be refused. Past the cap this returns an ERROR and no counts at all: a count over the first
+// 500 of N rows would UNDERSTATE the manual-intervention population, the one direction this state
+// must never err in, and it would look like an answer. See PlaidOrphanedItemHealthScanCap.
+//
+// Available is left false on both paths for the reason SummarisePlaidOrphanedItems leaves it false:
+// claiming a reading is trustworthy is the caller's explicit act.
+func SummarisePlaidOrphanedItemsBounded(items []PlaidOrphanedItem, total int, asOf time.Time) (PlaidOrphanedItemMetrics, error) {
+	if total > PlaidOrphanedItemHealthScanCap {
+		return PlaidOrphanedItemMetrics{}, fmt.Errorf(
+			"plaid_orphaned_items holds %d rows, past the %d-row cap this in-Go state derivation is bounded by; migrations 000134/000135 argued this table holds single digits of rows and it no longer does, so these counts need server-side totals by state (COUNT ... FILTER) rather than a bigger cap",
+			total, PlaidOrphanedItemHealthScanCap)
+	}
+	return SummarisePlaidOrphanedItems(items, asOf), nil
 }
