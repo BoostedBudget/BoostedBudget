@@ -29,12 +29,19 @@
 **Status**: Implemented
 **File**: `backend/internal/config/config.go`
 
+> ⚠️ **`DeletionWorkerInterval` / `DELETION_WORKER_INTERVAL` no longer exist (Issue #1493).** The
+> field listed below and the env var in the "Environment Variables Required" block were removed:
+> their only consumer was `workers.DeletionWorker`, deleted in #1482 because River never registered
+> it. Re-derive: `git grep -n DeletionWorkerInterval -- '*.go'` → no hits. Scheduled deletion runs as
+> the `scheduled_deletion_check` periodic River job, whose cadence comes from its own
+> `PeriodicJobOpts`. The historical code snippets further down this file (the `NewDeletionWorker`
+> wiring) are kept as a record of what was written then, not as current wiring.
+
 **Changes Made**:
 ```go
 // Added to Config struct:
 - SendGridAPIKey, SendGridFromEmail, SendGridFromName
 - DeletionGracePeriodDays (int, default 30)
-- DeletionWorkerInterval (string, default "1h")
 - DeletionTokenSecret (string)
 - ClerkManagementClientID, ClerkManagementClientSecret
 - FrontendURL (string, default "http://localhost:5173")
@@ -52,7 +59,6 @@ SENDGRID_FROM_NAME=BoostedBudget
 
 # Deletion
 DELETION_GRACE_PERIOD_DAYS=30
-DELETION_WORKER_INTERVAL=1h
 DELETION_TOKEN_SECRET=your-secret-here
 
 # Clerk Management
