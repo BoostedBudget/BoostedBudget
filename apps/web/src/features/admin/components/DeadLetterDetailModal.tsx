@@ -100,6 +100,15 @@ export function DeadLetterDetailModal({ jobId, onClose }: DeadLetterDetailModalP
         onSuccess: () => {
           toast.success('Notes saved')
           setIsEditingNotes(false)
+          // Without this the editor closes onto the read-only view, which renders the stale
+          // `job.notes` from the comment above — the detail query has no `refetchInterval`,
+          // `staleTime` is 5 minutes and `refetchOnWindowFocus` is false (main.tsx), so the
+          // operator sees the PREVIOUS note (or "No notes yet") and retypes what they just saved.
+          // The list row behind the modal carries a `notes` column and is stale for the same
+          // reason. The stats counts are untouched by a note, so they are deliberately not
+          // invalidated here.
+          void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobDetailQueryKey(jobId) })
+          void queryClient.invalidateQueries({ queryKey: getListAdminDeadLetterJobsQueryKey() })
         },
         onError: (err) => {
           toast.error(`Failed to save notes: ${mutationFailureMessage(err)}`)

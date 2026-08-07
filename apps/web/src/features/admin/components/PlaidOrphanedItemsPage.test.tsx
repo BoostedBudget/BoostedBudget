@@ -260,6 +260,33 @@ describe('PlaidOrphanedItemsPage', () => {
       expect(institutionCell).toHaveAttribute('data-ph-mask')
     })
 
+    // Migration 000137 states TWICE (at :55 and in the operator_resolution_note COMMENT) that this
+    // note is masked in PostHog session replay, and names it as the ONE column where an erased
+    // user's PII can re-enter ("removed Jane Doe's Chase Item"). It was not masked: the note is
+    // rendered inside the `operator_resolution` column, which was absent from `maskedColumnIds`.
+    //
+    // ⚠ THE MASK MUST BE ON THE NOTE ELEMENT, NOT THE CELL. Adding `operator_resolution` to
+    // `maskedColumnIds` would mask the whole <td> and take the attester with it — and an
+    // attestation whose author is hidden is the anonymous green tick this feature exists to
+    // prevent. The sibling assertion below is what forbids that shortcut.
+    it('masks the operator resolution note for session replay', () => {
+      loaded()
+      renderPage()
+      const note = within(row('orphan-attested')).getByText(attestedRow.operator_resolution_note)
+      expect(note.closest('[data-ph-mask]')).not.toBeNull()
+    })
+
+    // Sibling, and it fails in the opposite direction: operator_resolved_by is the ATTESTING STAFF
+    // MEMBER's Clerk id (domain/plaid_orphaned_item.go:205), not the erased subject's data, and it
+    // must stay legible in a replay. Without this, masking the whole column would pass the test
+    // above while destroying the evidence trail.
+    it('leaves the attesting staff member visible in session replay', () => {
+      loaded()
+      renderPage()
+      const attester = within(row('orphan-attested')).getByText(attestedRow.operator_resolved_by)
+      expect(attester.closest('[data-ph-mask]')).toBeNull()
+    })
+
     it('renders when the row was orphaned', () => {
       loaded()
       renderPage()

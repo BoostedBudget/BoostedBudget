@@ -334,7 +334,7 @@ export function HealthDashboardPage() {
               disprove the claim. */}
           <SummaryCard
             title="Operator-Attested (Unverified)"
-            value={orphanedItemsAvailable ? (data.plaid_orphaned_items.operator_attested ?? 0).toString() : 'Unavailable'}
+            value={orphanedItemsAvailable ? data.plaid_orphaned_items.operator_attested.toString() : 'Unavailable'}
             icon={<UserCheck size={24} />}
             status={!orphanedItemsAvailable ? 'warning' : 'neutral'}
           />

@@ -52,8 +52,18 @@
 -- filter would give false assurance while mangling legitimate notes. The mitigations are that it is
 -- reachable only from an admin-authenticated surface, that it is never exported to a data subject or
 -- an analytics pipeline, and that the note is the smaller risk than the alternative it replaces: an
--- anonymous, unexplained resolution nobody could later check. It is masked in PostHog session replay
--- like every other value on that page.
+-- anonymous, unexplained resolution nobody could later check.
+--
+-- ⚠ THE SESSION-REPLAY MITIGATION WAS ARGUED HERE BEFORE IT EXISTED. This comment originally
+-- claimed the note was "masked in PostHog session replay like every other value on that page".
+-- Both halves were false: the note was rendered in a DataTable column absent from
+-- `maskedColumnIds`, and most values on that page are deliberately NOT masked (the state, the
+-- timestamps, the error codes and the attesting staff id all stay legible on purpose). The claim
+-- is now true, and narrower: `data-ph-mask` sits on the note element itself in
+-- PlaidOrphanedItemsPage.tsx — not on the column, which would take the attester with it and make
+-- the attestation anonymous — and on the dialog textarea that writes it. Enforced by the Round-15
+-- PII regression in apps/web/src/test/pii-coverage.test.tsx. Nothing else on that page is claimed
+-- to be masked beyond the Plaid Item id and the institution name.
 --
 -- ── LOCK COST AND SQUAWK, argued from the semantics rather than from a green lint run ──────────────
 --
@@ -176,6 +186,8 @@ COMMENT ON COLUMN plaid_orphaned_items.operator_resolution_note IS
     'human types it and could type a name. Not schema-preventable and deliberately not filtered in '
     'code either (a filter would give false assurance while mangling legitimate notes); the '
     'mitigations are that it is written and read only through an admin-authenticated surface, is never '
-    'exported to a data subject or an analytics pipeline, and is masked in session replay. It is the '
+    'exported to a data subject or an analytics pipeline, and carries data-ph-mask on the element '
+    'that renders it (and on the textarea that writes it), so PostHog session replay never records '
+    'it -- narrower than the page as a whole, most of which is deliberately left legible. It is the '
     'smaller risk than what it replaces -- an unexplained resolution nobody could ever check. '
     'Issue #1497 item 2.';

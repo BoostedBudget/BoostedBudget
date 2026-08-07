@@ -115,7 +115,10 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <User className="w-5 h-5 text-primary" />
-                {user.email}
+                {/* Email is a MUST-mask field (docs/security/posthog-pii-masking.md). UsersPage
+                    masks the email COLUMN; this modal is the same address one click deeper, and
+                    the admin's consent to session replay is not the subject's. */}
+                <span data-ph-mask>{user.email}</span>
                 {user.is_admin && (
                   <Badge variant="warning" className="ml-2 gap-1">
                     <Shield size={14} />

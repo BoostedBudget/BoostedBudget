@@ -91,7 +91,11 @@ export function WebhookDetailModal({ webhookId, onClose }: WebhookDetailModalPro
 
               <div className="flex flex-col gap-2 mt-2">
                 <span className="text-[0.8125rem] font-semibold text-muted-foreground min-w-[110px] shrink-0">Payload:</span>
-                <pre className="bg-muted border border-border rounded-md px-4 py-3.5 text-[0.8125rem] font-mono overflow-x-auto whitespace-pre text-foreground max-h-[280px] overflow-y-auto">
+                {/* A Paddle payload is a verbatim vendor document: it carries the customer's
+                    email, name and billed amounts. Masked for the same reason
+                    DeadLetterDetailModal masks its raw-args and error blocks — the whole point of
+                    showing it is that nobody knows in advance what is inside it. */}
+                <pre className="bg-muted border border-border rounded-md px-4 py-3.5 text-[0.8125rem] font-mono overflow-x-auto whitespace-pre text-foreground max-h-[280px] overflow-y-auto" data-ph-mask>
                   {formatPayload(event.payload)}
                 </pre>
               </div>
