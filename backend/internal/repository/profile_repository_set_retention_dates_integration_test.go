@@ -66,7 +66,9 @@ func TestSetRetentionDates_Integration_ArmsClockWithPostgresArithmetic(t *testin
 	const retentionMonths = testRetentionMonths // 9 — deliberately not the config default of 6
 
 	before := dbNow(t, pool)
-	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, retentionMonths))
+	// The fixture user above is 'cancelled', so this drives the guarded production shape (Issue
+	// #1500 residual): the write's own authorising condition, satisfied.
+	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, RetentionClockRequiresStatus(domain.SubscriptionStatusCancelled), retentionMonths))
 	after := dbNow(t, pool)
 
 	var retStarted, retExpires *time.Time

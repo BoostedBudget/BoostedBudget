@@ -97,7 +97,10 @@ func createClaimForDeletionFixtureUser(
 	// Runs BEFORE the is_deleted write below, deliberately: SetRetentionDates (like every production
 	// writer here) is scoped `WHERE is_deleted = FALSE`, so arming it after an isDeleted=true fixture
 	// would fail with ErrUserNotFound.
-	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, claimFixtureRetentionMonths))
+	// RetentionClockUnguarded: this fixture arms the clock as SETUP for the deletion-claim tests
+	// below, not as a subscription transition, so there is no authorising status to name (Issue
+	// #1500 residual — see RetentionClockGuard's doc comment).
+	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, RetentionClockUnguarded, claimFixtureRetentionMonths))
 	_, err = pool.Exec(ctx, `
 		UPDATE users
 		SET retention_started_at = retention_started_at - make_interval(months => $1::int),

@@ -2,11 +2,13 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -140,7 +142,7 @@ func TestWorker_SubscriptionCanceled_CompMidLoop_StopsRemainingRemovals(t *testi
 	// Permissive on purpose: this test's point is that the retention clock must NOT be started, and
 	// a missing expectation would surface as a testify panic instead of the assertion that carries
 	// the meaning.
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil).Maybe()
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	err := worker.Work(ctx, job)
 
@@ -149,7 +151,7 @@ func TestWorker_SubscriptionCanceled_CompMidLoop_StopsRemainingRemovals(t *testi
 		"only the item removed before the comp may be gone; the remaining two must stay connected")
 	assert.Equal(t, 1, plaid.ifEligibleCalls,
 		"the cancellation webhook must use the recheck-carrying entry point")
-	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestWorker_SubscriptionCanceled_NoComp_RemovesEveryItem is the MANDATORY sibling assertion:
@@ -182,7 +184,7 @@ func TestWorker_SubscriptionCanceled_NoComp_RemovesEveryItem(t *testing.T) {
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(row, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
@@ -192,7 +194,7 @@ func TestWorker_SubscriptionCanceled_NoComp_RemovesEveryItem(t *testing.T) {
 	assert.Equal(t, []string{"item-1", "item-2", "item-3"}, plaid.removed,
 		"a user who is never comped must have every item removed — the recheck must not become a blanket refusal")
 	assert.Equal(t, 1, plaid.ifEligibleCalls)
-	mockProfileRepo.AssertCalled(t, "SetRetentionDates", ctx, "user_2abc123def456", mock.Anything)
+	mockProfileRepo.AssertCalled(t, "SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything)
 }
 
 // reactivationAfter returns an onRemoved hook that flips the row back to an ACTIVE subscription —
@@ -249,7 +251,7 @@ func TestWorker_SubscriptionCanceled_ReactivationMidLoop_StopsRemainingRemovals(
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 	// Permissive on purpose, exactly as in the comp test above: the assertion that carries the
 	// meaning is AssertNotCalled, and a missing expectation would surface as a testify panic instead.
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil).Maybe()
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	err := worker.Work(ctx, job)
 
@@ -257,7 +259,7 @@ func TestWorker_SubscriptionCanceled_ReactivationMidLoop_StopsRemainingRemovals(
 	assert.Equal(t, []string{"item-1"}, plaid.removed,
 		"once the subscription is active again the remaining items must stay connected")
 	assert.Equal(t, 1, plaid.ifEligibleCalls)
-	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // ─── Issue #1500 residual: the retention-date write on a user with ZERO linked Items ────────────
@@ -277,6 +279,14 @@ func TestWorker_SubscriptionCanceled_ReactivationMidLoop_StopsRemainingRemovals(
 // moment the disconnect is entered — the in-flight window this residual lives in. It returns the
 // mocked profile repo (so callers can assert on SetRetentionDates), the fake, and the Work error.
 func runZeroItemCancellation(t *testing.T, duringDisconnect func(row *domain.User)) (*mockSubscriptionProfileRepository, *fakePerItemWebhookCleanup, error) {
+	return runZeroItemCancellationWithRetentionResult(t, duringDisconnect, nil)
+}
+
+// runZeroItemCancellationWithRetentionResult is runZeroItemCancellation with control over what the
+// retention-clock write itself returns — the outcomes that only exist now that the write carries its
+// OWN guard (Issue #1500 residual): the row's authorising state can change AFTER the Go-side gate
+// passed, and the repository reports that as ErrRetentionClockPreconditionLost rather than writing.
+func runZeroItemCancellationWithRetentionResult(t *testing.T, duringDisconnect func(row *domain.User), retentionErr error) (*mockSubscriptionProfileRepository, *fakePerItemWebhookCleanup, error) {
 	t.Helper()
 
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
@@ -314,7 +324,11 @@ func runZeroItemCancellation(t *testing.T, duringDisconnect func(row *domain.Use
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 	// Permissive on purpose: the negative tests' meaning is carried by AssertNotCalled, and a missing
 	// expectation would surface as a testify panic instead of the assertion.
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil).Maybe()
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(retentionErr).Maybe()
+	// Only reached when retentionErr is a REAL failure: Work marks the webhook failed before
+	// returning the error. .Maybe() because the happy path and the precondition-lost path never
+	// touch it — which is itself part of what those tests assert (they require a nil error).
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.AnythingOfType("string")).Return(nil).Maybe()
 
 	return mockProfileRepo, plaid, worker.Work(ctx, job)
 }
@@ -329,7 +343,7 @@ func TestWorker_SubscriptionCanceled_ZeroItems_ReactivationBeforeRetentionWrite_
 
 	require.NoError(t, err, "a reactivation landing mid-flight is a legitimate stop, not a webhook failure")
 	assert.Empty(t, plaid.removed, "there was nothing to remove — the loop is not what stopped this run")
-	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestWorker_SubscriptionCanceled_ZeroItems_CompBeforeRetentionWrite_SkipsIt is the matched half:
@@ -345,7 +359,7 @@ func TestWorker_SubscriptionCanceled_ZeroItems_CompBeforeRetentionWrite_SkipsIt(
 
 	require.NoError(t, err, "a comp granted mid-flight is a legitimate stop, not a webhook failure")
 	assert.Empty(t, plaid.removed)
-	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestWorker_SubscriptionCanceled_ZeroItems_StaysCancelled_WritesRetentionDates is the MANDATORY
@@ -355,5 +369,49 @@ func TestWorker_SubscriptionCanceled_ZeroItems_StaysCancelled_WritesRetentionDat
 	mockProfileRepo, _, err := runZeroItemCancellation(t, nil)
 
 	require.NoError(t, err)
-	mockProfileRepo.AssertCalled(t, "SetRetentionDates", mock.Anything, "user_2abc123def456", mock.Anything)
+	mockProfileRepo.AssertCalled(t, "SetRetentionDates", mock.Anything, "user_2abc123def456", mock.Anything, mock.Anything)
+}
+
+// ─── Issue #1500 residual, second half: the write is its OWN guard ──────────────────────────────
+//
+// The gate above (cancellationCleanupStillAuthorised) is a READ. It narrowed the window from an
+// entire in-flight job to roughly one Go statement — it did not close it, and no read-then-write
+// gate can: an activation webhook committing between that read and the UPDATE still stamped
+// cancellation retention dates on an active, paying customer. The tests below cover the other half
+// of the fix: the condition this caller knows travels INTO the write, and the "someone else changed
+// this user" outcome the write can now report is handled as the legitimate stop it is.
+
+// TestWorker_SubscriptionCanceled_PassesCancelledGuardToRetentionWrite pins WHICH condition this
+// caller sends. A guard of the wrong status would be silently wrong in the most dangerous direction
+// — it would either refuse every legitimate cancellation, or authorise a write this flow has no
+// business making — and mock.Anything (which every other expectation here uses) cannot see that.
+func TestWorker_SubscriptionCanceled_PassesCancelledGuardToRetentionWrite(t *testing.T) {
+	mockProfileRepo, _, err := runZeroItemCancellation(t, nil)
+
+	require.NoError(t, err)
+	mockProfileRepo.AssertCalled(t, "SetRetentionDates", mock.Anything, "user_2abc123def456",
+		repository.RetentionClockRequiresStatus(domain.SubscriptionStatusCancelled), mock.Anything)
+}
+
+// TestWorker_SubscriptionCanceled_RetentionWriteGuardLost_IsLegitimateStop covers the outcome that
+// only the SQL guard can detect: the reactivation committed after the gate's read, so the write
+// itself refused. That is the same event the gate reports one line earlier, merely detected
+// microseconds later, and must be handled identically — release the claim, log, return nil. Making
+// River retry a webhook whose whole purpose has been overtaken would be the wrong answer.
+func TestWorker_SubscriptionCanceled_RetentionWriteGuardLost_IsLegitimateStop(t *testing.T) {
+	_, _, err := runZeroItemCancellationWithRetentionResult(t, nil, repository.ErrRetentionClockPreconditionLost)
+
+	require.NoError(t, err,
+		"a retention-clock write refused by its own guard is a legitimate stop (the subscription is no longer cancelled), not a webhook failure")
+}
+
+// TestWorker_SubscriptionCanceled_RetentionWriteRealError_StillPropagates is the mandatory sibling
+// to the test above: only the PRECONDITION-LOST outcome is swallowed. A genuine failure of this
+// required write must still abort the webhook so River retries it — the #1413 round-3 finding H5
+// behaviour, which the new branch must not have quietly widened into "all retention errors are fine".
+func TestWorker_SubscriptionCanceled_RetentionWriteRealError_StillPropagates(t *testing.T) {
+	_, _, err := runZeroItemCancellationWithRetentionResult(t, nil, errors.New("connection reset"))
+
+	require.Error(t, err, "a real retention-clock write failure must still fail the webhook")
+	assert.NotErrorIs(t, err, repository.ErrRetentionClockPreconditionLost)
 }

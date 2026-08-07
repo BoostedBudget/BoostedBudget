@@ -119,7 +119,8 @@ func createDeleteCascadeFixtureUser(
 	// backwards, i.e. simulating elapsed time rather than hand-writing the target row; no production
 	// writer of retention_expires_at ever computes a past instant (they all use
 	// clock_timestamp() + make_interval), production only gets there by waiting.
-	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, deleteCascadeRetentionMonths))
+	// RetentionClockUnguarded: fixture setup for the cascade test, not a subscription transition.
+	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, RetentionClockUnguarded, deleteCascadeRetentionMonths))
 	_, err = pool.Exec(ctx, `
 		UPDATE users
 		SET retention_started_at = retention_started_at - make_interval(months => $1::int),
