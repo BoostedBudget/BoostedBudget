@@ -717,6 +717,140 @@ describe('DeadLetterPage', () => {
     })
   })
 
+  // Z1/F2: the survivor of the bug commit 5d189f02 fixed for the modal — the fix went to the
+  // modal only. Neither delete on this page invalidated anything, and the suite above documents
+  // the gap rather than catching it: it asserts invalidation for retry and NOTHING for either
+  // delete.
+  //
+  // ⚠ Bulk delete refetched the LIST only incidentally: its `onSuccess` resets the filters, which
+  // changes the list query key. The stats query takes no params (DeadLetterPage.tsx:63), so its
+  // key never changes and the summary cards stayed wrong indefinitely. With Auto-refresh: OFF —
+  // a first-class toggle — nothing else ever corrects either one, the deleted row stays on
+  // screen, and a second delete on that phantom produces a spurious error toast.
+  describe('deleting refreshes the list and the summary cards', () => {
+    type MutationOptions = {
+      onSuccess?: (data: unknown) => void
+      onError?: (err: unknown) => void
+    } | undefined
+
+    function renderWithSpy() {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      const invalidateQueries = mock(() => Promise.resolve())
+      queryClient.invalidateQueries = invalidateQueries as unknown as typeof queryClient.invalidateQueries
+
+      function Wrapper({ children }: { children: React.ReactNode }) {
+        return (
+          <QueryClientProvider client={queryClient}>
+            <BrowserRouter>{children}</BrowserRouter>
+          </QueryClientProvider>
+        )
+      }
+
+      render(<DeadLetterPage />, { wrapper: Wrapper })
+      return { invalidateQueries }
+    }
+
+    function primeQueries() {
+      mockUseListAdminDeadLetterJobs.mockReturnValue({ data: mockListResponse, isLoading: false, error: null })
+      mockUseGetAdminDeadLetterJobStats.mockReturnValue({ data: undefined, isLoading: false, error: null })
+      mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    }
+
+    beforeEach(() => {
+      mockToastError.mockClear()
+      mockToastSuccess.mockClear()
+    })
+
+    async function openAndConfirmDelete(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(screen.getByRole('button', { name: /delete job 1/i }))
+      const dialog = screen.getByRole('alertdialog')
+      await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
+    }
+
+    async function openAndConfirmBulkDelete(user: ReturnType<typeof userEvent.setup>) {
+      fireEvent.change(screen.getByLabelText(/filter by user id/i), { target: { value: 'user_abc' } })
+      await user.click(screen.getByRole('button', { name: /delete all matching/i }))
+      const dialog = screen.getByRole('alertdialog')
+      await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
+    }
+
+    it('per-row delete invalidates the list and the stats', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+      mockUseDeleteAdminDeadLetterJob.mockReturnValue({
+        mutate: mock((_vars: unknown, options: MutationOptions) => {
+          options?.onSuccess?.(undefined)
+        }),
+        isPending: false,
+      })
+
+      const { invalidateQueries } = renderWithSpy()
+      await openAndConfirmDelete(user)
+
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: getListAdminDeadLetterJobsQueryKey() })
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
+    })
+
+    // Sibling: nothing was deleted, so nothing is stale. Without it, the test above would pass on
+    // a component that invalidates unconditionally.
+    it('per-row delete invalidates nothing when it fails', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+      mockUseDeleteAdminDeadLetterJob.mockReturnValue({
+        mutate: mock((_vars: unknown, options: MutationOptions) => {
+          options?.onError?.(new Error('Network Error'))
+        }),
+        isPending: false,
+      })
+
+      const { invalidateQueries } = renderWithSpy()
+      await openAndConfirmDelete(user)
+
+      expect(invalidateQueries).not.toHaveBeenCalled()
+    })
+
+    it('bulk delete invalidates the list and the stats', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+      mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({
+        mutate: mock((_vars: unknown, options: MutationOptions) => {
+          options?.onSuccess?.({ deleted: 3 })
+        }),
+        isPending: false,
+      })
+
+      const { invalidateQueries } = renderWithSpy()
+      await openAndConfirmBulkDelete(user)
+
+      // ⚠ The list assertion is not redundant with the filter reset: the reset only happens to
+      // change the key, and would stop refreshing the list the moment bulk delete is invoked
+      // with no filters set.
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: getListAdminDeadLetterJobsQueryKey() })
+      // The one the filter reset can never fix — the stats key takes no params.
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
+    })
+
+    it('bulk delete invalidates nothing when it fails', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+      mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({
+        mutate: mock((_vars: unknown, options: MutationOptions) => {
+          options?.onError?.(new Error('Network Error'))
+        }),
+        isPending: false,
+      })
+
+      const { invalidateQueries } = renderWithSpy()
+      await openAndConfirmBulkDelete(user)
+
+      expect(invalidateQueries).not.toHaveBeenCalled()
+    })
+  })
+
   describe('Phase 6 – DataTable migration', () => {
     it('renders data-ph-mask on user_id column cells', () => {
       mockUseListAdminDeadLetterJobs.mockReturnValue({

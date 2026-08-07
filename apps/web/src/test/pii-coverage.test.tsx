@@ -74,6 +74,13 @@ import {
   mockUseGetAdminUserSubscription,
   mockUseRemoveAdminUserTierOverride,
 } from '@/test/mocks/admin-subscriptions-api'
+// Round 15: admin operator surfaces (#1497 / Z1).
+import {
+  mockUseListAdminPlaidOrphanedItems,
+  mockUseRecordAdminPlaidOrphanedItemOperatorResolution,
+  mockUseGetAdminPaddleWebhookDetail,
+  mockUseReplayAdminPaddleWebhook,
+} from '@/test/mocks/admin-api'
 // EChartsChart mock — must be imported before any chart component dynamic imports
 // so that mock.module('@/shared/charts') is registered at load time.
 import '@/test/mocks/shared-charts'
@@ -141,6 +148,11 @@ const { AccountCustomizationModal } = await import('@/features/accounts/componen
 const { ReviewInboxPage } = await import('@/features/transactions/review/ReviewInboxPage')
 const { TransferActionForm } = await import('@/features/boosts/components/actions/TransferActionForm')
 const { CreateSavingsGoalDialog } = await import('@/features/savings/components/CreateSavingsGoalDialog')
+
+// --- Round 15: admin operator surfaces that render free text (#1497 / Z1) ---
+const { PlaidOrphanedItemsPage } = await import('@/features/admin/components/PlaidOrphanedItemsPage')
+const { UserDetailModal } = await import('@/features/admin/components/UserDetailModal')
+const { WebhookDetailModal } = await import('@/features/admin/components/WebhookDetailModal')
 
 const SENTINEL_MERCHANT = 'SENTINEL_MERCHANT_XYZ'
 const SENTINEL_NICKNAME = 'SENTINEL_NICKNAME_ABC'
@@ -1923,5 +1935,197 @@ describe('PII coverage — Round 14: AssetAllocationWidget (ECharts donut)', () 
       expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
     )
     expect(document.body.querySelector('[data-testid="echarts-chart"][data-ph-mask]')).not.toBeNull()
+  })
+})
+
+// ── Round 15: admin operator surfaces that render free text (#1497 / Z1 item 1) ──────────────
+//
+// The admin pages were outside this gate entirely, and one of them carried a documented
+// mitigation that did not exist: migration 000137 states TWICE that the orphaned-Item operator
+// resolution note is masked in session replay, and names it as the ONE column where an erased
+// user's PII can re-enter by accident. It was not masked. Two sibling admin surfaces were
+// leaking as well — the user detail modal's email and the Paddle webhook payload.
+//
+// Admins consent to replay; the DATA SUBJECTS in these payloads did not, and one of them has
+// already been erased.
+
+describe('PII coverage — Round 15: PlaidOrphanedItemsPage operator resolution note', () => {
+  const ORPHAN_ATTESTER = 'user_2attestingStaffMember'
+
+  beforeEach(() => {
+    cleanup()
+    mockUseListAdminPlaidOrphanedItems.mockReturnValue({
+      data: {
+        items: [
+          {
+            id: 'orphan-pii',
+            plaid_item_id: 'item-pii-AAA',
+            admin_state: 'operator_attested',
+            institution_id: 'ins_900',
+            institution_name: SENTINEL_INSTITUTION,
+            erasure_error_code: 'ITEM_LOGIN_REQUIRED',
+            retry_attempt_count: 3,
+            orphaned_at: '2026-06-15T10:00:00Z',
+            token_expires_at: '2026-07-15T10:00:00Z',
+            token_retained: false,
+            operator_resolved_at: '2026-07-20T09:00:00Z',
+            operator_resolved_by: ORPHAN_ATTESTER,
+            // The exact accident migration 000137 warns about: staff free text naming the
+            // erased person and their bank.
+            operator_resolution_note: `Removed ${SENTINEL_NICKNAME}'s ${SENTINEL_INSTITUTION} Item by hand.`,
+          },
+        ],
+        total: 1,
+        manual_intervention_required: 0,
+        auto_retrying: 0,
+        resolved: 0,
+        operator_attested: 1,
+        limit: 50,
+        offset: 0,
+        as_of: '2026-08-07T12:00:00Z',
+      },
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    } as never)
+    mockUseRecordAdminPlaidOrphanedItemOperatorResolution.mockReturnValue({
+      mutate: () => {},
+      isPending: false,
+    } as never)
+  })
+
+  test('scanForUnmaskedPII returns [] — the staff-written note is masked', async () => {
+    render(<PlaidOrphanedItemsPage />, { wrapper: createWrapper() })
+    const sentinels = [
+      { value: SENTINEL_NICKNAME, fieldDescription: 'erased subject name inside operator_resolution_note' },
+      { value: SENTINEL_INSTITUTION, fieldDescription: 'institution inside operator_resolution_note' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  // Sibling, failing in the opposite direction. The attester is a STAFF Clerk id, not the erased
+  // subject's data, and it must stay legible: masking the whole column would satisfy the test
+  // above while turning the attestation anonymous — the exact outcome #1497 exists to prevent.
+  test('the attesting staff id is NOT masked', async () => {
+    render(<PlaidOrphanedItemsPage />, { wrapper: createWrapper() })
+    await waitFor(() => expect(screen.getByText(ORPHAN_ATTESTER)).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+    expect(screen.getByText(ORPHAN_ATTESTER).closest('[data-ph-mask]')).toBeNull()
+  })
+})
+
+describe('PII coverage — Round 15: UserDetailModal target email', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('scanForUnmaskedPII returns [] — the admin-viewed user email is masked', async () => {
+    render(
+      <UserDetailModal
+        user={{
+          id: 'user-pii',
+          email: SENTINEL_EMAIL,
+          subscription_tier: 'premium',
+          subscription_status: 'active',
+          primary_region: 'iad',
+          created_at: '2024-01-15T10:00:00Z',
+          last_login_at: '2024-03-15T14:30:00Z',
+          is_active: true,
+          linked_accounts_count: 5,
+          boosts_count: 10,
+          transactions_count: 1500,
+          budgets_count: 4,
+        }}
+        loading={false}
+        open={true}
+        onClose={() => {}}
+      />,
+      { wrapper: createWrapper() }
+    )
+    const sentinels = [{ value: SENTINEL_EMAIL, fieldDescription: 'admin user detail modal email' }]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  // Sibling: the opaque user id is deliberately NOT masked — it is the identifier an operator
+  // needs to correlate the record, and it carries no personal data.
+  test('the user id is NOT masked', async () => {
+    render(
+      <UserDetailModal
+        user={{
+          id: 'user-pii',
+          email: SENTINEL_EMAIL,
+          subscription_tier: 'premium',
+          subscription_status: 'active',
+          primary_region: 'iad',
+          created_at: '2024-01-15T10:00:00Z',
+          last_login_at: '2024-03-15T14:30:00Z',
+          is_active: true,
+          linked_accounts_count: 5,
+          boosts_count: 10,
+          transactions_count: 1500,
+          budgets_count: 4,
+        }}
+        loading={false}
+        open={true}
+        onClose={() => {}}
+      />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(() => expect(screen.getByText(/User ID: user-pii/)).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+    expect(screen.getByText(/User ID: user-pii/).closest('[data-ph-mask]')).toBeNull()
+  })
+})
+
+describe('PII coverage — Round 15: WebhookDetailModal Paddle payload', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseGetAdminPaddleWebhookDetail.mockReturnValue({
+      data: {
+        id: 'wh-pii',
+        event_id: 'evt_pii',
+        event_type: 'subscription.updated',
+        status: 'processed',
+        created_at: '2026-08-01T10:00:00Z',
+        processed_at: '2026-08-01T10:00:01Z',
+        // A real Paddle payload carries the customer's email and the billed amount.
+        payload: { data: { customer: { email: SENTINEL_EMAIL }, totals: { total: '99999.99' } } },
+      },
+      isLoading: false,
+      error: null,
+    } as never)
+    mockUseReplayAdminPaddleWebhook.mockReturnValue({
+      mutate: () => {},
+      isPending: false,
+      isSuccess: false,
+      isError: false,
+    } as never)
+  })
+
+  test('scanForUnmaskedPII returns [] — the raw payload is masked', async () => {
+    render(<WebhookDetailModal webhookId="wh-pii" onClose={() => {}} />, {
+      wrapper: createWrapper(),
+    })
+    const sentinels = [
+      { value: SENTINEL_EMAIL, fieldDescription: 'customer email inside the Paddle webhook payload' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  // Sibling: the event type is operational metadata and stays legible, so a blanket mask over
+  // the whole modal would fail here rather than pass the test above by brute force.
+  test('the event type is NOT masked', async () => {
+    render(<WebhookDetailModal webhookId="wh-pii" onClose={() => {}} />, {
+      wrapper: createWrapper(),
+    })
+    await waitFor(() => expect(screen.getByText('subscription.updated')).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+    expect(screen.getByText('subscription.updated').closest('[data-ph-mask]')).toBeNull()
   })
 })

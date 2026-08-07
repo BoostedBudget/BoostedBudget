@@ -348,8 +348,15 @@ export function PlaidOrphanedItemsPage() {
             <span className="text-muted-foreground whitespace-nowrap">
               {formatInstant(item.operator_resolved_at)}
             </span>
+            {/* ⚠ data-ph-mask IS ON THE NOTE ITSELF, NOT ON THE COLUMN. The note is free text a
+                human typed, and migration 000137 names it as the one column in the table where
+                the erased user's PII can re-enter by accident ("removed Jane Doe's Chase Item") —
+                so it must not reach a PostHog session replay. It is NOT listed in
+                `maskedColumnIds` because that masks the whole <td>, which would take the attester
+                and the instant with it: an attestation whose author is hidden is the anonymous
+                green tick this feature exists to prevent. */}
             {item.operator_resolution_note && (
-              <span className="text-muted-foreground break-words">
+              <span className="text-muted-foreground break-words" data-ph-mask>
                 {item.operator_resolution_note}
               </span>
             )}
@@ -448,7 +455,7 @@ export function PlaidOrphanedItemsPage() {
                   actually outstanding. Status is neutral, not success: nothing has been verified. */}
               <SummaryCard
                 title="Operator-attested (unverified)"
-                value={String(data.operator_attested ?? 0)}
+                value={String(data.operator_attested)}
                 icon={<UserCheck size={24} />}
                 status="neutral"
               />

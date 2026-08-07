@@ -454,6 +454,7 @@ describe('HealthDashboardPage', () => {
           plaid_orphaned_items: {
             auto_retrying: 2,
             manual_intervention_required: 5,
+            operator_attested: 0,
             resolved: 9,
             max_unresolved_retry_attempt_count: 23,
             available: true,
@@ -487,6 +488,7 @@ describe('HealthDashboardPage', () => {
           plaid_orphaned_items: {
             auto_retrying: 0,
             manual_intervention_required: 3,
+            operator_attested: 0,
             resolved: 0,
             max_unresolved_retry_attempt_count: 4,
             available: true,
@@ -529,6 +531,7 @@ describe('HealthDashboardPage', () => {
           plaid_orphaned_items: {
             auto_retrying: 0,
             manual_intervention_required: 0,
+            operator_attested: 0,
             resolved: 0,
             max_unresolved_retry_attempt_count: 0,
             available: false,

@@ -436,6 +436,89 @@ describe('DeadLetterDetailModal', () => {
     })
   })
 
+  // Z1/F1: `handleRetry` and `handleDelete` both invalidated; save-notes was the one left out.
+  // The write landed and the panel kept rendering the OLD `job.notes` — the detail query has no
+  // `refetchInterval`, `staleTime` is 5 minutes and `refetchOnWindowFocus` is false (main.tsx),
+  // so nothing else would ever refresh it. The operator sees the previous note, or "No notes
+  // yet", and is invited to retype what they just saved.
+  describe('save-notes refreshes what it changed', () => {
+    type NotesOptions = {
+      onSuccess?: (data: unknown) => void
+      onError?: (err: unknown) => void
+    } | undefined
+
+    function primeQueries() {
+      mockUseGetAdminDeadLetterJobDetail.mockReturnValue({ data: mockJob, isLoading: false, error: null })
+      mockUseGetAdminDeadLetterJobArgs.mockReturnValue({ data: undefined, isLoading: false, error: null, refetch: mock(() => Promise.resolve()) })
+      mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+      mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    }
+
+    function renderWithSpy() {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      const invalidateQueries = mock(() => Promise.resolve())
+      queryClient.invalidateQueries = invalidateQueries as unknown as typeof queryClient.invalidateQueries
+
+      function Wrapper({ children }: { children: React.ReactNode }) {
+        return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      }
+
+      render(<DeadLetterDetailModal jobId={1} onClose={() => {}} />, { wrapper: Wrapper })
+      return { invalidateQueries }
+    }
+
+    function openEditorAndSave() {
+      fireEvent.click(screen.getByRole('button', { name: /add/i }))
+      fireEvent.change(screen.getByPlaceholderText(/add investigation notes/i), { target: { value: 'new notes' } })
+      fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    }
+
+    beforeEach(() => {
+      mockToastError.mockClear()
+      mockToastSuccess.mockClear()
+    })
+
+    it('invalidates this job and the list behind it when the save succeeds', () => {
+      primeQueries()
+      mockUseAddAdminDeadLetterJobNotes.mockReturnValue({
+        mutate: mock((_vars: unknown, options: NotesOptions) => {
+          options?.onSuccess?.(undefined)
+        }),
+        isPending: false,
+      })
+
+      const { invalidateQueries } = renderWithSpy()
+      openEditorAndSave()
+
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: getGetAdminDeadLetterJobDetailQueryKey(1) })
+      // The list carries a `notes` column (DeadLetterPage.tsx), so the row behind the modal is
+      // stale too.
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: getListAdminDeadLetterJobsQueryKey() })
+      // Notes change nothing the summary cards count (total / retried / last 24h / by kind), so
+      // the stats query is deliberately left alone — invalidating it would be a refetch nobody
+      // asked for.
+      expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
+    })
+
+    // Sibling: a rejected save changed nothing on the server, so refetching would replace the
+    // operator's unsaved text with the old note. Without this the test above would pass on a
+    // component that invalidates unconditionally.
+    it('invalidates nothing when the save fails', () => {
+      primeQueries()
+      mockUseAddAdminDeadLetterJobNotes.mockReturnValue({
+        mutate: mock((_vars: unknown, options: NotesOptions) => {
+          options?.onError?.(new Error('Network Error'))
+        }),
+        isPending: false,
+      })
+
+      const { invalidateQueries } = renderWithSpy()
+      openEditorAndSave()
+
+      expect(invalidateQueries).not.toHaveBeenCalled()
+    })
+  })
+
   describe('Issue #1496 – delete outcome is reported to the operator', () => {
     type DeleteOptions = {
       onSuccess?: (data: unknown) => void

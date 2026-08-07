@@ -195,6 +195,11 @@ export function DeadLetterPage() {
         trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_DELETE, { job_id: jobId })
         toast.success(`Job #${jobId} deleted`)
         setConfirmDeleteJobId(null)
+        // The deleted row and the summary counts are both stale now, and nothing else refreshes
+        // them: with Auto-refresh OFF there is no poll at all, so the phantom row stays on screen
+        // forever and a second delete on it produces a spurious error toast.
+        void queryClient.invalidateQueries({ queryKey: getListAdminDeadLetterJobsQueryKey() })
+        void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
       },
       onError: (err) => {
         toast.error(`Failed to delete job #${jobId}: ${mutationFailureMessage(err)}`)
@@ -226,6 +231,12 @@ export function DeadLetterPage() {
         setStartDate('')
         setEndDate('')
         setPage(1)
+        // ⚠ THE FILTER RESET ABOVE IS NOT A REFRESH. It happens to change the LIST query key, so
+        // the list refetches incidentally — and would stop doing so the moment a bulk delete runs
+        // with no filters set. The STATS query takes no params, so its key never changes and the
+        // summary cards would stay wrong indefinitely with or without the reset.
+        void queryClient.invalidateQueries({ queryKey: getListAdminDeadLetterJobsQueryKey() })
+        void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
       },
       onError: (err) => {
         toast.error(`Failed to delete matching jobs: ${mutationFailureMessage(err)}`)
