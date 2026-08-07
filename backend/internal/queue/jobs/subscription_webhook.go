@@ -44,8 +44,9 @@ type SubscriptionProfileRepository interface {
 	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error
 	// #930: Retention tracking — both dates are computed in Postgres (clock_timestamp() +
 	// make_interval); see ProfileRepository.SetRetentionDates's doc comment (profile_repository.go)
-	// for why a Go-computed date is never passed in.
-	SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error
+	// for why a Go-computed date is never passed in, and RetentionClockGuard's doc comment for why
+	// the authorising condition is passed in by this caller rather than hardcoded in the repository.
+	SetRetentionDates(ctx context.Context, userID string, guard repository.RetentionClockGuard, retentionMonths int) error
 	ClearRetentionDates(ctx context.Context, userID string) error
 	// #898: Dunning — past_due timestamp tracking
 	SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error
@@ -1120,7 +1121,27 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 			"user_id", userID)
 		return nil
 	}
-	if retErr := w.profileRepo.SetRetentionDates(ctx, userID, w.retentionMonths); retErr != nil {
+	//
+	// The gate above narrowed that window to roughly one Go statement; it did not close it, and no
+	// read-then-write gate can. The write's OWN guard is what closes it: SetRetentionDates is handed
+	// THIS flow's authorising condition — still 'cancelled' — and re-evaluates it inside the
+	// statement, against committed state (see RetentionClockGuard, repository/profile_repository.go).
+	// Both are load-bearing: the gate stops the WORK (the per-item Plaid loop, which SQL cannot
+	// short-circuit), the guard stops the WRITE.
+	//
+	// A lost precondition (ErrRetentionClockPreconditionLost) is therefore handled EXACTLY as the
+	// gate's own negative outcome one line above — release the claim, log, return nil, write nothing
+	// — because it is the same event, merely detected microseconds later: an activation or comp
+	// landed while this stale cancellation job was in flight. Returning an error instead would make
+	// River retry a webhook whose whole purpose has been overtaken. Every other error stays a real
+	// failure and propagates.
+	if retErr := w.profileRepo.SetRetentionDates(ctx, userID, repository.RetentionClockRequiresStatus(domain.SubscriptionStatusCancelled), w.retentionMonths); retErr != nil {
+		if errors.Is(retErr, repository.ErrRetentionClockPreconditionLost) {
+			w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, "cancellation cleanup no longer authorised at the retention-clock write itself (the subscription is no longer cancelled) — no retention dates written")
+			w.logger.Info("subscription-cancelled retention clock not started — the write's own guard found the subscription is no longer cancelled",
+				"user_id", userID)
+			return nil
+		}
 		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, retErr.Error())
 		return fmt.Errorf("failed to set retention dates on cancellation for user %s: %w", userID, retErr)
 	}

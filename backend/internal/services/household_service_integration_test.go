@@ -116,7 +116,8 @@ const retentionFixtureMonths = 6
 // FUTURE instant, and production only reaches expiry by waiting.
 func armElapsedRetentionClock(t *testing.T, ctx context.Context, pool *pgxpool.Pool, profileRepo repository.ProfileRepository, userID string) {
 	t.Helper()
-	require.NoError(t, profileRepo.SetRetentionDates(ctx, userID, retentionFixtureMonths))
+	// RetentionClockUnguarded: fixture setup, not a subscription transition (Issue #1500 residual).
+	require.NoError(t, profileRepo.SetRetentionDates(ctx, userID, repository.RetentionClockUnguarded, retentionFixtureMonths))
 	_, err := pool.Exec(ctx, `
 		UPDATE users
 		SET retention_started_at = retention_started_at - make_interval(months => $1::int),

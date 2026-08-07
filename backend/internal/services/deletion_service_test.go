@@ -181,7 +181,7 @@ func (m *MockProfileRepositoryForDeletion) GetEffectiveSubscriptionStatusByUserI
 	args := m.Called(ctx, userID)
 	return args.String(0), args.Error(1)
 }
-func (m *MockProfileRepositoryForDeletion) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
+func (m *MockProfileRepositoryForDeletion) SetRetentionDates(ctx context.Context, userID string, guard repository.RetentionClockGuard, retentionMonths int) error {
 	return nil
 }
 func (m *MockProfileRepositoryForDeletion) ClearRetentionDates(ctx context.Context, userID string) error {

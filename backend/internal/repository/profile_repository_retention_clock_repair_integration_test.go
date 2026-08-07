@@ -124,7 +124,8 @@ func TestRetentionClockRepair_Integration_ExcludesUserWithExistingClock(t *testi
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) })
 
-	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, 6))
+	// RetentionClockUnguarded: fixture setup for the repair pass, not a subscription transition.
+	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, RetentionClockUnguarded, 6))
 	// Read the persisted value back rather than trusting a Go-computed expectation — SetRetentionDates
 	// now computes retention_expires_at entirely in Postgres (clock_timestamp() + make_interval), so
 	// asserting against a Go time.Now().AddDate(0, 6, 0) value would only coincidentally agree (and

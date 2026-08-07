@@ -18,7 +18,51 @@ import (
 var (
 	ErrUserNotFound   = errors.New("user not found")
 	ErrDuplicateEmail = errors.New("email already exists")
+
+	// ErrRetentionClockPreconditionLost is returned by SetRetentionDates when the user row exists
+	// but the caller's authorising condition (RetentionClockGuard) no longer held at the moment of
+	// the write — someone else changed this user underneath the caller. Deliberately DISTINCT from
+	// ErrUserNotFound: the two mean different things and only one of them is an error. "Someone else
+	// changed this user" is a legitimate stop (the caller abandons the write and lets whatever flow
+	// now owns this user proceed); "no such user" is a genuine failure worth retrying/alerting on.
+	ErrRetentionClockPreconditionLost = errors.New("retention clock precondition lost: the user's authorising state changed concurrently")
+
+	// ErrRetentionClockGuardUnspecified is returned when a caller passes the zero-value
+	// RetentionClockGuard. The guard is REQUIRED and fails closed: an unspecified guard is rejected
+	// rather than silently defaulting to an unguarded write, because a default that silently skips
+	// the check is exactly how the original defect existed. A caller that genuinely needs no guard
+	// must say so explicitly with RetentionClockUnguarded.
+	ErrRetentionClockGuardUnspecified = errors.New("retention clock guard unspecified: pass RetentionClockRequiresStatus(...) or, explicitly, RetentionClockUnguarded")
 )
+
+// RetentionClockGuard is the caller-supplied authorising condition for a SetRetentionDates write:
+// the subscription_status the row must STILL carry, evaluated against committed state inside the
+// write's own statement, not in an earlier (and therefore non-atomic) read.
+//
+// It exists because SetRetentionDates's two production callers do NOT share one authorising
+// condition — the cancellation webhook may arm the clock only while the user is still 'cancelled',
+// while TrialService.ExpireTrial may arm it only for the user its own CAS
+// (ExpireTrialIfNoOverride) just moved to 'inactive'. Hardcoding either condition inside the
+// repository would be wrong for the other caller, so the condition is passed by the caller that
+// knows it — the same way CancelIfPastDueOccurrenceWithRetention takes its expected past_due
+// occurrence value rather than inventing one.
+//
+// The zero value is INVALID (ErrRetentionClockGuardUnspecified), so the unguarded write can only
+// be reached by naming it.
+type RetentionClockGuard string
+
+// RetentionClockUnguarded explicitly opts out of the write-time authorisation check. No production
+// caller uses it, and none should: every flow that arms this clock does so because of a state it
+// just observed, and that state is exactly what must still hold at write time. It exists for test
+// fixtures that arm the clock as SETUP for something else entirely (a deletion sweep, a repair
+// pass, a cascade) and legitimately have no authorising transition to name.
+const RetentionClockUnguarded RetentionClockGuard = "*unguarded*"
+
+// RetentionClockRequiresStatus builds a guard requiring the row to still carry the given
+// subscription_status when the retention-clock write executes.
+func RetentionClockRequiresStatus(status domain.SubscriptionStatus) RetentionClockGuard {
+	return RetentionClockGuard(status)
+}
 
 // ProfileRepository defines the interface for user profile data access
 type ProfileRepository interface {
@@ -111,7 +155,14 @@ type ProfileRepository interface {
 	//     action;
 	//   - the population self-resolves: each row proceeds notice -> notice -> delete on its own stored
 	//     deadline, or the user resubscribes and ClearRetentionDates nulls the field.
-	SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error
+	//
+	// Issue #1500 residual (Codex review, PR #1443 follow-up): the write is GUARDED. guard names the
+	// authorising condition the caller observed, and it is re-evaluated inside this statement against
+	// committed state — see RetentionClockGuard's own doc comment for why the condition is passed in
+	// rather than hardcoded here. Returns ErrRetentionClockPreconditionLost when the row exists but
+	// that condition no longer holds, ErrUserNotFound when there is no live row at all: two
+	// deliberately distinguishable outcomes, only one of which is an error (see those errors' docs).
+	SetRetentionDates(ctx context.Context, userID string, guard RetentionClockGuard, retentionMonths int) error
 
 	// ClearRetentionDates clears all retention tracking fields (called on resubscription).
 	ClearRetentionDates(ctx context.Context, userID string) error
@@ -2347,22 +2398,88 @@ func (r *profileRepository) GetUsersWithActivePaddleSubscriptions(ctx context.Co
 // clock_timestamp() + make_interval(months => $1) — see this method's doc comment on the
 // ProfileRepository interface for why (Go's AddDate disagrees with Postgres's make_interval on
 // month-end dates). Called when a user's subscription is cancelled or trial expires (#930).
-func (r *profileRepository) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
-	ct, err := r.db.Exec(ctx, `
-		UPDATE users
-		SET retention_started_at = clock_timestamp(),
-		    retention_expires_at = clock_timestamp() + make_interval(months => $1::int),
-		    updated_at = clock_timestamp()
-		WHERE id = $2 AND is_deleted = FALSE`,
-		retentionMonths, userID,
-	)
-	if err != nil {
-		return err
+//
+// Issue #1500 residual (Codex review, PR #1443 follow-up): THIS WRITE IS ITS OWN GUARD. It used to
+// key on `id = $2 AND is_deleted = FALSE` alone, which left a read-then-write race its callers'
+// Go-side gates could narrow but never close: the cancellation webhook re-checks authorisation
+// immediately before calling this (cancellationCleanupStillAuthorised, subscription_webhook.go),
+// but an activation webhook committing between that read and this UPDATE still stamped six-month
+// cancellation retention/deletion dates onto a now-active, paying customer. No read-then-write gate
+// can close that — only the write itself can, by re-evaluating the authorising condition against
+// committed state as part of the same statement. Same shape, and for the same stated reason, as
+// CancelIfPastDueOccurrenceWithRetention: "this method's WHERE clause is its OWN correctness
+// mechanism".
+//
+// The condition comes from the caller (guard), because the two production callers do not share one
+// — see RetentionClockGuard's doc comment.
+//
+// The candidate CTE takes `FOR NO KEY UPDATE` before the status is compared, matching
+// CancelIfPastDueOccurrenceWithRetention/ExpireTrialIfNoOverride's own ROUND 23 shape: a locked
+// SELECT follows the row's update chain, so the status compared here is the row version that exists
+// once any concurrent writer's lock is RELEASED, not the pre-wait one this statement first scanned.
+// (Never `FOR UPDATE` — see StampMissingPlaidCleanupMarkers's Finding 1 correction for the
+// cross-user deadlock that mode would risk.)
+//
+// The two zero-rows-affected outcomes are reported distinguishably, in ONE round trip: `target`
+// (existence of a live row) and `updated` (the write actually applying) are returned side by side,
+// so "someone else changed this user" (ErrRetentionClockPreconditionLost — a legitimate stop) can
+// never be mistaken for "no such user" (ErrUserNotFound — a genuine failure). A follow-up existence
+// SELECT would have been a second, unsynchronised read of a row this very race is about.
+//
+// The Go-side gates that callers run BEFORE this call are not redundant and must not be removed:
+// they short-circuit work (the per-item Plaid disconnect loop) that no SQL predicate can stop. The
+// gate stops the work; this WHERE clause stops the write.
+//
+// Deliberately NOT part of the guard: the comp/manual-override conjunct the cancellation webhook's
+// own gate also checks. A comp does not change subscription_status, so it is a genuinely separate
+// question, and it is not one both callers share (the trial path checks it against its own CAS
+// instead). Scoping this predicate to the status keeps one meaning for one parameter; the override
+// question stays with the callers that ask it, plus the retention deletion claim's own re-check.
+func (r *profileRepository) SetRetentionDates(ctx context.Context, userID string, guard RetentionClockGuard, retentionMonths int) error {
+	if guard == "" {
+		return ErrRetentionClockGuardUnspecified
 	}
-	if ct.RowsAffected() == 0 {
+	// nil means "no status condition" — reached only via the explicitly-named RetentionClockUnguarded.
+	var expectedStatus *string
+	if guard != RetentionClockUnguarded {
+		s := string(guard)
+		expectedStatus = &s
+	}
+
+	var userExists, updated bool
+	err := r.db.QueryRow(ctx, `
+		WITH target AS (
+			SELECT id, subscription_status FROM users
+			WHERE id = $2 AND is_deleted = FALSE
+			FOR NO KEY UPDATE
+		),
+		candidate AS (
+			SELECT id FROM target
+			WHERE $3::text IS NULL OR subscription_status = $3::text
+		),
+		updated AS (
+			UPDATE users
+			SET retention_started_at = clock_timestamp(),
+			    retention_expires_at = clock_timestamp() + make_interval(months => $1::int),
+			    updated_at = clock_timestamp()
+			FROM candidate
+			WHERE users.id = candidate.id
+			RETURNING users.id
+		)
+		SELECT EXISTS (SELECT 1 FROM target), EXISTS (SELECT 1 FROM updated)
+	`,
+		retentionMonths, userID, expectedStatus,
+	).Scan(&userExists, &updated)
+	if err != nil {
+		return fmt.Errorf("SetRetentionDates: %w", err)
+	}
+	if updated {
+		return nil
+	}
+	if !userExists {
 		return ErrUserNotFound
 	}
-	return nil
+	return ErrRetentionClockPreconditionLost
 }
 
 // ClearRetentionDates clears all retention tracking fields on resubscription (#930). Issue #1413

@@ -275,7 +275,8 @@ func TestExecuteDeletion_Integration_RetentionExpiryInFuture_NotDeleted(t *testi
 
 	userID := newRetentionRaceCandidate(t, ctx, f, "retention-expiry-future")
 
-	require.NoError(t, f.profileRepo.SetRetentionDates(ctx, userID, retentionFixtureMonths))
+	// RetentionClockUnguarded: fixture setup, not a subscription transition (Issue #1500 residual).
+	require.NoError(t, f.profileRepo.SetRetentionDates(ctx, userID, repository.RetentionClockUnguarded, retentionFixtureMonths))
 
 	before, err := f.profileRepo.GetUserByID(ctx, userID)
 	require.NoError(t, err)
