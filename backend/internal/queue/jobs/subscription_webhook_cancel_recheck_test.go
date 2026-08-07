@@ -117,6 +117,10 @@ func TestWorker_SubscriptionCanceled_CompMidLoop_StopsRemainingRemovals(t *testi
 		ClerkUserID:      "clerk_user_123",
 		SubscriptionTier: "premium",
 	}
+	// The row carries the CANCELLED status the handler's own UpdateSubscriptionFromPaddle write has
+	// just committed — the mocked repository does not apply writes to the row it hands back, so the
+	// fixture has to model the post-write world the re-reads actually see in production.
+	row.SubscriptionStatus = string(domain.SubscriptionStatusCancelled)
 	plaid.onRemoved = compAfter(row, "item-1")
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -161,6 +165,9 @@ func TestWorker_SubscriptionCanceled_NoComp_RemovesEveryItem(t *testing.T) {
 		ID:               "user_2abc123def456",
 		ClerkUserID:      "clerk_user_123",
 		SubscriptionTier: "premium",
+		// Still cancelled for the whole loop, and never comped: BOTH conjuncts of the per-item
+		// predicate hold at every item, so nothing may be skipped.
+		SubscriptionStatus: string(domain.SubscriptionStatusCancelled),
 	}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -178,4 +185,69 @@ func TestWorker_SubscriptionCanceled_NoComp_RemovesEveryItem(t *testing.T) {
 		"a user who is never comped must have every item removed — the recheck must not become a blanket refusal")
 	assert.Equal(t, 1, plaid.ifEligibleCalls)
 	mockProfileRepo.AssertCalled(t, "SetRetentionDates", ctx, "user_2abc123def456", mock.Anything)
+}
+
+// reactivationAfter returns an onRemoved hook that flips the row back to an ACTIVE subscription —
+// what a subscription.activated / subscription.updated webhook writes — the moment `afterItemID`
+// has been removed. Webhook jobs deliberately carry no River uniqueness options
+// (unique_opts_by_kind.go), so a newer activation genuinely can land while an older cancellation
+// job is still walking this user's items; mutating the shared row is how a unit test expresses
+// "the world changed between item 1 and item 2".
+func reactivationAfter(row *domain.User, afterItemID string) func(string) {
+	return func(itemID string) {
+		if itemID != afterItemID {
+			return
+		}
+		row.SubscriptionStatus = string(domain.SubscriptionStatusActive)
+	}
+}
+
+// TestWorker_SubscriptionCanceled_ReactivationMidLoop_StopsRemainingRemovals is the RED test for the
+// SECOND conjunct of the per-item predicate. The comp check alone answers "has an admin granted a
+// compensating override?" — it never re-asks whether the user is still CANCELLED, which is this
+// flow's actual authorising condition. A user who resubscribes while an older cancellation job is
+// mid-loop is active and paying; the remaining items must stay connected, and the retention clock —
+// a six-month countdown to hard deletion — must never be started on them.
+func TestWorker_SubscriptionCanceled_ReactivationMidLoop_StopsRemainingRemovals(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	plaid := &fakePerItemWebhookCleanup{itemIDs: []string{"item-1", "item-2", "item-3"}}
+	worker.SetPlaidCleanupService(plaid)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	job := createRiverJob(SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	})
+
+	row := &domain.User{
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: string(domain.SubscriptionStatusCancelled),
+	}
+	// No comp is ever granted here — the ONLY thing that changes is the subscription status. That
+	// isolation is the point: it is what makes this test fail while the predicate asks the comp
+	// question alone.
+	plaid.onRemoved = reactivationAfter(row, "item-1")
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(row, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+	// Permissive on purpose, exactly as in the comp test above: the assertion that carries the
+	// meaning is AssertNotCalled, and a missing expectation would surface as a testify panic instead.
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil).Maybe()
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a reactivation mid-loop is a legitimate stop, not a webhook failure")
+	assert.Equal(t, []string{"item-1"}, plaid.removed,
+		"once the subscription is active again the remaining items must stay connected")
+	assert.Equal(t, 1, plaid.ifEligibleCalls)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 }
