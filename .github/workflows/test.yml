@@ -916,6 +916,27 @@ jobs:
           path: ${{ env.GOCACHE }}
           key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
 
+      # #1487: `gofmt -w` rewrites the byte sequence '' into U+201D (and `` into
+      # U+201C) inside Go doc comments, silently corrupting SQL documentation.
+      # It cannot reach production behaviour (string literals are untouched),
+      # but nothing else in this pipeline flags it — the code still compiles
+      # and every test still passes. This is deliberately NOT `gofmt -l`: after
+      # the #1487 repair, the corrected files are exactly the ones `gofmt -l`
+      # wants to change back (confirmed: `gofmt -l backend/internal/repository/
+      # analytics_repository.go` lists that already-fixed file), so using the
+      # formatter as the guard would forbid the fixed state. See
+      # scripts/check-typographic-quotes.sh's own header for the full argument.
+      #
+      # Regression suite first (proves the guard itself can still reject a
+      # fixture), then the real scan against this checked-out tree.
+      - name: Test typographic-quote guard (#1487 regression suite)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-typographic-quotes.test.sh
+
+      - name: Guard — no U+201C/U+201D in tracked backend/*.go files (#1487)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/check-typographic-quotes.sh
+
       - name: Final workspace cleanup
         if: always()
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
