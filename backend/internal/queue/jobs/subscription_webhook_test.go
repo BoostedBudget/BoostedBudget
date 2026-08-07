@@ -3074,7 +3074,11 @@ func TestWorker_SubscriptionCanceled_ClearsOverCapacity(t *testing.T) {
 	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
 	job := createRiverJob(args)
 
-	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	// SubscriptionStatus is the POST-write world every re-read sees: the mocked repository does not
+	// apply this handler's own UpdateSubscriptionFromPaddle write to the row it hands back. Modelling
+	// it as still-active would make the retention-clock gate short-circuit, silently truncating the
+	// path this test's own setup implies (the SetRetentionDates stub below would go unused).
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "household_2", SubscriptionStatus: string(domain.SubscriptionStatusCancelled)}
 	hh := &domain.Household{ID: "hh-1", OwnerUserID: "user_2abc123def456"}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -3093,6 +3097,9 @@ func TestWorker_SubscriptionCanceled_ClearsOverCapacity(t *testing.T) {
 
 	require.NoError(t, err)
 	mockHHRepo.AssertExpectations(t)
+	// Positive control for the retention-clock gate: this run must reach the END of the cleanup, not
+	// exit early. Without it an unused SetRetentionDates stub would pass in silence.
+	mockProfileRepo.AssertCalled(t, "SetRetentionDates", ctx, "user_2abc123def456", mock.AnythingOfType("int"))
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 
@@ -3267,7 +3274,11 @@ func TestWorker_SubscriptionCanceled_NonOwner_NoOp(t *testing.T) {
 	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
 	job := createRiverJob(args)
 
-	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium", SubscriptionStatus: "active"}
+	// SubscriptionStatus is the POST-write world every re-read sees: the mocked repository does not
+	// apply this handler's own UpdateSubscriptionFromPaddle write to the row it hands back. Modelling
+	// it as still-active would make the retention-clock gate short-circuit, silently truncating the
+	// path this test's own setup implies (the SetRetentionDates stub below would go unused).
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium", SubscriptionStatus: string(domain.SubscriptionStatusCancelled)}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
@@ -3282,6 +3293,9 @@ func TestWorker_SubscriptionCanceled_NonOwner_NoOp(t *testing.T) {
 
 	require.NoError(t, err)
 	mockHHRepo.AssertExpectations(t)
+	// Positive control for the retention-clock gate: this run must reach the END of the cleanup, not
+	// exit early. Without it an unused SetRetentionDates stub would pass in silence.
+	mockProfileRepo.AssertCalled(t, "SetRetentionDates", ctx, "user_2abc123def456", mock.AnythingOfType("int"))
 	require.NoError(t, pool.ExpectationsWereMet(), "no transaction/Exec should occur for a non-owner")
 }
 
