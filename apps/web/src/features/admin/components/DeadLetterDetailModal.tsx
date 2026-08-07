@@ -24,7 +24,6 @@ import { mutationFailureMessage } from '../lib/mutationFailureMessage'
 interface DeadLetterDetailModalProps {
   jobId: number | null
   onClose: () => void
-  onDeleted?: () => void
 }
 
 const formatJson = (value: unknown): string => {
@@ -40,7 +39,7 @@ const fieldClass = 'text-[0.8125rem] font-semibold text-muted-foreground min-w-[
 const valueClass = 'text-sm text-foreground break-all'
 const preClass = 'bg-muted border border-border rounded-md px-4 py-3.5 text-[0.8125rem] font-mono overflow-x-auto whitespace-pre max-h-[200px] overflow-y-auto'
 
-export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterDetailModalProps) {
+export function DeadLetterDetailModal({ jobId, onClose }: DeadLetterDetailModalProps) {
   const [notesValue, setNotesValue] = useState('')
   const [isEditingNotes, setIsEditingNotes] = useState(false)
   const [showRawArgs, setShowRawArgs] = useState(false)
@@ -119,7 +118,7 @@ export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterD
   // Issue #1496: this used to pass `onSuccess` only, so a rejected delete left the confirmation
   // sub-dialog open with no explanation — the same defect as DeadLetterPage's per-row delete.
   // On failure, only the confirm sub-dialog is dismissed (`setConfirmDelete(false)`); the
-  // detail modal itself stays open (no `closeModal()`, no `onDeleted?.()`) because the job
+  // detail modal itself stays open (no `closeModal()`, no invalidation) because the job
   // still exists and the operator needs to see the error toast against it, not have the whole
   // view yanked away.
   const handleDelete = () => {
@@ -128,7 +127,12 @@ export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterD
       onSuccess: () => {
         trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_DELETE, { job_id: jobId })
         toast.success(`Job #${jobId} deleted`)
-        onDeleted?.()
+        // Mirrors the retry success path above: the deleted job no longer belongs in the list
+        // or the stats counts, and its detail query should stop being cached. Without this the
+        // page's 30s poll is the only thing that ever removes the row.
+        void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobDetailQueryKey(jobId) })
+        void queryClient.invalidateQueries({ queryKey: getListAdminDeadLetterJobsQueryKey() })
+        void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
         closeModal()
       },
       onError: (err) => {
