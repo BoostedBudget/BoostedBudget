@@ -564,6 +564,159 @@ describe('DeadLetterPage', () => {
     })
   })
 
+  // Issue #1496 (follow-up): the retry fix above was scoped too narrowly — the identical
+  // defect (mutation reports success only) was still live on per-row delete, bulk delete,
+  // and (in the modal) save-notes and delete. Per-row delete had a worse symptom: because
+  // `setConfirmDeleteJobId(null)` ran only in `onSuccess`, a failed delete left the
+  // confirmation dialog stuck open with no explanation at all.
+  describe('Issue #1496 – delete outcome is reported to the operator', () => {
+    type DeleteOptions = {
+      onSuccess?: (data: unknown) => void
+      onError?: (err: unknown) => void
+    } | undefined
+
+    const axiosError = (status: number, detail: string) => ({
+      response: { status, data: { detail } },
+      message: `Request failed with status code ${status}`,
+      isAxiosError: true,
+    })
+
+    const DELETE_FAILURE_DETAIL = 'job is referenced by an active retry chain; delete refused'
+
+    function primeQueries() {
+      mockUseListAdminDeadLetterJobs.mockReturnValue({ data: mockListResponse, isLoading: false, error: null })
+      mockUseGetAdminDeadLetterJobStats.mockReturnValue({ data: undefined, isLoading: false, error: null })
+      mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+      mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    }
+
+    beforeEach(() => {
+      mockToastError.mockClear()
+      mockToastSuccess.mockClear()
+    })
+
+    async function openAndConfirmDelete(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(screen.getByRole('button', { name: /delete job 1/i }))
+      const dialog = screen.getByRole('alertdialog')
+      await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
+    }
+
+    it('surfaces a delete failure to the operator and dismisses the stuck-open dialog', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      mockUseDeleteAdminDeadLetterJob.mockReturnValue({
+        mutate: mock((_vars: unknown, options: DeleteOptions) => {
+          options?.onError?.(axiosError(409, DELETE_FAILURE_DETAIL))
+        }),
+        isPending: false,
+      })
+
+      render(<DeadLetterPage />, { wrapper: createWrapper() })
+      await openAndConfirmDelete(user)
+
+      expect(mockToastError).toHaveBeenCalledTimes(1)
+      expect(mockToastError).toHaveBeenCalledWith(expect.stringContaining(DELETE_FAILURE_DETAIL))
+      expect(mockToastSuccess).not.toHaveBeenCalled()
+      // The worse symptom: without the fix, the confirmation dialog stays open on failure with
+      // no explanation at all.
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+
+    // Sibling positive assertion: without it, the failure test above would also pass if delete
+    // were broken outright (never deleting, never reporting success, never closing the dialog).
+    it('still reports success, tracks the event, and closes the dialog when delete succeeds', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      const deleteMutate = mock((_vars: unknown, options: DeleteOptions) => {
+        options?.onSuccess?.(undefined)
+      })
+      mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: deleteMutate, isPending: false })
+
+      render(<DeadLetterPage />, { wrapper: createWrapper() })
+      await openAndConfirmDelete(user)
+
+      expect(deleteMutate).toHaveBeenCalledWith({ id: 1 }, expect.any(Object))
+      expect(mockToastSuccess).toHaveBeenCalledTimes(1)
+      expect(mockToastError).not.toHaveBeenCalled()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Issue #1496 – bulk delete outcome is reported to the operator', () => {
+    type BulkDeleteOptions = {
+      onSuccess?: (data: unknown) => void
+      onError?: (err: unknown) => void
+    } | undefined
+
+    const axiosError = (status: number, detail: string) => ({
+      response: { status, data: { detail } },
+      message: `Request failed with status code ${status}`,
+      isAxiosError: true,
+    })
+
+    const BULK_DELETE_FAILURE_DETAIL = 'bulk delete refused: filter matched more than the safety cap'
+
+    function primeQueries() {
+      mockUseListAdminDeadLetterJobs.mockReturnValue({ data: mockListResponse, isLoading: false, error: null })
+      mockUseGetAdminDeadLetterJobStats.mockReturnValue({ data: undefined, isLoading: false, error: null })
+      mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+      mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    }
+
+    beforeEach(() => {
+      mockToastError.mockClear()
+      mockToastSuccess.mockClear()
+    })
+
+    async function openAndConfirmBulkDelete(user: ReturnType<typeof userEvent.setup>) {
+      fireEvent.change(screen.getByLabelText(/filter by user id/i), { target: { value: 'user_abc' } })
+      await user.click(screen.getByRole('button', { name: /delete all matching/i }))
+      const dialog = screen.getByRole('alertdialog')
+      await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
+    }
+
+    it('surfaces a bulk delete failure to the operator, dismisses the dialog, and leaves filters untouched', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({
+        mutate: mock((_vars: unknown, options: BulkDeleteOptions) => {
+          options?.onError?.(axiosError(422, BULK_DELETE_FAILURE_DETAIL))
+        }),
+        isPending: false,
+      })
+
+      render(<DeadLetterPage />, { wrapper: createWrapper() })
+      await openAndConfirmBulkDelete(user)
+
+      expect(mockToastError).toHaveBeenCalledTimes(1)
+      expect(mockToastError).toHaveBeenCalledWith(expect.stringContaining(BULK_DELETE_FAILURE_DETAIL))
+      expect(mockToastSuccess).not.toHaveBeenCalled()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      // Nothing was actually deleted, so the filter the operator set is still applied.
+      expect(screen.getByLabelText(/filter by user id/i)).toHaveValue('user_abc')
+    })
+
+    // Sibling positive assertion: without it, the failure test above would also pass if bulk
+    // delete were broken outright (never deleting, never resetting filters, never closing).
+    it('still reports success, resets filters, and closes the dialog when bulk delete succeeds', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      const bulkDeleteMutate = mock((_vars: unknown, options: BulkDeleteOptions) => {
+        options?.onSuccess?.({ deleted: 3 })
+      })
+      mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: bulkDeleteMutate, isPending: false })
+
+      render(<DeadLetterPage />, { wrapper: createWrapper() })
+      await openAndConfirmBulkDelete(user)
+
+      expect(bulkDeleteMutate).toHaveBeenCalledTimes(1)
+      expect(mockToastSuccess).toHaveBeenCalledTimes(1)
+      expect(mockToastError).not.toHaveBeenCalled()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      expect(screen.getByLabelText(/filter by user id/i)).toHaveValue('')
+    })
+  })
+
   describe('Phase 6 – DataTable migration', () => {
     it('renders data-ph-mask on user_id column cells', () => {
       mockUseListAdminDeadLetterJobs.mockReturnValue({
