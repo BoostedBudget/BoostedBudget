@@ -982,6 +982,10 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_Success(t *testing.T) {
 		ID:               "user_2abc123def456",
 		ClerkUserID:      "clerk_user_123",
 		SubscriptionTier: "premium",
+		// The mocked repository does not apply this handler's own UpdateSubscriptionFromPaddle write to
+		// the row it hands back, so the fixture has to model the post-write 'cancelled' world every
+		// re-read sees in production — including the one guarding the retention-clock write.
+		SubscriptionStatus: string(domain.SubscriptionStatusCancelled),
 	}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -1198,6 +1202,10 @@ func TestWorker_SubscriptionCanceled_DisconnectsPlaidItems(t *testing.T) {
 		ID:               "user_2abc123def456",
 		ClerkUserID:      "clerk_user_123",
 		SubscriptionTier: "premium",
+		// The mocked repository does not apply this handler's own UpdateSubscriptionFromPaddle write to
+		// the row it hands back, so the fixture has to model the post-write 'cancelled' world every
+		// re-read sees in production — including the one guarding the retention-clock write.
+		SubscriptionStatus: string(domain.SubscriptionStatusCancelled),
 	}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -1368,6 +1376,10 @@ func TestWorker_SubscriptionCanceled_PlaidCleanupNil_Succeeds(t *testing.T) {
 		ID:               "user_2abc123def456",
 		ClerkUserID:      "clerk_user_123",
 		SubscriptionTier: "premium",
+		// The mocked repository does not apply this handler's own UpdateSubscriptionFromPaddle write to
+		// the row it hands back, so the fixture has to model the post-write 'cancelled' world every
+		// re-read sees in production — including the one guarding the retention-clock write.
+		SubscriptionStatus: string(domain.SubscriptionStatusCancelled),
 	}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -1953,6 +1965,10 @@ func TestWorker_SubscriptionCanceled_CompRemovedMidProcessing_ProceedsWithDestru
 		ID:               "user_2abc123def456",
 		ClerkUserID:      "clerk_user_123",
 		SubscriptionTier: "premium",
+		// The mocked repository does not apply this handler's own UpdateSubscriptionFromPaddle write to
+		// the row it hands back, so the fixture has to model the post-write 'cancelled' world every
+		// re-read sees in production — including the one guarding the retention-clock write.
+		SubscriptionStatus: string(domain.SubscriptionStatusCancelled),
 		// No override — removed/lapsed by the time of the re-read.
 	}
 
@@ -2027,6 +2043,10 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_DisconnectsPlaidItems(t *tes
 		ID:               "user_2abc123def456",
 		ClerkUserID:      "clerk_user_123",
 		SubscriptionTier: "premium",
+		// The mocked repository does not apply this handler's own UpdateSubscriptionFromPaddle write to
+		// the row it hands back, so the fixture has to model the post-write 'cancelled' world every
+		// re-read sees in production — including the one guarding the retention-clock write.
+		SubscriptionStatus: string(domain.SubscriptionStatusCancelled),
 	}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -2553,6 +2573,10 @@ func TestWorker_SubscriptionCanceled_ClearsPastDueStamp(t *testing.T) {
 		ID:               "user_2abc123def456",
 		ClerkUserID:      "clerk_user_123",
 		SubscriptionTier: "premium",
+		// The mocked repository does not apply this handler's own UpdateSubscriptionFromPaddle write to
+		// the row it hands back, so the fixture has to model the post-write 'cancelled' world every
+		// re-read sees in production — including the one guarding the retention-clock write.
+		SubscriptionStatus: string(domain.SubscriptionStatusCancelled),
 	}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -3281,7 +3305,9 @@ func TestWorker_SubscriptionCanceled_ClaimWonBeforeDestructiveWork(t *testing.T)
 	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
 	job := createRiverJob(args)
 
-	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+	// SubscriptionStatus models the post-write world the re-reads see: the mocked repository does not
+	// apply this handler's own UpdateSubscriptionFromPaddle write to the row it hands back.
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium", SubscriptionStatus: string(domain.SubscriptionStatusCancelled)}
 	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	var callOrder []string
@@ -3335,7 +3361,9 @@ func TestWorker_SubscriptionCanceled_ClaimAlreadyCompleted_SkipsDestructive(t *t
 	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
 	job := createRiverJob(args)
 
-	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+	// SubscriptionStatus models the post-write world the re-reads see: the mocked repository does not
+	// apply this handler's own UpdateSubscriptionFromPaddle write to the row it hands back.
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium", SubscriptionStatus: string(domain.SubscriptionStatusCancelled)}
 	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -3376,7 +3404,9 @@ func TestWorker_SubscriptionCanceled_ClaimHeldByOther_ReturnsErrorForRetry(t *te
 	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
 	job := createRiverJob(args)
 
-	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+	// SubscriptionStatus models the post-write world the re-reads see: the mocked repository does not
+	// apply this handler's own UpdateSubscriptionFromPaddle write to the row it hands back.
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium", SubscriptionStatus: string(domain.SubscriptionStatusCancelled)}
 	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -3415,7 +3445,9 @@ func TestWorker_SubscriptionCanceled_ClaimWon_Success_CompletesClaim(t *testing.
 	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
 	job := createRiverJob(args)
 
-	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+	// SubscriptionStatus models the post-write world the re-reads see: the mocked repository does not
+	// apply this handler's own UpdateSubscriptionFromPaddle write to the row it hands back.
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium", SubscriptionStatus: string(domain.SubscriptionStatusCancelled)}
 	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -3462,7 +3494,9 @@ func TestWorker_SubscriptionCanceled_CompleteReturnsFalse_LoggedNotSwallowed(t *
 	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
 	job := createRiverJob(args)
 
-	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+	// SubscriptionStatus models the post-write world the re-reads see: the mocked repository does not
+	// apply this handler's own UpdateSubscriptionFromPaddle write to the row it hands back.
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium", SubscriptionStatus: string(domain.SubscriptionStatusCancelled)}
 	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -3509,7 +3543,9 @@ func TestWorker_SubscriptionCanceled_SetRetentionDatesError_Aborts_ReleasesClaim
 	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
 	job := createRiverJob(args)
 
-	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+	// SubscriptionStatus models the post-write world the re-reads see: the mocked repository does not
+	// apply this handler's own UpdateSubscriptionFromPaddle write to the row it hands back.
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium", SubscriptionStatus: string(domain.SubscriptionStatusCancelled)}
 	retentionErr := errors.New("retention write failed")
 	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 

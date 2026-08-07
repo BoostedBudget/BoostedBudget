@@ -43,10 +43,18 @@ type fakePerItemWebhookCleanup struct {
 	// onRemoved, if set, runs immediately after each item is removed — how a test changes the
 	// world partway through the loop.
 	onRemoved func(itemID string)
+	// onCall, if set, runs once when the disconnect is entered, BEFORE any item is considered. It is
+	// the only hook available to a user with ZERO linked items, whose loop body never executes: it
+	// models a competing webhook landing during the disconnect call itself rather than between two
+	// items.
+	onCall func()
 }
 
 func (f *fakePerItemWebhookCleanup) DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
 	f.ifEligibleCalls++
+	if f.onCall != nil {
+		f.onCall()
+	}
 	return f.loop(ctx, recheck)
 }
 
@@ -250,4 +258,102 @@ func TestWorker_SubscriptionCanceled_ReactivationMidLoop_StopsRemainingRemovals(
 		"once the subscription is active again the remaining items must stay connected")
 	assert.Equal(t, 1, plaid.ifEligibleCalls)
 	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// ─── Issue #1500 residual: the retention-date write on a user with ZERO linked Items ────────────
+//
+// The per-item recheck above protects the retention-clock write only through the loop's abort path:
+// the predicate is asked once per linked item, so a user with NO linked items never has it asked at
+// all, the loop returns success, and the write proceeds on whatever the world looked like when the
+// claim was won. A user with no bank connections is not an edge case, and the write it lets through
+// is six-month retention/deletion dates stamped onto an active, paying customer.
+//
+// The fix re-asks the SAME predicate (still cancelled AND no active manual override) immediately
+// before SetRetentionDates. These tests drive that write directly, with an empty item list, so the
+// loop cannot be what stops them.
+
+// runZeroItemCancellation wires a cancellation webhook for a user with NO linked Plaid items and
+// runs it. duringDisconnect (optional) mutates the row the mocked repository hands back at the
+// moment the disconnect is entered — the in-flight window this residual lives in. It returns the
+// Work error and the mocked profile repo so callers can assert on SetRetentionDates.
+func runZeroItemCancellation(t *testing.T, duringDisconnect func(row *domain.User)) (error, *mockSubscriptionProfileRepository, *fakePerItemWebhookCleanup) {
+	t.Helper()
+
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	// No items at all: the per-item loop body never executes, so nothing inside it can stop this run.
+	plaid := &fakePerItemWebhookCleanup{itemIDs: nil}
+	worker.SetPlaidCleanupService(plaid)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	job := createRiverJob(SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	})
+
+	row := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+		// The post-write world the re-reads see in production: this handler's own
+		// UpdateSubscriptionFromPaddle has just committed 'cancelled'. The mocked repository does not
+		// apply writes to the row it hands back, so the fixture has to model it.
+		SubscriptionStatus: string(domain.SubscriptionStatusCancelled),
+	}
+	if duringDisconnect != nil {
+		plaid.onCall = func() { duringDisconnect(row) }
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(row, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+	// Permissive on purpose: the negative tests' meaning is carried by AssertNotCalled, and a missing
+	// expectation would surface as a testify panic instead of the assertion.
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil).Maybe()
+
+	return worker.Work(ctx, job), mockProfileRepo, plaid
+}
+
+// TestWorker_SubscriptionCanceled_ZeroItems_ReactivationBeforeRetentionWrite_SkipsIt is the
+// headline RED test for the residual: a user with no linked Items whose subscription is reactivated
+// while this stale cancellation job is in flight must NOT have retention dates written.
+func TestWorker_SubscriptionCanceled_ZeroItems_ReactivationBeforeRetentionWrite_SkipsIt(t *testing.T) {
+	err, mockProfileRepo, plaid := runZeroItemCancellation(t, func(row *domain.User) {
+		row.SubscriptionStatus = string(domain.SubscriptionStatusActive)
+	})
+
+	require.NoError(t, err, "a reactivation landing mid-flight is a legitimate stop, not a webhook failure")
+	assert.Empty(t, plaid.removed, "there was nothing to remove — the loop is not what stopped this run")
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestWorker_SubscriptionCanceled_ZeroItems_CompBeforeRetentionWrite_SkipsIt is the matched half:
+// the comp/manual-override conjunct has carried the same residual since #1413. Closing one condition
+// and not the other would leave the pair half-done.
+func TestWorker_SubscriptionCanceled_ZeroItems_CompBeforeRetentionWrite_SkipsIt(t *testing.T) {
+	err, mockProfileRepo, plaid := runZeroItemCancellation(t, func(row *domain.User) {
+		tier := "premium"
+		endsAt := time.Now().Add(30 * 24 * time.Hour)
+		row.ManualTierOverride = &tier
+		row.ManualTierEndsAt = &endsAt
+	})
+
+	require.NoError(t, err, "a comp granted mid-flight is a legitimate stop, not a webhook failure")
+	assert.Empty(t, plaid.removed)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestWorker_SubscriptionCanceled_ZeroItems_StaysCancelled_WritesRetentionDates is the MANDATORY
+// sibling: without it both tests above pass just as well if the retention write broke outright for
+// every user with no linked items. A user who stays cancelled must still get the clock started.
+func TestWorker_SubscriptionCanceled_ZeroItems_StaysCancelled_WritesRetentionDates(t *testing.T) {
+	err, mockProfileRepo, _ := runZeroItemCancellation(t, nil)
+
+	require.NoError(t, err)
+	mockProfileRepo.AssertCalled(t, "SetRetentionDates", mock.Anything, "user_2abc123def456", mock.Anything)
 }
