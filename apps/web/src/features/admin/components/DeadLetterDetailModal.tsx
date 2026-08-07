@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -13,7 +15,11 @@ import {
   useRetryAdminDeadLetterJob,
   useAddAdminDeadLetterJobNotes,
   useDeleteAdminDeadLetterJob,
+  getListAdminDeadLetterJobsQueryKey,
+  getGetAdminDeadLetterJobStatsQueryKey,
+  getGetAdminDeadLetterJobDetailQueryKey,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
+import { retryFailureMessage } from '../lib/retryFailureMessage'
 
 interface DeadLetterDetailModalProps {
   jobId: number | null
@@ -50,6 +56,7 @@ export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterD
     { query: { enabled: false } }
   )
 
+  const queryClient = useQueryClient()
   const retryMutation = useRetryAdminDeadLetterJob()
   const notesMutation = useAddAdminDeadLetterJobNotes()
   const deleteMutation = useDeleteAdminDeadLetterJob()
@@ -59,11 +66,25 @@ export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterD
     fetchArgs()
   }
 
+  // Issue #1496: this used to pass `onSuccess` only, so a rejected replay left the modal looking
+  // exactly like a successful one. The reachable rejections are the 409 (deduplicated away by the
+  // kind's uniqueness options, so nothing was enqueued) and the 422 (unknown job kind); the
+  // already-retried case can't get here because the button is disabled and relabelled.
   const handleRetry = () => {
     if (!jobId) return
     retryMutation.mutate({ id: jobId }, {
       onSuccess: () => {
         trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_RETRY, { job_id: jobId })
+        toast.success(`Job #${jobId} re-enqueued`)
+        // Refetch what a successful replay changes: this job's retried_at/retry_job_id (so the
+        // footer button flips to "Already Retried" instead of inviting a second click), plus the
+        // list row and the retried/unretried counts behind the modal.
+        void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobDetailQueryKey(jobId) })
+        void queryClient.invalidateQueries({ queryKey: getListAdminDeadLetterJobsQueryKey() })
+        void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
+      },
+      onError: (err) => {
+        toast.error(`Failed to retry job #${jobId}: ${retryFailureMessage(err)}`)
       },
     })
   }

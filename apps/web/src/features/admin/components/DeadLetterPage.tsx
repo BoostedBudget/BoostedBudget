@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { RefreshCw, AlertCircle, AlertTriangle } from 'lucide-react'
@@ -8,7 +10,10 @@ import {
   useRetryAdminDeadLetterJob,
   useDeleteAdminDeadLetterJob,
   useBulkDeleteAdminDeadLetterJobs,
+  getListAdminDeadLetterJobsQueryKey,
+  getGetAdminDeadLetterJobStatsQueryKey,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
+import { retryFailureMessage } from '../lib/retryFailureMessage'
 import { SummaryCard } from '@/features/admin'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -59,6 +64,7 @@ export function DeadLetterPage() {
     query: { refetchInterval: autoRefresh ? 30000 : false },
   })
 
+  const queryClient = useQueryClient()
   const retryMutation = useRetryAdminDeadLetterJob()
   const deleteMutation = useDeleteAdminDeadLetterJob()
   const bulkDeleteMutation = useBulkDeleteAdminDeadLetterJobs()
@@ -158,9 +164,24 @@ export function DeadLetterPage() {
     },
   ]
 
+  // Issue #1496: this used to pass `onSuccess` only, so a rejected replay was indistinguishable
+  // from a successful one — the operator clicked Retry and the page said nothing. The reachable
+  // rejections are the 409 (deduplicated away, nothing enqueued) and the 422 (unknown job kind);
+  // an already-retried row can't get here because its button is disabled.
   const handleRetry = (jobId: number) => {
     retryMutation.mutate({ id: jobId }, {
-      onSuccess: () => trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_RETRY, { job_id: jobId }),
+      onSuccess: () => {
+        trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_RETRY, { job_id: jobId })
+        toast.success(`Job #${jobId} re-enqueued`)
+        // The row's status and the retried/unretried counts both change on a successful replay,
+        // and neither is refetched by the mutation itself — without this the operator waits out
+        // the 30s poll (or sees nothing at all with auto-refresh off).
+        void queryClient.invalidateQueries({ queryKey: getListAdminDeadLetterJobsQueryKey() })
+        void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
+      },
+      onError: (err) => {
+        toast.error(`Failed to retry job #${jobId}: ${retryFailureMessage(err)}`)
+      },
     })
   }
 

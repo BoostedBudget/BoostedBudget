@@ -13,6 +13,11 @@ import {
   mockUseGetAdminDeadLetterJobArgs,
   mockUseAddAdminDeadLetterJobNotes,
 } from '@/test/mocks/admin-api'
+import { mockToastError, mockToastSuccess } from '@/test/mocks/sonner'
+import {
+  getListAdminDeadLetterJobsQueryKey,
+  getGetAdminDeadLetterJobStatsQueryKey,
+} from '@boostedbudget/api-client/endpoints/admin/admin'
 import { DeadLetterPage } from './DeadLetterPage'
 
 const mockJobs = [
@@ -433,6 +438,130 @@ describe('DeadLetterPage', () => {
 
     expect(screen.getByLabelText(/filter by start date/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/filter by end date/i)).toBeInTheDocument()
+  })
+
+  // Issue #1496 (UI half): retry used to be invoked with `onSuccess` only, so a rejected
+  // replay produced no user-visible signal at all — the operator clicked Retry, the request
+  // 409'd or 422'd, and the page looked exactly as it does on success.
+  //
+  // The two reachable failure modes are the ones covered here. A *stranded* row (already
+  // retried) cannot produce the symptom: its button is disabled, so no request is sent.
+  describe('Issue #1496 – retry outcome is reported to the operator', () => {
+    type RetryOptions = {
+      onSuccess?: (data: unknown) => void
+      onError?: (err: unknown) => void
+    } | undefined
+
+    // Shape matches an axios rejection carrying a Huma ErrorModel body.
+    const axiosError = (status: number, detail: string) => ({
+      response: { status, data: { detail } },
+      message: `Request failed with status code ${status}`,
+      isAxiosError: true,
+    })
+
+    const DEDUP_DETAIL = 'a matching job already exists for this kind; retry was deduplicated and not enqueued'
+    const UNKNOWN_KIND_DETAIL = 'this job kind has no registered uniqueness policy; retry refused'
+
+    function renderPage() {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      const invalidateQueries = mock(() => Promise.resolve())
+      queryClient.invalidateQueries = invalidateQueries as unknown as typeof queryClient.invalidateQueries
+
+      function Wrapper({ children }: { children: React.ReactNode }) {
+        return (
+          <QueryClientProvider client={queryClient}>
+            <BrowserRouter>{children}</BrowserRouter>
+          </QueryClientProvider>
+        )
+      }
+
+      render(<DeadLetterPage />, { wrapper: Wrapper })
+      return { invalidateQueries }
+    }
+
+    function primeQueries() {
+      mockUseListAdminDeadLetterJobs.mockReturnValue({ data: mockListResponse, isLoading: false, error: null })
+      mockUseGetAdminDeadLetterJobStats.mockReturnValue({ data: undefined, isLoading: false, error: null })
+      mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+      mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    }
+
+    beforeEach(() => {
+      mockToastError.mockClear()
+      mockToastSuccess.mockClear()
+    })
+
+    it('surfaces the 409 deduplicated failure to the operator', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      mockUseRetryAdminDeadLetterJob.mockReturnValue({
+        mutate: mock((_vars: unknown, options: RetryOptions) => {
+          options?.onError?.(axiosError(409, DEDUP_DETAIL))
+        }),
+        isPending: false,
+      })
+
+      renderPage()
+      await user.click(screen.getByRole('button', { name: /retry job 1/i }))
+
+      expect(mockToastError).toHaveBeenCalledTimes(1)
+      expect(mockToastError).toHaveBeenCalledWith(expect.stringContaining(DEDUP_DETAIL))
+      expect(mockToastSuccess).not.toHaveBeenCalled()
+    })
+
+    it('surfaces the 422 unknown-kind failure to the operator', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      mockUseRetryAdminDeadLetterJob.mockReturnValue({
+        mutate: mock((_vars: unknown, options: RetryOptions) => {
+          options?.onError?.(axiosError(422, UNKNOWN_KIND_DETAIL))
+        }),
+        isPending: false,
+      })
+
+      renderPage()
+      await user.click(screen.getByRole('button', { name: /retry job 1/i }))
+
+      expect(mockToastError).toHaveBeenCalledTimes(1)
+      expect(mockToastError).toHaveBeenCalledWith(expect.stringContaining(UNKNOWN_KIND_DETAIL))
+      expect(mockToastSuccess).not.toHaveBeenCalled()
+    })
+
+    it('falls back to the transport message when the body carries no detail', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      mockUseRetryAdminDeadLetterJob.mockReturnValue({
+        mutate: mock((_vars: unknown, options: RetryOptions) => {
+          options?.onError?.(new Error('Network Error'))
+        }),
+        isPending: false,
+      })
+
+      renderPage()
+      await user.click(screen.getByRole('button', { name: /retry job 1/i }))
+
+      expect(mockToastError).toHaveBeenCalledWith(expect.stringContaining('Network Error'))
+    })
+
+    // Sibling positive assertion: without it, the error tests above would also pass if retry
+    // were broken outright (never enqueuing, never reporting success).
+    it('still reports success and refreshes the list when the retry succeeds', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      const retryMutate = mock((_vars: unknown, options: RetryOptions) => {
+        options?.onSuccess?.({ dead_letter_job_id: 1, retry_job_id: 999 })
+      })
+      mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: retryMutate, isPending: false })
+
+      const { invalidateQueries } = renderPage()
+      await user.click(screen.getByRole('button', { name: /retry job 1/i }))
+
+      expect(retryMutate).toHaveBeenCalledWith({ id: 1 }, expect.any(Object))
+      expect(mockToastSuccess).toHaveBeenCalledTimes(1)
+      expect(mockToastError).not.toHaveBeenCalled()
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: getListAdminDeadLetterJobsQueryKey() })
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
+    })
   })
 
   describe('Phase 6 – DataTable migration', () => {
