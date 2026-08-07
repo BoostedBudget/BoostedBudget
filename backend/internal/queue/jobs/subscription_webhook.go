@@ -990,25 +990,56 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// item, so a comp granted after the first item was removed still cost the user every remaining
 	// bank connection.
 	//
-	// IT RE-ASKS THIS FLOW'S OWN PREDICATE — the comp/entitlement question `reVerified.
-	// HasActiveManualOverride()` answers immediately above — NOT the past-due question the dunning
-	// flows re-ask. Nothing in this flow selects on past_due (it CLEARS past_due_started_at
+	// IT RE-ASKS THIS FLOW'S OWN AUTHORISING CONDITION — NOT the past-due question the dunning flows
+	// re-ask. Nothing in this flow selects on past_due (it CLEARS past_due_started_at
 	// unconditionally, further up), so re-asking that here would be inventing an authorisation rule
-	// rather than re-asking the one this call was authorised under. A read error is fail-closed:
-	// cleanupItems stops the loop and surfaces the error rather than continuing.
+	// rather than re-asking the one this call was authorised under.
+	//
+	// That condition has TWO conjuncts, and the predicate must re-ask BOTH (Codex pass 7, Medium):
+	//
+	//  1. No active compensating override — the comp/entitlement question `reVerified.
+	//     HasActiveManualOverride()` answers immediately above.
+	//  2. The user is STILL CANCELLED. This one is the authorising state itself, and re-asking it
+	//     invents nothing: this handler's own UpdateSubscriptionFromPaddle write (far above) put the
+	//     row into 'cancelled', and every destructive act below exists only because of it. Webhook
+	//     jobs deliberately carry NO River uniqueness options (unique_opts_by_kind.go) — webhooks
+	//     must never be deduplicated away — so a later subscription.activated/.updated delivery can
+	//     legitimately restore an active or trialing status WHILE this older cancellation job is
+	//     still walking the user's Items. Asking only conjunct 1 let that stale job keep
+	//     disconnecting the remaining Items of a now-active, paying customer, and then write
+	//     six-month retention/deletion dates over the top. Compare
+	//     PastDueService.reReadStillPastDue, which likewise re-asks status AND override AND the
+	//     exact occurrence.
+	//
+	// Occurrence identity is NOT re-asked here, unlike reReadStillPastDue: this flow's occurrence is
+	// webhook.EventID (Paddle's own idempotency key, used for the work-claim resourceID above), which
+	// is not a column on the user row, and the Paddle subscription id in the payload is not a
+	// dependable per-item conjunct (paddle_subscription_id is preserved-not-rewritten on
+	// cancellation, and may be NULL for legacy rows, so comparing it would fail CLOSED and silently
+	// skip legitimate cleanups). The cancel→resubscribe→cancel-again interleaving that occurrence
+	// identity would catch is already harmless once conjunct 2 holds: the reactivation flips the
+	// status and stops this job, and the SECOND cancellation is a different Paddle event with its own
+	// claim doing exactly the same work.
+	//
+	// A read error is fail-closed: cleanupItems stops the loop and surfaces the error rather than
+	// continuing.
 	if w.plaidCleanupSvc != nil {
 		stillEligible := func(rctx context.Context) (bool, error) {
 			fresh, readErr := w.profileRepo.GetUserByID(rctx, userID)
 			if readErr != nil {
 				return false, fmt.Errorf("failed to re-read user %s during Plaid disconnect: %w", userID, readErr)
 			}
+			if fresh.SubscriptionStatus != string(domain.SubscriptionStatusCancelled) {
+				return false, nil
+			}
 			return !fresh.HasActiveManualOverride(), nil
 		}
 		if err := w.plaidCleanupSvc.DisconnectAllUserItemsIfEligible(ctx, userID, stillEligible); err != nil {
-			// A comp-triggered abort is not a Plaid failure and must not be reported as one.
+			// An authorisation-triggered abort is not a Plaid failure and must not be reported as one.
 			// services.ErrCleanupAborted has TWO causes (see its doc comment) demanding opposite
-			// handling, so the predicate is asked once more to say which: a comp was granted mid-loop
-			// (a legitimate stop — release the claim and return nil, WITHOUT starting the retention
+			// handling, so the predicate is asked once more to say which: this flow's authorisation
+			// was lost mid-loop — a comp was granted, or the subscription became active again — which
+			// is a legitimate stop (release the claim and return nil, WITHOUT starting the retention
 			// clock below, exactly as the pre-loop comp branch above returns nil without it) versus a
 			// new linked item having appeared mid-pass (genuinely incomplete work — falls through to
 			// the error path, so River retries the whole webhook). An error from the recheck itself
@@ -1016,8 +1047,8 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 			// PastDueService.processGraceExpiry and DeletionService.ExecuteDeletion.
 			if errors.Is(err, services.ErrCleanupAborted) {
 				if eligible, checkErr := stillEligible(ctx); checkErr == nil && !eligible {
-					w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, "comp granted mid Plaid disconnect — remaining items left connected")
-					w.logger.Info("subscription-cancelled cleanup stopped partway through the Plaid disconnect — a comp was granted; the remaining items stay connected and no retention clock is started",
+					w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, "cancellation cleanup no longer authorised mid Plaid disconnect (comp granted, or subscription no longer cancelled) — remaining items left connected")
+					w.logger.Info("subscription-cancelled cleanup stopped partway through the Plaid disconnect — it is no longer authorised (a comp was granted, or the subscription is no longer cancelled); the remaining items stay connected and no retention clock is started",
 						"user_id", userID)
 					return nil
 				}
