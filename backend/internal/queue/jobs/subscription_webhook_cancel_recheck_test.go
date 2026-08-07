@@ -275,8 +275,8 @@ func TestWorker_SubscriptionCanceled_ReactivationMidLoop_StopsRemainingRemovals(
 // runZeroItemCancellation wires a cancellation webhook for a user with NO linked Plaid items and
 // runs it. duringDisconnect (optional) mutates the row the mocked repository hands back at the
 // moment the disconnect is entered — the in-flight window this residual lives in. It returns the
-// Work error and the mocked profile repo so callers can assert on SetRetentionDates.
-func runZeroItemCancellation(t *testing.T, duringDisconnect func(row *domain.User)) (error, *mockSubscriptionProfileRepository, *fakePerItemWebhookCleanup) {
+// mocked profile repo (so callers can assert on SetRetentionDates), the fake, and the Work error.
+func runZeroItemCancellation(t *testing.T, duringDisconnect func(row *domain.User)) (*mockSubscriptionProfileRepository, *fakePerItemWebhookCleanup, error) {
 	t.Helper()
 
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
@@ -316,14 +316,14 @@ func runZeroItemCancellation(t *testing.T, duringDisconnect func(row *domain.Use
 	// expectation would surface as a testify panic instead of the assertion.
 	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil).Maybe()
 
-	return worker.Work(ctx, job), mockProfileRepo, plaid
+	return mockProfileRepo, plaid, worker.Work(ctx, job)
 }
 
 // TestWorker_SubscriptionCanceled_ZeroItems_ReactivationBeforeRetentionWrite_SkipsIt is the
 // headline RED test for the residual: a user with no linked Items whose subscription is reactivated
 // while this stale cancellation job is in flight must NOT have retention dates written.
 func TestWorker_SubscriptionCanceled_ZeroItems_ReactivationBeforeRetentionWrite_SkipsIt(t *testing.T) {
-	err, mockProfileRepo, plaid := runZeroItemCancellation(t, func(row *domain.User) {
+	mockProfileRepo, plaid, err := runZeroItemCancellation(t, func(row *domain.User) {
 		row.SubscriptionStatus = string(domain.SubscriptionStatusActive)
 	})
 
@@ -336,7 +336,7 @@ func TestWorker_SubscriptionCanceled_ZeroItems_ReactivationBeforeRetentionWrite_
 // the comp/manual-override conjunct has carried the same residual since #1413. Closing one condition
 // and not the other would leave the pair half-done.
 func TestWorker_SubscriptionCanceled_ZeroItems_CompBeforeRetentionWrite_SkipsIt(t *testing.T) {
-	err, mockProfileRepo, plaid := runZeroItemCancellation(t, func(row *domain.User) {
+	mockProfileRepo, plaid, err := runZeroItemCancellation(t, func(row *domain.User) {
 		tier := "premium"
 		endsAt := time.Now().Add(30 * 24 * time.Hour)
 		row.ManualTierOverride = &tier
@@ -352,7 +352,7 @@ func TestWorker_SubscriptionCanceled_ZeroItems_CompBeforeRetentionWrite_SkipsIt(
 // sibling: without it both tests above pass just as well if the retention write broke outright for
 // every user with no linked items. A user who stays cancelled must still get the clock started.
 func TestWorker_SubscriptionCanceled_ZeroItems_StaysCancelled_WritesRetentionDates(t *testing.T) {
-	err, mockProfileRepo, _ := runZeroItemCancellation(t, nil)
+	mockProfileRepo, _, err := runZeroItemCancellation(t, nil)
 
 	require.NoError(t, err)
 	mockProfileRepo.AssertCalled(t, "SetRetentionDates", mock.Anything, "user_2abc123def456", mock.Anything)
