@@ -79,7 +79,6 @@ type Config struct {
 
 	// Deletion Configuration
 	DeletionGracePeriodDays int
-	DeletionWorkerInterval  string
 	DeletionTokenSecret     string
 
 	// Retention Configuration (#930: 6-month read-only period before auto-deletion)
@@ -174,7 +173,6 @@ func Load() (*Config, error) {
 
 		// Deletion Configuration
 		DeletionGracePeriodDays: getEnvAsInt("DELETION_GRACE_PERIOD_DAYS", 30),
-		DeletionWorkerInterval:  getEnv("DELETION_WORKER_INTERVAL", "1h"),
 		DeletionTokenSecret:     getEnv("DELETION_TOKEN_SECRET", ""),
 
 		// Retention Configuration (#930)
