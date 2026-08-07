@@ -1543,7 +1543,7 @@ func (w *RetentionCleanupCheckWorker) monitorOrphanedFKlessRows(ctx context.Cont
 // ⚠ THE DERIVATION IS SHARED, NOT DUPLICATED. domain.SummarisePlaidOrphanedItems is the same
 // function SystemHealthService.getPlaidOrphanedItemMetrics calls for /admin/health's JSON. Two
 // derivations of one state is how a dashboard and an alert come to disagree — and see that function
-// for why the state cannot be a SQL COUNT at all (one of AdminState's four checks depends on whether
+// for why the state cannot be a SQL COUNT at all (one of AdminState's checks depends on whether
 // THIS PROCESS can decrypt the ciphertext, which no predicate over the table can see).
 //
 // ⚠ NOTHING IS PUBLISHED ON A FAILED OR TRUNCATED READ. Setting the gauges to 0 in either case would
@@ -1586,6 +1586,12 @@ func (w *RetentionCleanupCheckWorker) monitorOrphanedPlaidItems(ctx context.Cont
 		WithLabelValues(string(domain.OrphanedItemManualInterventionRequired)).Set(float64(summary.ManualInterventionRequired))
 	observability.PlaidOrphanedItemsByAdminState.
 		WithLabelValues(string(domain.OrphanedItemResolved)).Set(float64(summary.Resolved))
+	// ⚠ EVERY domain.OrphanedItemAdminState MUST BE SET HERE, and the compiler will not say so — this
+	// enumeration is by hand, and a GaugeVec label that is never Set simply does not exist in the
+	// scrape. A state omitted here therefore does not fail loudly: its rows vanish, and these gauges
+	// silently stop summing to the population. operator_attested (Issue #1497 item 2) is the fourth.
+	observability.PlaidOrphanedItemsByAdminState.
+		WithLabelValues(string(domain.OrphanedItemOperatorAttested)).Set(float64(summary.OperatorAttested))
 	observability.PlaidOrphanedItemMaxRetryAttempts.Set(float64(summary.MaxUnresolvedRetryAttemptCount))
 
 	if summary.ManualInterventionRequired == 0 {
@@ -1602,6 +1608,7 @@ func (w *RetentionCleanupCheckWorker) monitorOrphanedPlaidItems(ctx context.Cont
 		"manual_intervention_required", summary.ManualInterventionRequired,
 		"auto_retrying", summary.AutoRetrying,
 		"resolved", summary.Resolved,
+		"operator_attested", summary.OperatorAttested,
 		"max_unresolved_retry_attempts", summary.MaxUnresolvedRetryAttemptCount,
 	)
 	return nil

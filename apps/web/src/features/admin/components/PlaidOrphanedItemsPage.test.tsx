@@ -8,11 +8,15 @@
  * the retention deadline.
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, within, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
-import { mockUseListAdminPlaidOrphanedItems } from '@/test/mocks/admin-api'
+import {
+  mockUseListAdminPlaidOrphanedItems,
+  mockUseRecordAdminPlaidOrphanedItemOperatorResolution,
+} from '@/test/mocks/admin-api'
+import { mockToastSuccess, mockToastError } from '@/test/mocks/sonner'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { PlaidOrphanedItemsPage } from './PlaidOrphanedItemsPage'
 
@@ -83,12 +87,34 @@ const resolvedRow = {
   resolved_at: '2026-05-10T10:00:00Z',
 }
 
+// A row an operator has CLAIMED to have handled at Plaid. Its credential is already purged, so
+// WITHOUT the attestation the server would have labelled it manual_intervention_required — which is
+// what makes the state assertions below about the attestation and not about anything else.
+const attestedRow = {
+  id: 'orphan-attested',
+  plaid_item_id: 'item-attested-EEE',
+  admin_state: 'operator_attested',
+  institution_id: 'ins_500',
+  institution_name: 'Fifth Attested Bank',
+  linked_item_status_at_erasure: 'replaced',
+  erasure_error_code: 'ITEM_LOGIN_REQUIRED',
+  retry_attempt_count: 5,
+  orphaned_at: '2026-06-15T10:00:00Z',
+  token_expires_at: '2026-07-15T10:00:00Z',
+  token_purged_at: '2026-07-15T11:00:00Z',
+  token_retained: false,
+  operator_resolved_at: '2026-07-20T09:00:00Z',
+  operator_resolved_by: 'user_2attestingAdmin',
+  operator_resolution_note: 'Removed the Item by hand in Plaid dashboard.',
+}
+
 const listResponse = {
-  items: [manualRow, autoRow, decayedRow, resolvedRow],
-  total: 4,
+  items: [manualRow, autoRow, decayedRow, resolvedRow, attestedRow],
+  total: 5,
   manual_intervention_required: 2,
   auto_retrying: 1,
   resolved: 1,
+  operator_attested: 1,
   limit: 50,
   offset: 0,
   as_of: '2026-08-04T12:00:00Z',
@@ -123,6 +149,13 @@ function row(id: string): HTMLElement {
 describe('PlaidOrphanedItemsPage', () => {
   beforeEach(() => {
     mockUseListAdminPlaidOrphanedItems.mockClear()
+    mockUseRecordAdminPlaidOrphanedItemOperatorResolution.mockClear()
+    mockToastSuccess.mockClear()
+    mockToastError.mockClear()
+    mockUseRecordAdminPlaidOrphanedItemOperatorResolution.mockReturnValue({
+      mutate: () => {},
+      isPending: false,
+    })
     mockTrackEvent.mockClear()
     mockUseListAdminPlaidOrphanedItems.mockReturnValue({
       data: undefined,
@@ -314,6 +347,148 @@ describe('PlaidOrphanedItemsPage', () => {
       loaded()
       renderPage()
       expect(mockTrackEvent).toHaveBeenCalledWith('admin_page_viewed', { page: 'plaid-orphaned-items' })
+    })
+  })
+
+  // ── Issue #1497 item 2: the operator attestation ────────────────────────────────────────────────
+  //
+  // ⚠ THE DISTINCTION THIS BLOCK DEFENDS. `operator_attested` means a colleague SAID they removed the
+  // Item at Plaid; `resolved` means Plaid itself confirmed it. They are different degrees of certainty
+  // about the same outstanding vendor obligation, and a screen that renders them identically — or
+  // hides the attested row — would undo the entire reason the server keeps two columns.
+  describe('operator attestation', () => {
+    it('labels an attested row distinctly, and never as resolved', () => {
+      loaded()
+      renderPage()
+      const cells = within(row('orphan-attested'))
+      expect(cells.getByText(/operator-attested/i)).toBeInTheDocument()
+      expect(cells.queryByText('Resolved')).toBeNull()
+      expect(cells.queryByText('Manual intervention required')).toBeNull()
+    })
+
+    it('says out loud that the attestation is unverified', () => {
+      loaded()
+      renderPage()
+      expect(within(row('orphan-attested')).getByText(/unverified/i)).toBeInTheDocument()
+    })
+
+    it('distinguishes the attested state by more than colour', () => {
+      loaded()
+      renderPage()
+      // WCAG 1.4.1: wording AND an icon, never hue alone — and a DIFFERENT icon from the other three
+      // states, so a monochrome or colour-blind reading still tells them apart.
+      const attested = within(row('orphan-attested')).getByText(/operator-attested/i)
+      const attestedIcon = attested.closest('span')?.querySelector('svg')
+      expect(attestedIcon).not.toBeNull()
+      const resolvedIcon = within(row('orphan-resolved'))
+        .getByText('Resolved')
+        .closest('span')
+        ?.querySelector('svg')
+      expect(resolvedIcon).not.toBeNull()
+      expect(attestedIcon?.getAttribute('class')).not.toEqual(null)
+      expect(attested.textContent).not.toEqual(
+        within(row('orphan-resolved')).getByText('Resolved').textContent
+      )
+    })
+
+    it('keeps the attested row VISIBLE and auditable — who attested, when, and what they said', () => {
+      loaded()
+      renderPage()
+      const cells = within(row('orphan-attested'))
+      expect(cells.getByText(/user_2attestingAdmin/)).toBeInTheDocument()
+      expect(cells.getByText(/Removed the Item by hand in Plaid dashboard\./)).toBeInTheDocument()
+    })
+
+    it('counts attested records separately from resolved ones', () => {
+      loaded({ ...listResponse, operator_attested: 3, resolved: 1 })
+      renderPage()
+      expect(screen.getByTestId('orphan-count-attested')).toHaveTextContent('3')
+      expect(screen.getByTestId('orphan-count-resolved')).toHaveTextContent('1')
+    })
+
+    it('offers the attestation action on a row that still needs a human', () => {
+      loaded()
+      renderPage()
+      expect(
+        within(row('orphan-manual')).getByRole('button', { name: /i removed this at plaid/i })
+      ).toBeInTheDocument()
+    })
+
+    it('offers no attestation action on a row that is already attested or proved resolved', () => {
+      loaded()
+      renderPage()
+      expect(
+        within(row('orphan-attested')).queryByRole('button', { name: /i removed this at plaid/i })
+      ).toBeNull()
+      expect(
+        within(row('orphan-resolved')).queryByRole('button', { name: /i removed this at plaid/i })
+      ).toBeNull()
+    })
+
+    it('will not submit an attestation with no note', () => {
+      const mutate = mock(() => {})
+      mockUseRecordAdminPlaidOrphanedItemOperatorResolution.mockReturnValue({ mutate, isPending: false } as never)
+      loaded()
+      renderPage()
+
+      fireEvent.click(within(row('orphan-manual')).getByRole('button', { name: /i removed this at plaid/i }))
+      fireEvent.click(screen.getByRole('button', { name: /^record attestation$/i }))
+
+      expect(mutate).not.toHaveBeenCalled()
+      expect(screen.getByRole('alert')).toHaveTextContent(/note/i)
+    })
+
+    it('submits the note against the record id and reports success', () => {
+      const mutate = mock((_vars: unknown, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.())
+      mockUseRecordAdminPlaidOrphanedItemOperatorResolution.mockReturnValue({ mutate, isPending: false } as never)
+      loaded()
+      renderPage()
+
+      fireEvent.click(within(row('orphan-manual')).getByRole('button', { name: /i removed this at plaid/i }))
+      fireEvent.change(screen.getByLabelText(/what you did at plaid/i), {
+        target: { value: 'Removed it in the Plaid dashboard just now.' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /^record attestation$/i }))
+
+      expect(mutate).toHaveBeenCalledTimes(1)
+      const vars = mutate.mock.calls[0]?.[0] as { id: string; data: { note: string } }
+      expect(vars.id).toBe('orphan-manual')
+      expect(vars.data.note).toBe('Removed it in the Plaid dashboard just now.')
+      expect(mockToastSuccess).toHaveBeenCalled()
+      expect(mockTrackEvent).toHaveBeenCalledWith('admin_orphaned_plaid_item_attested', {
+        record_id: 'orphan-manual',
+      })
+    })
+
+    // ⚠ THE SIBLING Y1 EXISTS BECAUSE OF: a mutation wired with onSuccess only leaves a failed write
+    // completely silent, so the operator believes their attestation was recorded when it was not. The
+    // reachable rejections here are the 409 (already attested — the first one stands, and THIS note
+    // was discarded) and the 404.
+    it('reports a rejected attestation instead of saying nothing', () => {
+      const mutate = mock((_vars: unknown, opts?: { onError?: (e: Error) => void }) =>
+        opts?.onError?.(new Error('this record already carries an operator attestation'))
+      )
+      mockUseRecordAdminPlaidOrphanedItemOperatorResolution.mockReturnValue({ mutate, isPending: false } as never)
+      loaded()
+      renderPage()
+
+      fireEvent.click(within(row('orphan-manual')).getByRole('button', { name: /i removed this at plaid/i }))
+      fireEvent.change(screen.getByLabelText(/what you did at plaid/i), {
+        target: { value: 'I did this one.' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /^record attestation$/i }))
+
+      expect(mockToastError).toHaveBeenCalled()
+      expect(mockToastSuccess).not.toHaveBeenCalled()
+    })
+
+    it('tells the operator the attestation is not a proof and does not stop the automated sweep', () => {
+      loaded()
+      renderPage()
+      fireEvent.click(within(row('orphan-manual')).getByRole('button', { name: /i removed this at plaid/i }))
+      const dialog = screen.getByRole('dialog')
+      expect(dialog).toHaveTextContent(/unverified/i)
+      expect(dialog).toHaveTextContent(/keeps re-?attempting|keep retrying|automated retry/i)
     })
   })
 })

@@ -15,6 +15,13 @@ import { getErrorDetail } from '@/features/household/hooks/errorStatus'
  * DeadLetterPage.tsx, 4 across DeadLetterPage.tsx and DeadLetterDetailModal.tsx) import from
  * here.
  *
+ * Issue #1497 item 2 added a SEVENTH call site outside the DLQ surface — the operator-attestation
+ * write in PlaidOrphanedItemsPage.tsx, whose reachable rejections are a 409 (the record is already
+ * attested, so the first attestation stands and this note was NOT stored) and a 404. The helper is
+ * unchanged; it is simply no longer DLQ-only, which is worth saying here because the paragraph above
+ * enumerates call sites and an enumeration that quietly goes stale is the exact rot this file's own
+ * ticket was about.
+ *
  * The reachable rejections all carry a Huma `ErrorModel` body whose `detail` is the only text
  * that tells the operator what actually happened (e.g. retry's 409 dedup / 422 unknown-kind;
  * delete's and save-notes' underlying repository failures). `error.message` for those is

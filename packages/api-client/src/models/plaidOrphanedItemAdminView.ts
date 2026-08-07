@@ -40,6 +40,9 @@ export interface PlaidOrphanedItemAdminView {
   last_retry_at?: string;
   last_retry_error_code?: string;
   linked_item_status_at_erasure?: string;
+  operator_resolution_note?: string;
+  operator_resolved_at?: string;
+  operator_resolved_by?: string;
   orphaned_at: string;
   plaid_item_id: string;
   resolved_at?: string;

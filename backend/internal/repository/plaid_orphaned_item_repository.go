@@ -2,11 +2,30 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+)
+
+// Sentinel errors for RecordOperatorResolution, which is the only write in this file whose caller has
+// something distinct to SAY about each way it can decline. Issue #1497 item 2.
+//
+// ⚠ THEY EXIST BECAUSE "NOTHING HAPPENED" IS NOT AN ACCEPTABLE ANSWER HERE. MarkResolved can report
+// its no-op as a plain `false` because its caller is a sweep, for which "somebody else already did
+// this" is a perfectly good outcome nobody needs to be told about. This write's caller is a HUMAN who
+// just typed a note: if the write is declined and the endpoint answers 200, the operator's note is
+// silently discarded and they are left believing it was recorded. That is the defect Y1 fixed on the
+// dead-letter surface an hour of this branch's history ago, and it is not being reintroduced here.
+var (
+	// ErrOrphanedItemNotFound: no plaid_orphaned_items row has that id. The endpoint answers 404.
+	ErrOrphanedItemNotFound = errors.New("orphaned Plaid item record not found")
+	// ErrOrphanedItemAlreadyAttested: the row already carries an operator attestation, which is
+	// first-wins and is never overwritten. The endpoint answers 409 and names the existing attester,
+	// so the second operator knows their note was NOT recorded and whose account stands.
+	ErrOrphanedItemAlreadyAttested = errors.New("orphaned Plaid item record already carries an operator attestation")
 )
 
 // plaidOrphanedItemRepository is the read/update side of plaid_orphaned_items — the table that
@@ -36,6 +55,11 @@ type PlaidOrphanedItemRepository interface {
 	// MarkResolved records a PROVED removal and purges the credential in the same statement. Reports
 	// false when the record was already resolved (first-wins).
 	MarkResolved(ctx context.Context, id string, asOf time.Time) (bool, error)
+	// RecordOperatorResolution records an UNVERIFIED operator attestation — "I removed this Item by
+	// hand in Plaid's dashboard" — and touches nothing else: not resolved_at, not the credential, not
+	// the attempt count. Returns ErrOrphanedItemNotFound or ErrOrphanedItemAlreadyAttested rather than
+	// declining silently. ⚠ It is NOT a variant of MarkResolved; see its method comment.
+	RecordOperatorResolution(ctx context.Context, id, operatorID, note string, asOf time.Time) error
 	// RecordRetryFailure records one failed attempt and its error code WITHOUT touching the
 	// credential — only the deadline ends the retrying.
 	RecordRetryFailure(ctx context.Context, id, errorCode string, asOf time.Time) error
@@ -70,7 +94,8 @@ const orphanSelectColumns = `
 	id, linked_item_id, plaid_item_id_encrypted, institution_id_encrypted, institution_name_encrypted,
 	linked_item_status, last_error_code, terminal_since, orphaned_at,
 	access_token_encrypted, token_expires_at, token_purged_at,
-	retry_attempt_count, last_retry_at, last_retry_error_code, resolved_at`
+	retry_attempt_count, last_retry_at, last_retry_error_code, resolved_at,
+	operator_resolved_at, operator_resolved_by, operator_resolution_note`
 
 // PurgeExpiredTokens is THE GUARANTEED HALF OF THE RETENTION BARGAIN, and the reason it is a separate
 // statement from anything to do with retrying. Issue #1497.
@@ -142,6 +167,42 @@ func (r *plaidOrphanedItemRepository) PurgeExpiredTokens(ctx context.Context, as
 // ceiling and no error-code exclusion. Nothing in this system gives up on a count, and the one
 // genuinely hopeless case (an undecryptable token) is handled by the caller — see the retry worker —
 // because it cannot be expressed in SQL without the key.
+//
+// ⚠ AND operator_resolved_at IS DELIBERATELY NOT IN THIS PREDICATE — A DECISION, NOT AN OMISSION.
+// Issue #1497 item 2 added an operator attestation ("I removed this Item by hand in Plaid's
+// dashboard"), and it is genuinely arguable whether this sweep should then stop re-attempting the row.
+// It does not, for four reasons, and the alternative's merit is stated rather than dismissed:
+//
+//  1. AN ATTESTATION IS NOT PROOF. This whole column exists because a human's claim and a Plaid
+//     response are different facts (see domain.OrphanedItemOperatorAttested). Letting the claim
+//     control machinery would treat it as the proof it explicitly is not — the exact conflation the
+//     design was chosen to prevent, and it would arrive by the back door of a WHERE clause.
+//  2. RETRYING IS THE ONLY THING THAT CAN EVER UPGRADE THE CLAIM. If the operator really did remove
+//     the Item, the next sweep's /item/remove comes back ITEM_NOT_FOUND, the service treats that as
+//     the same outcome as a success, and MarkResolved stamps resolved_at. So continuing to retry
+//     SELF-HEALS an honest attestation into a proved one at zero operator cost — and, if the claim
+//     was mistaken, actually removes the Item that is still billing. Excluding attested rows forecloses
+//     both outcomes permanently.
+//  3. THE FAILURE DIRECTIONS ARE NOT SYMMETRIC. Retrying an Item somebody already removed costs one
+//     Plaid call per row per day against a table migration 000134 argues holds single digits of rows,
+//     bounded anyway by the 30-day credential retention. NOT retrying an Item somebody only THOUGHT
+//     they removed costs an erased user's bank connection continuing to exist, and possibly to bill,
+//     with the row wearing a reassuring label. One mistaken click would permanently silence the only
+//     automated path — a mark outliving the work, which is this branch's signature defect.
+//  4. THE HUMAN IS RESPECTED WHERE IT ACTUALLY HELPS THEM: in what they are ASKED to do. AdminState
+//     reports 'operator_attested' rather than 'manual_intervention_required', so nobody is told to
+//     redo the work, and the row leaves the manual-intervention count and gauge. Deference belongs in
+//     the instruction to the operator, not in the machinery's willingness to check.
+//
+// THE COUNTER-ARGUMENT, IN FAIRNESS: continuing to retry means an attested row keeps accumulating
+// retry_attempt_count and can therefore trip the re-attempt gauge's intended >20 alert, which an
+// operator may read as "my attestation was ignored". That is accepted deliberately — a claim nothing
+// has been able to confirm in twenty attempts IS worth a second look, and the alternative is a gauge
+// an unverified sentence can switch off. It is documented in
+// domain.SummarisePlaidOrphanedItems' comment beside the count it affects.
+//
+// TestPlaidOrphanedItemRepository_Integration_GetRetryablePage_StillReturnsOperatorAttestedRows pins
+// this, with a proved-resolved control alongside it, so the decision cannot be reversed by accident.
 func (r *plaidOrphanedItemRepository) GetRetryablePage(ctx context.Context, asOf time.Time, after *OrphanRetryCursor, limit int) ([]domain.PlaidOrphanedItem, error) {
 	if limit <= 0 {
 		return nil, fmt.Errorf("GetRetryablePage: limit must be positive, got %d", limit)
@@ -207,6 +268,81 @@ func (r *plaidOrphanedItemRepository) MarkResolved(ctx context.Context, id strin
 		return false, fmt.Errorf("MarkResolved: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// RecordOperatorResolution records that AN OPERATOR SAYS they removed this Item by hand in Plaid's own
+// dashboard. Issue #1497 item 2.
+//
+// ⚠ IT IS NOT A VARIANT OF MarkResolved AND MUST NEVER BE MADE ONE. MarkResolved's documented meaning
+// is "a PROVED removal": an automated /item/remove came back success or ITEM_NOT_FOUND, i.e. Plaid
+// itself answered, which is why it also purges the credential in the same statement. This statement
+// records an UNVERIFIED HUMAN ASSERTION. Nothing checked it; nothing can check it retroactively.
+// Recording a claim in a proof's column is precisely how linked_items.status = 'replaced' came to be
+// believed as evidence that an Item had been removed at Plaid — the defect this table exists to undo —
+// so the two live in separate columns and this write touches NONE of the proof's artefacts:
+//
+//   - NOT resolved_at. That column answers "when did Plaid confirm this gone", and it must stay
+//     answerable and stay true. A row that is attested and later actually proved removed carries both,
+//     at their true strengths, and domain.PlaidOrphanedItem.AdminState reports the stronger one.
+//   - NOT access_token_encrypted and NOT token_purged_at. A claim licenses no purge: it proves nothing,
+//     and destroying the credential would remove the only means by which the claim could ever be
+//     CONFIRMED (a retry needs a token). The credential's life is governed by token_expires_at and by
+//     PurgeExpiredTokens alone — the one guarantee this feature's GDPR defensibility rests on, and it
+//     is not being made to depend on what somebody typed into a form.
+//   - NOT retry_attempt_count and NOT last_retry_at. An operator acting in Plaid's dashboard is not an
+//     automated attempt, and counting it as one would corrupt the one signal (#1497 item 4's gauge)
+//     that reports how hard this system has been trying.
+//
+// FIRST-WINS on operator_resolved_at, mirroring MarkResolved and MarkPlaidRemovalFailed: "who said
+// this, and when" must stay answerable, so a later attestation cannot overwrite an earlier one.
+//
+// ⚠ AND THE DECLINE IS REPORTED, not swallowed as a bare false. Both no-op cases return a sentinel
+// (ErrOrphanedItemNotFound / ErrOrphanedItemAlreadyAttested) because the caller here is a human who
+// has just written a note: answering "fine" while discarding it is how an operator comes to believe a
+// record exists that does not. The second statement runs ONLY on the rare zero-row path, so the happy
+// path is still one round-trip.
+func (r *plaidOrphanedItemRepository) RecordOperatorResolution(ctx context.Context, id, operatorID, note string, asOf time.Time) error {
+	// Guarded here as well as at the API layer because migration 000137's CHECK constraint enforces
+	// "an attestation is never anonymous" and a violation would surface as an opaque 23514 rather than
+	// as the thing that is actually wrong.
+	if operatorID == "" {
+		return fmt.Errorf("RecordOperatorResolution: an attestation must name the operator making it")
+	}
+
+	tag, err := r.db.Exec(ctx, `
+		UPDATE plaid_orphaned_items
+		SET operator_resolved_at = $2,
+		    operator_resolved_by = $3,
+		    operator_resolution_note = $4
+		WHERE id = $1 AND operator_resolved_at IS NULL`, id, asOf, operatorID, nullIfEmptyNote(note))
+	if err != nil {
+		return fmt.Errorf("RecordOperatorResolution: %w", err)
+	}
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+
+	// Zero rows means either "no such record" or "already attested", and the two need different
+	// answers from the endpoint (404 vs 409). Neither is an internal error.
+	var exists bool
+	if err := r.db.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM plaid_orphaned_items WHERE id = $1)`, id).Scan(&exists); err != nil {
+		return fmt.Errorf("RecordOperatorResolution: disambiguate no-op: %w", err)
+	}
+	if !exists {
+		return ErrOrphanedItemNotFound
+	}
+	return ErrOrphanedItemAlreadyAttested
+}
+
+// nullIfEmptyNote keeps an empty note out of the column as NULL rather than as '', so "no note" has
+// one representation. Migration 000137's CHECK permits a NULL note beside an attestation (a legitimate
+// repair may have none); the API layer is where a non-empty note is required of new writes.
+func nullIfEmptyNote(note string) *string {
+	if note == "" {
+		return nil
+	}
+	return &note
 }
 
 // RecordRetryFailure records one failed attempt: the count, the instant, and the error code.
@@ -307,6 +443,7 @@ func (r *plaidOrphanedItemRepository) scanOrphan(row rowScanner) (domain.PlaidOr
 		encInstID, encInstName                  *string
 		status, lastErrorCode, lastRetryErrCode *string
 		encToken                                *string
+		operatorBy, operatorNote                *string
 	)
 
 	if err := row.Scan(
@@ -314,6 +451,7 @@ func (r *plaidOrphanedItemRepository) scanOrphan(row rowScanner) (domain.PlaidOr
 		&status, &lastErrorCode, &item.TerminalSince, &item.OrphanedAt,
 		&encToken, &item.TokenExpiresAt, &item.TokenPurgedAt,
 		&item.RetryAttemptCount, &item.LastRetryAt, &lastRetryErrCode, &item.ResolvedAt,
+		&item.OperatorResolvedAt, &operatorBy, &operatorNote,
 	); err != nil {
 		return domain.PlaidOrphanedItem{}, fmt.Errorf("scan orphaned item: %w", err)
 	}
@@ -355,6 +493,16 @@ func (r *plaidOrphanedItemRepository) scanOrphan(row rowScanner) (domain.PlaidOr
 	}
 	if lastRetryErrCode != nil {
 		item.LastRetryErrorCode = *lastRetryErrCode
+	}
+	// The operator attestation's three columns are read PLAINTEXT and undecrypted, deliberately:
+	// operator_resolved_by is the attesting STAFF member's Clerk id rather than the erased subject's,
+	// and the note is staff-written prose. Neither is the encrypted-identifier class this table's other
+	// columns belong to — see migration 000137's prose on why. Issue #1497 item 2.
+	if operatorBy != nil {
+		item.OperatorResolvedBy = *operatorBy
+	}
+	if operatorNote != nil {
+		item.OperatorResolutionNote = *operatorNote
 	}
 	return item, nil
 }

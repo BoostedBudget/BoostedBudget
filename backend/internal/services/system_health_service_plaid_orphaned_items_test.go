@@ -236,3 +236,77 @@ func TestGetSystemHealth_PlaidOrphanedItems_NilRepo_IsUnavailableAndDoesNotPanic
 	assert.False(t, result.PlaidOrphanedItems.Available)
 	assert.Equal(t, domain.PlaidOrphanedItemMetrics{}, result.PlaidOrphanedItems)
 }
+
+// ─── Issue #1497 item 2: the operator-attested count must reach /admin/health ─────────────────────
+//
+// ⚠ WHY THIS IS ASSERTED HERE AND NOT ASSUMED. This surface's counts come from a hand-written switch
+// in domain.SummarisePlaidOrphanedItems, so a fourth state added to the domain does not fail to build
+// if nobody adds it here — the attested rows would simply be counted as nothing at all, and
+// /admin/health's own numbers would stop accounting for the table. This test is what notices.
+
+// orphanFixtureAttested is a row an operator has CLAIMED to have removed at Plaid. Its credential is
+// past its deadline, so without the attestation it would be manual_intervention_required — which is
+// what the control assertion below depends on.
+func orphanFixtureAttested(id string, now time.Time, attempts int) domain.PlaidOrphanedItem {
+	item := orphanFixturePurged(id, now, attempts)
+	attested := now.Add(-3 * time.Hour)
+	item.OperatorResolvedAt = &attested
+	item.OperatorResolvedBy = "user_2attestingAdmin"
+	item.OperatorResolutionNote = "Removed by hand in Plaid's dashboard."
+	return item
+}
+
+func TestGetSystemHealth_PlaidOrphanedItems_ReportsTheOperatorAttestedCountSeparately(t *testing.T) {
+	now := time.Now().UTC()
+
+	// The control first: the same rows WITHOUT their attestation must be manual-intervention work, or
+	// the assertions below would prove nothing about the attestation.
+	control := domain.SummarisePlaidOrphanedItems([]domain.PlaidOrphanedItem{
+		orphanFixturePurged("a", now, 1), orphanFixturePurged("b", now, 1), orphanFixturePurged("c", now, 1),
+	}, now)
+	require.Equal(t, int64(3), control.ManualInterventionRequired)
+	require.Equal(t, int64(0), control.OperatorAttested)
+
+	lister := new(MockPlaidOrphanedItemLister)
+	// 3 attested, 2 manual, 1 auto-retrying, 4 resolved — four distinct totals, so no single number
+	// and no pair of collapsed buckets can satisfy all four assertions.
+	items := []domain.PlaidOrphanedItem{
+		orphanFixtureAttested("attested-1", now, 14),
+		orphanFixtureAttested("attested-2", now, 2),
+		orphanFixtureAttested("attested-3", now, 2),
+		orphanFixturePurged("purged-1", now, 3),
+		orphanFixturePurged("purged-2", now, 3),
+		orphanFixtureLive("live-1", now, 1),
+		orphanFixtureResolved("resolved-1", now),
+		orphanFixtureResolved("resolved-2", now),
+		orphanFixtureResolved("resolved-3", now),
+		orphanFixtureResolved("resolved-4", now),
+	}
+	lister.On("List", mock.Anything, domain.PlaidOrphanedItemHealthScanCap, 0).Return(items, len(items), nil)
+
+	svc, _, _, _ := newOrphanHealthService(lister)
+
+	result, err := svc.GetSystemHealth(context.Background())
+	require.NoError(t, err)
+
+	got := result.PlaidOrphanedItems
+	assert.True(t, got.Available)
+	assert.Equal(t, int64(3), got.OperatorAttested,
+		"three unverified operator claims must be reported as their own number")
+	assert.Equal(t, int64(2), got.ManualInterventionRequired,
+		"and must not still be counted as work a human has to do")
+	assert.Equal(t, int64(4), got.Resolved,
+		"⚠ nor summed into the proved-removal count: one number is what Plaid told us, the other is what a colleague told us")
+	assert.Equal(t, int64(1), got.AutoRetrying)
+
+	// The four state counts must still account for the whole table.
+	assert.Equal(t, int64(len(items)),
+		got.AutoRetrying+got.ManualInterventionRequired+got.Resolved+got.OperatorAttested,
+		"a state nobody counted is a state nobody sees")
+
+	// The attested row's attempt history still drives item 4's gauge (14), deliberately: the sweep
+	// keeps retrying it, so an unverified claim must not silence the number that could expose it.
+	assert.Equal(t, int64(14), got.MaxUnresolvedRetryAttemptCount)
+
+	lister.AssertExpectations(t)
+}

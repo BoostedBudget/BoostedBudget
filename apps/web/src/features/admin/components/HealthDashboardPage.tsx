@@ -3,7 +3,7 @@ import { useGetSystemHealth } from '@boostedbudget/api-client/endpoints/admin/ad
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent';
 import { ANALYTICS_EVENTS } from '../../../shared/analytics';
 import { SummaryCard } from '@/features/admin';
-import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle, Users, Timer } from 'lucide-react';
+import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle, Users, Timer, UserCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 
@@ -290,6 +290,11 @@ export function HealthDashboardPage() {
           deliberately not shown: they are never work, and nothing prunes them, so the count only
           ever grows and would dominate the section visually while meaning nothing.
 
+          ⚠ Operator-attested rows (Issue #1497 item 2) ARE shown, unlike resolved ones, and that is
+          not an inconsistency: a resolved row is a removal Plaid confirmed, whereas an attested row
+          is one a colleague merely claimed, so it is still an open question rather than history. It
+          is deliberately not accented as success and its title says "unverified".
+
           Scope discipline, matching the Job Backlog section: this only makes the state VISIBLE.
           Whether outstanding orphans should degrade `data.status` is a product decision #1497 never
           asked for, so it is untouched. */}
@@ -307,6 +312,19 @@ export function HealthDashboardPage() {
             value={orphanedItemsAvailable ? data.plaid_orphaned_items.auto_retrying.toString() : 'Unavailable'}
             icon={<RefreshCw size={24} />}
             status={!orphanedItemsAvailable ? 'warning' : 'success'}
+          />
+          {/* ⚠ ITS OWN CARD, AND THE TITLE SAYS UNVERIFIED. This is the count of Items a colleague
+              SAID they removed by hand (Issue #1497 item 2); "Resolved" would be the count Plaid
+              confirmed. Summing them would produce a single "done" number whose accuracy nobody
+              could state, on the surface whose whole job is to report what is genuinely outstanding.
+              Status is deliberately never 'success': nothing here has been verified, and the
+              automated sweep is still re-attempting these rows precisely because it might yet
+              disprove the claim. */}
+          <SummaryCard
+            title="Operator-Attested (Unverified)"
+            value={orphanedItemsAvailable ? (data.plaid_orphaned_items.operator_attested ?? 0).toString() : 'Unavailable'}
+            icon={<UserCheck size={24} />}
+            status={!orphanedItemsAvailable ? 'warning' : 'neutral'}
           />
           <SummaryCard
             title="Worst Retry Attempt Count"

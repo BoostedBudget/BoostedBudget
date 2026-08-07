@@ -14,15 +14,33 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
-// stubOrphanRepo implements only what the handler calls. The other four methods panic deliberately:
-// this endpoint is READ-ONLY, and a handler that reached for MarkResolved or PurgeExpiredTokens would
-// fail loudly here rather than quietly gaining a write path on an admin GET.
+// stubOrphanRepo implements only what the two admin handlers call: List (the read) and
+// RecordOperatorResolution (Issue #1497 item 2's write). The other three methods panic deliberately —
+// no admin handler may resolve, purge, or record a retry failure, because those three are the
+// AUTOMATED sweep's verbs and each of them makes a claim about Plaid that only Plaid can supply. A
+// handler that reached for MarkResolved in particular would be promoting an operator's unverified
+// claim into a proved removal, and it fails loudly here rather than quietly.
 type stubOrphanRepo struct {
 	records []domain.PlaidOrphanedItem
 	total   int
 	err     error
 	limit   int
 	offset  int
+
+	// The attestation write's recorded arguments, so the handler tests can assert WHAT was written
+	// (and, in the listing tests, that nothing was).
+	attestCalls    int
+	attestID       string
+	attestOperator string
+	attestNote     string
+	attestAsOf     time.Time
+	attestErr      error
+}
+
+func (s *stubOrphanRepo) RecordOperatorResolution(_ context.Context, id, operatorID, note string, asOf time.Time) error {
+	s.attestCalls++
+	s.attestID, s.attestOperator, s.attestNote, s.attestAsOf = id, operatorID, note, asOf
+	return s.attestErr
 }
 
 func (s *stubOrphanRepo) List(_ context.Context, limit, offset int) ([]domain.PlaidOrphanedItem, int, error) {

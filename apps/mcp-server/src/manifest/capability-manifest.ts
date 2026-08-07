@@ -147,6 +147,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('getAdminDeadLetterJobArgs', REASON_ADMIN),
   excluded('getAdminPaymentFailures', REASON_ADMIN),
   excluded('listAdminPlaidOrphanedItems', REASON_ADMIN),
+  excluded('recordAdminPlaidOrphanedItemOperatorResolution', REASON_ADMIN),
   excluded('getSystemHealth', REASON_ADMIN),
   excluded('listAdminUsers', REASON_ADMIN),
   excluded('getAdminUserDetail', REASON_ADMIN),
