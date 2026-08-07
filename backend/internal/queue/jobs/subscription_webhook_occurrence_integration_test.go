@@ -50,7 +50,10 @@ func TestSubscriptionWebhook_Occurrence_CancelResubscribeCancelAgain_BothDisconn
 	// fixture rather than a freshly generated ID.
 	const userID = "user_2abc123def456"
 	clerkUserID := "clerk_user_123"
-	canceledUser := &domain.User{ID: userID, ClerkUserID: clerkUserID, SubscriptionTier: "premium"}
+	// SubscriptionStatus models the post-write world the re-reads see (including the one guarding the
+	// retention-clock write): the mocked repository does not apply this handler's own
+	// UpdateSubscriptionFromPaddle write to the row it hands back.
+	canceledUser := &domain.User{ID: userID, ClerkUserID: clerkUserID, SubscriptionTier: "premium", SubscriptionStatus: string(domain.SubscriptionStatusCancelled)}
 
 	firstWebhook := loadWebhookFixture(t, "subscription_canceled.json")
 	firstWebhook.ID = "webhook-first-cancellation"
@@ -137,7 +140,10 @@ func TestSubscriptionWebhook_Occurrence_SameEventRedelivered_SecondDeliveryDoesN
 	// extracts userID from THAT JSON field, not from any test parameter.
 	const userID = "user_2abc123def456"
 	clerkUserID := "clerk_user_123"
-	canceledUser := &domain.User{ID: userID, ClerkUserID: clerkUserID, SubscriptionTier: "premium"}
+	// SubscriptionStatus models the post-write world the re-reads see (including the one guarding the
+	// retention-clock write): the mocked repository does not apply this handler's own
+	// UpdateSubscriptionFromPaddle write to the row it hands back.
+	canceledUser := &domain.User{ID: userID, ClerkUserID: clerkUserID, SubscriptionTier: "premium", SubscriptionStatus: string(domain.SubscriptionStatusCancelled)}
 
 	webhook := loadWebhookFixture(t, "subscription_canceled.json")
 	webhook.ID = "webhook-redelivered"
