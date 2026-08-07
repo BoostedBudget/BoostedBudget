@@ -843,11 +843,6 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 	return nil
 }
 
-// processSubscriptionCanceled handles subscription.canceled and subscription.paused events.
-// Pause is not supported (#933); paused subscriptions are treated as terminal cancellations.
-// Issue #1413 High finding H7: a real work claim on ActionSubscriptionCancelledCleanup wraps
-// Plaid disconnect and retention writes for EXCLUSIVITY; unconditional writes (cancelled status,
-// Clerk sync, clear past_due) stay outside the claim as they record billing truth.
 // cancellationCleanupStillAuthorised re-asks, against the freshest possible read, the ONE question
 // every destructive act in processSubscriptionCanceled is authorised by: is this user STILL
 // cancelled, and is there STILL no active compensating override? Both conjuncts must hold; a read
@@ -873,6 +868,11 @@ func (w *SubscriptionWebhookWorker) cancellationCleanupStillAuthorised(ctx conte
 	return !fresh.HasActiveManualOverride(), nil
 }
 
+// processSubscriptionCanceled handles subscription.canceled and subscription.paused events.
+// Pause is not supported (#933); paused subscriptions are treated as terminal cancellations.
+// Issue #1413 High finding H7: a real work claim on ActionSubscriptionCancelledCleanup wraps
+// Plaid disconnect and retention writes for EXCLUSIVITY; unconditional writes (cancelled status,
+// Clerk sync, clear past_due) stay outside the claim as they record billing truth.
 func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
 	data, err := w.parseWebhookPayload(webhook)
 	if err != nil {
