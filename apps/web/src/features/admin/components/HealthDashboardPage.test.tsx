@@ -86,6 +86,7 @@ const mockHealthData = {
     auto_retrying: 0,
     manual_intervention_required: 0,
     resolved: 0,
+    operator_attested: 0,
     max_unresolved_retry_attempt_count: 0,
     available: true,
   },
@@ -542,6 +543,70 @@ describe('HealthDashboardPage', () => {
 
       const card = screen.getByText('Needs Manual Removal At Plaid').closest('[data-slot="card"]')
       expect(card?.className ?? '').not.toMatch(/success/i)
+    })
+
+    // ── Issue #1497 item 2: the operator-attested count reaches this dashboard ────────────────────
+    //
+    // ⚠ WHY IT MUST BE HERE AT ALL. The four state counts come from one hand-written switch in the
+    // backend and are rendered by a hand-written list of cards here, so a state added to the domain
+    // and not added to both simply disappears — an operator reading this page would see the four
+    // numbers no longer account for the table and have no way to tell.
+    it('shows the operator-attested count as its own number, never folded into a resolved total', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          plaid_orphaned_items: {
+            auto_retrying: 1,
+            manual_intervention_required: 2,
+            resolved: 9,
+            operator_attested: 4,
+            max_unresolved_retry_attempt_count: 6,
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(/Operator-Attested/i)).toBeInTheDocument()
+      })
+
+      // 4 is distinct from every other number in the fixture, so no other card's value can satisfy
+      // this and a card summing attested into resolved (13) cannot either.
+      expect(orphanCardValue('Operator-Attested (Unverified)')).toBe('4')
+      expect(orphanCardValue('Needs Manual Removal At Plaid')).toBe('2')
+
+      // ⚠ The label must say UNVERIFIED. This number is what colleagues said, not what Plaid
+      // confirmed, and a card titled merely "Attested" would read as a second kind of success.
+      expect(screen.getByText(/Operator-Attested \(Unverified\)/i)).toBeInTheDocument()
+    })
+
+    it('renders the attested count as Unavailable rather than a confident zero on a failed read', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          plaid_orphaned_items: {
+            auto_retrying: 0,
+            manual_intervention_required: 0,
+            resolved: 0,
+            operator_attested: 0,
+            max_unresolved_retry_attempt_count: 0,
+            available: false,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(/Operator-Attested/i)).toBeInTheDocument()
+      })
+      expect(orphanCardValue('Operator-Attested (Unverified)')).toBe('Unavailable')
     })
 
     // A rolling deploy, or an older cached response, can omit `plaid_orphaned_items` ENTIRELY. An

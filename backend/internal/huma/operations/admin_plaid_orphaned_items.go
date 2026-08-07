@@ -2,8 +2,10 @@ package operations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -12,6 +14,7 @@ import (
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
 // ListPlaidOrphanedItemsInput is the query for the orphaned-Plaid-Item admin listing. Issue #1497.
@@ -44,10 +47,55 @@ type ListPlaidOrphanedItemsOutput struct {
 		// working on. No operator action — acting now would duplicate work in flight.
 		AutoRetrying int `json:"auto_retrying"`
 		// Resolved counts records IN THIS PAGE whose Item was proved removed. History, not work.
-		Resolved int    `json:"resolved"`
-		Limit    int    `json:"limit"`
-		Offset   int    `json:"offset"`
-		AsOf     string `json:"as_of"`
+		Resolved int `json:"resolved"`
+		// OperatorAttested counts records IN THIS PAGE an operator has CLAIMED to have removed by hand
+		// in Plaid's dashboard, verified by nothing (Issue #1497 item 2). ⚠ Deliberately its own number
+		// and never summed into Resolved: one of these two counts is what Plaid told us, the other is
+		// what a colleague told us, and a surface that adds them together can no longer say which.
+		OperatorAttested int    `json:"operator_attested"`
+		Limit            int    `json:"limit"`
+		Offset           int    `json:"offset"`
+		AsOf             string `json:"as_of"`
+	}
+}
+
+// RecordPlaidOrphanedItemOperatorResolutionInput is the operator-attestation write. Issue #1497 item 2.
+//
+// ⚠ THE ATTESTER IS NOT IN THE BODY, AND MUST NEVER BE. It is taken from AdminAuthenticatedInput's
+// ClerkUserID, i.e. from the verified JWT. A client-supplied attester would let one operator file a
+// claim in a colleague's name, which destroys the ONLY mitigation an unverified attestation has: that
+// a real, identified person is answerable for it.
+type RecordPlaidOrphanedItemOperatorResolutionInput struct {
+	inputs.AdminAuthenticatedInput
+	ID   string                                           `path:"id" format:"uuid" doc:"plaid_orphaned_items.id of the record being attested"`
+	Body RecordPlaidOrphanedItemOperatorResolutionRequest `required:"true"`
+}
+
+// RecordPlaidOrphanedItemOperatorResolutionRequest carries the one thing only the operator knows.
+type RecordPlaidOrphanedItemOperatorResolutionRequest struct {
+	// Note is REQUIRED, and its being required is a design decision rather than boilerplate. An
+	// attestation is accepted on no evidence at all, so the only thing that makes it checkable later is
+	// a human-readable account of what was actually done — without one, this endpoint would be a button
+	// that makes a red badge go away. maxLength keeps a pasted log dump out of a column the admin table
+	// renders inline.
+	Note string `json:"note" minLength:"1" maxLength:"2000" required:"true" doc:"What you did at Plaid, in your own words. Recorded verbatim against your admin identity and shown on the orphaned-Items surface; it is the only way anyone can check this claim later."`
+}
+
+// RecordPlaidOrphanedItemOperatorResolutionOutput echoes exactly what was recorded.
+//
+// ⚠ IT DELIBERATELY DOES NOT RETURN admin_state. Deriving the row's new state here would mean either
+// re-reading the row (a second query for a value the client is about to refetch anyway) or COMPUTING
+// it from what this handler happens to know — and the second is the mistake: a row that was already
+// proved-resolved reports "resolved", not "operator_attested", because proof beats claim
+// (domain.PlaidOrphanedItem.AdminState). A guessed state on a compliance surface is exactly the class
+// of confident-but-unchecked claim this feature exists to eliminate, so the client refetches the list
+// and reads the server's derivation.
+type RecordPlaidOrphanedItemOperatorResolutionOutput struct {
+	Body struct {
+		ID                 string `json:"id"`
+		OperatorResolvedAt string `json:"operator_resolved_at"`
+		OperatorResolvedBy string `json:"operator_resolved_by"`
+		Note               string `json:"note"`
 	}
 }
 
@@ -56,12 +104,15 @@ type ListPlaidOrphanedItemsOutput struct {
 //
 // GET /api/v1/admin/plaid/orphaned-items
 //
-// READ-ONLY, AND THERE IS DELIBERATELY NO "RETRY" ACTION. The retry sweep already re-attempts every
-// unresolved record with a live credential on its own daily cadence, so a button would duplicate it
-// without changing any outcome; and for a record past its deadline there is nothing left to retry WITH,
-// which is precisely what admin_state = "manual_intervention_required" is telling the operator. An
-// action that could only ever be a no-op or a duplicate would be worse than absent: it would imply the
-// system can still act when it cannot.
+// ⚠ THERE IS DELIBERATELY NO "RETRY" ACTION, and Issue #1497 item 2 adding a write endpoint beside
+// this one did not change that. The retry sweep already re-attempts every unresolved record with a
+// live credential on its own daily cadence, so a retry button would duplicate it without changing any
+// outcome; and for a record past its deadline there is nothing left to retry WITH, which is precisely
+// what admin_state = "manual_intervention_required" is telling the operator. An action that could only
+// ever be a no-op or a duplicate would be worse than absent: it would imply the system can still act
+// when it cannot. The one write that DOES exist —
+// RecordPlaidOrphanedItemOperatorResolution — is the opposite shape: it asks the system to record
+// something only the human knows, rather than asking it to do something it cannot.
 func (h *AdminHandler) ListPlaidOrphanedItems(ctx context.Context, input *ListPlaidOrphanedItemsInput) (*ListPlaidOrphanedItemsOutput, error) {
 	if h.plaidOrphanedItemRepo == nil {
 		return nil, huma.Error503ServiceUnavailable("orphaned Plaid item repository not available")
@@ -90,6 +141,8 @@ func (h *AdminHandler) ListPlaidOrphanedItems(ctx context.Context, input *ListPl
 			out.Body.AutoRetrying++
 		case domain.OrphanedItemResolved:
 			out.Body.Resolved++
+		case domain.OrphanedItemOperatorAttested:
+			out.Body.OperatorAttested++
 		}
 		out.Body.Items = append(out.Body.Items, view)
 	}
@@ -97,6 +150,80 @@ func (h *AdminHandler) ListPlaidOrphanedItems(ctx context.Context, input *ListPl
 	out.Body.Limit = input.Limit
 	out.Body.Offset = input.Offset
 	out.Body.AsOf = asOf.Format(time.RFC3339)
+	return out, nil
+}
+
+// RecordPlaidOrphanedItemOperatorResolution records an operator's UNVERIFIED claim that they removed a
+// stranded Plaid Item by hand in Plaid's own dashboard. Issue #1497 item 2.
+//
+// POST /api/v1/admin/plaid/orphaned-items/{id}/operator-resolution
+//
+// ⚠ WHY THIS EXISTS AS ITS OWN THING RATHER THAN AS A "MARK RESOLVED" BUTTON. Before this endpoint, an
+// operator who did the manual work at Plaid had nowhere to say so: the row kept reporting
+// manual_intervention_required forever, and the only column that could have silenced it — resolved_at —
+// means "an automated /item/remove PROVED the Item gone", which the operator's action does not
+// establish. So the honest options were "leave a permanent false work item" or "write a false proof",
+// and this endpoint is the third one: record the claim AS a claim.
+//
+// WHAT IT THEREFORE DOES NOT DO, all enforced in the repository and pinned by tests there: it does not
+// stamp resolved_at, does not purge or touch the retained credential, does not stamp token_purged_at or
+// plaid_removed_at, does not touch the retry attempt count, and does NOT remove the row from the
+// automated retry sweep's selection (see plaidOrphanedItemRepository.GetRetryablePage for that decision
+// and its argument). The row also stays fully visible on the listing above — a claim that hid the
+// evidence for itself would be worthless.
+//
+// NEITHER NO-OP IS ANSWERED WITH A 200. A missing record is 404 and an already-attested one is 409,
+// because the caller is a human who just wrote a note: replying "done" while discarding it is how
+// somebody comes to believe a record exists that does not. That is the exact silence Y1 removed from
+// the dead-letter retry surface.
+func (h *AdminHandler) RecordPlaidOrphanedItemOperatorResolution(
+	ctx context.Context,
+	input *RecordPlaidOrphanedItemOperatorResolutionInput,
+) (*RecordPlaidOrphanedItemOperatorResolutionOutput, error) {
+	if h.plaidOrphanedItemRepo == nil {
+		return nil, huma.Error503ServiceUnavailable("orphaned Plaid item repository not available")
+	}
+	// Belt and braces beside the resolver, which already refuses a request with no Clerk identity: an
+	// anonymous attestation violates migration 000137's CHECK constraint, and a 23514 surfacing as a
+	// 500 would hide what is actually wrong. See the input type's comment on why the attester is never
+	// taken from the body.
+	if input.ClerkUserID == "" {
+		return nil, huma.Error401Unauthorized("an operator attestation must record the identity of the operator making it")
+	}
+
+	// The schema's minLength counts characters, so "   " passes it. An attestation whose note is only
+	// whitespace is the unexplained claim this endpoint exists to avoid producing, so it is refused here
+	// and the trimmed value is what gets stored.
+	note := strings.TrimSpace(input.Body.Note)
+	if note == "" {
+		return nil, huma.Error422UnprocessableEntity(
+			"an operator attestation must say what was actually done at Plaid — it is unverified, so the note is the only way anyone can check it later")
+	}
+
+	// ONE instant, stamped by the application rather than by the database's NOW(), for the reason #1466
+	// threaded asOf through every liveness predicate in this feature: the attestation timestamp is read
+	// back by a state derivation that is tested at its boundaries, and a clock read inside SQL is not
+	// controllable from a test.
+	asOf := time.Now().UTC()
+
+	err := h.plaidOrphanedItemRepo.RecordOperatorResolution(ctx, input.ID, input.ClerkUserID, note, asOf)
+	switch {
+	case errors.Is(err, repository.ErrOrphanedItemNotFound):
+		return nil, huma.Error404NotFound("no orphaned Plaid Item record with that id")
+	case errors.Is(err, repository.ErrOrphanedItemAlreadyAttested):
+		// 409 and an explicit statement that THIS note was not stored. First-wins keeps "who said this,
+		// and when" answerable, so the earlier attestation stands and the later one has to be told.
+		return nil, huma.Error409Conflict(
+			"this record already carries an operator attestation; the first one stands and your note was NOT recorded — read the existing attestation on the record before acting")
+	case err != nil:
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to record the operator attestation for orphaned Plaid item %s: %w", input.ID, err))
+	}
+
+	out := &RecordPlaidOrphanedItemOperatorResolutionOutput{}
+	out.Body.ID = input.ID
+	out.Body.OperatorResolvedAt = asOf.Format(time.RFC3339)
+	out.Body.OperatorResolvedBy = input.ClerkUserID
+	out.Body.Note = note
 	return out, nil
 }
 
@@ -123,4 +250,23 @@ func RegisterAdminPlaidOrphanedItemOperations(api huma.API, handler *AdminHandle
 			humamiddleware.NewAdminMiddleware(handler.config, handler.adminService),
 		},
 	}, handler.ListPlaidOrphanedItems)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "recordAdminPlaidOrphanedItemOperatorResolution",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/admin/plaid/orphaned-items/{id}/operator-resolution",
+		Summary:     "Attest that an orphaned Plaid Item was removed by hand (admin)",
+		Description: "Records that YOU removed this Plaid Item yourself in Plaid's dashboard. This is an " +
+			"UNVERIFIED attestation, not a proved removal: it is stored against your admin identity with " +
+			"your note, moves the record to admin_state 'operator_attested' so nobody is asked to redo the " +
+			"work, and deliberately does NOT set resolved_at (which means Plaid itself confirmed the " +
+			"removal), does NOT destroy the retained access token, and does NOT stop the automated retry " +
+			"sweep — the sweep is what can eventually confirm your claim. First-wins: if the record is " +
+			"already attested this returns 409 and your note is not stored. Requires admin role.",
+		Tags:     []string{"Admin"},
+		Security: []map[string][]string{{"clerk": {}}},
+		Middlewares: huma.Middlewares{
+			humamiddleware.NewAdminMiddleware(handler.config, handler.adminService),
+		},
+	}, handler.RecordPlaidOrphanedItemOperatorResolution)
 }

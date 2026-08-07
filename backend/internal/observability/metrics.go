@@ -313,6 +313,19 @@ var (
 	// unresolved total would make the gauge worse than absent, because an operator would believe
 	// they had been told something.
 	//
+	// ⚠ admin_state="operator_attested" (Issue #1497 item 2) IS NOT admin_state="resolved", and a
+	// dashboard that sums them is lying by arithmetic. "resolved" counts Items Plaid itself confirmed
+	// gone; "operator_attested" counts Items a colleague SAID they removed by hand, verified by
+	// nothing. The sweep keeps re-attempting attested rows precisely so that a true claim eventually
+	// becomes a "resolved" one — so a row that STAYS attested for a long time is a claim no retry has
+	// ever been able to confirm, and is worth an operator's eye even though it is not an alert.
+	//
+	// ⚠ EVERY STATE MUST BE Set() BY THE PUBLISHER. A GaugeVec label that is never set does not
+	// appear in the scrape at all, so a state added to domain.OrphanedItemAdminState and not added to
+	// monitorOrphanedPlaidItems' by-hand enumeration disappears silently rather than failing to
+	// build. TestRetentionCleanupCheck_MonitorOrphanedPlaidItems_PublishesTheOperatorAttestedState
+	// asserts the published states sum to the population, which is what notices.
+	//
 	// ⚠ A GAUGE, NOT A COUNTER, mirroring MalformedManualTierOverrideCount and
 	// OrphanedFKlessUserScopedRowsCount above: this is how many rows are in each state RIGHT NOW,
 	// each pass. A counter would only ever grow and would misrepresent one persistent stuck Item as
@@ -335,7 +348,7 @@ var (
 	// only signal that the check itself is broken.
 	PlaidOrphanedItemsByAdminState = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "plaid_orphaned_items_by_admin_state",
-		Help: "Current count of plaid_orphaned_items rows per admin state. admin_state=\"manual_intervention_required\" means a Plaid Item survived a GDPR erasure, nothing automated can finish removing it, and it may still be billing — a human must remove it in Plaid's dashboard; alert on any sustained non-zero. auto_retrying means a sweep holds a live credential and is working on it (no action). resolved is history. Not published at all on a failed or over-cap read, so alert on absence too.",
+		Help: "Current count of plaid_orphaned_items rows per admin state. admin_state=\"manual_intervention_required\" means a Plaid Item survived a GDPR erasure, nothing automated can finish removing it, and it may still be billing — a human must remove it in Plaid's dashboard; alert on any sustained non-zero. auto_retrying means a sweep holds a live credential and is working on it (no action). resolved is history — Plaid confirmed the Item gone. operator_attested is an UNVERIFIED human claim that somebody removed the Item by hand; it is deliberately not the same number as resolved and must never be summed into it, and a row that stays attested rather than becoming resolved is a claim no retry has managed to confirm. Not published at all on a failed or over-cap read, so alert on absence too.",
 	}, []string{"admin_state"})
 
 	// PlaidOrphanedItemMaxRetryAttempts is Issue #1497 item 4's re-attempt gauge — THE METRIC THAT

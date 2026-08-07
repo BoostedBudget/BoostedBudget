@@ -290,6 +290,8 @@ export * from './queueMetrics';
 export * from './recordMCPAuditBody';
 export * from './recordMCPAuditBodyOperationClass';
 export * from './recordMCPAuditBodyResult';
+export * from './recordPlaidOrphanedItemOperatorResolutionOutputBody';
+export * from './recordPlaidOrphanedItemOperatorResolutionRequest';
 export * from './recurringSubscriptionItem';
 export * from './recurringSubscriptionsResponse';
 export * from './regionResponse';

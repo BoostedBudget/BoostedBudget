@@ -1,13 +1,26 @@
 import { useEffect, useState, type ComponentType } from 'react'
-import { AlertTriangle, CheckCircle, Info, RefreshCw, Unplug } from 'lucide-react'
-import { useListAdminPlaidOrphanedItems } from '@boostedbudget/api-client/endpoints/admin/admin'
+import { AlertTriangle, CheckCircle, Info, RefreshCw, Unplug, UserCheck } from 'lucide-react'
+import { toast } from 'sonner'
+import {
+  useListAdminPlaidOrphanedItems,
+  useRecordAdminPlaidOrphanedItemOperatorResolution,
+} from '@boostedbudget/api-client/endpoints/admin/admin'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
 import { cn } from '@/lib/utils'
 import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
+import { mutationFailureMessage } from '../lib/mutationFailureMessage'
 import { SummaryCard } from './SummaryCard'
 
 /**
@@ -28,12 +41,19 @@ import { SummaryCard } from './SummaryCard'
  * it in the browser from the timestamps would quietly undo that decay and hide real work, so this
  * component only ever renders what came back — including states it does not recognise.
  *
- * ⚠ READ-ONLY, DELIBERATELY. There is no re-attempt button because the endpoint has no action to
- * call: the retry sweep already re-attempts every unresolved record that still holds a live
- * credential on its own cadence, and a record past its retention deadline has nothing left to
- * retry with — which is exactly what `manual_intervention_required` is telling the operator. A
- * button that could only ever be a duplicate or a no-op would imply the system can still act when
- * it cannot.
+ * ⚠ NO RE-ATTEMPT BUTTON, DELIBERATELY, and Issue #1497 item 2 adding a write did not change that.
+ * The retry sweep already re-attempts every unresolved record that still holds a live credential on
+ * its own cadence, and a record past its retention deadline has nothing left to retry with — which
+ * is exactly what `manual_intervention_required` is telling the operator. A button that could only
+ * ever be a duplicate or a no-op would imply the system can still act when it cannot.
+ *
+ * ⚠ THE ONE ACTION THAT EXISTS IS THE OPPOSITE SHAPE: "I removed this at Plaid" records something
+ * only the human knows. It is an UNVERIFIED ATTESTATION and the UI must keep saying so — it does not
+ * set `resolved_at` (which means Plaid itself confirmed the removal), does not destroy the retained
+ * credential, and does not stop the automated sweep. So `operator_attested` renders as its own state,
+ * never merged into `Resolved`, and the attested row stays in the table with the attester, the
+ * instant and the note visible: an attestation whose evidence is hidden is an anonymous green tick,
+ * which is the thing this whole feature exists not to produce.
  */
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -47,13 +67,15 @@ export const ADMIN_ORPHANED_PLAID_COLUMN_IDS = [
   'orphaned_at',
   'credential',
   'token_expires_at',
+  'operator_resolution',
+  'actions',
 ] as const
 
 const PAGE_SIZE = 50
 
 type StateMeta = {
   label: string
-  variant: 'destructive' | 'info' | 'success'
+  variant: 'destructive' | 'info' | 'success' | 'warning'
   Icon: ComponentType<{ size?: number; className?: string; 'aria-hidden'?: boolean }>
 }
 
@@ -67,6 +89,14 @@ const STATE_META: Record<string, StateMeta> = {
   },
   auto_retrying: { label: 'Auto-retrying', variant: 'info', Icon: RefreshCw },
   resolved: { label: 'Resolved', variant: 'success', Icon: CheckCircle },
+  // ⚠ NOT 'success' AND NOT THE SAME ICON AS `resolved`. This is a colleague's word, not Plaid's
+  // answer, and the wording says "unverified" out loud so the two are told apart by TEXT and ICON as
+  // well as by colour — WCAG 1.4.1, and also plain honesty on a compliance surface.
+  operator_attested: {
+    label: 'Operator-attested (unverified)',
+    variant: 'warning',
+    Icon: UserCheck,
+  },
 }
 
 function StateBadge({ state }: { state: string }) {
@@ -101,6 +131,11 @@ function formatInstant(value: string | undefined): string {
 
 export function PlaidOrphanedItemsPage() {
   const [page, setPage] = useState(1)
+  // The record currently being attested, plus the note being written for it. Held here rather than in
+  // the dialog so the dialog is a pure form and the row identity cannot drift from what gets POSTed.
+  const [attestingId, setAttestingId] = useState<string | null>(null)
+  const [note, setNote] = useState('')
+  const [noteError, setNoteError] = useState<string | null>(null)
   const trackEvent = useTrackEvent()
 
   useEffect(() => {
@@ -112,6 +147,52 @@ export function PlaidOrphanedItemsPage() {
     limit: PAGE_SIZE,
     offset,
   })
+  const attestMutation = useRecordAdminPlaidOrphanedItemOperatorResolution()
+
+  const closeAttestDialog = () => {
+    setAttestingId(null)
+    setNote('')
+    setNoteError(null)
+  }
+
+  const submitAttestation = () => {
+    const recordId = attestingId
+    if (!recordId) return
+    // A note is REQUIRED, and refusing here rather than letting the server 422 is not mere
+    // convenience: an attestation is accepted on no evidence at all, so the note is the only thing
+    // that makes it checkable later. The server enforces the same rule — this is the message that
+    // explains WHY, next to the field.
+    const trimmed = note.trim()
+    if (!trimmed) {
+      setNoteError('Say what you actually did at Plaid — this attestation is unverified, so the note is the only way anyone can check it later.')
+      return
+    }
+    setNoteError(null)
+
+    attestMutation.mutate(
+      { id: recordId, data: { note: trimmed } },
+      {
+        onSuccess: () => {
+          trackEvent(ANALYTICS_EVENTS.ADMIN_ORPHANED_PLAID_ITEM_ATTESTED, { record_id: recordId })
+          toast.success('Attestation recorded. The record now shows your claim, and the automated sweep keeps checking it.')
+          closeAttestDialog()
+          // The row's state, the note and the four page counts all change, and the mutation refetches
+          // none of them. Without this the operator stares at the state they just acted on.
+          void refetch()
+        },
+        // ⚠ onError IS NOT OPTIONAL. Issue #1496's UI half was exactly this: a mutation wired with
+        // onSuccess only, so a rejected write said nothing and the operator believed it had worked.
+        // The reachable rejections here are the 409 (already attested — the first attestation stands
+        // and THIS note was discarded) and the 404. The dialog stays OPEN on failure, because the
+        // note is still unsaved and closing it would throw away what they wrote.
+        onError: (err) => {
+          const message = mutationFailureMessage(err)
+          setNoteError(message)
+          toast.error(`Could not record the attestation: ${message}`)
+        },
+      }
+    )
+  }
 
   const rows = data?.items ?? []
   const total = data?.total ?? 0
@@ -247,6 +328,62 @@ export function PlaidOrphanedItemsPage() {
         </span>
       ),
     },
+    {
+      id: 'operator_resolution',
+      header: 'Operator attestation',
+      hideable: true,
+      resizable: true,
+      defaultSize: 280,
+      minSize: 180,
+      // ⚠ THE EVIDENCE IS SHOWN, NOT SUMMARISED AWAY. An attestation is accepted on no proof, so the
+      // only thing that makes it checkable is WHO said it, WHEN, and WHAT they said — a bare tick
+      // would be the anonymous green label this feature exists to prevent. The note is rendered in
+      // full (the API caps it at 2,000 characters) rather than truncated to an ellipsis.
+      render: (item) =>
+        item.operator_resolved_at ? (
+          <span className="flex flex-col gap-0.5 text-[0.8125rem]">
+            <span className="font-medium">
+              {item.operator_resolved_by || 'unattributed'}
+            </span>
+            <span className="text-muted-foreground whitespace-nowrap">
+              {formatInstant(item.operator_resolved_at)}
+            </span>
+            {item.operator_resolution_note && (
+              <span className="text-muted-foreground break-words">
+                {item.operator_resolution_note}
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="text-[0.8125rem] text-muted-foreground">—</span>
+        ),
+    },
+    {
+      id: 'actions',
+      header: 'Action',
+      defaultSize: 210,
+      minSize: 170,
+      // Offered ONLY where it can mean something: a row Plaid has already confirmed removed needs no
+      // human claim, and a row that already carries one is first-wins, so a second click could only
+      // ever produce a 409 and discard the note. Absent beats a button that cannot succeed.
+      render: (item) =>
+        item.admin_state === 'resolved' || item.operator_resolved_at ? (
+          <span className="text-[0.8125rem] text-muted-foreground">—</span>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setAttestingId(item.id)
+              setNote('')
+              setNoteError(null)
+            }}
+          >
+            I removed this at Plaid
+          </Button>
+        ),
+    },
   ]
 
   return (
@@ -270,7 +407,11 @@ export function PlaidOrphanedItemsPage() {
             using its Plaid Item ID, or it may keep billing.{' '}
             <strong className="text-foreground font-semibold">Auto-retrying</strong> means a stored
             credential and the retry sweep are still working on it; acting now would duplicate work
-            in flight.
+            in flight. If you do remove an Item by hand, record it with{' '}
+            <strong className="text-foreground font-semibold">I removed this at Plaid</strong> — that
+            is an <em>unverified</em> attestation kept separate from{' '}
+            <strong className="text-foreground font-semibold">Resolved</strong>, which means Plaid
+            itself confirmed the removal.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -300,9 +441,21 @@ export function PlaidOrphanedItemsPage() {
                 status="neutral"
               />
             </div>
+            <div data-testid="orphan-count-attested">
+              {/* ⚠ ITS OWN CARD, NEVER ADDED INTO "Resolved". One of these two numbers is what Plaid
+                  confirmed; the other is what a colleague said. A single "done" figure would be a
+                  number whose accuracy nobody could state, on the surface whose job is to say what is
+                  actually outstanding. Status is neutral, not success: nothing has been verified. */}
+              <SummaryCard
+                title="Operator-attested (unverified)"
+                value={String(data.operator_attested ?? 0)}
+                icon={<UserCheck size={24} />}
+                status="neutral"
+              />
+            </div>
             <div data-testid="orphan-count-resolved">
               <SummaryCard
-                title="Resolved"
+                title="Resolved (proved at Plaid)"
                 value={String(data.resolved)}
                 icon={<CheckCircle size={24} />}
                 status="success"
@@ -367,6 +520,62 @@ export function PlaidOrphanedItemsPage() {
           />
         </>
       )}
+
+      <Dialog
+        open={attestingId !== null}
+        onOpenChange={(open) => {
+          if (!open) closeAttestDialog()
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Record that you removed this Item at Plaid</DialogTitle>
+          </DialogHeader>
+
+          {/* ⚠ THE WORDING IS THE FEATURE. An operator clicking this is being asked to understand
+              that they are filing a claim, not closing a ticket: nothing verifies it, the credential
+              is untouched, and the automated sweep keeps trying — which is what can eventually turn
+              the claim into a confirmed removal. Softening any of that would make the button feel
+              like "mark done", which is precisely the conflation the separate columns exist for. */}
+          <p className="text-sm text-muted-foreground m-0">
+            This is an <strong className="text-foreground font-semibold">unverified</strong>{' '}
+            attestation recorded against your admin identity. It is deliberately{' '}
+            <em>not</em> the same as <strong className="text-foreground font-semibold">Resolved</strong>,
+            which means Plaid itself confirmed the removal. It does not destroy the stored credential,
+            and the automated retry sweep keeps re-attempting this Item — that is the only thing that
+            can ever confirm what you are recording here.
+          </p>
+
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+            What you did at Plaid
+            <textarea
+              className="min-h-24 rounded-md border border-border bg-background p-2.5 text-sm text-foreground"
+              value={note}
+              maxLength={2000}
+              data-ph-mask
+              onChange={(e) => {
+                setNote(e.target.value)
+                setNoteError(null)
+              }}
+            />
+          </label>
+
+          {noteError && (
+            <p className="text-sm text-destructive m-0" role="alert">
+              {noteError}
+            </p>
+          )}
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeAttestDialog}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={submitAttestation} disabled={attestMutation.isPending}>
+              Record attestation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

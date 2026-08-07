@@ -286,3 +286,82 @@ func TestRetentionCleanupCheck_MonitorOrphanedPlaidItems_NilRepo_SkipsWithoutPub
 		"an unwired repo must not publish a 0 that reads as a clean bill of health")
 	assert.Contains(t, logBuf.String(), "level=WARN")
 }
+
+// ─── Issue #1497 item 2: the operator-attested state must reach these gauges ──────────────────────
+//
+// ⚠ WHY THIS TEST IS PART OF THE ITEM-2 BATCH AND NOT AN AFTERTHOUGHT. The GaugeVec is labelled by
+// domain.OrphanedItemAdminState, and its label values are enumerated BY HAND in
+// monitorOrphanedPlaidItems — the compiler cannot notice a missing one. So a fourth state added to
+// the domain and not added here does not fail to build: the attested rows simply vanish from
+// Prometheus, and the published per-state gauges stop summing to the population, which is the
+// silent-default-bucket failure this batch was explicitly told to prevent.
+
+// orphanRowAttested is a row an operator has claimed to have handled at Plaid. Its credential is
+// dead, so WITHOUT the attestation it would be counted as manual_intervention_required — which is
+// what the control assertion below relies on.
+func orphanRowAttested(now time.Time, attempts int) domain.PlaidOrphanedItem {
+	attested := now.Add(-2 * time.Hour)
+	return domain.PlaidOrphanedItem{
+		ID:                     "attested",
+		TokenExpiresAt:         now.Add(-6 * time.Hour),
+		OrphanedAt:             now.Add(-31 * 24 * time.Hour),
+		RetryAttemptCount:      attempts,
+		OperatorResolvedAt:     &attested,
+		OperatorResolvedBy:     "user_2adminClerkID",
+		OperatorResolutionNote: "Removed by hand in Plaid's dashboard.",
+	}
+}
+
+func TestRetentionCleanupCheck_MonitorOrphanedPlaidItems_PublishesTheOperatorAttestedState(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Reset every label this test reads, so a value latched by an earlier test in this package cannot
+	// make the assertions below pass without this pass having published anything.
+	for _, state := range []string{"auto_retrying", "manual_intervention_required", "resolved", "operator_attested"} {
+		observability.PlaidOrphanedItemsByAdminState.WithLabelValues(state).Set(-1)
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	setupOrphanMonitorMocks(ctx, mockRepo)
+
+	lister := new(MockOrphanedPlaidItemLister)
+	items := []domain.PlaidOrphanedItem{
+		orphanRowAttested(now, 12),
+		orphanRowAttested(now, 3),
+		orphanRowNeedsHuman(now, 5),
+		orphanRowLive(now, 2),
+		orphanRowDone(now, 9),
+	}
+	lister.On("List", mock.Anything, domain.PlaidOrphanedItemHealthScanCap, 0).Return(items, len(items), nil)
+
+	var logBuf bytes.Buffer
+	worker := newOrphanMonitorWorker(lister, &logBuf, mockRepo)
+
+	require.NoError(t, worker.Work(ctx, newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})))
+
+	attested := testutil.ToFloat64(observability.PlaidOrphanedItemsByAdminState.WithLabelValues("operator_attested"))
+	manual := testutil.ToFloat64(observability.PlaidOrphanedItemsByAdminState.WithLabelValues("manual_intervention_required"))
+	auto := testutil.ToFloat64(observability.PlaidOrphanedItemsByAdminState.WithLabelValues("auto_retrying"))
+	resolved := testutil.ToFloat64(observability.PlaidOrphanedItemsByAdminState.WithLabelValues("resolved"))
+
+	assert.Equal(t, float64(2), attested,
+		"two attested rows must be published under their own label, not dropped into no bucket at all")
+	assert.Equal(t, float64(1), manual,
+		"and an attested row must NOT still be counted as work a human has to do — that is the whole point")
+	assert.Equal(t, float64(1), auto)
+	assert.Equal(t, float64(1), resolved,
+		"nor may a claim be published as a proved removal")
+
+	// The per-state gauges must still account for the whole population: a state nobody published is a
+	// state nobody can see, and this is the assertion that notices.
+	assert.Equal(t, float64(len(items)), attested+manual+auto+resolved)
+
+	// Item 4's gauge still sees the attested row's attempt history — deliberately, because the sweep
+	// keeps retrying it (see GetRetryablePage's decision). 12 is the worst UNRESOLVED count here; the
+	// resolved row's 9 is exempt and must not win.
+	assert.Equal(t, float64(12), testutil.ToFloat64(observability.PlaidOrphanedItemMaxRetryAttempts),
+		"an unverified claim must not silence the gauge capable of exposing it as false")
+
+	lister.AssertExpectations(t)
+}

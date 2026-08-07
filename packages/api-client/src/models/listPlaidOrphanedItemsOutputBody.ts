@@ -42,6 +42,7 @@ export interface ListPlaidOrphanedItemsOutputBody {
   limit: number;
   manual_intervention_required: number;
   offset: number;
+  operator_attested: number;
   resolved: number;
   total: number;
 }

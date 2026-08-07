@@ -138,6 +138,21 @@ const (
 	// purge, by an undecryptable token, by a row that never held one, and — importantly — by a live
 	// token that nothing has retried for OrphanedItemRetryStaleAfter.
 	OrphanedItemManualInterventionRequired OrphanedItemAdminState = "manual_intervention_required"
+	// OrphanedItemOperatorAttested: an operator has SAID they removed this Item in Plaid's dashboard.
+	// Issue #1497 item 2.
+	//
+	// ⚠ IT IS A CLAIM, NOT A PROOF, AND THAT IS THE ENTIRE REASON IT IS NOT OrphanedItemResolved.
+	// Resolved means an automated /item/remove came back success or ITEM_NOT_FOUND — Plaid itself
+	// answered. This state means a human typed a sentence. Nothing checked it, nothing can check it
+	// retroactively, and the two must stay distinguishable forever: laundering an unverified human
+	// assertion into a machine-verified fact is the exact defect this branch has removed repeatedly
+	// (most literally linked_items.status = 'replaced' being read as proof of removal at Plaid).
+	//
+	// What it therefore means to an operator: NO FURTHER MANUAL WORK IS EXPECTED — somebody already
+	// did it, and their name and note are on the row — but the record stays in the table, stays
+	// auditable, and (see plaidOrphanedItemRepository.GetRetryablePage) is still re-attempted by the
+	// automated sweep, which is the only thing that can ever upgrade the claim to a proof.
+	OrphanedItemOperatorAttested OrphanedItemAdminState = "operator_attested"
 )
 
 // PlaidOrphanedItem is one row of plaid_orphaned_items: a Plaid Item that may still exist and may
@@ -177,6 +192,32 @@ type PlaidOrphanedItem struct {
 	LastRetryAt        *time.Time
 	LastRetryErrorCode string
 	ResolvedAt         *time.Time
+	// OperatorResolvedAt / OperatorResolvedBy / OperatorResolutionNote are the OPERATOR ATTESTATION —
+	// a human's unverified statement that they removed this Item in Plaid's dashboard themselves.
+	// Issue #1497 item 2, migration 000137.
+	//
+	// ⚠ DELIBERATELY SEPARATE FROM ResolvedAt AND NEVER WRITTEN TOGETHER WITH IT. ResolvedAt is
+	// written only by the automatic sweep, on evidence from Plaid, and its write purges the
+	// credential in the same statement. These three are written only by an operator, on no evidence,
+	// and their write touches neither the credential nor ResolvedAt. See
+	// OrphanedItemOperatorAttested.
+	//
+	// OperatorResolvedBy is the ATTESTING STAFF MEMBER's Clerk user id, not the erased data subject's
+	// — this table's no-user-id rule (migration 000134) is about the person whose data was erased,
+	// and an accountability record naming the employee who acted is the opposite of a surviving
+	// pointer to them.
+	OperatorResolvedAt     *time.Time
+	OperatorResolvedBy     string
+	OperatorResolutionNote string
+}
+
+// OperatorHasAttested reports whether a human has claimed to have handled this Item at Plaid.
+//
+// A method rather than an inline `!= nil` at each site because three readers ask the question
+// (AdminState, AdminView, and the admin write endpoint's first-wins check) and "attested" must mean
+// the same thing in all three.
+func (o PlaidOrphanedItem) OperatorHasAttested() bool {
+	return o.OperatorResolvedAt != nil
 }
 
 // TokenIsLive reports whether this record holds a credential that may still be presented to Plaid at
@@ -201,22 +242,40 @@ func (o PlaidOrphanedItem) TokenIsLive(asOf time.Time) bool {
 // The order of the checks is the priority order and each is load-bearing:
 //
 //  1. Resolved wins outright. A removed Item is not work, whatever its token or attempt history says.
-//  2. A dead token (absent, purged, or past its deadline) means manual intervention. This is the state
+//  2. An OPERATOR ATTESTATION (Issue #1497 item 2) wins over everything below it, and loses to (1).
+//     See the two paragraphs beneath this list — the ordering on both sides of it is load-bearing.
+//  3. A dead token (absent, purged, or past its deadline) means manual intervention. This is the state
 //     the table exists to surface.
-//  3. A token this process could not decrypt is already covered by (2) — the repository leaves
-//     AccessToken empty and sets TokenUndecryptable, so TokenIsLive is false. This third check is
+//  4. A token this process could not decrypt is already covered by (3) — the repository leaves
+//     AccessToken empty and sets TokenUndecryptable, so TokenIsLive is false. This check is
 //     narrower and not redundant with it: it catches the row whose LAST RETRY could not decrypt even
 //     though the reader can, which is what a key rolled out to some processes and not others looks
 //     like. See OrphanTokenUndecryptableCode.
-//  4. A live token with no OBSERVED retry within OrphanedItemRetryStaleAfter means manual intervention:
+//  5. A live token with no OBSERVED retry within OrphanedItemRetryStaleAfter means manual intervention:
 //     the row must not claim an automated retry it has no evidence of. See that constant.
-//  5. Only then: auto-retrying.
+//  6. Only then: auto-retrying.
+//
+// ⚠ WHY THE ATTESTATION IS ABOVE (3), (4) AND (5), i.e. why adding a column was not enough. All three
+// of those checks are ways of concluding "a human must go and do this at Plaid". An attested row is
+// one where a human already says they did — so leaving the attestation below them would have the
+// surface demanding, indefinitely, the exact work its own record says was performed. That is the
+// "mark written, work never happens" defect run backwards, and it is what makes this a change to the
+// DERIVATION and not merely to the schema.
+//
+// ⚠ WHY IT IS BELOW (1), AND THIS ORDER IS PINNED BY A TEST. Resolved is Plaid's own answer; attested
+// is a sentence somebody typed. Proof beats claim, so a row that was attested and LATER proved
+// removed reports "resolved" — the stronger fact. Reordering these two to "show the human's statement
+// first, it is more recent" would silently downgrade verified removals to unverified claims;
+// TestPlaidOrphanedItem_AdminState_ProvedRemovalBeatsAnOperatorAttestation fails if anyone does.
 //
 // RetryAttemptCount is deliberately absent from this derivation. Nothing in this system gives up on an
 // attempt count, so a high count is information for the operator, never a state.
 func (o PlaidOrphanedItem) AdminState(asOf time.Time) OrphanedItemAdminState {
 	if o.ResolvedAt != nil {
 		return OrphanedItemResolved
+	}
+	if o.OperatorHasAttested() {
+		return OrphanedItemOperatorAttested
 	}
 	if !o.TokenIsLive(asOf) {
 		return OrphanedItemManualInterventionRequired
@@ -252,7 +311,8 @@ type PlaidOrphanedItemAdminView struct {
 	PlaidItemID string `json:"plaid_item_id"`
 	// AdminState is what an operator must DO: "auto_retrying" (nothing — work is in flight),
 	// "manual_intervention_required" (remove this Item in Plaid's dashboard, or it may keep billing),
-	// or "resolved" (history).
+	// "operator_attested" (a colleague says they already removed it — unverified, see
+	// OrphanedItemOperatorAttested), or "resolved" (proved removed; history).
 	AdminState      OrphanedItemAdminState `json:"admin_state"`
 	InstitutionID   string                 `json:"institution_id,omitempty"`
 	InstitutionName string                 `json:"institution_name,omitempty"`
@@ -274,7 +334,22 @@ type PlaidOrphanedItemAdminView struct {
 	TokenExpiresAt time.Time  `json:"token_expires_at"`
 	TokenPurgedAt  *time.Time `json:"token_purged_at,omitempty"`
 	TokenRetained  bool       `json:"token_retained"`
-	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+	// ResolvedAt is when an automated retry PROVED the Item gone at Plaid. Null on every other row,
+	// including an operator-attested one — the two are never both written by the same act.
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	// OperatorResolvedAt / OperatorResolvedBy / OperatorResolutionNote carry the operator attestation
+	// so that a merely-CLAIMED resolution stays auditable rather than becoming an anonymous tick.
+	// Issue #1497 item 2.
+	//
+	// ⚠ ALL THREE ARE EXPOSED, DELIBERATELY, AND THE NOTE IS ONE OF THEM. A claim with no attributable
+	// author and no stated reason cannot be checked against Plaid later, which would leave this surface
+	// unable to distinguish a diligent operator from a row somebody clicked to make a red badge go
+	// away. That is the whole risk of accepting an unverified attestation, so the mitigation is that
+	// the attestation is never anonymous. OperatorResolvedBy is the STAFF member's Clerk id (see the
+	// domain field's comment) — it is not the erased user's, and this view still carries no user PII.
+	OperatorResolvedAt     *time.Time `json:"operator_resolved_at,omitempty"`
+	OperatorResolvedBy     string     `json:"operator_resolved_by,omitempty"`
+	OperatorResolutionNote string     `json:"operator_resolution_note,omitempty"`
 }
 
 // AdminView projects the record for the admin API, computing AdminState against asOf.
@@ -302,6 +377,9 @@ func (o PlaidOrphanedItem) AdminView(asOf time.Time) PlaidOrphanedItemAdminView 
 		TokenPurgedAt:             o.TokenPurgedAt,
 		TokenRetained:             o.AccessToken != "" || o.TokenUndecryptable,
 		ResolvedAt:                o.ResolvedAt,
+		OperatorResolvedAt:        o.OperatorResolvedAt,
+		OperatorResolvedBy:        o.OperatorResolvedBy,
+		OperatorResolutionNote:    o.OperatorResolutionNote,
 	}
 }
 
@@ -337,19 +415,22 @@ const PlaidOrphanedItemHealthScanCap = 500
 //
 // ⚠ WHY THIS IS A GO DERIVATION AND NOT A SQL `COUNT(*) FILTER (WHERE ...)`, stated precisely
 // because an earlier version of this justification overstated it and the overstatement was caught.
-// Of AdminState's four checks, exactly ONE resists SQL: check 2, TokenIsLive, which depends on
+// Of AdminState's checks, exactly ONE resists SQL: the TokenIsLive check, which depends on
 // whether THIS PROCESS, RIGHT NOW, can decrypt the stored ciphertext — the repository reports an
 // undecryptable token as AccessToken == "", a fact no predicate over the table can see because the
-// key lives in the application. Check 1 (resolved_at IS NULL), check 3 (last_retry_error_code, which
-// is plaintext) and check 4 (a plain interval comparison over last_retry_at/orphaned_at) are ALL
-// SQL-expressible. So the accurate statement is "one of the four checks forces a Go derivation",
+// key lives in the application. The resolved_at check, the operator-attestation check (Issue #1497
+// item 2 — a plain operator_resolved_at IS NOT NULL), the last_retry_error_code check (that column is
+// plaintext) and the staleness check (a plain interval comparison over last_retry_at/orphaned_at) are
+// ALL SQL-expressible. So the accurate statement is "one of the checks forces a Go derivation",
 // not "no COUNT can reproduce this state" — the conclusion survives, the reasoning is narrower than
-// it was first written.
+// it was first written, and adding a fifth SQL-expressible check did not change it either way.
 //
-// ⚠ THE THREE STATE COUNTS ARE NOT ONE "UNRESOLVED" TOTAL, and collapsing them would defeat the
+// ⚠ THE STATE COUNTS ARE NOT ONE "UNRESOLVED" TOTAL, and collapsing them would defeat the
 // feature. auto_retrying means DO NOTHING — acting at Plaid now duplicates work in flight — while
 // manual_intervention_required means GO REMOVE THIS ITEM IN PLAID'S DASHBOARD OR IT MAY KEEP
-// BILLING. One number covering both tells an operator neither thing.
+// BILLING. One number covering both tells an operator neither thing. The same argument keeps
+// operator_attested out of Resolved: "a colleague says they did it" and "Plaid confirmed it is gone"
+// are different degrees of certainty about the same outstanding vendor obligation.
 //
 // asOf is taken rather than read from the clock, for the reason #1466 threaded it through every
 // liveness predicate: two of AdminState's checks are time-dependent, so a derivation that read the
@@ -370,12 +451,27 @@ func SummarisePlaidOrphanedItems(items []PlaidOrphanedItem, asOf time.Time) Plai
 			m.ManualInterventionRequired++
 		case OrphanedItemResolved:
 			m.Resolved++
+		case OrphanedItemOperatorAttested:
+			// ⚠ NOT FOLDED INTO Resolved. Both mean "no further manual work is expected", which is
+			// exactly the tempting simplification, and it would destroy the only distinction #1497
+			// item 2 exists to record: one of these two numbers is what Plaid told us, the other is
+			// what a colleague told us. See OrphanedItemOperatorAttested.
+			m.OperatorAttested++
 		}
 		// UNRESOLVED ONLY. A resolved row's attempt history is finished, so letting it drive this
 		// gauge would latch an alert forever on work that actually succeeded — the "mark outlives the
 		// work" shape this branch has closed five times already. Read straight off ResolvedAt rather
 		// than off the AdminState above, because a row can be unresolved AND manual-intervention, and
 		// a row being retried into the ground is exactly the case this gauge exists for.
+		//
+		// ⚠ AN OPERATOR-ATTESTED ROW STILL COUNTS HERE, and that is deliberate rather than an
+		// oversight of the #1497-item-2 change: ResolvedAt is the only thing exempted, because it is
+		// the only thing that PROVES the retrying has stopped mattering. An attestation does not stop
+		// the sweep (see plaidOrphanedItemRepository.GetRetryablePage's decision), so the count keeps
+		// climbing — and a row still failing 20-odd removals after somebody attested it is exactly the
+		// case worth telling a human about, since either the claim was wrong or the Item really is
+		// still at Plaid. Exempting attested rows here would let an unverified sentence silence the
+		// one gauge capable of exposing it as false.
 		if item.ResolvedAt == nil && int64(item.RetryAttemptCount) > m.MaxUnresolvedRetryAttemptCount {
 			m.MaxUnresolvedRetryAttemptCount = int64(item.RetryAttemptCount)
 		}

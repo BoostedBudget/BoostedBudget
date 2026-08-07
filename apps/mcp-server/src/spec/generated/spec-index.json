@@ -311,6 +311,27 @@
       ]
     },
     {
+      "operationId": "recordAdminPlaidOrphanedItemOperatorResolution",
+      "method": "POST",
+      "path": "/api/v1/admin/plaid/orphaned-items/{id}/operator-resolution",
+      "summary": "Attest that an orphaned Plaid Item was removed by hand (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Records that YOU removed this Plaid Item yourself in Plaid's dashboard. This is an UNVERIFIED attestation, not a proved removal: it is stored against your admin identity with your note, moves the record to admin_state 'operator_attested' so nobody is asked to redo the work, and deliberately does NOT set resolved_at (which means Plaid itself confirmed the removal), does NOT destroy the retained access token, and does NOT stop the automated retry sweep — the sweep is what can eventually confirm your claim. First-wins: if the record is already attested this returns 409 and your note is not stored. Requires admin role.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "plaid_orphaned_items.id of the record being attested",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "operationId": "grantTrial",
       "method": "POST",
       "path": "/api/v1/admin/subscription/grant-trial",

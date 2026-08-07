@@ -42,7 +42,7 @@ type SystemHealthResponse struct {
 // observability.PlaidOrphanedItemMaxRetryAttempts publish it. Issue #1497 items 4 and 5.
 //
 // ⚠ THE TWO ACTIONABLE COUNTS ARE SEPARATE FIELDS AND MUST STAY SEPARATE. The whole reason
-// OrphanedItemAdminState exists as three states rather than a resolved/unresolved boolean is that
+// OrphanedItemAdminState exists as four states rather than a resolved/unresolved boolean is that
 // auto_retrying and manual_intervention_required demand OPPOSITE human responses: the first means
 // "do nothing, a sweep is working on it", the second means "go remove this Item in Plaid's dashboard
 // using plaid_item_id, or it may keep billing an erased user's account". A single "unresolved" total
@@ -63,6 +63,19 @@ type PlaidOrphanedItemMetrics struct {
 	// Resolved is the number of rows an automated retry proved removed at Plaid. History, not work —
 	// and it never leaves the table, because nothing prunes plaid_orphaned_items.
 	Resolved int64 `json:"resolved"`
+	// OperatorAttested is the number of rows an operator has CLAIMED to have removed by hand in
+	// Plaid's dashboard, with no verification of any kind. Issue #1497 item 2.
+	//
+	// ⚠ IT IS ITS OWN NUMBER AND MUST NOT BE ADDED INTO Resolved, however similar they look on a
+	// dashboard. Resolved is a count of things Plaid confirmed; this is a count of things colleagues
+	// said. Summing them would produce a single "done" figure whose accuracy nobody could state, on
+	// the one surface whose job is to say what is actually outstanding — and it is the shape of every
+	// claim-as-proof defect this feature was built to avoid (see OrphanedItemOperatorAttested).
+	//
+	// A NON-ZERO VALUE IS NOT AN ALERT, but a PERSISTENTLY non-zero one is worth an operator's eye:
+	// the automated sweep keeps re-attempting attested rows, so a row that stays attested rather than
+	// becoming resolved means no retry has ever managed to confirm the claim.
+	OperatorAttested int64 `json:"operator_attested"`
 	// MaxUnresolvedRetryAttemptCount is the highest retry_attempt_count among UNRESOLVED rows —
 	// Issue #1497 item 4, the item named in that issue's own title. retry_attempt_count has been
 	// written by RecordRetryFailure since #1497 landed and, until this field, was read by no metric

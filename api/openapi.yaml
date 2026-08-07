@@ -3932,6 +3932,9 @@ components:
         offset:
           format: int64
           type: integer
+        operator_attested:
+          format: int64
+          type: integer
         resolved:
           format: int64
           type: integer
@@ -3944,6 +3947,7 @@ components:
         - manual_intervention_required
         - auto_retrying
         - resolved
+        - operator_attested
         - limit
         - offset
         - as_of
@@ -4660,6 +4664,13 @@ components:
           type: string
         linked_item_status_at_erasure:
           type: string
+        operator_resolution_note:
+          type: string
+        operator_resolved_at:
+          format: date-time
+          type: string
+        operator_resolved_by:
+          type: string
         orphaned_at:
           format: date-time
           type: string
@@ -4705,6 +4716,9 @@ components:
         max_unresolved_retry_attempt_count:
           format: int64
           type: integer
+        operator_attested:
+          format: int64
+          type: integer
         resolved:
           format: int64
           type: integer
@@ -4712,6 +4726,7 @@ components:
         - auto_retrying
         - manual_intervention_required
         - resolved
+        - operator_attested
         - max_unresolved_retry_attempt_count
         - available
       type: object
@@ -5048,6 +5063,48 @@ components:
         - confirmation_presented
         - confirmation_confirmed
         - result
+      type: object
+    RecordPlaidOrphanedItemOperatorResolutionOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RecordPlaidOrphanedItemOperatorResolutionOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        id:
+          type: string
+        note:
+          type: string
+        operator_resolved_at:
+          type: string
+        operator_resolved_by:
+          type: string
+      required:
+        - id
+        - operator_resolved_at
+        - operator_resolved_by
+        - note
+      type: object
+    RecordPlaidOrphanedItemOperatorResolutionRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RecordPlaidOrphanedItemOperatorResolutionRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        note:
+          description: What you did at Plaid, in your own words. Recorded verbatim against your admin identity and shown on the orphaned-Items surface; it is the only way anyone can check this claim later.
+          maxLength: 2000
+          minLength: 1
+          type: string
+      required:
+        - note
       type: object
     RecurringSubscriptionItem:
       additionalProperties: false
@@ -8143,6 +8200,43 @@ paths:
       security:
         - clerk: []
       summary: List orphaned Plaid Items (admin)
+      tags:
+        - Admin
+  /api/v1/admin/plaid/orphaned-items/{id}/operator-resolution:
+    post:
+      description: "Records that YOU removed this Plaid Item yourself in Plaid's dashboard. This is an UNVERIFIED attestation, not a proved removal: it is stored against your admin identity with your note, moves the record to admin_state 'operator_attested' so nobody is asked to redo the work, and deliberately does NOT set resolved_at (which means Plaid itself confirmed the removal), does NOT destroy the retained access token, and does NOT stop the automated retry sweep — the sweep is what can eventually confirm your claim. First-wins: if the record is already attested this returns 409 and your note is not stored. Requires admin role."
+      operationId: recordAdminPlaidOrphanedItemOperatorResolution
+      parameters:
+        - description: plaid_orphaned_items.id of the record being attested
+          in: path
+          name: id
+          required: true
+          schema:
+            description: plaid_orphaned_items.id of the record being attested
+            format: uuid
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordPlaidOrphanedItemOperatorResolutionRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordPlaidOrphanedItemOperatorResolutionOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Attest that an orphaned Plaid Item was removed by hand (admin)
       tags:
         - Admin
   /api/v1/admin/subscription/grant-trial:

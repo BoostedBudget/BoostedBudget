@@ -14,6 +14,9 @@
  * 61 excluded, 9 destructive writes (#1503 added listAdminPlaidOrphanedItems as the
  * 61st exclusion). Asserted as documentation below — expect
  * this test (not those literals) to be the source of truth as the manifest grows.
+ * ⚠ NOW 195 total / 62 excluded: Issue #1497 item 2 added
+ * recordAdminPlaidOrphanedItemOperatorResolution, excluded under the blanket admin policy. The
+ * allowed/read/write/destructive figures are unchanged, which is the point of the exclusion.
  */
 
 import { describe, expect, it } from 'bun:test'
@@ -73,11 +76,11 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
   it('documents the known baseline values (informational — the drift check above is authoritative)', () => {
     const fresh = computeCapabilitySummary(readSpecIndex())
 
-    expect(fresh.totalOperations).toBe(194)
+    expect(fresh.totalOperations).toBe(195)
     expect(fresh.allowedOperations).toBe(133)
     expect(fresh.readOperations).toBe(87)
     expect(fresh.writeOperations).toBe(46)
-    expect(fresh.excludedOperations).toBe(61)
+    expect(fresh.excludedOperations).toBe(62)
     expect(fresh.destructiveWriteOperations).toBe(9)
     expect(fresh.allowedOperations).toBe(fresh.readOperations + fresh.writeOperations)
     expect(fresh.totalOperations).toBe(fresh.allowedOperations + fresh.excludedOperations)

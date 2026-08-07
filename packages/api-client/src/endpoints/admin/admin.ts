@@ -74,6 +74,8 @@ import type {
   ListAdminUsersParams,
   ListPlaidOrphanedItemsOutputBody,
   PaddleWebhookEvent,
+  RecordPlaidOrphanedItemOperatorResolutionOutputBody,
+  RecordPlaidOrphanedItemOperatorResolutionRequest,
   SystemHealthResponse,
   WebhookEventListResponse,
   WebhookReplayResponse,
@@ -1079,6 +1081,71 @@ export function useListAdminPlaidOrphanedItems<TData = Awaited<ReturnType<typeof
 
 
 /**
+ * Records that YOU removed this Plaid Item yourself in Plaid's dashboard. This is an UNVERIFIED attestation, not a proved removal: it is stored against your admin identity with your note, moves the record to admin_state 'operator_attested' so nobody is asked to redo the work, and deliberately does NOT set resolved_at (which means Plaid itself confirmed the removal), does NOT destroy the retained access token, and does NOT stop the automated retry sweep — the sweep is what can eventually confirm your claim. First-wins: if the record is already attested this returns 409 and your note is not stored. Requires admin role.
+ * @summary Attest that an orphaned Plaid Item was removed by hand (admin)
+ */
+export const recordAdminPlaidOrphanedItemOperatorResolution = (
+    id: string,
+    recordPlaidOrphanedItemOperatorResolutionRequest: BodyType<NonReadonly<RecordPlaidOrphanedItemOperatorResolutionRequest>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RecordPlaidOrphanedItemOperatorResolutionOutputBody>(
+      {url: `/api/v1/admin/plaid/orphaned-items/${id}/operator-resolution`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: recordPlaidOrphanedItemOperatorResolutionRequest, signal
+    },
+      options);
+    }
+
+
+
+export const getRecordAdminPlaidOrphanedItemOperatorResolutionMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordAdminPlaidOrphanedItemOperatorResolution>>, TError,{id: string;data: BodyType<NonReadonly<RecordPlaidOrphanedItemOperatorResolutionRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof recordAdminPlaidOrphanedItemOperatorResolution>>, TError,{id: string;data: BodyType<NonReadonly<RecordPlaidOrphanedItemOperatorResolutionRequest>>}, TContext> => {
+
+const mutationKey = ['recordAdminPlaidOrphanedItemOperatorResolution'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof recordAdminPlaidOrphanedItemOperatorResolution>>, {id: string;data: BodyType<NonReadonly<RecordPlaidOrphanedItemOperatorResolutionRequest>>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  recordAdminPlaidOrphanedItemOperatorResolution(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RecordAdminPlaidOrphanedItemOperatorResolutionMutationResult = NonNullable<Awaited<ReturnType<typeof recordAdminPlaidOrphanedItemOperatorResolution>>>
+    export type RecordAdminPlaidOrphanedItemOperatorResolutionMutationBody = BodyType<NonReadonly<RecordPlaidOrphanedItemOperatorResolutionRequest>>
+    export type RecordAdminPlaidOrphanedItemOperatorResolutionMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Attest that an orphaned Plaid Item was removed by hand (admin)
+ */
+export const useRecordAdminPlaidOrphanedItemOperatorResolution = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordAdminPlaidOrphanedItemOperatorResolution>>, TError,{id: string;data: BodyType<NonReadonly<RecordPlaidOrphanedItemOperatorResolutionRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof recordAdminPlaidOrphanedItemOperatorResolution>>,
+        TError,
+        {id: string;data: BodyType<NonReadonly<RecordPlaidOrphanedItemOperatorResolutionRequest>>},
+        TContext
+      > => {
+      return useMutation(getRecordAdminPlaidOrphanedItemOperatorResolutionMutationOptions(options), queryClient);
+    }
+    /**
  * Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial.
  * @summary Grant trial subscription (admin)
  */

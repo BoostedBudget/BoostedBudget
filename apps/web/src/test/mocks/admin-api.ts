@@ -122,6 +122,13 @@ export const mockUseListAdminPlaidOrphanedItems = mock(() => ({
   refetch: mockRefetchListAdminPlaidOrphanedItems,
 }))
 
+// Issue #1497 item 2: the operator-attestation write on the orphaned-Items surface.
+export const mockRecordOrphanedItemAttestation = mock(() => {})
+export const mockUseRecordAdminPlaidOrphanedItemOperatorResolution = mock(() => ({
+  mutate: mockRecordOrphanedItemAttestation,
+  isPending: false,
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/admin/admin', () => ({
   ...RealAdminModule,
@@ -142,4 +149,6 @@ mock.module('@boostedbudget/api-client/endpoints/admin/admin', () => ({
   useDeleteAdminDeadLetterJob: mockUseDeleteAdminDeadLetterJob,
   useBulkDeleteAdminDeadLetterJobs: mockUseBulkDeleteAdminDeadLetterJobs,
   useListAdminPlaidOrphanedItems: mockUseListAdminPlaidOrphanedItems,
+  useRecordAdminPlaidOrphanedItemOperatorResolution:
+    mockUseRecordAdminPlaidOrphanedItemOperatorResolution,
 }))

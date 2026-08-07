@@ -36,5 +36,6 @@ export interface PlaidOrphanedItemMetrics {
   available: boolean;
   manual_intervention_required: number;
   max_unresolved_retry_attempt_count: number;
+  operator_attested: number;
   resolved: number;
 }
