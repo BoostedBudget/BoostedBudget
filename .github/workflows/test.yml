@@ -102,6 +102,20 @@ jobs:
     name: E2E Tests
     if: always() && !cancelled()
     runs-on: [self-hosted, macOS, mac-mini]
+    # Bound a wedged run. Without this the job inherits GitHub's 360-minute default, and this is a
+    # SELF-HOSTED pool of four runners on one Mac Mini -- so one stuck E2E job can hold a quarter of
+    # the capacity for six hours, slowing every sibling job and making the load-induced timeouts of
+    # #1489 worse. That is not hypothetical: run 31137080868 sat in "Run E2E tests" for 47.6 minutes
+    # before something killed it, while the same suite completes locally in 5.0 minutes.
+    #
+    # 35 is derived, not picked: across the last twelve runs on this branch, every E2E job that ran
+    # its test step to completion took 4.6-17.7 minutes (the other entries are truncated by
+    # superseding pushes, not natural durations). 35 is roughly 2x the observed maximum, so a
+    # legitimately slow run still finishes while a wedge fails in well under an hour.
+    #
+    # If this starts firing on healthy runs, the answer is NOT a bigger number -- it is that the host
+    # can no longer carry the matrix, which is #1489's subject.
+    timeout-minutes: 35
     environment: e2e  # Access Clerk secrets from e2e environment
     env:
       UNIQUE_WORKSPACE: workspace-e2e-test-${{ github.run_id }}
