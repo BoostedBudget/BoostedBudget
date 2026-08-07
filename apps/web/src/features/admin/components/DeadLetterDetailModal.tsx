@@ -19,7 +19,7 @@ import {
   getGetAdminDeadLetterJobStatsQueryKey,
   getGetAdminDeadLetterJobDetailQueryKey,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
-import { retryFailureMessage } from '../lib/retryFailureMessage'
+import { mutationFailureMessage } from '../lib/mutationFailureMessage'
 
 interface DeadLetterDetailModalProps {
   jobId: number | null
@@ -84,16 +84,28 @@ export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterD
         void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
       },
       onError: (err) => {
-        toast.error(`Failed to retry job #${jobId}: ${retryFailureMessage(err)}`)
+        toast.error(`Failed to retry job #${jobId}: ${mutationFailureMessage(err)}`)
       },
     })
   }
 
+  // Issue #1496: this used to pass `onSuccess` only, so a rejected save left the modal looking
+  // as if nothing happened. Unlike delete, a failed save-notes keeps the editor open on
+  // failure — closing it would discard the operator's unsaved text (the textarea only shows
+  // `notesValue`; the read-only view underneath falls back to the last-saved `job.notes`).
   const handleSaveNotes = () => {
     if (!jobId) return
     notesMutation.mutate(
       { id: jobId, data: { notes: notesValue } },
-      { onSuccess: () => setIsEditingNotes(false) }
+      {
+        onSuccess: () => {
+          toast.success('Notes saved')
+          setIsEditingNotes(false)
+        },
+        onError: (err) => {
+          toast.error(`Failed to save notes: ${mutationFailureMessage(err)}`)
+        },
+      }
     )
   }
 
@@ -104,13 +116,24 @@ export function DeadLetterDetailModal({ jobId, onClose, onDeleted }: DeadLetterD
     onClose()
   }
 
+  // Issue #1496: this used to pass `onSuccess` only, so a rejected delete left the confirmation
+  // sub-dialog open with no explanation — the same defect as DeadLetterPage's per-row delete.
+  // On failure, only the confirm sub-dialog is dismissed (`setConfirmDelete(false)`); the
+  // detail modal itself stays open (no `closeModal()`, no `onDeleted?.()`) because the job
+  // still exists and the operator needs to see the error toast against it, not have the whole
+  // view yanked away.
   const handleDelete = () => {
     if (!jobId) return
     deleteMutation.mutate({ id: jobId }, {
       onSuccess: () => {
         trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_DELETE, { job_id: jobId })
+        toast.success(`Job #${jobId} deleted`)
         onDeleted?.()
         closeModal()
+      },
+      onError: (err) => {
+        toast.error(`Failed to delete job #${jobId}: ${mutationFailureMessage(err)}`)
+        setConfirmDelete(false)
       },
     })
   }

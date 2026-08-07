@@ -13,7 +13,7 @@ import {
   getListAdminDeadLetterJobsQueryKey,
   getGetAdminDeadLetterJobStatsQueryKey,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
-import { retryFailureMessage } from '../lib/retryFailureMessage'
+import { mutationFailureMessage } from '../lib/mutationFailureMessage'
 import { SummaryCard } from '@/features/admin'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -180,15 +180,24 @@ export function DeadLetterPage() {
         void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
       },
       onError: (err) => {
-        toast.error(`Failed to retry job #${jobId}: ${retryFailureMessage(err)}`)
+        toast.error(`Failed to retry job #${jobId}: ${mutationFailureMessage(err)}`)
       },
     })
   }
 
+  // Issue #1496: this used to pass `onSuccess` only, so a rejected delete left the confirmation
+  // dialog open with no explanation — the operator saw nothing happen, twice over (no error, no
+  // dismissal). A failed delete still means there's nothing left to confirm, so the dialog is
+  // dismissed on failure the same as on success; only the toast tells the two apart.
   const handleDeleteConfirm = (jobId: number) => {
     deleteMutation.mutate({ id: jobId }, {
       onSuccess: () => {
         trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_DELETE, { job_id: jobId })
+        toast.success(`Job #${jobId} deleted`)
+        setConfirmDeleteJobId(null)
+      },
+      onError: (err) => {
+        toast.error(`Failed to delete job #${jobId}: ${mutationFailureMessage(err)}`)
         setConfirmDeleteJobId(null)
       },
     })
@@ -202,9 +211,14 @@ export function DeadLetterPage() {
       ...(filters.startDate && { start_date: filters.startDate }),
       ...(filters.endDate && { end_date: filters.endDate }),
     }
+    // Same fix as per-row delete: dismiss the confirmation dialog on failure too, so it doesn't
+    // stay stuck open. Unlike per-row delete, the filters/page reset stays onSuccess-only —
+    // nothing was actually deleted on failure, so the current filtered view is still accurate
+    // and resetting it would just discard the operator's filter state for no reason.
     bulkDeleteMutation.mutate({ data: filters_payload }, {
       onSuccess: (result) => {
         trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_BULK_DELETE, { deleted: result?.deleted })
+        toast.success(`Deleted ${result?.deleted ?? 0} job(s)`)
         setConfirmBulkDelete(false)
         setKind('')
         setUserId('')
@@ -212,6 +226,10 @@ export function DeadLetterPage() {
         setStartDate('')
         setEndDate('')
         setPage(1)
+      },
+      onError: (err) => {
+        toast.error(`Failed to delete matching jobs: ${mutationFailureMessage(err)}`)
+        setConfirmBulkDelete(false)
       },
     })
   }
