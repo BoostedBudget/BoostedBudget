@@ -3,7 +3,7 @@ import { useGetSystemHealth } from '@boostedbudget/api-client/endpoints/admin/ad
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent';
 import { ANALYTICS_EVENTS } from '../../../shared/analytics';
 import { SummaryCard } from '@/features/admin';
-import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle, Users, Timer, UserCheck } from 'lucide-react';
+import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle, Users, Timer, UserCheck, UserX, History } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 
@@ -110,6 +110,18 @@ export function HealthDashboardPage() {
   // produced by a failed read tells an operator that no erased user's Plaid Item is still billing —
   // a compliance claim nothing actually checked.
   const orphanedItemsAvailable = data.plaid_orphaned_items?.available;
+
+  // Issue #1504. Same fail-closed shape and the same optional-chaining guard as the two flags above,
+  // for the same two reasons (a failed query and a genuine zero arrive as identical zero-valued
+  // fields; the section itself can be absent on an older cached response or mid-rolling-deploy).
+  const deletionResidueAvailable = data.deletion_residue?.available;
+
+  // The count has to be read BEFORE the age, and this is not a style preference. The backend returns
+  // `newest_record_seconds` as 0 both when there are no residue records at all and when one was
+  // written this very instant — the two readings on this page that could not matter more differently.
+  // `deletionResidueRecords` is the disambiguator, so the age card branches on it and renders 'None'
+  // rather than '0s' when there is nothing to age. See domain.DeletionResidueMetrics (backend).
+  const deletionResidueRecords = deletionResidueAvailable ? data.deletion_residue.records : 0;
 
   return (
     <div className="p-8 max-w-[1400px] mx-auto max-md:p-4">
@@ -331,6 +343,55 @@ export function HealthDashboardPage() {
             value={orphanedItemsAvailable ? data.plaid_orphaned_items.max_unresolved_retry_attempt_count.toString() : 'Unavailable'}
             icon={<Timer size={24} />}
             status={!orphanedItemsAvailable ? 'warning' : (data.plaid_orphaned_items.max_unresolved_retry_attempt_count > ORPHAN_RETRY_ATTEMPT_WARN_THRESHOLD ? 'warning' : 'success')}
+          />
+        </div>
+      </section>
+
+      {/* Deletion Residue Section (Issue #1504) — GDPR deletions that were REVOKED after the user's
+          Paddle subscription-cancel call had already landed. The gate passed a moment earlier and a
+          network call cannot be recalled, so the cancel went through; the cascade then correctly
+          refused to delete anything. Each of these is a real person who kept their account and every
+          byte of their data, and has no subscription. Nobody tells them, and nothing automated
+          restores it — re-subscribing somebody automatically would be a worse failure than telling a
+          human, which is why this is a dashboard section and not a repair job.
+
+          Placed after Orphaned Plaid Items because it is the third instance of the same class of
+          signal on this page ("work only a human can finish"), and it reuses the same SummaryCard grid
+          rather than introducing a fourth shape.
+
+          ⚠ THIS COUNT NEVER GOES BACK DOWN, AND THAT IS DELIBERATE. There is no resolution column for
+          a residue record, nothing prunes audit_logs, and no record anywhere proves the affected user
+          was made whole — so a "handled" affordance here would be recording a claim as a proof, which
+          is precisely what the Operator-Attested card above exists to keep separate from Resolved. The
+          "Most Recent Occurrence" card carries the is-this-happening-now signal instead.
+
+          Scope discipline, matching both sections above: this only makes the residue VISIBLE. Whether
+          it should degrade `data.status` is a product decision #1504 never asked for, so `data.status`
+          is untouched. */}
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Deletion Residue</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
+          <SummaryCard
+            title="Subscriptions Cancelled By A Revoked Deletion"
+            value={deletionResidueAvailable ? deletionResidueRecords.toString() : 'Unavailable'}
+            icon={<UserX size={24} />}
+            status={!deletionResidueAvailable ? 'warning' : (deletionResidueRecords > 0 ? 'warning' : 'success')}
+          />
+          {/* ⚠ 'None' AND NOT '0s'. formatBacklogAge(0) renders '0s', which on an age card reads as
+              "this happened seconds ago" — the exact opposite of the truth when the real answer is
+              "this has never happened". The count is what distinguishes the two, so it gates the
+              branch. */}
+          <SummaryCard
+            title="Most Recent Occurrence"
+            value={
+              !deletionResidueAvailable
+                ? 'Unavailable'
+                : deletionResidueRecords === 0
+                  ? 'None'
+                  : `${formatBacklogAge(data.deletion_residue.newest_record_seconds)} ago`
+            }
+            icon={<History size={24} />}
+            status={!deletionResidueAvailable ? 'warning' : (deletionResidueRecords > 0 ? 'warning' : 'success')}
           />
         </div>
       </section>

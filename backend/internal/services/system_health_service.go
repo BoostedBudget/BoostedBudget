@@ -54,9 +54,11 @@ type systemHealthService struct {
 	pool           DatabasePool
 	plaidEnv       string
 	// jobHealthRepo backs the three DB-derived Plaid-cleanup/manual-tier-override backlog gauges
-	// (Issue #1458) — see repository.JobHealthRepository's own doc comment for why these queries
-	// are never duplicated here. Optional/nil-safe: an unwired jobHealthRepo (e.g. an older test
-	// construction of this struct) degrades to zero-value JobBacklogMetrics rather than panicking.
+	// (Issue #1458) and, since Issue #1504, the deletion-residue count behind
+	// SystemHealthResponse.DeletionResidue — see repository.JobHealthRepository's own doc comment for
+	// why these queries are never duplicated here. Optional/nil-safe: an unwired jobHealthRepo (e.g. an
+	// older test construction of this struct) degrades to zero-value JobBacklogMetrics and an
+	// UNAVAILABLE (never zero) DeletionResidueMetrics rather than panicking.
 	jobHealthRepo repository.JobHealthRepository
 	// plaidOrphanRepo backs SystemHealthResponse.PlaidOrphanedItems (Issue #1497 item 5).
 	// Optional/nil-safe: an unwired repo reports "unavailable", never a confident zero — see
@@ -175,6 +177,21 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		response.PlaidOrphanedItems = domain.PlaidOrphanedItemMetrics{}
 	} else {
 		response.PlaidOrphanedItems = orphanMetrics
+	}
+
+	// Post-gate external-effect residue (Issue #1504) — GDPR deletions revoked after the user's Paddle
+	// subscription had already been cancelled. Same "unknown is not zero" convention as every gauge
+	// above, and its own section rather than a field on JobBacklog so one failing query cannot blank
+	// out the other's numbers (see domain.DeletionResidueMetrics). Also deliberately NOT fed into
+	// calculateOverallStatus, matching both sections above: #1504 asked for visibility, not for a new
+	// definition of system health.
+	residueMetrics, err := s.getDeletionResidueMetrics(ctx)
+	if err != nil {
+		slog.Error("could not read the deletion-residue count for /admin/health; it is reported as unavailable rather than as zero — a cancelled subscription nobody has been told about must never render as a green zero",
+			"error", err)
+		response.DeletionResidue = domain.DeletionResidueMetrics{}
+	} else {
+		response.DeletionResidue = residueMetrics
 	}
 
 	// Calculate overall status
@@ -408,6 +425,41 @@ func (s *systemHealthService) getPlaidOrphanedItemMetrics(ctx context.Context, a
 	// every path has to say so explicitly. See domain.PlaidOrphanedItemMetrics.Available.
 	m.Available = true
 	return m, nil
+}
+
+// getDeletionResidueMetrics reads the post-gate external-effect residue count for /admin/health.
+// Issue #1504.
+//
+// ⚠ WHY THIS ONE IS A SQL COUNT WHILE getPlaidOrphanedItemMetrics above is a bounded full read — the
+// distinction matters, because the wrong one of these two shapes is a defect in either direction. That
+// derivation needs Go because one of AdminState's four checks (TokenIsLive) depends on whether THIS
+// PROCESS can decrypt a stored ciphertext, a fact no database can see. Nothing of the kind applies
+// here: a residue record has no state to derive at all. Its existence IS the fact, its action names
+// the effect, and its resource_id names the user. So a single indexed aggregate answers it exactly,
+// and loading rows to count them would be strictly worse — audit_logs is far larger than
+// plaid_orphaned_items, is appended to by every write path in the product, and has no pruning path, so
+// there is no cap that would make a full read safe here the way domain.PlaidOrphanedItemHealthScanCap
+// makes one safe there.
+//
+// Nil-safe, matching getJobBacklogMetrics and getPlaidOrphanedItemMetrics: an unwired repo is
+// "unknown", never "zero".
+func (s *systemHealthService) getDeletionResidueMetrics(ctx context.Context) (domain.DeletionResidueMetrics, error) {
+	if s.jobHealthRepo == nil {
+		// Not wired, not failed — but equally not a verified reading, so Available stays at its zero
+		// value. See domain.DeletionResidueMetrics.Available.
+		return domain.DeletionResidueMetrics{}, nil
+	}
+
+	count, newestAge, err := s.jobHealthRepo.GetDeletionResidueStats(ctx)
+	if err != nil {
+		return domain.DeletionResidueMetrics{}, fmt.Errorf("read deletion-residue stats: %w", err)
+	}
+	return domain.DeletionResidueMetrics{
+		Records:             int64(count),
+		NewestRecordSeconds: int64(newestAge.Seconds()),
+		// The query succeeded — this is a VERIFIED count, possibly a real (and very welcome) zero.
+		Available: true,
+	}, nil
 }
 
 // calculateOverallStatus determines the overall system health status

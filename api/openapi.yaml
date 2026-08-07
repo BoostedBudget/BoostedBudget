@@ -2768,6 +2768,22 @@ components:
         - message
         - suggestion
       type: object
+    DeletionResidueMetrics:
+      additionalProperties: false
+      properties:
+        available:
+          type: boolean
+        newest_record_seconds:
+          format: int64
+          type: integer
+        records:
+          format: int64
+          type: integer
+      required:
+        - records
+        - newest_record_seconds
+        - available
+      type: object
     Detailed:
       additionalProperties: false
       properties:
@@ -6051,6 +6067,8 @@ components:
           type: string
         dead_letter_queue:
           $ref: "#/components/schemas/DeadLetterMetrics"
+        deletion_residue:
+          $ref: "#/components/schemas/DeletionResidueMetrics"
         job_backlog:
           $ref: "#/components/schemas/JobBacklogMetrics"
         job_queues:
@@ -6080,6 +6098,7 @@ components:
         - paddle_status
         - job_backlog
         - plaid_orphaned_items
+        - deletion_residue
       type: object
     TagSource:
       additionalProperties: false
