@@ -65,14 +65,25 @@ func newEpisodeTestDeletionService(t *testing.T, f *integrationServiceFixture) (
 	return ds, clerk, audit
 }
 
-// requireDeletionSideEffectsNotRun asserts the two irreversible post-cascade side effects
-// ExecuteDeletion performs — the Clerk account deletion and the "user.deleted" audit entry — never
+// requireDeletionSideEffectsNotRun asserts the two irreversible side effects a completed deletion
+// leaves behind — the Clerk account deletion, and the durable "user.deleted" audit entry — never
 // happened. These are the observable evidence that the cascade committed, independent of whether
 // the users row happens to still be readable.
-func requireDeletionSideEffectsNotRun(t *testing.T, clerk *MockClerkService, audit *MockAuditLogger) {
+//
+// ⚠ THE AUDIT HALF IS CHECKED AGAINST THE DATABASE, NOT THE MOCK. Since Issue #1507 the entry is
+// written inside DeleteUserCascade's own transaction (repository.LogInTx), so the mocked
+// AuditLogger never sees it under ANY outcome — an AssertNotCalled on the mock alone would now be a
+// test that cannot fail. Counting rows for this subject is the assertion that still discriminates.
+func requireDeletionSideEffectsNotRun(t *testing.T, ctx context.Context, f *integrationServiceFixture, userID string, clerk *MockClerkService, audit *MockAuditLogger) {
 	t.Helper()
 	clerk.AssertNotCalled(t, "DeleteUser", mock.Anything, mock.Anything)
 	audit.AssertNotCalled(t, "Log", mock.Anything, "user.deleted", mock.Anything, mock.Anything)
+
+	var auditRows int
+	require.NoError(t, f.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM audit_logs WHERE resource_id = $1 AND action = 'user.deleted'`, userID).Scan(&auditRows))
+	require.Zero(t, auditRows,
+		"a deletion that did not happen must leave no durable `user.deleted` row claiming it did")
 }
 
 // requireUserStillPresent asserts the users row physically still exists and is not soft-deleted.
@@ -121,7 +132,7 @@ func TestExecuteDeletion_Integration_EpisodeCancelled_StaleJobDoesNotDelete(t *t
 	ds, clerk, audit := newEpisodeTestDeletionService(t, f)
 	require.NoError(t, ds.ExecuteDeletion(ctx, user.ID, repository.DeletionKindUserRequested),
 		"a stale job finding a cancelled request must be a benign no-op, not an error")
-	requireDeletionSideEffectsNotRun(t, clerk, audit)
+	requireDeletionSideEffectsNotRun(t, ctx, f, user.ID, clerk, audit)
 
 	requireUserStillPresent(t, f, user.ID,
 		"a user who cancelled their deletion request must not be deleted by an already-queued job")
@@ -162,7 +173,7 @@ func TestExecuteDeletion_Integration_EpisodeReRequested_StaleJobDoesNotDeleteEar
 	ds, clerk, audit := newEpisodeTestDeletionService(t, f)
 	require.NoError(t, ds.ExecuteDeletion(ctx, user.ID, repository.DeletionKindUserRequested),
 		"a stale job whose episode has been superseded must be a benign no-op, not an error")
-	requireDeletionSideEffectsNotRun(t, clerk, audit)
+	requireDeletionSideEffectsNotRun(t, ctx, f, user.ID, clerk, audit)
 
 	requireUserStillPresent(t, f, user.ID,
 		"a re-requested deletion must not be executed before its own deletion_scheduled_at elapses")

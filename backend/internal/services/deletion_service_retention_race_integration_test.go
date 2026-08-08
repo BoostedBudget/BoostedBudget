@@ -158,7 +158,7 @@ func TestExecuteDeletion_Integration_RetentionResubscribed_NotDeleted(t *testing
 	// a fatal row-missing assertion.
 	paddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
 
-	requireDeletionSideEffectsNotRun(t, clerk, audit)
+	requireDeletionSideEffectsNotRun(t, ctx, f, userID, clerk, audit)
 	requireUserStillPresent(t, f, userID,
 		"a user who resubscribed after the retention sweep selected them must NOT be hard-deleted")
 
@@ -190,7 +190,21 @@ func TestExecuteDeletion_Integration_RetentionCandidate_IsDeleted(t *testing.T) 
 			"DeleteUserCascade issues a real DELETE FROM users")
 
 	clerk.AssertCalled(t, "DeleteUser", mock.Anything, mock.Anything)
-	audit.AssertCalled(t, "Log", mock.Anything, "user.deleted", mock.Anything, mock.Anything)
+
+	// Issue #1507: the terminal entry is no longer this service's post-commit call — it is
+	// DeleteUserCascade's own last statement before COMMIT — so the mocked AuditLogger no longer
+	// sees it and asserting on the mock would now assert nothing. Assert on the DATABASE instead,
+	// which is strictly stronger: it proves the row is durably there after the same transaction
+	// erased the user it names.
+	audit.AssertNotCalled(t, "Log", mock.Anything, "user.deleted", mock.Anything, mock.Anything)
+	var auditRows int
+	require.NoError(t, f.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM audit_logs WHERE resource_id = $1 AND action = 'user.deleted'`, userID).Scan(&auditRows))
+	require.Equal(t, 1, auditRows,
+		"exactly one durable `user.deleted` row must have committed with the erasure it records")
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(context.Background(), `DELETE FROM audit_logs WHERE resource_id = $1`, userID)
+	})
 }
 
 // TestExecuteDeletion_Integration_RetentionResubscribedClockClearFailed_NotDeleted pins the
@@ -227,7 +241,7 @@ func TestExecuteDeletion_Integration_RetentionResubscribedClockClearFailed_NotDe
 	require.NoError(t, ds.ExecuteDeletion(ctx, userID, repository.DeletionKindRetention))
 
 	paddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
-	requireDeletionSideEffectsNotRun(t, clerk, audit)
+	requireDeletionSideEffectsNotRun(t, ctx, f, userID, clerk, audit)
 	requireUserStillPresent(t, f, userID,
 		"an active, paying subscription must block a retention hard delete even when the stale retention clock survived")
 }
@@ -257,7 +271,7 @@ func TestExecuteDeletion_Integration_RetentionClockCleared_StatusStillCancelled_
 	ds, clerk, audit, _ := newRetentionRaceTestDeletionService(t, f)
 	require.NoError(t, ds.ExecuteDeletion(ctx, userID, repository.DeletionKindRetention))
 
-	requireDeletionSideEffectsNotRun(t, clerk, audit)
+	requireDeletionSideEffectsNotRun(t, ctx, f, userID, clerk, audit)
 	requireUserStillPresent(t, f, userID,
 		"a user with no retention clock at all must not be hard-deleted under the retention authorisation")
 }
@@ -289,7 +303,7 @@ func TestExecuteDeletion_Integration_RetentionExpiryInFuture_NotDeleted(t *testi
 	ds, clerk, audit, _ := newRetentionRaceTestDeletionService(t, f)
 	require.NoError(t, ds.ExecuteDeletion(ctx, userID, repository.DeletionKindRetention))
 
-	requireDeletionSideEffectsNotRun(t, clerk, audit)
+	requireDeletionSideEffectsNotRun(t, ctx, f, userID, clerk, audit)
 	requireUserStillPresent(t, f, userID,
 		"a user whose retention window has been restarted must not be hard-deleted before it elapses")
 }

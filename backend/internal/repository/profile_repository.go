@@ -473,6 +473,11 @@ type profileRepository struct {
 	db                    DB
 	enc                   *appcrypto.FieldEncryptor
 	overrideTierValidator func(tierName string) bool
+	// auditLog writes DeleteUserCascade's terminal `user.deleted` entry inside the cascade's own
+	// transaction (Issue #1507). Held as the interface rather than reaching for a package-level
+	// helper so the write goes through the one documented entry point — LogInTx — whose doc comment
+	// carries the #1506 warning a future implementer must not be able to miss.
+	auditLog AuditLogRepository
 }
 
 // SetOverrideTierValidator injects a function that reports whether a manual_tier_override value
@@ -516,7 +521,10 @@ func (r *profileRepository) SetOverrideTierValidator(validator func(tierName str
 var _ ProfileRepository = (*profileRepository)(nil)
 
 func NewProfileRepository(db DB, enc *appcrypto.FieldEncryptor) *profileRepository {
-	return &profileRepository{db: db, enc: enc}
+	// auditLog is constructed unconditionally and from the same handle: DeleteUserCascade only ever
+	// calls LogInTx, which writes through the transaction it is given and never touches this
+	// receiver's db, so there is no configuration for a caller to get wrong or forget.
+	return &profileRepository{db: db, enc: enc, auditLog: NewAuditLogRepository(db)}
 }
 
 const userSelectQuery = `
@@ -1820,6 +1828,64 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM mcp_audit_log WHERE actor_user_id = $1`, userID); err != nil {
 		return false, fmt.Errorf("DeleteUserCascade: erase mcp_audit_log: %w", err)
+	}
+
+	// Issue #1507: THE TERMINAL AUDIT ENTRY, WRITTEN IN THE TRANSACTION IT DESCRIBES.
+	//
+	// This used to be ExecuteDeletion's own `s.auditLogger.Log(ctx, "user.deleted", ...)`, issued
+	// AFTER this transaction had committed and with its error routed to a log line. So the one
+	// entry that says "this person's data was erased" was the one entry that could be missing while
+	// the erasure it describes was permanent and unretriable — the exact inversion of what an audit
+	// trail is for, and the same "irreversible step taken, durable record missing" shape as the
+	// plaid_orphaned_items INSERT above. It is now the last statement before COMMIT: either both
+	// the erasure and its record land, or neither does.
+	//
+	// WHAT A FAILURE HERE DOES: IT ABORTS THE DELETION. Deliberate, and the harder of the two
+	// choices to defend, so the reasoning is stated rather than implied.
+	//
+	//   - Nothing is lost, only deferred. Unlike every other audit write in this codebase, this one
+	//     is inside a transaction that has not committed, so there IS something to roll back. The
+	//     deferred tx.Rollback restores the user intact, ExecuteDeletion's error path releases the
+	//     work claim, and the next scheduled run retries the whole deletion from the top. The user's
+	//     erasure is delayed by one sweep interval, not denied — and the error is surfaced, not
+	//     swallowed, so an operator can act inside any statutory window.
+	//   - The alternative is the defect. "Proceed and log" is exactly what #1507 exists to fix;
+	//     re-adopting it inside the transaction would leave the fix cosmetic.
+	//   - The realistic failure modes take the COMMIT with them anyway. This INSERT has no FK check
+	//     (user_id NULL), no unique constraint, and no trigger; what remains is connection loss,
+	//     disk-full, or the table being gone — none of which would have let the COMMIT two lines
+	//     below succeed either. The "audit write fails but everything else would have worked" case
+	//     is close to empty in practice, which is what makes abort cheap.
+	//   - AND "PROCEED AND LOG" IS NOT ACTUALLY AVAILABLE HERE, which is worth stating because it is
+	//     the thing a future reader will assume it can reach for. A failed statement leaves this
+	//     transaction in the aborted state; every subsequent statement, including the COMMIT below,
+	//     then fails too. Verified by mutation: replacing this `return` with `err = nil` does not
+	//     produce "user erased, no audit row" — it produces a COMMIT that reports
+	//     "commit unexpectedly resulted in rollback", i.e. the same abort with a worse error
+	//     message. Making the failure genuinely survivable would take a SAVEPOINT around this
+	//     INSERT, which is deliberately NOT done: it would reconstruct the pre-#1507 defect inside
+	//     the transaction that was supposed to have closed it.
+	//
+	// Pinned in both directions by
+	// TestDeleteUserCascade_Integration_AuditWriteFailureAbortsTheWholeCascade (state rolled back,
+	// not merely an error returned) and its mandatory sibling
+	// TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion.
+	//
+	// AFTER `DELETE FROM users`, NOT BEFORE, for two independent reasons: the entry records a
+	// completed erasure, and the redaction UPDATE far above (`SET changes = NULL WHERE
+	// resource_id = $1 ...`) runs earlier, so this row's NULL `changes` is NULL because nothing was
+	// written to it — not because it was redacted. It survives the DELETE because audit_logs.user_id
+	// is the only FK to users and it is written NULL, while resource_id has no FK at all.
+	//
+	// ⚠ LOCK ORDER IS UNPERTURBED, and that is a claim about this statement specifically. With
+	// user_id NULL no RI check fires, so this INSERT takes a RowExclusiveLock on audit_logs and NO
+	// row lock on users, households, or anything else — it can neither extend nor reorder the locks
+	// this transaction already holds (households FOR NO KEY UPDATE, then users FOR UPDATE), so the
+	// AcceptInvite invariant documented at the household lock above still holds unchanged. That is
+	// true ONLY while the actor is NULL: see LogInTx's #1506 warning, which is where a future
+	// implementer adding an actor will trip over it.
+	if err = r.auditLog.LogInTx(ctx, tx, "user.deleted", "user", userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: record the terminal audit entry: %w", err)
 	}
 
 	// Commit the transaction
