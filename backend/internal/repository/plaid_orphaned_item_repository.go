@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
@@ -302,9 +303,16 @@ func (r *plaidOrphanedItemRepository) MarkResolved(ctx context.Context, id strin
 // record exists that does not. The second statement runs ONLY on the rare zero-row path, so the happy
 // path is still one round-trip.
 func (r *plaidOrphanedItemRepository) RecordOperatorResolution(ctx context.Context, id, operatorID, note string, asOf time.Time) error {
-	// Guarded here as well as at the API layer because migration 000137's CHECK constraint enforces
-	// "an attestation is never anonymous" and a violation would surface as an opaque 23514 rather than
-	// as the thing that is actually wrong.
+	// Guarded here as well as at the API layer because migration 000137's CHECK constraint (tightened
+	// by 000139) enforces "an attestation is never anonymous" and a violation would surface as an
+	// opaque 23514 rather than as the thing that is actually wrong.
+	//
+	// ⚠ TRIMMED BEFORE IT IS VALIDATED, AND THE TRIMMED VALUE IS WHAT IS STORED. An exact-"" check
+	// lets "   " and "\t" through, and those are anonymous attestations by any reading that matters —
+	// which was the whole defect 000139 exists to close on the database side. Storing the trimmed form
+	// as well means two attestations can never differ only by invisible characters, so "who said this"
+	// stays a question with one answer.
+	operatorID = strings.TrimSpace(operatorID)
 	if operatorID == "" {
 		return fmt.Errorf("RecordOperatorResolution: an attestation must name the operator making it")
 	}
@@ -338,11 +346,19 @@ func (r *plaidOrphanedItemRepository) RecordOperatorResolution(ctx context.Conte
 // nullIfEmptyNote keeps an empty note out of the column as NULL rather than as '', so "no note" has
 // one representation. Migration 000137's CHECK permits a NULL note beside an attestation (a legitimate
 // repair may have none); the API layer is where a non-empty note is required of new writes.
+//
+// ⚠ WHITESPACE-ONLY COUNTS AS EMPTY, and the trimmed form is what is stored. "   " stored as a note
+// renders on the admin surface as an explanation that explains nothing while being, to code, a note
+// that exists — the two-representations-of-one-fact defect this branch has now closed several times.
+// Migration 000139 makes the same rule structural (plaid_orphaned_items_operator_note_is_not_blank),
+// so this function is now the normalisation and the constraint is the guarantee, rather than this
+// function being the only thing standing between a blank note and the column.
 func nullIfEmptyNote(note string) *string {
-	if note == "" {
+	trimmed := strings.TrimSpace(note)
+	if trimmed == "" {
 		return nil
 	}
-	return &note
+	return &trimmed
 }
 
 // RecordRetryFailure records one failed attempt: the count, the instant, and the error code.
