@@ -46,6 +46,13 @@ func installAuditInsertPoison(t *testing.T, ctx context.Context, pool *pgxpool.P
 	fn := "z1507_poison_" + suffix
 	trg := "z1507_poison_trg_" + suffix
 
+	// Registered BEFORE either CREATE, so a failure of the SECOND one cannot leak the first. Both
+	// DROPs are IF EXISTS, so cleaning up something that was never created is a no-op.
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON audit_logs`, trg))
+		_, _ = pool.Exec(context.Background(), fmt.Sprintf(`DROP FUNCTION IF EXISTS %s()`, fn))
+	})
+
 	_, err := pool.Exec(ctx, fmt.Sprintf(`
 		CREATE FUNCTION %s() RETURNS trigger AS $poison$
 		BEGIN
@@ -61,11 +68,6 @@ func installAuditInsertPoison(t *testing.T, ctx context.Context, pool *pgxpool.P
 	_, err = pool.Exec(ctx, fmt.Sprintf(
 		`CREATE TRIGGER %s BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION %s();`, trg, fn))
 	require.NoError(t, err, "install the audit-write poison trigger")
-
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON audit_logs`, trg))
-		_, _ = pool.Exec(context.Background(), fmt.Sprintf(`DROP FUNCTION IF EXISTS %s()`, fn))
-	})
 }
 
 // quoteLiteralForTest single-quotes a value for interpolation into DDL, which cannot take bind
@@ -124,9 +126,15 @@ func TestDeleteUserCascade_Integration_AuditWriteFailureAbortsTheWholeCascade(t 
 // broken outright and never produces a row under any circumstances.
 //
 // An ordinary, uneventful deletion must still write EXACTLY ONE durable `user.deleted` row. "Exactly
-// one" is asserted, not "at least one": moving the write into the transaction without removing
-// ExecuteDeletion's post-commit call would produce two, and a duplicated erasure record is its own
-// defect in a tamper-evident trail.
+// one" is asserted, not "at least one", because a duplicated erasure record is its own defect in a
+// tamper-evident trail.
+//
+// ⚠ SCOPE, STATED SO IT IS NOT OVERREAD: this calls DeleteUserCascade DIRECTLY, so what it can
+// falsify is "the cascade writes one row", not "the whole stack writes one row". It is structurally
+// blind to ExecuteDeletion's removed post-commit call, which lives a layer up. The cross-layer
+// exactly-once claim is proved end-to-end by TestExecuteDeletion_Integration_RetentionCandidate_
+// IsDeleted (internal/services), which runs ExecuteDeletion against a real database and counts the
+// same rows — and that is the test the "re-add the post-commit write" mutation is killed by.
 func TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -165,10 +173,15 @@ func TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion
 // depends entirely on user_id being NULL — audit_logs.user_id is an FK to users (migration 000003),
 // and resource_id has none at all.
 //
-// The second half of this test is the load-bearing one: it shows what the NULL actor is buying, by
-// proving the same INSERT with the subject in user_id is a foreign-key violation. That is also the
-// mechanism behind LogInTx's #1506 warning — a non-NULL actor makes this INSERT take FOR KEY SHARE
-// on a users row, which is what reintroduces the 40P01 cycle.
+// The second half shows what the NULL actor is buying, by proving the same INSERT with the subject
+// in user_id is a foreign-key violation.
+//
+// ⚠ WHAT THAT HALF DOES AND DOES NOT PROVE. It proves the FK is real, enforced, and would reject
+// this row — which is the PRECONDITION of LogInTx's #1506 warning, not the warning itself. It does
+// NOT exhibit the FOR KEY SHARE acquisition or the 40P01 cycle; a real deadlock test would need two
+// concurrent cascades and a non-NULL actor, i.e. it would have to build the very thing #1506 is
+// warned off building. The lock argument is therefore carried by the constraint's existence proved
+// here plus Postgres's documented RI semantics, not by a reproduction in this file.
 func TestDeleteUserCascade_Integration_AuditEntrySurvivesItsSubjectsHardDeletion(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)

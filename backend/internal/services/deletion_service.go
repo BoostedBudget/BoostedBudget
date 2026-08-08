@@ -768,8 +768,21 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// It is now DeleteUserCascade's own last statement before COMMIT (repository.LogInTx), so the
 	// record and the erasure land together or not at all. `deleted == true` above is therefore
 	// already proof that the entry was written. Do NOT re-add a call here: it would produce a second
-	// `user.deleted` row per deletion, which
-	// TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion refutes.
+	// `user.deleted` row per deletion, which TestExecuteDeletion_Integration_RetentionCandidate_
+	// IsDeleted refutes — that is the test that runs THIS function against a real database and
+	// counts the rows. (Its repository-layer sibling,
+	// TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion, calls the cascade
+	// directly and so cannot see this layer at all.)
+	//
+	// ⚠ AND NOTE WHAT A FAILURE OF THAT WRITE NOW COSTS. Because it aborts the cascade, an audit
+	// INSERT that fails PERSISTENTLY (a revoked INSERT privilege on audit_logs, a new constraint or
+	// RLS policy) gates this user's erasure for as long as it lasts — after the Plaid disconnect and
+	// possibly the Paddle cancellation above have already run and cannot be undone. The trade is
+	// argued at the write site in profile_repository.go; the part that lands HERE is that such a run
+	// takes the error branch below, which deliberately records no Paddle-cancel residue on the
+	// grounds that the run is still expected to complete. For a persistent failure that premise is
+	// false. Recording residue for every cascade error would break the transient case the rule was
+	// written for, so it is left as-is and named rather than silently changed.
 	//
 	// The service's OTHER audit writes are unchanged and stay non-fatal: RequestDeletion's
 	// `user.deletion_requested` and CancelDeletion's `user.deletion_cancelled` both describe a state
