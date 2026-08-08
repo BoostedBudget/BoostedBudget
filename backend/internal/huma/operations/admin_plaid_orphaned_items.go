@@ -184,7 +184,8 @@ func (h *AdminHandler) RecordPlaidOrphanedItemOperatorResolution(
 		return nil, huma.Error503ServiceUnavailable("orphaned Plaid item repository not available")
 	}
 	// Belt and braces beside the resolver, which already refuses a request with no Clerk identity: an
-	// anonymous attestation violates migration 000137's CHECK constraint, and a 23514 surfacing as a
+	// anonymous attestation violates migration 000137's CHECK constraint (tightened by 000139 to reject a
+	// blank attester as well as a NULL one), and a 23514 surfacing as a
 	// 500 would hide what is actually wrong. See the input type's comment on why the attester is never
 	// taken from the body.
 	if input.ClerkUserID == "" {

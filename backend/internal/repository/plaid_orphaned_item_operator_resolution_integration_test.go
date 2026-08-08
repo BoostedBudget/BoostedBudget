@@ -9,7 +9,7 @@ package repository
 // resolved_at exactly as they were, and that the retry sweep's own selection still returns the row.
 // pgxmock matches query text and argument shape, so it would happily pass an UPDATE that also nulled
 // the credential, one that also stamped resolved_at, and one whose first-wins predicate was missing.
-// Two of the constraints asserted here exist only in the database (migration 000137).
+// Three of the constraints asserted here exist only in the database (migrations 000137 and 000139).
 //
 // Run with:
 //
@@ -276,7 +276,7 @@ func TestPlaidOrphanedItemRepository_Integration_List_ReportsTheOperatorAttested
 	assert.Equal(t, "user_2attestingAdmin", view.OperatorResolvedBy)
 }
 
-// ─── The two CHECK constraints migration 000137 adds, asserted against the database itself ───────
+// ─── The CHECK constraints 000137 added and 000139 tightened, asserted against the database ────
 //
 // A constraint no test ever violates is indistinguishable from an absent one — the same argument
 // TestPlaidOrphanedItems_Integration_PurgedTokenIsNullIsEnforcedByTheDatabase makes for 000135's.
@@ -310,4 +310,141 @@ func TestPlaidOrphanedItems_Integration_OperatorAttestationConstraintsAreEnforce
 		SET operator_resolved_at = $2, operator_resolved_by = $3, operator_resolution_note = $4
 		WHERE id = $1`, id, asOf, "user_x", "explains everything")
 	require.NoError(t, err, "the whole triple together must be accepted, or the constraints are simply wrong")
+}
+
+// ⚠ THE REPOSITORY TRIMS BEFORE IT VALIDATES, so a whitespace-only attester cannot slip past the
+// exact-"" check and land as an opaque 23514 from the constraint above. The trimmed value is also what
+// gets STORED, so an attester never differs from another only by invisible characters, and a
+// whitespace-only note is normalised to NULL rather than stored as a note that says nothing.
+func TestPlaidOrphanedItemRepository_Integration_RecordOperatorResolution_TrimsBeforeValidating(t *testing.T) {
+	repo, ctx := newOrphanRepo(t)
+	asOf := time.Now().UTC()
+
+	for _, blank := range []string{"", "   ", "\t\n"} {
+		id := seedOrphanRow(t, ctx, repo, orphanFixture{
+			plaidItemID: "item-trim-reject-" + uuid.NewString(),
+			orphanedAt:  asOf, tokenExpiresAt: asOf.Add(domain.OrphanedItemTokenRetention),
+		})
+		err := repo.RecordOperatorResolution(ctx, id, blank, "a note", asOf)
+		require.ErrorContains(t, err, "must name the operator",
+			"a whitespace-only attester is an anonymous one, and must be refused HERE — not as a 23514 the caller cannot read")
+
+		// SIBLING: the refusal really did refuse. Nothing was written.
+		s := readAttestationState(t, ctx, repo, id)
+		assert.Nil(t, s.operatorResolvedAt, "a refused attestation must leave the row untouched")
+		assert.Nil(t, s.operatorNote)
+	}
+
+	// And the positive half: padding is stripped on the way in, on both columns.
+	id := seedOrphanRow(t, ctx, repo, orphanFixture{
+		plaidItemID: "item-trim-accept-" + uuid.NewString(),
+		orphanedAt:  asOf, tokenExpiresAt: asOf.Add(domain.OrphanedItemTokenRetention),
+	})
+	require.NoError(t, repo.RecordOperatorResolution(ctx, id, "  user_2paddedAdmin\n", "  Removed at Plaid.\t", asOf))
+	s := readAttestationState(t, ctx, repo, id)
+	require.NotNil(t, s.operatorResolvedBy)
+	assert.Equal(t, "user_2paddedAdmin", *s.operatorResolvedBy)
+	require.NotNil(t, s.operatorNote)
+	assert.Equal(t, "Removed at Plaid.", *s.operatorNote)
+
+	// A note that is ONLY whitespace becomes NULL — "no note" has one representation, not two.
+	blankNote := seedOrphanRow(t, ctx, repo, orphanFixture{
+		plaidItemID: "item-trim-note-" + uuid.NewString(),
+		orphanedAt:  asOf, tokenExpiresAt: asOf.Add(domain.OrphanedItemTokenRetention),
+	})
+	require.NoError(t, repo.RecordOperatorResolution(ctx, blankNote, "user_2admin", "   ", asOf))
+	blankState := readAttestationState(t, ctx, repo, blankNote)
+	assert.Nil(t, blankState.operatorNote, "a note of pure whitespace is no note at all, and must be stored as NULL")
+	assert.NotNil(t, blankState.operatorResolvedAt, "the attestation itself still stands — 000137 permits a NULL note")
+}
+
+// ⚠ AND A BLANK ATTESTER IS AN ANONYMOUS ONE. Migration 000139.
+//
+// 000137's constraint enforced NULL PARITY only, so (now(), '') and (now(), '   ') both satisfied it
+// while being, in every sense that matters, the anonymous attestation 000137's own prose says the
+// database refuses. The mitigation for storing an unverified human claim is that somebody is
+// answerable for it; an attester of "" names nobody. This is asserted against the DATABASE rather
+// than against the repository on purpose — the repository guard covers one writer, the constraint
+// covers every writer there will ever be, and only the constraint survives a future code change.
+func TestPlaidOrphanedItems_Integration_ABlankOperatorIsRefusedByTheDatabase(t *testing.T) {
+	repo, ctx := newOrphanRepo(t)
+	asOf := time.Now().UTC()
+
+	id := seedOrphanRow(t, ctx, repo, orphanFixture{
+		plaidItemID: "item-blank-attester-" + uuid.NewString(),
+		orphanedAt:  asOf, tokenExpiresAt: asOf.Add(domain.OrphanedItemTokenRetention),
+	})
+
+	for _, blank := range []struct{ name, value string }{
+		{"the empty string", ""},
+		{"spaces only", "   "},
+		{"a tab only", "\t"},
+		{"a newline only", "\n"},
+	} {
+		t.Run(blank.name, func(t *testing.T) {
+			_, err := repo.db.Exec(ctx, `
+				UPDATE plaid_orphaned_items
+				SET operator_resolved_at = $2, operator_resolved_by = $3
+				WHERE id = $1`, id, asOf, blank.value)
+			assert.ErrorContains(t, err, "plaid_orphaned_items_operator_attestation_is_attributed",
+				"an attestation attributed to nobody must be refused by the database — NULL parity alone permits it")
+		})
+	}
+
+	// ⚠ THE MANDATORY SIBLINGS. Without these the test above passes against a constraint that rejects
+	// EVERY write, which would be a far worse bug than the one being fixed.
+	_, err := repo.db.Exec(ctx, `
+		UPDATE plaid_orphaned_items
+		SET operator_resolved_at = $2, operator_resolved_by = $3, operator_resolution_note = $4
+		WHERE id = $1`, id, asOf, "user_2genuineAdmin", "Removed at Plaid by hand.")
+	require.NoError(t, err, "a genuine attestation must still be accepted")
+
+	_, err = repo.db.Exec(ctx, `
+		UPDATE plaid_orphaned_items
+		SET operator_resolved_at = NULL, operator_resolved_by = NULL, operator_resolution_note = NULL
+		WHERE id = $1`, id)
+	require.NoError(t, err, "and the NULL/NULL/NULL pair — the state every row starts in — must stay legal")
+}
+
+// ⚠ AND "NO NOTE" HAS EXACTLY ONE REPRESENTATION. Migration 000139.
+//
+// A stored '' and a stored NULL read identically to a human and differently to code; keeping both
+// legal guarantees that two writers eventually disagree about which they meant, and the admin surface
+// renders "an explanation that says nothing" as if it were an explanation. The API already refuses a
+// blank note and the repository normalises one to NULL — this is the same rule for everyone else.
+func TestPlaidOrphanedItems_Integration_ABlankNoteIsRefusedByTheDatabase(t *testing.T) {
+	repo, ctx := newOrphanRepo(t)
+	asOf := time.Now().UTC()
+
+	id := seedOrphanRow(t, ctx, repo, orphanFixture{
+		plaidItemID: "item-blank-note-" + uuid.NewString(),
+		orphanedAt:  asOf, tokenExpiresAt: asOf.Add(domain.OrphanedItemTokenRetention),
+	})
+
+	for _, blank := range []struct{ name, value string }{
+		{"the empty string", ""},
+		{"spaces only", "   "},
+		{"a tab only", "\t"},
+	} {
+		t.Run(blank.name, func(t *testing.T) {
+			_, err := repo.db.Exec(ctx, `
+				UPDATE plaid_orphaned_items
+				SET operator_resolved_at = $2, operator_resolved_by = $3, operator_resolution_note = $4
+				WHERE id = $1`, id, asOf, "user_2genuineAdmin", blank.value)
+			assert.ErrorContains(t, err, "plaid_orphaned_items_operator_note_is_not_blank",
+				"a note that says nothing must be stored as NULL or not at all")
+		})
+	}
+
+	// SIBLINGS: a real note is accepted, and so is an attestation with NO note at all — 000137's
+	// deliberate allowance for a legitimate backfill or manual repair, which must survive this change.
+	_, err := repo.db.Exec(ctx, `
+		UPDATE plaid_orphaned_items
+		SET operator_resolved_at = $2, operator_resolved_by = $3, operator_resolution_note = $4
+		WHERE id = $1`, id, asOf, "user_2genuineAdmin", "Removed at Plaid by hand.")
+	require.NoError(t, err, "a real note must still be accepted")
+
+	_, err = repo.db.Exec(ctx, `
+		UPDATE plaid_orphaned_items SET operator_resolution_note = NULL WHERE id = $1`, id)
+	require.NoError(t, err, "and a NULL note beside an attestation stays legal — 000137's allowance is not being revoked")
 }
