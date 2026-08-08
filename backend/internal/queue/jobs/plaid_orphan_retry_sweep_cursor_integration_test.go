@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"testing"
 	"time"
 
@@ -75,7 +76,15 @@ func orphanRetryToken(id string) string { return "orphan-retry-tok-" + id }
 // explicit orphaned_at so the test controls the sort key exactly.
 func seedOrphanRetryCandidate(t *testing.T, pool *pgxpool.Pool, enc *appcrypto.FieldEncryptor, orphanedAt time.Time) string {
 	t.Helper()
-	id := uuid.NewString()
+	return seedOrphanRetryCandidateWithID(t, pool, enc, uuid.NewString(), orphanedAt)
+}
+
+// seedOrphanRetryCandidateWithID is seedOrphanRetryCandidate with the row identity supplied by the
+// caller. It exists for the ONE property a random id cannot express: which member of a tie group is
+// at its HEAD and which is at its TAIL. Ties break on `id ASC`, so a test that needs "these two rows
+// rank ahead of that one, at the same orphaned_at" must choose the ids, not accept them.
+func seedOrphanRetryCandidateWithID(t *testing.T, pool *pgxpool.Pool, enc *appcrypto.FieldEncryptor, id string, orphanedAt time.Time) string {
+	t.Helper()
 
 	encItem, err := enc.EncryptString("orphan-retry-item-" + id)
 	require.NoError(t, err, "encrypt plaid item id")
@@ -146,6 +155,33 @@ func assertOrphanSweepSeesExactlySeeded(t *testing.T, pool *pgxpool.Pool, seeded
 		"setup guard: the first %d retryable orphan records on this database must be exactly the rows this "+
 			"test seeded; a foreign fixture row ranking ahead of them would invalidate every cap-based "+
 			"assertion below", len(seeded))
+}
+
+// sortedOrphanIDs returns n fresh uuids in the order PostgreSQL will rank them.
+//
+// Safe to compare as Go strings: PostgreSQL orders `uuid` by its 16 raw bytes, and uuid.NewString
+// emits the canonical LOWERCASE hex form with dashes at fixed positions — over the alphabet
+// [0-9a-f] the ASCII order of a hex digit is its numeric order, so a bytewise string comparison of
+// two canonical uuids and a bytewise comparison of the values they encode agree everywhere.
+func sortedOrphanIDs(n int) []string {
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		ids = append(ids, uuid.NewString())
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// orphanRecordIsResolved reports whether the sweep actually removed this record's Plaid Item.
+// Reading resolved_at rather than the remover's tally is deliberate: "the Item is gone at Plaid and
+// the credential is purged" is a fact about the ROW, and it is the fact that decides whether an
+// outstanding Item was really disposed of.
+func orphanRecordIsResolved(t *testing.T, pool *pgxpool.Pool, id string) bool {
+	t.Helper()
+	var resolvedAt *time.Time
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT resolved_at FROM plaid_orphaned_items WHERE id = $1`, id).Scan(&resolvedAt))
+	return resolvedAt != nil
 }
 
 // tokensOf maps seeded record ids to the credentials the sweep would present for them.
@@ -309,6 +345,96 @@ func TestPlaidOrphanRetrySweepCursor_TieGroupFillsTheCap_AdvancesPastItAndReache
 		"the record ranked BEHIND an over-cap tie group in which nothing ever drains must still be "+
 			"reached; that is what the exclusive advance buys, and it is bought at the documented price "+
 			"of the group's own third row (see repository.NextPosition)")
+}
+
+// ---------------------------------------------------------------------------------------------
+// 4b. WHAT THE EXCLUSIVE ADVANCE ACTUALLY COSTS — and it is NOT what NextPosition's comment used to
+//     say it was. That comment bounded the sacrifice to a tie group "in which no row ever leaves the
+//     candidate set", and test 4 above builds exactly that (all three tied rows failing). The
+//     precondition is OVERSTATED: only the rows at the HEAD of the group need keep failing, because
+//     only they have to fill the cap. The row at the TAIL may be FULLY PROCESSABLE and is sacrificed
+//     anyway.
+//
+//     For this sweep that row is a removable Plaid Item that is never retried on any run — and once
+//     its 30-day token TTL elapses (`token_expires_at`, migration 000135) no automated path can ever
+//     remove it. These two tests construct the case rather than argue it: 4b proves the tail row is
+//     never reached, 4c proves — with the identical fixture — that it would have been resolved had it
+//     been reached, so 4b's negative is a sacrifice and not a row that was never processable.
+// ---------------------------------------------------------------------------------------------
+
+func TestPlaidOrphanRetrySweepCursor_OverCapTieGroup_SacrificesAProcessableTailRow(t *testing.T) {
+	pool := connectJobsTestDB(t)
+	resetSweepCursor(t, pool, repository.SweepCursorOrphanRetry)
+	enc := newJobsTestFieldEncryptor(t)
+
+	tied := time.Date(1992, 9, 1, 0, 0, 0, 0, time.UTC)
+	ids := sortedOrphanIDs(3)
+	headA := seedOrphanRetryCandidateWithID(t, pool, enc, ids[0], tied)
+	headB := seedOrphanRetryCandidateWithID(t, pool, enc, ids[1], tied)
+	tail := seedOrphanRetryCandidateWithID(t, pool, enc, ids[2], tied)
+	behind := seedOrphanRetryCandidate(t, pool, enc, tied.Add(1*time.Second))
+	assertOrphanSweepSeesExactlySeeded(t, pool, []string{headA, headB, tail, behind})
+
+	// ⚠ ONLY THE HEAD FAILS. `tail` is a perfectly removable Item: had any run presented its
+	// credential, Plaid would have accepted and MarkResolved would have purged it. That is the whole
+	// point — the sacrifice does not need an undrainable group, only an undrainable HEAD.
+	failing := tokensOf(headA, headB, behind)
+
+	attempted := map[string]bool{}
+	for run := 1; run <= 3; run++ {
+		for tok := range runOrphanRetrySweep(t, pool, 2, 2, failing).attemptedSet() {
+			attempted[tok] = true
+		}
+	}
+
+	// The sibling positive, and it is mandatory: without it this test would also pass if the sweep
+	// did nothing whatsoever. The exclusive advance is doing its job — the row RANKED BEHIND the
+	// over-cap tie group is reached, which is what the trade buys.
+	require.True(t, attempted[orphanRetryToken(behind)],
+		"the row ranked behind the tie group must be reached by run 3; if it is not, the exclusive "+
+			"advance is broken and this test's negative below proves nothing")
+
+	// THE SACRIFICE, asserted as membership over the union of all three runs — never as a count
+	// delta, which a broadened predicate would shift identically on both sides.
+	require.False(t, attempted[orphanRetryToken(tail)],
+		"THE DOCUMENTED PRICE OF THE EXCLUSIVE ADVANCE: the third row of an over-cap tie group is not "+
+			"reached on ANY run, and a wrap does not help (a wrap restarts at the beginning and re-reads "+
+			"the same first cap-worth). Note that only headA/headB fail here — %s is fully processable "+
+			"and is skipped anyway. If this assertion ever fails because the cursor learned to advance "+
+			"WITHIN a tie group, that is the fix landing, not a regression: delete this test and update "+
+			"repository.NextPosition's comment and #1477's body together", tail)
+
+	require.False(t, orphanRecordIsResolved(t, pool, tail),
+		"and the consequence is not bookkeeping: %s's Plaid Item is still outstanding and still "+
+			"possibly billing, with no run that will ever attempt it before its token_expires_at "+
+			"deadline retires the only credential that could", tail)
+}
+
+func TestPlaidOrphanRetrySweepCursor_TieGroupTailRow_IsResolvedOnceTheCapReachesIt(t *testing.T) {
+	pool := connectJobsTestDB(t)
+	resetSweepCursor(t, pool, repository.SweepCursorOrphanRetry)
+	enc := newJobsTestFieldEncryptor(t)
+
+	// Identical fixture to 4b — same shape, same failing head, same tail row — with ONE difference:
+	// a cap of 3 instead of 2, so the tie group is no longer over-cap. Everything else being equal is
+	// what makes this a control for that test rather than a separate scenario.
+	tied := time.Date(1992, 10, 1, 0, 0, 0, 0, time.UTC)
+	ids := sortedOrphanIDs(3)
+	headA := seedOrphanRetryCandidateWithID(t, pool, enc, ids[0], tied)
+	headB := seedOrphanRetryCandidateWithID(t, pool, enc, ids[1], tied)
+	tail := seedOrphanRetryCandidateWithID(t, pool, enc, ids[2], tied)
+	behind := seedOrphanRetryCandidate(t, pool, enc, tied.Add(1*time.Second))
+	assertOrphanSweepSeesExactlySeeded(t, pool, []string{headA, headB, tail, behind})
+
+	failing := tokensOf(headA, headB, behind)
+
+	attempted := runOrphanRetrySweep(t, pool, 2, 3, failing).attemptedSet()
+
+	require.True(t, attempted[orphanRetryToken(tail)],
+		"a cap of 3 admits the whole tie group, so the tail row IS presented to Plaid")
+	require.True(t, orphanRecordIsResolved(t, pool, tail),
+		"and it is resolved — which is what makes the row 4b never reaches a SACRIFICED row rather "+
+			"than an unprocessable one")
 }
 
 // ---------------------------------------------------------------------------------------------
