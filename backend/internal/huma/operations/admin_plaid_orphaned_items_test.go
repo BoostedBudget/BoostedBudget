@@ -158,3 +158,35 @@ func TestListPlaidOrphanedItems_RepositoryErrorIsMapped(t *testing.T) {
 	_, err := h.ListPlaidOrphanedItems(context.Background(), &ListPlaidOrphanedItemsInput{Limit: 50})
 	require.Error(t, err)
 }
+
+// TestListPlaidOrphanedItemsDescription_EnumeratesEveryAdminState is the guard on the one sentence
+// an integrator outside this repository reads to learn what admin_state can be.
+//
+// The defect it exists to prevent has already happened once: `operator_attested` was added to
+// domain.AdminState and to all three in-repo consumers, and this description — and therefore
+// api/openapi.yaml and the generated TypeScript client's doc comment — kept listing three states.
+// A published enumeration missing a value is worse than no enumeration, because a client that
+// switches on it has no reason to believe a fourth exists and will silently fall through.
+//
+// Ranging over domain.AllOrphanedItemAdminStates rather than over a list typed here is deliberate:
+// a second hand-maintained list would be a second place to forget, which is the defect itself.
+func TestListPlaidOrphanedItemsDescription_EnumeratesEveryAdminState(t *testing.T) {
+	require.NotEmpty(t, domain.AllOrphanedItemAdminStates,
+		"an empty enumeration would make every assertion below vacuous")
+
+	for _, state := range domain.AllOrphanedItemAdminStates {
+		assert.Contains(t, listPlaidOrphanedItemsDescription, "'"+string(state)+"'",
+			"the published description must name admin_state %q, quoted exactly as the wire value: a client switching on this enumeration cannot know about a state the API never mentions", state)
+	}
+}
+
+// The sibling that keeps the test above from passing on a description that merely dumps every
+// constant. `operator_attested` is the value whose MEANING is easiest to get wrong — it is a claim,
+// not a proof — so the description has to say so, or an operator reads "attested" as "done" and the
+// distinction the whole state exists to preserve is lost at the only boundary that is published.
+func TestListPlaidOrphanedItemsDescription_SaysTheAttestationIsUnverified(t *testing.T) {
+	assert.Contains(t, listPlaidOrphanedItemsDescription, "UNVERIFIED",
+		"the description must say the attestation is unverified — 'attested' alone reads as 'removed'")
+	assert.Contains(t, listPlaidOrphanedItemsDescription, "resolved_at is NOT set",
+		"and it must say what that means mechanically, so an integrator does not infer resolution from it")
+}

@@ -64,6 +64,20 @@ func seedOrphanRow(t *testing.T, ctx context.Context, repo *plaidOrphanedItemRep
 		id, uuid.NewString(), encItem, nullIfEmpty(f.status), nullIfEmpty(f.lastErrorCode),
 		f.orphanedAt, encToken, f.tokenExpiresAt, f.resolvedAt, f.lastRetryAt, f.attemptCount)
 	require.NoError(t, err)
+
+	// ⚠ CLEANUP IS NOT HYGIENE HERE, IT IS A CORRECTNESS DEPENDENCY OF OTHER TESTS. Nothing prunes
+	// plaid_orphaned_items in production, and until this Cleanup existed nothing pruned it in the
+	// shared integration database either: the fixtures of every run accumulated (152 rows, measured)
+	// until an unrelated test's own fixture fell off the first page of a List and that test failed
+	// for a reason that had nothing to do with what it was testing. The table is also the one
+	// domain.PlaidOrphanedItemHealthScanCap bounds, so unbounded fixture growth would eventually make
+	// the health readers refuse outright.
+	//
+	// context.Background(), never t.Context(): the test context is cancelled before t.Cleanup runs,
+	// so this DELETE would fail silently and leak the row it was added to remove.
+	t.Cleanup(func() {
+		_, _ = repo.db.Exec(context.Background(), `DELETE FROM plaid_orphaned_items WHERE id = $1`, id)
+	})
 	return id
 }
 
@@ -529,4 +543,81 @@ func TestPlaidOrphanedItemRepository_Integration_PurgeExpiredTokens_IsBoundedByO
 	tok, purgedAt = tokenState(t, ctx, repo, insideWindow)
 	assert.Nil(t, tok, "the same bound applies to every row; nothing about the first row's purge was special")
 	assert.NotNil(t, purgedAt)
+}
+
+// TestPlaidOrphanedItemRepository_Integration_List_TotalDescribesTheWholeTableNotThePage is the live
+// half of the single-statement guarantee TestOrphanListQuery_TakesItsTotalFromTheSameStatementAsThePage
+// asserts structurally.
+//
+// `COUNT(*) OVER ()` is evaluated after ORDER BY and BEFORE LIMIT/OFFSET. That is the entire reason
+// one statement can serve both answers, and it is a property of the server rather than of the Go
+// around it, so pgxmock cannot see it: a mocked pool returns whatever the test hands it. The
+// falsifier is exact — if the window were computed after LIMIT (or were partitioned, or were replaced
+// by a count of the returned slice) the total below would read 1 instead of the table's real size.
+func TestPlaidOrphanedItemRepository_Integration_List_TotalDescribesTheWholeTableNotThePage(t *testing.T) {
+	repo, ctx := newOrphanRepo(t)
+	asOf := time.Now().UTC()
+
+	// Three rows with distinct orphaned_at so the ordering is deterministic and the newest is known.
+	var seeded []string
+	for i := 0; i < 3; i++ {
+		seeded = append(seeded, seedOrphanRow(t, ctx, repo, orphanFixture{
+			plaidItemID:    "item-window-" + uuid.NewString(),
+			accessToken:    "tok",
+			orphanedAt:     asOf.Add(-time.Duration(i) * time.Hour),
+			tokenExpiresAt: asOf.Add(domain.OrphanedItemTokenRetention),
+		}))
+	}
+
+	// The whole table, for the reference the page's total has to match. Read separately and with the
+	// same predicate the table has (none), because the point is to check the number List reports, not
+	// to re-derive it the way List does.
+	var tableRows int
+	require.NoError(t, repo.db.QueryRow(ctx, `SELECT COUNT(*) FROM plaid_orphaned_items`).Scan(&tableRows))
+	require.GreaterOrEqual(t, tableRows, 3, "the three rows just seeded must be in the table, or nothing below proves anything")
+
+	page, total, err := repo.List(ctx, 1, 0)
+	require.NoError(t, err)
+
+	require.Len(t, page, 1, "the page must honour the limit — a total that matched only because the page was unbounded would prove nothing")
+	assert.Equal(t, tableRows, total,
+		"the total must describe the whole table the page was cut from, not the page: a window count computed after LIMIT would report 1 here")
+
+	// MEMBERSHIP, not just a count: the single row returned must be the NEWEST seeded one, so the
+	// ORDER BY the total is paired with is the ordering that actually produced the page.
+	assert.Equal(t, seeded[0], page[0].ID,
+		"newest first — the page and its total come off one ordered result set, so the ordering has to be the real one")
+
+	// And the same total holds from a later offset, which it cannot if it is derived from the slice.
+	pageTwo, totalTwo, err := repo.List(ctx, 1, 1)
+	require.NoError(t, err)
+	require.Len(t, pageTwo, 1)
+	assert.Equal(t, tableRows, totalTwo, "the total is a property of the table, not of where in it the caller is standing")
+	assert.Equal(t, seeded[1], pageTwo[0].ID)
+}
+
+// The empty-page-past-the-end path, which is the one shape the window count cannot speak for: with no
+// row returned there is nothing for it to ride out on, and reporting 0 for a non-empty table would be
+// a lie the admin UI would render as "no records". It is deliberately the ONLY two-statement path in
+// List; see List's comment for why it cannot mislead the metrics readers (both read offset 0, where
+// zero rows is a true zero).
+func TestPlaidOrphanedItemRepository_Integration_List_EmptyPagePastTheEndStillReportsTheRealTotal(t *testing.T) {
+	repo, ctx := newOrphanRepo(t)
+	asOf := time.Now().UTC()
+
+	seedOrphanRow(t, ctx, repo, orphanFixture{
+		plaidItemID: "item-pastend-" + uuid.NewString(), accessToken: "tok",
+		orphanedAt: asOf, tokenExpiresAt: asOf.Add(domain.OrphanedItemTokenRetention),
+	})
+
+	var tableRows int
+	require.NoError(t, repo.db.QueryRow(ctx, `SELECT COUNT(*) FROM plaid_orphaned_items`).Scan(&tableRows))
+	require.GreaterOrEqual(t, tableRows, 1)
+
+	page, total, err := repo.List(ctx, 10, tableRows+50)
+	require.NoError(t, err)
+
+	assert.Empty(t, page, "there is nothing past the end of the table")
+	assert.Equal(t, tableRows, total,
+		"an operator who paged past the end must still be told how many records exist, or the UI shows 'no records' for a table that has some")
 }

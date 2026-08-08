@@ -8179,7 +8179,7 @@ paths:
         - Admin
   /api/v1/admin/plaid/orphaned-items:
     get:
-      description: "Returns Plaid Items whose local record was deleted by a completed GDPR erasure before removal could be proved, labelled with the action required: 'auto_retrying' (an automated retry holds a live credential — no action), 'manual_intervention_required' (remove the Item in Plaid's dashboard using plaid_item_id, or it may keep billing), or 'resolved' (history). Never returns the retained access token. Requires admin role."
+      description: "Returns Plaid Items whose local record was deleted by a completed GDPR erasure before removal could be proved, labelled with the action required: 'manual_intervention_required' (remove the Item in Plaid's dashboard using plaid_item_id, or it may keep billing), 'auto_retrying' (an automated retry holds a live credential — no action), 'operator_attested' (an admin has stated they removed it by hand; this is an UNVERIFIED claim, resolved_at is NOT set, and the automated sweep keeps re-attempting the removal precisely because it may yet disprove the claim), or 'resolved' (Plaid confirmed the removal — history, not work). Never returns the retained access token. Requires admin role."
       operationId: listAdminPlaidOrphanedItems
       parameters:
         - description: Number of records to return

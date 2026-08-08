@@ -176,9 +176,55 @@ func TestSummarisePlaidOrphanedItems_EmptyPopulationIsAllZeroes(t *testing.T) {
 // argument is about the RATE rows arrive at, and nothing prunes this table (no production DELETE
 // exists, and MarkResolved only stamps resolved_at), so it grows monotonically. The cap turns an
 // unbounded read into a bounded one whose overflow is reported rather than silently truncated.
-func TestPlaidOrphanedItemHealthScanCap_IsFarAboveTheArguedTableSizeAndStillBounded(t *testing.T) {
-	assert.Greater(t, PlaidOrphanedItemHealthScanCap, 100,
-		"the cap must leave enormous headroom over the single-digit population migrations 000134/000135 argue for, so it is a tripwire and not a routine limit")
-	assert.LessOrEqual(t, PlaidOrphanedItemHealthScanCap, 5000,
-		"and it must stay small enough that loading and decrypting that many rows on an admin request is bounded work")
+//
+// ⚠ WHAT THIS TEST USED TO BE, AND WHY THAT WAS WORSE THAN NOTHING. It asserted `100 < cap <= 5000`
+// — a range almost any plausible constant satisfies, so it could not fail for any change anybody was
+// realistically going to make, while reading in a coverage report and to a reviewer as though the cap
+// were pinned. Two things replace it. The VALUE is pinned outright, so changing it is a deliberate
+// act that edits a test rather than a silent edit of a constant. And the BEHAVIOUR the cap governs is
+// asserted at both sides of the boundary: past it the derivation must REFUSE and return no counts at
+// all, because a count over the first 500 of N rows understates the manual-intervention population —
+// the one direction a compliance surface must never err in, and it would look like an answer.
+func TestPlaidOrphanedItemHealthScanCap_IsPinnedAndGovernsRefusalPastIt(t *testing.T) {
+	assert.Equal(t, 500, PlaidOrphanedItemHealthScanCap,
+		"the cap is pinned, not ranged: it is four orders of magnitude above the single-digit population migrations 000134/000135 argue for, and small enough that decrypting that many rows on an admin request is bounded work. Changing it is a decision, and the remedy when it trips is server-side totals by state, not a bigger number")
+
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	// One row per state so a refusal cannot be mistaken for "there was nothing to count anyway".
+	page := []PlaidOrphanedItem{orphanRowManualExpiredToken(now, 3), orphanRowAutoRetrying(now, 1)}
+
+	// AT the cap: a read of exactly cap rows saw the whole table, so it is a complete reading and
+	// must be reported. The boundary is inclusive; `>=` here would be a false alarm one row early.
+	atCap, err := SummarisePlaidOrphanedItemsBounded(page, PlaidOrphanedItemHealthScanCap, now)
+	require.NoError(t, err, "exactly cap rows is a COMPLETE read — refusing it would make the tripwire fire one row early, forever")
+	assert.Equal(t, int64(1), atCap.ManualInterventionRequired,
+		"and it must actually report the counts, not merely decline to error")
+
+	// ONE PAST the cap: refuse, and refuse with NO counts at all.
+	pastCap, err := SummarisePlaidOrphanedItemsBounded(page, PlaidOrphanedItemHealthScanCap+1, now)
+	require.Error(t, err, "past the cap the page in hand is a truncated view of the table and must not be summarised")
+	assert.Equal(t, PlaidOrphanedItemMetrics{}, pastCap,
+		"and it must REFUSE rather than TRUNCATE: '1 of >500 rows need manual intervention' is a more convincing lie than no answer at all")
+	assert.Contains(t, err.Error(), "COUNT ... FILTER",
+		"the error must name the remedy — server-side totals by state — because the reflex when this trips is to raise the cap, which is the one fix that does not work")
+}
+
+// The empty-page half of the same guard: a page of zero rows drawn from a table that is NOT empty is
+// not a reading of anything, and summarising it would publish confident zeroes for a population that
+// may be entirely manual-intervention work — the same under-count the cap refusal exists to prevent,
+// arriving by the other door.
+func TestSummarisePlaidOrphanedItemsBounded_EmptyPageOverANonEmptyTableIsRefused(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+
+	got, err := SummarisePlaidOrphanedItemsBounded(nil, 7, now)
+
+	require.Error(t, err, "zero rows out of a 7-row table is not a reading; reporting it as all-zeroes would say 'no work outstanding' about a table nobody read")
+	assert.Equal(t, PlaidOrphanedItemMetrics{}, got)
+
+	// SIBLING: the guard is about the MISMATCH, not about empty pages. A genuinely empty table is a
+	// real zero and must still be reported, or /admin/health reads "unavailable" forever in the
+	// normal case.
+	realZero, err := SummarisePlaidOrphanedItemsBounded(nil, 0, now)
+	require.NoError(t, err, "an empty table is a REAL zero and must be reported as one")
+	assert.Equal(t, PlaidOrphanedItemMetrics{}, realZero)
 }

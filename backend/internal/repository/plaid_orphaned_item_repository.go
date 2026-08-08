@@ -98,6 +98,21 @@ const orphanSelectColumns = `
 	retry_attempt_count, last_retry_at, last_retry_error_code, resolved_at,
 	operator_resolved_at, operator_resolved_by, operator_resolution_note`
 
+// orphanListQuery is List's ONE statement: the page and its total, in a single snapshot.
+//
+// Hoisted to a package-level constant for the reason deletionResidueStatsQuery is (job_health_repository.go):
+// it lets a plain unit test assert the single-statement property without a database, so the guard
+// against somebody reintroducing a separate `SELECT COUNT(*)` cannot be skipped along with the
+// integration suite. See TestOrphanListQuery_TakesItsTotalFromTheSameStatementAsThePage and List's
+// own comment for why that property is correctness rather than tidiness.
+//
+// The window count is the LAST column so it appends cleanly to orphanSelectColumns and to
+// scanOrphan's destination list.
+const orphanListQuery = `SELECT ` + orphanSelectColumns + `, COUNT(*) OVER () AS total
+	FROM plaid_orphaned_items
+	ORDER BY orphaned_at DESC, id DESC
+	LIMIT $1 OFFSET $2`
+
 // PurgeExpiredTokens is THE GUARANTEED HALF OF THE RETENTION BARGAIN, and the reason it is a separate
 // statement from anything to do with retrying. Issue #1497.
 //
@@ -413,6 +428,28 @@ func (r *plaidOrphanedItemRepository) RecordRetryFailure(ctx context.Context, id
 // work list), and the caller derives which of the two operator stories each row is in via
 // domain.PlaidOrphanedItem.AdminState. Filtering here would make the state machine's inputs invisible
 // to the surface that reports it.
+//
+// ⚠ THE TOTAL AND THE PAGE COME FROM ONE STATEMENT, AND THAT IS A CORRECTNESS PROPERTY, NOT A
+// ROUND-TRIP OPTIMISATION. This used to run `SELECT COUNT(*)` and then the page as two separate,
+// non-transactional statements. Under READ COMMITTED each takes its OWN snapshot, so a row inserted
+// between them makes the two answers describe different tables — and the direction that failure runs
+// is the one that matters here. domain.SummarisePlaidOrphanedItemsBounded refuses to publish a state
+// count when `total` says the table is past domain.PlaidOrphanedItemHealthScanCap, exactly so a
+// partial scan is never reported as a total; a `total` read BEFORE the page could say 500 while the
+// page it is paired with was truncated out of a 502-row table, and the reader would publish a
+// silent UNDER-COUNT of the manual-intervention population — the one direction a compliance surface
+// must never err in, and the precise case the cap exists to prevent.
+//
+// `COUNT(*) OVER ()` is evaluated after ORDER BY but BEFORE LIMIT/OFFSET, so it is the total over the
+// whole result set the page was cut from, taken in the same snapshot as the page itself. Nothing
+// about isolation levels, retries or transaction bookkeeping is required for that: one statement is
+// one snapshot. Do not "simplify" this back into a separate COUNT.
+//
+// THE ONE PATH THAT STILL NEEDS A SECOND STATEMENT is an EMPTY page at a NON-ZERO offset, where the
+// window function has no row to ride out on and would report 0 for a table that is not empty. That
+// is a caller who paged past the end, it has no page for the total to be inconsistent WITH, and it
+// is unreachable from the two metrics readers (both read offset 0, where zero rows is a true zero).
+// See SummarisePlaidOrphanedItemsBounded's own guard, which fails closed on that shape anyway.
 func (r *plaidOrphanedItemRepository) List(ctx context.Context, limit, offset int) ([]domain.PlaidOrphanedItem, int, error) {
 	if limit <= 0 {
 		return nil, 0, fmt.Errorf("List: limit must be positive, got %d", limit)
@@ -421,23 +458,17 @@ func (r *plaidOrphanedItemRepository) List(ctx context.Context, limit, offset in
 		return nil, 0, fmt.Errorf("List: offset must not be negative, got %d", offset)
 	}
 
-	var total int
-	if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM plaid_orphaned_items`).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("List: count: %w", err)
-	}
-
-	rows, err := r.db.Query(ctx, `SELECT `+orphanSelectColumns+`
-		FROM plaid_orphaned_items
-		ORDER BY orphaned_at DESC, id DESC
-		LIMIT $1 OFFSET $2`, limit, offset)
+	rows, err := r.db.Query(ctx, orphanListQuery, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("List: %w", err)
 	}
 	defer rows.Close()
 
 	var out []domain.PlaidOrphanedItem
+	var total int
 	for rows.Next() {
-		item, scanErr := r.scanOrphan(rows)
+		// The extra destination is the window count, identical on every row of the page.
+		item, scanErr := r.scanOrphan(rows, &total)
 		if scanErr != nil {
 			return nil, 0, fmt.Errorf("List: %w", scanErr)
 		}
@@ -445,6 +476,13 @@ func (r *plaidOrphanedItemRepository) List(ctx context.Context, limit, offset in
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("List: %w", err)
+	}
+
+	if len(out) == 0 && offset > 0 {
+		// See the method comment: the only shape where the window count cannot speak for itself.
+		if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM plaid_orphaned_items`).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("List: count for empty page past offset %d: %w", offset, err)
+		}
 	}
 	return out, total, nil
 }
@@ -468,7 +506,12 @@ type rowScanner interface {
 // FieldEncryptor.DecryptString PASSES THROUGH any value lacking the 'ENC$' prefix (dual-read support
 // for rows predating migration 000053), so a plaintext legacy value reads correctly here too — the
 // same property migration 000134's comment documents for plaid_item_id_encrypted.
-func (r *plaidOrphanedItemRepository) scanOrphan(row rowScanner) (domain.PlaidOrphanedItem, error) {
+//
+// extraDests are destinations for columns a caller SELECTed after orphanSelectColumns, in the order
+// they appear there. Only List uses it, for its `COUNT(*) OVER ()` window total; the trailing
+// position is what lets the shared column list stay the shared column list rather than forking into
+// a with-total and a without-total copy that could drift.
+func (r *plaidOrphanedItemRepository) scanOrphan(row rowScanner, extraDests ...interface{}) (domain.PlaidOrphanedItem, error) {
 	var (
 		item                                    domain.PlaidOrphanedItem
 		encItemID                               string
@@ -478,13 +521,16 @@ func (r *plaidOrphanedItemRepository) scanOrphan(row rowScanner) (domain.PlaidOr
 		operatorBy, operatorNote                *string
 	)
 
-	if err := row.Scan(
+	dests := []interface{}{
 		&item.ID, &item.LinkedItemID, &encItemID, &encInstID, &encInstName,
 		&status, &lastErrorCode, &item.TerminalSince, &item.OrphanedAt,
 		&encToken, &item.TokenExpiresAt, &item.TokenPurgedAt,
 		&item.RetryAttemptCount, &item.LastRetryAt, &lastRetryErrCode, &item.ResolvedAt,
 		&item.OperatorResolvedAt, &operatorBy, &operatorNote,
-	); err != nil {
+	}
+	dests = append(dests, extraDests...)
+
+	if err := row.Scan(dests...); err != nil {
 		return domain.PlaidOrphanedItem{}, fmt.Errorf("scan orphaned item: %w", err)
 	}
 
