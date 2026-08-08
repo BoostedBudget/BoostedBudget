@@ -23,16 +23,26 @@ import "github.com/maxnussbaum/BoostedBudget/internal/queue"
 //	  riverInsertOptsFromUnique(queue, <Kind>UniqueOpts()) — see periodic_job_opts.go. Uniqueness IS
 //	  passed. (This is what Issue #1448 wired; before it, these hand-wrote bare InsertOpts.)
 //	plaid_sync, investment_holdings_sync, investment_transactions_sync:
-//	  accountService.enqueueInitialSync (internal/services/account_service.go:1049) passes
+//	  accountService.enqueueInitialSync (internal/services/account_service.go) passes
 //	  queue.WithUnique(*plaidSyncUniqueOpts()) to all three. That mirror is value-identical to
 //	  PlaidSyncUniqueOpts() and to investmentSyncUniqueOpts() (ByArgs, 5m, same five states).
-//	webhook_processing: internal/huma/operations/plaid_webhook.go:152 calls
+//	webhook_processing: internal/huma/operations/plaid_webhook.go's handler calls
 //	  jobs.WebhookProcessingUniqueOpts() directly.
-//	item_cleanup: item_cleanup_check.go:411 and :627 call ItemCleanupUniqueOpts();
-//	  account_service.go:720 passes the itemCleanupUniqueOpts() mirror.
-//	account_deletion: scheduled_deletion_check.go:222 calls AccountDeletionUniqueOpts().
+//	item_cleanup: THREE kind-specific producers (this block has always enumerated all three; other
+//	  records have repeatedly said "two"). In item_cleanup_check.go, both
+//	  ItemCleanupCheckWorker.Work's candidate sweep AND reenqueueStrandedCleanups — the #1486
+//	  backstop, which is the one those other records omit — call ItemCleanupUniqueOpts();
+//	  accountService.DeleteAccount (account_service.go) passes the itemCleanupUniqueOpts() mirror.
+//	  Plus the kind-agnostic dead-letter replay below, which no type-based enumeration can see.
+//	account_deletion: ScheduledDeletionCheckWorker.Work (scheduled_deletion_check.go) calls
+//	  AccountDeletionUniqueOpts().
 //	boost_evaluation, subscription_webhook, notification_email, effective_category_refresh,
 //	  email_change_propagation: NO producer passes uniqueness — see the noUniqueness block below.
+//
+// ⚠ Cited by SYMBOL, never by line. This block previously carried six line citations and FOUR of
+// them had rotted silently (item_cleanup's two, enqueueInitialSync's, and account_deletion's) while
+// still reading as verified — the same failure #1477's own body was rewritten to remove. A citation
+// that rots invites the reader to trust the surrounding claim by association.
 //
 // Why a kind-keyed table exists at all (#1492, and #1486/#1490 for the same reasoning applied to args
 // shapes): the dead-letter replay path (services.deadLetterService.Retry) is a THIRD producer of
