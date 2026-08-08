@@ -16,7 +16,7 @@ help:
 	@echo "  make test-ci          - Run CI tests with coverage enforcement"
 	@echo "  make backend-test     - Run backend tests only"
 	@echo "  make frontend-test    - Run frontend tests only"
-	@echo "  make test-scripts     - Run shell script regression suites (scripts/**/*.test.sh)"
+	@echo "  make test-scripts     - Run shell script regression suites (scripts/**/*.test.sh) + the review-provenance guard"
 	@echo ""
 	@echo "Backend:"
 	@echo "  make backend-build    - Build backend binary"
@@ -210,30 +210,39 @@ test-scripts:
 	@echo "Running shell script regression suites"
 	@echo "========================================"
 	@echo ""
-	@echo "1/7: check-frontend-coverage.test.sh (exercises the real lcov merger)"
+	@echo "1/9: check-frontend-coverage.test.sh (exercises the real lcov merger)"
 	@if command -v lcov &> /dev/null; then \
 		bash scripts/check-frontend-coverage.test.sh; \
 	else \
 		echo "⚠️  lcov not installed — skipping (install: brew install lcov). CI always has lcov."; \
 	fi
 	@echo ""
-	@echo "2/7: check-orphan-chunks.test.sh"
+	@echo "2/9: check-orphan-chunks.test.sh"
 	@bash scripts/__tests__/check-orphan-chunks.test.sh
 	@echo ""
-	@echo "3/7: rollback-residue.test.sh"
+	@echo "3/9: rollback-residue.test.sh"
 	@bash scripts/__tests__/rollback-residue.test.sh
 	@echo ""
-	@echo "4/7: pg_dump-via-docker.test.sh"
+	@echo "4/9: pg_dump-via-docker.test.sh"
 	@bash scripts/__tests__/pg_dump-via-docker.test.sh
 	@echo ""
-	@echo "5/7: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
+	@echo "5/9: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
 	@bash scripts/__tests__/check-e2e-storage-state.test.sh
 	@echo ""
-	@echo "6/7: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
+	@echo "6/9: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
 	@bash scripts/__tests__/check-mcp-job-triggers.test.sh
 	@echo ""
-	@echo "7/7: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
+	@echo "7/9: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
 	@bash scripts/__tests__/check-typographic-quotes.test.sh
+	@echo ""
+	@echo "8/9: check-review-provenance.test.sh (AD-2 — fixtures + truth table for the review-provenance guard)"
+	@bash scripts/__tests__/check-review-provenance.test.sh
+	@echo ""
+	@echo "9/9: check-review-provenance.sh (AD-2 — the guard itself, against THIS tree)"
+	@echo "     Fails when HEAD has moved past the last adversarially-reviewed SHA in any"
+	@echo "     non-exempt path. To satisfy it: run the review, then"
+	@echo "     scripts/check-review-provenance.sh --stamp \"<reviewer>\" \"<evidence>\""
+	@bash scripts/check-review-provenance.sh
 	@echo ""
 	@echo "✅ Shell script regression suites passed!"
 
