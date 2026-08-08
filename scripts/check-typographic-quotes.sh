@@ -53,13 +53,41 @@
 #
 # Usage: scripts/check-typographic-quotes.sh [path-under-repo-root]
 #   Defaults to "backend". Exits 1 and prints every offending file:line if
-#   any tracked *.go file under that path contains U+201C or U+201D;
-#   exits 0 otherwise.
+#   any tracked *.go file under that path contains U+201C or U+201D; exits 0
+#   otherwise. Exits 1 if the scan root resolves to ZERO tracked .go files --
+#   a scan of nothing proves nothing, so that is a failure, not a pass (see
+#   "THREE WAYS THIS GUARD USED TO PASS VACUOUSLY" below). Exits >=2 if grep
+#   itself could not run (missing/broken binary) -- that must not be
+#   silently treated as "0 occurrences found".
+#
+# ---------------------------------------------------------------------------
+# THREE WAYS THIS GUARD USED TO PASS VACUOUSLY (fixed, kept here so the next
+# person doesn't reintroduce one of them)
+# ---------------------------------------------------------------------------
+# 1. Empty scan root: if "backend" is renamed/moved or the argument is wrong,
+#    the old script printed "nothing to scan" and exited 0. Now: exit 1.
+# 2. Missing grep: both scans used to be `... || true`, so a `127` (grep not
+#    found) produced an empty result set indistinguishable from "0 matches".
+#    Now: grep's exit status is inspected explicitly -- 0 (matched) and 1 (no
+#    match) are the only statuses treated as a completed scan; anything else
+#    is a hard failure (exit 2), not a PASS.
+# 3. `core.quotePath`: `git ls-files` C-quotes non-ASCII paths by default
+#    (e.g. `"backend/f\303\251.go"`), so a plain `grep '\.go$'` filter never
+#    matches the trailing quote and the file is silently dropped from the
+#    scan. Now: `git -c core.quotePath=false ls-files` disables the quoting.
 set -euo pipefail
 
 SCAN_ROOT="${1:-backend}"
 
 cd "$(git rev-parse --show-toplevel)"
+
+# grep binary for both passes below. Hard-coded to /usr/bin/grep for every
+# real invocation of this script. The override exists ONLY so this script's
+# own regression suite (scripts/__tests__/check-typographic-quotes.test.sh)
+# can simulate "grep could not run" -- there is no way to make the real
+# /usr/bin/grep vanish from a test sandbox, so the test points this variable
+# at a path that does not exist instead. Do not set this outside that suite.
+GREP_BIN="${CHECK_TYPOGRAPHIC_QUOTES_GREP_BIN:-/usr/bin/grep}"
 
 # U+201C LEFT DOUBLE QUOTATION MARK  = UTF-8 bytes E2 80 9C
 # U+201D RIGHT DOUBLE QUOTATION MARK = UTF-8 bytes E2 80 9D
@@ -72,31 +100,73 @@ RIGHT_DQUOTE=$'\xe2\x80\x9d'
 
 # Tracked files only (git ls-files), filtered to *.go -- NOT a filesystem
 # walk, so untracked/vendored/generated content produces no noise.
-# `|| true` because grep exits 1 on "no match", which is not an error here
-# and must not trip `set -e`.
-FILE_LIST="$(git ls-files -- "$SCAN_ROOT" | /usr/bin/grep '\.go$' || true)"
+# `-c core.quotePath=false` stops git from C-quoting non-ASCII paths (see
+# defect 3 above) -- without it, a tracked file with a non-ASCII name is
+# printed as `"backend/f\303\251.go"` (with a literal trailing double-quote
+# byte), which the `\.go$` filter below never matches, so the file is
+# silently never scanned.
+#
+# grep's own exit status is captured explicitly instead of `... || true`:
+# grep exits 0 (matched a line), 1 (no line matched -- a normal, expected
+# outcome here), or >=2 (a real error: binary missing, bad pattern,
+# permission denied). Collapsing all three into "assume empty" is exactly
+# the fail-open bug this guard exists to avoid making of ITSELF (defect 2).
+# `set +e`/`set -e` bracket the one statement whose status we need to
+# inspect by hand, rather than `cmd || true`, which would suspend `set -e`
+# for the whole left-hand operand for the rest of the script.
+set +e
+FILE_LIST="$(git -c core.quotePath=false ls-files -- "$SCAN_ROOT" | "$GREP_BIN" '\.go$')"
+FILTER_RC=$?
+set -e
+
+if [ "$FILTER_RC" -gt 1 ]; then
+  echo "check-typographic-quotes: ERROR -- '$GREP_BIN' exited $FILTER_RC (expected 0 or 1) while filtering tracked files to *.go." >&2
+  echo "This usually means the grep binary is missing or broken, not that there is nothing to scan. Failing closed, not reporting a false PASS." >&2
+  exit 2
+fi
 
 if [ -z "$FILE_LIST" ]; then
-  echo "check-typographic-quotes: no tracked .go files under '$SCAN_ROOT' -- nothing to scan"
-  exit 0
+  echo "check-typographic-quotes: FAIL -- no tracked .go files found under '$SCAN_ROOT'." >&2
+  echo "A scan of zero files proves nothing about #1487-style corruption, so this is a failure, not a pass." >&2
+  echo "Check that '$SCAN_ROOT' is still the correct, current path (not renamed, moved, or a typo) and that this script's argument is right." >&2
+  exit 1
 fi
 
 # Deliberately NOT `"${FILES[@]}"` over a bash array: building and expanding
 # an array to hold FILE_LIST risks the empty-array-under-`set -u` crash on
-# macOS bash 3.2 (this repo has been bitten by exactly that). Piping the
-# newline-separated list through xargs sidesteps arrays entirely.
-#
-# Captured into a variable rather than piped straight to a conditional:
-# `cmd1 | cmd2` in a pipeline masks cmd1's exit status with cmd2's under
-# `set -o pipefail`-less shells and vice versa, and `grep ... || true` on the
-# right of a pipe would otherwise suspend `set -e` for the whole pipeline.
-# Capturing first, then testing the captured *content* (not an exit code),
-# avoids that class of bug.
-# -H forces the filename prefix even though xargs -I{} invokes grep with a
-# single filename argument at a time (grep omits the filename by default
-# when given exactly one file, which would otherwise make every violation
-# line unidentifiable).
-VIOLATIONS="$(printf '%s\n' "$FILE_LIST" | LC_ALL=C xargs -I{} /usr/bin/grep -nHF -e "$LEFT_DQUOTE" -e "$RIGHT_DQUOTE" {} 2>/dev/null || true)"
+# macOS bash 3.2 (this repo has been bitten by exactly that). A `while read`
+# loop over a here-string sidesteps arrays entirely and, unlike piping into
+# `xargs`, lets each invocation's own exit status be inspected directly
+# rather than reconstructed from xargs' aggregate (123/124/126/127) mapping.
+VIOLATIONS=""
+GREP_ERROR=0
+while IFS= read -r go_file; do
+  [ -n "$go_file" ] || continue
+  set +e
+  MATCH="$("$GREP_BIN" -nHF -e "$LEFT_DQUOTE" -e "$RIGHT_DQUOTE" -- "$go_file")"
+  SCAN_RC=$?
+  set -e
+  case "$SCAN_RC" in
+    0)
+      if [ -z "$VIOLATIONS" ]; then
+        VIOLATIONS="$MATCH"
+      else
+        VIOLATIONS="$VIOLATIONS
+$MATCH"
+      fi
+      ;;
+    1) : ;; # no U+201C/U+201D in this file -- expected, not an error
+    *)
+      GREP_ERROR=1
+      echo "check-typographic-quotes: ERROR -- '$GREP_BIN' exited $SCAN_RC (expected 0 or 1) scanning '$go_file'." >&2
+      ;;
+  esac
+done <<< "$FILE_LIST"
+
+if [ "$GREP_ERROR" -eq 1 ]; then
+  echo "check-typographic-quotes: ERROR -- grep failed during the content scan; failing closed rather than reporting a false PASS." >&2
+  exit 2
+fi
 
 if [ -n "$VIOLATIONS" ]; then
   echo "check-typographic-quotes: FAIL -- found U+201C/U+201D (typographic double quotes) in tracked .go files under '$SCAN_ROOT':"
@@ -108,5 +178,6 @@ if [ -n "$VIOLATIONS" ]; then
   exit 1
 fi
 
-echo "check-typographic-quotes: PASS -- 0 occurrences of U+201C/U+201D in tracked .go files under '$SCAN_ROOT'"
+FILE_COUNT="$(printf '%s\n' "$FILE_LIST" | wc -l | tr -d ' ')"
+echo "check-typographic-quotes: PASS -- 0 occurrences of U+201C/U+201D across $FILE_COUNT tracked .go files under '$SCAN_ROOT'"
 exit 0
