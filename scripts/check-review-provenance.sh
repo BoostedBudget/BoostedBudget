@@ -52,6 +52,13 @@
 #   performance budget. Config YAML, workflows, scripts (including this one), and any new
 #   file type are all in scope by default.
 #
+# SCOPE, STATED SO IT IS NOT MISTAKEN FOR COVERAGE
+# The guard compares committed history only (reviewed_sha..HEAD). Uncommitted working-tree
+# edits are NOT checked, deliberately: `make test-scripts` runs constantly against a dirty
+# tree during development, and a guard that is red by default is a guard that gets deleted.
+# Nothing uncommitted can reach a PR, so the gate still sits in front of everything that
+# ships -- but do not read a green run as "the working tree is reviewed".
+#
 # EXIT CODES
 #   0  pass — HEAD has not moved past the reviewed SHA in any non-exempt path
 #   1  a review is owed — non-exempt paths changed since the reviewed SHA
@@ -59,7 +66,11 @@
 #      SHA, or a scan that found nothing to check (an empty scan is not a pass)
 set -euo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  echo "check-review-provenance: FAIL-CLOSED -- not inside a git working tree, or 'git' is unavailable." >&2
+  echo "  Every check below (ancestry, range enumeration) needs git. Without it there is no evidence either way." >&2
+  exit 2
+fi
 cd "$REPO_ROOT"
 
 PROVENANCE_FILE="${REVIEW_PROVENANCE_FILE:-docs/review/last-adversarial-review.txt}"
@@ -206,10 +217,45 @@ if [ "$AHEAD" -eq 0 ]; then
 fi
 
 # ── 5. Enumerate what changed. An empty enumeration is NOT a pass. ────────────
-CHANGED="$(git diff --name-only "$REVIEWED_SHA" "$HEAD_SHA")"
+# The scanned set is the UNION OF EACH COMMIT'S OWN DIFF, not the endpoint diff
+# `git diff <reviewed> HEAD`. An adversarial review of this guard's first draft (Codex,
+# this branch) demonstrated why with a working bypass: commit an unreviewed behaviour
+# change, then in a second commit revert it while touching only README.md. The endpoint
+# diff then shows one exempt path and the guard exits 0, while an unreviewed
+# behaviour-changing commit sits in the range and is reachable by bisect and by deploy.
+#
+# --no-renames deliberately, on each commit: with rename detection ON, `--name-only`
+# prints only the DESTINATION path, so `git mv scripts/runtime.sh docs/runtime.md`
+# surfaces one exempt .md and hides the executable's disappearance (Codex's other
+# demonstrated bypass). --no-renames prints both sides.
+#
+# core.quotePath is left at its default (on): a path with non-ASCII or control bytes is
+# printed C-quoted with a trailing '"', which can never match the `.md` suffix test, so
+# such paths land in the requires-review bucket. That bias is deliberate -- quoting can
+# only ever make a path look LESS exempt, never more.
+#
+# Commits are enumerated with `git rev-list`, never `git log`, which has silently
+# printed fewer commits than its own `--count` reported for the same range here.
+COMMITS="$(git rev-list "${REVIEWED_SHA}..${HEAD_SHA}")"
+COMMIT_COUNT="$(/usr/bin/grep -c . <<< "$COMMITS" || true)"
+if [ "$COMMIT_COUNT" -ne "$AHEAD" ]; then
+  die_closed "'git rev-list' enumerated $COMMIT_COUNT commit(s) but 'git rev-list --count' says $AHEAD." \
+    "The two disagree, so neither can be trusted. Failing closed rather than scanning a partial range."
+fi
+
+CHANGED=""
+while IFS= read -r commit; do
+  [ -n "$commit" ] || continue
+  PER_COMMIT="$(git diff-tree --no-commit-id --name-only -r --no-renames "$commit")"
+  [ -n "$PER_COMMIT" ] || continue
+  if [ -z "$CHANGED" ]; then CHANGED="$PER_COMMIT"; else CHANGED="$CHANGED
+$PER_COMMIT"; fi
+done <<< "$COMMITS"
+CHANGED="$(sort -u <<< "$CHANGED" | /usr/bin/grep -v '^$' || true)"
+
 if [ -z "$CHANGED" ]; then
-  die_closed "$AHEAD commit(s) exist in ${REVIEWED_SHA}..${HEAD_SHA} but 'git diff --name-only' enumerated ZERO paths." \
-    "A scan that found nothing to check is an instrument failure or a pure revert chain -- either way it is not evidence that nothing needs review." \
+  die_closed "$AHEAD commit(s) exist in ${REVIEWED_SHA}..${HEAD_SHA} but the per-commit scan enumerated ZERO paths." \
+    "A scan that found nothing to check is not evidence that nothing needs review -- it is an instrument failure, or a range of nothing but empty commits." \
     "Re-review and re-stamp rather than trusting an empty scan."
 fi
 CHANGED_COUNT="$(/usr/bin/grep -c . <<< "$CHANGED")"

@@ -147,6 +147,44 @@ git -C "$REPO" add -A && git -C "$REPO" commit -q -m "new component"
 run_guard
 expect_rc 1 "6. a path in a directory the filter never heard of requires review (exempt-list is fail-closed)" "thing.py"
 
+# 6b. A .go file RENAMED to a .md file. With git's rename detection on,
+#     `git diff --name-only` prints only the DESTINATION path -- a single exempt .md --
+#     and the disappearance of the .go file is invisible. The guard passes
+#     --no-renames for exactly this reason.
+init_repo
+write_prov "$BASE_SHA"
+git -C "$REPO" mv backend/internal/services/base.go docs-note.md
+git -C "$REPO" commit -q -m "rename go -> md"
+# Control: confirm rename detection really does collapse this to one exempt path,
+# otherwise the fixture would not exercise the bug and a pass would prove nothing.
+RENAME_VIEW="$(git -C "$REPO" diff --name-only "$BASE_SHA" HEAD)"
+if [[ "$RENAME_VIEW" == *"base.go"* ]]; then
+  fail "6b. fixture control failed: rename detection did not hide the .go source path (view: $RENAME_VIEW), so this test does not exercise the --no-renames fix"
+else
+  run_guard
+  expect_rc 1 "6b. a .go file renamed to .md still requires review (--no-renames)" "base.go"
+fi
+
+# 6c. Codex bypass #2: an unreviewed behaviour-changing commit, then a second commit
+#     that reverts it while touching only an exempt path. The ENDPOINT diff shows one
+#     exempt path and would exit 0; the per-commit union sees the .go change.
+init_repo
+write_prov "$BASE_SHA"
+echo 'func Unreviewed() {}' >> "$REPO/backend/internal/services/base.go"
+git -C "$REPO" commit -qam "unreviewed behaviour change"
+git -C "$REPO" checkout -q "$BASE_SHA" -- backend/internal/services/base.go
+echo "# note" > "$REPO/README.md"
+git -C "$REPO" add -A && git -C "$REPO" commit -q -m "revert the change, touch only prose"
+# Control: confirm the endpoint diff really does hide the .go path, otherwise this
+# fixture does not exercise the per-commit-union fix and a pass would prove nothing.
+ENDPOINT_VIEW="$(git -C "$REPO" diff --name-only "$BASE_SHA" HEAD)"
+if [[ "$ENDPOINT_VIEW" == *"base.go"* ]]; then
+  fail "6c. fixture control failed: the endpoint diff still shows base.go (view: $ENDPOINT_VIEW), so this does not exercise the per-commit union"
+else
+  run_guard
+  expect_rc 1 "6c. a behaviour change reverted before HEAD is still caught (per-commit union, not endpoint diff)" "base.go"
+fi
+
 echo ""
 echo "Degenerate inputs (guard must FAIL CLOSED, exit 2 -- distinct from exit 1):"
 
@@ -254,6 +292,11 @@ else
   run_guard
   expect_rc 2 "15. commits exist but the path scan enumerated ZERO paths -> fails closed, not a vacuous pass" "ZERO paths"
 fi
+
+# 15b. Not inside a git working tree at all: every check below needs git, so the
+#      absence of git is absence of evidence, not evidence of absence.
+OUT="$(cd "$SANDBOX" && bash "$SCRIPT" 2>&1)" && RC=0 || RC=$?
+expect_rc 2 "15b. running outside any git working tree fails closed" "not inside a git working tree"
 
 # 16. Placeholder attribution.
 init_repo
