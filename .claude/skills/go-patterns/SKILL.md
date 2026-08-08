@@ -490,11 +490,31 @@ cd backend && grep -rn 'Kind() string { return "' internal/services internal/wor
 
 **That command is necessary but NOT sufficient.** `queue.RawJobArgs.Kind()` returns a *stored*
 string (`internal/queue/raw_job.go`), and `deadLetterService.Retry` re-enqueues **any**
-dead-lettered kind through it — with the original queue and max-attempts but **no `UniqueOpts`**. So
-every kind has one producer no static grep can see, it can resurrect a job whose preconditions have
-since changed, and it can bypass deduplication. Audit each kind assuming a replay is possible: the
-worker must re-verify its own preconditions rather than trust the producer (`PlaidSyncWorker` is the
-model — it re-checks item existence and ownership and returns `nil` for both).
+dead-lettered kind through it. So **every kind has one producer no static grep can see**, and it can
+resurrect a job whose preconditions have since changed. Audit each kind assuming a replay is
+possible: the worker must re-verify its own preconditions rather than trust the producer
+(`PlaidSyncWorker` is the model — it re-checks item existence and ownership and returns `nil` for
+both).
+
+> ⚠️ **CORRECTION.** This paragraph used to end *"…with the original queue and max-attempts but **no
+> `UniqueOpts`**. So … it can bypass deduplication."* **Both halves are false today.**
+>
+> - **Issue #1492** added `jobs.UniqueOptsForKind` (`internal/queue/jobs/unique_opts_by_kind.go`).
+>   `Retry` now resolves the kind's uniqueness options **before** it claims the row, applies them via
+>   `queue.WithUnique`, and **fails closed** on a kind with no registry entry
+>   (`ErrDeadLetterRetryKindUnknown`) rather than replaying it unguarded. A replay no longer bypasses
+>   deduplication — and if River *does* deduplicate it, the replay is refused with
+>   `ErrDeadLetterRetryDeduplicated` instead of reporting a success that created no job. **Adding a new
+>   job kind means adding its entry to that registry**, or its dead-letter rows become unreplayable.
+> - **Issue #1508** then made the whole replay **one transaction**: the claim
+>   (`AtomicMarkRetriedInTx`), the River insert (`EnqueueTx`) and the retry-id write
+>   (`MarkRetriedInTx`) commit together or not at all, and `tx.Rollback` replaced the compensating
+>   `ReleaseRetryClaim` UPDATE (now deleted). The claim-before-enqueue **order is unchanged** —
+>   reversing it re-opens the double-enqueue race. Consequence for anyone reading
+>   `dead_letter_jobs`: a **committed** row now always carries a real `retry_job_id`; no new row can
+>   reach `retry_job_id = 0`. Rows still at 0 are **historical**, written by the old two-commit path,
+>   and for those the column remains undecidable between "never enqueued" and "enqueued, bookkeeping
+>   failed" — which is why no reaper is built on it.
 
 **2. A mirror that drifts fails in production, not in CI — unless it is pinned.** Nothing about the
 mirrors is compile-checked; the two types are in packages that cannot see each other. A renamed or
