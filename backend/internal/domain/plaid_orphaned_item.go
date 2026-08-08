@@ -155,6 +155,25 @@ const (
 	OrphanedItemOperatorAttested OrphanedItemAdminState = "operator_attested"
 )
 
+// AllOrphanedItemAdminStates is the complete set of values AdminState can return, in the order an
+// operator cares about them: what needs doing first, what needs nothing last.
+//
+// It exists because the published API description enumerated THREE of the four for the whole of
+// Issue #1497 item 2's life — `operator_attested` was added to the derivation and to all three
+// consumers, and the one sentence an external reader relies on to know the enumeration was left
+// short. Go cannot enumerate a const block reflectively, so this slice is the single place a fifth
+// state has to be added, and the tests that range over it are what make forgetting it loud.
+//
+// ⚠ It is NOT a substitute for exhaustively handling each state where the states MEAN different
+// things — SummarisePlaidOrphanedItems' switch and the admin surface's per-state rendering are
+// deliberately explicit, because folding two of these together is the defect, not the omission.
+var AllOrphanedItemAdminStates = []OrphanedItemAdminState{
+	OrphanedItemManualInterventionRequired,
+	OrphanedItemAutoRetrying,
+	OrphanedItemOperatorAttested,
+	OrphanedItemResolved,
+}
+
 // PlaidOrphanedItem is one row of plaid_orphaned_items: a Plaid Item that may still exist and may
 // still bill, whose local linked_items row was destroyed by a GDPR erasure before removal could be
 // proved. It carries no user id and no user PII by design — see migration 000134 — plus, since
@@ -491,6 +510,21 @@ func SummarisePlaidOrphanedItems(items []PlaidOrphanedItem, asOf time.Time) Plai
 // 500 of N rows would UNDERSTATE the manual-intervention population, the one direction this state
 // must never err in, and it would look like an answer. See PlaidOrphanedItemHealthScanCap.
 //
+// ⚠ `total` MUST COME FROM THE SAME SNAPSHOT AS `items`, which is why plaidOrphanedItemRepository.List
+// derives both from a single statement (`COUNT(*) OVER ()`) rather than from a COUNT followed by a
+// page. Two non-transactional statements can hand this function a total of exactly the cap alongside
+// a page truncated out of a larger table, and the refusal below — the entire purpose of the cap —
+// would not fire. See List's comment.
+//
+// The empty-page guard is the second half of that: a page of zero rows drawn from a table that is
+// not empty is not a reading of anything, and summarising it would publish confident zeroes for a
+// population that may be entirely manual-intervention work. It is unreachable from either metrics
+// reader (both read offset 0), and it is here precisely so that staying unreachable is not what the
+// correctness depends on.
+//
+// The cap boundary is INCLUSIVE — exactly cap rows is a complete read and is reported. See
+// TestPlaidOrphanedItemHealthScanCap_IsPinnedAndGovernsRefusalPastIt.
+//
 // Available is left false on both paths for the reason SummarisePlaidOrphanedItems leaves it false:
 // claiming a reading is trustworthy is the caller's explicit act.
 func SummarisePlaidOrphanedItemsBounded(items []PlaidOrphanedItem, total int, asOf time.Time) (PlaidOrphanedItemMetrics, error) {
@@ -498,6 +532,11 @@ func SummarisePlaidOrphanedItemsBounded(items []PlaidOrphanedItem, total int, as
 		return PlaidOrphanedItemMetrics{}, fmt.Errorf(
 			"plaid_orphaned_items holds %d rows, past the %d-row cap this in-Go state derivation is bounded by; migrations 000134/000135 argued this table holds single digits of rows and it no longer does, so these counts need server-side totals by state (COUNT ... FILTER) rather than a bigger cap",
 			total, PlaidOrphanedItemHealthScanCap)
+	}
+	if total > 0 && len(items) == 0 {
+		return PlaidOrphanedItemMetrics{}, fmt.Errorf(
+			"plaid_orphaned_items holds %d rows but the page handed to this derivation is empty, so there is nothing here to summarise; a count of zero over a non-empty table would understate the manual-intervention population, the one direction this state must never err in",
+			total)
 	}
 	return SummarisePlaidOrphanedItems(items, asOf), nil
 }

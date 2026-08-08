@@ -228,6 +228,35 @@ func (h *AdminHandler) RecordPlaidOrphanedItemOperatorResolution(
 	return out, nil
 }
 
+// listPlaidOrphanedItemsDescription is the listing endpoint's published description — the text that
+// lands in api/openapi.yaml and, from there, in the generated client and in whatever an operator or
+// an integrator reads before they act on a row.
+//
+// ⚠ IT IS BUILT BY INTERPOLATING domain's OWN AdminState CONSTANTS, NOT BY TYPING THEIR NAMES, and
+// that is the whole reason this is a variable rather than a string literal inline in the Register
+// call. The hand-typed version enumerated THREE of the four states: `operator_attested` was added to
+// the derivation (Issue #1497 item 2) and to all three consumers, and this sentence — the only
+// description of the enumeration anybody outside the codebase can read — was left saying there were
+// three. A published enumeration that is missing a value is worse than none, because a client that
+// switches on it has no reason to think a fourth exists.
+//
+// The order is the operator's, not domain.AdminState's priority order: what needs doing, then what
+// needs nothing. Adding a state to domain.OrphanedItemAdminState without adding a clause here is
+// caught by TestListPlaidOrphanedItemsDescription_EnumeratesEveryAdminState.
+var listPlaidOrphanedItemsDescription = fmt.Sprintf(
+	"Returns Plaid Items whose local record was deleted by a completed GDPR erasure before removal "+
+		"could be proved, labelled with the action required: '%s' (remove the Item in Plaid's dashboard "+
+		"using plaid_item_id, or it may keep billing), '%s' (an automated retry holds a live credential "+
+		"— no action), '%s' (an admin has stated they removed it by hand; this is an UNVERIFIED claim, "+
+		"resolved_at is NOT set, and the automated sweep keeps re-attempting the removal precisely "+
+		"because it may yet disprove the claim), or '%s' (Plaid confirmed the removal — history, not "+
+		"work). Never returns the retained access token. Requires admin role.",
+	domain.OrphanedItemManualInterventionRequired,
+	domain.OrphanedItemAutoRetrying,
+	domain.OrphanedItemOperatorAttested,
+	domain.OrphanedItemResolved,
+)
+
 // RegisterAdminPlaidOrphanedItemOperations registers the orphaned-Plaid-Item admin listing.
 //
 // Called from RegisterAdminRoutes, and named *Operations rather than *Routes to match
@@ -240,12 +269,8 @@ func RegisterAdminPlaidOrphanedItemOperations(api huma.API, handler *AdminHandle
 		Method:      http.MethodGet,
 		Path:        "/api/v1/admin/plaid/orphaned-items",
 		Summary:     "List orphaned Plaid Items (admin)",
-		Description: "Returns Plaid Items whose local record was deleted by a completed GDPR erasure before " +
-			"removal could be proved, labelled with the action required: 'auto_retrying' (an automated retry " +
-			"holds a live credential — no action), 'manual_intervention_required' (remove the Item in Plaid's " +
-			"dashboard using plaid_item_id, or it may keep billing), or 'resolved' (history). Never returns the " +
-			"retained access token. Requires admin role.",
-		Tags:     []string{"Admin"},
+		Description: listPlaidOrphanedItemsDescription,
+		Tags:        []string{"Admin"},
 		Security: []map[string][]string{{"clerk": {}}},
 		Middlewares: huma.Middlewares{
 			humamiddleware.NewAdminMiddleware(handler.config, handler.adminService),

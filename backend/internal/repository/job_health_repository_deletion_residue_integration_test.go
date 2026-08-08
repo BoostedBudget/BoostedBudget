@@ -79,9 +79,24 @@ func createResidueStatsUser(t *testing.T, pool *pgxpool.Pool, label string) stri
 // (three records across two users), not merely that a field exists — a surface that returned a
 // constant would pass the latter.
 //
-// Deliberately relative to a baseline rather than absolute: GetDeletionResidueStats scans the whole
-// audit_logs table (it is a health gauge, not a per-test query), so it is not isolated from rows
-// another package's fixtures left behind. The DELTA is what this query controls.
+// ⚠ IT ASSERTS MEMBERSHIP, NOT A DELTA, AND THAT REPLACES WHAT IT USED TO ASSERT. The original
+// assertion was `baseline + 3`, and a delta over a measured baseline is blind to any mutation that
+// shifts the baseline and the result by the SAME amount. Predicate WIDENING is exactly that class —
+// broaden `user.deletion_residue.%` to `user.%` and both readings grow by the same set of extra rows,
+// so `baseline + 3` still holds. That mutation passed this test once. (The delta is kept below,
+// because "our three rows are among what it counted" is still worth saying; it is no longer the only
+// thing said.)
+//
+// The membership assertion pins the surface's count against an INDEPENDENT enumeration of what a
+// residue record is: exact action EQUALITY, computed here, rather than the LIKE prefix the query
+// under test embeds. Widening the query's pattern makes the two disagree; narrowing it does too. And
+// the decoy rows are seeded by this test rather than assumed to exist, so the comparison cannot pass
+// vacuously on an otherwise-empty audit_logs — a passing control validates the pattern, not the
+// input.
+//
+// The baseline still has to be measured rather than assumed zero: GetDeletionResidueStats scans the
+// whole audit_logs table (it is a health gauge, not a per-test query), so it is not isolated from
+// rows another package's fixtures left behind.
 func TestJobHealthRepository_Integration_DeletionResidue_SeededPopulationIsCounted(t *testing.T) {
 	pool := connectTestDB(t)
 	repo := NewJobHealthRepository(pool)
@@ -101,8 +116,33 @@ func TestJobHealthRepository_Integration_DeletionResidue_SeededPopulationIsCount
 	require.NoError(t, profileRepo.RecordDeletionResidue(ctx, userB, DeletionResiduePaddleSubscriptionCancelled))
 	require.NoError(t, profileRepo.RecordDeletionResidue(ctx, userB, DeletionResiduePaddleSubscriptionCancelled))
 
+	// The decoys a WIDENED predicate would sweep up: the audit rows an ordinary, harmless deletion
+	// leaves. They live inside `user.` and outside the residue namespace, and they are seeded HERE so
+	// the membership assertion below has something to be non-vacuous about even on a fresh database.
+	// Their resource_id is userA's, so createResidueStatsUser's cleanup takes them.
+	for _, action := range []string{"user.deletion_requested", "user.deleted", "user.updated"} {
+		_, insErr := pool.Exec(ctx,
+			`INSERT INTO audit_logs (user_id, action, resource_type, resource_id) VALUES (NULL, $1, 'user', $2)`,
+			action, userA)
+		require.NoError(t, insErr)
+	}
+
 	count, newest, err := repo.GetDeletionResidueStats(ctx)
 	require.NoError(t, err)
+
+	// MEMBERSHIP. Enumerated by exact equality on the full action, which is what a residue record IS;
+	// the query under test reaches the same rows through a LIKE prefix. Any widening or narrowing of
+	// that prefix makes the two numbers disagree, whatever the baseline does.
+	var exactlyResidue int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM audit_logs WHERE action = $1`,
+		deletionResidueActionPrefix+string(DeletionResiduePaddleSubscriptionCancelled),
+	).Scan(&exactlyResidue))
+	require.GreaterOrEqual(t, exactlyResidue, 3,
+		"the three rows just written must be in the reference set, or the comparison below proves nothing")
+	assert.Equal(t, exactlyResidue, count,
+		"the surface must count EXACTLY the residue rows and nothing else — three ordinary `user.` deletion rows were seeded above precisely so a predicate broadened to `user.%` shows up here as a disagreement rather than as a matching shift in both readings")
+
 	assert.Equal(t, baseline+3, count,
 		"every residue record must be counted — one per occurrence, not one per user: two separate revocations against the same user are two subscriptions somebody has to restore")
 	assert.Greater(t, newest, time.Duration(0),
