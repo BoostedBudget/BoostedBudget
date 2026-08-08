@@ -91,12 +91,17 @@ type fakeSweeper struct {
 	maxAttempts int
 	res         services.OrphanRetrySweepResult
 	err         error
+	// resume records the cross-run position object the worker handed over (Issue #1477), so a test
+	// can prove the worker supplies one at all — a worker that quietly passed nil would restore the
+	// pre-#1477 starvation and every other assertion here would stay green.
+	resume services.OrphanRetryResume
 }
 
-func (f *fakeSweeper) Sweep(_ context.Context, _ time.Time, pageSize, maxAttempts int) (services.OrphanRetrySweepResult, error) {
+func (f *fakeSweeper) Sweep(_ context.Context, _ time.Time, pageSize, maxAttempts int, resume services.OrphanRetryResume) (services.OrphanRetrySweepResult, error) {
 	f.calls++
 	f.pageSize = pageSize
 	f.maxAttempts = maxAttempts
+	f.resume = resume
 	return f.res, f.err
 }
 
@@ -114,6 +119,11 @@ func TestPlaidOrphanRetryWorker_Work_PassesTheProductionBounds(t *testing.T) {
 	require.NoError(t, w.Work(context.Background(), retryJob()))
 	assert.Equal(t, orphanRetryPageSize, sweeper.pageSize)
 	assert.Equal(t, maxOrphanRetriesPerSweep, sweeper.maxAttempts)
+	// Issue #1477: the resume object is handed over even with no SweepCursors store wired — it is
+	// nil-safe and simply persists nothing. What must NOT happen is the worker passing a nil
+	// interface, because then wiring the store later would change nothing.
+	require.NotNil(t, sweeper.resume, "the worker must always hand the sweep its cross-run resume position")
+	assert.Nil(t, sweeper.resume.StartCursor(), "with no store wired there is no position to resume from")
 }
 
 func TestPlaidOrphanRetryWorker_Work_ReturnsTheSweepError(t *testing.T) {

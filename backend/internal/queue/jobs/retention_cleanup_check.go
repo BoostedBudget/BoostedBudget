@@ -1709,7 +1709,7 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 		if len(users) == 0 {
 			// An empty page at a RESUMED position means the persisted cursor is past the end, not
 			// that there is no work: clear it and re-query from the beginning within this same run.
-			if resume.wrapNow(ctx, totalUsers) {
+			if resume.WrapNow(ctx, totalUsers) {
 				cursor = nil
 				continue
 			}
@@ -1777,7 +1777,7 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 	}
 
 	// Persist the remainder position (cap hit) or clear it (end of set reached) — Issue #1477.
-	resume.finish(ctx, cappedStop, reached)
+	resume.Finish(ctx, cappedStop, reached)
 
 	if totalUsers == 0 {
 		w.logger.Info("no users with expired retention", "job_id", jobID)

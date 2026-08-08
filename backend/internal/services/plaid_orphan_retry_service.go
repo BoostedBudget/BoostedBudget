@@ -62,6 +62,32 @@ type OrphanRetrySweepResult struct {
 	CapHit bool
 }
 
+// OrphanRetryResume is the persisted cross-run resume position for this sweep, supplied per RUN by
+// the caller. Issue #1477.
+//
+// ⚠ IT IS DECLARED HERE AND IMPLEMENTED ELSEWHERE, DELIBERATELY. The mechanism — the sweep_cursors
+// row, the load, the wrap decision, the save/clear asymmetry, repository.NextPosition — is the one
+// the other three capped sweeps already share (queue/jobs/sweep_resume.go, designed in
+// repository/sweep_cursor_repository.go). This interface exists so that the one paging loop that
+// lives in the service layer can USE that mechanism rather than grow a second one; there is no
+// implementation of it in this package and there must not be.
+//
+// nil is legal and means "do not persist anything": the sweep then starts from the oldest candidate
+// every run, which is exactly the pre-#1477 behaviour. That keeps this package's unit tests free of
+// a database, and it is why production wiring (main.go → PlaidOrphanRetryWorkerDeps.SweepCursors)
+// is the thing to check if the starvation below ever reappears.
+type OrphanRetryResume interface {
+	// StartCursor is the position to resume from, or nil to start from the oldest candidate.
+	StartCursor() *repository.OrphanRetryCursor
+	// WrapNow reports whether an empty page at a RESUMED position means the stored watermark is
+	// past the end (true — it has been cleared, and the caller must re-query from nil within this
+	// same run) rather than "there is nothing to do".
+	WrapNow(ctx context.Context, processed int) bool
+	// Finish persists where a capped run stopped, or clears the position when the run reached the
+	// end of the candidate set.
+	Finish(ctx context.Context, cappedStop bool, reached repository.SweepPosition)
+}
+
 // PlaidOrphanRetryService re-attempts Plaid /item/remove for records in plaid_orphaned_items that still
 // hold a live, unexpired credential. Issue #1497.
 //
@@ -79,7 +105,9 @@ type PlaidOrphanRetryService interface {
 	// the instant the retention deadline is judged at — that is re-read from the wall clock immediately
 	// before each credential is presented to Plaid, because a run can outlive a deadline it started
 	// inside. See retryOne.
-	Sweep(ctx context.Context, asOf time.Time, pageSize, maxAttempts int) (OrphanRetrySweepResult, error)
+	//
+	// resume carries the cross-run position (Issue #1477) and may be nil — see OrphanRetryResume.
+	Sweep(ctx context.Context, asOf time.Time, pageSize, maxAttempts int, resume OrphanRetryResume) (OrphanRetrySweepResult, error)
 }
 
 type plaidOrphanRetryService struct {
@@ -135,10 +163,25 @@ func (s *plaidOrphanRetryService) SetLogger(logger *slog.Logger) {
 // THE CURSOR ADVANCES PAST ROWS THAT FAILED, not merely past rows that succeeded. That is the whole
 // reason it is a keyset cursor rather than a re-run of the same predicate: a row whose removal keeps
 // failing (or whose outcome cannot be written back) must not occupy the oldest slot of every subsequent
-// page within this run and starve everything behind it. Across runs there is no persisted cursor, so a
-// permanently-failing row IS re-attempted every run — which is correct, since only the deadline ends
-// the retrying, and is bounded by the cap.
-func (s *plaidOrphanRetryService) Sweep(ctx context.Context, asOf time.Time, pageSize, maxAttempts int) (OrphanRetrySweepResult, error) {
+// page within this run and starve everything behind it.
+//
+// ⚠ AND ACROSS RUNS IT IS THE SAME PROBLEM, which this comment used to describe only in its benign
+// half. A permanently-failing row IS re-attempted every run — correct, since only the retention
+// deadline ends the retrying — but it also STAYS at the head of the candidate set while doing so:
+// GetRetryablePage's predicate is (unresolved, credential present, deadline not passed) with no
+// attempt ceiling and no backoff on last_retry_at, and RecordRetryFailure moves none of those. So
+// before Issue #1477, when the cursor restarted at nil on every run, a backlog larger than
+// maxAttempts whose head kept failing meant every run re-spent its whole budget on the same oldest
+// records and NOTHING past the cap was ever retried — until those records' own credentials expired,
+// after which no automated path can ever remove their Items. That is a structural starvation, not
+// slow drainage, and unlike item_cleanup's it needs no database failure: an ordinary Plaid failure,
+// which is the case this sweep exists for, is enough.
+//
+// Since #1477 the position is PERSISTED (resume, see OrphanRetryResume) and the next run continues
+// from where this one stopped. The replacement guarantee is bounded, not absolute — it is stated
+// once, with its bound, in repository/sweep_cursor_repository.go's header. Do not restate it here as
+// "no starvation".
+func (s *plaidOrphanRetryService) Sweep(ctx context.Context, asOf time.Time, pageSize, maxAttempts int, resume OrphanRetryResume) (OrphanRetrySweepResult, error) {
 	var res OrphanRetrySweepResult
 
 	if s.plaidService == nil {
@@ -151,7 +194,18 @@ func (s *plaidOrphanRetryService) Sweep(ctx context.Context, asOf time.Time, pag
 		return res, fmt.Errorf("plaid orphan retry sweep: pageSize and maxAttempts must be positive, got %d/%d", pageSize, maxAttempts)
 	}
 
+	// Issue #1477: resume where the last CAPPED run stopped. A nil resume is the pre-#1477
+	// behaviour — start from the oldest candidate — and is what every unit test in this package
+	// passes; production wires it in main.go.
 	var cursor *repository.OrphanRetryCursor
+	if resume != nil {
+		cursor = resume.StartCursor()
+	}
+	// reached records only the TIMESTAMP half of the last position this run visited — never the row
+	// id. See repository/sweep_cursor_repository.go's header for why sweep_cursors stores no row
+	// identity.
+	var reached repository.SweepPosition
+
 	for {
 		remaining := maxAttempts - res.Attempted
 		if remaining <= 0 {
@@ -170,6 +224,12 @@ func (s *plaidOrphanRetryService) Sweep(ctx context.Context, asOf time.Time, pag
 			return res, fmt.Errorf("plaid orphan retry sweep: read retryable page: %w", err)
 		}
 		if len(page) == 0 {
+			// An empty page at a RESUMED position means the persisted cursor is past the end, not
+			// that there is no work: clear it and re-query from the beginning within this same run.
+			if resume != nil && resume.WrapNow(ctx, res.Attempted) {
+				cursor = nil
+				continue
+			}
 			break
 		}
 		// Truncate defensively rather than trusting the query's LIMIT, so the cap is a property of THIS
@@ -187,10 +247,19 @@ func (s *plaidOrphanRetryService) Sweep(ctx context.Context, asOf time.Time, pag
 
 		last := page[len(page)-1]
 		cursor = &repository.OrphanRetryCursor{OrphanedAt: last.OrphanedAt, ID: last.ID}
+		lastOrphanedAt := last.OrphanedAt
+		reached = repository.SweepPosition{TS1: &lastOrphanedAt}
 
 		if len(page) < limit {
 			break
 		}
+	}
+
+	// Persist the remainder position (cap hit) or clear it (end of set reached) — Issue #1477.
+	// res.CapHit is set by exactly one branch above, the one that stops the run early, so it is
+	// precisely "this run stopped with a remainder".
+	if resume != nil {
+		resume.Finish(ctx, res.CapHit, reached)
 	}
 
 	return res, nil

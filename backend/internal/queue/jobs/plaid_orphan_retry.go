@@ -10,6 +10,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
@@ -40,6 +41,12 @@ const orphanRetryPageSize = 500
 // too eagerly; what the cap bounds is Plaid API volume and one run's duration. Migration 000134 expects
 // this table to hold single digits of rows, so the cap is unreachable in practice and hitting it is
 // itself the alarming signal.
+//
+// Hitting it stops THIS run early and defers the remainder; since Issue #1477 the next run RESUMES
+// from the timestamp key this one stopped at (sweep_cursors) instead of restarting from the oldest
+// record, so a permanently-failing head no longer consumes every run's whole budget. That
+// replacement guarantee is bounded, not absolute — it is stated once, with its bound, in
+// repository/sweep_cursor_repository.go's header. Do not restate it as "no starvation".
 const maxOrphanRetriesPerSweep = 1000
 
 // PlaidOrphanRetryWorker runs the retry sweep.
@@ -50,6 +57,11 @@ type PlaidOrphanRetryWorker struct {
 	logger      *slog.Logger
 	pageSize    int
 	maxPerSweep int
+	// sweepCursors persists where a capped run stopped so the NEXT run resumes there instead of
+	// restarting from the oldest candidate (Issue #1477). Optional/nil-safe: a nil store reproduces
+	// the pre-#1477 behaviour exactly. See sweep_resume.go and
+	// repository/sweep_cursor_repository.go.
+	sweepCursors sweepCursorStore
 }
 
 // PlaidOrphanRetryWorkerDeps contains the dependencies for PlaidOrphanRetryWorker.
@@ -60,6 +72,10 @@ type PlaidOrphanRetryWorkerDeps struct {
 	// they exist so tests can exercise the paging loop and the cap without seeding hundreds of rows.
 	PageSize    int
 	MaxPerSweep int
+	// SweepCursors persists this sweep's cross-run resume position (Issue #1477). Optional and
+	// nil-safe: unwired, every run restarts from the oldest candidate, which is exactly the
+	// pre-#1477 starvation-prone behaviour — production MUST wire it (main.go).
+	SweepCursors repository.SweepCursorRepository
 }
 
 // NewPlaidOrphanRetryWorker creates the worker. Service may be nil (Plaid not configured), in which case
@@ -69,12 +85,19 @@ func NewPlaidOrphanRetryWorker(deps PlaidOrphanRetryWorkerDeps) *PlaidOrphanRetr
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &PlaidOrphanRetryWorker{
+	w := &PlaidOrphanRetryWorker{
 		svc:         deps.Service,
 		logger:      logger,
 		pageSize:    intOrDefault(deps.PageSize, orphanRetryPageSize),
 		maxPerSweep: intOrDefault(deps.MaxPerSweep, maxOrphanRetriesPerSweep),
 	}
+	// Guarded rather than assigned directly, for the reason given in
+	// NewScheduledDeletionCheckWorker: "unwired means nil, and nil means do not persist" stays true
+	// by inspection.
+	if deps.SweepCursors != nil {
+		w.sweepCursors = deps.SweepCursors
+	}
+	return w
 }
 
 // Work runs one retry sweep and logs its tally.
@@ -100,7 +123,11 @@ func (w *PlaidOrphanRetryWorker) Work(ctx context.Context, job *river.Job[PlaidO
 		return fmt.Errorf("plaid orphan retry: no service wired; stranded Plaid Items are NOT being retried")
 	}
 
-	res, err := w.svc.Sweep(ctx, time.Now().UTC(), w.pageSize, w.maxPerSweep)
+	// Issue #1477: the same persisted cursor mechanism the other three capped sweeps use, handed to
+	// the service because THIS sweep's paging loop lives there. See sweep_resume.go's header.
+	resume := orphanRetryResume{newSweepResume(ctx, w.sweepCursors, repository.SweepCursorOrphanRetry, w.logger, job.ID)}
+
+	res, err := w.svc.Sweep(ctx, time.Now().UTC(), w.pageSize, w.maxPerSweep, resume)
 	// The tally is logged even on error, because a sweep that failed on page three still resolved
 	// whatever pages one and two resolved, and a log line that omitted that would misdescribe the run.
 	w.logger.Info("plaid orphan retry sweep completed",

@@ -373,7 +373,7 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 		if len(items) == 0 {
 			// An empty page at a RESUMED position means the persisted cursor is past the end, not
 			// that there is no work: clear it and re-query from the beginning within this same run.
-			if resume.wrapNow(ctx, totalItems) {
+			if resume.WrapNow(ctx, totalItems) {
 				cursor = nil
 				continue
 			}
@@ -545,7 +545,7 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 	}
 
 	// Persist the remainder position (cap hit) or clear it (end of set reached) — Issue #1477.
-	resume.finish(ctx, cappedStop, reached)
+	resume.Finish(ctx, cappedStop, reached)
 
 	// Issue #1486 follow-up part C: recover STRANDED rows. Runs unconditionally — in particular it must not sit
 	// behind the "no items need cleanup" early return below, because a run with zero NEW candidates is

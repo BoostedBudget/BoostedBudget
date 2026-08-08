@@ -9,23 +9,31 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Issue #1477 — the persisted cross-run resume position for the three capped periodic sweeps.
+// Issue #1477 — the persisted cross-run resume position for the FOUR capped periodic sweeps.
 //
-// THE DEFECT. scheduled_deletion_check, retention_cleanup_check's deleteExpiredAccounts and
-// item_cleanup_check all page with a keyset cursor that starts at nil on EVERY run, and all three
-// are capped per run (maxUsersPerDeletionSweep / maxUsersPerRetentionSweep /
-// maxItemsPerCleanupSweep). Above the cap, every run therefore re-reads the same oldest rows: a
+// THE DEFECT. scheduled_deletion_check, retention_cleanup_check's deleteExpiredAccounts,
+// item_cleanup_check and the plaid orphan retry (services.PlaidOrphanRetryService.Sweep) all page
+// with a keyset cursor that starts at nil on EVERY run, and all four are capped per run
+// (maxUsersPerDeletionSweep / maxUsersPerRetentionSweep / maxItemsPerCleanupSweep /
+// maxOrphanRetriesPerSweep). Above the cap, every run therefore re-reads the same oldest rows: a
 // permanently-failing head of the queue starves everything behind it indefinitely. That is a
 // structural starvation, not slow drainage — it does not depend on arrival rate, and it is exactly
 // what GetUsersScheduledForDeletionPage's, GetUsersWithExpiredRetentionPage's and
 // GetItemsForCleanupPage's own doc comments already said, each pointing at this issue.
 //
+// ⚠ WHAT PUTS A ROW AT THAT STARVING HEAD IS NOT THE SAME FACT FOR EVERY SWEEP, and reading it as
+// one fact is how the item_cleanup claim was first overstated. Per sweep it is: a user whose
+// deletion job cannot be ENQUEUED (scheduled_deletion, expired_retention), an item that cannot be
+// MARKED — a database failure, since a stamped row leaves the candidate set at once
+// (item_cleanup), and a record whose /item/remove keeps failing at PLAID (plaid_orphan_retry, which
+// has no attempt ceiling and no backoff, so a failed retry leaves the row's position untouched).
+//
 // WHERE THE CURSOR LIVES, AND WHY. A dedicated sweep_cursors table (migration 000140), one row per
 // sweep, holding ONLY the sort-key TIMESTAMPS of the position — never a row identity.
 //
-//   - Not a column on the swept table. There is no row that survives to carry it: two of the three
+//   - Not a column on the swept table. There is no row that survives to carry it: two of the four
 //     sweeps hard-delete the users they walk (DeleteUserCascade's `DELETE FROM users`), and the
-//     third stamps rows OUT of its own candidate set.
+//     other two stamp rows OUT of their own candidate sets.
 //   - No user_id and no foreign key, deliberately, mirroring plaid_orphaned_items (migration
 //     000134) — the established precedent in this schema for a table that must outlive erasure. An
 //     FK into users would either cascade the cursor away in the middle of the sweep that is doing
@@ -34,7 +42,7 @@ import (
 //   - Storing only timestamps costs nothing in precision. A watermark of "the timestamp key where
 //     the last run stopped" is turned back into an EXACT keyset cursor by pairing it with a
 //     synthesized min/max UUID sentinel (MinSweepSentinelID / MaxSweepSentinelID below), because
-//     every one of the three sweeps breaks ties on a `uuid` column and PostgreSQL orders uuid by
+//     every one of the four sweeps breaks ties on a `uuid` column and PostgreSQL orders uuid by
 //     its 16 raw bytes. `(ts, id) > (T, 00000000-…-000000000000)` is precisely "ts >= T", and
 //     `(ts, id) > (T, ffffffff-…-ffffffffffff)` is precisely "ts > T". So the sweeps' existing
 //     page-query signatures and their existing keyset predicates are used UNCHANGED; nothing about
@@ -69,7 +77,8 @@ import (
 //	    promptly. It is skipped until the next wrap, so its bound is one full cycle, not one run.
 //	    This is real for item_cleanup, whose last_synced_at leg makes a row eligible by the passage
 //	    of time against an OLD timestamp; it is marginal for the two user sweeps, whose sort columns
-//	    are set to future instants when the row becomes eligible.
+//	    are set to future instants when the row becomes eligible, and for plaid_orphan_retry, whose
+//	    orphaned_at is stamped at the erasure that creates the row.
 //	  - anything at all when the candidate set churns faster than one cycle.
 //	  - ⚠ anything about rows past the first C of an OVER-CAP TIE GROUP — more than C rows sharing
 //	    ONE timestamp key — in which no row ever leaves the candidate set. The exclusive advance
@@ -82,14 +91,17 @@ import (
 //	    and NOTHING behind it is ever reached. It is written down rather than left to be discovered.
 //	    The realistic instance is item_cleanup's (NULL, NULL) bucket, which its zero-active-accounts
 //	    predicate leg can populate in bulk; the two user sweeps' sort columns are per-user instants
-//	    and do not form large ties.
+//	    and do not form large ties. plaid_orphan_retry ties by construction — DeleteUserCascade
+//	    inserts every one of an erased user's outstanding Items in ONE statement, so they all take
+//	    the same orphaned_at DEFAULT NOW() — but the group is that user's item count, single digits
+//	    against a cap of 1,000, so it cannot be an OVER-CAP tie group.
 //
-// Compare what was true BEFORE, for all three sweeps: above the cap, rows past it were reached
+// Compare what was true BEFORE, for all four sweeps: above the cap, rows past it were reached
 // NEVER, tie group or not, for as long as the head kept failing. The change is from "never" to
 // "within one cycle", not to "always promptly" and not to "always".
 
 // SweepCursorName identifies one sweep's row in sweep_cursors. Declared as a named string type so
-// a caller cannot accidentally pass an arbitrary string, and so the three legal values are
+// a caller cannot accidentally pass an arbitrary string, and so the four legal values are
 // enumerable and greppable from one place.
 type SweepCursorName string
 
@@ -101,8 +113,18 @@ const (
 	// GetUsersWithExpiredRetentionPage. TS1 = retention_expires_at; TS2 unused.
 	SweepCursorExpiredRetention SweepCursorName = "expired_retention"
 	// SweepCursorItemCleanup is ItemCleanupCheckWorker's sweep over GetItemsForCleanupPage.
-	// TS1 = last_error_at, TS2 = last_synced_at — the only sweep of the three that needs TS2.
+	// TS1 = last_error_at, TS2 = last_synced_at — the only sweep of the four that needs TS2.
 	SweepCursorItemCleanup SweepCursorName = "item_cleanup"
+	// SweepCursorOrphanRetry is PlaidOrphanRetryWorker's sweep over GetRetryablePage.
+	// TS1 = orphaned_at; TS2 unused.
+	//
+	// ⚠ Its starving head is the one of the four that needs NO database or enqueue failure at all: a
+	// record whose /item/remove keeps failing at Plaid is written back (retry_attempt_count,
+	// last_retry_error_code) WITHOUT its orphaned_at moving and WITHOUT leaving the candidate set —
+	// GetRetryablePage has no attempt ceiling and no backoff on last_retry_at, deliberately, because
+	// only the retention deadline is allowed to end the retrying. So an ordinary, expected Plaid
+	// failure was enough to starve everything behind it.
+	SweepCursorOrphanRetry SweepCursorName = "plaid_orphan_retry"
 )
 
 // MinSweepSentinelID and MaxSweepSentinelID are the two synthesized uuid values that turn a
@@ -130,8 +152,8 @@ const (
 // TS1/TS2 are pointers because a NULL is a legitimate position for the item_cleanup sweep — its
 // two sort columns are both nullable and its "zero active accounts" predicate leg matches rows
 // where both are NULL. A nil component is stored as SQL NULL and coalesced to 'infinity' by the
-// page queries, exactly where ORDER BY ... NULLS LAST puts it. The two user sweeps never write a
-// nil TS1 (their sort columns are IS NOT NULL by predicate) and never use TS2 at all.
+// page queries, exactly where ORDER BY ... NULLS LAST puts it. The other three sweeps never write a
+// nil TS1 (their sort columns are NOT NULL, by predicate or by schema) and never use TS2 at all.
 type SweepPosition struct {
 	TS1 *time.Time
 	TS2 *time.Time
@@ -199,7 +221,7 @@ func NextPosition(start *SweepPosition, reached SweepPosition) SweepPosition {
 // design, the reset rules and the bounded starvation guarantee.
 //
 // Deliberately NOT folded into ProfileRepository or LinkedItemRepository: the mechanism is shared
-// by three sweeps across two different tables, and it is the one piece of state here that must NOT
+// by four sweeps across three different tables, and it is the one piece of state here that must NOT
 // be user-scoped.
 type SweepCursorRepository interface {
 	// Load returns the stored resume position for a sweep, or (nil, nil) when there is none —
