@@ -1824,6 +1824,42 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// that column self-heals within one day even if this fix were entirely absent) any row in these
 	// three tables whose user_id/actor_user_id no longer names a real user, on every scheduled pass,
 	// rather than leaving a residual GDPR-erasure gap silent and undiscoverable.
+	// ⚠ ROUND 12, FINDING AB-3 — THE ONE SHAPE THE BACKSTOP ABOVE DOES NOT SEE. RECORDED, NOT FIXED.
+	// The paragraph above is about a row INSERTED into one of these three tables after its DELETE has
+	// run; GetOrphanedFKlessUserScopedRowCounts finds those. A dead-letter REPLAY escapes both.
+	//
+	// DeadLetterService.Retry (services/dead_letter_service.go) claims its dead_letter_jobs row and
+	// inserts the replacement river_job in ONE transaction. If that transaction is open when this
+	// statement runs, this statement BLOCKS on the row lock the claim holds — while this transaction
+	// already holds the users row FOR UPDATE — and nothing bounds the wait: there is no
+	// statement_timeout and no lock_timeout set anywhere in this codebase (verified repo-wide; the only
+	// timeout mentioned anywhere is Postgres's own deadlock_timeout, in test commentary). It is NOT a
+	// deadlock cycle — the replay never asks for anything this transaction holds — so Postgres will not
+	// break it. It is a one-way wait lasting as long as the replay does.
+	//
+	// If the replay commits first, this DELETE then erases its dead_letter_jobs row and the erasure
+	// completes — but the river_job it inserted lives in a table this method does not touch at all (0
+	// occurrences of `river_job` in this file, against 17 `DELETE FROM` statements naming 5 tables) and
+	// stays runnable.
+	//
+	// ⚠ WHAT ACTUALLY SURVIVES, STATED PRECISELY BECAUSE THE FIRST DESCRIPTION OF THIS OVERSTATED IT.
+	// NOT resurrected PII. This codebase deliberately keeps PII out of job args and says so
+	// (queue/jobs/email_change_propagation.go: "Email is intentionally NOT stored here to avoid
+	// plaintext PII in the river_job table"), and no args type carries an email, name or address. What
+	// survives is an internal UUID referencing nothing, inside a job that will find no user and no-op.
+	// Real, small, and pre-existing — it is the WAIT and the orphaned runnable job that are new.
+	//
+	// WHY NOTHING IS DONE ABOUT IT HERE, having been assessed. The obvious guard — the replay declining
+	// to enqueue for a user whose deletion is in flight — does not close it: the failing interleaving is
+	// the one where the replay commits FIRST, so any check it makes against its own snapshot sees a user
+	// who is still there. The guard that WOULD close it is the replay taking a CONFLICTING lock on the
+	// users row (FOR SHARE / FOR KEY SHARE) before enqueueing, and that is not safe: the replay would
+	// hold the dead_letter_jobs row and want users, while this transaction holds users and wants that
+	// dead_letter_jobs row — a genuine lock cycle, i.e. trading an unbounded wait for exactly the
+	// SQLSTATE 40P01 class this file has spent several rounds engineering out. Sweeping river_job from
+	// this transaction is a design change on the most sensitive path in this codebase and is
+	// deliberately not made. The residual is therefore recorded rather than closed. The same note is
+	// written from the other side at DeadLetterService.Retry.
 	if _, err = tx.Exec(ctx, `DELETE FROM dead_letter_jobs WHERE user_id = $1`, userID); err != nil {
 		return false, fmt.Errorf("DeleteUserCascade: erase dead_letter_jobs: %w", err)
 	}

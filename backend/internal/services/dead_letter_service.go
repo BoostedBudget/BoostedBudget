@@ -190,6 +190,24 @@ func (s *deadLetterService) GetRawArgs(ctx context.Context, id int64) (json.RawM
 // back, so the only committed outcomes are "claimed, with a real job id, and that job exists" and
 // "nothing happened". The rollback IS the release; there is no compensating write left to fail.
 //
+// ⚠ ROUND 12, FINDING AB-3 — THIS TRANSACTION CAN OUTLIVE A GDPR ERASURE IT RACES. Recorded here,
+// assessed, and deliberately not guarded; the full argument is at the DELETE FROM dead_letter_jobs
+// statement in repository.DeleteUserCascade, which is the other half of the race.
+//
+// In short: the claim at step 4 takes a row lock on dead_letter_jobs that DeleteUserCascade's own
+// erasure of that table then blocks on, from inside a transaction already holding the user's row FOR
+// UPDATE, with no statement_timeout or lock_timeout anywhere in this codebase to bound the wait. No
+// cycle exists (this transaction never asks for anything the cascade holds), so Postgres will not
+// break it. If this transaction commits first, the cascade erases the user AND the dead_letter_jobs
+// row that sourced this replay — but the river_job inserted at step 5 is in a table the cascade does
+// not touch, so it survives and stays runnable.
+//
+// ⚠ What survives is NOT PII: job args deliberately carry none (see the note in
+// queue/jobs/email_change_propagation.go), so it is an internal UUID referencing nothing, in a job
+// that will no-op. The reason no guard is added is that the only guard that would actually close the
+// race requires locking the users row from inside THIS transaction, which converts an unbounded
+// one-way wait into a real lock cycle with the cascade — a worse trade.
+//
 // River's insert is safe to make through the caller's transaction: it inserts into river_job on
 // that connection and sends its "new job" notification in the same transaction, so no producer can
 // see or work the job before COMMIT, and a rollback removes it (river v0.38.0, client.go InsertTx:
