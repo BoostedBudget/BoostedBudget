@@ -219,10 +219,35 @@ func (r *DeadLetterJobRepository) DeleteByFilters(ctx context.Context, filters d
 	return result.RowsAffected(), nil
 }
 
-// AtomicMarkRetried atomically claims a DLQ job for retry using a compare-and-set.
-// Returns true if the claim succeeded (retried_at was NULL), false if already retried.
-// This prevents double-retry race conditions at the database level.
-func (r *DeadLetterJobRepository) AtomicMarkRetried(ctx context.Context, id int64, retryJobID int64) (bool, error) {
+// BeginRetryTx opens the transaction DeadLetterService.Retry runs its whole replay in — the claim,
+// the River insert (queue.JobQueue.EnqueueTx) and the retry-id write, committing as one unit.
+//
+// Issue #1508: those were three separate commits, and the first two could disagree. A claim that
+// committed without an insert spent the row's single replay slot on nothing; an insert whose id
+// write then failed left the row at the placeholder with a live job behind it. Both wrote
+// retry_job_id = 0, so the column could not tell them apart, and no reaper could be built on it.
+// One transaction removes the disagreement rather than trying to detect it: either the row is
+// claimed AND carries a real River job id AND that job exists, or none of the three happened.
+//
+// A tx handle is returned rather than taking a callback because the middle step is not a repository
+// operation at all — it is an insert River performs through the same pgx.Tx.
+func (r *DeadLetterJobRepository) BeginRetryTx(ctx context.Context) (pgx.Tx, error) {
+	return r.db.Begin(ctx)
+}
+
+// AtomicMarkRetriedInTx atomically claims a DLQ job for retry using a compare-and-set, inside the
+// caller's transaction. Returns true if the claim succeeded (retried_at was NULL), false if the row
+// was already retried or does not exist.
+//
+// The claim must stay BEFORE the enqueue (see DeadLetterService.Retry): claiming afterwards re-opens
+// the concurrent double-enqueue race this compare-and-set exists to close. Running it inside the
+// transaction preserves that order and strengthens it — the UPDATE takes a row lock that a
+// concurrent replay of the same row blocks on until this transaction ends, and then re-evaluates
+// `retried_at IS NULL` against the committed result.
+//
+// retryJobID is the 0 placeholder on the way in; MarkRetriedInTx overwrites it with the real River
+// job id before the same transaction commits, so no committed row is ever left at 0.
+func (r *DeadLetterJobRepository) AtomicMarkRetriedInTx(ctx context.Context, tx pgx.Tx, id int64, retryJobID int64) (bool, error) {
 	query := `
 		UPDATE dead_letter_jobs
 		SET retried_at = $1, retry_job_id = $2
@@ -230,7 +255,7 @@ func (r *DeadLetterJobRepository) AtomicMarkRetried(ctx context.Context, id int6
 		RETURNING id`
 
 	var returnedID int64
-	err := r.db.QueryRow(ctx, query, time.Now(), retryJobID, id).Scan(&returnedID)
+	err := tx.QueryRow(ctx, query, time.Now(), retryJobID, id).Scan(&returnedID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return false, nil
@@ -238,33 +263,6 @@ func (r *DeadLetterJobRepository) AtomicMarkRetried(ctx context.Context, id int6
 		return false, err
 	}
 	return true, nil
-}
-
-// ReleaseRetryClaim un-stamps a retry claim taken by AtomicMarkRetried for a replay that then
-// enqueued nothing (a queue error, or a River UniqueSkipped dedup), making the row retryable again.
-//
-// The claim-then-act ORDER in DeadLetterService.Retry is deliberate — claiming after a successful
-// enqueue would re-open the concurrent double-enqueue race the CAS exists to close — so the only
-// safe fix for a replay that did not happen is to undo the claim, which is what this does.
-//
-// retry_job_id = 0 is the discriminator: 0 is the placeholder AtomicMarkRetried writes, and the
-// success path overwrites it with the new River job ID (MarkRetried). River job IDs come from a
-// bigserial starting at 1 (migrations/000030_add_river_queue.up.sql), so 0 is never a real one.
-//
-// What that guard does and does not prove. It DOES prevent this statement from un-retrying a row whose
-// retry_job_id has been recorded. It does NOT prove that a row still at 0 has no live job: there is a
-// window between a successful Enqueue and MarkRetried, and if MarkRetried fails (it is best-effort) the
-// row stays at 0 permanently with a real job behind it. Nothing calls this method on either of those
-// paths — the service calls it only where the insert did not happen — so the guard is a second line of
-// defence, not the reason correctness holds.
-func (r *DeadLetterJobRepository) ReleaseRetryClaim(ctx context.Context, id int64) error {
-	query := `
-		UPDATE dead_letter_jobs
-		SET retried_at = NULL, retry_job_id = NULL
-		WHERE id = $1 AND retried_at IS NOT NULL AND retry_job_id = 0`
-
-	_, err := r.db.Exec(ctx, query, id)
-	return err
 }
 
 // ListUnnotified returns dead letter jobs where users haven't been notified yet.
@@ -360,10 +358,16 @@ func (r *DeadLetterJobRepository) MarkNotified(ctx context.Context, id int64) er
 	return err
 }
 
-// MarkRetried records that a dead letter job was manually retried.
-func (r *DeadLetterJobRepository) MarkRetried(ctx context.Context, id int64, retryJobID int64) error {
+// MarkRetriedInTx records the River job id a manual retry produced, inside the transaction that
+// took the claim (AtomicMarkRetriedInTx) and made the insert.
+//
+// This is NOT best-effort — it was, until Issue #1508, and that is precisely what made
+// retry_job_id = 0 undecidable: a failed id write left a claimed row with a live job behind it,
+// indistinguishable from a claim whose enqueue never happened. Its error must therefore abort the
+// replay, taking the claim and the River insert with it.
+func (r *DeadLetterJobRepository) MarkRetriedInTx(ctx context.Context, tx pgx.Tx, id int64, retryJobID int64) error {
 	query := `UPDATE dead_letter_jobs SET retried_at = $1, retry_job_id = $2 WHERE id = $3`
-	_, err := r.db.Exec(ctx, query, time.Now(), retryJobID, id)
+	_, err := tx.Exec(ctx, query, time.Now(), retryJobID, id)
 	return err
 }
 
