@@ -1077,12 +1077,19 @@ type ItemCleanupSweepCursor struct {
 // claim shipped on maxUsersPerDeletionSweep and is only true below the cap): within a single run the
 // caller advances across pages until the repository returns a short page (exhausted) or the caller's
 // total-processed cap (maxItemsPerCleanupSweep, queue/jobs/item_cleanup_check.go) is reached. Across
-// runs there is NO persisted cursor (#1477) — every run restarts from nil. So while the number of
-// candidates that are NOT getting marked stays BELOW the cap, each run steps past them and later
-// rows are reached; at or above that count, every run re-spends its entire budget on the same
-// unmarkable oldest rows and never reaches anything past the cap, for as long as they keep failing.
-// Successfully marked rows do not have this problem: MarkForCleanup sets cleanup_scheduled_at, after
-// which the row does not match this predicate at all.
+// runs, since Issue #1477, the caller PERSISTS the timestamp key a capped run stopped at (the
+// sweep_cursors table — repository/sweep_cursor_repository.go) and passes it back here as the next
+// run's `after`, so a head of UNMARKABLE rows larger than the cap no longer consumes every later
+// run's whole budget. Before #1477 it did, and nothing past the cap was EVER reached for as long as
+// they kept failing.
+//
+// ⚠ The starving head here must be UNMARKABLE, i.e. MarkForCleanup itself failing — a database
+// failure. It is NOT a Plaid failure: a successfully marked row sets cleanup_scheduled_at and stops
+// matching this predicate immediately, so however badly its downstream /item/remove goes, it is not
+// in this query's result set any more.
+//
+// The replacement guarantee is BOUNDED, not absolute — it is stated once, in full, in
+// repository/sweep_cursor_repository.go's header. Do not restate it as "no starvation".
 //
 // No index can serve this sort key, exactly as none could serve the unbounded query's: the closest
 // one, idx_linked_items_cleanup_candidates (status, last_error_at) WHERE status IN

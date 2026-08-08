@@ -45,13 +45,15 @@ const scheduledDeletionCheckPageSize = 500
 // already far more than a healthy run should ever need. Hitting the cap does NOT reschedule
 // or retry anything; it only stops THIS run early and logs a WARN naming how many users were
 // processed. This is not silent truncation: the existing periodic schedule
-// (ScheduledDeletionCheckPeriodicOpts) already re-runs this job on its own cadence — but that
-// next run does NOT resume where this one stopped. There is no persisted cross-run cursor
-// (Work()'s `cursor` variable below is local and starts nil on every invocation), so the next
-// run restarts oldest-first. It reaches users past this run's cap only once the ones this run
-// already enqueued are actually deleted (until then they are cheaply re-skipped via
-// AccountDeletionUniqueOpts' dedup, not reprocessed) — see Work()'s doc comment below and
-// GetUsersScheduledForDeletionPage's doc comment (profile_repository.go) for the full picture.
+// (ScheduledDeletionCheckPeriodicOpts) already re-runs this job on its own cadence, and since
+// Issue #1477 that next run RESUMES where this one stopped rather than restarting oldest-first —
+// Work() below persists the timestamp it got to via sweep_cursors
+// (repository/sweep_cursor_repository.go) whenever, and only whenever, it stops early on this cap.
+// So users ranked past this run's cap are reached on the next run regardless of whether the ones
+// this run enqueued ever complete. Before #1477 they were reached only once those completed, which
+// meant never if any of them permanently failed. See Work()'s doc comment below,
+// repository/sweep_cursor_repository.go for the guarantee stated with its bound, and
+// GetUsersScheduledForDeletionPage's doc comment (profile_repository.go) for the query side.
 const maxUsersPerDeletionSweep = 50000
 
 // ProfileRepository defines the methods needed for deletion scheduling.
@@ -75,6 +77,10 @@ type ScheduledDeletionCheckWorker struct {
 	logger      *slog.Logger
 	pageSize    int
 	maxUsers    int
+	// sweepCursors persists where a capped run stopped so the NEXT run resumes there instead of
+	// restarting from the oldest row (Issue #1477). Optional/nil-safe: a nil store reproduces the
+	// pre-#1477 behaviour exactly. See sweep_resume.go and repository/sweep_cursor_repository.go.
+	sweepCursors sweepCursorStore
 }
 
 // ScheduledDeletionCheckWorkerDeps contains the dependencies for ScheduledDeletionCheckWorker.
@@ -90,6 +96,10 @@ type ScheduledDeletionCheckWorkerDeps struct {
 	// default. Exists so tests can exercise the total-processed safety cap without seeding
 	// tens of thousands of fixture users — production should never set this.
 	MaxUsersPerSweep int
+	// SweepCursors persists this sweep's cross-run resume position (Issue #1477). Optional and
+	// nil-safe: unwired, every run restarts from the oldest eligible row, which is exactly the
+	// pre-#1477 starvation-prone behaviour — production MUST wire it (main.go).
+	SweepCursors repository.SweepCursorRepository
 }
 
 // NewScheduledDeletionCheckWorker creates a new scheduled deletion check worker.
@@ -108,13 +118,20 @@ func NewScheduledDeletionCheckWorker(deps ScheduledDeletionCheckWorkerDeps) *Sch
 	if maxUsers <= 0 {
 		maxUsers = maxUsersPerDeletionSweep
 	}
-	return &ScheduledDeletionCheckWorker{
+	w := &ScheduledDeletionCheckWorker{
 		profileRepo: deps.ProfileRepo,
 		jobQueue:    deps.JobQueue,
 		logger:      logger,
 		pageSize:    pageSize,
 		maxUsers:    maxUsers,
 	}
+	// Guarded rather than assigned directly: a nil repository.SweepCursorRepository stored into the
+	// narrower sweepCursorStore field would still be a nil interface, but writing it explicitly
+	// keeps "unwired means nil, and nil means do not persist" true by inspection.
+	if deps.SweepCursors != nil {
+		w.sweepCursors = deps.SweepCursors
+	}
+	return w
 }
 
 // SetJobQueue sets the job queue after worker creation.
@@ -136,12 +153,14 @@ func (w *ScheduledDeletionCheckWorker) SetJobQueue(jq queue.JobQueue) {
 //     page fetched in this run; the loop below re-queries until exhaustion or the cap, so a
 //     permanently-stuck oldest user cannot starve later users out of every page forever (see
 //     GetUsersScheduledForDeletionPage's doc comment). Hitting the cap logs a WARN and stops this
-//     run early; it does not schedule anything new. The next periodic run re-starts its own
-//     pagination from the oldest still-eligible row rather than resuming this run's cursor —
-//     there is no persisted cross-run cursor (Codex round5 residual #3) — so it reaches users
-//     past this run's cap only once the ones this run already enqueued are actually deleted
-//     (until then they are cheaply re-skipped via AccountDeletionUniqueOpts' dedup, not
-//     reprocessed).
+//     run early; it does not schedule anything new. Issue #1477: it also PERSISTS the timestamp
+//     this run got to (sweep_cursors, via sweepResume.finish below), so the next periodic run
+//     resumes there instead of restarting from the oldest still-eligible row. A run that instead
+//     reaches the end of the candidate set CLEARS that position, and a run whose persisted
+//     position turns out to be past the end wraps to the beginning within the same run — the two
+//     resets that stop a forward-only cursor from silently stalling the sweep forever. The
+//     guarantee this buys, and its bound, are stated once in
+//     repository/sweep_cursor_repository.go's header; do not restate it here as "no starvation".
 //
 // Errors in individual deletion enqueueing don't fail the entire job.
 func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[ScheduledDeletionCheckArgs]) (err error) {
@@ -167,7 +186,14 @@ func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[
 
 	startTime := time.Now()
 
-	var cursor *repository.DeletionSweepCursor
+	// Issue #1477: resume where the last CAPPED run stopped, instead of restarting from the oldest
+	// row every time. See sweep_resume.go and repository/sweep_cursor_repository.go for the design,
+	// the two reset rules, and the starvation guarantee stated with its bound.
+	resume := newSweepResume(ctx, w.sweepCursors, repository.SweepCursorScheduledDeletion, w.logger, job.ID)
+	cursor := deletionCursorFrom(resume.start)
+	var reached repository.SweepPosition
+	cappedStop := false
+
 	var totalUsers, enqueuedCount, skippedCount, errorCount int
 
 	for {
@@ -181,6 +207,12 @@ func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[
 		}
 
 		if len(users) == 0 {
+			// An empty page at a RESUMED position means the persisted cursor is past the end, not
+			// that there is no work: clear it and re-query from the beginning within this same run.
+			if resume.wrapNow(ctx, totalUsers) {
+				cursor = nil
+				continue
+			}
 			break
 		}
 
@@ -246,10 +278,15 @@ func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[
 		}
 
 		last := users[len(users)-1]
+		lastScheduledAt := derefDeletionScheduledAt(last)
 		cursor = &repository.DeletionSweepCursor{
-			ScheduledAt: derefDeletionScheduledAt(last),
+			ScheduledAt: lastScheduledAt,
 			UserID:      last.ID,
 		}
+		// reached records only the TIMESTAMP half of that position — never last.ID. That is the
+		// whole reason sweep_cursors can outlive a GDPR erasure of the very user this sweep is
+		// about to delete: see repository/sweep_cursor_repository.go's header.
+		reached = repository.SweepPosition{TS1: &lastScheduledAt}
 
 		// exhausted mirrors the pre-existing short-page check below, but computed from
 		// fetchedCount (pre-truncation) so it still reflects what the REPOSITORY actually told
@@ -275,6 +312,7 @@ func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[
 				"processed", totalUsers,
 				"cap", w.maxUsers,
 			)
+			cappedStop = true
 			break
 		}
 
@@ -283,6 +321,9 @@ func (w *ScheduledDeletionCheckWorker) Work(ctx context.Context, job *river.Job[
 			break
 		}
 	}
+
+	// Persist the remainder position (cap hit) or clear it (end of set reached) — Issue #1477.
+	resume.finish(ctx, cappedStop, reached)
 
 	if totalUsers == 0 {
 		w.logger.Info("no users scheduled for deletion",

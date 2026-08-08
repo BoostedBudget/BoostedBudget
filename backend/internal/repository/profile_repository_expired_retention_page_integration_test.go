@@ -192,11 +192,15 @@ func runExpiredRetentionSweep(t *testing.T, ctx context.Context, repo *profileRe
 //	    ExecuteDeletion does — DeleteUserCascade hard-deletes the users row), advances past them
 //	    and reaches the row ranked beyond the first sweep's cap.
 //
-// (c) is the bound this fix can honestly claim. It is NOT "no starvation": every sweep restarts
-// from a nil cursor (there is no persisted cross-run cursor — #1477), so the guarantee holds only
-// while the number of eligible-but-never-completing rows stays BELOW the cap. At or above the cap,
-// every later sweep re-spends its entire budget on the same stuck oldest rows and never reaches
-// anything past them, for as long as they keep failing.
+// (c) is the bound THIS test can honestly claim, and it is a claim about the QUERY only: the second
+// sweep here advances because the first sweep's rows are genuinely gone, not because anything was
+// persisted. That was once the whole story — every sweep restarted from a nil cursor, so a set of
+// eligible-but-never-completing rows larger than the cap starved everything past it forever.
+// Issue #1477 changed the CALLER, not this query: RetentionCleanupCheckWorker.deleteExpiredAccounts
+// now persists where a capped sweep stopped (sweep_cursors) and passes it back as `after`. The
+// cross-run behaviour is therefore proved in queue/jobs, not here — see
+// retention_cleanup_check_sweep_cursor_integration_test.go — and the guarantee, with its bound, is
+// stated once in repository/sweep_cursor_repository.go. Do not restate it as "no starvation".
 func TestGetUsersWithExpiredRetentionPage_Integration_CapBoundsSweepAndSecondSweepAdvances(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)

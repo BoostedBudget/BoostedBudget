@@ -1277,27 +1277,31 @@ type DeletionSweepCursor struct {
 // stuck row — until a page comes back short (exhausted) OR the caller's total-processed safety
 // cap (maxUsersPerDeletionSweep, queue/jobs/scheduled_deletion_check.go) is reached. Hitting the
 // cap logs a WARN naming how many users were processed and stops that run early WITHOUT
-// scheduling anything new. The next periodic run's pagination starts over from the oldest
-// still-eligible row (there is no persisted cross-run cursor) — the users this run already
-// enqueued are cheaply re-skipped via AccountDeletionUniqueOpts' dedup until they are actually
-// deleted, at which point the row is hard-deleted (DeleteUserCascade's `DELETE FROM users` below)
-// and no longer matches this query at all, letting that later run's own cap reach users past this
-// run's. This is deferred continuation, not silent truncation, but it is NOT instantaneous: a
-// backlog that keeps arriving faster than AccountDeletionWorker can drain it will keep
-// re-spending each run's cap on rows it already queued, not exclusively on new ones.
+// scheduling anything new. Since Issue #1477 the next periodic run's pagination RESUMES from the
+// timestamp that capped run stopped at, rather than starting over from the oldest still-eligible
+// row — see the paragraph below and repository/sweep_cursor_repository.go. (Through #1477 it did
+// start over, and the users a run had already enqueued were cheaply re-skipped via
+// AccountDeletionUniqueOpts' dedup until they were actually deleted, at which point the row is
+// hard-deleted — DeleteUserCascade's `DELETE FROM users` below — and no longer matches this query
+// at all. That dedup is still what makes a re-visited row cheap; it is simply no longer the only
+// thing that lets a later run reach users past an earlier run's cap.)
 //
-// That rate-based framing describes only the SLOW case. The guarantee is stronger — and the
-// failure mode above the cap is structural, not merely a matter of arrival rate: because every
-// run restarts pagination from a nil cursor (there is no persisted cross-run cursor — #1477),
-// if the number of eligible rows that are NOT actually completing deletion (stuck in
-// AccountDeletionWorker, or otherwise never reaching the point where DeleteUserCascade removes
-// them from this query's result set) exceeds maxUsersPerDeletionSweep
-// (queue/jobs/scheduled_deletion_check.go), then every future sweep spends its ENTIRE budget
-// re-fetching those same oldest stuck rows and NEVER reaches anything ranked past the cap — for
-// as long as those rows keep failing to complete, regardless of how fast or slow new work
-// arrives. This is permanent starvation of every row past the cap, not "eventual drainage once
-// the backlog clears." Below the cap, the keyset-paginated, cross-page-within-one-run guarantee
-// above holds without qualification; above it, it does not.
+// That rate-based framing describes only the SLOW case, and it was not the whole story. Until
+// Issue #1477 the failure mode above the cap was STRUCTURAL, not a matter of arrival rate: every
+// run restarted pagination from a nil cursor, so if the number of eligible rows NOT actually
+// completing deletion (stuck in AccountDeletionWorker, or otherwise never reaching the point where
+// DeleteUserCascade removes them from this query's result set) exceeded maxUsersPerDeletionSweep
+// (queue/jobs/scheduled_deletion_check.go), every future sweep spent its ENTIRE budget re-fetching
+// those same oldest stuck rows and NEVER reached anything ranked past the cap, for as long as they
+// kept failing. That was permanent starvation of every row past the cap, not eventual drainage.
+//
+// #1477 closed it: ScheduledDeletionCheckWorker now PERSISTS the timestamp a capped run stopped at
+// (the sweep_cursors table — repository/sweep_cursor_repository.go) and passes it back here as the
+// next run's `after`, so a permanently-failing head no longer occupies every run's budget. The
+// replacement guarantee is BOUNDED, not absolute — every candidate is reached within one full
+// cycle of runs rather than promptly, and rows that become eligible behind the current watermark
+// wait for the wrap. It is stated once, in full, in repository/sweep_cursor_repository.go's
+// header; do not restate it here as "no starvation".
 func (r *profileRepository) GetUsersScheduledForDeletionPage(ctx context.Context, after *DeletionSweepCursor, limit int) ([]*domain.User, error) {
 	if limit <= 0 {
 		limit = 500
@@ -3083,15 +3087,19 @@ type RetentionSweepCursor struct {
 // claim shipped on maxUsersPerDeletionSweep and is only true below the cap): within a single sweep,
 // the caller advances across pages until the repository returns a short page (exhausted) or the
 // caller's total-processed cap (maxUsersPerRetentionSweep, queue/jobs/retention_cleanup_check.go)
-// is reached. Across sweeps there is NO persisted cursor (#1477) — every sweep restarts from nil.
-// So:
-//   - While the number of eligible rows that are NOT completing deletion stays BELOW
-//     maxUsersPerRetentionSweep, each sweep steps past them and later rows are reached.
-//   - At or above that count, every sweep spends its ENTIRE budget re-fetching the same stuck
-//     oldest rows and NEVER reaches anything ranked past the cap, for as long as those rows keep
-//     failing. That is permanent starvation of every row past the cap, not slow drainage, and it
-//     does not depend on arrival rate. Raising the cap moves the threshold; it does not remove it.
-//     Fixing it properly needs a persisted cross-run cursor (#1477).
+// is reached. Across sweeps, since Issue #1477, the caller PERSISTS the timestamp a capped sweep
+// stopped at (the sweep_cursors table — repository/sweep_cursor_repository.go) and passes it back
+// here as the next sweep's `after`. So:
+//   - Below the cap the within-run guarantee above is unchanged: each sweep steps past stuck rows
+//     and later rows are reached in the same run.
+//   - At or above the cap, a set of stuck oldest rows no longer consumes every later sweep's whole
+//     budget. Before #1477 it did, and nothing ranked past the cap was EVER reached for as long as
+//     they kept failing — permanent starvation, independent of arrival rate.
+//   - The replacement guarantee is BOUNDED, not absolute (every candidate is reached within one
+//     full cycle of sweeps, which says nothing about the per-row action succeeding, nor about
+//     wall-clock latency, nor about rows that become eligible behind the current watermark). It is
+//     stated once, in full, in repository/sweep_cursor_repository.go's header. Do not restate it
+//     here as "no starvation".
 //
 // Successful rows do not have this problem: ExecuteDeletion ends in DeleteUserCascade's
 // `DELETE FROM users`, after which the row does not match this query at all.

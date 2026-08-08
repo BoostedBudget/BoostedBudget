@@ -151,11 +151,12 @@ const expiredRetentionPageSize = 500
 //
 // Hitting the cap does NOT reschedule or retry anything: it stops THIS run's deletion step early and
 // logs a WARN naming how many users were processed. The periodic registration re-runs the job on its
-// own cadence, and that run restarts pagination from a nil cursor (there is no persisted cross-run
-// cursor — #1477). See GetUsersWithExpiredRetentionPage's doc comment (profile_repository.go) for
-// what that does and does NOT guarantee: below this cap, a stuck oldest row cannot prevent later
-// rows from being reached; at or above it, every later sweep re-spends its whole budget on the same
-// stuck rows and never reaches anything past the cap. Do not restate that as "no starvation".
+// own cadence, and since Issue #1477 that run RESUMES from the timestamp this run stopped at
+// (sweep_cursors — repository/sweep_cursor_repository.go) rather than restarting from a nil cursor.
+// That is what removes the pre-#1477 failure this comment used to describe, in which a set of stuck
+// oldest rows larger than this cap consumed every later sweep's whole budget and nothing past the
+// cap was EVER reached. The replacement guarantee is bounded, not absolute — it is stated once, with
+// its bound, in repository/sweep_cursor_repository.go's header. Do not restate it as "no starvation".
 const maxUsersPerRetentionSweep = 1000
 
 // RetentionCleanupCheckArgs contains the arguments for the retention cleanup check job.
@@ -439,6 +440,11 @@ type RetentionCleanupCheckWorker struct {
 	// plaidOrphanedItemRepo backs the orphaned-Plaid-Item alerting pass, Step 0e (Issue #1497 item
 	// 4). Optional/nil-safe, and the nil case SKIPS rather than publishing zeroes.
 	plaidOrphanedItemRepo OrphanedPlaidItemLister
+	// sweepCursors persists where a capped deleteExpiredAccounts run stopped so the NEXT run
+	// resumes there instead of restarting from the oldest expired row (Issue #1477).
+	// Optional/nil-safe: a nil store reproduces the pre-#1477 behaviour exactly. See
+	// sweep_resume.go and repository/sweep_cursor_repository.go.
+	sweepCursors sweepCursorStore
 }
 
 // OrphanedPlaidItemLister is the ONE verb monitorOrphanedPlaidItems needs from
@@ -473,6 +479,10 @@ type RetentionCleanupCheckWorkerDeps struct {
 	// 4). Optional/nil-safe: an unwired repo SKIPS the pass and publishes nothing, rather than
 	// publishing zeroes that would read as a clean bill of health — see monitorOrphanedPlaidItems.
 	PlaidOrphanedItemRepo OrphanedPlaidItemLister
+	// SweepCursors persists deleteExpiredAccounts's cross-run resume position (Issue #1477).
+	// Optional and nil-safe: unwired, every run restarts from the oldest expired row, which is
+	// exactly the pre-#1477 starvation-prone behaviour — production MUST wire it (main.go).
+	SweepCursors repository.SweepCursorRepository
 }
 
 // NewRetentionCleanupCheckWorker creates a new retention cleanup check worker.
@@ -481,7 +491,7 @@ func NewRetentionCleanupCheckWorker(deps RetentionCleanupCheckWorkerDeps) *Reten
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &RetentionCleanupCheckWorker{
+	w := &RetentionCleanupCheckWorker{
 		profileRepo:               deps.ProfileRepo,
 		deletionService:           deps.DeletionService,
 		emailService:              deps.EmailService,
@@ -491,6 +501,13 @@ func NewRetentionCleanupCheckWorker(deps RetentionCleanupCheckWorkerDeps) *Reten
 		maxUsersPerRetentionSweep: intOrDefault(deps.MaxUsersPerRetentionSweep, maxUsersPerRetentionSweep),
 		plaidOrphanedItemRepo:     deps.PlaidOrphanedItemRepo,
 	}
+	// Guarded rather than assigned directly, for the reason given in
+	// NewScheduledDeletionCheckWorker: "unwired means nil, and nil means do not persist" stays true
+	// by inspection.
+	if deps.SweepCursors != nil {
+		w.sweepCursors = deps.SweepCursors
+	}
+	return w
 }
 
 // SetWorkClaimsRepo wires the durable work-claims mechanism send30dNotices/send7dNotices require
@@ -1673,7 +1690,14 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 		return nil
 	}
 
-	var cursor *repository.RetentionSweepCursor
+	// Issue #1477: resume where the last CAPPED run stopped, instead of restarting from the oldest
+	// expired row every time. See sweep_resume.go and repository/sweep_cursor_repository.go for the
+	// design, the two reset rules, and the starvation guarantee stated with its bound.
+	resume := newSweepResume(ctx, w.sweepCursors, repository.SweepCursorExpiredRetention, w.logger, jobID)
+	cursor := retentionCursorFrom(resume.start)
+	var reached repository.SweepPosition
+	cappedStop := false
+
 	var totalUsers, deletedCount, errorCount int
 
 	for {
@@ -1683,6 +1707,12 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 		}
 
 		if len(users) == 0 {
+			// An empty page at a RESUMED position means the persisted cursor is past the end, not
+			// that there is no work: clear it and re-query from the beginning within this same run.
+			if resume.wrapNow(ctx, totalUsers) {
+				cursor = nil
+				continue
+			}
 			break
 		}
 
@@ -1716,10 +1746,15 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 		// rows the loop SKIPPED (manual override) or FAILED to delete: that is the whole point of a
 		// keyset cursor here — a row that is eligible by the query's predicate but cannot actually be
 		// deleted must not occupy the oldest slot of every subsequent page within this run.
+		lastExpiresAt := derefRetentionExpiresAt(lastUser)
 		cursor = &repository.RetentionSweepCursor{
-			ExpiresAt: derefRetentionExpiresAt(lastUser),
+			ExpiresAt: lastExpiresAt,
 			UserID:    lastUser.ID,
 		}
+		// reached records only the TIMESTAMP half of that position — never lastUser.ID. That is the
+		// whole reason sweep_cursors can outlive the GDPR erasure this loop body performs: see
+		// repository/sweep_cursor_repository.go's header.
+		reached = repository.SweepPosition{TS1: &lastExpiresAt}
 
 		// exhausted is computed from fetchedCount (pre-truncation) so it reflects what the
 		// REPOSITORY said, even on a page that also happens to trip the cap.
@@ -1732,6 +1767,7 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 		if totalUsers >= w.maxUsersPerRetentionSweep && !exhausted {
 			w.logger.Warn("expired-retention deletion sweep hit its total-processed safety cap; deferring remainder to the next periodic run",
 				"job_id", jobID, "processed", totalUsers, "cap", w.maxUsersPerRetentionSweep)
+			cappedStop = true
 			break
 		}
 
@@ -1739,6 +1775,9 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 			break
 		}
 	}
+
+	// Persist the remainder position (cap hit) or clear it (end of set reached) — Issue #1477.
+	resume.finish(ctx, cappedStop, reached)
 
 	if totalUsers == 0 {
 		w.logger.Info("no users with expired retention", "job_id", jobID)

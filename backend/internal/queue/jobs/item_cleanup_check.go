@@ -137,12 +137,14 @@ const (
 //
 // Hitting the cap does NOT reschedule or retry anything: it stops THIS run early and logs a WARN
 // naming how many items were processed. The periodic registration re-runs the job on its own
-// cadence, and that run restarts pagination from a nil cursor (there is no persisted cross-run
-// cursor — #1477). See GetItemsForCleanupPage's doc comment (repository/linked_item_repository.go)
-// for what that does and does NOT guarantee: below this cap, an oldest row that cannot be marked
-// cannot prevent later rows from being reached; at or above it, every later run re-spends its whole
-// budget on the same unmarkable rows and never reaches anything past the cap. Do not restate that as
-// "no starvation".
+// cadence, and since Issue #1477 that run RESUMES from the timestamp key this run stopped at
+// (sweep_cursors — repository/sweep_cursor_repository.go) rather than restarting from a nil cursor.
+// That removes the pre-#1477 failure this comment used to describe, in which a set of UNMARKABLE
+// oldest rows larger than this cap consumed every later run's whole budget and nothing past the cap
+// was EVER reached. (Unmarkable, not un-removable: a successfully stamped row leaves the candidate
+// set at once, so only MarkForCleanup itself failing produces that head — a database failure, not a
+// Plaid one.) The replacement guarantee is bounded, not absolute — it is stated once, with its
+// bound, in repository/sweep_cursor_repository.go's header. Do not restate it as "no starvation".
 const maxItemsPerCleanupSweep = 1000
 
 // LinkedItemCleanupRepository defines the methods needed for item cleanup scheduling.
@@ -228,6 +230,11 @@ type ItemCleanupCheckWorker struct {
 	// itemCleanupCheckPageSize / maxItemsPerCleanupSweep constants for the rationale and derivation.
 	cleanupPageSize  int
 	maxItemsPerSweep int
+	// sweepCursors persists where a capped run stopped so the NEXT run resumes there instead of
+	// restarting from the oldest candidate (Issue #1477). Optional/nil-safe: a nil store reproduces
+	// the pre-#1477 behaviour exactly. See sweep_resume.go and
+	// repository/sweep_cursor_repository.go.
+	sweepCursors sweepCursorStore
 }
 
 // ItemCleanupCheckWorkerDeps contains the dependencies for ItemCleanupCheckWorker.
@@ -247,6 +254,10 @@ type ItemCleanupCheckWorkerDeps struct {
 	// production default. Exists so tests can exercise the total-processed safety cap without
 	// seeding thousands of fixture items — production should never set this.
 	MaxItemsPerCleanupSweep int
+	// SweepCursors persists this sweep's cross-run resume position (Issue #1477). Optional and
+	// nil-safe: unwired, every run restarts from the oldest candidate, which is exactly the
+	// pre-#1477 starvation-prone behaviour — production MUST wire it (main.go).
+	SweepCursors repository.SweepCursorRepository
 }
 
 // intOrDefault returns value if positive, otherwise defaultValue.
@@ -267,7 +278,7 @@ func NewItemCleanupCheckWorker(deps ItemCleanupCheckWorkerDeps) *ItemCleanupChec
 		logger = slog.Default()
 	}
 
-	return &ItemCleanupCheckWorker{
+	w := &ItemCleanupCheckWorker{
 		linkedItemRepo:     deps.LinkedItemRepo,
 		accountRepo:        deps.AccountRepo,
 		jobQueue:           deps.JobQueue,
@@ -278,6 +289,13 @@ func NewItemCleanupCheckWorker(deps ItemCleanupCheckWorkerDeps) *ItemCleanupChec
 		cleanupPageSize:    intOrDefault(deps.CleanupPageSize, itemCleanupCheckPageSize),
 		maxItemsPerSweep:   intOrDefault(deps.MaxItemsPerCleanupSweep, maxItemsPerCleanupSweep),
 	}
+	// Guarded rather than assigned directly, for the reason given in
+	// NewScheduledDeletionCheckWorker: "unwired means nil, and nil means do not persist" stays true
+	// by inspection.
+	if deps.SweepCursors != nil {
+		w.sweepCursors = deps.SweepCursors
+	}
+	return w
 }
 
 // SetJobQueue sets the job queue after worker creation.
@@ -325,7 +343,21 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 	now := time.Now()
 	defaultCleanupAt := now.Add(time.Duration(w.gracePeriodDays) * 24 * time.Hour)
 
-	var cursor *repository.ItemCleanupSweepCursor
+	// Issue #1477: resume where the last CAPPED run stopped, instead of restarting from the oldest
+	// candidate every time. See sweep_resume.go and repository/sweep_cursor_repository.go for the
+	// design, the two reset rules, and the starvation guarantee stated with its bound.
+	//
+	// ⚠ For THIS sweep specifically, the backlog that starves has to be UNMARKABLE, not merely
+	// un-removable at Plaid: a successfully stamped row leaves the candidate set immediately
+	// (cleanupCandidateSelectQuery requires cleanup_scheduled_at IS NULL), so only MarkForCleanup
+	// itself failing — a database failure — keeps a row at the head of every page. A failing
+	// /item/remove downstream does not. The comment at the MarkForCleanup call site below already
+	// says this; it is repeated here because this is the loop the cursor changes.
+	resume := newSweepResume(ctx, w.sweepCursors, repository.SweepCursorItemCleanup, w.logger, job.ID)
+	cursor := itemCleanupCursorFrom(resume.start)
+	var reached repository.SweepPosition
+	cappedStop := false
+
 	var totalItems, scheduledCount, skippedCount, errorCount int
 
 	for {
@@ -339,6 +371,12 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 		}
 
 		if len(items) == 0 {
+			// An empty page at a RESUMED position means the persisted cursor is past the end, not
+			// that there is no work: clear it and re-query from the beginning within this same run.
+			if resume.wrapNow(ctx, totalItems) {
+				cursor = nil
+				continue
+			}
 			break
 		}
 
@@ -480,6 +518,12 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 			LastSyncedAt: lastItem.LastSyncedAt,
 			ItemID:       lastItem.ID,
 		}
+		// reached records only the TIMESTAMP half of that position — never lastItem.ID (nor its
+		// UserID, which is not part of the sort key at all). See
+		// repository/sweep_cursor_repository.go's header for why sweep_cursors stores no row
+		// identity. Both components are legitimately nil here: this sweep's zero-active-accounts
+		// leg matches items that have never errored and never synced.
+		reached = repository.SweepPosition{TS1: lastItem.LastErrorAt, TS2: lastItem.LastSyncedAt}
 
 		// exhausted is computed from fetchedCount (pre-truncation) so it reflects what the REPOSITORY
 		// said, even on a page that also happens to trip the cap.
@@ -491,6 +535,7 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 		if totalItems >= w.maxItemsPerSweep && !exhausted {
 			w.logger.Warn("item cleanup sweep hit its total-processed safety cap; deferring remainder to the next periodic run",
 				"job_id", job.ID, "processed", totalItems, "cap", w.maxItemsPerSweep)
+			cappedStop = true
 			break
 		}
 
@@ -498,6 +543,9 @@ func (w *ItemCleanupCheckWorker) Work(ctx context.Context, job *river.Job[ItemCl
 			break
 		}
 	}
+
+	// Persist the remainder position (cap hit) or clear it (end of set reached) — Issue #1477.
+	resume.finish(ctx, cappedStop, reached)
 
 	// Issue #1486 follow-up part C: recover STRANDED rows. Runs unconditionally — in particular it must not sit
 	// behind the "no items need cleanup" early return below, because a run with zero NEW candidates is

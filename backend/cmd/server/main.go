@@ -445,6 +445,15 @@ func main() {
 		// superset) — so this single swap requires no other changes at any other call site.
 		workClaimsRepo := repository.NewWorkClaimsOutcomeRepository(db) // Issue #1413: durable leased claims for destructive actions
 
+		// Issue #1477: the persisted cross-run resume position shared by the three capped periodic
+		// sweeps (scheduled_deletion_check, retention_cleanup_check's deleteExpiredAccounts,
+		// item_cleanup_check). Each worker treats it as optional and nil-safe, so leaving it
+		// unwired would not break anything visibly — it would silently restore the pre-#1477
+		// behaviour in which a permanently-failing head of the queue starves everything behind it.
+		// It is therefore wired here unconditionally, alongside the other shared repositories, and
+		// passed to all three workers below.
+		sweepCursorRepo := repository.NewSweepCursorRepository(db)
+
 		// Create GDPR-consent-gated analytics client.
 		// User-behavior analytics events (e.g. transfer suggestion accept/reject) use
 		// gdprClient.CaptureIfConsented, which checks privacy settings before firing.
@@ -728,6 +737,9 @@ func main() {
 				ProfileRepo: profileRepo,
 				JobQueue:    nil, // Set later after River client is created
 				Logger:      appLogger,
+				// Issue #1477: resume a capped run where it stopped instead of restarting from the
+				// oldest eligible user every run.
+				SweepCursors: sweepCursorRepo,
 			})
 			appLogger.Info("Scheduled deletion check worker created (River)")
 
@@ -765,6 +777,9 @@ func main() {
 			// exactly when Plaid is unconfigured, so gating this on plaidService would silence the
 			// signal in the deployment that needs it most.
 			PlaidOrphanedItemRepo: plaidOrphanedItemRepo,
+			// Issue #1477: resume a capped deleteExpiredAccounts run where it stopped instead of
+			// restarting from the oldest expired user every run.
+			SweepCursors: sweepCursorRepo,
 		})
 		// Issue #1413 Medium finding M9 (Codex review round 3): required for
 		// send30dNotices/send7dNotices to gain EXCLUSIVITY on ActionRetentionNotice30d/7d
@@ -1221,6 +1236,10 @@ func main() {
 					// editable. Unset means both constructors read the SAME
 					// defaultCleanupErrorDays / defaultCleanupStaleDays (30 / 60, unchanged from the
 					// literals this replaced), so the invariant is structural.
+
+					// Issue #1477: resume a capped run where it stopped instead of restarting from
+					// the oldest candidate item every run.
+					SweepCursors: sweepCursorRepo,
 				})
 				appLogger.Info("Item cleanup check worker created")
 
