@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+# check-review-provenance.sh — fail-closed guard for the mandatory adversarial review.
+#
+# THE PROBLEM IT SOLVES
+# CLAUDE.md makes an adversarial (Codex, or documented fallback) review mandatory before
+# a PR. On this branch it was skipped twice in an identical way: plan mode blocked the
+# launch, the review was recorded as "owed as the first implementation step", and the
+# round ended without it. Round 11 existed *because* round 10 skipped it; round 11 then
+# shipped its five largest batches unreviewed. Two rounds of writing "mandatory" in prose
+# did not work, so the review became a mechanical gate: this script.
+#
+# WHAT IT CHECKS
+# A tracked provenance file records the last SHA that was actually adversarially reviewed,
+# plus enough attribution to audit the claim afterwards. This script fails when HEAD has
+# moved past that SHA in any way that could plausibly need review.
+#
+# HOW TO SATISFY IT (read this before deleting the guard)
+#   1. Run the adversarial review over `<reviewed_sha>..HEAD`
+#      (`codex:codex-rescue`, or CLAUDE.md's documented fallback reviewer).
+#   2. Stamp the result:
+#        scripts/check-review-provenance.sh --stamp "<reviewer>" "<evidence>"
+#      e.g. --stamp "codex:codex-rescue (gpt-5-codex, task mode)" "session 019fe29b-d579"
+#      That rewrites the provenance file to the current HEAD and today's date.
+#   3. Commit the provenance file. Because the provenance file is itself an exempt path
+#      (see below), that commit does NOT re-arm the guard — which is the only reason the
+#      stamp/commit sequence can ever converge.
+# Stamping without having run a review is not a technical bypass, it is a false audit
+# record. The guard's job is to make the skip visible and attributable, not to be
+# unforgeable.
+#
+# WHICH CHANGES DEMAND A FRESH REVIEW (the filter, and why it is an EXEMPT-list)
+# Blocking on *any* HEAD movement makes a README typo demand a fresh adversarial review;
+# a guard nobody can satisfy gets deleted. So there is a filter. But this branch has a
+# live example of a path filter that was simultaneously too broad and too narrow (the MCP
+# paths-filter), and the reason is that it enumerated the paths that DO matter. Any such
+# allow-list is fail-OPEN by construction: a directory nobody thought of, or a new
+# top-level component added next year, silently falls outside it and ships unreviewed.
+#
+# This filter is inverted for exactly that reason. It enumerates only paths that are
+# provably incapable of changing runtime behaviour, and treats EVERYTHING ELSE — including
+# every path that does not exist yet — as requiring review. Getting the exempt list wrong
+# costs a redundant review; getting an allow-list wrong costs an unreviewed change.
+#
+#   EXEMPT (no fresh review required):
+#     * any path ending in `.md`  — prose,
+#       EXCEPT any file whose basename is exactly `CLAUDE.md`, which directs agent
+#       behaviour and is therefore behavioural, not prose;
+#     * the provenance file itself — otherwise stamping a review re-arms the guard and
+#       the workflow above can never converge.
+#   NOT EXEMPT (fresh review required): everything else. Note deliberately: `docs/` is NOT
+#   exempt as a directory — it holds `docs/decisions/bundle-baseline.json`, a load-bearing
+#   performance budget. Config YAML, workflows, scripts (including this one), and any new
+#   file type are all in scope by default.
+#
+# EXIT CODES
+#   0  pass — HEAD has not moved past the reviewed SHA in any non-exempt path
+#   1  a review is owed — non-exempt paths changed since the reviewed SHA
+#   2  fail closed — missing/malformed/unparseable provenance, unknown or non-ancestor
+#      SHA, or a scan that found nothing to check (an empty scan is not a pass)
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+PROVENANCE_FILE="${REVIEW_PROVENANCE_FILE:-docs/review/last-adversarial-review.txt}"
+REQUIRED_KEYS="reviewed_sha reviewed_range reviewer reviewed_at evidence"
+
+die_closed() {
+  echo "check-review-provenance: FAIL-CLOSED -- $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do echo "  $1" >&2; shift; done
+  exit 2
+}
+
+# ── --stamp: rewrite the provenance file at the current HEAD ──────────────────
+if [ "${1:-}" = "--stamp" ]; then
+  STAMP_REVIEWER="${2:-}"
+  STAMP_EVIDENCE="${3:-}"
+  if [ -z "$STAMP_REVIEWER" ] || [ -z "$STAMP_EVIDENCE" ]; then
+    echo "usage: $0 --stamp \"<reviewer>\" \"<evidence>\"" >&2
+    echo "Both are mandatory: an unattributed stamp is exactly the unauditable record this guard exists to prevent." >&2
+    exit 2
+  fi
+  STAMP_HEAD="$(git rev-parse HEAD)"
+  STAMP_PREV=""
+  if [ -f "$PROVENANCE_FILE" ]; then
+    STAMP_PREV="$(sed -n 's/^reviewed_sha:[[:space:]]*//p' "$PROVENANCE_FILE" | head -1)"
+  fi
+  [ -n "$STAMP_PREV" ] || STAMP_PREV="$(git rev-list --max-parents=0 HEAD | tail -1)"
+  mkdir -p "$(dirname "$PROVENANCE_FILE")"
+  {
+    echo "# Last adversarially-reviewed commit. See scripts/check-review-provenance.sh."
+    echo "# Update ONLY after a review has actually run, with:"
+    echo "#   scripts/check-review-provenance.sh --stamp \"<reviewer>\" \"<evidence>\""
+    echo ""
+    echo "reviewed_sha: $STAMP_HEAD"
+    echo "reviewed_range: ${STAMP_PREV}..${STAMP_HEAD}"
+    echo "reviewer: $STAMP_REVIEWER"
+    echo "reviewed_at: $(date -u +%Y-%m-%d)"
+    echo "evidence: $STAMP_EVIDENCE"
+  } > "$PROVENANCE_FILE"
+  echo "check-review-provenance: stamped $PROVENANCE_FILE at $STAMP_HEAD"
+  echo "Commit it. The provenance file is an exempt path, so committing it does not re-arm the guard."
+  exit 0
+fi
+
+# ── 1. The file must exist ────────────────────────────────────────────────────
+if [ ! -f "$PROVENANCE_FILE" ]; then
+  die_closed "provenance file '$PROVENANCE_FILE' does not exist." \
+    "No record of an adversarial review means no review can be assumed. This is a failure, not a pass." \
+    "Run the review, then: $0 --stamp \"<reviewer>\" \"<evidence>\""
+fi
+
+# ── 2. It must parse: strict `key: value`, `#` comments and blank lines only ──
+BODY="$(sed -e 's/[[:space:]]*$//' "$PROVENANCE_FILE" | /usr/bin/grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' || true)"
+if [ -z "$BODY" ]; then
+  die_closed "provenance file '$PROVENANCE_FILE' is empty (or contains only comments)." \
+    "An unparseable provenance record proves nothing about whether a review ran."
+fi
+
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  # Strict: the text before the FIRST colon must be a bare [a-z_]+ key (no spaces, no
+  # punctuation), the colon must be followed by a space, and the value must be non-empty.
+  # A loose "contains a colon somewhere" check would accept an English sentence as a
+  # key/value pair and then silently ignore it.
+  LINE_KEY="${line%%:*}"
+  case "$line" in
+    *": "*) : ;;
+    *) die_closed "provenance file '$PROVENANCE_FILE' has an unparseable line: $line" \
+         "Expected strict 'key: value' (lowercase/underscore key, colon, single space), '#' comments, or blank lines." ;;
+  esac
+  case "$LINE_KEY" in
+    "" | *[!a-z_]*)
+      die_closed "provenance file '$PROVENANCE_FILE' has an unparseable line: $line" \
+        "The text before the first colon ('$LINE_KEY') is not a bare lowercase/underscore key." ;;
+  esac
+done <<< "$BODY"
+# Note: an empty value ("reviewed_sha: ") needs no separate check -- trailing whitespace
+# is stripped above, so such a line becomes "reviewed_sha:" and fails the ": " test.
+
+field() {
+  # Prints the single value for a key, or nothing. Deliberately not `local x=$(...)`:
+  # `local` swallows the command's exit status.
+  sed -n "s/^$1:[[:space:]]*//p" <<< "$BODY"
+}
+
+for key in $REQUIRED_KEYS; do
+  COUNT="$(field "$key" | /usr/bin/grep -c . || true)"
+  if [ "$COUNT" -eq 0 ]; then
+    die_closed "provenance file '$PROVENANCE_FILE' is missing required key '$key'." \
+      "Required keys: $REQUIRED_KEYS"
+  fi
+  if [ "$COUNT" -gt 1 ]; then
+    die_closed "provenance file '$PROVENANCE_FILE' declares '$key' $COUNT times." \
+      "A record with two answers is not a record. Exactly one of each key is required."
+  fi
+done
+
+REVIEWED_SHA="$(field reviewed_sha)"
+REVIEWED_AT="$(field reviewed_at)"
+REVIEWER="$(field reviewer)"
+EVIDENCE="$(field evidence)"
+
+case "$REVIEWED_SHA" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) : ;;
+  *) die_closed "reviewed_sha '$REVIEWED_SHA' is not a full 40-character lowercase hex SHA." \
+       "Abbreviated SHAs are ambiguous across history rewrites; the full SHA is required." ;;
+esac
+
+case "$REVIEWED_AT" in
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
+  *) die_closed "reviewed_at '$REVIEWED_AT' is not an ISO-8601 date (YYYY-MM-DD)." ;;
+esac
+
+for placeholder in TODO todo tbd TBD unknown none n/a - ?; do
+  if [ "$REVIEWER" = "$placeholder" ] || [ "$EVIDENCE" = "$placeholder" ]; then
+    die_closed "reviewer/evidence is the placeholder '$placeholder'." \
+      "An unattributed record is indistinguishable from no record."
+  fi
+done
+
+# ── 3. The SHA must be a commit that actually exists ──────────────────────────
+if ! git cat-file -e "${REVIEWED_SHA}^{commit}" 2>/dev/null; then
+  die_closed "reviewed_sha $REVIEWED_SHA is not a commit in this repository." \
+    "Either the record is fabricated or the commit was garbage-collected after a history rewrite." \
+    "Re-review the current HEAD and re-stamp."
+fi
+
+# ── 4. …and an ancestor of HEAD. Uses rev-list/merge-base, never `git log`: ───
+# `git log --oneline` has silently printed fewer commits than `rev-list --count`
+# reported for the same range in this environment, losing an entire batch.
+HEAD_SHA="$(git rev-parse HEAD)"
+if ! git merge-base --is-ancestor "$REVIEWED_SHA" "$HEAD_SHA"; then
+  die_closed "reviewed_sha $REVIEWED_SHA is NOT an ancestor of HEAD ($HEAD_SHA)." \
+    "History was rewritten, or the record points at an unrelated branch. Everything reachable from HEAD is therefore unreviewed." \
+    "Re-review and re-stamp."
+fi
+
+AHEAD="$(git rev-list --count "${REVIEWED_SHA}..${HEAD_SHA}")"
+if [ "$AHEAD" -eq 0 ]; then
+  echo "check-review-provenance: PASS -- HEAD ($HEAD_SHA) is exactly the reviewed commit."
+  echo "  reviewer: $REVIEWER"
+  echo "  reviewed_at: $REVIEWED_AT / evidence: $EVIDENCE"
+  exit 0
+fi
+
+# ── 5. Enumerate what changed. An empty enumeration is NOT a pass. ────────────
+CHANGED="$(git diff --name-only "$REVIEWED_SHA" "$HEAD_SHA")"
+if [ -z "$CHANGED" ]; then
+  die_closed "$AHEAD commit(s) exist in ${REVIEWED_SHA}..${HEAD_SHA} but 'git diff --name-only' enumerated ZERO paths." \
+    "A scan that found nothing to check is an instrument failure or a pure revert chain -- either way it is not evidence that nothing needs review." \
+    "Re-review and re-stamp rather than trusting an empty scan."
+fi
+CHANGED_COUNT="$(/usr/bin/grep -c . <<< "$CHANGED")"
+
+NEEDS_REVIEW=""
+EXEMPT_COUNT=0
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  BASENAME="${path##*/}"
+  if [ "$path" = "$PROVENANCE_FILE" ]; then
+    EXEMPT_COUNT=$((EXEMPT_COUNT + 1))
+    continue
+  fi
+  if [ "$BASENAME" != "CLAUDE.md" ] && [ "${path%.md}" != "$path" ]; then
+    EXEMPT_COUNT=$((EXEMPT_COUNT + 1))
+    continue
+  fi
+  if [ -z "$NEEDS_REVIEW" ]; then NEEDS_REVIEW="$path"; else NEEDS_REVIEW="$NEEDS_REVIEW
+$path"; fi
+done <<< "$CHANGED"
+
+if [ -n "$NEEDS_REVIEW" ]; then
+  NEEDS_COUNT="$(/usr/bin/grep -c . <<< "$NEEDS_REVIEW")"
+  echo "check-review-provenance: FAIL -- $NEEDS_COUNT of $CHANGED_COUNT changed path(s) since the last" >&2
+  echo "adversarially-reviewed commit require a fresh review ($EXEMPT_COUNT exempt)." >&2
+  echo "" >&2
+  echo "  last reviewed: $REVIEWED_SHA ($REVIEWED_AT, $REVIEWER)" >&2
+  echo "  HEAD:          $HEAD_SHA ($AHEAD commit(s) ahead)" >&2
+  echo "" >&2
+  while IFS= read -r offender; do echo "  $offender" >&2; done <<< "$NEEDS_REVIEW"
+  echo "" >&2
+  echo "Run the adversarial review over ${REVIEWED_SHA}..${HEAD_SHA}, then:" >&2
+  echo "  $0 --stamp \"<reviewer>\" \"<evidence>\"" >&2
+  exit 1
+fi
+
+echo "check-review-provenance: PASS -- $AHEAD commit(s) since $REVIEWED_SHA touched $CHANGED_COUNT path(s), all $EXEMPT_COUNT exempt (prose/provenance only)."
+echo "  reviewer: $REVIEWER"
+echo "  reviewed_at: $REVIEWED_AT / evidence: $EVIDENCE"
+exit 0
