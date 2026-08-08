@@ -117,7 +117,7 @@ func TestPlaidOrphanRetryService_Sweep_SuccessResolvesAndPresentsTheRetainedToke
 	repo := newFakeOrphanRepo([]domain.PlaidOrphanedItem{liveOrphan("a", "tok-a")})
 	remover := &fakeRemover{errByToken: map[string]error{}}
 
-	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100)
+	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"tok-a"}, remover.tokens,
@@ -135,7 +135,7 @@ func TestPlaidOrphanRetryService_Sweep_ItemNotFoundCountsAsRemoved(t *testing.T)
 	repo := newFakeOrphanRepo([]domain.PlaidOrphanedItem{liveOrphan("a", "tok-a")})
 	remover := &fakeRemover{errByToken: map[string]error{"tok-a": plaidAPIError(t, "ITEM_NOT_FOUND")}}
 
-	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100)
+	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a"}, repo.resolved)
 	assert.Empty(t, repo.failures)
@@ -147,7 +147,7 @@ func TestPlaidOrphanRetryService_Sweep_FailureRecordsTheCodeAndKeepsTheRecordOut
 	repo := newFakeOrphanRepo([]domain.PlaidOrphanedItem{liveOrphan("a", "tok-a")})
 	remover := &fakeRemover{errByToken: map[string]error{"tok-a": plaidAPIError(t, "INTERNAL_SERVER_ERROR")}}
 
-	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100)
+	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100, nil)
 	require.NoError(t, err)
 	assert.Empty(t, repo.resolved)
 	assert.Equal(t, map[string]string{"a": "INTERNAL_SERVER_ERROR"}, repo.failures)
@@ -160,7 +160,7 @@ func TestPlaidOrphanRetryService_Sweep_NonPlaidErrorGetsALocalSentinelNotAnEmpty
 	repo := newFakeOrphanRepo([]domain.PlaidOrphanedItem{liveOrphan("a", "tok-a")})
 	remover := &fakeRemover{errByToken: map[string]error{"tok-a": errors.New("dial tcp: connection refused")}}
 
-	_, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100)
+	_, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100, nil)
 	require.NoError(t, err)
 	assert.Equal(t, orphanRetryTransportErrorCode, repo.failures["a"],
 		"an empty code in the column would read as 'never attempted', which is a different fact")
@@ -175,7 +175,7 @@ func TestPlaidOrphanRetryService_Sweep_UndecryptableTokenIsRecordedAndNeverSentT
 	repo := newFakeOrphanRepo([]domain.PlaidOrphanedItem{row})
 	remover := &fakeRemover{errByToken: map[string]error{}}
 
-	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100)
+	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100, nil)
 	require.NoError(t, err)
 
 	assert.Empty(t, remover.tokens, "there is nothing usable to present; calling Plaid with '' would be a lie")
@@ -190,7 +190,7 @@ func TestPlaidOrphanRetryService_Sweep_EmptyTokenIsSkippedNotSent(t *testing.T) 
 	repo := newFakeOrphanRepo([]domain.PlaidOrphanedItem{liveOrphan("a", "")})
 	remover := &fakeRemover{errByToken: map[string]error{}}
 
-	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100)
+	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100, nil)
 	require.NoError(t, err)
 	assert.Empty(t, remover.tokens)
 	assert.Equal(t, 1, res.Skipped)
@@ -229,7 +229,7 @@ func TestPlaidOrphanRetryService_Sweep_DeadlineElapsingMidRunStopsTheTokenReachi
 	svc := newRetryService(repo, remover)
 	svc.SetClock(func() time.Time { return clock })
 
-	res, err := svc.Sweep(context.Background(), t0, 10, 100)
+	res, err := svc.Sweep(context.Background(), t0, 10, 100, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"tok-before", "tok-after"}, remover.tokens,
@@ -272,7 +272,7 @@ func TestPlaidOrphanRetryService_Sweep_AdvancesTheKeysetCursorAcrossPages(t *tes
 	)
 	remover := &fakeRemover{errByToken: map[string]error{}}
 
-	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 1, 100)
+	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 1, 100, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, res.Attempted)
 
@@ -291,7 +291,7 @@ func TestPlaidOrphanRetryService_Sweep_StopsAtItsPerSweepCap(t *testing.T) {
 	)
 	remover := &fakeRemover{errByToken: map[string]error{}}
 
-	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 2, 1)
+	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 2, 1, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Attempted, "the cap bounds the TOTAL attempts across every page of one run")
 	assert.True(t, res.CapHit)
@@ -308,7 +308,7 @@ func TestPlaidOrphanRetryService_Sweep_PageQueryFailureIsReturned(t *testing.T) 
 	repo.pageErrs = []error{errors.New("connection reset")}
 	remover := &fakeRemover{errByToken: map[string]error{}}
 
-	_, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100)
+	_, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connection reset")
 }
@@ -325,7 +325,7 @@ func TestPlaidOrphanRetryService_Sweep_RecordingFailuresAreCountedNotSwallowed(t
 		"tok-b": plaidAPIError(t, "INTERNAL_SERVER_ERROR"),
 	}}
 
-	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100)
+	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100, nil)
 	require.NoError(t, err, "one unrecordable row must not abort the sweep")
 	assert.Equal(t, 2, res.RecordErrors)
 	assert.Equal(t, 2, repo.failureCalls, "the second row is still attempted")
@@ -340,7 +340,7 @@ func TestPlaidOrphanRetryService_Sweep_UnrecordableResolutionIsNotCountedAsResol
 	repo.resolvedErr = errors.New("db down")
 	remover := &fakeRemover{errByToken: map[string]error{}}
 
-	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100)
+	res, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 10, 100, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, res.Resolved, "nothing was recorded, so nothing may be claimed")
 	assert.Equal(t, 1, res.RecordErrors)
@@ -353,7 +353,7 @@ func TestPlaidOrphanRetryService_Sweep_NarrowsTheQueryLimitToTheRemainingBudget(
 	repo := newFakeOrphanRepo([]domain.PlaidOrphanedItem{liveOrphan("a", "tok-a")})
 	remover := &fakeRemover{errByToken: map[string]error{}}
 
-	_, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 500, 3)
+	_, err := newRetryService(repo, remover).Sweep(context.Background(), time.Now(), 500, 3, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, repo.limits)
 	assert.Equal(t, 3, repo.limits[0], "pageSize 500 with a budget of 3 must ask for 3, not 500")
@@ -364,7 +364,7 @@ func TestPlaidOrphanRetryService_Sweep_NarrowsTheQueryLimitToTheRemainingBudget(
 func TestPlaidOrphanRetryService_Sweep_RefusesWithoutAPlaidClient(t *testing.T) {
 	repo := newFakeOrphanRepo([]domain.PlaidOrphanedItem{liveOrphan("a", "tok-a")})
 
-	_, err := NewPlaidOrphanRetryService(repo, nil).Sweep(context.Background(), time.Now(), 10, 100)
+	_, err := NewPlaidOrphanRetryService(repo, nil).Sweep(context.Background(), time.Now(), 10, 100, nil)
 	require.Error(t, err)
 	assert.Equal(t, 0, repo.calls, "it must not even read the work list it cannot act on")
 }

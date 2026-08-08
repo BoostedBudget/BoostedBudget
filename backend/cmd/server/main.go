@@ -445,13 +445,13 @@ func main() {
 		// superset) — so this single swap requires no other changes at any other call site.
 		workClaimsRepo := repository.NewWorkClaimsOutcomeRepository(db) // Issue #1413: durable leased claims for destructive actions
 
-		// Issue #1477: the persisted cross-run resume position shared by the three capped periodic
+		// Issue #1477: the persisted cross-run resume position shared by the four capped periodic
 		// sweeps (scheduled_deletion_check, retention_cleanup_check's deleteExpiredAccounts,
-		// item_cleanup_check). Each worker treats it as optional and nil-safe, so leaving it
-		// unwired would not break anything visibly — it would silently restore the pre-#1477
-		// behaviour in which a permanently-failing head of the queue starves everything behind it.
-		// It is therefore wired here unconditionally, alongside the other shared repositories, and
-		// passed to all three workers below.
+		// item_cleanup_check, plaid_orphan_retry). Each worker treats it as optional and nil-safe,
+		// so leaving it unwired would not break anything visibly — it would silently restore the
+		// pre-#1477 behaviour in which a permanently-failing head of the queue starves everything
+		// behind it. It is therefore wired here unconditionally, alongside the other shared
+		// repositories, and passed to all four workers below.
 		sweepCursorRepo := repository.NewSweepCursorRepository(db)
 
 		// Create GDPR-consent-gated analytics client.
@@ -1266,6 +1266,10 @@ func main() {
 				plaidOrphanRetryWorker = jobs.NewPlaidOrphanRetryWorker(jobs.PlaidOrphanRetryWorkerDeps{
 					Service: plaidOrphanRetrySvc,
 					Logger:  appLogger,
+					// Issue #1477: the fourth sweep of the same shape. Unwired, a record whose
+					// /item/remove keeps failing at Plaid holds the head of the candidate set and
+					// nothing past the per-run cap is ever retried.
+					SweepCursors: sweepCursorRepo,
 				})
 				appLogger.Info("Plaid orphaned-item retry worker created")
 

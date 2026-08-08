@@ -9,27 +9,35 @@ import (
 
 // Issue #1477 — the caller half of the persisted cross-run sweep cursor. The design, the reset
 // rules and the BOUNDED starvation guarantee are documented once, in
-// repository/sweep_cursor_repository.go's header; this file is the mechanism the three sweeps
+// repository/sweep_cursor_repository.go's header; this file is the mechanism the four sweeps
 // share, and deliberately restates nothing.
 //
-// DO ALL THREE SWEEPS SHARE ONE MECHANISM? Yes — and the check that they genuinely correspond was
-// made on the sort keys, not assumed. All three page with a keyset cursor whose ORDER BY is
-// (one or two timestamps ASC, then a `uuid` id ASC), and in all three the id is a pure
+// DO ALL FOUR SWEEPS SHARE ONE MECHANISM? Yes — and the check that they genuinely correspond was
+// made on the sort keys, not assumed. All four page with a keyset cursor whose ORDER BY is
+// (one or two timestamps ASC, then a `uuid` id ASC), and in all four the id is a pure
 // tie-breaker with no meaning of its own:
 //
 //	scheduled_deletion  ORDER BY deletion_scheduled_at ASC, id ASC
 //	expired_retention   ORDER BY retention_expires_at ASC, id ASC
 //	item_cleanup        ORDER BY COALESCE(last_error_at,'infinity') ASC,
 //	                             COALESCE(last_synced_at,'infinity') ASC, li.id ASC
+//	plaid_orphan_retry  ORDER BY orphaned_at ASC, id ASC
 //
 // The only structural difference is arity (item_cleanup has two timestamp components and both of
-// its are nullable; the other two have one, NOT NULL by their own predicates). SweepPosition
-// carries two optional timestamps, which covers both shapes without a per-sweep type. What is NOT
-// shared is the cursor VALUE: each sweep has its own row in sweep_cursors under its own
+// its are nullable; the other three have one, NOT NULL by their own predicates or by schema).
+// SweepPosition carries two optional timestamps, which covers both shapes without a per-sweep type.
+// What is NOT shared is the cursor VALUE: each sweep has its own row in sweep_cursors under its own
 // SweepCursorName, and each converts the shared position into its OWN cursor type
-// (DeletionSweepCursor / RetentionSweepCursor / ItemCleanupSweepCursor), which the repository
-// keeps as three distinct types precisely so a cursor harvested from one sweep can never be fed to
-// another's query. Sharing the persistence did not weaken that.
+// (DeletionSweepCursor / RetentionSweepCursor / ItemCleanupSweepCursor / OrphanRetryCursor), which
+// the repository keeps as four distinct types precisely so a cursor harvested from one sweep can
+// never be fed to another's query. Sharing the persistence did not weaken that.
+//
+// ⚠ ONE OF THE FOUR LOOPS IS NOT IN THIS PACKAGE. The plaid orphan retry pages inside
+// services.PlaidOrphanRetryService.Sweep, because its per-row action is a Plaid call that belongs in
+// the service layer. Rather than grow a second mechanism there, the worker builds the same
+// sweepResume and hands it to Sweep through services.OrphanRetryResume — which is why WrapNow and
+// Finish are exported: they now cross a package boundary. orphanRetryResume below is the whole
+// adapter.
 
 // sweepCursorStore is the narrow view of repository.SweepCursorRepository these workers need.
 // Narrow-per-consumer, matching this package's existing convention (RetentionPlaidCleanup,
@@ -52,7 +60,7 @@ type sweepResume struct {
 	jobID  int64
 
 	// start is the position this run resumed from, nil when it started from the beginning. It is
-	// set to nil by wrapNow, so a position saved after a wrap is derived against the beginning
+	// set to nil by WrapNow, so a position saved after a wrap is derived against the beginning
 	// (inclusive), not against the stale watermark the run abandoned.
 	start *repository.SweepPosition
 	// wrapped records that this run has already performed its one wrap. One is enough and more
@@ -85,7 +93,7 @@ func newSweepResume(ctx context.Context, store sweepCursorStore, name repository
 	return r
 }
 
-// wrapNow decides whether an empty page means "the persisted position is past the end" (wrap) or
+// WrapNow decides whether an empty page means "the persisted position is past the end" (wrap) or
 // "there is genuinely nothing to do" (stop). It returns true only for the first case, having
 // already cleared the stored position, and the caller must then re-query from a nil cursor within
 // the SAME run.
@@ -95,7 +103,7 @@ func newSweepResume(ctx context.Context, store sweepCursorStore, name repository
 // set from wherever it started, which is ordinary exhaustion. This is what makes a past-the-end
 // cursor structurally unable to masquerade as "no work to do" — every run that finds nothing at
 // its resume point re-asks from the beginning before reporting nothing, and says so in the log.
-func (r *sweepResume) wrapNow(ctx context.Context, processed int) bool {
+func (r *sweepResume) WrapNow(ctx context.Context, processed int) bool {
 	if r == nil || r.start == nil || r.wrapped || processed > 0 {
 		return false
 	}
@@ -107,7 +115,7 @@ func (r *sweepResume) wrapNow(ctx context.Context, processed int) bool {
 	return true
 }
 
-// finish persists (or clears) the position at the end of a run.
+// Finish persists (or clears) the position at the end of a run.
 //
 //   - cappedStop: this run stopped EARLY because it hit its per-run cap, so there is a genuine
 //     remainder. Save where it got to, and let the next run resume there.
@@ -118,7 +126,7 @@ func (r *sweepResume) wrapNow(ctx context.Context, processed int) bool {
 // A persistence failure is non-fatal and logged: the worst case is that the next run restarts from
 // the beginning (the pre-#1477 behaviour) or re-visits rows it already reached, never that it skips
 // a row.
-func (r *sweepResume) finish(ctx context.Context, cappedStop bool, reached repository.SweepPosition) {
+func (r *sweepResume) Finish(ctx context.Context, cappedStop bool, reached repository.SweepPosition) {
 	if r == nil || r.store == nil {
 		return
 	}
@@ -182,4 +190,28 @@ func itemCleanupCursorFrom(pos *repository.SweepPosition) *repository.ItemCleanu
 		LastSyncedAt: pos.TS2,
 		ItemID:       pos.SentinelID(),
 	}
+}
+
+// orphanRetryCursorFrom is the plaid orphan retry sweep's conversion. Its shape is
+// deletionCursorFrom's — one NOT NULL timestamp plus the uuid sentinel — and it is a fourth function
+// rather than a generic one for the same reason: repository.OrphanRetryCursor is a distinct type so
+// that a position harvested from one sweep cannot reach another sweep's query.
+func orphanRetryCursorFrom(pos *repository.SweepPosition) *repository.OrphanRetryCursor {
+	if pos == nil || pos.TS1 == nil {
+		return nil
+	}
+	return &repository.OrphanRetryCursor{OrphanedAt: *pos.TS1, ID: pos.SentinelID()}
+}
+
+// orphanRetryResume adapts sweepResume to services.OrphanRetryResume — the entire cost of the one
+// sweep whose paging loop lives in the service layer. It adds the typed-cursor conversion and
+// nothing else: the load, the wrap decision, the save/clear asymmetry and NextPosition are all the
+// shared mechanism's, unmodified.
+type orphanRetryResume struct{ *sweepResume }
+
+// StartCursor is the resumed position as this sweep's own cursor type, or nil for "from the
+// beginning". Read through the embedded run state so that a WrapNow earlier in the run — which
+// nils that state — is reflected here too.
+func (r orphanRetryResume) StartCursor() *repository.OrphanRetryCursor {
+	return orphanRetryCursorFrom(r.start)
 }

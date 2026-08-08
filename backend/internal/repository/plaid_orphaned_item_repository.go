@@ -169,6 +169,22 @@ func (r *plaidOrphanedItemRepository) PurgeExpiredTokens(ctx context.Context, as
 // genuinely hopeless case (an undecryptable token) is handled by the caller — see the retry worker —
 // because it cannot be expressed in SQL without the key.
 //
+// ⚠ THAT ABSENCE IS WHY THIS SWEEP NEEDS A CROSS-RUN CURSOR (Issue #1477), and it is the sharpest
+// case of the four. With no ceiling and no backoff, a record whose /item/remove keeps failing is
+// written back by RecordRetryFailure WITHOUT its orphaned_at moving and WITHOUT leaving this
+// predicate — so it holds the head of the very first page of every run. Before #1477 the caller
+// restarted from `after == nil` each run, so a backlog larger than its cap
+// (maxOrphanRetriesPerSweep, queue/jobs/plaid_orphan_retry.go) meant every run re-spent its whole
+// budget on the same oldest records and nothing past the cap was EVER retried — until those records'
+// credentials expired, after which no automated path can remove their Items at all. The caller now
+// PERSISTS the timestamp key a capped run stopped at (the sweep_cursors table —
+// repository/sweep_cursor_repository.go) and passes it back here as the next run's `after`.
+//
+// Unlike item_cleanup's, this starving head needs no database failure: an ordinary Plaid failure,
+// the case this sweep exists for, is enough. The replacement guarantee is BOUNDED, not absolute — it
+// is stated once, in full, in repository/sweep_cursor_repository.go's header. Do not restate it as
+// "no starvation".
+//
 // ⚠ AND operator_resolved_at IS DELIBERATELY NOT IN THIS PREDICATE — A DECISION, NOT AN OMISSION.
 // Issue #1497 item 2 added an operator attestation ("I removed this Item by hand in Plaid's
 // dashboard"), and it is genuinely arguable whether this sweep should then stop re-attempting the row.
