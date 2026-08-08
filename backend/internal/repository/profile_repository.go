@@ -1843,33 +1843,55 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// WHAT A FAILURE HERE DOES: IT ABORTS THE DELETION. Deliberate, and the harder of the two
 	// choices to defend, so the reasoning is stated rather than implied.
 	//
-	//   - Nothing is lost, only deferred. Unlike every other audit write in this codebase, this one
-	//     is inside a transaction that has not committed, so there IS something to roll back. The
-	//     deferred tx.Rollback restores the user intact, ExecuteDeletion's error path releases the
-	//     work claim, and the next scheduled run retries the whole deletion from the top. The user's
-	//     erasure is delayed by one sweep interval, not denied — and the error is surfaced, not
-	//     swallowed, so an operator can act inside any statutory window.
-	//   - The alternative is the defect. "Proceed and log" is exactly what #1507 exists to fix;
-	//     re-adopting it inside the transaction would leave the fix cosmetic.
-	//   - The realistic failure modes take the COMMIT with them anyway. This INSERT has no FK check
-	//     (user_id NULL), no unique constraint, and no trigger; what remains is connection loss,
-	//     disk-full, or the table being gone — none of which would have let the COMMIT two lines
-	//     below succeed either. The "audit write fails but everything else would have worked" case
-	//     is close to empty in practice, which is what makes abort cheap.
-	//   - AND "PROCEED AND LOG" IS NOT ACTUALLY AVAILABLE HERE, which is worth stating because it is
-	//     the thing a future reader will assume it can reach for. A failed statement leaves this
-	//     transaction in the aborted state; every subsequent statement, including the COMMIT below,
-	//     then fails too. Verified by mutation: replacing this `return` with `err = nil` does not
-	//     produce "user erased, no audit row" — it produces a COMMIT that reports
+	//   - DATABASE STATE is rolled back, so the erasure is deferred rather than denied. Unlike every
+	//     other audit write in this codebase, this one is inside a transaction that has not
+	//     committed, so there IS something to roll back. The deferred tx.Rollback restores the users
+	//     row and everything FK-linked to it, ExecuteDeletion's error path releases the work claim,
+	//     and the deletion is genuinely re-attempted: AccountDeletionWorker returns the error to
+	//     River (retry with backoff) and ScheduledDeletionCheckWorker/RetentionCleanupCheckWorker
+	//     re-select the user on their next sweep, since nothing about their eligibility changed.
+	//   - ⚠ BUT "NOTHING IS LOST" WOULD BE FALSE, AND THE HONEST VERSION MATTERS. By the time this
+	//     statement runs, ExecuteDeletion has ALREADY disconnected the user's Plaid items and may
+	//     already have cancelled their Paddle subscription — external, irreversible, and NOT undone
+	//     by this rollback. So a failure here leaves a user who exists but has been partially
+	//     externally erased, and a persistently-failing audit INSERT (an INSERT privilege revoked on
+	//     audit_logs while UPDATE/DELETE survive, a new CHECK or RLS policy, a trigger — audit-
+	//     specific modes that do NOT take the COMMIT with them, and exactly what
+	//     TestDeleteUserCascade_Integration_AuditWriteFailureAbortsTheWholeCascade injects) would
+	//     gate that user's erasure for as long as it lasts. That is a real cost of this choice and
+	//     it is not hypothetical.
+	//   - IT IS STILL THE RIGHT CHOICE, because the two failure directions are not symmetric. Abort
+	//     leaves a LOUD, RECOVERABLE state: every attempt returns an error, the user still exists and
+	//     is still a data subject with an intact record, and an operator who restores the write can
+	//     complete the erasure. "Proceed and log" leaves a SILENT, UNRECOVERABLE one: the person is
+	//     gone and nothing durable says it happened, with nothing left to retry from — which is
+	//     precisely the defect #1507 exists to close, and re-adopting it inside the transaction would
+	//     make this fix cosmetic. A blocked erasure is an operational incident someone can fix; an
+	//     unrecorded erasure is permanent.
+	//   - AND "PROCEED AND LOG" IS NOT ACTUALLY AVAILABLE HERE ANYWAY, which is worth stating because
+	//     it is the thing a future reader will assume it can reach for. A failed statement leaves
+	//     this transaction in the aborted state; every subsequent statement, including the COMMIT
+	//     below, then fails too. Verified by mutation: replacing this `return` with `err = nil` does
+	//     not produce "user erased, no audit row" — it produces a COMMIT that reports
 	//     "commit unexpectedly resulted in rollback", i.e. the same abort with a worse error
 	//     message. Making the failure genuinely survivable would take a SAVEPOINT around this
 	//     INSERT, which is deliberately NOT done: it would reconstruct the pre-#1507 defect inside
 	//     the transaction that was supposed to have closed it.
+	//   - ⚠ ONE CONSEQUENCE THAT IS PRE-EXISTING RATHER THAN NEW, but which this statement widens the
+	//     entrance to: an ERROR from this method (as opposed to a (false, nil) refusal) deliberately
+	//     records no Paddle-cancel residue — see ExecuteDeletion's own comment, "a run that is still
+	//     expected to complete records nothing". That rule was written for transient errors. Under a
+	//     PERSISTENT audit failure the run is not in fact expected to complete, and the residue goes
+	//     unrecorded. Recording residue for every cascade error would contradict the documented rule
+	//     for the transient case, so it is left alone here and noted instead.
 	//
 	// Pinned in both directions by
 	// TestDeleteUserCascade_Integration_AuditWriteFailureAbortsTheWholeCascade (state rolled back,
 	// not merely an error returned) and its mandatory sibling
-	// TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion.
+	// TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion. Note that the
+	// sibling calls THIS method directly, so it proves "the cascade writes exactly one row"; the
+	// separate claim that no SECOND row is written by the service layer is proved end-to-end by
+	// TestExecuteDeletion_Integration_RetentionCandidate_IsDeleted, which runs ExecuteDeletion.
 	//
 	// AFTER `DELETE FROM users`, NOT BEFORE, for two independent reasons: the entry records a
 	// completed erasure, and the redaction UPDATE far above (`SET changes = NULL WHERE
@@ -1878,8 +1900,9 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// is the only FK to users and it is written NULL, while resource_id has no FK at all.
 	//
 	// ⚠ LOCK ORDER IS UNPERTURBED, and that is a claim about this statement specifically. With
-	// user_id NULL no RI check fires, so this INSERT takes a RowExclusiveLock on audit_logs and NO
-	// row lock on users, households, or anything else — it can neither extend nor reorder the locks
+	// user_id NULL the FK's constraint trigger short-circuits before it touches users at all (MATCH
+	// SIMPLE treats a NULL key as satisfied), so this INSERT takes a RowExclusiveLock on audit_logs
+	// and NO row lock on users, households, or anything else — it can neither extend nor reorder the locks
 	// this transaction already holds (households FOR NO KEY UPDATE, then users FOR UPDATE), so the
 	// AcceptInvite invariant documented at the household lock above still holds unchanged. That is
 	// true ONLY while the actor is NULL: see LogInTx's #1506 warning, which is where a future

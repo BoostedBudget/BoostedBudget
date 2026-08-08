@@ -55,8 +55,10 @@ import (
 // ⚠⚠ THE NULL ACTOR IS NOW A LOCKING PRECONDITION, NOT ONLY AN HONESTY ONE — ISSUE #1506 MUST READ
 // THIS BEFORE ADDING AN ACTOR. Since Issue #1507, LogInTx runs this INSERT INSIDE
 // DeleteUserCascade's transaction, which holds `FOR UPDATE` on the subject's users row. With
-// user_id NULL, MATCH SIMPLE satisfies fk_audit_logs_user_id trivially: no RI trigger fires, so the
-// INSERT requests NO `FOR KEY SHARE` on any users row and cannot participate in a lock cycle. The
+// user_id NULL, MATCH SIMPLE satisfies fk_audit_logs_user_id trivially: the constraint trigger
+// short-circuits on the NULL key before it reads or locks anything in users (migration 000003
+// declares no MATCH FULL, so MATCH SIMPLE is the default), so the INSERT requests NO `FOR KEY
+// SHARE` on any users row and cannot participate in a lock cycle. The
 // moment a non-NULL actor is written here, that FK check DOES fire, and an INSERT naming user A
 // while a cascade of user B holds A's row `FOR UPDATE` (and vice versa) is the cross-user deadlock
 // class — SQLSTATE 40P01 — this codebase has already reproduced against a live database (see
@@ -85,9 +87,10 @@ type AuditLogRepository interface {
 	//
 	// Its one production caller is DeleteUserCascade, which holds `FOR UPDATE` on the subject's
 	// users row for the whole transaction. Because user_id is NULL, fk_audit_logs_user_id is
-	// satisfied under MATCH SIMPLE without firing an RI check at all — this INSERT therefore
-	// requests NO `FOR KEY SHARE` on any users row, and no lock cycle involving users is even
-	// expressible. That, and nothing else, is why this write can live inside that transaction.
+	// satisfied under MATCH SIMPLE and its constraint trigger short-circuits before it reads or
+	// locks anything in users — this INSERT therefore requests NO `FOR KEY SHARE` on any users row,
+	// and no lock cycle involving users is even expressible. That, and nothing else, is why this
+	// write can live inside that transaction.
 	//
 	// #1506 proposes giving AuditLogger an explicit actor. The instant a non-NULL user_id reaches
 	// THIS method, the FK check fires and takes `FOR KEY SHARE` on that actor's users row — while a
