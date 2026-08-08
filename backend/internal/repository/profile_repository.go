@@ -1957,6 +1957,23 @@ type DeletionResidueEffect string
 // without a human intervening.
 const DeletionResiduePaddleSubscriptionCancelled DeletionResidueEffect = "paddle_subscription_cancelled"
 
+// DeletionResiduePaddleSubscriptionCancelledCascadeFailed is the SAME harm as the constant above —
+// account kept, subscription irreversibly cancelled at Paddle — reached the third way: the cascade
+// returned an ERROR rather than declining, and the error is not one this codebase recognises as
+// transient (see cascadeErrorIsRecognisedTransient, deletion_service.go).
+//
+// WHY IT IS A SEPARATE KIND RATHER THAN THE SAME ONE. Both rows describe the same loss to the same
+// user, but they hand an operator two different jobs. A `paddle_subscription_cancelled` row means the
+// deletion is OVER (the user revoked it, or the cascade's guard refused): the account is stable and
+// the only task is to restore the subscription. A `..._cascade_failed` row means the deletion is
+// still STUCK and will re-run — the underlying database fault has to be fixed as well, and until it
+// is, every retry re-cancels nothing but re-writes this record. Collapsing the two would hide the
+// second task behind the first.
+//
+// It shares deletionResidueActionPrefix, so the operator query, the partial index (migration 000138)
+// and both Prometheus gauges pick it up with no change: the vocabulary widened, the namespace did not.
+const DeletionResiduePaddleSubscriptionCancelledCascadeFailed DeletionResidueEffect = "paddle_subscription_cancelled_cascade_failed"
+
 // deletionResidueActionPrefix is the audit_logs.action namespace these records live in. Kept as one
 // constant so the operator query in RecordDeletionResidue's doc comment
 // (action LIKE 'user.deletion_residue.%') cannot drift away from what is actually written.
