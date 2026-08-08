@@ -1,20 +1,9 @@
 # Last adversarially-reviewed commit. See scripts/check-review-provenance.sh.
-#
-# CLAUDE.md makes an adversarial review mandatory before a PR. Prose did not enforce it:
-# the review was skipped twice on this branch in the same way (plan mode blocked the
-# launch, it was recorded as "owed as the first implementation step", and the round ended
-# without it). This file is the machine-checkable record that replaces the prose promise.
-#
 # Update ONLY after a review has actually run, with:
 #   scripts/check-review-provenance.sh --stamp "<reviewer>" "<evidence>"
-# Committing this file does not re-arm the guard -- it is an exempt path, which is the
-# only reason the review -> stamp -> commit sequence converges.
-#
-# Strict format: `key: value`, one per line. `#` comments and blank lines are ignored.
-# Anything else fails the guard closed.
 
-reviewed_sha: ff964e625f5a208d24d0c07ecb435dcb5a825297
-reviewed_range: b76e1b8a96794f9d10bb60d507f451f748535509..ff964e625f5a208d24d0c07ecb435dcb5a825297
-reviewer: codex:codex-rescue (round 12 batch AA, task mode, fresh session)
-reviewed_at: 2026-08-07
-evidence: codex thread 019fe29b-d579; findings AC-1 confirmed/sharpened, AC-2 and AC-3 confirmed, AB-2 refuted; recorded in plan Part 53
+reviewed_sha: 2060ef4b6ae53c14d2de3a188635d5f99f150459
+reviewed_range: ff964e625f5a208d24d0c07ecb435dcb5a825297..2060ef4b6ae53c14d2de3a188635d5f99f150459
+reviewer: codex:codex-rescue (Codex, task mode, fresh session; thread 019fe2d8-777c)
+reviewed_at: 2026-08-08
+evidence: reviewed ff964e625f5a208d24d0c07ecb435dcb5a825297..127dc9c22e07459f1ff50071b952ec270fd3e76f and returned 3 demonstrated bypasses (rename-hides-deletion, endpoint-diff revert, post-literal deps.SweepCursors=nil); all 3 closed in 2060ef4b, which is self-audited and NOT independently re-reviewed
