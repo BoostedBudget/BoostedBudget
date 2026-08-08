@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
@@ -290,57 +291,74 @@ func TestDeadLetterJobRepository_DeleteByFilters_NoFilters(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// --- AtomicMarkRetried ---
+// --- AtomicMarkRetriedInTx / MarkRetriedInTx (#1508) ---
 
-func TestDeadLetterJobRepository_AtomicMarkRetried_Success(t *testing.T) {
+// beginDLQRetryTx opens the mock transaction the claim and the id write share. pgxmock records the
+// statements issued through it, which is all these tests can check: it matches SQL as text and never
+// evaluates a WHERE clause or a transaction boundary. That the two writes and River's insert really
+// do commit or roll back together is proved against a real planner in
+// dead_letter_retry_atomicity_integration_test.go.
+func beginDLQRetryTx(t *testing.T, mock pgxmock.PgxPoolIface, repo *DeadLetterJobRepository) pgx.Tx {
+	t.Helper()
+	mock.ExpectBegin()
+	tx, err := repo.BeginRetryTx(context.Background())
+	require.NoError(t, err)
+	return tx
+}
+
+func TestDeadLetterJobRepository_AtomicMarkRetriedInTx_Success(t *testing.T) {
 	mock, repo := setupDLQMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
+	tx := beginDLQRetryTx(t, mock, repo)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE dead_letter_jobs`)).
 		WithArgs(pgxmock.AnyArg(), int64(999), int64(1)).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow(int64(1)))
 
-	claimed, err := repo.AtomicMarkRetried(ctx, 1, 999)
+	claimed, err := repo.AtomicMarkRetriedInTx(ctx, tx, 1, 999)
 
 	require.NoError(t, err)
 	assert.True(t, claimed)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// --- ReleaseRetryClaim ---
-
-// TestDeadLetterJobRepository_ReleaseRetryClaim_Success checks only that the statement is issued with
-// the row id and nothing else — pgxmock matches SQL as text and cannot evaluate the WHERE clause, so
-// the retry_job_id = 0 guard is proved in
-// TestDeadLetterJobRepository_ReleaseRetryClaim_Integration against a real planner instead.
-func TestDeadLetterJobRepository_ReleaseRetryClaim_Success(t *testing.T) {
-	mock, repo := setupDLQMockDB(t)
-	defer mock.Close()
-
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE dead_letter_jobs`)).
-		WithArgs(int64(7)).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-
-	require.NoError(t, repo.ReleaseRetryClaim(context.Background(), 7))
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestDeadLetterJobRepository_AtomicMarkRetried_AlreadyRetried(t *testing.T) {
+func TestDeadLetterJobRepository_AtomicMarkRetriedInTx_AlreadyRetried(t *testing.T) {
 	mock, repo := setupDLQMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
+	tx := beginDLQRetryTx(t, mock, repo)
 
 	// No rows returned = already retried or not found
 	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE dead_letter_jobs`)).
 		WithArgs(pgxmock.AnyArg(), int64(999), int64(1)).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}))
 
-	claimed, err := repo.AtomicMarkRetried(ctx, 1, 999)
+	claimed, err := repo.AtomicMarkRetriedInTx(ctx, tx, 1, 999)
 
 	require.NoError(t, err)
 	assert.False(t, claimed)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDeadLetterJobRepository_MarkRetriedInTx_WritesTheRealJobIDThroughTheSameTx pins the half that
+// used to be a separate best-effort statement: the id write must reach the caller's transaction, so
+// that rolling it back also un-claims the row.
+func TestDeadLetterJobRepository_MarkRetriedInTx_WritesTheRealJobIDThroughTheSameTx(t *testing.T) {
+	mock, repo := setupDLQMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	tx := beginDLQRetryTx(t, mock, repo)
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE dead_letter_jobs SET retried_at = $1, retry_job_id = $2 WHERE id = $3`)).
+		WithArgs(pgxmock.AnyArg(), int64(4242), int64(1)).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectRollback()
+
+	require.NoError(t, repo.MarkRetriedInTx(ctx, tx, 1, 4242))
+	require.NoError(t, tx.Rollback(ctx))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

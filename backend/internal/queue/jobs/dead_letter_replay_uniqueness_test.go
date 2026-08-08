@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -24,8 +25,27 @@ import (
 // Hand-written rather than testify-mocked: this test asserts on what reached the QUEUE, and the repo
 // only has to not get in the way.
 type stubDLQRepo struct {
-	job              *domain.DeadLetterJob
-	releaseCallCount int
+	job         *domain.DeadLetterJob
+	commitCount int
+}
+
+// stubRetryTx is the transaction handle the replay claims, enqueues and commits in (#1508). Only
+// Commit and Rollback are implemented; anything else would panic on the nil embedded interface,
+// which is what should happen if the replay ever tried to run SQL of its own through it.
+type stubRetryTx struct {
+	pgx.Tx
+	repo *stubDLQRepo
+}
+
+func (s *stubRetryTx) Commit(context.Context) error {
+	s.repo.commitCount++
+	return nil
+}
+
+func (s *stubRetryTx) Rollback(context.Context) error { return nil }
+
+func (s *stubDLQRepo) BeginRetryTx(_ context.Context) (pgx.Tx, error) {
+	return &stubRetryTx{repo: s}, nil
 }
 
 func (s *stubDLQRepo) GetByID(_ context.Context, _ int64) (*domain.DeadLetterJob, error) {
@@ -36,14 +56,13 @@ func (s *stubDLQRepo) ListAll(_ context.Context, _ domain.DeadLetterJobFilters, 
 	return nil, 0, nil
 }
 
-func (s *stubDLQRepo) AtomicMarkRetried(_ context.Context, _, _ int64) (bool, error) { return true, nil }
-
-func (s *stubDLQRepo) ReleaseRetryClaim(_ context.Context, _ int64) error {
-	s.releaseCallCount++
-	return nil
+func (s *stubDLQRepo) AtomicMarkRetriedInTx(_ context.Context, _ pgx.Tx, _, _ int64) (bool, error) {
+	return true, nil
 }
 
-func (s *stubDLQRepo) MarkRetried(_ context.Context, _ int64, _ int64) error { return nil }
+func (s *stubDLQRepo) MarkRetriedInTx(_ context.Context, _ pgx.Tx, _ int64, _ int64) error {
+	return nil
+}
 
 func (s *stubDLQRepo) AddNotes(_ context.Context, _ int64, _ string) error { return nil }
 
@@ -149,20 +168,20 @@ func replayInsertWithStoredArgs(t *testing.T, kind string, storedArgs []byte, st
 		MaxAttempts: 5,
 	}}
 	mockQueue := &MockJobQueue{}
-	mockQueue.On("Enqueue", mock.Anything, mock.Anything, mock.Anything).
+	mockQueue.On("EnqueueTx", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(&queue.JobResult{ID: 4242}, nil)
 
 	svc := services.NewDeadLetterService(repo, mockQueue, UniqueOptsForKind)
 	resp, err := svc.Retry(context.Background(), 1)
 	require.NoError(t, err)
 	require.True(t, resp.Success)
-	require.Zero(t, repo.releaseCallCount, "a successful replay must keep its claim")
+	require.Equal(t, 1, repo.commitCount, "a successful replay must commit its claim and its insert together")
 
 	require.Len(t, mockQueue.Calls, 1)
-	enqueuedJob, ok := mockQueue.Calls[0].Arguments.Get(1).(queue.Job)
+	enqueuedJob, ok := mockQueue.Calls[0].Arguments.Get(2).(queue.Job)
 	require.True(t, ok)
-	opts, ok := mockQueue.Calls[0].Arguments.Get(2).([]queue.EnqueueOption)
-	require.True(t, ok, "MockJobQueue.Enqueue's third mock argument must be the option slice")
+	opts, ok := mockQueue.Calls[0].Arguments.Get(3).([]queue.EnqueueOption)
+	require.True(t, ok, "MockJobQueue.EnqueueTx's fourth mock argument must be the option slice")
 
 	resolved := queue.ApplyOptions(opts)
 	return riverUniqueKeyInputs{

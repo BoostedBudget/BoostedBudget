@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -24,9 +25,10 @@ var (
 
 	// ErrDeadLetterRetryDeduplicated means the replay was deduplicated away by the kind's own
 	// uniqueness options — River enqueued NOTHING (JobResult.UniqueSkipped). Either a live job for
-	// these args already exists, or the kind's ByPeriod window has not elapsed. A release of the retry
-	// slot is attempted so the row can be replayed again once that stops being true; if that release
-	// itself fails it is logged at Error and the row stays consumed (see releaseClaim).
+	// these args already exists, or the kind's ByPeriod window has not elapsed. Since #1508 the
+	// claim is taken inside the replay's transaction, so returning this error rolls it back and the
+	// row is replayable again once that stops being true — no compensating write is involved, and
+	// therefore none can fail.
 	ErrDeadLetterRetryDeduplicated = errors.New("dead letter retry was deduplicated against an existing job")
 )
 
@@ -53,9 +55,12 @@ type UniqueOptsResolver func(kind string) (opts *queue.UniqueOpts, known bool)
 type deadLetterRepo interface {
 	GetByID(ctx context.Context, id int64) (*domain.DeadLetterJob, error)
 	ListAll(ctx context.Context, filters domain.DeadLetterJobFilters, limit, offset int) ([]*domain.DeadLetterJob, int, error)
-	AtomicMarkRetried(ctx context.Context, id, retryJobID int64) (bool, error)
-	ReleaseRetryClaim(ctx context.Context, id int64) error
-	MarkRetried(ctx context.Context, id int64, retryJobID int64) error
+	// BeginRetryTx, AtomicMarkRetriedInTx and MarkRetriedInTx are the three halves of one atomic
+	// replay — see Retry, and BeginRetryTx's own comment for why #1508 needed them to share a
+	// transaction with the River insert.
+	BeginRetryTx(ctx context.Context) (pgx.Tx, error)
+	AtomicMarkRetriedInTx(ctx context.Context, tx pgx.Tx, id, retryJobID int64) (bool, error)
+	MarkRetriedInTx(ctx context.Context, tx pgx.Tx, id int64, retryJobID int64) error
 	AddNotes(ctx context.Context, id int64, notes string) error
 	DeleteByID(ctx context.Context, id int64) error
 	DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
@@ -164,17 +169,32 @@ func (s *deadLetterService) GetRawArgs(ctx context.Context, id int64) (json.RawM
 // uniqueness options its kind's real producers use.
 // Returns ErrDeadLetterJobAlreadyRetried if the job has already been retried.
 //
-// Flow (claim-first to prevent double-enqueue):
+// Flow (claim-first to prevent double-enqueue, all of steps 3-6 in ONE transaction):
 //  1. Fetch job and check RetriedAt (fast pre-check for better error messages)
 //  2. Resolve the kind's uniqueness options — BEFORE claiming, so a kind with no registered policy
-//     is refused without spending the row's one retry
-//  3. AtomicMarkRetried (CAS with placeholder 0) — claims the retry slot before enqueueing
-//  4. Enqueue new River job using RawJobArgs (preserves original queue/maxAttempts/uniqueness)
-//  5. MarkRetried to update the tracked job ID (best-effort)
+//     is refused without opening a transaction or spending the row's one retry
+//  3. BeginRetryTx
+//  4. AtomicMarkRetriedInTx (CAS with placeholder 0) — claims the retry slot before enqueueing
+//  5. EnqueueTx the new River job using RawJobArgs (preserves original queue/maxAttempts/uniqueness)
+//  6. MarkRetriedInTx to record the real job ID, then COMMIT
 //
-// Step 4 has two outcomes in which NOTHING was enqueued — a queue error, and a UniqueSkipped dedup.
-// Both release the claim taken in step 3, rather than moving the claim after the enqueue: see
-// ReleaseRetryClaim's comment on why claim-then-act must stay in that order.
+// ⚠ Steps 4 and 5 must stay in this order. Claiming after a successful enqueue re-opens the
+// concurrent double-enqueue race the compare-and-set exists to close; the transaction preserves the
+// order rather than replacing it.
+//
+// Issue #1508 — why one transaction. The claim and the enqueue used to be separate commits, so they
+// could disagree: a committed claim with no job (the row's one replay spent on nothing), or a job
+// with no recorded id (best-effort MarkRetried failing). Both left retry_job_id = 0, which is why
+// that column could not discriminate them and why no reaper could be built on it. Now every failure
+// after step 3 — a queue error, a dedup, a failed id write, a failed COMMIT — rolls the whole thing
+// back, so the only committed outcomes are "claimed, with a real job id, and that job exists" and
+// "nothing happened". The rollback IS the release; there is no compensating write left to fail.
+//
+// River's insert is safe to make through the caller's transaction: it inserts into river_job on
+// that connection and sends its "new job" notification in the same transaction, so no producer can
+// see or work the job before COMMIT, and a rollback removes it (river v0.38.0, client.go InsertTx:
+// "Because of snapshot visibility guarantees across transactions, the job will not be worked until
+// the transaction has committed, and if the transaction rolls back, so too is the inserted job").
 func (s *deadLetterService) Retry(ctx context.Context, id int64) (*domain.DeadLetterRetryResponse, error) {
 	job, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -207,9 +227,27 @@ func (s *deadLetterService) Retry(ctx context.Context, id int64) (*domain.DeadLe
 		return nil, fmt.Errorf("%w: %s", ErrDeadLetterRetryKindUnknown, job.Kind)
 	}
 
+	tx, err := s.repo.BeginRetryTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin dead letter retry transaction: %w", err)
+	}
+	// Every path below except the final COMMIT leaves the replay undone. Rollback after a commit is
+	// a no-op error (pgx.ErrTxClosed) and is not worth reporting; anything else is logged, because a
+	// rollback that does not happen is the one way a claim could still outlive its replay.
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			s.logger.ErrorContext(ctx, "dead letter retry transaction could not be rolled back",
+				"dead_letter_id", id, "error", rbErr)
+		}
+	}()
+
 	// Claim the retry slot first — prevents concurrent double-enqueue.
-	// Use 0 as placeholder; updated after enqueueing.
-	claimed, err := s.repo.AtomicMarkRetried(ctx, id, 0)
+	// Use 0 as placeholder; overwritten with the real job ID before this transaction commits.
+	claimed, err := s.repo.AtomicMarkRetriedInTx(ctx, tx, id, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to claim dead letter job for retry: %w", err)
 	}
@@ -232,41 +270,44 @@ func (s *deadLetterService) Retry(ctx context.Context, id int64) (*domain.DeadLe
 		enqOpts = append(enqOpts, queue.WithUnique(*uniqueOpts))
 	}
 
-	result, err := s.jobQueue.Enqueue(ctx, rawArgs, enqOpts...)
+	result, err := s.jobQueue.EnqueueTx(ctx, tx, rawArgs, enqOpts...)
 	if err != nil {
-		// Slot claimed but enqueue failed, so the claim must not stand or this transient failure would
-		// permanently consume the row's only retry.
+		// The claim is inside this transaction, so returning here undoes it: an enqueue error can no
+		// longer permanently consume the row's only retry.
 		//
-		// An Enqueue error is not PROOF that nothing was inserted — River's Insert is an autocommit
-		// statement, so a commit whose response is lost surfaces here as an error over a job that
-		// exists. Releasing therefore trades "one transient error strands the row forever" for "an
-		// ambiguous error may allow a second insert". That trade is only safe because of part A of this
-		// change: with the kind's uniqueness options now on the replay, a duplicate insert of the same
-		// args is UniqueSkipped rather than duplicated — for every kind whose producers pass options.
-		// The five noUniqueness kinds have no such protection, and for them a duplicate is possible;
-		// all five are idempotent or naturally repeat-safe (a category refresh, an email-change
-		// propagation, a rule evaluation, a webhook reprocess, and a kind with no producer at all).
+		// It also no longer matters that an enqueue error is not PROOF that nothing was inserted. The
+		// insert went through THIS transaction, so whatever it did dies with the rollback — where the
+		// old autocommit Insert could have committed a job whose response was lost, leaving a
+		// release to trade a stranded row against a possible duplicate.
 		s.logger.ErrorContext(ctx, "dead letter retry enqueue failed after claiming",
 			"dead_letter_id", id, "error", err)
-		s.releaseClaim(ctx, id, "enqueue failed")
 		return nil, fmt.Errorf("failed to enqueue retry job: %w", err)
 	}
 
 	if result.UniqueSkipped {
 		// River deduplicated the replay against an existing job and inserted nothing — result.ID is
 		// the EXISTING job's ID, not a new one. Reporting success here would tell the operator a
-		// retry is running when none was created.
+		// retry is running when none was created. Rolling back returns the slot.
 		s.logger.WarnContext(ctx, "dead letter retry deduplicated against existing job",
 			"dead_letter_id", id, "kind", job.Kind, "existing_job_id", result.ID)
-		s.releaseClaim(ctx, id, "retry deduplicated")
 		return nil, fmt.Errorf("%w: existing job %d", ErrDeadLetterRetryDeduplicated, result.ID)
 	}
 
-	// Update claim with real job ID (best-effort — failure doesn't affect job execution)
-	if updateErr := s.repo.MarkRetried(ctx, id, result.ID); updateErr != nil {
-		s.logger.ErrorContext(ctx, "failed to update retry job ID",
-			"dead_letter_id", id, "new_job_id", result.ID, "error", updateErr)
+	// Replace the 0 placeholder with the real job ID. No longer best-effort: it is what makes a
+	// committed row's retry_job_id trustworthy, so its failure must take the whole replay with it.
+	if err := s.repo.MarkRetriedInTx(ctx, tx, id, result.ID); err != nil {
+		s.logger.ErrorContext(ctx, "failed to record retry job ID; rolling the replay back",
+			"dead_letter_id", id, "new_job_id", result.ID, "error", err)
+		return nil, fmt.Errorf("failed to record retry job id: %w", err)
 	}
+
+	if err := tx.Commit(ctx); err != nil {
+		// A COMMIT whose response is lost may in fact have committed — and that is fine here, because
+		// what would then be committed is the CONSISTENT outcome: claim, real retry_job_id, and the
+		// job. The operator sees an error over a row that either replayed completely or not at all.
+		return nil, fmt.Errorf("failed to commit dead letter retry: %w", err)
+	}
+	committed = true
 
 	newJobID := result.ID
 	return &domain.DeadLetterRetryResponse{
@@ -277,28 +318,19 @@ func (s *deadLetterService) Retry(ctx context.Context, id int64) (*domain.DeadLe
 	}, nil
 }
 
-// releaseClaim un-stamps a retry claim taken for a replay that then enqueued nothing, restoring
-// retried_at to NULL so the row is retryable again.
+// Both residual holes the pre-#1508 compensating release left open are now closed by construction,
+// and neither has a detector because neither has a state to detect:
 //
-// A release failure leaves the row in the one state this mechanism exists to eliminate — a consumed
-// retry with no live job behind it — and this function CANNOT fix that: it logs at Error and returns.
-// It deliberately does not replace the caller's error (the enqueue or dedup outcome is what the
-// operator must act on), which means a release failure reaches an operator only through logs, not
-// through the API response. Two residual holes follow from that and neither is closed here:
+//   - A failed release (Postgres unavailable for both the enqueue and the release) stranded the
+//     claim permanently. There is no release any more — the rollback is the release, and a
+//     transaction whose connection dies is aborted by the server, so the claim never commits.
+//   - A crash between the claim committing and the enqueue stranded it the same way. The claim no
+//     longer commits on its own.
 //
-//   - Release failure (e.g. Postgres unavailable for both the enqueue and the release) strands the
-//     claim permanently, exactly as before this change — just now confined to the case where two
-//     things fail instead of one.
-//   - A crash between AtomicMarkRetried committing and Enqueue being called strands it the same way.
-//
-// Both need a reaper — something that finds rows with retried_at set, retry_job_id = 0, and no
-// corresponding river_job, and releases them — which is a separate piece of work, not a comment.
-func (s *deadLetterService) releaseClaim(ctx context.Context, id int64, reason string) {
-	if err := s.repo.ReleaseRetryClaim(ctx, id); err != nil {
-		s.logger.ErrorContext(ctx, "dead letter retry claim could not be released",
-			"dead_letter_id", id, "reason", reason, "error", err)
-	}
-}
+// What remains uncovered is HISTORY: rows stranded at retry_job_id = 0 by the old two-commit path
+// before this change. They are still undecidable in exactly the way #1508 describes — the column
+// cannot say whether a live job sits behind them — so no reaper is shipped for them, and releasing
+// them automatically could double-enqueue a running job. See the issue for the disposition.
 
 // AddNotes sets admin notes on a dead letter job.
 func (s *deadLetterService) AddNotes(ctx context.Context, id int64, notes string) error {

@@ -21,12 +21,11 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
-// TestDeadLetterJobRepository_ReleaseRetryClaim_Integration exercises the claim/release round trip
-// against a real planner (#1492 part B). pgxmock matches statements as text and never evaluates a
-// WHERE clause, so it cannot tell whether the retry_job_id = 0 guard works — and that guard is the
-// only thing standing between "release a claim whose enqueue failed" and "un-retry a row whose retry
-// is running".
-func TestDeadLetterJobRepository_ReleaseRetryClaim_Integration(t *testing.T) {
+// TestDeadLetterJobRepository_RetryClaimInTx_Integration exercises the claim against a real planner.
+// pgxmock matches statements as text and never evaluates a WHERE clause or a transaction boundary,
+// so it can see neither the `retried_at IS NULL` compare-and-set nor the fact that an uncommitted
+// claim leaves the row untouched — and those two are the whole mechanism (#1492 part B, #1508).
+func TestDeadLetterJobRepository_RetryClaimInTx_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	repo := NewDeadLetterJobRepository(pool)
 	ctx := context.Background()
@@ -53,40 +52,53 @@ func TestDeadLetterJobRepository_ReleaseRetryClaim_Integration(t *testing.T) {
 		return retriedAt, retryJobID
 	}
 
-	t.Run("releases a placeholder claim so the row is retryable again", func(t *testing.T) {
+	t.Run("a rolled-back claim leaves the row retryable", func(t *testing.T) {
 		id := insertRow(t)
 
-		claimed, err := repo.AtomicMarkRetried(ctx, id, 0)
+		tx, err := repo.BeginRetryTx(ctx)
+		require.NoError(t, err)
+		claimed, err := repo.AtomicMarkRetriedInTx(ctx, tx, id, 0)
 		require.NoError(t, err)
 		require.True(t, claimed)
-
-		require.NoError(t, repo.ReleaseRetryClaim(ctx, id))
+		require.NoError(t, tx.Rollback(ctx))
 
 		retriedAt, retryJobID := readClaim(t, id)
-		assert.Nil(t, retriedAt, "retried_at must be NULL again or the row's one retry stays consumed")
+		assert.Nil(t, retriedAt, "retried_at must be NULL or the row's one retry stays consumed")
 		assert.Nil(t, retryJobID)
 
-		// The proof that "retryable again" is not just a column value: the CAS accepts a new claim.
-		reclaimed, err := repo.AtomicMarkRetried(ctx, id, 0)
+		// The proof that "retryable" is not just a column value: the CAS accepts a new claim.
+		tx2, err := repo.BeginRetryTx(ctx)
 		require.NoError(t, err)
-		assert.True(t, reclaimed, "AtomicMarkRetried must be able to claim the released row again")
+		defer func() { _ = tx2.Rollback(ctx) }()
+		reclaimed, err := repo.AtomicMarkRetriedInTx(ctx, tx2, id, 0)
+		require.NoError(t, err)
+		assert.True(t, reclaimed, "the compare-and-set must be able to claim the rolled-back row again")
 	})
 
-	t.Run("leaves a completed retry alone", func(t *testing.T) {
+	t.Run("a committed claim carries the real job id and refuses a second claim", func(t *testing.T) {
 		id := insertRow(t)
 
-		claimed, err := repo.AtomicMarkRetried(ctx, id, 0)
+		tx, err := repo.BeginRetryTx(ctx)
+		require.NoError(t, err)
+		claimed, err := repo.AtomicMarkRetriedInTx(ctx, tx, id, 0)
 		require.NoError(t, err)
 		require.True(t, claimed)
-		// The success path overwrites the 0 placeholder with the real River job ID.
-		require.NoError(t, repo.MarkRetried(ctx, id, 4242))
-
-		require.NoError(t, repo.ReleaseRetryClaim(ctx, id))
+		// The success path overwrites the 0 placeholder with the real River job ID, in the same
+		// transaction — so no committed row is ever observable at 0.
+		require.NoError(t, repo.MarkRetriedInTx(ctx, tx, id, 4242))
+		require.NoError(t, tx.Commit(ctx))
 
 		retriedAt, retryJobID := readClaim(t, id)
 		require.NotNil(t, retriedAt, "a row with a real retry job must stay retried")
 		require.NotNil(t, retryJobID)
 		assert.Equal(t, int64(4242), *retryJobID)
+
+		tx2, err := repo.BeginRetryTx(ctx)
+		require.NoError(t, err)
+		defer func() { _ = tx2.Rollback(ctx) }()
+		reclaimed, err := repo.AtomicMarkRetriedInTx(ctx, tx2, id, 0)
+		require.NoError(t, err)
+		assert.False(t, reclaimed, "the single-shot property must survive the move into a transaction")
 	})
 }
 
