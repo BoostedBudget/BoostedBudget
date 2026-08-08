@@ -9,6 +9,31 @@ import (
 // HTTP metrics are handled by middleware/metrics.go.
 // These cover business-logic and infrastructure events.
 
+// UnmeasuredGauge declares a gauge that DOES NOT EXIST IN THE SCRAPE UNTIL SOMETHING HAS MEASURED IT.
+//
+// ⚠ WHY THIS IS NOT A promauto.NewGauge, and it is the whole point. A registered plain Gauge is
+// exported from the instant the process starts, carrying its zero value — so every gauge fed by a
+// periodic collector publishes a confident 0 for the entire window between process start and the
+// collector's first successful read, and publishes it again forever if that read never succeeds. For
+// a backlog gauge that means "there is no backlog" asserted by something that has not looked. For
+// observability.DeletionResidueRecords, whose prescribed rule is `increase(...) > 0`, it is worse
+// than a wrong number: the later 0 → N step LOOKS LIKE AN INCREASE, so a process restart fires an
+// alert about an incident that did not happen. A metric that exists but does not yet represent what
+// it claims is the exact failure these gauges were added to detect elsewhere.
+//
+// A GaugeVec with NO label names collects nothing until WithLabelValues() creates its single child,
+// and that child is an unlabelled sample carrying the same metric name — so the scrape shape is
+// byte-identical to a plain Gauge once published, and the family is simply ABSENT before then.
+// `absent(metric_name)` therefore distinguishes "nobody has measured this" from "measured, and it is
+// zero", which no plain Gauge can express. Publish with `X.WithLabelValues().Set(v)`.
+//
+// ⚠ THE CORRESPONDING OBLIGATION: every alert on such a gauge needs an absent()/staleness companion
+// rule, because silence is now a possible state. Each declaration below spells its rules out — this
+// repo has no alert-rule file to put them in.
+func UnmeasuredGauge(opts prometheus.GaugeOpts) *prometheus.GaugeVec {
+	return promauto.NewGaugeVec(opts, nil)
+}
+
 var (
 	// AppErrorsTotal counts 5xx errors by type and status code
 	AppErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
@@ -80,9 +105,17 @@ var (
 	// cmd/server/main.go's startJobHealthMetricsCollector — lives there, not here, because
 	// internal/repository already imports internal/observability, so the reverse dependency this
 	// collector needs would be an import cycle if placed in this package).
-	ManualTierOverrideOldestUnclearedExpiredSeconds = promauto.NewGauge(prometheus.GaugeOpts{
+	//
+	// ⚠ AN UnmeasuredGauge (see above): absent until startJobHealthMetricsCollector's first successful
+	// read, rather than publishing a reassuring 0 from process start. Rules:
+	//
+	//	manual_tier_override_oldest_uncleared_expired_seconds > 86400
+	//	  for: 1h
+	//	absent(manual_tier_override_oldest_uncleared_expired_seconds)
+	//	  for: 1h
+	ManualTierOverrideOldestUnclearedExpiredSeconds = UnmeasuredGauge(prometheus.GaugeOpts{
 		Name: "manual_tier_override_oldest_uncleared_expired_seconds",
-		Help: "Age in seconds of the oldest expired-but-uncleared manual_tier_override; 0 when none exist.",
+		Help: "Age in seconds of the oldest expired-but-uncleared manual_tier_override; 0 when none exist. Absent until the collector has actually read the database, so alert on absence too.",
 	})
 
 	// PlaidCleanupOutstandingUsers and PlaidCleanupOldestOutstandingSeconds are the Issue #1413
@@ -109,13 +142,22 @@ var (
 	// join would report a large PERMANENT phantom backlog on day one and get ignored forever. See
 	// GetOutstandingPlaidCleanupStats's doc comment for the query, which joins on the SAME liveness
 	// definition (a NULL linked_items.status counts as live) the repair query itself uses.
-	PlaidCleanupOutstandingUsers = promauto.NewGauge(prometheus.GaugeOpts{
+	//
+	// ⚠ BOTH ARE UnmeasuredGauges (see above). Healthy is 0 for both — which is exactly why they must
+	// not be exported as 0 before anything has looked: "no outstanding cleanup" is the reading an
+	// operator is most likely to trust without checking when it was last refreshed. Rules:
+	//
+	//	plaid_cleanup_outstanding_users > 0
+	//	  for: 24h
+	//	absent(plaid_cleanup_outstanding_users)
+	//	  for: 1h
+	PlaidCleanupOutstandingUsers = UnmeasuredGauge(prometheus.GaugeOpts{
 		Name: "plaid_cleanup_outstanding_users",
-		Help: "Number of users with outstanding Plaid-disconnect cleanup (plaid_cleanup_pending_at set, with at least one live linked item); 0 when none exist.",
+		Help: "Number of users with outstanding Plaid-disconnect cleanup (plaid_cleanup_pending_at set, with at least one live linked item); 0 when none exist. Absent until the collector has actually read the database, so alert on absence too.",
 	})
-	PlaidCleanupOldestOutstandingSeconds = promauto.NewGauge(prometheus.GaugeOpts{
+	PlaidCleanupOldestOutstandingSeconds = UnmeasuredGauge(prometheus.GaugeOpts{
 		Name: "plaid_cleanup_oldest_outstanding_seconds",
-		Help: "Age in seconds of the oldest outstanding Plaid-disconnect cleanup (plaid_cleanup_pending_at with a live linked item); 0 when none exist.",
+		Help: "Age in seconds of the oldest outstanding Plaid-disconnect cleanup (plaid_cleanup_pending_at with a live linked item); 0 when none exist. Absent until the collector has actually read the database, so alert on absence too.",
 	})
 
 	// DeletionResidueRecords and DeletionResidueNewestSeconds are Issue #1504's alerting half. One
@@ -138,16 +180,42 @@ var (
 	// the actionable signal, and DeletionResidueNewestSeconds is its human-readable companion: a small
 	// value means it just happened.
 	//
+	// ⚠ AND THAT IS WHY BOTH ARE UnmeasuredGauges (see above) RATHER THAN plain Gauges. An
+	// increase()-based rule is uniquely poisoned by a startup zero: as plain Gauges these two were
+	// exported as 0 from process start and only replaced on startJobHealthMetricsCollector's first
+	// successful read, so on any process with pre-existing residue the 0 → N step LOOKED LIKE N NEW
+	// INCIDENTS and the prescribed rule fired on a restart. Absent-until-measured removes the
+	// fabricated sample entirely: increase() over a series with no prior sample produces nothing, so a
+	// restart is silent and the first real change is the first alert. The collector now also performs
+	// one read BEFORE its ticker starts, so the absent window is the length of a query rather than five
+	// minutes — and if that read fails these stay absent rather than publishing a zero, because a zero
+	// here means "no GDPR deletion has ever been left with a cancelled subscription", which a failed
+	// read has established nothing about.
+	//
 	// ⚠ DeletionResidueNewestSeconds IS 0 BOTH WHEN THERE ARE NO RECORDS AND WHEN ONE WAS JUST WRITTEN.
 	// Any rule using it must gate on DeletionResidueRecords > 0 first. Unlike
 	// PlaidCleanupOldestOutstandingSeconds above, a zero here is not unambiguous good news.
-	DeletionResidueRecords = promauto.NewGauge(prometheus.GaugeOpts{
+	//
+	// The intended rules, given this repo has no alert-rule file (see PlaidOrphanedItemsByAdminState
+	// below for the same statement and the same reason):
+	//
+	//	# A NEW residue record: somebody's subscription was cancelled and their deletion then revoked.
+	//	increase(deletion_residue_records[15m]) > 0
+	//	# The collector has stopped reporting — unknown is not zero, and this rule is what makes the
+	//	# absent-until-measured design safe rather than merely quiet.
+	//	absent(deletion_residue_records)
+	//	  for: 1h
+	//
+	// ⚠ NO `for:` ON THE FIRST RULE, deliberately. increase() over a monotonic gauge is a transient:
+	// it returns to 0 once the step leaves the window, so a `for:` longer than the window would
+	// guarantee the alert never fires at all.
+	DeletionResidueRecords = UnmeasuredGauge(prometheus.GaugeOpts{
 		Name: "deletion_residue_records",
-		Help: "All-time number of GDPR deletions revoked AFTER the user's Paddle subscription had already been cancelled (audit_logs action prefix user.deletion_residue.). Every one is a user who kept their account and lost their subscription. Monotonic — alert on increase(), not on > 0.",
+		Help: "All-time number of GDPR deletions revoked AFTER the user's Paddle subscription had already been cancelled (audit_logs action prefix user.deletion_residue.). Every one is a user who kept their account and lost their subscription. Monotonic — alert on increase(), not on > 0. Absent until the collector has actually read the database (never a startup zero, which increase() would misread as new incidents), so alert on absence too.",
 	})
-	DeletionResidueNewestSeconds = promauto.NewGauge(prometheus.GaugeOpts{
+	DeletionResidueNewestSeconds = UnmeasuredGauge(prometheus.GaugeOpts{
 		Name: "deletion_residue_newest_seconds",
-		Help: "Age in seconds of the MOST RECENT deletion-residue record; 0 both when none exist and when one was just written, so gate on deletion_residue_records > 0 before reading it.",
+		Help: "Age in seconds of the MOST RECENT deletion-residue record; 0 both when none exist and when one was just written, so gate on deletion_residue_records > 0 before reading it. Absent until the collector has actually read the database.",
 	})
 
 	// PlaidDisconnectRepairUserFailuresTotal counts per-user failures inside
@@ -415,9 +483,30 @@ var (
 	// ever accumulate before its credential expires and the row becomes
 	// manual_intervention_required anyway. 20 therefore fires with roughly a third of the retention
 	// window left — early enough for a human to act at Plaid before the automated path runs out.
-	PlaidOrphanedItemMaxRetryAttempts = promauto.NewGauge(prometheus.GaugeOpts{
+	//
+	// ⚠ AN UnmeasuredGauge, AND IT IS THE SIBLING OF PlaidOrphanedItemsByAdminState THAT WAS NOT
+	// SAFE. That GaugeVec has always been absent until published, because a Vec collects nothing
+	// until a label set is created — which is why monitorOrphanedPlaidItems' claim that it publishes
+	// NOTHING on a failed or truncated read, and the `absent(...)` rule above that depends on the
+	// claim, were true of it. As a plain Gauge, this one was the exception: it was exported as 0 from
+	// process start and on every failed or over-cap read before the first successful pass, so it
+	// asserted "no Item is being retried into the ground" with nothing having looked. And its window
+	// is the WORST of any gauge here — monitorOrphanedPlaidItems runs on the retention worker's DAILY
+	// cadence, not the five-minute job-health collector's, so a process that restarts more often than
+	// once a day could report a permanent, entirely fabricated 0. Its `for: 6h` clock is reset by each
+	// restart on top of that. Making it absent-until-measured is what makes the pass's documented
+	// behaviour actually true of both its gauges, and the corresponding rule is:
+	//
+	//	absent(plaid_orphaned_item_max_retry_attempts)
+	//	  for: 48h
+	//
+	// matching the cadence-aware window already prescribed for PlaidOrphanedItemsByAdminState. No
+	// startup read is added for this one: unlike the job-health collector there is no process-start
+	// hook here — the publisher is a scheduled River job — so the honest fix is silence until the
+	// first pass, not a synthetic reading at boot.
+	PlaidOrphanedItemMaxRetryAttempts = UnmeasuredGauge(prometheus.GaugeOpts{
 		Name: "plaid_orphaned_item_max_retry_attempts",
-		Help: "Highest retry_attempt_count among UNRESOLVED plaid_orphaned_items rows — the worst single Plaid Item whose automated removal keeps failing after its owner's GDPR erasure. The maximum (not a sum or mean) because the signal is one Item retried into the ground; unresolved-only so a succeeded row's history cannot latch the alert. The daily sweep plus the 30-day credential retention caps any row near 30, so a reading above ~20 means a human should act at Plaid before the automated path expires.",
+		Help: "Highest retry_attempt_count among UNRESOLVED plaid_orphaned_items rows — the worst single Plaid Item whose automated removal keeps failing after its owner's GDPR erasure. The maximum (not a sum or mean) because the signal is one Item retried into the ground; unresolved-only so a succeeded row's history cannot latch the alert. The daily sweep plus the 30-day credential retention caps any row near 30, so a reading above ~20 means a human should act at Plaid before the automated path expires. Absent until the daily pass has actually read the table, so alert on absence too.",
 	})
 
 	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.

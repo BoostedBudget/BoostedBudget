@@ -1592,7 +1592,10 @@ func (w *RetentionCleanupCheckWorker) monitorOrphanedPlaidItems(ctx context.Cont
 	// silently stop summing to the population. operator_attested (Issue #1497 item 2) is the fourth.
 	observability.PlaidOrphanedItemsByAdminState.
 		WithLabelValues(string(domain.OrphanedItemOperatorAttested)).Set(float64(summary.OperatorAttested))
-	observability.PlaidOrphanedItemMaxRetryAttempts.Set(float64(summary.MaxUnresolvedRetryAttemptCount))
+	// .WithLabelValues() with no labels: an observability.UnmeasuredGauge, absent from the scrape
+	// until this line runs, so a process that has not yet completed a pass reports nothing rather than
+	// a fabricated 0. See its declaration for why this gauge in particular needed it.
+	observability.PlaidOrphanedItemMaxRetryAttempts.WithLabelValues().Set(float64(summary.MaxUnresolvedRetryAttemptCount))
 
 	if summary.ManualInterventionRequired == 0 {
 		return nil

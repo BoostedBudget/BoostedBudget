@@ -179,7 +179,7 @@ func TestRetentionCleanupCheck_MonitorOrphanedPlaidItems_CleanTableResetsTheGaug
 	// Prime both gauges non-zero, modelling a PRIOR pass that found work, so this proves a reset
 	// rather than "never touched".
 	observability.PlaidOrphanedItemsByAdminState.WithLabelValues("manual_intervention_required").Set(9)
-	observability.PlaidOrphanedItemMaxRetryAttempts.Set(41)
+	observability.PlaidOrphanedItemMaxRetryAttempts.WithLabelValues().Set(41)
 
 	require.NoError(t, worker.Work(ctx, newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})))
 
@@ -232,7 +232,7 @@ func TestRetentionCleanupCheck_MonitorOrphanedPlaidItems_ListFailure_DoesNotPubl
 	worker := newOrphanMonitorWorker(lister, &logBuf, mockRepo)
 
 	observability.PlaidOrphanedItemsByAdminState.WithLabelValues("manual_intervention_required").Set(6)
-	observability.PlaidOrphanedItemMaxRetryAttempts.Set(15)
+	observability.PlaidOrphanedItemMaxRetryAttempts.WithLabelValues().Set(15)
 
 	require.NoError(t, worker.Work(ctx, newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})))
 
@@ -364,4 +364,44 @@ func TestRetentionCleanupCheck_MonitorOrphanedPlaidItems_PublishesTheOperatorAtt
 		"an unverified claim must not silence the gauge capable of exposing it as false")
 
 	lister.AssertExpectations(t)
+}
+
+// ⚠ THE STARTUP ZERO, THE SIBLING GAUGE'S VERSION OF IT.
+//
+// monitorOrphanedPlaidItems' doc comment says it publishes NOTHING on a failed or truncated read,
+// and the alert rules for these gauges rest on `absent(...)` being the signal that the pass has
+// stopped. That was true of PlaidOrphanedItemsByAdminState for free — a GaugeVec collects nothing
+// until a label set exists — and FALSE of PlaidOrphanedItemMaxRetryAttempts, which as a plain Gauge
+// was registered at 0 from process start. So before the first pass it asserted "no Item is being
+// retried into the ground", and this publisher runs on the retention worker's DAILY cadence: a
+// process restarted more often than once a day published nothing but that fabricated zero, and reset
+// the rule's own `for: 6h` clock each time. It is now an observability.UnmeasuredGauge.
+//
+// SIBLING, in the same test: after a real pass the gauge is present and carries the measurement, so
+// this cannot be satisfied by a gauge that is simply never published.
+func TestRetentionCleanupCheck_MonitorOrphanedPlaidItems_MaxRetryGaugeIsAbsentUntilAPassHasRun(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Return the gauge to its process-start state — no child, nothing collected — so this test is
+	// asserting the declaration's behaviour rather than the order the package's tests happened to run
+	// in.
+	observability.PlaidOrphanedItemMaxRetryAttempts.DeleteLabelValues()
+	require.Equal(t, 0, testutil.CollectAndCount(observability.PlaidOrphanedItemMaxRetryAttempts),
+		"an unmeasured gauge must be ABSENT from the scrape, not present with a confident 0 — absent() is what the alert rule reads")
+
+	mockRepo := new(MockRetentionProfileRepository)
+	setupOrphanMonitorMocks(ctx, mockRepo)
+
+	lister := new(MockOrphanedPlaidItemLister)
+	lister.On("List", mock.Anything, domain.PlaidOrphanedItemHealthScanCap, 0).
+		Return([]domain.PlaidOrphanedItem{orphanRowNeedsHuman(now, 17)}, 1, nil)
+
+	var logBuf bytes.Buffer
+	worker := newOrphanMonitorWorker(lister, &logBuf, mockRepo)
+	require.NoError(t, worker.Work(ctx, newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})))
+
+	require.Equal(t, 1, testutil.CollectAndCount(observability.PlaidOrphanedItemMaxRetryAttempts),
+		"and once a pass HAS read the table the gauge must appear — absence must mean 'not measured', never 'never published'")
+	assert.Equal(t, float64(17), testutil.ToFloat64(observability.PlaidOrphanedItemMaxRetryAttempts))
 }

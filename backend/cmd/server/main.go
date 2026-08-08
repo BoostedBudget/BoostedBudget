@@ -2156,44 +2156,76 @@ func createClerkCheck() func() error {
 // query is logged and skipped for THAT metric only (not fatal, and not allowed to block the
 // other): a transient DB hiccup here must not crash the whole process, and each gauge simply keeps
 // its last-known value until its next tick succeeds. The goroutine stops when ctx is cancelled.
+//
+// ⚠ IT READS ONCE BEFORE THE TICKER STARTS, and that is not a latency optimisation. Every gauge
+// here is now an observability.UnmeasuredGauge — absent from the scrape until this function
+// publishes it — precisely so that "nobody has looked yet" and "measured, and it is zero" are
+// different scrapes. Before both halves of that change, these were plain Gauges exporting 0 from
+// process start and untouched for the first five minutes, so each process asserted "no backlog, no
+// residue, nothing expired" with nothing having queried anything. For
+// observability.DeletionResidueRecords that was worse than a stale number: its prescribed rule is
+// `increase(deletion_residue_records[15m]) > 0`, and on any process with pre-existing residue the
+// 0 → N step five minutes into the process LOOKED LIKE N NEW INCIDENTS. A restart paged somebody
+// about a GDPR failure that had not happened.
+//
+// ⚠ AND A FAILED READ — startup or tick — STILL PUBLISHES NOTHING. There is no "publish 0 and log
+// it" branch anywhere below, on purpose: a zero produced by a failed query is the same false claim
+// as a zero produced by never having queried, just later. On the first pass that leaves the series
+// absent (the absent()/staleness rules documented at each gauge's declaration are what report it);
+// on a later pass it leaves the last real reading in place, which staleness likewise reports.
 func startJobHealthMetricsCollector(ctx context.Context, repo repository.JobHealthRepository, logger *slog.Logger) {
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
+		// The initial measurement, before the loop: the first sample any scrape can see is therefore a
+		// reading rather than a default, and the unmeasured window is one query long instead of one
+		// tick long.
+		refreshJobHealthMetrics(ctx, repo, logger)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
-				if err != nil {
-					logger.Warn("failed to refresh manual tier override job-health gauge", "error", err)
-				} else {
-					observability.ManualTierOverrideOldestUnclearedExpiredSeconds.Set(age.Seconds())
-				}
-
-				plaidCount, plaidOldestAge, err := repo.GetOutstandingPlaidCleanupStats(ctx)
-				if err != nil {
-					logger.Warn("failed to refresh Plaid-cleanup job-health gauges", "error", err)
-				} else {
-					observability.PlaidCleanupOutstandingUsers.Set(float64(plaidCount))
-					observability.PlaidCleanupOldestOutstandingSeconds.Set(plaidOldestAge.Seconds())
-				}
-
-				// Issue #1504: the deletion-residue pair. Same per-metric error isolation as the two
-				// above — a failure here logs and leaves both gauges at their last-known value rather
-				// than zeroing them, because a zeroed monotonic gauge would read as "the residue went
-				// away", which is the one thing it can never mean.
-				residueCount, residueNewestAge, err := repo.GetDeletionResidueStats(ctx)
-				if err != nil {
-					logger.Warn("failed to refresh deletion-residue gauges", "error", err)
-				} else {
-					observability.DeletionResidueRecords.Set(float64(residueCount))
-					observability.DeletionResidueNewestSeconds.Set(residueNewestAge.Seconds())
-				}
+				refreshJobHealthMetrics(ctx, repo, logger)
 			}
 		}
 	}()
+}
+
+// refreshJobHealthMetrics performs one pass over every job-health gauge. Extracted from
+// startJobHealthMetricsCollector's loop so the startup read and the periodic read are literally the
+// same code — two copies of this would be two chances for the startup pass to drift into publishing
+// something the tick does not, which is the class of bug this whole change is about.
+//
+// Per-metric error isolation throughout: one failing query must not suppress the others, and none of
+// them is fatal.
+func refreshJobHealthMetrics(ctx context.Context, repo repository.JobHealthRepository, logger *slog.Logger) {
+	age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
+	if err != nil {
+		logger.Warn("failed to refresh manual tier override job-health gauge", "error", err)
+	} else {
+		observability.ManualTierOverrideOldestUnclearedExpiredSeconds.WithLabelValues().Set(age.Seconds())
+	}
+
+	plaidCount, plaidOldestAge, err := repo.GetOutstandingPlaidCleanupStats(ctx)
+	if err != nil {
+		logger.Warn("failed to refresh Plaid-cleanup job-health gauges", "error", err)
+	} else {
+		observability.PlaidCleanupOutstandingUsers.WithLabelValues().Set(float64(plaidCount))
+		observability.PlaidCleanupOldestOutstandingSeconds.WithLabelValues().Set(plaidOldestAge.Seconds())
+	}
+
+	// Issue #1504: the deletion-residue pair. Same per-metric error isolation as the two above — a
+	// failure here logs and leaves both gauges as they were (absent before the first success, at their
+	// last-known value after it) rather than zeroing them, because a zeroed monotonic gauge would read
+	// as "the residue went away", which is the one thing it can never mean.
+	residueCount, residueNewestAge, err := repo.GetDeletionResidueStats(ctx)
+	if err != nil {
+		logger.Warn("failed to refresh deletion-residue gauges", "error", err)
+	} else {
+		observability.DeletionResidueRecords.WithLabelValues().Set(float64(residueCount))
+		observability.DeletionResidueNewestSeconds.WithLabelValues().Set(residueNewestAge.Seconds())
+	}
 }
 
 func boolStatus(configured bool) string {
