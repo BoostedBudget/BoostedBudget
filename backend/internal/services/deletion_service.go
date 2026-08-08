@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -666,13 +667,16 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// re-creates the subscription (see ProfileRepository.RecordDeletionResidue's doc comment). A
 	// failed write cannot change the outcome of a deletion that is already over, so it is logged at
 	// Error rather than propagated — but it is never swallowed silently, which was the whole finding.
-	recordPaddleCancelResidue := func(reason string) {
+	//
+	// The `effect` parameter exists because there are now TWO kinds of this one harm and an operator
+	// has a different job for each — see repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed.
+	recordPaddleCancelResidue := func(effect repository.DeletionResidueEffect, reason string) {
 		if !subscriptionCancelled {
 			return
 		}
 		slog.Default().Error("account deletion stopped after the user's Paddle subscription had already been cancelled — the user KEEPS their account and data but has NO subscription; this needs a human",
-			"user_id", userID, "claim_kind", string(kind), "reason", reason)
-		if recErr := s.profileRepo.RecordDeletionResidue(ctx, userID, repository.DeletionResiduePaddleSubscriptionCancelled); recErr != nil {
+			"user_id", userID, "claim_kind", string(kind), "residue_effect", string(effect), "reason", reason)
+		if recErr := s.profileRepo.RecordDeletionResidue(ctx, userID, effect); recErr != nil {
 			slog.Default().Error("failed to record the post-gate external-effect residue — this user's cancelled subscription is now visible ONLY in logs",
 				"user_id", userID, "error", recErr)
 		}
@@ -688,7 +692,8 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 				// Only fires when the revocation was caught by the SECOND gate, after the cancel had
 				// already landed; a revocation caught by the first gate cancels nothing and so leaves
 				// nothing to report.
-				recordPaddleCancelResidue("authorisation revoked between the subscription cancel and the customer archive")
+				recordPaddleCancelResidue(repository.DeletionResiduePaddleSubscriptionCancelled,
+					"authorisation revoked between the subscription cancel and the customer archive")
 				return nil
 			}
 			// A Paddle FAILURE (as opposed to a revocation) deliberately records nothing: the claim is
@@ -718,6 +723,30 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	deleted, err := s.profileRepo.DeleteUserCascade(ctx, userID, user.DeletionRequestedAt)
 	if err != nil {
 		releaseClaim(err.Error())
+		// Round 12 finding AB-1: the THIRD way a user survives a run whose Paddle cancel already
+		// landed, and until now the only one that recorded nothing at all. #1504 covered the gate
+		// decline and the cascade's (false, nil) refusal; this branch was left out on the grounds
+		// that an errored run still retries into success, so the user is not being LEFT in the state
+		// the record describes.
+		//
+		// #1507 broke that premise without removing it. Making the terminal audit write abort the
+		// cascade created a class of error — a revoked INSERT privilege on audit_logs, a new CHECK
+		// or RLS policy, a trigger — that no retry clears. Every sweep re-runs the whole sequence,
+		// re-cancels nothing (there is nothing left to cancel) and fails identically, while the user
+		// keeps their account with no subscription and severed bank links, and BOTH of #1504's
+		// metrics read zero. The harm the metrics were built for, occurring invisibly.
+		//
+		// ⚠ NOT "record on every cascade error" — that is what b76e1b8a's reasoning rules out and it
+		// is still right. cascadeErrorIsRecognisedTransient names the classes for which the retry
+		// premise genuinely holds and stays silent for those; everything else, including anything
+		// unrecognised, records. Its doc comment argues the default direction.
+		//
+		// ⚠ NOT REMEDIATION. Nothing here re-subscribes anyone (see RecordDeletionResidue's own doc
+		// comment); this makes an existing, already-occurring harm visible to a human.
+		if !cascadeErrorIsRecognisedTransient(err) {
+			recordPaddleCancelResidue(repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed,
+				"the cascade failed with a non-transient error after the subscription had been cancelled: "+err.Error())
+		}
 		return fmt.Errorf("failed to cascade delete user data: %w", err)
 	}
 	if !deleted {
@@ -727,7 +756,8 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 		// Issue #1504: the SECOND way a user survives a run whose Paddle cancel already landed. The
 		// harm is identical to the gate-decline case above — account kept, subscription gone — so the
 		// record must be identical too; covering only the gate would silently miss this half.
-		recordPaddleCancelResidue("the cascade's own re-verification refused after the subscription had been cancelled")
+		recordPaddleCancelResidue(repository.DeletionResiduePaddleSubscriptionCancelled,
+			"the cascade's own re-verification refused after the subscription had been cancelled")
 		return nil
 	}
 
@@ -779,10 +809,12 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// RLS policy) gates this user's erasure for as long as it lasts — after the Plaid disconnect and
 	// possibly the Paddle cancellation above have already run and cannot be undone. The trade is
 	// argued at the write site in profile_repository.go; the part that lands HERE is that such a run
-	// takes the error branch below, which deliberately records no Paddle-cancel residue on the
-	// grounds that the run is still expected to complete. For a persistent failure that premise is
-	// false. Recording residue for every cascade error would break the transient case the rule was
-	// written for, so it is left as-is and named rather than silently changed.
+	// takes the error branch ABOVE. That branch used to record no Paddle-cancel residue at all, on
+	// the grounds that the run was still expected to complete — a premise this very failure mode
+	// breaks. It no longer does: the branch now records a
+	// DeletionResiduePaddleSubscriptionCancelledCascadeFailed residue whenever the error is not one
+	// cascadeErrorIsRecognisedTransient vouches for, which keeps b76e1b8a's transient case silent
+	// and stops this one from being invisible. Round 12, finding AB-1.
 	//
 	// The service's OTHER audit writes are unchanged and stay non-fatal: RequestDeletion's
 	// `user.deletion_requested` and CancelDeletion's `user.deletion_cancelled` both describe a state
@@ -1003,4 +1035,67 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 	}
 
 	return subscriptionCancelled, nil
+}
+
+// transientCascadeSQLSTATEClasses are the SQLSTATE classes for which "this run failed but the next
+// one is still expected to complete" is KNOWN to be true, rather than merely hoped. Classified by
+// two-character class, not by individual code, because the classes are defined by cause and a new
+// member of one of them is transient for the same reason the existing members are:
+//
+//	08 — Connection Exception ................ the connection died; a new one will not be that one
+//	40 — Transaction Rollback ................ deadlock_detected / serialization_failure; retry is
+//	                                           the DOCUMENTED response and this repo already relies
+//	                                           on it (see the 40P01 analysis in profile_repository.go)
+//	53 — Insufficient Resources .............. out of memory / connections / disk; relieves itself
+//	55 — Object Not In Prerequisite State .... lock_not_available and friends; a lock is held NOW
+//	57 — Operator Intervention ............... query_canceled, admin_shutdown; the operator did it
+//
+// Class 42 (insufficient_privilege, undefined_table), class 23 (constraint violations) and class P0
+// (a trigger's raise_exception) are deliberately ABSENT: those are exactly the three persistent modes
+// #1507's own commit message names as the cost of aborting the cascade on a failed audit write, and
+// they do not clear on retry. Nothing else is enumerated either way — see the default direction below.
+var transientCascadeSQLSTATEClasses = map[string]struct{}{
+	"08": {}, "40": {}, "53": {}, "55": {}, "57": {},
+}
+
+// cascadeErrorIsRecognisedTransient answers the one question ExecuteDeletion's cascade-error branch
+// needs: is this a failure we KNOW will be retried into success, so that recording a permanent
+// operator artifact would be wrong?
+//
+// ⚠ WHY IT IS "RECOGNISED transient" AND NOT "IS persistent", AND WHY THE DEFAULT RECORDS. b76e1b8a
+// argued — correctly, and the argument survives here intact — that recording residue on EVERY cascade
+// error would break the transient case: a deadlock resolves in milliseconds, the claim is released,
+// the next run completes the deletion, and an operator would have been handed a permanent artifact
+// for a non-incident. That argument establishes what must NOT record. It says nothing about the case
+// #1507 then created, where the cascade aborts on a database fault that no retry clears.
+//
+// So the predicate is an ALLOWLIST of known-transient classes and everything else records. The
+// asymmetry is deliberate and matches this function's three siblings in ExecuteDeletion — the
+// undetermined answer from abortIfUnauthorised, the failed CountUncleanedLinkedItems, the failed
+// stillAuthorised recheck — all of which fail CLOSED, on the same reasoning: "we do not know" is not
+// permission to stay silent about an irreversible external effect that has already landed. The two
+// error directions are not symmetric in cost. A spurious residue row is a false alarm an operator
+// closes in a minute; a missed one is a user who keeps their account, loses their subscription, and
+// is never told, with both of #1504's metrics reading zero. The allowlist is what keeps b76e1b8a's
+// case — which is the FREQUENT one — out of that default.
+//
+// A nil error is "transient" in the only sense that matters here: it is not a failure, so there is
+// nothing to record. The call site guards on err != nil anyway; this makes the function total.
+func cascadeErrorIsRecognisedTransient(err error) bool {
+	if err == nil {
+		return true
+	}
+	// Cancellation and deadline expiry are the non-SQLSTATE half: in practice the same shutdown or
+	// job deadline that killed the cascade killed the run, and the next run redoes the sequence.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// errors.As, not a type assertion: the repository wraps every failure in fmt.Errorf, so no
+	// production caller ever sees a bare *pgconn.PgError here.
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && len(pgErr.Code) >= 2 {
+		_, transient := transientCascadeSQLSTATEClasses[pgErr.Code[:2]]
+		return transient
+	}
+	return false
 }
