@@ -75,26 +75,68 @@ import (
 //	  - anything about wall-clock latency. Those are runs at the sweep's own periodic cadence.
 //	  - that a row which becomes eligible with a sort key BEHIND the current watermark is reached
 //	    promptly. It is skipped until the next wrap, so its bound is one full cycle, not one run.
-//	    This is real for item_cleanup, whose last_synced_at leg makes a row eligible by the passage
-//	    of time against an OLD timestamp; it is marginal for the two user sweeps, whose sort columns
-//	    are set to future instants when the row becomes eligible, and for plaid_orphan_retry, whose
+//	    ⚠ This is real for item_cleanup, and it has THREE distinct causes, not the one this bullet
+//	    used to name. cleanupCandidateReasonPredicate (linked_item_repository.go) has four legs, and
+//	    three of them make a row eligible WITHOUT moving its sort key
+//	    (COALESCE(last_error_at,'infinity'), COALESCE(last_synced_at,'infinity'), li.id):
+//	      1. `li.status = 'revoked'` — a status transition; neither timestamp is written.
+//	      2. `NOT EXISTS (active accounts)` — an accounts-table change; neither timestamp is written.
+//	      3. `li.last_synced_at < NOW() - staleDays` — eligibility arrives by the passage of time
+//	         against an OLD timestamp, so the row is already ranked behind wherever the watermark is.
+//	    Only the first leg (`status IN ('error','login_required') AND last_error_at < ...`) writes the
+//	    leading sort column as it becomes eligible, and even it lands BEHIND an advanced watermark
+//	    once errorDays has elapsed. It is marginal for the two user sweeps, whose sort columns are set
+//	    to future instants when the row becomes eligible, and for plaid_orphan_retry, whose
 //	    orphaned_at is stamped at the erasure that creates the row.
 //	  - anything at all when the candidate set churns faster than one cycle.
 //	  - ⚠ anything about rows past the first C of an OVER-CAP TIE GROUP — more than C rows sharing
-//	    ONE timestamp key — in which no row ever leaves the candidate set. The exclusive advance
-//	    (see NextPosition) steps the watermark past such a group after two runs, which is what lets
-//	    everything RANKED BEHIND the group be reached; the price is that the group's rows past the
-//	    first C are not reached at all, on any run, including after a wrap (a wrap restarts at the
-//	    beginning, which re-reads the same first C of the group). This residual is narrow — it needs
-//	    a tie group larger than the cap AND every one of its rows permanently failing — and the
-//	    alternative is worse: without the exclusive advance, such a group stalls the sweep entirely
-//	    and NOTHING behind it is ever reached. It is written down rather than left to be discovered.
-//	    The realistic instance is item_cleanup's (NULL, NULL) bucket, which its zero-active-accounts
-//	    predicate leg can populate in bulk; the two user sweeps' sort columns are per-user instants
-//	    and do not form large ties. plaid_orphan_retry ties by construction — DeleteUserCascade
-//	    inserts every one of an erased user's outstanding Items in ONE statement, so they all take
-//	    the same orphaned_at DEFAULT NOW() — but the group is that user's item count, single digits
-//	    against a cap of 1,000, so it cannot be an OVER-CAP tie group.
+//	    ONE timestamp key. The exclusive advance (see NextPosition) steps the watermark past such a
+//	    group after two runs, which is what lets everything RANKED BEHIND the group be reached; the
+//	    price is that the group's rows past the first C are not reached at all, on any run, including
+//	    after a wrap (a wrap restarts at the beginning, which re-reads the same first C of the group).
+//
+//	    ⚠ THE PRECONDITION IS NARROWER THAN THIS BULLET ORIGINALLY CLAIMED, and correcting it is the
+//	    whole of the change: it used to say the residual needed a group "in which no row ever leaves
+//	    the candidate set", i.e. EVERY one of its rows permanently failing. That is not what is
+//	    required. Only the FIRST C rows of the group — the ones that fill the cap — need keep
+//	    failing. The rows behind them inside the same group may be entirely healthy, and are
+//	    sacrificed anyway, because the exclusive advance is taken without ever looking at them.
+//	    Constructed, not argued: jobs.TestPlaidOrphanRetrySweepCursor_OverCapTieGroup_
+//	    SacrificesAProcessableTailRow builds a 3-row tie group against a cap of 2 in which only the
+//	    two head rows fail, and shows the third is reached on no run; its control,
+//	    ...TieGroupTailRow_IsResolvedOnceTheCapReachesIt, shows that same row being removed at Plaid
+//	    and resolved the moment a larger cap admits it. So the sacrificed row is a PROCESSABLE row,
+//	    and for plaid_orphan_retry that is a removable Plaid Item that is retried on no run — after
+//	    which its token_expires_at deadline (migration 000135) retires the only credential any
+//	    automated path could have used, permanently. Stated plainly rather than softened.
+//
+//	    ⚠ WHY IT IS NOT FIXED, per sweep rather than in the blanket. The fix would be to persist the
+//	    tie-break id so a run can resume WITHIN a group. SweepPosition deliberately carries no row
+//	    identity (see this header's second section), so that answer has to be given one sweep at a
+//	    time, and given that way it does not pay:
+//	      - scheduled_deletion and expired_retention tie-break on `users.id`. Persisting it would put
+//	        a reference to a specific user into a table designed to outlive that user's erasure — the
+//	        exact artefact the no-FK/no-user_id decision exists to prevent, on the two sweeps whose
+//	        job IS the erasure. Rejected on GDPR grounds, not on cost.
+//	      - item_cleanup ties on `linked_items.id`, which is user-scoped and cascade-deleted with its
+//	        owner; persisting it is the same artefact one indirection out. Rejected for the same
+//	        reason — and item_cleanup is the sweep where an over-cap tie group is actually realistic
+//	        (its (NULL, NULL) bucket, which the zero-active-accounts leg can populate in bulk).
+//	      - plaid_orphan_retry ties on `plaid_orphaned_items.id`, a table built with no user_id and
+//	        no FK precisely so it can outlive erasure (migration 000134), so persisting THAT id would
+//	        carry no user reference and would be GDPR-neutral. But this sweep cannot produce an
+//	        over-cap tie group: DeleteUserCascade inserts one erased user's outstanding Items in ONE
+//	        statement, so they share an orphaned_at, and the group is that user's item count — single
+//	        digits against a cap of 1,000.
+//	    The fix is therefore blocked exactly where the residual is real and vacuous exactly where it
+//	    is permitted. An offset-into-the-tie-group ("skip the first K rows at key T"), which would
+//	    carry no identity at all, was considered and rejected for something worse: if any row ahead of
+//	    the offset leaves the candidate set between runs, the offset skips a row that was never
+//	    reached — converting a documented, bounded sacrifice into a silent, unbounded one on paths
+//	    that hard-delete users and remove Plaid Items.
+//
+//	    The alternative to the exclusive advance is also worse than the residual: without it, such a
+//	    group stalls the sweep entirely and NOTHING behind it is ever reached.
 //
 // Compare what was true BEFORE, for all four sweeps: above the cap, rows past it were reached
 // NEVER, tie group or not, for as long as the head kept failing. The change is from "never" to
@@ -204,10 +246,22 @@ func equalTimePtr(a, b *time.Time) bool {
 //
 // ⚠ The price is stated exactly, not softened: the rows of that over-cap tie group past the first
 // cap-worth are then not reached AT ALL — not on a later run, and not after a wrap, since a wrap
-// restarts at the beginning and re-reads the same first cap-worth. That residual is bounded to a
-// tie group LARGER than the cap in which no row ever leaves the candidate set, and it is the
-// deliberate trade against the alternative, which is that such a group stalls the sweep completely
-// and nothing ranked behind it is ever reached either. See this file's header, final bullet.
+// restarts at the beginning and re-reads the same first cap-worth.
+//
+// ⚠ AND THE PRECONDITION IS NOT WHAT THIS COMMENT USED TO SAY. It read "bounded to a tie group
+// LARGER than the cap in which no row ever leaves the candidate set". Only the group's FIRST
+// cap-worth of rows need keep failing — they are the ones that consume the cap. Everything behind
+// them inside the same group is sacrificed WITHOUT BEING LOOKED AT, healthy or not, so a fully
+// processable row can be skipped forever. jobs.TestPlaidOrphanRetrySweepCursor_OverCapTieGroup_
+// SacrificesAProcessableTailRow constructs exactly that (two failing head rows, one removable tail
+// row, cap 2) and its control resolves the same tail row under a cap of 3. For plaid_orphan_retry
+// the sacrificed row is a live, removable Plaid Item that no run ever retries.
+//
+// It remains the deliberate trade against the alternative, which is that such a group stalls the
+// sweep completely and nothing ranked behind it is ever reached either — and against persisting the
+// tie-break id, which is GDPR-blocked on the three sweeps whose id is user-scoped and vacuous on the
+// one where it is not. That per-sweep argument is in this file's header, final bullet; it is a
+// per-sweep answer on purpose, because a blanket one would be wrong on both halves.
 func NextPosition(start *SweepPosition, reached SweepPosition) SweepPosition {
 	if start != nil && sameTimestampKey(*start, reached) {
 		reached.Exclusive = true
