@@ -148,25 +148,35 @@ const paddleCancelSideEffectLease = 10 * time.Minute
 //
 // NO ACTOR PARAMETER, DELIBERATELY, FOR NOW. audit_logs distinguishes the ACTING party
 // (user_id) from the SUBJECT (resource_id), and this signature can only supply the latter. All
-// four production call sites are self-service or system-initiated — a user acting on their own
-// account (RequestDeletion, CancelDeletion, RegisterUser) or a background worker acting on
-// nobody's behalf (ExecuteDeletion, which also runs for retention sweeps nobody asked for) — so
-// no caller has an actor to pass that is not either the subject or nothing. The implementation
-// therefore writes user_id NULL rather than copying the subject into it, which would assert
-// "this person performed this action" and be flatly false for a retention deletion. If an
-// admin-initiated deletion path is ever added, this interface MUST gain an explicit actor first:
-// tracked in Issue #1506.
+// three remaining production call sites are self-service — a user acting on their own account
+// (RequestDeletion, CancelDeletion, RegisterUser) — so no caller has an actor to pass that is not
+// either the subject or nothing. The implementation therefore writes user_id NULL rather than
+// copying the subject into it, which would assert "this person performed this action" and be
+// flatly false for a system-initiated action. If an admin-initiated deletion path is ever added,
+// this interface MUST gain an explicit actor first: tracked in Issue #1506.
 //
-// ERRORS ARE REPORTED, NEVER SWALLOWED BY THE IMPLEMENTATION — but the deletion call sites below
-// deliberately do NOT abort on one. See the note at RequestDeletion's call for the reasoning.
+// ⚠ #1506 IS ALSO CONSTRAINED BY LOCKING, NOT ONLY BY HONESTY, AND THE CONSTRAINT IS NOT IN THIS
+// PACKAGE. Since Issue #1507 the `user.deleted` entry no longer goes through this interface at all:
+// it is written inside DeleteUserCascade's transaction via repository.LogInTx, whose doc comment
+// explains why a non-NULL actor on THAT path reintroduces a reproduced SQLSTATE 40P01 deadlock.
+// Read it before widening this signature.
+//
+// ERRORS ARE REPORTED, NEVER SWALLOWED BY THE IMPLEMENTATION — but the two deletion call sites
+// below deliberately do NOT abort on one, because both describe a state change that has already
+// committed. See the note at RequestDeletion's call for the reasoning, including why the
+// in-transaction `user.deleted` write makes the opposite choice.
 type AuditLogger interface {
 	Log(ctx context.Context, action, resourceType, resourceID string) error
 }
 
 // logAuditFailure surfaces an audit-write failure at ERROR level and returns. It exists so the
-// three deletion call sites cannot drift apart on how they treat one, and so that "the audit trail
-// silently recorded nothing" — the exact defect Issue #1505 closed — can never again be the quiet
-// default. A nil error is the overwhelmingly common case and costs nothing.
+// non-transactional audit call sites cannot drift apart on how they treat one, and so that "the
+// audit trail silently recorded nothing" — the exact defect Issue #1505 closed — can never again be
+// the quiet default. A nil error is the overwhelmingly common case and costs nothing.
+//
+// It is deliberately NOT used for `user.deleted` any more: since Issue #1507 that entry is written
+// inside DeleteUserCascade's transaction, where a failure genuinely can and does roll the erasure
+// back rather than needing to be tolerated.
 func logAuditFailure(ctx context.Context, err error, action, subjectUserID string) {
 	if err == nil {
 		return
@@ -273,21 +283,22 @@ func (s *deletionService) RequestDeletion(ctx context.Context, userID, email str
 	// AN AUDIT-WRITE FAILURE DOES NOT ABORT THE DELETION, AND IS NOT DISCARDED EITHER. Both halves
 	// are deliberate (Issue #1505):
 	//
-	//   - Not aborting: by the time this runs the state change has already committed (here,
-	//     MarkForDeletion; at the ExecuteDeletion call site, the entire irreversible cascade).
-	//     Returning an error would report a failure for work that succeeded, and for
-	//     ExecuteDeletion it would make the River worker retry a deletion that has already run —
-	//     re-attempting external cleanup against a user who no longer exists. There is nothing to
-	//     roll back and nothing to retry. A transient database blip must not block a GDPR request.
+	//   - Not aborting: by the time this runs the state change (MarkForDeletion) has already
+	//     committed. Returning an error would report a failure for work that succeeded. There is
+	//     nothing to roll back and nothing to retry. A transient database blip must not block a
+	//     GDPR request.
 	//   - Not discarding: `_ =` was how the stub's permanent uselessness stayed invisible. A write
 	//     the database refused is now logged at ERROR with the subject and action, so a missing
 	//     trail entry is an alertable event rather than nothing at all.
 	//
-	// The alternative — make the audit write part of the same transaction as the state change —
-	// is the stronger design and is NOT available here: RequestDeletion's write and ExecuteDeletion's
-	// terminal entry both sit outside any transaction the service controls, and for `user.deleted`
-	// the transaction it would have to join is the cascade, which this change is explicitly not
-	// permitted to alter. Tracked in Issue #1507.
+	// The alternative — make the audit write part of the same transaction as the state change — is
+	// the stronger design and IS now taken wherever it is available. Issue #1507 took it for
+	// `user.deleted`, which is written inside DeleteUserCascade's own transaction
+	// (repository.AuditLogRepository.LogInTx) and DOES abort the deletion on failure, because there
+	// the erasure has not committed yet and rolling back merely defers it to the next sweep. It is
+	// still NOT available here: MarkForDeletion runs in a transaction this service does not hold
+	// open (requestDeletionTransactional commits before returning), so this write has nothing left
+	// to join. Same for CancelDeletion's entry.
 	logAuditFailure(ctx, s.auditLogger.Log(ctx, "user.deletion_requested", "user", userID),
 		"user.deletion_requested", userID)
 
@@ -749,11 +760,22 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// The database column name is legacy and will be renamed in a future migration
 	_ = s.clerkService.DeleteUser(ctx, user.ClerkUserID)
 
-	// Create audit log. THE TERMINAL ENTRY: the cascade has already committed and the user is gone,
-	// so this row — keyed by resource_id, which carries no FK to users — is the only remaining
-	// evidence that the erasure happened. Non-fatal but never silent; see RequestDeletion's call
-	// site for why aborting here is not an option.
-	logAuditFailure(ctx, s.auditLogger.Log(ctx, "user.deleted", "user", userID), "user.deleted", userID)
+	// NO `user.deleted` AUDIT WRITE HERE ANY MORE — Issue #1507. It used to be this line, issued
+	// after DeleteUserCascade had already committed, with its error routed to logAuditFailure. That
+	// made the single most important entry in the GDPR trail the one entry that could go missing
+	// while the erasure it describes was permanent and had nothing left to retry from.
+	//
+	// It is now DeleteUserCascade's own last statement before COMMIT (repository.LogInTx), so the
+	// record and the erasure land together or not at all. `deleted == true` above is therefore
+	// already proof that the entry was written. Do NOT re-add a call here: it would produce a second
+	// `user.deleted` row per deletion, which
+	// TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion refutes.
+	//
+	// The service's OTHER audit writes are unchanged and stay non-fatal: RequestDeletion's
+	// `user.deletion_requested` and CancelDeletion's `user.deletion_cancelled` both describe a state
+	// change that has ALREADY committed in a transaction this service does not hold, so there is
+	// nothing there to roll back and aborting would report failure for work that succeeded. Only
+	// this one entry was inside reach of a transaction, which is why only this one moved.
 
 	// Capture analytics event for account deletion
 	if s.analytics != nil {

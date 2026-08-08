@@ -12,9 +12,15 @@ package repository
 //     audit_logs.user_id is a nullable UUID WITH `FK ... ON DELETE SET NULL`. Which of the two the
 //     subject goes into decides whether the row can be written AT ALL after the subject is erased.
 //     pgxmock validates call shape and would pass over exactly that.
-//   - The `user.deleted` entry is written AFTER DeleteUserCascade has committed. Had the subject
+//   - The `user.deleted` entry is written after the subject's users row is gone. Had the subject
 //     been put in user_id, that INSERT would fail with a foreign-key violation every single time,
-//     in production, silently (the call site discards the error today). Proven below.
+//     in production. Proven below.
+//
+// ⚠ SINCE ISSUE #1507 THAT ENTRY IS WRITTEN INSIDE DeleteUserCascade'S TRANSACTION, via LogInTx,
+// as its last statement before COMMIT — not by ExecuteDeletion after the cascade committed. What
+// these tests cover is unchanged (they exercise Log against the pool directly), but the property
+// they establish now also underwrites the in-transaction write: see
+// profile_repository_cascade_audit_integration_test.go for the transactional half.
 //
 // Run with:
 //
@@ -78,8 +84,9 @@ func TestAuditLogRepository_Integration_WritesADurableRowWithTheSubjectInResourc
 }
 
 // THE ASSERTION THE FEATURE IS POINTLESS WITHOUT. A deletion audit entry whose subject is then hard
-// deleted must survive, and — because ExecuteDeletion logs `user.deleted` AFTER the cascade commits
-// — must still be WRITABLE once the subject is gone.
+// deleted must survive, and — because the `user.deleted` entry is written after the `DELETE FROM
+// users` that erases its subject (since #1507, in the same transaction as that DELETE) — must still
+// be WRITABLE once the subject is gone.
 func TestAuditLogRepository_Integration_RowOutlivesAndIsWritableAfterTheSubjectsHardDeletion(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -116,7 +123,7 @@ func TestAuditLogRepository_Integration_RowOutlivesAndIsWritableAfterTheSubjects
 	_, err = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, user.ID)
 	require.NoError(t, err)
 
-	// ExecuteDeletion's `user.deleted` entry is written HERE — after the subject no longer exists.
+	// The `user.deleted` entry is written HERE — after the subject no longer exists.
 	// With the subject in resource_id (no FK) this succeeds. With the subject in user_id it would be
 	// a foreign-key violation, i.e. the audit trail's single most important entry would never be
 	// written at all.

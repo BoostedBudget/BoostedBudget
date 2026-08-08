@@ -62,7 +62,10 @@ func newDeletionFixture(t *testing.T, plaidCleanup PlaidItemCleanupService) (
 
 	repo.On("GetUserByID", mock.Anything, user.ID).Return(user, nil)
 	repo.On("ClaimForDeletion", mock.Anything, user.ID).Return(true, nil)
-	audit.On("Log", mock.Anything, "user.deleted", "user", user.ID).Return(nil).Maybe()
+	// No `user.deleted` expectation: since Issue #1507 that entry is written inside
+	// DeleteUserCascade's transaction (repository.LogInTx), never through this interface. Left
+	// unstubbed deliberately — an unstubbed testify call panics, so a regression that re-adds the
+	// post-commit write here fails loudly instead of silently double-recording.
 
 	return svc, repo, clerk, claims, user
 }

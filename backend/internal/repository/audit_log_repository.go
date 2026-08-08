@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // AuditLogRepository writes GDPR audit-trail entries to audit_logs. It is the REAL implementation
@@ -24,23 +26,44 @@ import (
 // the wrong one; getting it backwards here would be worse than that, because:
 //
 //   - resource_id has NO FK, so a row keyed to an erased subject is still writable and still there.
-//   - user_id DOES have one. ExecuteDeletion writes its `user.deleted` entry AFTER
-//     DeleteUserCascade has committed — the subject's users row no longer exists. Putting the
-//     subject in user_id would make that INSERT a foreign-key violation EVERY time, in production,
-//     for the single most important entry in the trail. Pinned by
-//     TestAuditLogRepository_Integration_RowOutlivesAndIsWritableAfterTheSubjectsHardDeletion.
+//   - user_id DOES have one. The `user.deleted` entry is written AFTER the subject's users row has
+//     been deleted — since Issue #1507 that is DeleteUserCascade's own final statement, inside the
+//     same transaction as the `DELETE FROM users` it records; before #1507 it was ExecuteDeletion's
+//     separate post-commit statement. Either way the users row is already gone by then, so putting
+//     the subject in user_id would make that INSERT a foreign-key violation EVERY time, in
+//     production, for the single most important entry in the trail. Pinned by
+//     TestAuditLogRepository_Integration_RowOutlivesAndIsWritableAfterTheSubjectsHardDeletion and,
+//     at the in-transaction write site, by
+//     TestDeleteUserCascade_Integration_AuditEntrySurvivesItsSubjectsHardDeletion.
 //
 // THE INTERFACE CARRIES NO ACTOR, and user_id is therefore written as SQL NULL rather than filled
 // in with the subject. Log(ctx, action, resourceType, resourceID) has no actor parameter, and none
-// of its four production call sites has one to give: RequestDeletion and CancelDeletion receive
-// only the subject's id, and ExecuteDeletion and RegisterUser run under a background worker or a
-// sign-up flow with no separate acting principal. NULL is the honest reading and matches the
-// column's own documented meaning ("NULL if system action or user deleted") and
-// RecordDeletionResidue's precedent. Writing the subject into user_id would manufacture the claim
+// of its production call sites has one to give: RequestDeletion and CancelDeletion receive only the
+// subject's id, RegisterUser runs under a sign-up flow with no separate acting principal, and
+// DeleteUserCascade's `user.deleted` entry (via LogInTx, since Issue #1507) is written by a
+// background worker acting on nobody's behalf — a retention sweep nobody asked for. NULL is the
+// honest reading and matches the column's own documented meaning ("NULL if system action or user
+// deleted") and
+// RecordDeletionResidue's precedent.
+//
+// Writing the subject into user_id would manufacture the claim
 // "this person performed this action", which for a retention-triggered deletion — nobody asked; the
 // clock expired — is simply false. A false record is worse than an absent one. Extending the
 // interface with an explicit actor is tracked separately (see the ticket referenced in
 // services.AuditLogger's doc comment); today no caller could supply a non-nil value for it.
+//
+// ⚠⚠ THE NULL ACTOR IS NOW A LOCKING PRECONDITION, NOT ONLY AN HONESTY ONE — ISSUE #1506 MUST READ
+// THIS BEFORE ADDING AN ACTOR. Since Issue #1507, LogInTx runs this INSERT INSIDE
+// DeleteUserCascade's transaction, which holds `FOR UPDATE` on the subject's users row. With
+// user_id NULL, MATCH SIMPLE satisfies fk_audit_logs_user_id trivially: no RI trigger fires, so the
+// INSERT requests NO `FOR KEY SHARE` on any users row and cannot participate in a lock cycle. The
+// moment a non-NULL actor is written here, that FK check DOES fire, and an INSERT naming user A
+// while a cascade of user B holds A's row `FOR UPDATE` (and vice versa) is the cross-user deadlock
+// class — SQLSTATE 40P01 — this codebase has already reproduced against a live database (see
+// StampMissingPlaidCleanupMarkers's ROUND 23 correction in profile_repository.go, and
+// DeleteUserCascade's redaction comment). #1506 must therefore either keep the actor NULL on the
+// in-transaction path specifically, or establish a total order over users-row locks first. See
+// LogInTx's own warning, which is the one a future implementer trips over at the call site.
 //
 // NOTHING IS WRITTEN TO `changes`. DeleteUserCascade redacts with
 // `UPDATE audit_logs SET changes = NULL WHERE resource_id = $1 OR user_id = $1`, so any payload
@@ -52,6 +75,33 @@ type AuditLogRepository interface {
 	// it never reports a refused write as a success. Whether a caller treats that error as fatal
 	// is the caller's decision — see services.AuditLogger.
 	Log(ctx context.Context, action, resourceType, resourceID string) error
+
+	// LogInTx records the same entry inside a caller-supplied transaction, so the entry commits or
+	// rolls back WITH the state change it describes. Issue #1507. Mirrors
+	// MCPAuditRepository.RecordInTx, which is the same pattern for the same reason.
+	//
+	// ⚠⚠ THIS IS SAFE ONLY WHILE THE ACTOR (audit_logs.user_id) IS WRITTEN AS NULL. READ THIS
+	// BEFORE IMPLEMENTING ISSUE #1506.
+	//
+	// Its one production caller is DeleteUserCascade, which holds `FOR UPDATE` on the subject's
+	// users row for the whole transaction. Because user_id is NULL, fk_audit_logs_user_id is
+	// satisfied under MATCH SIMPLE without firing an RI check at all — this INSERT therefore
+	// requests NO `FOR KEY SHARE` on any users row, and no lock cycle involving users is even
+	// expressible. That, and nothing else, is why this write can live inside that transaction.
+	//
+	// #1506 proposes giving AuditLogger an explicit actor. The instant a non-NULL user_id reaches
+	// THIS method, the FK check fires and takes `FOR KEY SHARE` on that actor's users row — while a
+	// concurrent cascade may hold it `FOR UPDATE` and be about to want the row this one holds. That
+	// is the cross-user 40P01 deadlock the deferral of #1507 was originally argued from, and it was
+	// reproduced against a live database, not theorised. It is why #1507 shipped BEFORE #1506, and
+	// it is a sequencing constraint on #1506, not on this method.
+	//
+	// If you are adding an actor: either keep the in-transaction path's actor NULL, or establish a
+	// total order over users-row locks across every writer first. Do not simply widen the
+	// signature. The lock-order invariant this must not perturb is stated at DeleteUserCascade's
+	// household lock and pinned by
+	// TestDeleteUserCascade_Integration_LockOrderMatchesAcceptInvite_NoDeadlockWithConcurrentAcceptInvite.
+	LogInTx(ctx context.Context, tx pgx.Tx, action, resourceType, resourceID string) error
 }
 
 type auditLogRepository struct {
@@ -64,10 +114,27 @@ func NewAuditLogRepository(db DB) AuditLogRepository {
 }
 
 func (r *auditLogRepository) Log(ctx context.Context, action, resourceType, resourceID string) error {
+	return writeAuditLogEntry(ctx, r.db, action, resourceType, resourceID)
+}
+
+// LogInTx implements AuditLogRepository.LogInTx — see that method's doc comment, and in particular
+// its #1506 warning, before changing anything here. The receiver's own db handle is deliberately
+// unused: the whole point is that the write lands in the CALLER's transaction.
+func (r *auditLogRepository) LogInTx(ctx context.Context, tx pgx.Tx, action, resourceType, resourceID string) error {
+	return writeAuditLogEntry(ctx, tx, action, resourceType, resourceID)
+}
+
+// writeAuditLogEntry is the single statement behind both Log and LogInTx, so the two cannot drift
+// apart on validation, column choice, or error wording. Same shape as recordMCPAuditEntry.
+func writeAuditLogEntry(ctx context.Context, db DB, action, resourceType, resourceID string) error {
 	// Refuse rather than write a row that looks like an audit entry and names nothing. An entry
 	// with an empty action, or one that identifies no subject, is worse than no entry: it still
 	// occupies the trail an operator queries, while answering none of the questions the trail
 	// exists to answer. Same reasoning as RecordDeletionResidue's empty-effect refusal.
+	//
+	// This refusal is BEFORE the statement, so on the LogInTx path it fails the caller's
+	// transaction without poisoning it — the caller gets an error on a still-usable tx rather than
+	// a `current transaction is aborted` on every subsequent statement.
 	if action == "" || resourceType == "" || resourceID == "" {
 		return fmt.Errorf("audit log: action, resource type and resource id are all required (got %q/%q/%q)",
 			action, resourceType, resourceID)
@@ -75,8 +142,9 @@ func (r *auditLogRepository) Log(ctx context.Context, action, resourceType, reso
 	// user_id is left NULL deliberately — see the type doc. It also means this INSERT performs no
 	// FK check on users, so it cannot request FOR KEY SHARE on a users row another transaction
 	// holds FOR UPDATE; that is the cross-user deadlock class (SQLSTATE 40P01) called out in
-	// DeleteUserCascade's redaction comment.
-	_, err := r.db.Exec(ctx,
+	// DeleteUserCascade's redaction comment. ⚠ On the LogInTx path that is not a nicety but the
+	// precondition the whole in-transaction write rests on — see LogInTx's #1506 warning.
+	_, err := db.Exec(ctx,
 		`INSERT INTO audit_logs (user_id, action, resource_type, resource_id) VALUES (NULL, $1, $2, $3)`,
 		action, resourceType, resourceID)
 	if err != nil {
