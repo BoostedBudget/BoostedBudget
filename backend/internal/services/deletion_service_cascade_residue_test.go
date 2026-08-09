@@ -215,6 +215,63 @@ func TestCascadeErrorIsRecognisedTransient_RecognisedClasses(t *testing.T) {
 	assert.True(t, cascadeErrorIsRecognisedTransient(context.DeadlineExceeded))
 }
 
+// ⚠ THE SQLSTATE LEG MUST NOT BE DECIDED BY WHICHEVER PgError THE WALK REACHES FIRST.
+// Round 14, finding CC-2. The leg used to be a bare `errors.As`, which for a tree containing
+// `Unwrap() []error` binds the FIRST assignable node in slice order and never looks at the rest —
+// the same first-match unsoundness the round-13 fifth pass removed from the ConnectError leg's
+// net.Error check (see anyErrorInTree's doc comment). A chain carrying a transient SQLSTATE from one
+// host and a PERMANENT one from another therefore answered "transient" whenever the transient one
+// happened to come first, suppressing the residue for a fault no retry clears.
+//
+// The corrected rule is deliberately NOT the sibling leg's quantifier. The ConnectError leg says
+// "any transient node wins"; this leg says "any NON-transient SQLSTATE loses". Both are the
+// fail-closed reading of their own evidence, and they differ because the evidence differs: a socket
+// errno describes one host's reachability and says nothing about the others, whereas a server-issued
+// SQLSTATE like 28P01 invalid_password or 3D000 invalid_catalog_name is a statement about the
+// DEPLOYMENT that a second host being briefly refused does not soften. Adopting "any transient node
+// wins" here would suppress the residue in exactly the 28P01 case the round-13 re-review restored it
+// for. The change can therefore only ever turn a `true` into a `false` — i.e. add a spurious residue
+// row, never remove a real one, which is the direction the parent function's doc comment argues for
+// at length.
+//
+// ⚠ WHAT THESE FIXTURES PROVE, AND WHAT THEY DO NOT — stated the way round 13 stated it for its own,
+// because the limitation is inherited rather than avoided. `errors.Join` gives the two per-host
+// errors as SIBLINGS under a synthetic root, with each PgError nested one level down inside
+// wrapPgError's `fmt.Errorf`. So these fixtures DO exercise the walk descending into every branch of
+// an `Unwrap() []error` node, and they DO fix the sibling order the old first-match depended on.
+// They do NOT reproduce pgconn's containment exactly: production nests each host's PgError beneath
+// that host's *pgconn.ConnectError, and ConnectError's cause field is unexported, so no external
+// package can build that shape (the same wall documented at
+// TestConnectErrorIsRecognisedTransient_AllowlistsCausesRatherThanTheShape). The fixture is a
+// faithful model of the aggregation and an approximation of the per-host wrapper — not a proof of
+// the latter.
+//
+// ⚠ REACHABILITY: a joined multi-host chain requires a multi-host DATABASE_URL, for which this repo
+// has no evidence (every configured value — docker-compose, QA, CI, both fly.toml files — names a
+// single host). The test pins the classifier's contract, not an observed production incident.
+func TestCascadeErrorIsRecognisedTransient_AJoinedChainIsDecidedByItsPermanentSQLSTATE(t *testing.T) {
+	permanent := wrapPgError("42501") // insufficient_privilege — never clears on retry
+	transient := wrapPgError("57P03") // cannot_connect_now — clears when the server finishes starting
+
+	// The ordering pair. Both orders must give the SAME answer; before the fix the first of these
+	// returned true purely because the transient SQLSTATE was in slice position 0.
+	assert.False(t, cascadeErrorIsRecognisedTransient(errors.Join(transient, permanent)),
+		"a permanent SQLSTATE later in a joined chain must still record — first-match is not the rule")
+	assert.False(t, cascadeErrorIsRecognisedTransient(errors.Join(permanent, transient)),
+		"and the same chain in the other order must answer identically")
+
+	// Paired control for THIS claim, not for the tool: the fix must not turn every joined chain into
+	// a recording one. A chain whose SQLSTATEs are ALL transient stays silent, so the assertions
+	// above are the permanent member doing the work and not the `Unwrap() []error` shape itself.
+	assert.True(t, cascadeErrorIsRecognisedTransient(errors.Join(transient, wrapPgError("40001"))),
+		"a joined chain of exclusively transient SQLSTATEs is still transient")
+
+	// A PgError with no usable code carries no evidence either way and must not veto its sibling —
+	// the pre-fix code fell through to the ConnectError leg in that case, and that behaviour is kept.
+	assert.True(t, cascadeErrorIsRecognisedTransient(errors.Join(wrapPgError(""), transient)),
+		"a codeless PgError is not evidence of permanence and must not suppress a transient sibling")
+}
+
 // SQLSTATE class 08 ("connection exception") is in the allowlist, but the most common way a
 // connection failure actually reaches this classifier carries NO SQLSTATE AT ALL. DeleteUserCascade
 // opens its transaction (profile_repository.go, `BeginTx`) only AFTER the external cleanup, so a
