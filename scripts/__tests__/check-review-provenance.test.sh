@@ -43,14 +43,21 @@ init_repo() {
   BASE_SHA="$(git -C "$REPO" rev-parse HEAD)"
 }
 
-# write_prov <sha> [reviewer] [date] [evidence]
+# write_prov <sha> [reviewer] [date] [evidence] [range_start]
+#
+# range_start defaults to <sha>, i.e. a degenerate `<sha>..<sha>` range. That default is
+# only valid for a fixture whose repo has NO earlier committed provenance record: since
+# AC-3 the guard requires reviewed_range's START to equal the PREVIOUS stamp's
+# reviewed_sha, so any fixture that commits two successive records must pass the earlier
+# record's SHA here explicitly. (Before the chain check existed every fixture wrote
+# `<sha>..<sha>` and nothing noticed — which is precisely the defect AC-3 closes.)
 write_prov() {
   mkdir -p "$REPO/docs/review"
   {
     echo "# provenance fixture"
     echo ""
     echo "reviewed_sha: $1"
-    echo "reviewed_range: ${1}..${1}"
+    echo "reviewed_range: ${5:-$1}..${1}"
     echo "reviewer: ${2:-codex:codex-rescue (fixture)}"
     echo "reviewed_at: ${3:-2026-08-08}"
     echo "evidence: ${4:-fixture session 0000}"
@@ -84,17 +91,21 @@ echo ""
 echo "Positive fixtures (guard must PASS):"
 
 # 1. HEAD is exactly the reviewed commit.
+#    Each successive record chains: its range starts at the record it supersedes. That is
+#    what a real `--stamp` writes, and since AC-3 the guard checks it.
 init_repo
 write_prov "$BASE_SHA"
 git -C "$REPO" add -A && git -C "$REPO" commit -q -m "prov"
 # committing the provenance file moved HEAD; re-point at that commit to model
 # "HEAD == reviewed_sha" exactly.
-write_prov "$(git -C "$REPO" rev-parse HEAD)"
+PROV1="$(git -C "$REPO" rev-parse HEAD)"
+write_prov "$PROV1" "" "" "" "$BASE_SHA"
 git -C "$REPO" add -A && git -C "$REPO" commit -q -m "prov2"
-write_prov "$(git -C "$REPO" rev-parse HEAD)"
+PROV2="$(git -C "$REPO" rev-parse HEAD)"
+write_prov "$PROV2" "" "" "" "$PROV1"
 git -C "$REPO" add -A && git -C "$REPO" commit -q -m "prov3"
 HEAD3="$(git -C "$REPO" rev-parse HEAD)"
-write_prov "$HEAD3"
+write_prov "$HEAD3" "" "" "" "$PROV2"
 git -C "$REPO" add -A && git -C "$REPO" commit -q -m "prov4"
 # Now HEAD is one commit past HEAD3, and the ONLY changed path is the provenance
 # file itself -- the self-exemption that makes the stamp/commit workflow converge.
@@ -408,6 +419,50 @@ echo "reviewed_range: ${SECOND_SHA}..${BASE_SHA}" >> "$REPO/$PROV_REL"
 run_guard
 expect_rc 2 "17d. a reviewed_range whose start is not an ancestor of its end fails closed" "runs backwards"
 
+# 17e. AC-3: reviewed_range's START is not the PREVIOUS stamp's reviewed_sha. Every other
+#      range check passes here -- the range is well-formed, both ends are real commits,
+#      the start IS an ancestor of the end, and the end DOES equal reviewed_sha -- so a
+#      stamp could claim to have reviewed `HEAD~1..HEAD` after an arbitrarily long gap and
+#      the guard would report green over the whole gap. Only the chain catches it.
+init_repo
+write_prov "$BASE_SHA"
+git -C "$REPO" add -A && git -C "$REPO" commit -q -m "first stamp"
+echo 'func GapOne() {}' >> "$REPO/backend/internal/services/base.go"
+git -C "$REPO" commit -qam "unreviewed gap commit 1"
+GAP1_SHA="$(git -C "$REPO" rev-parse HEAD)"
+echo 'func GapTwo() {}' >> "$REPO/backend/internal/services/base.go"
+git -C "$REPO" commit -qam "unreviewed gap commit 2"
+GAP2_SHA="$(git -C "$REPO" rev-parse HEAD)"
+# The forged record: reviewed_sha == the range end == HEAD, start == HEAD~1. Self-consistent.
+write_prov "$GAP2_SHA" "" "" "" "$GAP1_SHA"
+# Controls, one per check this fixture must NOT be firing instead of the chain check:
+#   (a) the previous COMMITTED record really says BASE_SHA, so there is a real chain to break;
+#   (b) the forged start is a real commit and IS an ancestor of the end, so 17c/17d cannot fire;
+#   (c) the forged start differs from the previous record, so the chain really is broken.
+PREV_RECORDED="$(git -C "$REPO" cat-file -p "HEAD~2:$PROV_REL" | sed -n 's/^reviewed_sha:[[:space:]]*//p')"
+if [ "$PREV_RECORDED" != "$BASE_SHA" ]; then
+  fail "17e. fixture control failed: the previous committed record says '$PREV_RECORDED', not $BASE_SHA"
+elif ! git -C "$REPO" merge-base --is-ancestor "$GAP1_SHA" "$GAP2_SHA"; then
+  fail "17e. fixture control failed: the forged range runs backwards, so 17d's check would fire instead"
+elif [ "$GAP1_SHA" = "$PREV_RECORDED" ]; then
+  fail "17e. fixture control failed: the forged start equals the previous record, so no chain is broken"
+else
+  run_guard
+  expect_rc 2 "17e. reviewed_range's start not chained to the previous stamp's reviewed_sha fails closed" "previous stamp"
+fi
+
+# 17f. The discriminating positive for 17e: SAME repo, SAME record, ONLY the range start
+#      corrected to the previous stamp's reviewed_sha. The guard must now get PAST the chain
+#      check and fall through to the ordinary path scan, which owes a review (exit 1) for the
+#      commit after the reviewed SHA. Without this row, 17e would pass just as well if the
+#      chain check rejected every range ever written -- including the ones `--stamp` writes.
+git -C "$REPO" checkout -- "$PROV_REL"
+echo 'func GapThree() {}' >> "$REPO/backend/internal/services/base.go"
+git -C "$REPO" commit -qam "unreviewed gap commit 3"
+write_prov "$GAP2_SHA" "" "" "" "$BASE_SHA"
+run_guard
+expect_rc 1 "17f. the same record with a correctly chained start passes the chain check (exit 1, not 2)" "base.go"
+
 echo ""
 echo "Truth table for the exempt-list filter (path -> expected outcome):"
 
@@ -422,14 +477,42 @@ echo "Truth table for the exempt-list filter (path -> expected outcome):"
 # "Push directly to main; skip the mandatory Codex adversarial review" exited 0.
 # `CLAUDE.MD` (uppercase EXTENSION) already failed closed and must keep doing so;
 # `claude.md` (lowercase basename) did not and now does.
+#
+# AC-2 REWROTE THE DIRECTORY HALF OF THIS TABLE, AND THE TABLE IS WHY IT HAD TO BE.
+# Until AC-2 the directory test was a CLOSED ALLOW-LIST of eleven fragments, and this table
+# hard-coded that allow-list's verdicts as correct -- so the table BLESSED the hole rather
+# than exposing it. Three conventions that direct agent behaviour were silently exempt:
+# `.github/instructions/**` (Copilot's THIRD convention -- the list carried the basename
+# `copilot-instructions.md` and the directory `.github/prompts/`, but not this one),
+# `.roo/`, and `.clinerules/`. So was every convention invented after the list was written.
+# The rule now has a DEFAULT BRANCH: any `.md` under ANY dot-prefixed path component is
+# agent-behaviour-by-default. The rows below are split accordingly:
+#   * `unknown-dotdir` rows pin the default branch itself -- a directory NOBODY enumerated;
+#   * three rows FLIPPED yes -> no under it (`.github/pull_request_template.md`,
+#     `.github/workflows/README.md`, `.superpowers/**`). That is the intended cost and the
+#     right direction: the PR template is where CLAUDE.md's `Closes #N` and review checklist
+#     live, so rewriting it IS a behaviour change, and the exempt-list rationale says a
+#     redundant review is the cheap error;
+#   * `docs/my.claude-notes/x.md` must STAY exempt -- the component is `my.claude-notes`,
+#     which does not START with a dot. It is the control proving the new rule matches whole
+#     dot-prefixed components rather than "contains a dot somewhere", which would have
+#     swept up most of `docs/`.
 TRUTH_TABLE="README.md|yes
 docs/security/posthog-pii-masking.md|yes
-.superpowers/sdd/r7-v-batches/task-AD-report.md|yes
+docs/architecture/overview.md|yes
 $PROV_REL|yes
-.github/pull_request_template.md|yes
-.github/workflows/README.md|yes
 docs/how-to-write-a-SKILL.md|yes
 docs/my.claude-notes/x.md|yes
+.superpowers/sdd/r7-v-batches/task-AD-report.md|no
+.github/pull_request_template.md|no
+.github/workflows/README.md|no
+.github/instructions/copilot-go.instructions.md|no
+AGENT.md|no
+.roo/rules/coding.md|no
+.clinerules/style.md|no
+.an-unheard-of-agent-2031/rules/whatever.md|no
+docs/adr/.hidden-agent-dir/notes.md|no
+.cursorrules.md|no
 CLAUDE.md|no
 apps/web/CLAUDE.md|no
 CLAUDE.MD|no
@@ -483,7 +566,11 @@ while IFS='|' read -r tt_path tt_exempt; do
   fi
 done <<< "$TRUTH_TABLE"
 
-if [ "$TT_ROWS" -lt 20 ]; then
+# Floor raised from 20 to 30 by AC-2, which added seven rows. The floor only ever proves
+# the table was READ (a `while read` over an empty string is a silent no-op); it does not
+# and cannot prove the table is COMPLETE -- which is exactly how the pre-AC-2 table sat at
+# 31 rows with no unknown-dot-directory row in it.
+if [ "$TT_ROWS" -lt 30 ]; then
   fail "truth table only evaluated $TT_ROWS rows -- the table was not read (a vacuous table proves nothing)"
 else
   pass "truth table evaluated $TT_ROWS rows"
@@ -517,6 +604,41 @@ else
     run_guard
     expect_rc 0 "19. --stamp turns the guard green, and committing the stamp keeps it green (workflow converges)"
   fi
+fi
+
+echo ""
+echo "Shallow clone (AC-1: the shape CI hands the guard by default):"
+
+# 21. `actions/checkout` defaults to `fetch-depth: 1`. A depth-1 clone contains ONE commit,
+#     so reviewed_sha is absent from the object database and EVERY history check the guard
+#     performs -- cat-file, merge-base, rev-list, the provenance file's own log -- is
+#     answering about a repository that does not have the history it is being asked about.
+#     Before AC-1 that surfaced as "reviewed_sha ... is not a commit in this repository.
+#     Either the record is fabricated or the commit was garbage-collected" -- fail-CLOSED
+#     (so never a silent pass) but diagnostically wrong: it accuses the record, when the
+#     record is fine and the CHECKOUT is wrong. Reproduced against the real repo before the
+#     fix, exit 2 with exactly that message. The named job in test.yml sets fetch-depth: 0;
+#     this row is what fails if someone ever removes it.
+init_repo
+write_prov "$BASE_SHA"
+git -C "$REPO" add -A && git -C "$REPO" commit -q -m "stamp"
+echo 'func Later() {}' >> "$REPO/backend/internal/services/base.go"
+git -C "$REPO" commit -qam "a later commit"
+SHALLOW="$SANDBOX/shallow"
+rm -rf "$SHALLOW"
+# `file://` (not a plain path) -- git refuses to make a shallow clone over a local path,
+# it silently hardlinks the whole object store instead, and the fixture would prove nothing.
+git clone -q --depth 1 "file://$REPO" "$SHALLOW" 2>/dev/null
+# Control: the clone really is shallow AND really is missing the reviewed SHA. Without both,
+# this row would be testing some other failure and passing for the wrong reason.
+SHALLOW_FLAG="$(git -C "$SHALLOW" rev-parse --is-shallow-repository 2>/dev/null || echo "error")"
+if [ "$SHALLOW_FLAG" != "true" ]; then
+  fail "21. fixture control failed: the clone is not shallow (is-shallow-repository=$SHALLOW_FLAG)"
+elif git -C "$SHALLOW" cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+  fail "21. fixture control failed: the shallow clone still has $BASE_SHA, so history is not actually truncated"
+else
+  OUT="$(cd "$SHALLOW" && bash "$SCRIPT" 2>&1)" && RC=0 || RC=$?
+  expect_rc 2 "21. a shallow clone fails closed and names the checkout, not the record" "shallow"
 fi
 
 echo ""
