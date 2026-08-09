@@ -256,6 +256,44 @@ func TestCascadeErrorIsRecognisedTransient_ConnectionAttemptFailuresAreTransient
 		"widening to ConnectError must not make an unrecognised error transient")
 }
 
+// THE CASE THE FIRST VERSION OF THAT FIX GOT WRONG, pinned so it cannot come back.
+//
+// pgconn puts the SERVER'S startup ErrorResponse inside a ConnectError, so a rotated password
+// (28P01) or a dropped database (3D000) reaches this classifier as a ConnectError that DOES carry a
+// SQLSTATE. Those are permanent: no retry clears them. The first version of the ConnectError branch
+// ran BEFORE the SQLSTATE lookup and returned true for every ConnectError, which silently dropped
+// both the human-facing Error log and the residue for exactly that permanent case. The #1432
+// round-13 Codex RE-REVIEW refuted it and the order was inverted; this test is what holds the order.
+//
+// errors.Join models "a ConnectError that contains a PgError" for errors.As without needing
+// ConnectError's unexported cause field, which no external package can populate. Note deliberately:
+// the joined value's Error() is never called anywhere in this test, because ConnectError.Error()
+// dereferences that unexported field.
+func TestCascadeErrorIsRecognisedTransient_ConnectErrorCarryingASQLSTATEUsesTheSQLSTATE(t *testing.T) {
+	bareConnect := &pgconn.ConnectError{Config: &pgconn.Config{}}
+
+	for _, tc := range []struct {
+		code      string
+		transient bool
+		why       string
+	}{
+		{"28P01", false, "invalid_password: a rotated credential is permanent and needs a human"},
+		{"3D000", false, "invalid_catalog_name: a dropped database is permanent and needs a human"},
+		{"57P03", true, "cannot_connect_now: the server is starting up, and class 57 is allowlisted"},
+		{"08006", true, "connection_failure carried in a ConnectError is still class 08"},
+	} {
+		joined := errors.Join(bareConnect, wrapPgError(tc.code))
+		assert.Equal(t, tc.transient, cascadeErrorIsRecognisedTransient(joined),
+			"SQLSTATE %s inside a ConnectError — %s", tc.code, tc.why)
+	}
+
+	// Paired control for THIS claim: the same bare ConnectError with NO SQLSTATE beside it is still
+	// transient, so the assertions above are driven by the SQLSTATE and not by having broken the
+	// ConnectError branch outright.
+	assert.True(t, cascadeErrorIsRecognisedTransient(bareConnect),
+		"a ConnectError with no SQLSTATE must remain transient")
+}
+
 // A nil error is not a failure at all. Asserted because the call site's guard is `err != nil` and a
 // classifier that answered "not transient" for nil would record a residue on every SUCCESSFUL
 // deletion if that guard were ever refactored away.
