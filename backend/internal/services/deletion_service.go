@@ -1209,15 +1209,53 @@ func connectErrorIsRecognisedTransient(err error) bool {
 		return true
 	}
 	// A timeout at any layer that models net.Error: the attempt ran out of time rather than being
-	// refused an answer.
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return true
-	}
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) {
-		// IsNotFound is the name not existing — a rename or a bad config, not a blip.
-		return dnsErr.IsTemporary || dnsErr.IsTimeout
+	// refused an answer. A *net.DNSError is consulted on its own fields, because it is ALSO a
+	// net.Error whose Timeout() is merely IsTimeout, and NXDOMAIN must not read as a blip.
+	//
+	// ⚠ WALKED, NOT errors.As'd, AND THAT IS THE WHOLE POINT. errors.As stops at the FIRST match.
+	// pgconn joins the per-host errors of a multi-host configuration into one tree, so a chain can
+	// begin with an NXDOMAIN from a fallback host — itself a net.Error with Timeout() == false — and
+	// carry the primary host's genuine timeout further along. errors.As bound the NXDOMAIN and the
+	// timeout was never examined: an everyday timeout, classified permanent, false residue. Found by
+	// the round-13 Codex FIFTH pass, in the fix the fourth pass had asked for. Any node in the tree
+	// answering "transient" is enough; only a tree with no transient node anywhere records.
+	return anyErrorInTree(err, func(e error) bool {
+		if dnsErr, ok := e.(*net.DNSError); ok {
+			// IsNotFound is the name not existing — a rename or a bad config, not a blip.
+			return dnsErr.IsTemporary || dnsErr.IsTimeout
+		}
+		if netErr, ok := e.(net.Error); ok {
+			return netErr.Timeout()
+		}
+		return false
+	})
+}
+
+// anyErrorInTree reports whether pred holds for ANY error in err's tree, following both wrapping
+// shapes: `Unwrap() error` and, for errors.Join and pgconn's per-host aggregation, `Unwrap() []error`.
+//
+// It exists because errors.As and errors.Is answer different questions from the one asked here.
+// errors.Is walks the whole tree but only compares against one target value; errors.As walks the
+// whole tree but STOPS at the first assignable node, which is wrong when several nodes share an
+// interface and only a later one carries the answer — exactly the NXDOMAIN-then-timeout case above.
+func anyErrorInTree(err error, pred func(error) bool) bool {
+	for err != nil {
+		if pred(err) {
+			return true
+		}
+		switch u := err.(type) {
+		case interface{ Unwrap() error }:
+			err = u.Unwrap()
+		case interface{ Unwrap() []error }:
+			for _, branch := range u.Unwrap() {
+				if anyErrorInTree(branch, pred) {
+					return true
+				}
+			}
+			return false
+		default:
+			return false
+		}
 	}
 	return false
 }
