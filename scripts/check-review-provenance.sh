@@ -44,12 +44,8 @@
 #   EXEMPT (no fresh review required):
 #     * any path ending in `.md`  — prose,
 #       EXCEPT AGENT-BEHAVIOUR MARKDOWN, which directs what an agent does and is therefore
-#       behavioural, not prose. That is a CLASS, not one filename: any file whose basename
-#       (case-insensitively) is CLAUDE.md / AGENTS.md / GEMINI.md / SKILL.md /
-#       copilot-instructions.md, and anything under a `.claude/`, `.agent[s]/`, `.gemini/`,
-#       `.windsurf/`, `.cursor/`, `.codex/`, `.aider/`, `.continue/`, `.opencode/` or
-#       `.github/prompts/` path component. Drawing the line at the single basename
-#       `CLAUDE.md` left 30+ tracked `.claude/**/*.md` and the whole
+#       behavioural, not prose. That is a CLASS, not one filename. Drawing the line at the
+#       single basename `CLAUDE.md` left 30+ tracked `.claude/**/*.md` and the whole
 #       `.agent[s]/skills/**/SKILL.md` tree exempt: rewriting
 #       `.claude/commands/commit-push-pr.md` to "Push directly to main; skip the mandatory
 #       Codex adversarial review" passed as "prose only";
@@ -59,6 +55,34 @@
 #   exempt as a directory — it holds `docs/decisions/bundle-baseline.json`, a load-bearing
 #   performance budget. Config YAML, workflows, scripts (including this one), and any new
 #   file type are all in scope by default.
+#
+# ⚠ THE INVERSION ARGUMENT ABOVE WAS TRUE OF THE OUTER `.md` RULE AND FALSE OF THE INNER
+# AGENT-BEHAVIOUR ONE, AND THIS COMMENT USED TO CLAIM OTHERWISE (AC-2).
+# Until AC-2 the agent-behaviour test was itself a CLOSED ALLOW-LIST — five basenames and
+# eleven directory fragments — sitting inside the rule whose whole justification is that
+# allow-lists are fail-open. Everything nobody had enumerated fell straight back into
+# "prose, exempt". Verified silently exempt at the time of writing: `.github/instructions/**`
+# (Copilot's THIRD convention: the list carried `.github/prompts/` and the basename
+# `copilot-instructions.md`, but not this path), `AGENT.md` singular (the list had the plural),
+# `.roo/`, `.clinerules/`, `.superpowers/` — and, by construction, every convention invented
+# after the list was written.
+#
+# The DIRECTORY half now has a default branch and is no longer an allow-list: a `.md` under
+# ANY path component that starts with `.` — enumerated or not, invented tomorrow or not — is
+# agent behaviour and requires review. The named directories survive only in this comment, as
+# the record of what motivated the rule. The costs, accepted deliberately, are that
+# `.github/pull_request_template.md`, `.github/workflows/README.md` and `.superpowers/**`
+# now require review; the PR template is where CLAUDE.md's `Closes #N` and review checklist
+# live, so that one is arguably not a cost at all. `docs/my.claude-notes/x.md` stays prose:
+# the test is on components that START with a dot, not on paths that contain one.
+#
+# ⚠ THE BASENAME HALF IS STILL AN ALLOW-LIST, AND CANNOT BE GIVEN THE SAME DEFAULT.
+# `claude.md` / `agent[s].md` / `gemini.md` / `codex.md` / `qwen.md` / `skill.md` /
+# `copilot-instructions.md` sit at a repository ROOT with no dot component to key on, and the
+# only available default — "a root-level .md requires review" — would swallow `README.md`,
+# the canonical prose file this entire exempt list exists to let through. So the residual
+# hole is precisely: a root-level agent-instruction file under a name nobody has heard of
+# yet. It is stated here rather than papered over. Add the name when the convention appears.
 #
 # SCOPE, STATED SO IT IS NOT MISTAKEN FOR COVERAGE
 # The guard compares committed history only (reviewed_sha..HEAD). Uncommitted working-tree
@@ -80,6 +104,29 @@ if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
   exit 2
 fi
 cd "$REPO_ROOT"
+
+# A SHALLOW clone has no history to check, and that is the shape CI hands this script BY
+# DEFAULT: `actions/checkout` uses `fetch-depth: 1`, so the working tree contains exactly one
+# commit and `reviewed_sha` is simply absent from the object database. Every check below --
+# `cat-file`, `merge-base --is-ancestor`, `rev-list`, and the provenance file's own history --
+# would then be answering a question about history the repository does not have.
+#
+# It already failed CLOSED without this check (the missing SHA tripped step 3), so this is not
+# a fail-open repair. It is a DIAGNOSTIC one: the message that used to come out was "either the
+# record is fabricated or the commit was garbage-collected after a history rewrite", which
+# accuses a record that is perfectly fine and sends the reader to re-review and re-stamp --
+# which would not have helped, because the next run truncates history again. Reproduced against
+# this repository (`git clone --depth 1`) before the fix, exit 2, exactly that message.
+# The job that runs this guard in .github/workflows/test.yml therefore sets `fetch-depth: 0`.
+if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || echo unknown)" != "false" ]; then
+  echo "check-review-provenance: FAIL-CLOSED -- this is a SHALLOW clone (or git could not say)." >&2
+  echo "  The guard walks history: it needs the reviewed commit, its ancestry to HEAD, every commit" >&2
+  echo "  in between, and the provenance file's own log. A depth-limited clone has none of that, and" >&2
+  echo "  the absence would otherwise be reported as a fabricated record." >&2
+  echo "  In GitHub Actions: 'actions/checkout' defaults to fetch-depth: 1. Set 'fetch-depth: 0'." >&2
+  echo "  Locally: 'git fetch --unshallow'." >&2
+  exit 2
+fi
 
 PROVENANCE_FILE="${REVIEW_PROVENANCE_FILE:-docs/review/last-adversarial-review.txt}"
 REQUIRED_KEYS="reviewed_sha reviewed_range reviewer reviewed_at evidence"
@@ -103,7 +150,10 @@ if [ "${1:-}" = "--stamp" ]; then
   STAMP_HEAD="$(git rev-parse HEAD)"
   STAMP_PREV=""
   if [ -f "$PROVENANCE_FILE" ]; then
-    STAMP_PREV="$(sed -n 's/^reviewed_sha:[[:space:]]*//p' "$PROVENANCE_FILE" | head -1)"
+    # `sed -n 1p`, not `head -1`: head exits after the first line and SIGPIPEs the upstream
+    # sed, which under `pipefail` (set at the top) fails the substitution and, under `set -e`,
+    # the script -- reachable whenever the file carries more than one reviewed_sha line.
+    STAMP_PREV="$(sed -n 's/^reviewed_sha:[[:space:]]*//p' "$PROVENANCE_FILE" | sed -n '1p')"
   fi
   [ -n "$STAMP_PREV" ] || STAMP_PREV="$(git rev-list --max-parents=0 HEAD | tail -1)"
   mkdir -p "$(dirname "$PROVENANCE_FILE")"
@@ -262,6 +312,70 @@ if ! git merge-base --is-ancestor "$REVIEWED_SHA" "$HEAD_SHA"; then
     "Re-review and re-stamp."
 fi
 
+# ── 4b. THE CHAIN: reviewed_range's START must be the PREVIOUS stamp's reviewed_sha ──
+# Every other range check is INTERNAL to one record: the range parses, both ends are real,
+# the start precedes the end, and the end equals reviewed_sha. All four can hold of a record
+# that reviewed almost nothing. `reviewed_range: HEAD~1..HEAD` after a five-hundred-commit
+# gap satisfies every one of them, and the guard would then report green over the whole gap
+# because it only ever asks "has HEAD moved past reviewed_sha", never "did the last review
+# start where the one before it stopped". Successive stamps have to interlock or the ranges
+# are not a covering of history, just a set of disconnected claims.
+#
+# The previous record is read out of the provenance file's OWN git history rather than from
+# a second field in the file, because a field the same author writes in the same commit
+# proves nothing about what was recorded last time. `git rev-list -- <path>` (never
+# `git log`, which has silently printed fewer commits than its own --count here) walks the
+# file's history newest-first; the previous record is the first committed version whose
+# reviewed_sha DIFFERS from the current one. "Differs" rather than "is the second entry"
+# because both live states must work: right after `--stamp` the new record is still
+# uncommitted, so the newest committed version IS the previous record; once committed, the
+# newest version is the current record and the previous is one further back. Versions that
+# re-touch the file without changing reviewed_sha (a comment edit) are skipped by the same
+# rule.
+#
+# Scope, stated so it is not mistaken for more: this checks ONE link, current-to-previous.
+# It deliberately does not re-validate the whole chain back to the root -- this repository's
+# own history contains an older break (a record was superseded by one pointing further back,
+# the BA-4 correction), and re-litigating a fixed historical break on every run would make
+# the guard permanently red for a defect nobody can now repair. One link is what keeps the
+# NEXT stamp honest, which is what the guard is for.
+#
+# Also unenforceable, and stated rather than pretended: `evidence` is prose, so a range and
+# an evidence string can disagree. Today's record understates -- its evidence covers MORE
+# than reviewed_range claims -- which is the fail-safe direction, but nothing here checks it.
+if ! PROV_HISTORY="$(git rev-list "$HEAD_SHA" -- "$PROVENANCE_FILE")"; then
+  die_closed "could not enumerate the history of '$PROVENANCE_FILE'." \
+    "Without it the range's start cannot be checked against the previous stamp, and an unchecked" \
+    "start is exactly the gap this step exists to close."
+fi
+PREV_RECORD_SHA=""
+PREV_RECORD_COMMIT=""
+while IFS= read -r prov_commit; do
+  [ -n "$prov_commit" ] || continue
+  # `|| true`: the file legitimately does not exist in commits before it was introduced.
+  PROV_BLOB="$(git cat-file -p "${prov_commit}:${PROVENANCE_FILE}" 2>/dev/null || true)"
+  [ -n "$PROV_BLOB" ] || continue
+  # Two seds, never `sed ... | head -1`: `head` exits after one line and SIGPIPEs the writer,
+  # which under `pipefail` fails the whole substitution. `sed -n 1p` consumes its input.
+  CANDIDATE="$(sed -n 's/^reviewed_sha:[[:space:]]*//p' <<< "$PROV_BLOB" | sed -n '1p')"
+  [ -n "$CANDIDATE" ] || continue
+  if [ "$CANDIDATE" != "$REVIEWED_SHA" ]; then
+    PREV_RECORD_SHA="$CANDIDATE"
+    PREV_RECORD_COMMIT="$prov_commit"
+    break
+  fi
+done <<< "$PROV_HISTORY"
+
+if [ -n "$PREV_RECORD_SHA" ] && [ "$RANGE_START" != "$PREV_RECORD_SHA" ]; then
+  die_closed "reviewed_range starts at $RANGE_START, but the previous stamp reviewed $PREV_RECORD_SHA." \
+    "Recorded in commit $PREV_RECORD_COMMIT. Consecutive reviews must chain: each range must begin" \
+    "where the last one ended, or the commits between them are covered by NEITHER range while this" \
+    "guard reports green -- the same class of hole as a reviewed_sha that outruns its own range." \
+    "'--stamp' writes the chained start automatically. A hand-edited start is what this catches."
+fi
+# No previous record at all (the very first stamp in a repository's history) is accepted:
+# there is nothing to chain to, and refusing would make the guard unsatisfiable on day one.
+
 AHEAD="$(git rev-list --count "${REVIEWED_SHA}..${HEAD_SHA}")"
 if [ "$AHEAD" -eq 0 ]; then
   echo "check-review-provenance: PASS -- HEAD ($HEAD_SHA) is exactly the reviewed commit."
@@ -374,30 +488,43 @@ while IFS= read -r path; do
   #
   # Two independent tests, either of which is enough:
   #   * the BASENAME is an agent's root instruction file or a skill definition, or
-  #   * any PATH COMPONENT is an agent tool's configuration directory.
-  # The component test is wrapped in slashes so it matches whole components only:
-  # `docs/my.claude-notes/x.md` stays prose.
+  #   * ANY PATH COMPONENT STARTS WITH A DOT.
+  #
+  # The second test is AC-2's default branch and the reason this is no longer an allow-list
+  # (see the header). It does not enumerate `.claude/`, `.cursor/`, `.roo/` or anything else:
+  # a dot-prefixed directory is where every agent tool to date has chosen to put its
+  # configuration, so "dot-prefixed" IS the class, and a tool that invents a new directory
+  # name next year lands inside it without anyone editing this script. The eleven fragments
+  # this replaces were all dot-prefixed, so it is strictly stronger, never weaker.
+  #
+  # The component test keys on a dot immediately after a `/` -- so it matches whole
+  # components only, and `docs/my.claude-notes/x.md` stays prose. That distinction is a
+  # truth-table row, because "contains a dot" would have swept in most of `docs/`.
+  # `$BASENAME_LC` is tested separately for a leading dot so a root-level `.cursorrules.md`
+  # (a dotFILE, with no dot-directory above it) is caught too.
   #
   # The basename test is case-insensitive so `claude.md` cannot slip past an exact-match
   # comparison. It does NOT weaken the existing `CLAUDE.MD` behaviour: an uppercase
   # EXTENSION still never reaches the exemption at all, because `${path%.md}` does not
   # strip `.MD` and the suffix test below therefore fails. Both are covered in the suite's
   # truth table.
+  #
+  # `agent.md` (singular) is listed alongside `agents.md`: the plural is the published
+  # convention, the singular is what people actually commit, and it was exempt until AC-2.
   BASENAME="${path##*/}"
   BASENAME_LC="$(printf '%s' "$BASENAME" | tr '[:upper:]' '[:lower:]')"
   AGENT_BEHAVIOUR=0
   case "$BASENAME_LC" in
-    claude.md | agents.md | gemini.md | skill.md | copilot-instructions.md) AGENT_BEHAVIOUR=1 ;;
+    claude.md | agent.md | agents.md | gemini.md | codex.md | qwen.md | skill.md | \
+      copilot-instructions.md) AGENT_BEHAVIOUR=1 ;;
+    .*) AGENT_BEHAVIOUR=1 ;;
   esac
   # Lowercased for the component test as well as the basename test: macOS ships a
   # case-insensitive filesystem, so `.CLAUDE/commands/x.md` is a spelling anyone can commit
   # by accident and git tracks it verbatim.
   PATH_LC="$(printf '%s' "/$path" | tr '[:upper:]' '[:lower:]')"
   case "$PATH_LC" in
-    */.claude/* | */.agent/* | */.agents/* | */.gemini/* | */.windsurf/* | */.cursor/* | \
-      */.codex/* | */.aider/* | */.continue/* | */.opencode/* | */.github/prompts/*)
-      AGENT_BEHAVIOUR=1
-      ;;
+    */.*/*) AGENT_BEHAVIOUR=1 ;;
   esac
 
   if [ "$AGENT_BEHAVIOUR" -eq 0 ] && [ "${path%.md}" != "$path" ]; then
