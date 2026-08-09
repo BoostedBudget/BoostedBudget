@@ -283,11 +283,28 @@ func TestCascadeErrorIsRecognisedTransient_AJoinedChainIsDecidedByItsPermanentSQ
 // fault that repeats on every retry. That is the failure direction the parent function's doc comment
 // says must never happen, and it is reachable in exactly the shape CC-2 was written for: pgconn
 // gives each candidate host its own connect-timeout context and joins every host's error
-// (pgconn.go:251, pgconn.go:269 in pgx v5.9.2), so the timeout and the auth failure land as siblings.
+// (pgconn.go:251, pgconn.go:269 in pgx v5.9.2), so a timeout and an authentication failure end up in
+// one tree.
+//
+// ⚠ AND THAT IS AS FAR AS THE FIXTURE GOES — corrected here rather than left standing, because the
+// first draft of this comment said the two leaves "arrive as siblings" and the CE RE-REVIEW refuted
+// it. They are COUSINS, not siblings: pgx v5.9.2 wraps the join in a ConnectError (pgconn.go:162),
+// the join's children are per-dial wrappers (pgconn.go:316), and the timeout or startup PgError sits
+// one level beneath each of those (pgconn.go:317, pgconn.go:483). `errors.Join` + `fmt.Errorf` here
+// gives an EQUIVALENT abstract tree — both joined branches, plus unary wrappers the walk traverses
+// transparently — and it proves the PRECEDENCE this test is about. It does not reproduce pgconn's
+// containment, and it cannot: ConnectError's cause field is unexported, the same wall documented at
+// TestCascadeErrorIsRecognisedTransient_AJoinedChainIsDecidedByItsPermanentSQLSTATE. Reachability
+// still needs a multi-host DATABASE_URL for which this repo has no evidence; every configured value
+// names a single host.
 //
 // The fix is ordering only: the SQLSTATE veto now runs first. Cancellation and deadline expiry with
-// no permanent SQLSTATE in the chain remain transient, which is what the leg was for — asserted by
-// the paired controls below, so this fixture cannot be satisfied by deleting the leg.
+// no permanent SQLSTATE in the chain remain transient, which is what the leg was for — pinned by the
+// controls below. ⚠ Which control kills which mutation, stated rather than claimed collectively: the
+// two BARE cases fail if the cancellation/deadline leg is deleted; the joined-with-40001 case fails
+// if the hoisted veto is broadened to reject allowlisted classes. The third does NOT kill leg
+// deletion — class 40 would still return true through the positive SQLSTATE branch — so it is a
+// polarity control, not a second copy of the first two.
 func TestCascadeErrorIsRecognisedTransient_DeadlineDoesNotMaskAPermanentSQLSTATE(t *testing.T) {
 	timedOut := fmt.Errorf("dial host-a: %w", context.DeadlineExceeded)
 	cancelled := fmt.Errorf("dial host-a: %w", context.Canceled)
