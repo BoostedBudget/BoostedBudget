@@ -11,7 +11,13 @@ package repository
 //
 // Run with:
 //
-//	DATABASE_URL=postgres://... go test ./internal/repository/... -run 'TestGetUsersNeedingRetention|TestGetUsersWithExpiredRetention_Integration|TestNoActiveManualOverridePredicate' -tags integration -v
+//	DATABASE_URL=postgres://... go test ./internal/repository/... -run 'TestGetUsersNeedingRetention|TestGetUsersWithExpiredRetentionPage_Integration|TestRetentionQueries_Integration|TestNoActiveManualOverridePredicate' -tags integration -v
+//
+// Every alternative above is spelled so that it MATCHES a declared test. The pattern previously read
+// `TestGetUsersWithExpiredRetention_Integration`, which matches nothing — the declared name is
+// `TestGetUsersWithExpiredRetentionPage_Integration_ExcludesActiveComp`, with `Page` — and it omitted
+// this file's two `TestRetentionQueries_Integration_*` tests entirely, so the documented command ran a
+// strict subset of the file and reported success.
 
 import (
 	"context"

@@ -172,7 +172,7 @@ func buildCategoryScopedBoostReq(t *testing.T, budgetID, categoryID, fromAccount
 	}
 }
 
-// TestRuleExecution_CategoryScoped_Integration exercises the full category-scoped rule stack
+// TestBoostExecution_CategoryScoped_Integration exercises the full category-scoped rule stack
 // against a real Postgres database. It is gated on DATABASE_URL and skips automatically in
 // environments without a live database.
 func TestBoostExecution_CategoryScoped_Integration(t *testing.T) {

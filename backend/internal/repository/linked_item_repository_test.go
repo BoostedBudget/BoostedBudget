@@ -774,9 +774,16 @@ func TestLinkedItemRepository_GetByItemID_ReturnsInvestmentsLastSyncedDate(t *te
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestLinkedItemRepository_GetByUserID_ExcludesReplacedByDefault tests that GetByUserID
-// should only return active items (not replaced ones) for normal use cases
-// Note: This behavior may need adjustment based on business requirements
+// TestLinkedItemRepository_GetByUserID_IncludesAllStatuses asserts that GetByUserID hands back every
+// row the query returned, including a `replaced` one, rather than filtering by status itself —
+// status filtering is the service layer's job.
+//
+// ⚠ Scope, stated because the name overreaches on its own: this is a pgxmock test, so it proves the
+// ROW MAPPER passes all statuses through. It does not and cannot prove the SQL selects them, because
+// the rows are supplied by the mock. The header previously named
+// `TestLinkedItemRepository_GetByUserID_ExcludesReplacedByDefault` — a function that does not exist
+// anywhere in this repo — and described the opposite behaviour ("should only return active items"),
+// so it was both a dangling citation and a false description of the assertion three lines below it.
 func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 	mock, repo := setupLinkedItemMockDB(t)
 	defer mock.Close()

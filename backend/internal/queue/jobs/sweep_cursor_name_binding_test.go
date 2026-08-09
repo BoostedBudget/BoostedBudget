@@ -19,8 +19,10 @@ package jobs
 // through the same entry point production uses, with a store that records every name it is asked
 // about. The assertion is that the run touched EXACTLY ONE name and that it was that sweep's own.
 // Swap any two of the four call sites and two cases here fail; point two sweeps at one name and two
-// fail; add a fifth sweep without a case and TestSweepCursorNames_EveryDeclaredNameHasABoundWorker
-// fails. The name never appears as a literal in the arrange half of a case — it is read back from
+// fail; add a fifth sweep without a case and TestSweepCursorNames_EveryDeclaredNameHasBoundWorker
+// fails (the name is spelled exactly as the func below declares it, so it works as a `-run` pattern;
+// it previously read "…HasABoundWorker", which matched nothing).
+// The name never appears as a literal in the arrange half of a case — it is read back from
 // the store the worker used.
 //
 // Deliberately a UNIT test with no database: the binding is a property of the wiring, and the page
