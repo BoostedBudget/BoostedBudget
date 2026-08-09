@@ -95,6 +95,91 @@ jobs:
               - 'config/**'
 
   # =============================================================================
+  # Review Provenance (#1432 AC-1) — the mandatory adversarial review, as a gate.
+  #
+  # WHY THIS JOB EXISTS AT ALL. scripts/check-review-provenance.sh and its 63-case suite
+  # were written across two rounds, hardened by four separate findings, and run by exactly
+  # one thing: `make test-scripts`, on a developer's laptop, when they remember. NO PIPELINE
+  # RAN EITHER. Searching all eight workflow files for "provenance" returned three hits, all
+  # of them `provenance: false` on docker/build-push-action. The paired control is that five
+  # sibling suites from the SAME scripts/__tests__/ directory ARE wired into this file, so
+  # the omission was specific to this one rather than a convention of not wiring suites.
+  # "A file existing is not evidence it runs" is the rule this branch coined; the guard built
+  # to mechanise the review discipline was itself running on nothing but discipline.
+  #
+  # WHY BOTH STEPS. They answer different questions and neither substitutes for the other:
+  #   * the SUITE proves the guard still works — that it can still reject the bypasses it was
+  #     built from (merge commits, orphan roots, revert-before-HEAD, agent-behaviour markdown);
+  #   * the GUARD ITSELF proves THIS BRANCH was actually reviewed.
+  # A green suite over a guard nobody points at the repo is the exact failure being repaired
+  # here. Suite first, then the real scan: the same order, and the same reasoning, as the
+  # "Test typographic-quote guard" / "Guard — no U+201C/U+201D" pair in the Backend Tests job.
+  #
+  # WHY A SEPARATE JOB RATHER THAN A STEP IN AN EXISTING ONE. Three constraints, and no
+  # existing job satisfies all three:
+  #   * it must be UNGATED. Every paths-filtered job is wrong here — a PR touching only
+  #     apps/web/** skips Backend Tests, and that PR's unreviewed frontend commits are
+  #     precisely what the guard exists to stop.
+  #   * it must NOT be depended on. Folding it into detect-changes (the other ungated job)
+  #     would make a red guard SKIP every downstream job, replacing the whole test report
+  #     with one failure — the worst possible failure mode for a process gate.
+  #   * it must not need `environment:` secrets, which rules out E2E Tests (the remaining
+  #     ungated job) for fork PRs, where the e2e environment's secrets are unavailable.
+  # Nothing depends on this job, so a red guard reports itself and nothing else.
+  #
+  # ⚠ fetch-depth: 0 IS LOAD-BEARING — DO NOT REMOVE IT.
+  # actions/checkout defaults to fetch-depth: 1. This guard walks history: `rev-list` between
+  # two SHAs, `merge-base --is-ancestor`, and the provenance file's own log. In a depth-1
+  # clone the reviewed SHA is simply not in the object database. Reproduced against this
+  # repository (`git clone --depth 1`): exit 2, "reviewed_sha ... is not a commit in this
+  # repository" — fail-closed, so never a false green, but a permanently red job blaming the
+  # record instead of the checkout. The guard now detects the shallow clone and says so; this
+  # line is what stops it firing. The full history here is 3,834 commits / 38 MiB, so the
+  # unshallow costs seconds on the self-hosted runner.
+  #
+  # On a fork PR, checkout resolves refs/pull/N/merge and fetch-depth: 0 brings the base
+  # repository's full history with it, so the reviewed SHA is present and is an ancestor of
+  # the merge commit. The guard then evaluates the fork's commits as unreviewed — which is
+  # correct, and means an external contribution is red until someone with review access runs
+  # the adversarial review and stamps it. That is a policy consequence, recorded here rather
+  # than engineered around.
+  # =============================================================================
+  review-provenance:
+    name: Review Provenance
+    # No `needs:` and no paths filter, deliberately — see above. `always() && !cancelled()`
+    # matches the E2E job's idiom and starts the job immediately rather than queueing it
+    # behind detect-changes.
+    if: always() && !cancelled()
+    runs-on: [self-hosted, macOS, mac-mini]
+    timeout-minutes: 10
+    env:
+      UNIQUE_WORKSPACE: workspace-review-provenance-${{ github.run_id }}
+
+    steps:
+      - name: Clean workspace (fix permission issues)
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+          # Load-bearing. See the block comment above before changing this.
+          fetch-depth: 0
+
+      - name: Test review-provenance guard (fixtures + truth table)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-review-provenance.test.sh
+
+      - name: Guard — this branch must have been adversarially reviewed (#1432)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/check-review-provenance.sh
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
   # E2E Tests (starts immediately — no needs — so it gets runner priority over
   # jobs that wait for detect-changes. Builds its own backend binary.)
   # =============================================================================
