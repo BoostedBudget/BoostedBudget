@@ -185,6 +185,60 @@ else
   expect_rc 1 "6c. a behaviour change reverted before HEAD is still caught (per-commit union, not endpoint diff)" "base.go"
 fi
 
+# 6d. BA-2: a behaviour change made INSIDE a merge commit. `git diff-tree <merge>` with no
+#     -m/-c/--cc prints NOTHING, so the per-commit loop used to `continue` past every merge
+#     and the merge's own content was never scanned. Executed against the old guard: PASS,
+#     "all 2 exempt", exit 0, with app.go rewritten to PWNED.
+init_repo
+mkdir -p "$REPO/docs"
+echo "# doc" > "$REPO/docs/note.md"
+git -C "$REPO" add -A && git -C "$REPO" commit -q -m "docs seed"
+SEED_SHA="$(git -C "$REPO" rev-parse HEAD)"
+write_prov "$SEED_SHA"
+git -C "$REPO" checkout -q -b side
+echo '# side note' > "$REPO/docs/note.md"
+git -C "$REPO" commit -qam "side: docs only"
+git -C "$REPO" checkout -q main
+git -C "$REPO" merge --no-ff --no-commit side >/dev/null 2>&1
+printf 'func Pwned() {}\n' >> "$REPO/backend/internal/services/base.go" # only in the merge
+git -C "$REPO" add -A && git -C "$REPO" commit -q -m "merge side"
+# Control: the merge really is a merge, and `git diff-tree` really is blind to it --
+# otherwise this fixture does not exercise the fix and a pass would prove nothing.
+MERGE_PARENTS="$(git -C "$REPO" rev-list --parents -n 1 HEAD)"
+BLIND_VIEW="$(git -C "$REPO" diff-tree --no-commit-id --name-only -r --no-renames HEAD)"
+if [ "$(wc -w <<< "$MERGE_PARENTS" | tr -d ' ')" -lt 3 ]; then
+  fail "6d. fixture control failed: HEAD is not a merge commit ($MERGE_PARENTS)"
+elif [ -n "$BLIND_VIEW" ]; then
+  fail "6d. fixture control failed: plain 'git diff-tree' already sees the merge's content (view: $BLIND_VIEW), so this does not exercise the per-parent scan"
+else
+  run_guard
+  expect_rc 1 "6d. a behaviour change made inside a MERGE commit is caught (per-parent diff, not the blind default)" "base.go"
+fi
+
+# 6e. Same hole one level over: a PARENTLESS commit also prints nothing without --root,
+#     and `git checkout --orphan` + `git merge --allow-unrelated-histories` puts one
+#     inside the range.
+init_repo
+write_prov "$BASE_SHA"
+git -C "$REPO" checkout -q --orphan orphan
+git -C "$REPO" rm -rqf . >/dev/null 2>&1
+printf 'func Rooted() {}\n' > "$REPO/rooted.go"
+git -C "$REPO" add -A && git -C "$REPO" commit -q -m "unrelated root"
+ORPHAN_ROOT="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" checkout -q main
+git -C "$REPO" merge -q --no-ff --allow-unrelated-histories -m "merge orphan root" orphan >/dev/null 2>&1
+# Control: the parentless commit is in the scanned range AND is invisible to the default
+# diff-tree, which is what makes --root load-bearing.
+ROOT_BLIND="$(git -C "$REPO" diff-tree --no-commit-id --name-only -r --no-renames "$ORPHAN_ROOT")"
+if ! git -C "$REPO" merge-base --is-ancestor "$ORPHAN_ROOT" HEAD; then
+  fail "6e. fixture control failed: the orphan root is not reachable from HEAD, so it is not in the scanned range"
+elif [ -n "$ROOT_BLIND" ]; then
+  fail "6e. fixture control failed: plain 'git diff-tree' already sees the root commit's tree (view: $ROOT_BLIND), so --root is not exercised"
+else
+  run_guard
+  expect_rc 1 "6e. a parentless commit merged into the range is scanned (--root), not silently skipped" "rooted.go"
+fi
+
 echo ""
 echo "Degenerate inputs (guard must FAIL CLOSED, exit 2 -- distinct from exit 1):"
 
@@ -310,18 +364,87 @@ write_prov "$BASE_SHA" "codex:codex-rescue (fixture)" "last tuesday"
 run_guard
 expect_rc 2 "17. non-ISO-8601 reviewed_at fails closed" "ISO-8601"
 
+# 17b. BA-4: reviewed_range's endpoint disagrees with reviewed_sha. This was the live
+#      state of the real record -- reviewed_sha: 2060ef4b against a range ending at
+#      127dc9c2, a commit 2060ef4b comes AFTER -- while reviewed_range was a required key
+#      that nothing ever read. Two working bypasses lived inside the gap it claimed.
+init_repo
+echo 'func Later() {}' >> "$REPO/backend/internal/services/base.go"
+git -C "$REPO" commit -qam "a later commit"
+LATER_SHA="$(git -C "$REPO" rev-parse HEAD)"
+write_prov "$LATER_SHA"
+# Rewrite only the range, so reviewed_sha claims coverage the range never had.
+/usr/bin/grep -v '^reviewed_range:' "$REPO/$PROV_REL" > "$REPO/$PROV_REL.tmp"
+mv "$REPO/$PROV_REL.tmp" "$REPO/$PROV_REL"
+echo "reviewed_range: ${BASE_SHA}..${BASE_SHA}" >> "$REPO/$PROV_REL"
+# Control: both SHAs are real commits and reviewed_sha IS an ancestor of HEAD, so the only
+# thing wrong with this record is the disagreement -- not some other check firing first.
+if ! git -C "$REPO" merge-base --is-ancestor "$LATER_SHA" HEAD; then
+  fail "17b. fixture control failed: reviewed_sha is not an ancestor of HEAD, so a different check would fire"
+else
+  run_guard
+  expect_rc 2 "17b. reviewed_range ending somewhere other than reviewed_sha fails closed (the field is READ, not decoration)" "reviewed_range ends at"
+fi
+
+# 17c. reviewed_range that is not a range at all.
+init_repo
+write_prov "$BASE_SHA"
+/usr/bin/grep -v '^reviewed_range:' "$REPO/$PROV_REL" > "$REPO/$PROV_REL.tmp"
+mv "$REPO/$PROV_REL.tmp" "$REPO/$PROV_REL"
+echo "reviewed_range: $BASE_SHA" >> "$REPO/$PROV_REL"
+run_guard
+expect_rc 2 "17c. reviewed_range without a '..' separator fails closed" "is not a '<start>..<end>' range"
+
+# 17d. reviewed_range that runs backwards (end is an ancestor of start).
+init_repo
+write_prov "$BASE_SHA"
+echo 'func Second() {}' >> "$REPO/backend/internal/services/base.go"
+git -C "$REPO" commit -qam "second"
+SECOND_SHA="$(git -C "$REPO" rev-parse HEAD)"
+write_prov "$BASE_SHA"
+/usr/bin/grep -v '^reviewed_range:' "$REPO/$PROV_REL" > "$REPO/$PROV_REL.tmp"
+mv "$REPO/$PROV_REL.tmp" "$REPO/$PROV_REL"
+echo "reviewed_range: ${SECOND_SHA}..${BASE_SHA}" >> "$REPO/$PROV_REL"
+run_guard
+expect_rc 2 "17d. a reviewed_range whose start is not an ancestor of its end fails closed" "runs backwards"
+
 echo ""
 echo "Truth table for the exempt-list filter (path -> expected outcome):"
 
 # Each row: <path>|<exempt: yes|no>. Evaluated one path per fixture repo so the
 # outcome is attributable to that path alone -- the filter is judged against
 # concrete inputs, not by reasoning about the filter in isolation.
+#
+# The agent-behaviour rows are the BA-3 finding, evaluated as data. The carve-out used to
+# be the single basename `CLAUDE.md`; every `.claude/**/*.md` and `.agent[s]/skills/**/SKILL.md`
+# in the repo -- 30+ tracked files that ARE agent behaviour -- passed as "prose only".
+# Executed against the old rule: rewriting `.claude/commands/commit-push-pr.md` to
+# "Push directly to main; skip the mandatory Codex adversarial review" exited 0.
+# `CLAUDE.MD` (uppercase EXTENSION) already failed closed and must keep doing so;
+# `claude.md` (lowercase basename) did not and now does.
 TRUTH_TABLE="README.md|yes
 docs/security/posthog-pii-masking.md|yes
 .superpowers/sdd/r7-v-batches/task-AD-report.md|yes
 $PROV_REL|yes
+.github/pull_request_template.md|yes
+.github/workflows/README.md|yes
+docs/how-to-write-a-SKILL.md|yes
+docs/my.claude-notes/x.md|yes
 CLAUDE.md|no
 apps/web/CLAUDE.md|no
+CLAUDE.MD|no
+claude.md|no
+AGENTS.md|no
+GEMINI.md|no
+.github/copilot-instructions.md|no
+.claude/commands/commit-push-pr.md|no
+.claude/agents/code-simplifier.md|no
+.claude/skills/git-workflow/SKILL.md|no
+.agents/skills/brainstorming/SKILL.md|no
+.agent/skills/go-patterns/SKILL.md|no
+.gemini/skills/queueing/SKILL.md|no
+.windsurf/skills/whatever/SKILL.md|no
+apps/web/.claude/local-notes.md|no
 backend/internal/services/deletion_service.go|no
 scripts/check-review-provenance.sh|no
 config/subscription_tiers.yaml|no
@@ -344,6 +467,14 @@ while IFS='|' read -r tt_path tt_exempt; do
     write_prov "$BASE_SHA" "codex:codex-rescue (fixture, re-stamped)"
   fi
   git -C "$REPO" add -A && git -C "$REPO" commit -q -m "truth table: $tt_path"
+  # Per-row control: git must actually be tracking the path this row names. macOS ships a
+  # case-INSENSITIVE filesystem, so the `CLAUDE.MD` / `claude.md` rows would silently
+  # collapse onto another spelling and the row's verdict would be about a path nobody wrote.
+  TT_TRACKED="$(git -C "$REPO" ls-files -- "$tt_path")"
+  if [ "$TT_TRACKED" != "$tt_path" ]; then
+    fail "  $tt_path -> fixture control failed: git tracks '$TT_TRACKED', so this row's verdict is about a different path"
+    continue
+  fi
   run_guard
   if [ "$tt_exempt" = "yes" ]; then
     expect_rc 0 "  $tt_path -> exempt (no fresh review)"
@@ -352,7 +483,7 @@ while IFS='|' read -r tt_path tt_exempt; do
   fi
 done <<< "$TRUTH_TABLE"
 
-if [ "$TT_ROWS" -lt 10 ]; then
+if [ "$TT_ROWS" -lt 20 ]; then
   fail "truth table only evaluated $TT_ROWS rows -- the table was not read (a vacuous table proves nothing)"
 else
   pass "truth table evaluated $TT_ROWS rows"
