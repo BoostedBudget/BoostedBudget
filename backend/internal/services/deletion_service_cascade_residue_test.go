@@ -2,8 +2,11 @@ package services
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
+	"syscall"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -265,10 +268,16 @@ func TestCascadeErrorIsRecognisedTransient_ConnectionAttemptFailuresAreTransient
 // both the human-facing Error log and the residue for exactly that permanent case. The #1432
 // round-13 Codex RE-REVIEW refuted it and the order was inverted; this test is what holds the order.
 //
-// errors.Join models "a ConnectError that contains a PgError" for errors.As without needing
-// ConnectError's unexported cause field, which no external package can populate. Note deliberately:
-// the joined value's Error() is never called anywhere in this test, because ConnectError.Error()
-// dereferences that unexported field.
+// ⚠ WHAT THIS TEST DOES AND DOES NOT MODEL, corrected after the round-13 Codex third pass called the
+// original wording overstated — it was. errors.Join does NOT reproduce pgconn's containment shape:
+// production nests the PgError INSIDE the ConnectError (ConnectError.Unwrap), whereas Join makes the
+// two SIBLINGS under a new root (errors.Join's Unwrap() []error). errors.As searches the whole tree
+// either way, which is why this works, and the precedence between the two branches is genuinely what
+// it constrains — the reverted ordering fails it, executed. But it is a precedence test, not a
+// production-shape test, and it is written here as one. The shape itself cannot be built from outside
+// pgconn: ConnectError's cause field is unexported, so no external package can populate it.
+// Note deliberately: the joined value's Error() is never called anywhere in this test, because
+// ConnectError.Error() dereferences that unexported field.
 func TestCascadeErrorIsRecognisedTransient_ConnectErrorCarryingASQLSTATEUsesTheSQLSTATE(t *testing.T) {
 	bareConnect := &pgconn.ConnectError{Config: &pgconn.Config{}}
 
@@ -287,11 +296,65 @@ func TestCascadeErrorIsRecognisedTransient_ConnectErrorCarryingASQLSTATEUsesTheS
 			"SQLSTATE %s inside a ConnectError — %s", tc.code, tc.why)
 	}
 
-	// Paired control for THIS claim: the same bare ConnectError with NO SQLSTATE beside it is still
-	// transient, so the assertions above are driven by the SQLSTATE and not by having broken the
-	// ConnectError branch outright.
-	assert.True(t, cascadeErrorIsRecognisedTransient(bareConnect),
-		"a ConnectError with no SQLSTATE must remain transient")
+	// Paired control for THIS claim: the same ConnectError with NO SQLSTATE beside it, carrying a
+	// recognised-transient socket cause, is still transient — so the assertions above are driven by
+	// the SQLSTATE and not by having broken the ConnectError branch outright.
+	assert.True(t, cascadeErrorIsRecognisedTransient(errors.Join(bareConnect, syscall.ECONNREFUSED)),
+		"a ConnectError with no SQLSTATE and a transient socket cause must remain transient")
+}
+
+// "NO SQLSTATE" IS NOT EVIDENCE OF TRANSIENCE, and the second version of this fix wrongly assumed it
+// was. The round-13 Codex THIRD pass named the permanent no-SQLSTATE shapes: NXDOMAIN, an expired or
+// untrusted TLS certificate, a hostname mismatch, an unsupported SASL/channel-binding configuration,
+// a protocol the server will never speak. All of those reach the classifier as a *pgconn.ConnectError
+// with no *pgconn.PgError anywhere in the chain, and none of them clear on retry — so classifying
+// them transient would silently suppress the residue for a landed Paddle cancellation.
+//
+// The ConnectError leg is therefore an allowlist of RECOGNISED transient causes, in the same
+// fail-closed shape as transientCascadeSQLSTATEClasses. This test asserts both directions.
+func TestConnectErrorIsRecognisedTransient_AllowlistsCausesRatherThanTheShape(t *testing.T) {
+	bareConnect := &pgconn.ConnectError{Config: &pgconn.Config{}}
+	with := func(cause error) error { return errors.Join(bareConnect, cause) }
+
+	// TRANSIENT: the socket-level "not right now" set.
+	for _, cause := range []error{
+		syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.EHOSTUNREACH,
+		syscall.ENETUNREACH, syscall.ETIMEDOUT, syscall.EPIPE,
+	} {
+		assert.True(t, cascadeErrorIsRecognisedTransient(with(cause)),
+			"errno %v is a recognised transient connection failure", cause)
+	}
+	assert.True(t, cascadeErrorIsRecognisedTransient(
+		with(&net.DNSError{Err: "server misbehaving", IsTemporary: true})),
+		"a TEMPORARY DNS failure is transient")
+	assert.True(t, cascadeErrorIsRecognisedTransient(
+		with(&net.DNSError{Err: "i/o timeout", IsTimeout: true})),
+		"a DNS TIMEOUT is transient")
+
+	// PERSISTENT: every shape the third pass named. None of these self-heal, so all must record.
+	assert.False(t, cascadeErrorIsRecognisedTransient(
+		with(&net.DNSError{Err: "no such host", IsNotFound: true})),
+		"NXDOMAIN is a permanent answer, not a blip — verified against the real chain: pgconn.Connect "+
+			"to a non-existent host yields a ConnectError carrying IsNotFound=true, IsTemporary=false")
+	assert.False(t, cascadeErrorIsRecognisedTransient(
+		with(x509.CertificateInvalidError{Reason: x509.Expired})),
+		"an expired certificate never fixes itself")
+	assert.False(t, cascadeErrorIsRecognisedTransient(
+		with(x509.HostnameError{Host: "db.internal"})),
+		"a certificate hostname mismatch never fixes itself")
+	assert.False(t, cascadeErrorIsRecognisedTransient(
+		with(x509.UnknownAuthorityError{})),
+		"an untrusted CA never fixes itself")
+	assert.False(t, cascadeErrorIsRecognisedTransient(
+		with(errors.New("unsupported SASL authentication mechanism"))),
+		"a permanent auth/protocol configuration failure must record, not be assumed transient")
+
+	// The control that pairs with THIS claim rather than with the tool: the very same causes attached
+	// to something that is NOT a ConnectError must still record, so the assertions above are the
+	// ConnectError leg doing the work and not some unrelated errno matching.
+	assert.False(t, cascadeErrorIsRecognisedTransient(
+		fmt.Errorf("DeleteUserCascade: %w", syscall.ECONNREFUSED)),
+		"ECONNREFUSED outside a ConnectError is not a recognised cascade transient")
 }
 
 // A nil error is not a failure at all. Asserted because the call site's guard is `err != nil` and a

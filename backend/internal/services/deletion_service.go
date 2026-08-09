@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"syscall"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -1117,9 +1119,19 @@ func cascadeErrorIsRecognisedTransient(err error) bool {
 	//     own pool Exec, and a pool Exec can be served by an ALREADY-ESTABLISHED connection that
 	//     predates the credential rotation which is failing new handshakes.
 	//
-	// So the SQLSTATE check runs FIRST and a ConnectError is only transient when it carries no
-	// SQLSTATE at all — i.e. when the failure was the network, not the server's answer. A ConnectError
-	// wrapping 57P03 cannot_connect_now still reads transient, correctly, via class 57.
+	// So the SQLSTATE check runs FIRST and a ConnectError is only considered at all once no SQLSTATE
+	// was found. A ConnectError wrapping 57P03 cannot_connect_now still reads transient, correctly,
+	// via class 57.
+	//
+	// ⚠ AND "NO SQLSTATE" IS NOT ITSELF EVIDENCE OF TRANSIENCE. The round-13 Codex THIRD pass caught
+	// the next layer: plenty of PERMANENT failures produce a ConnectError with no PgError at all —
+	// an expired or untrusted TLS certificate, a hostname mismatch, an unsupported SASL/channel-binding
+	// configuration, a protocol version the server will never speak, and NXDOMAIN. Verified by
+	// execution, not by reading: pgconn.Connect to a non-existent host yields a ConnectError carrying
+	// a *net.DNSError with IsNotFound=true and IsTemporary=false. Treating all of those as transient
+	// would silently drop the residue for a harm that never self-heals — the same defect as the
+	// version above, one level over. So the ConnectError leg is an ALLOWLIST too, in the same
+	// fail-closed shape as transientCascadeSQLSTATEClasses: see connectErrorIsRecognisedTransient.
 	//
 	// errors.As, not a type assertion: the repository wraps every failure in fmt.Errorf, so no
 	// production caller ever sees a bare *pgconn.PgError here.
@@ -1128,9 +1140,53 @@ func cascadeErrorIsRecognisedTransient(err error) bool {
 		_, transient := transientCascadeSQLSTATEClasses[pgErr.Code[:2]]
 		return transient
 	}
+	// No SQLSTATE anywhere in the chain: transient only if this was a connection attempt that failed
+	// for a RECOGNISED transient reason. Everything else — including anything unrecognised — records,
+	// which is the default direction this function's doc comment argues for.
 	var connErr *pgconn.ConnectError
-	if errors.As(err, &connErr) {
-		return true
+	return errors.As(err, &connErr) && connectErrorIsRecognisedTransient(err)
+}
+
+// transientConnectErrnos are the socket-level failures that mean "not right now" rather than
+// "not ever". Each one is a condition a restarting server, a failing-over replica or a brief network
+// partition produces and a retry a minute later clears.
+var transientConnectErrnos = []syscall.Errno{
+	syscall.ECONNREFUSED, // nothing listening yet — a server mid-restart
+	syscall.ECONNRESET,   // the peer tore the connection down
+	syscall.EHOSTUNREACH, // routing gap
+	syscall.ENETUNREACH,  // routing gap
+	syscall.ETIMEDOUT,    // SYN never answered
+	syscall.EPIPE,        // wrote to a socket the peer had already closed
+}
+
+// connectErrorIsRecognisedTransient decides whether a *pgconn.ConnectError that carries no SQLSTATE
+// is one we KNOW a retry clears.
+//
+// ⚠ IT IS AN ALLOWLIST FOR THE SAME REASON transientCascadeSQLSTATEClasses IS. The set of permanent
+// ways a connection attempt can fail is open-ended and grows with pgconn, Go's TLS stack and the
+// deployment's network configuration — an expired certificate, an untrusted CA, a hostname mismatch,
+// an unsupported SASL mechanism, a protocol the server will never speak, a hostname that does not
+// exist. None of those carry a SQLSTATE and none of them clear on retry. Enumerating THOSE would be
+// fail-open by construction: the next one nobody thought of would be classified transient and would
+// silently suppress a residue. Enumerating the transient ones instead costs, at worst, a spurious
+// residue row an operator closes in a minute — the asymmetry the parent function's doc comment
+// argues at length.
+//
+// DNS is checked FIRST and on its own field, because a *net.DNSError is also a net.Error: NXDOMAIN
+// (IsNotFound) is a permanent answer that the generic checks below would otherwise never see.
+func connectErrorIsRecognisedTransient(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		// IsNotFound is the name not existing — a rename or a bad config, not a blip.
+		return dnsErr.IsTemporary || dnsErr.IsTimeout
 	}
-	return false
+	for _, errno := range transientConnectErrnos {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	// A timeout at any layer that models net.Error: the attempt ran out of time rather than being
+	// refused an answer. Deliberately last, so the DNS case above cannot reach it.
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
