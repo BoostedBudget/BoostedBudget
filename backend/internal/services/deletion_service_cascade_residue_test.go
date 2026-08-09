@@ -377,6 +377,23 @@ func TestConnectErrorIsRecognisedTransient_AllowlistsCausesRatherThanTheShape(t 
 	assert.True(t, cascadeErrorIsRecognisedTransient(
 		errors.Join(bareConnect, &net.DNSError{Err: "no such host", IsNotFound: true}, syscall.ECONNREFUSED)),
 		"a mixed multi-host chain must be read by its recoverable half")
+	// THE SAME MULTI-HOST CASE, BUT WITH A TIMEOUT INSTEAD OF AN ERRNO — which the first version of
+	// the reordering still got wrong, and the round-13 Codex FIFTH pass caught. errors.As stops at the
+	// FIRST match: a *net.DNSError is itself a net.Error, so `errors.As(err, &netErr)` bound the
+	// NXDOMAIN (Timeout() == false) and the genuine timeout from the primary host, further along the
+	// joined chain, was never examined. Everyday timeout, false permanent residue. Both timeout-shaped
+	// predicates now walk the WHOLE tree instead of taking errors.As's first hit.
+	assert.True(t, cascadeErrorIsRecognisedTransient(
+		errors.Join(bareConnect,
+			&net.DNSError{Err: "no such host", IsNotFound: true},
+			&net.DNSError{Err: "i/o timeout", IsTimeout: true})),
+		"a joined chain whose FIRST net.Error is NXDOMAIN must still see a later timeout")
+	assert.True(t, cascadeErrorIsRecognisedTransient(
+		errors.Join(bareConnect,
+			&net.DNSError{Err: "no such host", IsNotFound: true},
+			&net.OpError{Op: "dial", Err: &timeoutOnlyError{}})),
+		"…including a non-DNS net.Error timeout after an NXDOMAIN")
+
 	// …and the control that pairs with THAT claim: NXDOMAIN ALONE is still permanent, so the
 	// assertion above is the errno doing the work and not the DNS branch having been broken.
 	assert.False(t, cascadeErrorIsRecognisedTransient(
@@ -410,3 +427,11 @@ func TestDeletionResidueEffects_FitTheAuditLogsActionColumn(t *testing.T) {
 			"audit_logs.action is VARCHAR(100)")
 	}
 }
+
+// timeoutOnlyError is a net.Error that is a TIMEOUT and nothing else — no errno, no DNS fields — so
+// an assertion using it can only pass through the generic net.Error timeout predicate.
+type timeoutOnlyError struct{}
+
+func (*timeoutOnlyError) Error() string   { return "i/o timeout" }
+func (*timeoutOnlyError) Timeout() bool   { return true }
+func (*timeoutOnlyError) Temporary() bool { return true }
