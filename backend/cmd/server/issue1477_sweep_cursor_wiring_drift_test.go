@@ -60,10 +60,40 @@ package main
 // shapes that exist today (`var db *pgxpool.Pool` and `db, err = database.NewPool(...)`).
 // Anything else is reported rather than assumed benign.
 //
+// TWO MORE HOLES, ONE LEVEL OVER FROM THE `= nil` ONE, CLOSED BY THE SAME FAIL-CLOSED SHAPE.
+// Both were found by the #1432 round-13 Codex review and both were EXECUTED against the
+// version of this test that lacked them — `go build` clean, `go vet` clean, this test PASSING:
+//
+//  1. INDIRECT ASSIGNMENT THROUGH A POINTER. Every check above reads the LHS of an
+//     AssignStmt as an *ast.Ident or an *ast.SelectorExpr. A *ast.StarExpr is neither:
+//
+//     func(p *repository.SweepCursorRepository) { *p = nil }(&sweepCursorRepo)
+//
+//     leaves sawCursorConstruction true, produces no Ident and no Selector on any LHS, and
+//     nils the shared interface for all four sites. The guard cannot follow the pointer, so
+//     it forbids the step that CREATES one: taking the address of `sweepCursorRepo` or of
+//     `db` anywhere in main.go is drift. `&` is the only way to obtain such a pointer (even
+//     reflect and unsafe need one), so this is a genuine choke point rather than a filter.
+//     main.go takes neither address today, verified.
+//
+//  2. A PARAMETER OF THAT NAME. Parameters are *ast.Field, so they are not a ValueSpec, not
+//     an AssignStmt and not a RangeStmt — the three binding forms the walk knew about:
+//
+//     func(sweepCursorRepo repository.SweepCursorRepository) {
+//     worker = jobs.NewScheduledDeletionCheckWorker(jobs.…Deps{ …, SweepCursors: sweepCursorRepo })
+//     }(nil)
+//
+//     satisfies the inline-literal check and the by-name field check while the worker
+//     receives nil. The same hole existed for `db`. Both names are now rejected as
+//     parameters, results and receivers anywhere in main.go.
+//
 // NOT covered, stated so it is not mistaken for covered: whether the four constructed
 // workers are actually REGISTERED with River. That is a materially larger surface (the
 // river.Workers registry, its AddWorker calls and the queue config) and belongs in its own
-// guard, not bolted onto this one.
+// guard, not bolted onto this one. The #1432 round-13 review sharpened this residual with
+// the exact sites it leaves open — deleting any of main.go's four `river.AddWorker` calls
+// for scheduledDeletionCheckWorker, retentionCleanupCheckWorker, itemCleanupCheckWorker or
+// plaidOrphanRetryWorker leaves every assertion in this file green.
 //
 // If a sweep is legitimately retired, delete its entry from requiredSweepWiring below —
 // that edit is the deliberate, reviewable act this test exists to force.
@@ -221,6 +251,8 @@ func TestIssue1477SweepCursorWiringNoDrift(t *testing.T) {
 	var varRebinds []string
 	var ctorArgFindings []string
 	var dbRebinds []string
+	var addressTaken []string
+	var shadowingParams []string
 
 	// noteCursorBinding records one place where the name `sweepCursorRepo` is bound to a
 	// value. EVERY such binding must be the constructor call AROUND `db`; anything else —
@@ -255,8 +287,48 @@ func TestIssue1477SweepCursorWiringNoDrift(t *testing.T) {
 		dbRebinds = append(dbRebinds, fset.Position(pos).String())
 	}
 
+	// noteFieldNames records any parameter, result or receiver called `sweepCursorRepo` or
+	// `db`. Such a name is a binding the three statement-level cases below cannot see (a
+	// parameter is an *ast.Field), and inside its function body it shadows the real variable
+	// while every by-name check in this test still reads as correct.
+	noteFieldNames := func(fl *ast.FieldList, what string) {
+		if fl == nil {
+			return
+		}
+		for _, f := range fl.List {
+			for _, name := range f.Names {
+				if name.Name == sweepCursorVarName || name.Name == dbVarName {
+					shadowingParams = append(shadowingParams,
+						fmt.Sprintf("%s (%s %q)", fset.Position(name.Pos()).String(), what, name.Name))
+				}
+			}
+		}
+	}
+
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
+		case *ast.FuncDecl:
+			noteFieldNames(node.Recv, "receiver")
+			if node.Type != nil {
+				noteFieldNames(node.Type.Params, "parameter")
+				noteFieldNames(node.Type.Results, "result")
+			}
+		case *ast.FuncLit:
+			if node.Type != nil {
+				noteFieldNames(node.Type.Params, "parameter")
+				noteFieldNames(node.Type.Results, "result")
+			}
+		case *ast.UnaryExpr:
+			// `&sweepCursorRepo` / `&db`. The guard cannot follow a pointer, so it forbids
+			// the only step that can produce one — see hole 1 in this file's header.
+			if node.Op != token.AND {
+				return true
+			}
+			if id, ok := node.X.(*ast.Ident); ok &&
+				(id.Name == sweepCursorVarName || id.Name == dbVarName) {
+				addressTaken = append(addressTaken,
+					fmt.Sprintf("%s (&%s)", fset.Position(node.Pos()).String(), id.Name))
+			}
 		case *ast.RangeStmt:
 			// `for db := range …` / `for sweepCursorRepo := range …` shadow the real
 			// binding without ever being an AssignStmt or a ValueSpec.
@@ -414,6 +486,28 @@ func TestIssue1477SweepCursorWiringNoDrift(t *testing.T) {
 			"field it is a NON-nil interface, so every worker's `!= nil` guard passes and the sweeps "+
 			"panic instead of degrading.",
 			dbVarName, at, sweepCursorCtor, dbVarName, dbVarName, dbVarName, dbVarName, dbPoolPkg, dbPoolCtor)
+	}
+
+	for _, at := range addressTaken {
+		t.Errorf("WIRING DRIFT: main.go takes the ADDRESS of a guarded variable at %s.\n"+
+			"  Every other check in this guard reads the left-hand side of an assignment as an "+
+			"identifier or a selector. `*p = nil` through a pointer is neither, so it nils the shared "+
+			"value for all four sweeps with nothing to see: `go build`, `go vet` and this test were all "+
+			"clean against the demonstrated bypass\n"+
+			"    func(p *repository.SweepCursorRepository) { *p = nil }(&%s)\n"+
+			"  Since the guard cannot follow a pointer, it forbids creating one. If main.go legitimately "+
+			"needs the address of %q or %q, that is the reviewable act this guard exists to force.",
+			at, sweepCursorVarName, sweepCursorVarName, dbVarName)
+	}
+
+	for _, at := range shadowingParams {
+		t.Errorf("WIRING DRIFT: main.go binds a guarded name as a function parameter/result/receiver at %s.\n"+
+			"  A parameter is an *ast.Field, so it is invisible to the ValueSpec, AssignStmt and "+
+			"RangeStmt cases that catch every other shadowing form — while the inline-literal check and "+
+			"the by-name %s check below both still read as correct. Demonstrated bypass:\n"+
+			"    func(%s repository.SweepCursorRepository) { … SweepCursors: %s … }(nil)\n"+
+			"  %q and %q must name the shared values built at the top of main.go and nothing else.",
+			at, sweepCursorField, sweepCursorVarName, sweepCursorVarName, sweepCursorVarName, dbVarName)
 	}
 
 	for _, at := range fieldAssignments {

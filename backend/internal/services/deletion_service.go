@@ -1042,7 +1042,11 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 // two-character class, not by individual code, because the classes are defined by cause and a new
 // member of one of them is transient for the same reason the existing members are:
 //
-//	08 — Connection Exception ................ the connection died; a new one will not be that one
+//	08 — Connection Exception ................ the connection died; a new one will not be that one.
+//	                                           ⚠ SQLSTATE 08 only covers a connection that EXISTED and
+//	                                           broke. A connection that was never established carries
+//	                                           no SQLSTATE at all and is matched separately, as a
+//	                                           *pgconn.ConnectError, in the function below.
 //	40 — Transaction Rollback ................ deadlock_detected / serialization_failure; retry is
 //	                                           the DOCUMENTED response and this repo already relies
 //	                                           on it (see the 40P01 analysis in profile_repository.go)
@@ -1088,6 +1092,27 @@ func cascadeErrorIsRecognisedTransient(err error) bool {
 	// Cancellation and deadline expiry are the non-SQLSTATE half: in practice the same shutdown or
 	// job deadline that killed the cascade killed the run, and the next run redoes the sequence.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// A CONNECTION ATTEMPT THAT NEVER REACHED POSTGRES CARRIES NO SQLSTATE, so the class-08
+	// ("connection exception") entry in the allowlist below cannot see it. DeleteUserCascade opens
+	// its transaction only AFTER the external cleanup, and a pool acquisition that cannot reach the
+	// server fails there as a *pgconn.ConnectError — never a *pgconn.PgError — so the errors.As
+	// below missed it and the syntactic default recorded a PERMANENT operator artifact for a blip
+	// the very next run recovers from. Nothing ever clears such a row. Whoever put "08" in the
+	// allowlist meant connection failures to be transient; this is the same intent applied to the
+	// shape the failure actually arrives in, not a widening of the default. Round 13, Codex review
+	// of 127dc9c2..62014b4d.
+	//
+	// ⚠ ATTACKED, AND THE ATTACK STRENGTHENS IT. The obvious objection is that a ConnectError can
+	// also be PERMANENT — a rotated password, a dropped database — and staying silent would then hide
+	// a real harm. It would not, because RecordDeletionResidue writes to THAT SAME POSTGRES. If the
+	// connection attempt cannot succeed, the residue write cannot succeed either, and the old
+	// behaviour produced not a record but a second log line about a failed record. So the choice here
+	// is not "record vs. stay silent"; it is "attempt an impossible write and log twice, or classify
+	// honestly". The operator signal for a database that is unreachable is not a residue row.
+	var connErr *pgconn.ConnectError
+	if errors.As(err, &connErr) {
 		return true
 	}
 	// errors.As, not a type assertion: the repository wraps every failure in fmt.Errorf, so no

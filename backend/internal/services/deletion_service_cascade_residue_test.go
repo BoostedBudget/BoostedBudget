@@ -211,6 +211,51 @@ func TestCascadeErrorIsRecognisedTransient_RecognisedClasses(t *testing.T) {
 	assert.True(t, cascadeErrorIsRecognisedTransient(context.DeadlineExceeded))
 }
 
+// SQLSTATE class 08 ("connection exception") is in the allowlist, but the most common way a
+// connection failure actually reaches this classifier carries NO SQLSTATE AT ALL. DeleteUserCascade
+// opens its transaction (profile_repository.go, `BeginTx`) only AFTER the external cleanup, so a
+// pool acquisition that cannot reach Postgres fails there — and pgx reports that as a
+// *pgconn.ConnectError, not a *pgconn.PgError. `errors.As(err, &pgErr)` therefore misses it and the
+// syntactic default records.
+//
+// That is the exact false positive the round-13 Codex review asked about: the Paddle cancel has
+// landed, the database blips for one run, a PERMANENT operator artifact is written, and the very
+// next run completes the deletion — leaving a residue row describing a user who no longer exists and
+// a harm that never happened. Nothing ever clears it.
+//
+// The allowlist's own intent settles the direction: whoever put "08" in it meant connection failures
+// to be transient. This closes the gap between that intent and the shape the error actually arrives
+// in. It does NOT widen the default — an unrecognised error still records, which is the asymmetry
+// cascadeErrorIsRecognisedTransient's doc comment argues for.
+func TestCascadeErrorIsRecognisedTransient_ConnectionAttemptFailuresAreTransient(t *testing.T) {
+	// A GENUINE *pgconn.ConnectError, produced the way production produces one, rather than a
+	// hand-built literal: ConnectError's inner error field is unexported, so a literal cannot carry a
+	// cause and would not be the shape this classifier has to survive. Port 1 is refused immediately
+	// and needs no server, so this is deterministic and offline.
+	_, connErr := pgconn.Connect(context.Background(),
+		"postgres://u:p@127.0.0.1:1/nodb?sslmode=disable&connect_timeout=1")
+	require.Error(t, connErr)
+	var asConnect *pgconn.ConnectError
+	require.True(t, errors.As(connErr, &asConnect),
+		"control for THIS claim: the error pgx returns for an unreachable host really is a *pgconn.ConnectError")
+	var asPg *pgconn.PgError
+	require.False(t, errors.As(connErr, &asPg),
+		"control for THIS claim: it carries no SQLSTATE, which is exactly why the class-08 allowlist entry misses it")
+
+	assert.True(t, cascadeErrorIsRecognisedTransient(connErr),
+		"a bare *pgconn.ConnectError must be recognised as transient")
+	assert.True(t, cascadeErrorIsRecognisedTransient(
+		fmt.Errorf("DeleteUserCascade: begin transaction: %w", connErr)),
+		"a WRAPPED *pgconn.ConnectError must be recognised as transient — the repository wraps everything")
+
+	// The control that pairs with THIS claim, not with the tool: widening to ConnectError must not
+	// have widened the default. A persistent constraint failure, and a plain error, still record.
+	assert.False(t, cascadeErrorIsRecognisedTransient(wrapPgError("23505")),
+		"widening to ConnectError must not make a unique_violation transient")
+	assert.False(t, cascadeErrorIsRecognisedTransient(errors.New("something nobody anticipated")),
+		"widening to ConnectError must not make an unrecognised error transient")
+}
+
 // A nil error is not a failure at all. Asserted because the call site's guard is `err != nil` and a
 // classifier that answered "not transient" for nil would record a residue on every SUCCESSFUL
 // deletion if that guard were ever refactored away.
