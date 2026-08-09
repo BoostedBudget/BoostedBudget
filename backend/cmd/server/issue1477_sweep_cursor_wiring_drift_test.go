@@ -36,10 +36,40 @@ package main
 // passing it, and additionally rejects any `X.SweepCursors = …` assignment anywhere in
 // main.go.
 //
+// It also checks the SWEEP-CURSOR CONSTRUCTOR'S OWN ARGUMENT, and every binding of the
+// name `db` that feeds it. Checking only that `sweepCursorRepo` is bound to
+// `repository.NewSweepCursorRepository(...)` leaves a hole one level INSIDE the call:
+// `NewSweepCursorRepository(nil)` builds a real repository around a nil DB, so every
+// Load and Save fails, and `sweepResume` treats a Load failure as NON-FATAL and starts the
+// run FROM THE BEGINNING (see resumeSweep in queue/jobs/sweep_resume.go) — which is exactly
+// the silent starvation regime this guard exists to prevent, reached without touching any
+// of the four field assignments. Four bypasses were executed against the version of this
+// test that lacked the check, all four PASSING it:
+//
+//	repository.NewSweepCursorRepository(nil)                       // literal nil
+//	var cursorDB repository.DB; …; NewSweepCursorRepository(cursorDB) // nil-checked variable
+//	repository.NewSweepCursorRepository(sweepCursorDB(db))         // helper returning the DB
+//	db = nil; repository.NewSweepCursorRepository(db)              // the pool itself neutered
+//
+// The last is the worst of the four: `db` is a *pgxpool.Pool, so a nil one stored in the
+// repository's DB interface field is a NON-nil interface — the workers' `!= nil` guards all
+// pass and the calls panic instead of degrading.
+//
+// The check is fail-closed in the same shape as the rest of this test: the argument must be
+// the bare identifier `db`, and every binding of `db` in main.go must be one of the two
+// shapes that exist today (`var db *pgxpool.Pool` and `db, err = database.NewPool(...)`).
+// Anything else is reported rather than assumed benign.
+//
+// NOT covered, stated so it is not mistaken for covered: whether the four constructed
+// workers are actually REGISTERED with River. That is a materially larger surface (the
+// river.Workers registry, its AddWorker calls and the queue config) and belongs in its own
+// guard, not bolted onto this one.
+//
 // If a sweep is legitimately retired, delete its entry from requiredSweepWiring below —
 // that edit is the deliberate, reviewable act this test exists to force.
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -81,23 +111,91 @@ const (
 	sweepCursorCtor    = "NewSweepCursorRepository"
 	sweepCursorPkg     = "repository"
 	jobsPkgAlias       = "jobs"
+
+	// dbVarName is the pool variable the sweep-cursor repository must be built around, and
+	// dbPoolPkg/dbPoolCtor/dbPoolType are the only two shapes allowed to bind that name.
+	dbVarName  = "db"
+	dbPoolPkg  = "database"
+	dbPoolCtor = "NewPool"
+	dbPoolType = "Pool"
 )
 
-// isSweepCursorCtorCall reports whether expr is literally
-// `repository.NewSweepCursorRepository(...)`. The package qualifier is checked too:
-// without it, a locally-defined `x.NewSweepCursorRepository(db)` returning anything at
-// all would satisfy the binding check.
-func isSweepCursorCtorCall(expr ast.Expr) bool {
+// cursorBinding classifies one binding of `sweepCursorRepo`.
+type cursorBinding int
+
+const (
+	// bindingOK: bound by repository.NewSweepCursorRepository(db) — the only correct shape.
+	bindingOK cursorBinding = iota
+	// bindingNotTheCtor: bound to something that is not the constructor at all.
+	bindingNotTheCtor
+	// bindingBadCtorArg: the constructor, called around something other than `db`.
+	bindingBadCtorArg
+)
+
+// classifyCursorBinding reports how expr binds `sweepCursorRepo`.
+//
+// The package qualifier is checked: without it, a locally-defined
+// `x.NewSweepCursorRepository(db)` returning anything at all would satisfy the binding
+// check. The ARGUMENT is checked for the reason given in this file's header — a real
+// repository around a nil or substituted DB fails every Load, and a failed Load is
+// non-fatal and restarts the sweep from the beginning.
+func classifyCursorBinding(expr ast.Expr) (cursorBinding, string) {
 	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return bindingNotTheCtor, ""
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != sweepCursorCtor {
+		return bindingNotTheCtor, ""
+	}
+	if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != sweepCursorPkg {
+		return bindingNotTheCtor, ""
+	}
+	if len(call.Args) != 1 {
+		return bindingBadCtorArg, fmt.Sprintf("%d arguments", len(call.Args))
+	}
+	id, ok := call.Args[0].(*ast.Ident)
+	if !ok {
+		// A call, a conversion, a selector — anything the guard cannot read as "the pool".
+		return bindingBadCtorArg, "a non-identifier expression"
+	}
+	if id.Name != dbVarName {
+		return bindingBadCtorArg, fmt.Sprintf("%q", id.Name)
+	}
+	return bindingOK, ""
+}
+
+// dbBindingIsRecognised reports whether one binding of the name `db` is one of the two
+// shapes main.go uses today: the `var db *pgxpool.Pool` declaration, or the assignment
+// whose right-hand side is `database.NewPool(...)`. decl distinguishes the two callers;
+// value is nil when the binding's per-name value cannot be read (a tuple assignment).
+func dbBindingIsRecognised(decl bool, declType ast.Expr, value ast.Expr, rhs []ast.Expr) bool {
+	if decl {
+		// `var db *pgxpool.Pool` — a pointer to a selector-qualified type, no value.
+		if value != nil {
+			return false
+		}
+		star, ok := declType.(*ast.StarExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := star.X.(*ast.SelectorExpr)
+		return ok && sel.Sel.Name == dbPoolType
+	}
+	// `db, err = database.NewPool(ctx, cfg)` — one call on the right of a tuple assign.
+	if len(rhs) != 1 {
+		return false
+	}
+	call, ok := rhs[0].(*ast.CallExpr)
 	if !ok {
 		return false
 	}
 	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != sweepCursorCtor {
+	if !ok || sel.Sel.Name != dbPoolCtor {
 		return false
 	}
 	pkg, ok := sel.X.(*ast.Ident)
-	return ok && pkg.Name == sweepCursorPkg
+	return ok && pkg.Name == dbPoolPkg
 }
 
 // callResult is what the AST walk records about one constructor call site.
@@ -121,37 +219,74 @@ func TestIssue1477SweepCursorWiringNoDrift(t *testing.T) {
 	sawCursorConstruction := false
 	var fieldAssignments []string
 	var varRebinds []string
+	var ctorArgFindings []string
+	var dbRebinds []string
 
 	// noteCursorBinding records one place where the name `sweepCursorRepo` is bound to a
-	// value. EVERY such binding must be the constructor call; anything else — `= nil`, a
-	// substitute repository, a shadowing `var` declaration, a tuple assignment whose
-	// per-name value cannot be read — is drift, because after it the four workers below
-	// receive a value this test never checked. This is the same fail-closed shape as
-	// fieldAssignments: the guard enumerates the bindings it can prove correct and treats
-	// everything else as a finding.
+	// value. EVERY such binding must be the constructor call AROUND `db`; anything else —
+	// `= nil`, a substitute repository, a shadowing `var` declaration, a tuple assignment
+	// whose per-name value cannot be read, or the real constructor around a substituted or
+	// nil DB — is drift, because after it the four workers below receive a value this test
+	// never checked. This is the same fail-closed shape as fieldAssignments: the guard
+	// enumerates the bindings it can prove correct and treats everything else as a finding.
 	noteCursorBinding := func(pos token.Pos, value ast.Expr) {
-		if value != nil && isSweepCursorCtorCall(value) {
-			sawCursorConstruction = true
+		if value == nil {
+			varRebinds = append(varRebinds, fset.Position(pos).String())
 			return
 		}
-		varRebinds = append(varRebinds, fset.Position(pos).String())
+		switch verdict, detail := classifyCursorBinding(value); verdict {
+		case bindingOK:
+			sawCursorConstruction = true
+		case bindingBadCtorArg:
+			ctorArgFindings = append(ctorArgFindings,
+				fmt.Sprintf("%s (built around %s)", fset.Position(pos).String(), detail))
+		default:
+			varRebinds = append(varRebinds, fset.Position(pos).String())
+		}
+	}
+
+	// noteDBBinding records one place where the name `db` is bound. Only the two shapes
+	// main.go uses today are accepted; anything else could put a nil or substituted pool
+	// under an argument that still reads `db` at the constructor call.
+	noteDBBinding := func(pos token.Pos, decl bool, declType, value ast.Expr, rhs []ast.Expr) {
+		if dbBindingIsRecognised(decl, declType, value, rhs) {
+			return
+		}
+		dbRebinds = append(dbRebinds, fset.Position(pos).String())
 	}
 
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
+		case *ast.RangeStmt:
+			// `for db := range …` / `for sweepCursorRepo := range …` shadow the real
+			// binding without ever being an AssignStmt or a ValueSpec.
+			for _, e := range []ast.Expr{node.Key, node.Value} {
+				id, ok := e.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				switch id.Name {
+				case sweepCursorVarName:
+					varRebinds = append(varRebinds, fset.Position(id.Pos()).String())
+				case dbVarName:
+					dbRebinds = append(dbRebinds, fset.Position(id.Pos()).String())
+				}
+			}
 		case *ast.ValueSpec:
 			// `var sweepCursorRepo repository.SweepCursorRepository` — a nil interface,
 			// and not an AssignStmt. Declared inside any nested scope it shadows the real
 			// binding for every call site after it.
 			for i, name := range node.Names {
-				if name.Name != sweepCursorVarName {
-					continue
-				}
 				var value ast.Expr
 				if len(node.Values) == len(node.Names) {
 					value = node.Values[i]
 				}
-				noteCursorBinding(name.Pos(), value)
+				switch name.Name {
+				case sweepCursorVarName:
+					noteCursorBinding(name.Pos(), value)
+				case dbVarName:
+					noteDBBinding(name.Pos(), true, node.Type, value, node.Values)
+				}
 			}
 		case *ast.AssignStmt:
 			for i, lhs := range node.Lhs {
@@ -163,12 +298,22 @@ func TestIssue1477SweepCursorWiringNoDrift(t *testing.T) {
 				// variable is a genuinely nil interface, every worker's
 				// `if deps.SweepCursors != nil` skips, and all four sweeps revert to the
 				// pre-#1477 starving behaviour while this test still passes.
-				if id, ok := lhs.(*ast.Ident); ok && id.Name == sweepCursorVarName {
+				if id, ok := lhs.(*ast.Ident); ok {
 					var value ast.Expr
 					if len(node.Lhs) == len(node.Rhs) {
 						value = node.Rhs[i]
 					}
-					noteCursorBinding(id.Pos(), value)
+					switch id.Name {
+					case sweepCursorVarName:
+						noteCursorBinding(id.Pos(), value)
+					case dbVarName:
+						// (a2) …and so must the POOL that constructor is called around.
+						// `db = nil` one line above the call leaves the argument reading
+						// `db` while the repository wraps a typed-nil pool — a NON-nil
+						// interface, so the workers' nil guards pass and the sweeps panic
+						// rather than degrade.
+						noteDBBinding(id.Pos(), false, nil, value, node.Rhs)
+					}
 				}
 				// (b) Nothing may assign to a .SweepCursors FIELD. Legitimate wiring
 				// happens only inside the composite literals checked below; a
@@ -246,6 +391,29 @@ func TestIssue1477SweepCursorWiringNoDrift(t *testing.T) {
 			"because they only look at the NAME. The name must be bound exactly once, by the "+
 			"constructor, and never rebound.", sweepCursorVarName, at, sweepCursorPkg, sweepCursorCtor,
 			sweepCursorVarName)
+	}
+
+	for _, at := range ctorArgFindings {
+		t.Errorf("WIRING DRIFT: main.go binds %s at %s to repository.%s(...) called around something "+
+			"other than the shared %q pool.\n"+
+			"  The constructor is not a validator: it wraps whatever it is given. A nil or substituted "+
+			"DB makes every Load and Save fail, and resumeSweep (queue/jobs/sweep_resume.go) treats a "+
+			"failed Load as NON-FATAL and starts the run FROM THE BEGINNING — the pre-#1477 starving "+
+			"behaviour, reached without touching any of the four %s field assignments this test checks "+
+			"below. If the pool legitimately moved or was renamed, update %s in this test; that edit is "+
+			"the reviewable act the guard exists to force.",
+			sweepCursorVarName, at, sweepCursorCtor, dbVarName, sweepCursorField, "dbVarName")
+	}
+
+	for _, at := range dbRebinds {
+		t.Errorf("WIRING DRIFT: main.go binds %q at %s in a shape this guard does not recognise.\n"+
+			"  %s is checked to be built around %q by name, so a rebinding or shadowing of %q defeats "+
+			"that check while the argument still reads correctly. Only two shapes are accepted: the "+
+			"`var %s *pgxpool.Pool` declaration and the `%s, err = %s.%s(...)` assignment. A "+
+			"*pgxpool.Pool set to nil is worse than a nil interface: stored in the repository's DB "+
+			"field it is a NON-nil interface, so every worker's `!= nil` guard passes and the sweeps "+
+			"panic instead of degrading.",
+			dbVarName, at, sweepCursorCtor, dbVarName, dbVarName, dbVarName, dbVarName, dbPoolPkg, dbPoolCtor)
 	}
 
 	for _, at := range fieldAssignments {
