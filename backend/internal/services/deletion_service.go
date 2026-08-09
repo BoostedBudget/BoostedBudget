@@ -1101,7 +1101,9 @@ func cascadeErrorIsRecognisedTransient(err error) bool {
 	// cancel had already landed. That is the one direction this function's doc comment says must never
 	// happen. Reachable in the exact shape CC-2 was written for: pgconn gives each candidate host its
 	// own connect-timeout context and joins every host's error (pgx v5.9.2, pgconn.go:251 and :269), so
-	// a timeout and an authentication failure arrive as siblings.
+	// a timeout and an authentication failure end up in one tree — as COUSINS beneath sibling per-dial
+	// wrappers, not as direct siblings, which is the correction the CE re-review made to this comment's
+	// first draft. The walk is indifferent to the difference; the claim about the shape was not.
 	//
 	// Hoisting it costs nothing the transient legs needed: a cancelled or deadline-expired cascade with
 	// no permanent SQLSTATE in its chain still falls through to the check below and still reads
