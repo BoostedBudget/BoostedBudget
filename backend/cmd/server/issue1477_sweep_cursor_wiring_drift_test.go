@@ -97,6 +97,24 @@ package main
 //     holes in. The fail-closed direction costs one rename; the other direction costs a
 //     silent bypass.
 //
+// WHY THERE IS A SECOND TEST IN THIS FILE (#1432 round 14, findings CB-1 and CB-2).
+// Every bypass listed above was demonstrated by HAND, against a throwaway copy of main.go,
+// and then closed. Nothing re-ran them. That left the classifier in the position this whole
+// branch keeps objecting to: its discrimination was provable by READING and by nothing else,
+// so a future edit that made `classifyCursorBinding` or the walk accept one of these shapes
+// again would be caught by no test — the real-main.go assertion only fails if PRODUCTION
+// drifts, never if the GUARD does. `bindingBadCtorArg` in particular had five occurrences,
+// all of them in the classifier itself and none in any assertion.
+//
+// TestIssue1477SweepCursorClassifierFixtures closes that by driving the SAME walk over
+// synthetic in-test sources, one per bypass shape, each asserting the specific rejection
+// reason rather than merely "an error occurred", plus a POSITIVE CONTROL whose correct
+// wiring must produce no findings at all. Without the positive control every negative case
+// would still pass if the classifier simply rejected everything.
+//
+// The two tests are complementary and neither replaces the other: the real-main.go
+// assertion catches drift in PRODUCTION WIRING, the fixtures catch drift in the GUARD.
+//
 // NOT covered, stated so it is not mistaken for covered: whether the four constructed
 // workers are actually REGISTERED with River. That is a materially larger surface (the
 // river.Workers registry, its AddWorker calls and the queue config) and belongs in its own
@@ -113,6 +131,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -247,13 +267,40 @@ type callResult struct {
 	fieldValue string
 }
 
-func TestIssue1477SweepCursorWiringNoDrift(t *testing.T) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "main.go", nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("could not parse main.go: %v", err)
-	}
+// Stable identifiers for every rejection this guard can produce. They exist so the fixture
+// test can assert the SPECIFIC reason a synthetic source was rejected — "an error occurred"
+// would be satisfied by a classifier that rejected everything, including correct wiring.
+const (
+	findingVacuousScan      = "vacuous-scan"
+	findingNoConstruction   = "no-construction"
+	findingCursorRebound    = "cursor-rebound"
+	findingBadCtorArg       = "bad-ctor-arg"
+	findingDBRebound        = "db-rebound"
+	findingAddressTaken     = "address-taken"
+	findingShadowingParam   = "shadowing-param"
+	findingFieldAssignment  = "field-assignment"
+	findingCtorMissing      = "ctor-missing"
+	findingNotInlineLiteral = "not-inline-literal"
+	findingWrongLiteralType = "wrong-literal-type"
+	findingMissingField     = "missing-field"
+	findingNilField         = "nil-field"
+	findingWrongFieldValue  = "wrong-field-value"
+)
 
+// cursorWiringFinding is one rejection: a stable kind for assertions, and the full operator
+// -facing message the real-main.go test reports verbatim.
+type cursorWiringFinding struct {
+	kind    string
+	message string
+}
+
+// scanSweepCursorWiring runs the whole guard over one parsed file and returns every
+// rejection it found, in a deterministic order. Splitting it out from the test body is what
+// lets the fixture test drive the SAME walk over synthetic sources instead of duplicating
+// it — a duplicated walk would drift from this one and prove nothing about it.
+//
+// A findingVacuousScan result is fatal to the caller: an empty scan is not a pass.
+func scanSweepCursorWiring(fset *token.FileSet, file *ast.File) []cursorWiringFinding {
 	calls := map[string][]callResult{}
 	totalJobsCtorCalls := 0
 	sawCursorConstruction := false
@@ -449,118 +496,307 @@ func TestIssue1477SweepCursorWiringNoDrift(t *testing.T) {
 		return true
 	})
 
+	var findings []cursorWiringFinding
+	add := func(kind, format string, args ...any) {
+		findings = append(findings, cursorWiringFinding{kind: kind, message: fmt.Sprintf(format, args...)})
+	}
+
 	// Fail closed if the scan found nothing to check. An empty scan is not a pass:
 	// a rename of the `jobs` import alias, or main.go being moved or split, would
 	// otherwise silence this guard entirely while it still reported success.
 	if totalJobsCtorCalls == 0 {
-		t.Fatalf("found ZERO calls to any of the four jobs.New*Worker constructors in main.go — the "+
-			"scan is vacuous, not clean. main.go parsed (%d top-level decls), so the worker "+
-			"construction moved or the `jobs` import alias changed; update this test to follow it.",
+		add(findingVacuousScan,
+			"found ZERO calls to any of the four jobs.New*Worker constructors in main.go — the "+
+				"scan is vacuous, not clean. main.go parsed (%d top-level decls), so the worker "+
+				"construction moved or the `jobs` import alias changed; update this test to follow it.",
 			len(file.Decls))
+		return findings
 	}
 
 	if !sawCursorConstruction {
-		t.Errorf("main.go never binds %s to a call to %s.%s(...) — the value the four sites pass is "+
-			"not a real sweep-cursor repository (Issue #1477), so every worker falls back to the "+
-			"pre-#1477 starving behaviour.", sweepCursorVarName, sweepCursorPkg, sweepCursorCtor)
+		add(findingNoConstruction,
+			"main.go never binds %s to a call to %s.%s(...) — the value the four sites pass is "+
+				"not a real sweep-cursor repository (Issue #1477), so every worker falls back to the "+
+				"pre-#1477 starving behaviour.", sweepCursorVarName, sweepCursorPkg, sweepCursorCtor)
 	}
 
 	for _, at := range varRebinds {
-		t.Errorf("WIRING DRIFT: main.go binds %s at %s to something other than %s.%s(...).\n"+
-			"  The constructor returns an INTERFACE, so `%s = nil` yields a genuinely nil interface: "+
-			"every worker's `if deps.SweepCursors != nil` skips, all four sweeps silently revert to "+
-			"the pre-#1477 starving behaviour, and the four per-site literal checks below still pass "+
-			"because they only look at the NAME. The name must be bound exactly once, by the "+
-			"constructor, and never rebound.", sweepCursorVarName, at, sweepCursorPkg, sweepCursorCtor,
+		add(findingCursorRebound,
+			"WIRING DRIFT: main.go binds %s at %s to something other than %s.%s(...).\n"+
+				"  The constructor returns an INTERFACE, so `%s = nil` yields a genuinely nil interface: "+
+				"every worker's `if deps.SweepCursors != nil` skips, all four sweeps silently revert to "+
+				"the pre-#1477 starving behaviour, and the four per-site literal checks below still pass "+
+				"because they only look at the NAME. The name must be bound exactly once, by the "+
+				"constructor, and never rebound.", sweepCursorVarName, at, sweepCursorPkg, sweepCursorCtor,
 			sweepCursorVarName)
 	}
 
 	for _, at := range ctorArgFindings {
-		t.Errorf("WIRING DRIFT: main.go binds %s at %s to repository.%s(...) called around something "+
-			"other than the shared %q pool.\n"+
-			"  The constructor is not a validator: it wraps whatever it is given. A nil or substituted "+
-			"DB makes every Load and Save fail, and resumeSweep (queue/jobs/sweep_resume.go) treats a "+
-			"failed Load as NON-FATAL and starts the run FROM THE BEGINNING — the pre-#1477 starving "+
-			"behaviour, reached without touching any of the four %s field assignments this test checks "+
-			"below. If the pool legitimately moved or was renamed, update %s in this test; that edit is "+
-			"the reviewable act the guard exists to force.",
+		add(findingBadCtorArg,
+			"WIRING DRIFT: main.go binds %s at %s to repository.%s(...) called around something "+
+				"other than the shared %q pool.\n"+
+				"  The constructor is not a validator: it wraps whatever it is given. A nil or substituted "+
+				"DB makes every Load and Save fail, and resumeSweep (queue/jobs/sweep_resume.go) treats a "+
+				"failed Load as NON-FATAL and starts the run FROM THE BEGINNING — the pre-#1477 starving "+
+				"behaviour, reached without touching any of the four %s field assignments this test checks "+
+				"below. If the pool legitimately moved or was renamed, update %s in this test; that edit is "+
+				"the reviewable act the guard exists to force.",
 			sweepCursorVarName, at, sweepCursorCtor, dbVarName, sweepCursorField, "dbVarName")
 	}
 
 	for _, at := range dbRebinds {
-		t.Errorf("WIRING DRIFT: main.go binds %q at %s in a shape this guard does not recognise.\n"+
-			"  %s is checked to be built around %q by name, so a rebinding or shadowing of %q defeats "+
-			"that check while the argument still reads correctly. Only two shapes are accepted: the "+
-			"`var %s *pgxpool.Pool` declaration and the `%s, err = %s.%s(...)` assignment. A "+
-			"*pgxpool.Pool set to nil is worse than a nil interface: stored in the repository's DB "+
-			"field it is a NON-nil interface, so every worker's `!= nil` guard passes and the sweeps "+
-			"panic instead of degrading.",
+		add(findingDBRebound,
+			"WIRING DRIFT: main.go binds %q at %s in a shape this guard does not recognise.\n"+
+				"  %s is checked to be built around %q by name, so a rebinding or shadowing of %q defeats "+
+				"that check while the argument still reads correctly. Only two shapes are accepted: the "+
+				"`var %s *pgxpool.Pool` declaration and the `%s, err = %s.%s(...)` assignment. A "+
+				"*pgxpool.Pool set to nil is worse than a nil interface: stored in the repository's DB "+
+				"field it is a NON-nil interface, so every worker's `!= nil` guard passes and the sweeps "+
+				"panic instead of degrading.",
 			dbVarName, at, sweepCursorCtor, dbVarName, dbVarName, dbVarName, dbVarName, dbPoolPkg, dbPoolCtor)
 	}
 
 	for _, at := range addressTaken {
-		t.Errorf("WIRING DRIFT: main.go takes the ADDRESS of a guarded variable at %s.\n"+
-			"  Every other check in this guard reads the left-hand side of an assignment as an "+
-			"identifier or a selector. `*p = nil` through a pointer is neither, so it nils the shared "+
-			"value for all four sweeps with nothing to see: `go build`, `go vet` and this test were all "+
-			"clean against the demonstrated bypass\n"+
-			"    func(p *repository.SweepCursorRepository) { *p = nil }(&%s)\n"+
-			"  Since the guard cannot follow a pointer, it forbids creating one. If main.go legitimately "+
-			"needs the address of %q or %q, that is the reviewable act this guard exists to force.",
+		add(findingAddressTaken,
+			"WIRING DRIFT: main.go takes the ADDRESS of a guarded variable at %s.\n"+
+				"  Every other check in this guard reads the left-hand side of an assignment as an "+
+				"identifier or a selector. `*p = nil` through a pointer is neither, so it nils the shared "+
+				"value for all four sweeps with nothing to see: `go build`, `go vet` and this test were all "+
+				"clean against the demonstrated bypass\n"+
+				"    func(p *repository.SweepCursorRepository) { *p = nil }(&%s)\n"+
+				"  Since the guard cannot follow a pointer, it forbids creating one. If main.go legitimately "+
+				"needs the address of %q or %q, that is the reviewable act this guard exists to force.",
 			at, sweepCursorVarName, sweepCursorVarName, dbVarName)
 	}
 
 	for _, at := range shadowingParams {
-		t.Errorf("WIRING DRIFT: main.go binds a guarded name as a function parameter/result/receiver at %s.\n"+
-			"  A parameter is an *ast.Field, so it is invisible to the ValueSpec, AssignStmt and "+
-			"RangeStmt cases that catch every other shadowing form — while the inline-literal check and "+
-			"the by-name %s check below both still read as correct. Demonstrated bypass:\n"+
-			"    func(%s repository.SweepCursorRepository) { … SweepCursors: %s … }(nil)\n"+
-			"  %q and %q must name the shared values built at the top of main.go and nothing else.",
+		add(findingShadowingParam,
+			"WIRING DRIFT: main.go binds a guarded name as a function parameter/result/receiver at %s.\n"+
+				"  A parameter is an *ast.Field, so it is invisible to the ValueSpec, AssignStmt and "+
+				"RangeStmt cases that catch every other shadowing form — while the inline-literal check and "+
+				"the by-name %s check below both still read as correct. Demonstrated bypass:\n"+
+				"    func(%s repository.SweepCursorRepository) { … SweepCursors: %s … }(nil)\n"+
+				"  %q and %q must name the shared values built at the top of main.go and nothing else.",
 			at, sweepCursorField, sweepCursorVarName, sweepCursorVarName, sweepCursorVarName, dbVarName)
 	}
 
 	for _, at := range fieldAssignments {
-		t.Errorf("WIRING DRIFT: main.go assigns to a .%s field at %s.\n"+
-			"  The cursor may only be wired inside the constructor's inline Deps literal. A "+
-			"post-construction reassignment defeats every literal-level check while the worker "+
-			"silently receives nil.", sweepCursorField, at)
+		add(findingFieldAssignment,
+			"WIRING DRIFT: main.go assigns to a .%s field at %s.\n"+
+				"  The cursor may only be wired inside the constructor's inline Deps literal. A "+
+				"post-construction reassignment defeats every literal-level check while the worker "+
+				"silently receives nil.", sweepCursorField, at)
 	}
 
 	for _, req := range requiredSweepWiring {
 		sites := calls[req.ctor]
 		if len(sites) == 0 {
-			t.Errorf("main.go never calls jobs.%s(...) — this sweep is no longer constructed here, "+
-				"so its cursor wiring cannot be checked.\n  %s", req.ctor, req.why)
+			add(findingCtorMissing,
+				"main.go never calls jobs.%s(...) — this sweep is no longer constructed here, "+
+					"so its cursor wiring cannot be checked.\n  %s", req.ctor, req.why)
 			continue
 		}
 		for _, site := range sites {
 			switch {
 			case !site.inlineLit:
-				t.Errorf("WIRING DRIFT: jobs.%s at %s is not called with a single INLINE "+
-					"jobs.%s{...} literal.\n  %s\n"+
-					"  Building the Deps in a variable first opens a window in which %s can be "+
-					"reassigned after the literal has satisfied this test — a demonstrated bypass. "+
-					"Keep the literal at the call site.",
+				add(findingNotInlineLiteral,
+					"WIRING DRIFT: jobs.%s at %s is not called with a single INLINE "+
+						"jobs.%s{...} literal.\n  %s\n"+
+						"  Building the Deps in a variable first opens a window in which %s can be "+
+						"reassigned after the literal has satisfied this test — a demonstrated bypass. "+
+						"Keep the literal at the call site.",
 					req.ctor, site.pos, req.depsType, req.why, sweepCursorField)
 			case site.litType != req.depsType:
-				t.Errorf("WIRING DRIFT: jobs.%s at %s is called with a jobs.%s literal, expected jobs.%s.\n  %s",
+				add(findingWrongLiteralType,
+					"WIRING DRIFT: jobs.%s at %s is called with a jobs.%s literal, expected jobs.%s.\n  %s",
 					req.ctor, site.pos, site.litType, req.depsType, req.why)
 			case !site.hasField:
-				t.Errorf("WIRING DRIFT: jobs.%s at %s does not set %s.\n  %s\n"+
-					"  The worker nil-guards this field, so the omission is invisible at compile time, "+
-					"at startup, and to every unit test.",
+				add(findingMissingField,
+					"WIRING DRIFT: jobs.%s at %s does not set %s.\n  %s\n"+
+						"  The worker nil-guards this field, so the omission is invisible at compile time, "+
+						"at startup, and to every unit test.",
 					req.ctor, site.pos, sweepCursorField, req.why)
 			case site.fieldValue == "nil":
-				t.Errorf("WIRING DRIFT: jobs.%s at %s sets %s to a literal nil.\n  %s",
+				add(findingNilField,
+					"WIRING DRIFT: jobs.%s at %s sets %s to a literal nil.\n  %s",
 					req.ctor, site.pos, sweepCursorField, req.why)
 			case site.fieldValue != sweepCursorVarName:
-				t.Errorf("WIRING DRIFT: jobs.%s at %s sets %s to %q, not the shared %q built by "+
-					"repository.%s.\n  %s\n  All four sweeps must share ONE repository value; a "+
-					"per-sweep substitute is a change that needs review, not a silent edit.",
+				add(findingWrongFieldValue,
+					"WIRING DRIFT: jobs.%s at %s sets %s to %q, not the shared %q built by "+
+						"repository.%s.\n  %s\n  All four sweeps must share ONE repository value; a "+
+						"per-sweep substitute is a change that needs review, not a silent edit.",
 					req.ctor, site.pos, sweepCursorField, site.fieldValue, sweepCursorVarName,
 					sweepCursorCtor, req.why)
 			}
 		}
+	}
+
+	return findings
+}
+
+// TestIssue1477SweepCursorWiringNoDrift is the PRODUCTION half of this guard: it runs the
+// scan over the real main.go read from disk. It is what catches drift in the wiring itself.
+func TestIssue1477SweepCursorWiringNoDrift(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("could not parse main.go: %v", err)
+	}
+
+	for _, f := range scanSweepCursorWiring(fset, file) {
+		if f.kind == findingVacuousScan {
+			t.Fatal(f.message)
+		}
+		t.Error(f.message)
+	}
+}
+
+// --- Synthetic-source fixtures (#1432 round 14, CB-1 / CB-2) ---------------------------
+//
+// Everything below drives the SAME scan over in-test sources. See the header for why: the
+// real-main.go assertion cannot fail when the GUARD regresses, only when production does.
+
+// cursorFixtureSource wraps one snippet in the smallest main.go-shaped program the scan can
+// read: the two recognised `db` bindings, then the snippet (which must bind
+// sweepCursorRepo), then the four worker constructions wired correctly. Only the snippet
+// varies between fixtures, so any difference in the findings is attributable to it.
+//
+// The sources are PARSED, never compiled — go/parser does no name resolution, so undeclared
+// identifiers like `ctx` and `pgxpool` are fine and no import block is needed.
+func cursorFixtureSource(snippet string) string {
+	return `package main
+
+func main() {
+	var db *pgxpool.Pool
+	db, err = database.NewPool(ctx, cfg)
+	_ = err
+` + snippet + `
+	w1 = jobs.NewScheduledDeletionCheckWorker(jobs.ScheduledDeletionCheckWorkerDeps{SweepCursors: sweepCursorRepo})
+	w2 = jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{SweepCursors: sweepCursorRepo})
+	w3 = jobs.NewItemCleanupCheckWorker(jobs.ItemCleanupCheckWorkerDeps{SweepCursors: sweepCursorRepo})
+	w4 = jobs.NewPlaidOrphanRetryWorker(jobs.PlaidOrphanRetryWorkerDeps{SweepCursors: sweepCursorRepo})
+}
+`
+}
+
+// correctCursorBinding is the one shape the guard accepts. Every negative fixture below
+// starts from it and changes exactly one thing.
+const correctCursorBinding = "\tsweepCursorRepo = repository.NewSweepCursorRepository(db)"
+
+func TestIssue1477SweepCursorClassifierFixtures(t *testing.T) {
+	tests := []struct {
+		name string
+		// why records which round-12/13 bypass this fixture pins down.
+		why string
+		// snippet replaces the cursor binding (and any drift) in the fixture program.
+		snippet string
+		// wantKinds is the EXACT set of rejection kinds the scan must produce — not "at
+		// least one error". An exact set is what makes the positive control meaningful and
+		// what makes a mutation redden exactly one fixture.
+		wantKinds []string
+		// wantDetail, when set, must appear in the concatenated messages: it pins the
+		// rejection to the specific offending construct rather than the category.
+		wantDetail string
+	}{
+		{
+			name:      "PositiveControl_CorrectWiringIsAccepted",
+			why:       "MANDATORY control: without it every case below passes if the scan rejects everything",
+			snippet:   correctCursorBinding,
+			wantKinds: nil,
+		},
+		{
+			name:      "CB1_PlainReassignmentToNil",
+			why:       "CB-1: `sweepCursorRepo = nil` — rated Irreversible, proven by hand in round 12 and never committed until now",
+			snippet:   correctCursorBinding + "\n\tsweepCursorRepo = nil",
+			wantKinds: []string{findingCursorRebound},
+		},
+		{
+			name:       "CB2_ConstructorAroundLiteralNil",
+			why:        "CB-2: `NewSweepCursorRepository(nil)` builds a real repository around a nil DB; bindingBadCtorArg had zero assertions before this fixture",
+			snippet:    "\tsweepCursorRepo = repository.NewSweepCursorRepository(nil)",
+			wantKinds:  []string{findingNoConstruction, findingBadCtorArg},
+			wantDetail: `built around "nil"`,
+		},
+		{
+			name:      "VarSpecShadowing",
+			why:       "a `var` declaration is a ValueSpec, not an AssignStmt: it shadows with a nil interface",
+			snippet:   correctCursorBinding + "\n\tif cond {\n\t\tvar sweepCursorRepo repository.SweepCursorRepository\n\t\t_ = sweepCursorRepo\n\t}",
+			wantKinds: []string{findingCursorRebound},
+		},
+		{
+			name:      "RangeStmtShadowingDB",
+			why:       "`for db := range …` binds the pool name without ever being an AssignStmt or a ValueSpec",
+			snippet:   correctCursorBinding + "\n\tfor db := range pools {\n\t\t_ = db\n\t}",
+			wantKinds: []string{findingDBRebound},
+		},
+		{
+			name:      "PointerIndirectionViaAddressOf",
+			why:       "`*p = nil` has a StarExpr LHS, invisible to every Ident/Selector check; the guard forbids taking the address instead",
+			snippet:   correctCursorBinding + "\n\tfunc(p *repository.SweepCursorRepository) { *p = nil }(&sweepCursorRepo)",
+			wantKinds: []string{findingAddressTaken},
+		},
+		{
+			name:      "ParameterNamedSweepCursorRepo",
+			why:       "a parameter is an *ast.Field: it shadows the real value while every by-name check still reads correct",
+			snippet:   correctCursorBinding + "\n\tfunc(sweepCursorRepo repository.SweepCursorRepository) { _ = sweepCursorRepo }(nil)",
+			wantKinds: []string{findingShadowingParam},
+		},
+		{
+			name:      "ParameterNamedDB",
+			why:       "the same hole existed for the pool name",
+			snippet:   correctCursorBinding + "\n\tfunc(db *pgxpool.Pool) { _ = db }(nil)",
+			wantKinds: []string{findingShadowingParam},
+		},
+		{
+			name:      "PoolNeuteredBeforeConstructor",
+			why:       "`db = nil` leaves the constructor argument reading `db` while it wraps a typed-nil pool — a NON-nil interface, so the workers panic instead of degrading",
+			snippet:   "\tdb = nil\n" + correctCursorBinding,
+			wantKinds: []string{findingDBRebound},
+		},
+		{
+			name:      "WrongPackageConstructor",
+			why:       "a locally-defined constructor of the right name returning anything at all would otherwise satisfy the binding check",
+			snippet:   "\tsweepCursorRepo = fakerepo.NewSweepCursorRepository(db)",
+			wantKinds: []string{findingNoConstruction, findingCursorRebound},
+		},
+		{
+			name:       "PostConstructionFieldAssignment",
+			why:        "the original Codex bypass: build the Deps in a variable, neuter the field, then call the constructor",
+			snippet:    correctCursorBinding + "\n\tdeps.SweepCursors = nil",
+			wantKinds:  []string{findingFieldAssignment},
+			wantDetail: "assigns to a .SweepCursors field",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			src := cursorFixtureSource(tc.snippet)
+			file, err := parser.ParseFile(fset, "fixture.go", src, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("fixture source does not parse (%v); the fixture is broken, not the guard:\n%s", err, src)
+			}
+
+			findings := scanSweepCursorWiring(fset, file)
+			var gotKinds []string
+			var messages []string
+			for _, f := range findings {
+				gotKinds = append(gotKinds, f.kind)
+				messages = append(messages, f.message)
+			}
+			sort.Strings(gotKinds)
+			want := append([]string(nil), tc.wantKinds...)
+			sort.Strings(want)
+
+			if strings.Join(gotKinds, ",") != strings.Join(want, ",") {
+				t.Fatalf("scan produced the wrong rejection reasons.\n  why this fixture exists: %s\n"+
+					"  want kinds: %v\n  got kinds:  %v\n  messages:\n%s\n  source:\n%s",
+					tc.why, want, gotKinds, strings.Join(messages, "\n---\n"), src)
+			}
+			if tc.wantDetail != "" && !strings.Contains(strings.Join(messages, "\n"), tc.wantDetail) {
+				t.Errorf("rejection reason is the right CATEGORY but does not name the offending construct.\n"+
+					"  want message containing: %q\n  messages:\n%s", tc.wantDetail, strings.Join(messages, "\n---\n"))
+			}
+		})
 	}
 }
