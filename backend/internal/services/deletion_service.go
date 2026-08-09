@@ -1097,30 +1097,40 @@ func cascadeErrorIsRecognisedTransient(err error) bool {
 	// A CONNECTION ATTEMPT THAT NEVER REACHED POSTGRES CARRIES NO SQLSTATE, so the class-08
 	// ("connection exception") entry in the allowlist below cannot see it. DeleteUserCascade opens
 	// its transaction only AFTER the external cleanup, and a pool acquisition that cannot reach the
-	// server fails there as a *pgconn.ConnectError — never a *pgconn.PgError — so the errors.As
-	// below missed it and the syntactic default recorded a PERMANENT operator artifact for a blip
-	// the very next run recovers from. Nothing ever clears such a row. Whoever put "08" in the
-	// allowlist meant connection failures to be transient; this is the same intent applied to the
-	// shape the failure actually arrives in, not a widening of the default. Round 13, Codex review
-	// of 127dc9c2..62014b4d.
+	// server fails there as a *pgconn.ConnectError, which carries no SQLSTATE — so errors.As for a
+	// *pgconn.PgError missed it and the syntactic default recorded a PERMANENT operator artifact for
+	// a blip the very next run recovers from. Nothing ever clears such a row. Whoever put "08" in the
+	// allowlist meant connection failures to be transient; recognising ConnectError applies that same
+	// intent to the shape the failure actually arrives in. Round 13, Codex review of
+	// 127dc9c2..62014b4d.
 	//
-	// ⚠ ATTACKED, AND THE ATTACK STRENGTHENS IT. The obvious objection is that a ConnectError can
-	// also be PERMANENT — a rotated password, a dropped database — and staying silent would then hide
-	// a real harm. It would not, because RecordDeletionResidue writes to THAT SAME POSTGRES. If the
-	// connection attempt cannot succeed, the residue write cannot succeed either, and the old
-	// behaviour produced not a record but a second log line about a failed record. So the choice here
-	// is not "record vs. stay silent"; it is "attempt an impossible write and log twice, or classify
-	// honestly". The operator signal for a database that is unreachable is not a residue row.
-	var connErr *pgconn.ConnectError
-	if errors.As(err, &connErr) {
-		return true
-	}
+	// ⚠ ORDER IS LOAD-BEARING, AND THE FIRST ATTEMPT AT THIS GOT IT WRONG. The first version returned
+	// true for ANY ConnectError, ahead of the SQLSTATE check, on the argument that a permanent
+	// connection failure could not be recorded anyway because RecordDeletionResidue writes to that
+	// same Postgres. The round-13 Codex RE-REVIEW refuted both halves and it was right:
+	//
+	//   * pgconn wraps the server's STARTUP ErrorResponse inside a ConnectError (pgconn.go, the
+	//     connect path), so 28P01 invalid_password and 3D000 invalid_catalog_name — both permanent —
+	//     arrive as a ConnectError that DOES contain a *pgconn.PgError. Returning true for those
+	//     silently drops the human-facing Error log AND the residue for a harm that never self-heals.
+	//   * "same database, therefore unwritable" is not categorical: RecordDeletionResidue issues its
+	//     own pool Exec, and a pool Exec can be served by an ALREADY-ESTABLISHED connection that
+	//     predates the credential rotation which is failing new handshakes.
+	//
+	// So the SQLSTATE check runs FIRST and a ConnectError is only transient when it carries no
+	// SQLSTATE at all — i.e. when the failure was the network, not the server's answer. A ConnectError
+	// wrapping 57P03 cannot_connect_now still reads transient, correctly, via class 57.
+	//
 	// errors.As, not a type assertion: the repository wraps every failure in fmt.Errorf, so no
 	// production caller ever sees a bare *pgconn.PgError here.
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && len(pgErr.Code) >= 2 {
 		_, transient := transientCascadeSQLSTATEClasses[pgErr.Code[:2]]
 		return transient
+	}
+	var connErr *pgconn.ConnectError
+	if errors.As(err, &connErr) {
+		return true
 	}
 	return false
 }

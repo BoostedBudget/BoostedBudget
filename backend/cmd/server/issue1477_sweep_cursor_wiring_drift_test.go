@@ -87,6 +87,16 @@ package main
 //     receives nil. The same hole existed for `db`. Both names are now rejected as
 //     parameters, results and receivers anywhere in main.go.
 //
+//     ⚠ KNOWN OVER-REACH, recorded rather than trimmed. The scan covers EVERY FuncDecl in
+//     main.go, so a future top-level helper — `func checkHealth(db *pgxpool.Pool)` — would
+//     be reported even though it is outside main() and cannot shadow main's local. The
+//     round-13 Codex re-review raised this and judged it nuisance-level: renaming the
+//     parameter to `pool` satisfies the guard in one edit. Narrowing the rule to "inside
+//     main() only" would mean deciding which function is main and how the four call sites
+//     are reached from it, which is the sort of clever filter this guard keeps finding
+//     holes in. The fail-closed direction costs one rename; the other direction costs a
+//     silent bypass.
+//
 // NOT covered, stated so it is not mistaken for covered: whether the four constructed
 // workers are actually REGISTERED with River. That is a materially larger surface (the
 // river.Workers registry, its AddWorker calls and the queue config) and belongs in its own
