@@ -1,18 +1,9 @@
 # Last adversarially-reviewed commit. See scripts/check-review-provenance.sh.
 # Update ONLY after a review has actually run, with:
 #   scripts/check-review-provenance.sh --stamp "<reviewer>" "<evidence>"
-#
-# reviewed_sha was 2060ef4b6ae53c14d2de3a188635d5f99f150459 until batch BA (#1432 round 13,
-# finding BA-4). That was never true: the review ran over ..127dc9c2 and 2060ef4b is a
-# LATER commit (verified: `git merge-base --is-ancestor 2060ef4b 127dc9c2` fails). The
-# reviewed_range field said so all along and the guard never read it. Two working bypasses
-# — the shared sweepCursorRepo nil-ing (BA-1) and the merge-commit scan hole (BA-2) — were
-# sitting inside exactly that falsely-claimed gap. reviewed_sha is now the commit that was
-# actually reviewed, so the guard is RED until batch BD's review runs and re-stamps it.
-# That red is the guard working. Do not stamp it green without a review.
 
-reviewed_sha: 127dc9c22e07459f1ff50071b952ec270fd3e76f
-reviewed_range: ff964e625f5a208d24d0c07ecb435dcb5a825297..127dc9c22e07459f1ff50071b952ec270fd3e76f
-reviewer: codex:codex-rescue (Codex, task mode, fresh session; thread 019fe2d8-777c)
-reviewed_at: 2026-08-08
-evidence: reviewed ff964e625f5a208d24d0c07ecb435dcb5a825297..127dc9c22e07459f1ff50071b952ec270fd3e76f and returned 3 demonstrated bypasses (rename-hides-deletion, endpoint-diff revert, post-literal deps.SweepCursors=nil); all 3 closed in 2060ef4b, which is NOT covered by this record and is owed a review
+reviewed_sha: 5d1e0835759c49d2c95450d96da44df09944a1e4
+reviewed_range: 127dc9c22e07459f1ff50071b952ec270fd3e76f..5d1e0835759c49d2c95450d96da44df09944a1e4
+reviewer: codex:codex-rescue (Codex CLI 0.146.0, task mode, effort high; 6 fresh sessions)
+reviewed_at: 2026-08-09
+evidence: 6 Codex passes over 127dc9c2..5d1e0835. Jobs task-msl2sk1z-0tork2 (session 019fe3f6-4cf7) 2 questions: sweep-cursor + provenance guard bypasses, and deletion cascade residue; then task-msl3d46s-uggm8i (019fe404-f034), task-msl3os93-hxg2b5 (019fe40d-3e29), task-msl410di-250bxw (019fe415-f29e), task-msl4i2y7-o410n7 (019fe422-19f6) each re-reviewing the prior fix and each REFUTING it, and task-msl4nydg-0b5in3 (019fe426-4851) returning clean. FIXED: pointer-indirection and parameter-shadowing bypasses of the sweep-cursor drift guard (both executed against the pre-fix guard and re-run against the fixed one); ConnectError misclassification in cascadeErrorIsRecognisedTransient, over four corrected iterations. NOT COVERED, recorded not closed: River worker registration is still unguarded; the provenance guard's agent-behaviour carve-out is itself a directory allow-list; a Plaid disconnect on a user with no Paddle subscription records no residue; 45 of 62 excluded MCP spec-index entries carry manifestClass read from the excluded() helper default. Uncommitted working-tree edits are outside this guard's scope by design.
