@@ -355,11 +355,21 @@ func TestPlaidOrphanRetrySweepCursor_TieGroupFillsTheCap_AdvancesPastItAndReache
 //     only they have to fill the cap. The row at the TAIL may be FULLY PROCESSABLE and is sacrificed
 //     anyway.
 //
-//     For this sweep that row is a removable Plaid Item that is never retried on any run — and once
-//     its 30-day token TTL elapses (`token_expires_at`, migration 000135) no automated path can ever
-//     remove it. These two tests construct the case rather than argue it: 4b proves the tail row is
-//     never reached, 4c proves — with the identical fixture — that it would have been resolved had it
+//     These two tests construct the case rather than argue it: 4b proves the tail row is never
+//     reached, 4c proves — with the identical fixture — that it would have been resolved had it
 //     been reached, so 4b's negative is a sacrifice and not a row that was never processable.
+//
+//     ⚠ SEVERITY RETRACTED IN PLACE — the retracted sentence is reproduced rather than referenced.
+//     This block used to continue: "For this sweep that row is a removable Plaid Item that is never
+//     retried on any run — and once its 30-day token TTL elapses (`token_expires_at`, migration
+//     000135) no automated path can ever remove it." True of the fixture below, which runs at a cap
+//     of 2; OVERSTATED as a production claim. The sacrifice requires an OVER-CAP tie group, and
+//     maxOrphanRetriesPerSweep is 1,000, so production would need ONE erased user holding more than
+//     1,000 Plaid Items in a single DeleteUserCascade — which inserts that user's outstanding Items
+//     in one statement, so the group is that user's item count. Not reachable. NOTHING in these two
+//     tests changes: the mechanism is real, and the caps of 2 and 3 are precisely what make it
+//     observable. See repository.NextPosition and this repo's sweep_cursor_repository.go header,
+//     which carry the same retraction.
 // ---------------------------------------------------------------------------------------------
 
 func TestPlaidOrphanRetrySweepCursor_OverCapTieGroup_SacrificesAProcessableTailRow(t *testing.T) {

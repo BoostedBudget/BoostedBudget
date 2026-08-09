@@ -105,10 +105,22 @@ import (
 //	    SacrificesAProcessableTailRow builds a 3-row tie group against a cap of 2 in which only the
 //	    two head rows fail, and shows the third is reached on no run; its control,
 //	    ...TieGroupTailRow_IsResolvedOnceTheCapReachesIt, shows that same row being removed at Plaid
-//	    and resolved the moment a larger cap admits it. So the sacrificed row is a PROCESSABLE row,
-//	    and for plaid_orphan_retry that is a removable Plaid Item that is retried on no run — after
-//	    which its token_expires_at deadline (migration 000135) retires the only credential any
-//	    automated path could have used, permanently. Stated plainly rather than softened.
+//	    and resolved the moment a larger cap admits it. So the sacrificed row is a PROCESSABLE row.
+//
+//	    ⚠ SEVERITY RETRACTED, AND THE RETRACTED WORDS ARE REPRODUCED HERE RATHER THAN POINTED AT.
+//	    This bullet used to close: "and for plaid_orphan_retry that is a removable Plaid Item that
+//	    is retried on no run — after which its token_expires_at deadline (migration 000135) retires
+//	    the only credential any automated path could have used, permanently." Everything ABOVE this
+//	    paragraph stands unchanged — the mechanism is real, the old precondition really was wrong,
+//	    and the two tests that construct it are sound. What is withdrawn is the PRODUCTION
+//	    CONSEQUENCE. The sacrifice requires an OVER-CAP tie group, and the production caps are 1,000
+//	    (maxOrphanRetriesPerSweep, maxItemsPerCleanupSweep, maxUsersPerRetentionSweep) and 50,000
+//	    (maxUsersPerDeletionSweep), so it takes more than 1,000 rows sharing ONE identical sort key
+//	    — for plaid_orphan_retry, a single erased user holding more than 1,000 Plaid Items in one
+//	    DeleteUserCascade. Not reachable. The plaid_orphan_retry bullet below already said exactly
+//	    this, and the two statements contradicted each other in one file for as long as both stood.
+//	    The residual is real at the cap values the tests use (2 and 3); it is not a billing leak at
+//	    production caps.
 //
 //	    ⚠ WHY IT IS NOT FIXED, per sweep rather than in the blanket. The fix would be to persist the
 //	    tie-break id so a run can resume WITHIN a group. SweepPosition deliberately carries no row
@@ -254,8 +266,17 @@ func equalTimePtr(a, b *time.Time) bool {
 // them inside the same group is sacrificed WITHOUT BEING LOOKED AT, healthy or not, so a fully
 // processable row can be skipped forever. jobs.TestPlaidOrphanRetrySweepCursor_OverCapTieGroup_
 // SacrificesAProcessableTailRow constructs exactly that (two failing head rows, one removable tail
-// row, cap 2) and its control resolves the same tail row under a cap of 3. For plaid_orphan_retry
-// the sacrificed row is a live, removable Plaid Item that no run ever retries.
+// row, cap 2) and its control resolves the same tail row under a cap of 3.
+//
+// ⚠ SEVERITY RETRACTED IN PLACE, with the retracted words reproduced so this is not a dangling
+// pointer. This comment used to add: "For plaid_orphan_retry the sacrificed row is a live,
+// removable Plaid Item that no run ever retries." That is true of the constructed fixture and
+// OVERSTATED as a production claim. The sacrifice needs an OVER-CAP tie group; production caps are
+// 1,000 (maxOrphanRetriesPerSweep, maxItemsPerCleanupSweep, maxUsersPerRetentionSweep) and 50,000
+// (maxUsersPerDeletionSweep), so more than 1,000 rows would have to share ONE identical sort key —
+// for plaid_orphan_retry, one erased user holding more than 1,000 Plaid Items in a single
+// DeleteUserCascade. Nothing else here is withdrawn: the mechanism, the wrong old precondition and
+// both tests stand exactly as written.
 //
 // It remains the deliberate trade against the alternative, which is that such a group stalls the
 // sweep completely and nothing ranked behind it is ever reached either — and against persisting the
