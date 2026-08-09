@@ -1092,6 +1092,24 @@ func cascadeErrorIsRecognisedTransient(err error) bool {
 	if err == nil {
 		return true
 	}
+	// ⚠ THE PERMANENT-SQLSTATE VETO RUNS BEFORE EVERY OTHER TRANSIENT LEG, AND THAT ORDERING IS THE
+	// WHOLE POINT. Round 14's CE Codex review found the cancellation/deadline check sitting ABOVE this
+	// walk, where `errors.Is` — which since Go 1.20 traverses `Unwrap() []error` as well — matched a
+	// per-host dial timeout in a joined multi-host chain and returned true before any SQLSTATE was
+	// examined. A permanent 28P01 later in the SAME chain therefore never got its veto, and the residue
+	// was dropped for a fault that repeats on every retry, after the Plaid removal and the Paddle
+	// cancel had already landed. That is the one direction this function's doc comment says must never
+	// happen. Reachable in the exact shape CC-2 was written for: pgconn gives each candidate host its
+	// own connect-timeout context and joins every host's error (pgx v5.9.2, pgconn.go:251 and :269), so
+	// a timeout and an authentication failure arrive as siblings.
+	//
+	// Hoisting it costs nothing the transient legs needed: a cancelled or deadline-expired cascade with
+	// no permanent SQLSTATE in its chain still falls through to the check below and still reads
+	// transient. A cancellation mid-statement that DOES carry a SQLSTATE carries 57014 query_canceled,
+	// which is class 57 and therefore allowlisted, so it does not trip this veto either.
+	if anyErrorInTree(err, pgErrorWithTransience(false)) {
+		return false
+	}
 	// Cancellation and deadline expiry are the non-SQLSTATE half: in practice the same shutdown or
 	// job deadline that killed the cascade killed the run, and the next run redoes the sequence.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -1172,9 +1190,9 @@ func cascadeErrorIsRecognisedTransient(err error) bool {
 	// A type assertion inside the walk, not errors.As: anyErrorInTree already provides the traversal
 	// errors.As was being used for, and the repository wraps every failure in fmt.Errorf, so no
 	// production caller ever sees a bare *pgconn.PgError at the root.
-	if anyErrorInTree(err, pgErrorWithTransience(false)) {
-		return false
-	}
+	// ⚠ ONLY THE POSITIVE HALF OF THIS LEG IS HERE. Its negative half — the permanent-SQLSTATE veto —
+	// was hoisted above the cancellation check by round 14's CE review; the block up there explains
+	// why, and the two halves are still one rule read in two directions.
 	if anyErrorInTree(err, pgErrorWithTransience(true)) {
 		return true
 	}

@@ -272,6 +272,44 @@ func TestCascadeErrorIsRecognisedTransient_AJoinedChainIsDecidedByItsPermanentSQ
 		"a codeless PgError is not evidence of permanence and must not suppress a transient sibling")
 }
 
+// ⚠ THE CANCELLATION/DEADLINE LEG MUST NOT PRE-EMPT THE PERMANENT-SQLSTATE VETO.
+// Round 14, batch CE, found by the Codex adversarial review of 2740c4cb..50e6db93.
+//
+// CC-2 made the SQLSTATE leg walk the whole tree so that a permanent SQLSTATE anywhere in a joined
+// multi-host chain vetoes a transient sibling. But the context.Canceled / context.DeadlineExceeded
+// check sat ABOVE that walk and used `errors.Is`, which since Go 1.20 traverses `Unwrap() []error`
+// too. So a chain containing BOTH a per-host dial timeout AND a permanent 28P01 short-circuited to
+// "transient" at the deadline check and the SQLSTATE walk never ran — the residue was dropped for a
+// fault that repeats on every retry. That is the failure direction the parent function's doc comment
+// says must never happen, and it is reachable in exactly the shape CC-2 was written for: pgconn
+// gives each candidate host its own connect-timeout context and joins every host's error
+// (pgconn.go:251, pgconn.go:269 in pgx v5.9.2), so the timeout and the auth failure land as siblings.
+//
+// The fix is ordering only: the SQLSTATE veto now runs first. Cancellation and deadline expiry with
+// no permanent SQLSTATE in the chain remain transient, which is what the leg was for — asserted by
+// the paired controls below, so this fixture cannot be satisfied by deleting the leg.
+func TestCascadeErrorIsRecognisedTransient_DeadlineDoesNotMaskAPermanentSQLSTATE(t *testing.T) {
+	timedOut := fmt.Errorf("dial host-a: %w", context.DeadlineExceeded)
+	cancelled := fmt.Errorf("dial host-a: %w", context.Canceled)
+	permanent := wrapPgError("28P01") // invalid_password — never clears on retry
+
+	assert.False(t, cascadeErrorIsRecognisedTransient(errors.Join(timedOut, permanent)),
+		"a per-host deadline must not suppress a permanent SQLSTATE elsewhere in the chain")
+	assert.False(t, cascadeErrorIsRecognisedTransient(errors.Join(permanent, timedOut)),
+		"and the same chain in the other order must answer identically")
+	assert.False(t, cascadeErrorIsRecognisedTransient(errors.Join(cancelled, permanent)),
+		"context.Canceled behaves the same way — the veto is on the SQLSTATE, not on the leg")
+
+	// Paired controls for THIS claim rather than for the tool: the leg must still do its job when no
+	// permanent SQLSTATE is present, or the assertions above would also pass if the leg were removed.
+	assert.True(t, cascadeErrorIsRecognisedTransient(timedOut),
+		"a bare deadline is still transient")
+	assert.True(t, cascadeErrorIsRecognisedTransient(cancelled),
+		"a bare cancellation is still transient")
+	assert.True(t, cascadeErrorIsRecognisedTransient(errors.Join(timedOut, wrapPgError("40001"))),
+		"a deadline joined with an exclusively transient SQLSTATE is still transient")
+}
+
 // SQLSTATE class 08 ("connection exception") is in the allowlist, but the most common way a
 // connection failure actually reaches this classifier carries NO SQLSTATE AT ALL. DeleteUserCascade
 // opens its transaction (profile_repository.go, `BeginTx`) only AFTER the external cleanup, so a
