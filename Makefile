@@ -242,6 +242,10 @@ test-scripts:
 	@echo "     Fails when HEAD has moved past the last adversarially-reviewed SHA in any"
 	@echo "     non-exempt path. To satisfy it: run the review, then"
 	@echo "     scripts/check-review-provenance.sh --stamp \"<reviewer>\" \"<evidence>\""
+	@echo "     EXPECTED RED (#1432 round 13, finding BA-4): reviewed_sha was corrected from"
+	@echo "     2060ef4b to 127dc9c2, the commit that was ACTUALLY reviewed. This suite stays"
+	@echo "     red until batch BD's adversarial review runs and re-stamps it. That is the"
+	@echo "     guard working -- do NOT stamp it green to make this target pass."
 	@bash scripts/check-review-provenance.sh
 	@echo ""
 	@echo "✅ Shell script regression suites passed!"

@@ -1,9 +1,18 @@
 # Last adversarially-reviewed commit. See scripts/check-review-provenance.sh.
 # Update ONLY after a review has actually run, with:
 #   scripts/check-review-provenance.sh --stamp "<reviewer>" "<evidence>"
+#
+# reviewed_sha was 2060ef4b6ae53c14d2de3a188635d5f99f150459 until batch BA (#1432 round 13,
+# finding BA-4). That was never true: the review ran over ..127dc9c2 and 2060ef4b is a
+# LATER commit (verified: `git merge-base --is-ancestor 2060ef4b 127dc9c2` fails). The
+# reviewed_range field said so all along and the guard never read it. Two working bypasses
+# — the shared sweepCursorRepo nil-ing (BA-1) and the merge-commit scan hole (BA-2) — were
+# sitting inside exactly that falsely-claimed gap. reviewed_sha is now the commit that was
+# actually reviewed, so the guard is RED until batch BD's review runs and re-stamps it.
+# That red is the guard working. Do not stamp it green without a review.
 
-reviewed_sha: 2060ef4b6ae53c14d2de3a188635d5f99f150459
-reviewed_range: ff964e625f5a208d24d0c07ecb435dcb5a825297..2060ef4b6ae53c14d2de3a188635d5f99f150459
+reviewed_sha: 127dc9c22e07459f1ff50071b952ec270fd3e76f
+reviewed_range: ff964e625f5a208d24d0c07ecb435dcb5a825297..127dc9c22e07459f1ff50071b952ec270fd3e76f
 reviewer: codex:codex-rescue (Codex, task mode, fresh session; thread 019fe2d8-777c)
 reviewed_at: 2026-08-08
-evidence: reviewed ff964e625f5a208d24d0c07ecb435dcb5a825297..127dc9c22e07459f1ff50071b952ec270fd3e76f and returned 3 demonstrated bypasses (rename-hides-deletion, endpoint-diff revert, post-literal deps.SweepCursors=nil); all 3 closed in 2060ef4b, which is self-audited and NOT independently re-reviewed
+evidence: reviewed ff964e625f5a208d24d0c07ecb435dcb5a825297..127dc9c22e07459f1ff50071b952ec270fd3e76f and returned 3 demonstrated bypasses (rename-hides-deletion, endpoint-diff revert, post-literal deps.SweepCursors=nil); all 3 closed in 2060ef4b, which is NOT covered by this record and is owed a review

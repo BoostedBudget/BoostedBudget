@@ -79,8 +79,26 @@ const (
 	sweepCursorField   = "SweepCursors"
 	sweepCursorVarName = "sweepCursorRepo"
 	sweepCursorCtor    = "NewSweepCursorRepository"
+	sweepCursorPkg     = "repository"
 	jobsPkgAlias       = "jobs"
 )
+
+// isSweepCursorCtorCall reports whether expr is literally
+// `repository.NewSweepCursorRepository(...)`. The package qualifier is checked too:
+// without it, a locally-defined `x.NewSweepCursorRepository(db)` returning anything at
+// all would satisfy the binding check.
+func isSweepCursorCtorCall(expr ast.Expr) bool {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != sweepCursorCtor {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == sweepCursorPkg
+}
 
 // callResult is what the AST walk records about one constructor call site.
 type callResult struct {
@@ -102,22 +120,55 @@ func TestIssue1477SweepCursorWiringNoDrift(t *testing.T) {
 	totalJobsCtorCalls := 0
 	sawCursorConstruction := false
 	var fieldAssignments []string
+	var varRebinds []string
+
+	// noteCursorBinding records one place where the name `sweepCursorRepo` is bound to a
+	// value. EVERY such binding must be the constructor call; anything else — `= nil`, a
+	// substitute repository, a shadowing `var` declaration, a tuple assignment whose
+	// per-name value cannot be read — is drift, because after it the four workers below
+	// receive a value this test never checked. This is the same fail-closed shape as
+	// fieldAssignments: the guard enumerates the bindings it can prove correct and treats
+	// everything else as a finding.
+	noteCursorBinding := func(pos token.Pos, value ast.Expr) {
+		if value != nil && isSweepCursorCtorCall(value) {
+			sawCursorConstruction = true
+			return
+		}
+		varRebinds = append(varRebinds, fset.Position(pos).String())
+	}
 
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
+		case *ast.ValueSpec:
+			// `var sweepCursorRepo repository.SweepCursorRepository` — a nil interface,
+			// and not an AssignStmt. Declared inside any nested scope it shadows the real
+			// binding for every call site after it.
+			for i, name := range node.Names {
+				if name.Name != sweepCursorVarName {
+					continue
+				}
+				var value ast.Expr
+				if len(node.Values) == len(node.Names) {
+					value = node.Values[i]
+				}
+				noteCursorBinding(name.Pos(), value)
+			}
 		case *ast.AssignStmt:
 			for i, lhs := range node.Lhs {
 				// (a) The shared value must be BOUND to sweepCursorRepo by a call to
-				// repository.NewSweepCursorRepository. Merely seeing that call somewhere
-				// is not enough: `var sweepCursorRepo repository.SweepCursorRepository`
-				// (a nil interface) alongside an unrelated call would satisfy a
-				// call-anywhere check while all four workers received nil.
-				if id, ok := lhs.(*ast.Ident); ok && id.Name == sweepCursorVarName && i < len(node.Rhs) {
-					if call, ok := node.Rhs[i].(*ast.CallExpr); ok {
-						if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == sweepCursorCtor {
-							sawCursorConstruction = true
-						}
+				// repository.NewSweepCursorRepository — at EVERY binding of that name,
+				// not merely at one of them. Checking that the constructor was called
+				// somewhere leaves `sweepCursorRepo = nil` one line later completely
+				// invisible: the constructor returns an INTERFACE, so the reassigned
+				// variable is a genuinely nil interface, every worker's
+				// `if deps.SweepCursors != nil` skips, and all four sweeps revert to the
+				// pre-#1477 starving behaviour while this test still passes.
+				if id, ok := lhs.(*ast.Ident); ok && id.Name == sweepCursorVarName {
+					var value ast.Expr
+					if len(node.Lhs) == len(node.Rhs) {
+						value = node.Rhs[i]
 					}
+					noteCursorBinding(id.Pos(), value)
 				}
 				// (b) Nothing may assign to a .SweepCursors FIELD. Legitimate wiring
 				// happens only inside the composite literals checked below; a
@@ -182,10 +233,19 @@ func TestIssue1477SweepCursorWiringNoDrift(t *testing.T) {
 	}
 
 	if !sawCursorConstruction {
-		t.Errorf("main.go never assigns %s from a call to repository.%s(...) — the value the four "+
-			"sites pass is not a real sweep-cursor repository (Issue #1477). A nil interface variable "+
-			"of the right name would satisfy every per-site check below while every worker fell back "+
-			"to the pre-#1477 starving behaviour.", sweepCursorVarName, sweepCursorCtor)
+		t.Errorf("main.go never binds %s to a call to %s.%s(...) — the value the four sites pass is "+
+			"not a real sweep-cursor repository (Issue #1477), so every worker falls back to the "+
+			"pre-#1477 starving behaviour.", sweepCursorVarName, sweepCursorPkg, sweepCursorCtor)
+	}
+
+	for _, at := range varRebinds {
+		t.Errorf("WIRING DRIFT: main.go binds %s at %s to something other than %s.%s(...).\n"+
+			"  The constructor returns an INTERFACE, so `%s = nil` yields a genuinely nil interface: "+
+			"every worker's `if deps.SweepCursors != nil` skips, all four sweeps silently revert to "+
+			"the pre-#1477 starving behaviour, and the four per-site literal checks below still pass "+
+			"because they only look at the NAME. The name must be bound exactly once, by the "+
+			"constructor, and never rebound.", sweepCursorVarName, at, sweepCursorPkg, sweepCursorCtor,
+			sweepCursorVarName)
 	}
 
 	for _, at := range fieldAssignments {

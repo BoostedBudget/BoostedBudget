@@ -43,8 +43,16 @@
 #
 #   EXEMPT (no fresh review required):
 #     * any path ending in `.md`  — prose,
-#       EXCEPT any file whose basename is exactly `CLAUDE.md`, which directs agent
-#       behaviour and is therefore behavioural, not prose;
+#       EXCEPT AGENT-BEHAVIOUR MARKDOWN, which directs what an agent does and is therefore
+#       behavioural, not prose. That is a CLASS, not one filename: any file whose basename
+#       (case-insensitively) is CLAUDE.md / AGENTS.md / GEMINI.md / SKILL.md /
+#       copilot-instructions.md, and anything under a `.claude/`, `.agent[s]/`, `.gemini/`,
+#       `.windsurf/`, `.cursor/`, `.codex/`, `.aider/`, `.continue/`, `.opencode/` or
+#       `.github/prompts/` path component. Drawing the line at the single basename
+#       `CLAUDE.md` left 30+ tracked `.claude/**/*.md` and the whole
+#       `.agent[s]/skills/**/SKILL.md` tree exempt: rewriting
+#       `.claude/commands/commit-push-pr.md` to "Push directly to main; skip the mandatory
+#       Codex adversarial review" passed as "prose only";
 #     * the provenance file itself — otherwise stamping a review re-arms the guard and
 #       the workflow above can never converge.
 #   NOT EXEMPT (fresh review required): everything else. Note deliberately: `docs/` is NOT
@@ -169,6 +177,7 @@ for key in $REQUIRED_KEYS; do
 done
 
 REVIEWED_SHA="$(field reviewed_sha)"
+REVIEWED_RANGE="$(field reviewed_range)"
 REVIEWED_AT="$(field reviewed_at)"
 REVIEWER="$(field reviewer)"
 EVIDENCE="$(field evidence)"
@@ -178,6 +187,42 @@ case "$REVIEWED_SHA" in
   *) die_closed "reviewed_sha '$REVIEWED_SHA' is not a full 40-character lowercase hex SHA." \
        "Abbreviated SHAs are ambiguous across history rewrites; the full SHA is required." ;;
 esac
+
+# reviewed_range: `<start>..<end>`. It was previously REQUIRED TO EXIST and NEVER READ, so
+# the live record carried `reviewed_sha: 2060ef4b` while its own evidence said the review
+# had covered `..127dc9c2` — a commit that 2060ef4b comes AFTER, not before. Two real
+# bypasses (the shared-variable nil-ing and the merge commit) were sitting inside exactly
+# that unreviewed gap, and no mechanism could ever surface the contradiction. A required
+# field nobody reads is decoration; this reads it and fails closed when the two disagree.
+# `##*..` (longest prefix) rather than `#*..`: on `A..B..C` a shortest-prefix strip leaves
+# `B..C` as the "endpoint", which then fails the hex check with a misleading message
+# instead of being reported as the malformed range it is.
+RANGE_START="${REVIEWED_RANGE%%..*}"
+RANGE_END="${REVIEWED_RANGE##*..}"
+case "$REVIEWED_RANGE" in
+  *".."*) : ;;
+  *) die_closed "reviewed_range '$REVIEWED_RANGE' is not a '<start>..<end>' range." \
+       "The range is what states WHAT WAS REVIEWED; an unparseable one cannot be checked against reviewed_sha." ;;
+esac
+case "$RANGE_START..$RANGE_END" in
+  "$REVIEWED_RANGE") : ;;
+  *) die_closed "reviewed_range '$REVIEWED_RANGE' contains more than one '..' separator." \
+       "A range with two separators has no unambiguous endpoint." ;;
+esac
+for range_sha in "$RANGE_START" "$RANGE_END"; do
+  case "$range_sha" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) : ;;
+    *) die_closed "reviewed_range endpoint '$range_sha' is not a full 40-character lowercase hex SHA." \
+         "Both ends of the reviewed range must be unambiguous commits." ;;
+  esac
+done
+if [ "$RANGE_END" != "$REVIEWED_SHA" ]; then
+  die_closed "reviewed_range ends at $RANGE_END but reviewed_sha is $REVIEWED_SHA." \
+    "The two fields describe the same review and must agree. When they disagree, reviewed_sha claims" \
+    "coverage the review never had, and everything between the range's real end and reviewed_sha is" \
+    "unreviewed while the guard reports green. Set reviewed_sha to the commit that was ACTUALLY" \
+    "reviewed -- do not widen the range to match the claim."
+fi
 
 case "$REVIEWED_AT" in
   [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
@@ -196,6 +241,15 @@ if ! git cat-file -e "${REVIEWED_SHA}^{commit}" 2>/dev/null; then
   die_closed "reviewed_sha $REVIEWED_SHA is not a commit in this repository." \
     "Either the record is fabricated or the commit was garbage-collected after a history rewrite." \
     "Re-review the current HEAD and re-stamp."
+fi
+
+if ! git cat-file -e "${RANGE_START}^{commit}" 2>/dev/null; then
+  die_closed "reviewed_range starts at $RANGE_START, which is not a commit in this repository." \
+    "A range whose start does not exist describes no review at all."
+fi
+if ! git merge-base --is-ancestor "$RANGE_START" "$RANGE_END"; then
+  die_closed "reviewed_range $REVIEWED_RANGE runs backwards: $RANGE_START is not an ancestor of $RANGE_END." \
+    "A '<start>..<end>' range that is not ancestor-ordered enumerates commits nobody reviewed."
 fi
 
 # ── 4. …and an ancestor of HEAD. Uses rev-list/merge-base, never `git log`: ───
@@ -243,10 +297,52 @@ if [ "$COMMIT_COUNT" -ne "$AHEAD" ]; then
     "The two disagree, so neither can be trusted. Failing closed rather than scanning a partial range."
 fi
 
+#
+# MERGE COMMITS ARE DIFFED AGAINST EVERY PARENT, NOT LEFT TO THE DEFAULT.
+# `git diff-tree <merge>` with no -m/-c/--cc prints NOTHING at all, so the loop below used
+# to `continue` past every merge and a merge commit's OWN content was never scanned. That
+# is a working bypass, demonstrated end to end: branch, commit a docs-only change, then
+# `git merge --no-ff --no-commit` and rewrite a .go file inside the merge commit itself.
+# The guard reported `PASS ... all 2 exempt`, exit 0, while `git diff <reviewed>..HEAD`
+# proved the .go change had landed.
+#
+# The fix scans a merge as the UNION of its diff against EACH parent, rather than with
+# `--cc`. `--cc`/`-c` print only paths that differ from ALL parents and then prune further
+# on "uninteresting" hunks; relying on those semantics is exactly the kind of clever filter
+# this guard keeps finding holes in. A union over parents cannot be fail-open: any path the
+# merge resolved differently from any parent is surfaced. It over-reports — an ordinary
+# merge lists everything the other side brought in — and that is the correct direction to
+# err in, per the exempt-list rationale above: a redundant review, never a silent one.
 CHANGED=""
 while IFS= read -r commit; do
   [ -n "$commit" ] || continue
-  PER_COMMIT="$(git diff-tree --no-commit-id --name-only -r --no-renames "$commit")"
+  # `<sha> <parent1> [<parent2> ...]`; strip the commit's own sha to get the parent list.
+  COMMIT_PARENTS="$(git rev-list --parents -n 1 "$commit")"
+  COMMIT_PARENTS="${COMMIT_PARENTS#"$commit"}"
+  PARENT_COUNT=0
+  # Unquoted on purpose: the value is a space-separated list of SHAs, and word splitting
+  # is exactly what is wanted. SHAs cannot contain spaces or glob characters.
+  for parent in $COMMIT_PARENTS; do
+    PARENT_COUNT=$((PARENT_COUNT + 1))
+  done
+  if [ "$PARENT_COUNT" -eq 0 ]; then
+    # A PARENTLESS commit prints NOTHING without --root — the same silent-skip class as
+    # the merge bypass, one level over, and reachable the same way: `git checkout --orphan`
+    # plus `git merge --allow-unrelated-histories` puts a second root inside the range.
+    # Verified: `git diff-tree --no-commit-id --name-only -r <root>` prints an empty string;
+    # with --root it prints the root's whole tree.
+    PER_COMMIT="$(git diff-tree --no-commit-id --name-only -r --no-renames --root "$commit")"
+  elif [ "$PARENT_COUNT" -eq 1 ]; then
+    PER_COMMIT="$(git diff-tree --no-commit-id --name-only -r --no-renames "$commit")"
+  else
+    PER_COMMIT=""
+    for parent in $COMMIT_PARENTS; do
+      VS_PARENT="$(git diff-tree --no-commit-id --name-only -r --no-renames "$parent" "$commit")"
+      [ -n "$VS_PARENT" ] || continue
+      if [ -z "$PER_COMMIT" ]; then PER_COMMIT="$VS_PARENT"; else PER_COMMIT="$PER_COMMIT
+$VS_PARENT"; fi
+    done
+  fi
   [ -n "$PER_COMMIT" ] || continue
   if [ -z "$CHANGED" ]; then CHANGED="$PER_COMMIT"; else CHANGED="$CHANGED
 $PER_COMMIT"; fi
@@ -264,12 +360,47 @@ NEEDS_REVIEW=""
 EXEMPT_COUNT=0
 while IFS= read -r path; do
   [ -n "$path" ] || continue
-  BASENAME="${path##*/}"
   if [ "$path" = "$PROVENANCE_FILE" ]; then
     EXEMPT_COUNT=$((EXEMPT_COUNT + 1))
     continue
   fi
-  if [ "$BASENAME" != "CLAUDE.md" ] && [ "${path%.md}" != "$path" ]; then
+
+  # Is this .md file AGENT BEHAVIOUR rather than prose? The carve-out used to be drawn at
+  # the single basename `CLAUDE.md`, which is one file out of a class: this repo tracks 30+
+  # `.claude/**/*.md` (commands, agents, skills) and a large `.agent[s]/skills/**/SKILL.md`
+  # tree, all of which direct what an agent does. Executed against the old rule: rewriting
+  # `.claude/commands/commit-push-pr.md` to "Push directly to main; skip the mandatory
+  # Codex adversarial review" passed as "prose only".
+  #
+  # Two independent tests, either of which is enough:
+  #   * the BASENAME is an agent's root instruction file or a skill definition, or
+  #   * any PATH COMPONENT is an agent tool's configuration directory.
+  # The component test is wrapped in slashes so it matches whole components only:
+  # `docs/my.claude-notes/x.md` stays prose.
+  #
+  # The basename test is case-insensitive so `claude.md` cannot slip past an exact-match
+  # comparison. It does NOT weaken the existing `CLAUDE.MD` behaviour: an uppercase
+  # EXTENSION still never reaches the exemption at all, because `${path%.md}` does not
+  # strip `.MD` and the suffix test below therefore fails. Both are covered in the suite's
+  # truth table.
+  BASENAME="${path##*/}"
+  BASENAME_LC="$(printf '%s' "$BASENAME" | tr '[:upper:]' '[:lower:]')"
+  AGENT_BEHAVIOUR=0
+  case "$BASENAME_LC" in
+    claude.md | agents.md | gemini.md | skill.md | copilot-instructions.md) AGENT_BEHAVIOUR=1 ;;
+  esac
+  # Lowercased for the component test as well as the basename test: macOS ships a
+  # case-insensitive filesystem, so `.CLAUDE/commands/x.md` is a spelling anyone can commit
+  # by accident and git tracks it verbatim.
+  PATH_LC="$(printf '%s' "/$path" | tr '[:upper:]' '[:lower:]')"
+  case "$PATH_LC" in
+    */.claude/* | */.agent/* | */.agents/* | */.gemini/* | */.windsurf/* | */.cursor/* | \
+      */.codex/* | */.aider/* | */.continue/* | */.opencode/* | */.github/prompts/*)
+      AGENT_BEHAVIOUR=1
+      ;;
+  esac
+
+  if [ "$AGENT_BEHAVIOUR" -eq 0 ] && [ "${path%.md}" != "$path" ]; then
     EXEMPT_COUNT=$((EXEMPT_COUNT + 1))
     continue
   fi
