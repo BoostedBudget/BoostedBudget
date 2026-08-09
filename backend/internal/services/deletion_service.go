@@ -1124,6 +1124,11 @@ func cascadeErrorIsRecognisedTransient(err error) bool {
 	// was found. A ConnectError wrapping 57P03 cannot_connect_now still reads transient, correctly,
 	// via class 57.
 	//
+	// ⚠ THAT SETTLES THE ORDER OF THE TWO LEGS AND NOTHING MORE. Round 14 found this passage being
+	// read as if it closed the ordering question outright, while the SQLSTATE leg below was still
+	// picking whichever PgError a first-match traversal reached first. It is not the same question
+	// and it was not settled; see the block at that leg.
+	//
 	// ⚠ AND "NO SQLSTATE" IS NOT ITSELF EVIDENCE OF TRANSIENCE. The round-13 Codex THIRD pass caught
 	// the next layer: plenty of PERMANENT failures produce a ConnectError with no PgError at all —
 	// an expired or untrusted TLS certificate, a hostname mismatch, an unsupported SASL/channel-binding
@@ -1134,18 +1139,69 @@ func cascadeErrorIsRecognisedTransient(err error) bool {
 	// version above, one level over. So the ConnectError leg is an ALLOWLIST too, in the same
 	// fail-closed shape as transientCascadeSQLSTATEClasses: see connectErrorIsRecognisedTransient.
 	//
-	// errors.As, not a type assertion: the repository wraps every failure in fmt.Errorf, so no
-	// production caller ever sees a bare *pgconn.PgError here.
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && len(pgErr.Code) >= 2 {
-		_, transient := transientCascadeSQLSTATEClasses[pgErr.Code[:2]]
-		return transient
+	// ⚠ WALKED, NOT errors.As'd — AND UNTIL ROUND 14 THIS LEG WAS THE INCONSISTENT ONE. It used to be
+	// `errors.As(err, &pgErr) && len(pgErr.Code) >= 2`, which binds the FIRST assignable node in the
+	// tree and never examines another. That is the same first-match unsoundness the round-13 FIFTH
+	// pass removed from connectErrorIsRecognisedTransient's net.Error check, left in place here — so
+	// the two legs disagreed about a question they both face, and the comment above (which settles
+	// only the order of the LEGS, not the order WITHIN one) read as if the whole question were
+	// closed. It was not. Round 14, finding CC-2.
+	//
+	// It bit in two ways, both requiring a tree with an `Unwrap() []error` node — pgconn's multi-host
+	// aggregation, which joins the errors of every attempted host:
+	//
+	//   * a transient SQLSTATE in slice position 0 masked a PERMANENT one later in the chain, and the
+	//     residue for a fault no retry clears was silently suppressed;
+	//   * a PgError with an EMPTY code in position 0 failed the `len >= 2` guard, dropping the whole
+	//     leg — so a usable SQLSTATE further along was never consulted at all.
+	//
+	// ⚠ THE QUANTIFIER IS DELIBERATELY NOT THE SIBLING LEG'S, AND THE DIFFERENCE IS THE POINT.
+	// connectErrorIsRecognisedTransient says "any transient node wins". This leg says "any
+	// NON-transient SQLSTATE loses". Both are the fail-CLOSED reading of their own evidence; they
+	// differ because the evidence differs. A socket errno describes one host's reachability and says
+	// nothing about the others, so a recoverable host redeems the chain. A server-issued SQLSTATE
+	// does not work that way: 28P01 invalid_password and 3D000 invalid_catalog_name are statements
+	// about the DEPLOYMENT, and a second host being briefly refused does not make the password right.
+	// Importing "any transient node wins" here would suppress the residue in precisely the 28P01 case
+	// the round-13 re-review restored it for. So the rule can only ever turn a former `true` into a
+	// `false` — at worst a spurious residue row an operator closes in a minute, never a missing one.
+	//
+	// A codeless PgError is evidence of nothing and votes neither way; the chain then falls through
+	// to the ConnectError leg exactly as it did before.
+	//
+	// A type assertion inside the walk, not errors.As: anyErrorInTree already provides the traversal
+	// errors.As was being used for, and the repository wraps every failure in fmt.Errorf, so no
+	// production caller ever sees a bare *pgconn.PgError at the root.
+	if anyErrorInTree(err, pgErrorWithTransience(false)) {
+		return false
+	}
+	if anyErrorInTree(err, pgErrorWithTransience(true)) {
+		return true
 	}
 	// No SQLSTATE anywhere in the chain: transient only if this was a connection attempt that failed
 	// for a RECOGNISED transient reason. Everything else — including anything unrecognised — records,
 	// which is the default direction this function's doc comment argues for.
 	var connErr *pgconn.ConnectError
 	return errors.As(err, &connErr) && connectErrorIsRecognisedTransient(err)
+}
+
+// pgErrorWithTransience builds a predicate for anyErrorInTree that matches any *pgconn.PgError whose
+// SQLSTATE class's membership of transientCascadeSQLSTATEClasses equals `transient`.
+//
+// A PgError whose Code is shorter than two characters matches NEITHER polarity: it carries no class
+// and so is not evidence of transience or of permanence. That is what lets a codeless PgError sit in
+// a joined chain without vetoing a sibling that does carry a class, and it preserves the pre-round-14
+// behaviour for the single-error case (`wrapPgError("")` still falls through to the ConnectError leg
+// and records) — see TestCascadeErrorIsRecognisedTransient_UnknownErrorsAreNotTransient.
+func pgErrorWithTransience(transient bool) func(error) bool {
+	return func(e error) bool {
+		pgErr, ok := e.(*pgconn.PgError)
+		if !ok || len(pgErr.Code) < 2 {
+			return false
+		}
+		_, isTransient := transientCascadeSQLSTATEClasses[pgErr.Code[:2]]
+		return isTransient == transient
+	}
 }
 
 // transientConnectErrnos are the socket-level failures that mean "not right now" rather than
