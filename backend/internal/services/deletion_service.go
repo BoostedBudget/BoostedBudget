@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"syscall"
@@ -1160,7 +1161,18 @@ var transientConnectErrnos = []syscall.Errno{
 }
 
 // connectErrorIsRecognisedTransient decides whether a *pgconn.ConnectError that carries no SQLSTATE
-// is one we KNOW a retry clears.
+// is one a retry is EXPECTED to clear.
+//
+// ⚠ "EXPECTED", NOT "GUARANTEED", AND THE DIFFERENCE IS DELIBERATE. The round-13 Codex fourth pass
+// pointed out — correctly — that no socket-level signal can promise self-healing: ECONNREFUSED is a
+// restarting server AND a permanently wrong port; EHOSTUNREACH is a routing blip AND a static routing
+// mistake; a timeout is a slow network AND a firewall that will drop the packet forever. An earlier
+// draft of this comment claimed the predicate answers "we KNOW a retry clears", which no
+// implementation of it could honour. It does not. It answers "this is the shape a recoverable
+// connection failure takes", and it is a likelihood heuristic on a deliberately chosen error
+// direction: a wrong TRUE costs a suppressed residue, a wrong FALSE costs a spurious row an operator
+// closes in a minute. That asymmetry is why the set is kept small and why everything unrecognised
+// still records — but it is not certainty and is no longer written as if it were.
 //
 // ⚠ IT IS AN ALLOWLIST FOR THE SAME REASON transientCascadeSQLSTATEClasses IS. The set of permanent
 // ways a connection attempt can fail is open-ended and grows with pgconn, Go's TLS stack and the
@@ -1172,21 +1184,40 @@ var transientConnectErrnos = []syscall.Errno{
 // residue row an operator closes in a minute — the asymmetry the parent function's doc comment
 // argues at length.
 //
-// DNS is checked FIRST and on its own field, because a *net.DNSError is also a net.Error: NXDOMAIN
-// (IsNotFound) is a permanent answer that the generic checks below would otherwise never see.
+// ⚠ ORDER: DNS IS CHECKED LAST, NOT FIRST. An earlier draft returned on the DNS branch immediately,
+// which the fourth pass showed to be wrong for pgx's MULTI-HOST configurations: pgconn joins the
+// errors from every attempted host into ONE ConnectError, so a chain can hold an NXDOMAIN from a
+// fallback host beside an ECONNREFUSED from the primary. Returning on the DNS answer classified that
+// whole (recoverable) case permanent. Scanning the recognised-transient causes first and consulting
+// DNS only when none of them are present gives NXDOMAIN-alone the permanent answer it deserves while
+// letting a mixed chain be read by its recoverable half. `(*net.DNSError).Timeout()` is IsTimeout, so
+// an IsNotFound error cannot sneak through the generic timeout check either.
 func connectErrorIsRecognisedTransient(err error) bool {
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) {
-		// IsNotFound is the name not existing — a rename or a bad config, not a blip.
-		return dnsErr.IsTemporary || dnsErr.IsTimeout
-	}
 	for _, errno := range transientConnectErrnos {
 		if errors.Is(err, errno) {
 			return true
 		}
 	}
+	// A GRACEFUL disconnect during the startup handshake: the server, proxy or load balancer accepted
+	// the TCP connection and then closed it while pgx was awaiting the startup response. pgproto3
+	// turns that into io.ErrUnexpectedEOF (or io.EOF) inside the ConnectError. It is neither an errno
+	// nor a net.Error timeout, so the checks above and below both miss it — and it is one of the most
+	// ordinary shapes a rolling restart or a failover produces, which made it the allowlist's worst
+	// omission: an everyday deploy would have written false permanent residue. Round 13, Codex fourth
+	// pass.
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return true
+	}
 	// A timeout at any layer that models net.Error: the attempt ran out of time rather than being
-	// refused an answer. Deliberately last, so the DNS case above cannot reach it.
+	// refused an answer.
 	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		// IsNotFound is the name not existing — a rename or a bad config, not a blip.
+		return dnsErr.IsTemporary || dnsErr.IsTimeout
+	}
+	return false
 }

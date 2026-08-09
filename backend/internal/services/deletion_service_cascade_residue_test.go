@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"syscall"
 	"testing"
@@ -312,6 +313,16 @@ func TestCascadeErrorIsRecognisedTransient_ConnectErrorCarryingASQLSTATEUsesTheS
 //
 // The ConnectError leg is therefore an allowlist of RECOGNISED transient causes, in the same
 // fail-closed shape as transientCascadeSQLSTATEClasses. This test asserts both directions.
+//
+// ⚠ WHAT `with` PROVES, stated plainly because the fourth pass caught the first version overclaiming
+// the sibling test one function up and this one had the same flaw. errors.Join makes the ConnectError
+// and the cause SIBLINGS; production nests the cause beneath ConnectError.Unwrap. The implementation
+// searches the whole outer tree for a ConnectError and then, independently, the same tree for a
+// recognised cause — so these assertions prove CO-OCCURRENCE, not that the cause belongs to the
+// ConnectError. That is the behaviour under test and it is what the production code does, but it is
+// weaker than a nested fixture would be, and a nested one cannot be built: ConnectError's cause field
+// is unexported. TestCascadeErrorIsRecognisedTransient_ConnectionAttemptFailuresAreTransient covers
+// one genuinely nested chain, from a real refused connection.
 func TestConnectErrorIsRecognisedTransient_AllowlistsCausesRatherThanTheShape(t *testing.T) {
 	bareConnect := &pgconn.ConnectError{Config: &pgconn.Config{}}
 	with := func(cause error) error { return errors.Join(bareConnect, cause) }
@@ -348,6 +359,29 @@ func TestConnectErrorIsRecognisedTransient_AllowlistsCausesRatherThanTheShape(t 
 	assert.False(t, cascadeErrorIsRecognisedTransient(
 		with(errors.New("unsupported SASL authentication mechanism"))),
 		"a permanent auth/protocol configuration failure must record, not be assumed transient")
+
+	// A GRACEFUL startup disconnect — the shape a rolling restart or a failover actually produces, and
+	// the allowlist's worst omission until the round-13 Codex fourth pass named it. pgproto3 turns a
+	// connection closed mid-handshake into io.ErrUnexpectedEOF inside the ConnectError; it is neither
+	// an errno nor a net.Error timeout, so before this it wrote FALSE PERMANENT RESIDUE on an ordinary
+	// deploy.
+	assert.True(t, cascadeErrorIsRecognisedTransient(with(io.ErrUnexpectedEOF)),
+		"a graceful disconnect during the startup handshake is a restart, not a permanent fault")
+	assert.True(t, cascadeErrorIsRecognisedTransient(with(io.EOF)),
+		"the plain-EOF spelling of the same restart")
+
+	// MULTI-HOST: pgconn joins the errors from EVERY attempted host into one ConnectError, so a chain
+	// can hold an NXDOMAIN from a fallback host beside an ECONNREFUSED from the primary. That whole
+	// case is recoverable and must not read permanent because of the fallback's DNS answer. The
+	// earlier draft returned on the DNS branch first and got this wrong.
+	assert.True(t, cascadeErrorIsRecognisedTransient(
+		errors.Join(bareConnect, &net.DNSError{Err: "no such host", IsNotFound: true}, syscall.ECONNREFUSED)),
+		"a mixed multi-host chain must be read by its recoverable half")
+	// …and the control that pairs with THAT claim: NXDOMAIN ALONE is still permanent, so the
+	// assertion above is the errno doing the work and not the DNS branch having been broken.
+	assert.False(t, cascadeErrorIsRecognisedTransient(
+		errors.Join(bareConnect, &net.DNSError{Err: "no such host", IsNotFound: true})),
+		"NXDOMAIN alone is still permanent")
 
 	// The control that pairs with THIS claim rather than with the tool: the very same causes attached
 	// to something that is NOT a ConnectError must still record, so the assertions above are the
