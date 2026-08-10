@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
@@ -51,11 +52,22 @@ type QAAuthBypassOutput struct {
 }
 
 // Bypass handles POST /api/v1/qa/auth/bypass.
-// Guard #1: Rejects production environment with 404.
-// Guard #2: Route never registered in production (enforced in main.go).
+//
+// Two independent guards stand in front of it:
+//   - Guard 1, registration: cmd/server/main.go registers this route only when
+//     config.Config.QAAuthBypassRefusalReason returns "" — an explicitly-set ENVIRONMENT on a
+//     two-value allowlist, the QA_AUTH_BYPASS_ENABLED opt-in, the three QA settings, and no
+//     production-only signal (a Clerk sk_live_ key, PADDLE_ENVIRONMENT=production).
+//   - Guard 2, below: the handler re-checks the environment itself, so the route cannot serve
+//     even if it is somehow registered.
 func (h *QAAuthBypassHandler) Bypass(ctx context.Context, input *QAAuthBypassInput) (*QAAuthBypassOutput, error) {
-	// Guard #1: Never serve this endpoint in production.
-	if h.environment == "production" {
+	// Guard 2 of 2.
+	//
+	// #1432 batch ED, finding B2-1: this used to read `h.environment == "production"`, which
+	// fails OPEN — "Production", " production ", "prod", a typo, and "" all fell through to
+	// minting a five-minute admin sign-in token. It is now an allowlist, so an unrecognised
+	// value gets the production treatment.
+	if !domain.IsQAAuthBypassEnvironment(h.environment) {
 		return nil, huma.Error404NotFound("not found")
 	}
 

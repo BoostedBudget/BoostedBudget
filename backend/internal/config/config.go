@@ -53,9 +53,15 @@ type Config struct {
 	ClerkPublishableKey string
 
 	// QA Auth Bypass (QA/Staging only - never set in production)
+	//
+	// QAAuthBypassEnabled (QA_AUTH_BYPASS_ENABLED) is the explicit opt-in added by #1432
+	// batch ED, finding B2-1: ENVIRONMENT equality alone used to decide whether the
+	// unauthenticated, admin-token-minting bypass route existed. It is consulted only through
+	// Config.QAAuthBypassRefusalReason — see qa_auth_bypass_gate.go for the full gate.
 	QABypassSecret       string
 	QAAdminClerkUserID   string
 	QAPremiumClerkUserID string
+	QAAuthBypassEnabled  bool
 
 	// Plaid
 	PlaidClientID    string
@@ -150,6 +156,7 @@ func Load() (*Config, error) {
 		QABypassSecret:       getEnv("QA_BYPASS_SECRET", ""),
 		QAAdminClerkUserID:   getEnv("QA_ADMIN_CLERK_USER_ID", ""),
 		QAPremiumClerkUserID: getEnv("QA_PREMIUM_CLERK_USER_ID", ""),
+		QAAuthBypassEnabled:  getEnvBool("QA_AUTH_BYPASS_ENABLED", false),
 
 		// Plaid
 		PlaidClientID:    getEnv("PLAID_CLIENT_ID", ""),
