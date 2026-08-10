@@ -134,3 +134,114 @@ func TestListDLQSort_Integration(t *testing.T) {
 		}
 	})
 }
+
+// ─── Round 15, Tier E item 6: the stranded retry_job_id = 0 rows ─────────────────────────────────
+//
+// A row left by the pre-#1508 two-commit path has retried_at set and retry_job_id = 0 — a state
+// BeginRetryTx's own comment calls undecidable. It was being read in the two most flattering ways at
+// once: counted as a SUCCESS by GetStats' `retried` bucket, and filtered OUT of the age alarm by
+// GetOldestJobAge's `WHERE retried_at IS NULL`. So a row whose replay demonstrably did not complete
+// both inflated the recovery count and was invisible to the one signal that says "this has been
+// sitting here too long".
+//
+// ⚠ INTEGRATION, NOT pgxmock, AND THAT IS THE POINT. pgxmock matches query TEXT and never evaluates
+// a FILTER clause or an aggregate, so it cannot tell these two predicates apart at all — it would
+// pass against either spelling. Only a real planner can answer this.
+//
+// ⚠ ASSERTED AS DELTAS, never as absolute totals: these are unfiltered whole-table aggregates and
+// the integration database is shared, so an absolute count would be a false failure the moment
+// another test's fixture existed alongside this one.
+func TestDeadLetterJobRepository_StrandedRetryRows_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	repo := NewDeadLetterJobRepository(pool)
+	// ⚠ NOT t.Context(): the cleanup below must outlive this test's own context, or the fixture rows
+	// leak into the shared integration database and corrupt OTHER packages' whole-table aggregates.
+	ctx := context.Background()
+
+	// failed_at is set far in the past so this row is unambiguously the oldest unresolved one, which
+	// is what makes the age assertion below a statement about THIS row rather than about whatever
+	// else happens to be in the table.
+	insertStranded := func(t *testing.T) int64 {
+		t.Helper()
+		var id int64
+		require.NoError(t, pool.QueryRow(ctx, `
+			INSERT INTO dead_letter_jobs (original_job_id, kind, queue, args, errors, max_attempts, created_at, failed_at, retried_at, retry_job_id)
+			VALUES (0, 'stranded_retry_test', 'default', '{}'::jsonb, '[]'::jsonb, 5,
+			        NOW() - INTERVAL '400 days', NOW() - INTERVAL '400 days', NOW(), 0)
+			RETURNING id`).Scan(&id))
+		t.Cleanup(func() {
+			_, _ = pool.Exec(ctx, `DELETE FROM dead_letter_jobs WHERE id = $1`, id)
+		})
+		return id
+	}
+
+	insertGenuinelyRetried := func(t *testing.T) int64 {
+		t.Helper()
+		var id int64
+		require.NoError(t, pool.QueryRow(ctx, `
+			INSERT INTO dead_letter_jobs (original_job_id, kind, queue, args, errors, max_attempts, created_at, failed_at, retried_at, retry_job_id)
+			VALUES (0, 'genuine_retry_test', 'default', '{}'::jsonb, '[]'::jsonb, 5,
+			        NOW() - INTERVAL '401 days', NOW() - INTERVAL '401 days', NOW(), 9977)
+			RETURNING id`).Scan(&id))
+		t.Cleanup(func() {
+			_, _ = pool.Exec(ctx, `DELETE FROM dead_letter_jobs WHERE id = $1`, id)
+		})
+		return id
+	}
+
+	t.Run("a stranded row is not counted as a successful retry", func(t *testing.T) {
+		before, err := repo.GetStats(ctx)
+		require.NoError(t, err)
+
+		insertStranded(t)
+
+		after, err := repo.GetStats(ctx)
+		require.NoError(t, err)
+
+		assert.Equal(t, before.Retried, after.Retried,
+			"retry_job_id = 0 means the replay's id write never landed — counting it under `retried` reports a demonstrably incomplete replay as a recovery")
+		assert.Equal(t, before.Total+1, after.Total,
+			"it is still a dead letter job and must still be in the total — the fix must not make it disappear instead")
+	})
+
+	// ⚠ SIBLING, MANDATORY. Without it the assertion above would also pass against a predicate that
+	// counted NOTHING as retried. This pins that a real replay still reads as a success.
+	t.Run("a genuinely retried row is still counted as a successful retry", func(t *testing.T) {
+		before, err := repo.GetStats(ctx)
+		require.NoError(t, err)
+
+		insertGenuinelyRetried(t)
+
+		after, err := repo.GetStats(ctx)
+		require.NoError(t, err)
+
+		assert.Equal(t, before.Retried+1, after.Retried,
+			"a row carrying a real River job id is a completed replay and must keep counting as one")
+	})
+
+	t.Run("a stranded row is visible to the age alarm", func(t *testing.T) {
+		insertStranded(t)
+
+		age, err := repo.GetOldestJobAge(ctx)
+		require.NoError(t, err)
+
+		// 400 days ≈ 9600 hours. The old `WHERE retried_at IS NULL` excluded this row entirely, so
+		// the alarm reported whatever else was in the table — for a table holding only stranded rows,
+		// zero.
+		assert.GreaterOrEqual(t, age, int64(9000),
+			"the one signal that says a dead letter job has been sitting too long must not be blind to the rows that are stuck with nobody looking at them")
+	})
+
+	// ⚠ SIBLING, MANDATORY, and it is the direction that would break the alarm outright: a genuinely
+	// retried row is RESOLVED and must still be excluded, or the age alarm would fire forever on
+	// every job the system successfully recovered.
+	t.Run("a genuinely retried row stays excluded from the age alarm", func(t *testing.T) {
+		insertGenuinelyRetried(t)
+
+		age, err := repo.GetOldestJobAge(ctx)
+		require.NoError(t, err)
+
+		assert.Less(t, age, int64(9000),
+			"a completed replay is resolved — including it would make the age alarm permanent on every recovered job")
+	})
+}

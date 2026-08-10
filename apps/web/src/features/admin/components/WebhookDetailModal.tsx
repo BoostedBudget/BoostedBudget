@@ -5,6 +5,8 @@
  * Modal dialog displaying Paddle webhook event details with replay capability.
  */
 
+import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -12,7 +14,13 @@ import { Loader2 } from 'lucide-react'
 import {
   useGetAdminPaddleWebhookDetail,
   useReplayAdminPaddleWebhook,
+  getListAdminPaddleWebhooksQueryKey,
+  getGetAdminPaddleWebhookStatsQueryKey,
+  getGetAdminPaddleWebhookDetailQueryKey,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
+import { mutationFailureMessage } from '../lib/mutationFailureMessage'
 
 interface WebhookDetailModalProps {
   webhookId: string | null
@@ -33,7 +41,33 @@ export function WebhookDetailModal({ webhookId, onClose }: WebhookDetailModalPro
     query: { enabled: !!webhookId },
   })
 
+  const queryClient = useQueryClient()
+  const trackEvent = useTrackEvent()
   const replayMutation = useReplayAdminPaddleWebhook()
+
+  // Issue #1496, round 15 (Tier E item 2) — the sibling of WebhooksPage's replay, and stated
+  // separately because a fix applied only to the page would leave this one live, exactly as the
+  // original #1496 fix left both of these live. See that call site for the full argument.
+  //
+  // ⚠ THIS ONE INVALIDATES A THIRD KEY. The modal is looking at the DETAIL query, and its
+  // processed/attempts/processing_error fields are precisely what a replay changes — so the modal
+  // the operator is still standing in front of would otherwise keep showing the pre-replay state.
+  const handleReplay = () => {
+    if (!event?.id) return
+    const eventType = event.event_type ?? ''
+    replayMutation.mutate({ id: event.id }, {
+      onSuccess: () => {
+        trackEvent(ANALYTICS_EVENTS.ADMIN_WEBHOOK_REPLAY, { event_type: eventType })
+        toast.success(`${eventType} webhook replayed`)
+        void queryClient.invalidateQueries({ queryKey: getGetAdminPaddleWebhookDetailQueryKey(event.id) })
+        void queryClient.invalidateQueries({ queryKey: getListAdminPaddleWebhooksQueryKey() })
+        void queryClient.invalidateQueries({ queryKey: getGetAdminPaddleWebhookStatsQueryKey() })
+      },
+      onError: (err) => {
+        toast.error(`Failed to replay ${eventType} webhook: ${mutationFailureMessage(err)}`)
+      },
+    })
+  }
 
   return (
     <Dialog open={!!webhookId} onOpenChange={(open) => !open && onClose()}>
@@ -111,7 +145,7 @@ export function WebhookDetailModal({ webhookId, onClose }: WebhookDetailModalPro
             <DialogFooter>
               <Button
                 variant="outline"
-                onClick={() => replayMutation.mutate({ id: event.id ?? '' })}
+                onClick={handleReplay}
                 disabled={replayMutation.isPending}
               >
                 {replayMutation.isPending ? 'Replaying...' : 'Replay'}
