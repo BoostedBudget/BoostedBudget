@@ -276,25 +276,72 @@
       "operationId": "fireWebhook",
       "method": "POST",
       "path": "/api/v1/admin/plaid/fire-webhook",
-      "summary": "Fire a Plaid webhook (QA only)",
+      "summary": "Fire a Plaid webhook (sandbox Plaid only)",
       "tags": [
         "Admin"
       ],
       "manifestClass": "read",
       "excluded": true,
-      "description": "Fires a Plaid webhook for testing in QA environment. Requires Clerk authentication."
+      "description": "Fires a Plaid webhook for testing. Requires Clerk authentication and admin authorization. Reachable in every environment, but only functions when PLAID_ENV=sandbox; it returns an error otherwise."
+    },
+    {
+      "operationId": "listAdminPlaidOrphanedItems",
+      "method": "GET",
+      "path": "/api/v1/admin/plaid/orphaned-items",
+      "summary": "List orphaned Plaid Items (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Returns Plaid Items whose local record was deleted by a completed GDPR erasure before removal could be proved, labelled with the action required: 'manual_intervention_required' (remove the Item in Plaid's dashboard using plaid_item_id, or it may keep billing), 'auto_retrying' (an automated retry holds a live credential — no action), 'operator_attested' (an admin has stated they removed it by hand; this is an UNVERIFIED claim, resolved_at is NOT set, and the automated sweep keeps re-attempting the removal precisely because it may yet disprove the claim), or 'resolved' (Plaid confirmed the removal — history, not work). Never returns the retained access token. Requires admin role.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Number of records to return",
+          "type": "integer"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "description": "Number of records to skip",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "operationId": "recordAdminPlaidOrphanedItemOperatorResolution",
+      "method": "POST",
+      "path": "/api/v1/admin/plaid/orphaned-items/{id}/operator-resolution",
+      "summary": "Attest that an orphaned Plaid Item was removed by hand (admin)",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Records that YOU removed this Plaid Item yourself in Plaid's dashboard. This is an UNVERIFIED attestation, not a proved removal: it is stored against your admin identity with your note, moves the record to admin_state 'operator_attested' so nobody is asked to redo the work, and deliberately does NOT set resolved_at (which means Plaid itself confirmed the removal), does NOT destroy the retained access token, and does NOT stop the automated retry sweep — the sweep is what can eventually confirm your claim. First-wins: if the record is already attested this returns 409 and your note is not stored. Requires admin role.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "plaid_orphaned_items.id of the record being attested",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "grantTrial",
       "method": "POST",
       "path": "/api/v1/admin/subscription/grant-trial",
-      "summary": "Grant trial subscription (QA only)",
+      "summary": "Grant trial subscription (admin)",
       "tags": [
         "Admin"
       ],
       "manifestClass": "read",
       "excluded": true,
-      "description": "Grants a 60-day trial to the authenticated user. For E2E testing. Returns success if user already has trial."
+      "description": "Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial."
     },
     {
       "operationId": "getSystemHealth",

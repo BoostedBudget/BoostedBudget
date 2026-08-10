@@ -44,8 +44,9 @@ type SubscriptionProfileRepository interface {
 	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error
 	// #930: Retention tracking — both dates are computed in Postgres (clock_timestamp() +
 	// make_interval); see ProfileRepository.SetRetentionDates's doc comment (profile_repository.go)
-	// for why a Go-computed date is never passed in.
-	SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error
+	// for why a Go-computed date is never passed in, and RetentionClockGuard's doc comment for why
+	// the authorising condition is passed in by this caller rather than hardcoded in the repository.
+	SetRetentionDates(ctx context.Context, userID string, guard repository.RetentionClockGuard, retentionMonths int) error
 	ClearRetentionDates(ctx context.Context, userID string) error
 	// #898: Dunning — past_due timestamp tracking
 	SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error
@@ -79,7 +80,17 @@ type SubscriptionPaddleTransactionRepository interface {
 // Issue #896: Disconnects all Plaid items on subscription cancellation. Pause is not a supported
 // product feature (#933); subscription.paused is treated as cancellation and uses this same path.
 type PlaidItemCleanupForWebhook interface {
-	DisconnectAllUserItems(ctx context.Context, userID string) error
+	// DisconnectAllUserItemsIfEligible disconnects every one of the user's Plaid items, invoking
+	// recheck immediately before EVERY remaining item; the first (false, nil) stops the loop and
+	// reports services.ErrCleanupAborted. See
+	// services.PlaidItemCleanupService.DisconnectAllUserItemsIfEligible for the full contract.
+	//
+	// THERE IS DELIBERATELY NO nil-RECHECK COUNTERPART (Issue #1500). This interface used to declare
+	// DisconnectAllUserItems and processSubscriptionCanceled was one of its last two callers
+	// anywhere; both the declaration and the underlying service method are gone rather than merely
+	// unused, because the failure mode being closed is silence — while a recheck-free entry point
+	// exists, a future caller gets no per-item recheck by default and nothing complains.
+	DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error
 }
 
 // HouseholdOverCapacityRepository defines the single, non-transactional household
@@ -833,6 +844,31 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 	return nil
 }
 
+// cancellationCleanupStillAuthorised re-asks, against the freshest possible read, the ONE question
+// every destructive act in processSubscriptionCanceled is authorised by: is this user STILL
+// cancelled, and is there STILL no active compensating override? Both conjuncts must hold; a read
+// error is fail-closed (false plus the error), never an optimistic "carry on".
+//
+// It exists as a single named function — rather than being written out at each consumer — because
+// this flow now asks it from TWO places that must never be able to disagree: the per-item recheck
+// handed to DisconnectAllUserItemsIfEligible, and the gate immediately before SetRetentionDates.
+// Two hand-written copies of an authorisation question is exactly the drift this branch has had to
+// repair repeatedly; `expiredRetentionClockPredicate` (profile_repository.go) is the local
+// precedent for splicing one definition into both consumers instead.
+//
+// See the long comment at the disconnect call site for WHY these are the two conjuncts, and why
+// occurrence identity is deliberately not a third.
+func (w *SubscriptionWebhookWorker) cancellationCleanupStillAuthorised(ctx context.Context, userID string) (bool, error) {
+	fresh, readErr := w.profileRepo.GetUserByID(ctx, userID)
+	if readErr != nil {
+		return false, fmt.Errorf("failed to re-read user %s during subscription-cancelled cleanup: %w", userID, readErr)
+	}
+	if fresh.SubscriptionStatus != string(domain.SubscriptionStatusCancelled) {
+		return false, nil
+	}
+	return !fresh.HasActiveManualOverride(), nil
+}
+
 // processSubscriptionCanceled handles subscription.canceled and subscription.paused events.
 // Pause is not supported (#933); paused subscriptions are treated as terminal cancellations.
 // Issue #1413 High finding H7: a real work claim on ActionSubscriptionCancelledCleanup wraps
@@ -965,7 +1001,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// so this can be safely retried (Release makes it immediately reclaimable) rather than
 	// orphaning a still-connected, still-billing Plaid item with no automatic retry.
 	//
-	// Issue #1413 H1: DisconnectAllUserItems can return services.ErrSideEffectClaimBusy when
+	// Issue #1413 H1: the disconnect can return services.ErrSideEffectClaimBusy when
 	// another flow (the past-due grace-cancel cron, the Plaid-disconnect window pass, or another
 	// cancellation webhook delivery) currently holds the OPERATION-keyed
 	// ActionPlaidDisconnectUser claim for this user. Logged distinctly at Info — this is expected
@@ -973,8 +1009,69 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// cron jobs), so it must still release this flow claim and return an ERROR so River retries
 	// the whole webhook, exactly like the ClaimHeldByOther handling above for the flow claim
 	// itself.
+	//
+	// Issue #1500: stillEligible is the PER-ITEM recheck, and passing it is the point. This call site
+	// used the nil-recheck entry point until now, so the comp re-verification directly above covered
+	// the whole loop rather than each item in it — and the loop is one Plaid /item/remove per linked
+	// item, so a comp granted after the first item was removed still cost the user every remaining
+	// bank connection.
+	//
+	// IT RE-ASKS THIS FLOW'S OWN AUTHORISING CONDITION — NOT the past-due question the dunning flows
+	// re-ask. Nothing in this flow selects on past_due (it CLEARS past_due_started_at
+	// unconditionally, further up), so re-asking that here would be inventing an authorisation rule
+	// rather than re-asking the one this call was authorised under.
+	//
+	// That condition has TWO conjuncts, and the predicate must re-ask BOTH (Codex pass 7, Medium):
+	//
+	//  1. No active compensating override — the comp/entitlement question `reVerified.
+	//     HasActiveManualOverride()` answers immediately above.
+	//  2. The user is STILL CANCELLED. This one is the authorising state itself, and re-asking it
+	//     invents nothing: this handler's own UpdateSubscriptionFromPaddle write (far above) put the
+	//     row into 'cancelled', and every destructive act below exists only because of it. Webhook
+	//     jobs deliberately carry NO River uniqueness options (unique_opts_by_kind.go) — webhooks
+	//     must never be deduplicated away — so a later subscription.activated/.updated delivery can
+	//     legitimately restore an active or trialing status WHILE this older cancellation job is
+	//     still walking the user's Items. Asking only conjunct 1 let that stale job keep
+	//     disconnecting the remaining Items of a now-active, paying customer, and then write
+	//     six-month retention/deletion dates over the top. Compare
+	//     PastDueService.reReadStillPastDue, which likewise re-asks status AND override AND the
+	//     exact occurrence.
+	//
+	// Occurrence identity is NOT re-asked here, unlike reReadStillPastDue: this flow's occurrence is
+	// webhook.EventID (Paddle's own idempotency key, used for the work-claim resourceID above), which
+	// is not a column on the user row, and the Paddle subscription id in the payload is not a
+	// dependable per-item conjunct (paddle_subscription_id is preserved-not-rewritten on
+	// cancellation, and may be NULL for legacy rows, so comparing it would fail CLOSED and silently
+	// skip legitimate cleanups). The cancel→resubscribe→cancel-again interleaving that occurrence
+	// identity would catch is already harmless once conjunct 2 holds: the reactivation flips the
+	// status and stops this job, and the SECOND cancellation is a different Paddle event with its own
+	// claim doing exactly the same work.
+	//
+	// A read error is fail-closed: cleanupItems stops the loop and surfaces the error rather than
+	// continuing.
+	stillEligible := func(rctx context.Context) (bool, error) {
+		return w.cancellationCleanupStillAuthorised(rctx, userID)
+	}
 	if w.plaidCleanupSvc != nil {
-		if err := w.plaidCleanupSvc.DisconnectAllUserItems(ctx, userID); err != nil {
+		if err := w.plaidCleanupSvc.DisconnectAllUserItemsIfEligible(ctx, userID, stillEligible); err != nil {
+			// An authorisation-triggered abort is not a Plaid failure and must not be reported as one.
+			// services.ErrCleanupAborted has TWO causes (see its doc comment) demanding opposite
+			// handling, so the predicate is asked once more to say which: this flow's authorisation
+			// was lost mid-loop — a comp was granted, or the subscription became active again — which
+			// is a legitimate stop (release the claim and return nil, WITHOUT starting the retention
+			// clock below, exactly as the pre-loop comp branch above returns nil without it) versus a
+			// new linked item having appeared mid-pass (genuinely incomplete work — falls through to
+			// the error path, so River retries the whole webhook). An error from the recheck itself
+			// falls through too, which is the fail-closed direction. Same shape as
+			// PastDueService.processGraceExpiry and DeletionService.ExecuteDeletion.
+			if errors.Is(err, services.ErrCleanupAborted) {
+				if eligible, checkErr := stillEligible(ctx); checkErr == nil && !eligible {
+					w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, "cancellation cleanup no longer authorised mid Plaid disconnect (comp granted, or subscription no longer cancelled) — remaining items left connected")
+					w.logger.Info("subscription-cancelled cleanup stopped partway through the Plaid disconnect — it is no longer authorised (a comp was granted, or the subscription is no longer cancelled); the remaining items stay connected and no retention clock is started",
+						"user_id", userID)
+					return nil
+				}
+			}
 			if errors.Is(err, services.ErrSideEffectClaimBusy) {
 				w.logger.Info("subscription-cancelled Plaid disconnect deferred — side-effect claim held by another flow",
 					"user_id", userID)
@@ -991,7 +1088,60 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// indefinitely. Release (not Complete) and propagate so River retries the whole webhook;
 	// unlike the past-due grace path, nothing here gates re-entry on subscription_status, so a
 	// retry naturally reaches this write again.
-	if retErr := w.profileRepo.SetRetentionDates(ctx, userID, w.retentionMonths); retErr != nil {
+	//
+	// Gated on one last evaluation of this flow's authorising condition, immediately before the write
+	// (Issue #1500 residual). Until now this write was protected ONLY through the disconnect loop's
+	// abort path — the predicate was asked once per linked Item — so the two populations for whom the
+	// loop body never executes got no protection at all: a user with ZERO linked Items (common: plenty
+	// of accounts have no bank connections), and a deployment with no Plaid cleanup collaborator wired.
+	// For them a reactivation, or a comp, landing while this stale cancellation job was in flight still
+	// stamped six-month retention/deletion dates onto an active, paying customer. The retention
+	// deletion claim now re-verifies subscription status, so such a user cannot be hard-deleted on the
+	// strength of these dates, but the stored state was still wrong and other consumers read those
+	// columns (retention notices, the retention-clock repair pass).
+	//
+	// Deliberately NOT gated on w.plaidCleanupSvc != nil: whether the retention clock may be armed is a
+	// question about this user's billing state, not about whether Plaid happens to be configured.
+	// Coupling the two would be the same mistake as gating a GDPR retention limit on a feature flag.
+	//
+	// Same three outcomes as the loop's own abort handling, for the same reasons: no longer authorised
+	// is a legitimate stop (release the claim, return nil, write nothing — like the pre-loop comp branch
+	// above); a failed read is fail-closed (release and propagate so River retries the whole webhook);
+	// authorised proceeds. Stopping here also skips the marker clear below, exactly as the mid-loop
+	// abort does — a run that lost its authorisation leaves plaid_cleanup_pending_at for the repair
+	// pass rather than declaring this episode finished.
+	authorised, authErr := w.cancellationCleanupStillAuthorised(ctx, userID)
+	if authErr != nil {
+		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, authErr.Error())
+		return fmt.Errorf("failed to re-verify user %s before starting the retention clock: %w", userID, authErr)
+	}
+	if !authorised {
+		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, "cancellation cleanup no longer authorised before the retention-clock write (comp granted, or subscription no longer cancelled) — no retention dates written")
+		w.logger.Info("subscription-cancelled retention clock not started — the cleanup is no longer authorised (a comp was granted, or the subscription is no longer cancelled)",
+			"user_id", userID)
+		return nil
+	}
+	//
+	// The gate above narrowed that window to roughly one Go statement; it did not close it, and no
+	// read-then-write gate can. The write's OWN guard is what closes it: SetRetentionDates is handed
+	// THIS flow's authorising condition — still 'cancelled' — and re-evaluates it inside the
+	// statement, against committed state (see RetentionClockGuard, repository/profile_repository.go).
+	// Both are load-bearing: the gate stops the WORK (the per-item Plaid loop, which SQL cannot
+	// short-circuit), the guard stops the WRITE.
+	//
+	// A lost precondition (ErrRetentionClockPreconditionLost) is therefore handled EXACTLY as the
+	// gate's own negative outcome one line above — release the claim, log, return nil, write nothing
+	// — because it is the same event, merely detected microseconds later: an activation or comp
+	// landed while this stale cancellation job was in flight. Returning an error instead would make
+	// River retry a webhook whose whole purpose has been overtaken. Every other error stays a real
+	// failure and propagates.
+	if retErr := w.profileRepo.SetRetentionDates(ctx, userID, repository.RetentionClockRequiresStatus(domain.SubscriptionStatusCancelled), w.retentionMonths); retErr != nil {
+		if errors.Is(retErr, repository.ErrRetentionClockPreconditionLost) {
+			w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, "cancellation cleanup no longer authorised at the retention-clock write itself (the subscription is no longer cancelled) — no retention dates written")
+			w.logger.Info("subscription-cancelled retention clock not started — the write's own guard found the subscription is no longer cancelled",
+				"user_id", userID)
+			return nil
+		}
 		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, retErr.Error())
 		return fmt.Errorf("failed to set retention dates on cancellation for user %s: %w", userID, retErr)
 	}

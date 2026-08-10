@@ -2,8 +2,9 @@
 # Run tests that conflict with centralized preloads or use inline mock.module() calls.
 # Issue #1323: Process isolation via /tmp to avoid bunfig.toml loading.
 #
-# Four groups: A (minimal preloads), B (with registry/context), C (inline mocks),
-# D (real-implementation hooks). Each runs as a separate bun process to prevent pollution.
+# Five groups: A (minimal preloads), B (with registry/context), C (inline mocks),
+# D (real-implementation hooks), E (MerchantsTab inline DataTable mock). Each runs as a
+# separate bun process to prevent pollution.
 
 set -e
 
@@ -17,7 +18,7 @@ for arg in "$@"; do
     esac
 done
 
-echo "Running process-isolated test groups (A, B, C, D)..."
+echo "Running process-isolated test groups (A, B, C, D, E)..."
 cd /tmp
 
 run_group() {

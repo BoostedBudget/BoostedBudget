@@ -47,8 +47,11 @@ func (r *recipeRepository) Create(ctx context.Context, recipe *domain.MCPRecipe)
 }
 
 func (r *recipeRepository) List(ctx context.Context, userID string) ([]domain.MCPRecipe, error) {
+	// Issue #1444: description is nullable (migration 000085_create_mcp_recipes.up.sql:10 — no
+	// NOT NULL constraint) but domain.MCPRecipe.Description is a bare string, not *string.
+	// COALESCE guarantees a non-NULL scan target — "" is the natural zero for this omitempty field.
 	query := `
-		SELECT id, user_id, name, description, spec, schedule, enabled, created_at, updated_at
+		SELECT id, user_id, name, COALESCE(description, '') AS description, spec, schedule, enabled, created_at, updated_at
 		FROM mcp_recipes
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -76,8 +79,9 @@ func (r *recipeRepository) List(ctx context.Context, userID string) ([]domain.MC
 }
 
 func (r *recipeRepository) Get(ctx context.Context, id string, userID string) (*domain.MCPRecipe, error) {
+	// Issue #1444: same NULL-safety as List above — description is nullable.
 	query := `
-		SELECT id, user_id, name, description, spec, schedule, enabled, created_at, updated_at
+		SELECT id, user_id, name, COALESCE(description, '') AS description, spec, schedule, enabled, created_at, updated_at
 		FROM mcp_recipes
 		WHERE id = $1 AND user_id = $2
 	`

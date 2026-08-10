@@ -216,6 +216,50 @@ func TestTrialExpirationCheckUniqueOpts(t *testing.T) {
 	assert.Contains(t, opts.ByState, queue.JobStatePending)
 }
 
+// ─── Issue #1448: this job shipped RunOnStart: true with NO dedup guarantee at all. ──────
+
+func TestTrialExpirationCheckInsertOpts_Queue(t *testing.T) {
+	opts := TrialExpirationCheckInsertOpts()
+	require.NotNil(t, opts)
+	assert.Equal(t, "low", opts.Queue)
+}
+
+func TestTrialExpirationCheckInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := TrialExpirationCheckInsertOpts()
+	want := TrialExpirationCheckUniqueOpts()
+
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
+	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
+	assert.False(t, opts.UniqueOpts.ByQueue, "uniqueness must stay global across queues")
+
+	require.Len(t, opts.UniqueOpts.ByState, len(want.ByState),
+		"main.go's periodic registration previously carried NO UniqueOpts at all for this "+
+			"job despite RunOnStart: true (Issue #1448) — ByState must match "+
+			"TrialExpirationCheckUniqueOpts() exactly, not just be non-empty")
+	for i, s := range want.ByState {
+		assert.Equal(t, rivertype.JobState(s), opts.UniqueOpts.ByState[i])
+	}
+}
+
+func TestTrialExpirationCheckPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := TrialExpirationCheckPeriodicOpts()
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart)
+}
+
+func TestTrialExpirationCheckPeriodicOpts_ID(t *testing.T) {
+	opts := TrialExpirationCheckPeriodicOpts()
+	assert.Equal(t, "trial_expiration_check", opts.ID)
+}
+
+func TestTrialExpirationCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	opts := TrialExpirationCheckPeriodicOpts()
+	require.True(t, opts.RunOnStart)
+
+	unique := TrialExpirationCheckUniqueOpts()
+	require.NotEmpty(t, unique.ByState)
+}
+
 func TestNewTrialExpirationCheckWorker_DefaultLogger(t *testing.T) {
 	mockRepo := new(MockTrialProfileRepository)
 	mockTrialSvc := new(MockTrialService)

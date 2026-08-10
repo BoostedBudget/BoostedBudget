@@ -11,7 +11,13 @@ package repository
 //
 // Run with:
 //
-//	DATABASE_URL=postgres://... go test ./internal/repository/... -run 'TestGetUsersNeedingRetention|TestGetUsersWithExpiredRetention_Integration|TestNoActiveManualOverridePredicate' -tags integration -v
+//	DATABASE_URL=postgres://... go test ./internal/repository/... -run 'TestGetUsersNeedingRetention|TestGetUsersWithExpiredRetentionPage_Integration|TestRetentionQueries_Integration|TestNoActiveManualOverridePredicate' -tags integration -v
+//
+// Every alternative above is spelled so that it MATCHES a declared test. The pattern previously read
+// `TestGetUsersWithExpiredRetention_Integration`, which matches nothing — the declared name is
+// `TestGetUsersWithExpiredRetentionPage_Integration_ExcludesActiveComp`, with `Page` — and it omitted
+// this file's two `TestRetentionQueries_Integration_*` tests entirely, so the documented command ran a
+// strict subset of the file and reported success.
 
 import (
 	"context"
@@ -164,9 +170,9 @@ func TestGetUsersNeedingRetention7dNotice_Integration_ExcludesActiveComp(t *test
 	assertRetentionSelection(t, users, fixtures)
 }
 
-// TestGetUsersWithExpiredRetention_Integration_ExcludesActiveComp mirrors the above for the
+// TestGetUsersWithExpiredRetentionPage_Integration_ExcludesActiveComp mirrors the above for the
 // hard-delete candidate query (retention_expires_at already in the past).
-func TestGetUsersWithExpiredRetention_Integration_ExcludesActiveComp(t *testing.T) {
+func TestGetUsersWithExpiredRetentionPage_Integration_ExcludesActiveComp(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
@@ -175,10 +181,7 @@ func TestGetUsersWithExpiredRetention_Integration_ExcludesActiveComp(t *testing.
 	retentionExpiresAt := time.Now().Add(-1 * time.Hour) // already expired
 	fixtures := setupRetentionFixtures(t, ctx, pool, repo, "rexp", retentionExpiresAt)
 
-	users, err := repo.GetUsersWithExpiredRetention(ctx)
-	require.NoError(t, err)
-
-	assertRetentionSelection(t, users, fixtures)
+	assertRetentionSelection(t, walkAllExpiredRetentionUsers(t, ctx, repo), fixtures)
 }
 
 // TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared is the C1 negative-
@@ -202,7 +205,9 @@ func TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared(t *te
 	}{
 		{"30d_notice", time.Now().Add(15 * 24 * time.Hour), repo.GetUsersNeedingRetention30dNotice},
 		{"7d_notice", time.Now().Add(3 * 24 * time.Hour), repo.GetUsersNeedingRetention7dNotice},
-		{"expired_retention", time.Now().Add(-1 * time.Hour), repo.GetUsersWithExpiredRetention},
+		{"expired_retention", time.Now().Add(-1 * time.Hour), func(ctx context.Context) ([]*domain.User, error) {
+			return walkAllExpiredRetentionUsers(t, ctx, repo), nil
+		}},
 	}
 
 	for _, tt := range tests {
@@ -264,7 +269,9 @@ func TestRetentionQueries_Integration_MalformedOverride_StillExcluded(t *testing
 	}{
 		{"30d_notice", time.Now().Add(15 * 24 * time.Hour), repo.GetUsersNeedingRetention30dNotice},
 		{"7d_notice", time.Now().Add(3 * 24 * time.Hour), repo.GetUsersNeedingRetention7dNotice},
-		{"expired_retention", time.Now().Add(-1 * time.Hour), repo.GetUsersWithExpiredRetention},
+		{"expired_retention", time.Now().Add(-1 * time.Hour), func(ctx context.Context) ([]*domain.User, error) {
+			return walkAllExpiredRetentionUsers(t, ctx, repo), nil
+		}},
 	}
 
 	for _, tt := range tests {
@@ -292,7 +299,7 @@ func TestRetentionQueries_Integration_MalformedOverride_StillExcluded(t *testing
 // override predicate now has two independent expressions of the SAME rule — Go
 // (domain.User.HasActiveManualOverride, used for row-level reads) and SQL
 // (noActiveManualOverridePredicate, used for these set-based queries). This test inserts the
-// full 3x3 fixture matrix from the plan (manual_tier_override: NULL/”/'premium' x
+// full 3x3 fixture matrix from the plan (manual_tier_override: NULL/''/'premium' x
 // manual_tier_ends_at: NULL/past/future) and asserts the SQL predicate's verdict equals the Go
 // predicate's verdict for every one of the 9 rows. This is the guard against the two
 // definitions drifting apart in a future edit.

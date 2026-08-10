@@ -1,0 +1,22 @@
+-- Round 15, Tier E item 5: rebuild idx_audit_logs_deletion_residue after 000143 has cleared any
+-- INVALID leftover. Second half of a two-file repair — see 000143 for why the defect exists, how it
+-- was verified, and why these two statements cannot share a file.
+--
+-- The index definition is IDENTICAL to 000138's, character for character in its predicate, and that
+-- is load-bearing rather than tidy: Postgres uses a partial index only when it can PROVE the query's
+-- WHERE implies the index's predicate, and for a LIKE clause that proof is an expression-tree
+-- equality. GetDeletionResidueStats (backend/internal/repository/job_health_repository.go) inlines
+-- this same literal, and TestJobHealthRepository_Integration_DeletionResidue_IsServedByThePartialIndex
+-- pins the pairing. Any reword here silently returns the health endpoint to a sequential scan.
+--
+-- CONCURRENTLY as the file's SOLE statement (mirrors 000077, 000082 and 000138 itself), because
+-- golang-migrate does not wrap a single-statement file in a transaction and CONCURRENTLY requires
+-- that. IF NOT EXISTS keeps it idempotent — and, on a database whose index is present and VALID,
+-- correctly makes this a no-op rather than a needless rebuild.
+--
+-- ⚠ THE RESIDUAL, STATED PLAINLY: if THIS build is itself interrupted, it leaves an invalid index of
+-- exactly the kind 000143 clears — the hazard is inherent to CONCURRENTLY, and no migration can
+-- remove it. What has changed is that the condition is now detectable and has a written remedy
+-- (re-run 000143 and 000144) instead of hiding behind a successful-looking IF NOT EXISTS forever.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_logs_deletion_residue
+    ON audit_logs (created_at) WHERE action LIKE 'user.deletion_residue.%';

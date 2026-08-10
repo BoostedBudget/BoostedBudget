@@ -24,6 +24,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/require"
@@ -35,7 +36,9 @@ func setupHouseholdServiceIntegrationDB(t *testing.T) *pgxpool.Pool {
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set — skipping integration test")
 	}
-	pool, err := pgxpool.New(context.Background(), dsn)
+	// Issue #1461: route through database.NewPoolFromURL (not a bare pgxpool.New) so this pool
+	// pins session TimeZone=UTC exactly like the production pool does.
+	pool, err := database.NewPoolFromURL(context.Background(), dsn)
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 	return pool
@@ -91,6 +94,38 @@ func insertIntegrationTestUser(t *testing.T, profileRepo repository.ProfileRepos
 	}
 	require.NoError(t, profileRepo.CreateUser(context.Background(), user))
 	return user
+}
+
+// retentionFixtureMonths is the retention window the arming helper below uses. It matches
+// RetentionCleanupCheckWorker's own default (intOrDefault(deps.RetentionMonths, 6),
+// queue/jobs/retention_cleanup_check.go) so a fixture row looks like a production one. Any positive
+// value works — the helper shifts the resulting stamps rather than depending on the size.
+const retentionFixtureMonths = 6
+
+// armElapsedRetentionClock puts a user in the state GetUsersWithExpiredRetentionPage selects and
+// retentionDeletionClaimPredicate authorises: a retention clock that has already run out. Every
+// integration test whose deletion is authorised by the RETENTION rule (ExecuteDeletion with
+// DeletionKindRetention, or DeleteUserCascade with a nil expectedDeletionRequestedAt) needs this —
+// since #1440 T0-retention both re-verify the clock and the subscription status, so a user with no
+// clock at all is correctly refused.
+//
+// It arms the clock through the PRODUCTION writer (SetRetentionDates, whose interval arithmetic is
+// computed in Postgres as clock_timestamp() + make_interval(months => n)) and then shifts BOTH stamps
+// backwards by more than the window — i.e. it simulates elapsed time rather than hand-crafting the
+// target row. No production writer can produce an already-elapsed clock directly: they all compute a
+// FUTURE instant, and production only reaches expiry by waiting.
+func armElapsedRetentionClock(t *testing.T, ctx context.Context, pool *pgxpool.Pool, profileRepo repository.ProfileRepository, userID string) {
+	t.Helper()
+	// RetentionClockUnguarded: fixture setup, not a subscription transition (Issue #1500 residual).
+	require.NoError(t, profileRepo.SetRetentionDates(ctx, userID, repository.RetentionClockUnguarded, retentionFixtureMonths))
+	_, err := pool.Exec(ctx, `
+		UPDATE users
+		SET retention_started_at = retention_started_at - make_interval(months => $1::int),
+		    retention_expires_at = retention_expires_at - make_interval(months => $1::int)
+		WHERE id = $2`,
+		retentionFixtureMonths+1, userID,
+	)
+	require.NoError(t, err)
 }
 
 func TestHouseholdServiceIntegration_AcceptInvite_FullHappyPath(t *testing.T) {
@@ -153,7 +188,7 @@ func TestHouseholdServiceIntegration_AcceptInvite_FullHappyPath(t *testing.T) {
 
 	// Household entitlement was written for the invitee, sourced from the owner.
 	entRepo := repository.NewEntitlementRepository(f.pool)
-	entitlement, err := entRepo.GetActiveEntitlement(ctx, invitee.ID)
+	entitlement, err := entRepo.GetActiveEntitlement(ctx, invitee.ID, time.Now())
 	require.NoError(t, err)
 	require.Equal(t, domain.EntitlementSourceHousehold, entitlement.Source)
 	require.Equal(t, owner.ID, *entitlement.PayerUserID)
@@ -1165,7 +1200,7 @@ func TestHouseholdServiceIntegration_AcceptInvite_RestoresRemovedMemberWithinWin
 
 	// A fresh household entitlement exists for the restored member.
 	entRepo := repository.NewEntitlementRepository(f.pool)
-	entitlement, err := entRepo.GetActiveEntitlement(ctx, invitee.ID)
+	entitlement, err := entRepo.GetActiveEntitlement(ctx, invitee.ID, time.Now())
 	require.NoError(t, err)
 	require.Equal(t, domain.EntitlementSourceHousehold, entitlement.Source)
 	require.Equal(t, owner.ID, *entitlement.PayerUserID)

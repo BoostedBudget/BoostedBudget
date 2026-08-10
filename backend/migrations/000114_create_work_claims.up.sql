@@ -29,9 +29,9 @@
 -- bespoke predicates for a mechanism that is otherwise identical across actions.
 --
 -- The claim is deliberately narrow: it establishes EXCLUSIVITY only. The existing
--- conditional state-transition predicates (e.g. claimForDeletionPredicate) still gate
--- CORRECTNESS ("is this user still eligible") and must be re-checked after the claim is
--- won, inside the same call, before any irreversible external work.
+-- conditional state-transition predicates (e.g. profile_repository.go's ClaimForDeletion
+-- predicates) still gate CORRECTNESS ("is this user still eligible") and must be re-checked
+-- after the claim is won, inside the same call, before any irreversible external work.
 
 CREATE TABLE IF NOT EXISTS work_claims (
     id               BIGSERIAL   PRIMARY KEY,

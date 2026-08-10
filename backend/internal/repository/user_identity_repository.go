@@ -90,9 +90,13 @@ func (r *userIdentityRepository) decryptIdentity(identity *domain.UserIdentity) 
 // GetByClerkID retrieves an identity by Clerk user ID
 func (r *userIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID string) (*domain.UserIdentity, error) {
 	blindIdx := r.enc.BlindIndex(clerkUserID)
+	// Issue #1444: email is nullable (migration 000008_create_user_identities_table.up.sql:18 — no
+	// NOT NULL constraint; "may differ across providers") but domain.UserIdentity.Email is a bare
+	// string, not *string. COALESCE guarantees a non-NULL scan target; DecryptString("") is a safe
+	// passthrough (no "ENC$" prefix), so decryptIdentity needs no special-casing.
 	query := `
 		SELECT id, user_id, clerk_user_id, provider, provider_user_id,
-		       email, email_verified, is_primary,
+		       COALESCE(email, '') AS email, email_verified, is_primary,
 		       created_at, updated_at, last_used_at
 		FROM user_identities
 		WHERE clerk_user_id_blind_idx = $1
@@ -130,9 +134,10 @@ func (r *userIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID s
 // GetByUserID retrieves all identities for a user
 // Returns identities ordered by is_primary DESC (primary first), then created_at ASC (oldest first)
 func (r *userIdentityRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.UserIdentity, error) {
+	// Issue #1444: same NULL-safety as GetByClerkID above — email is nullable.
 	query := `
 		SELECT id, user_id, clerk_user_id, provider, provider_user_id,
-		       email, email_verified, is_primary,
+		       COALESCE(email, '') AS email, email_verified, is_primary,
 		       created_at, updated_at, last_used_at
 		FROM user_identities
 		WHERE user_id = $1

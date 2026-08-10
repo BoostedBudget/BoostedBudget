@@ -38,7 +38,8 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
     linked_item_status,
   } = account
 
-  // Check if the linked item is disconnected (subscription expired)
+  // Check if the linked item is disconnected — this can mean the subscription lapsed (#679/#680)
+  // OR that orphan cleanup removed the Plaid item successfully; status alone can't tell which.
   const isDisconnected = linked_item_status === 'disconnected'
 
   // Display name: nickname > official_name > name
@@ -83,7 +84,7 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
               (isDisconnected || is_hidden) ? (
                 <>
                   {isDisconnected && (
-                    <Badge variant="warning" title="Account disconnected - resubscribe to reconnect">
+                    <Badge variant="warning" title="This connection is no longer active">
                       <Unplug className="h-3 w-3" />
                       <span>Disconnected</span>
                     </Badge>

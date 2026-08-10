@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,7 +37,11 @@ var (
 	// checkable) rather than a genuine per-item failure — turning an idempotent no-op into a hard
 	// abort would reproduce the exact false-positive failure mode Issue #1413 #1453's sibling
 	// finding (verifyNoNewLinkedItemAppeared) exists to avoid.
-	ErrNoLinkedItemsUpdated = errors.New("MarkItemsDisconnected: update affected zero rows (all given ids already disconnected/replaced?)")
+	// Issue #1495: also returned by MarkPlaidRemoved, whose zero-row case means something DIFFERENT
+	// (the ids do not exist — that method has no status guard that could filter a live row out), so
+	// the message is worded method-neutrally rather than naming MarkItemsDisconnected. The two
+	// callers wrap it with their own method name and count, which is what a log actually shows.
+	ErrNoLinkedItemsUpdated = errors.New("linked_items update affected zero rows (given ids already terminal, or no longer present?)")
 )
 
 // normalizeLinkedItemStatus treats a NULL linked_items.status value as
@@ -112,19 +117,20 @@ type LinkedItemRepository interface {
 
 	// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
 
-	// GetItemsForCleanup retrieves items that are candidates for cleanup.
-	// Criteria: items in error/login_required state > errorDays, OR revoked status, OR not synced > staleDays.
-	// Only returns items that haven't been notified yet (cleanup_scheduled_at IS NULL).
-	GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error)
-
-	// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due.
-	// Returns items where cleanup_scheduled_at < NOW().
+	// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due —
+	// cleanup_scheduled_at IS NOT NULL AND < NOW(), excluding 'disconnected' ONLY. It is the
+	// stranded-cleanup backstop's selection query (Issue #1486 follow-up part C). 'replaced' is
+	// deliberately INCLUDED (such an item is still live and still billing at Plaid) while
+	// 'disconnected' is deliberately excluded; see the implementation's doc comment, which is where
+	// that asymmetry with the sweep's candidacy predicate is argued.
 	GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error)
 
 	// MarkForCleanup marks an item for cleanup with notification and scheduled cleanup timestamp.
 	MarkForCleanup(ctx context.Context, itemID string, cleanupAt time.Time) error
 
-	// ClearCleanupSchedule clears the cleanup schedule for an item (e.g., if user reconnected).
+	// ClearCleanupSchedule clears the cleanup schedule for an item. NOT called on reconnection:
+	// repairing an item through Plaid Link update mode leaves cleanup_scheduled_at set. See
+	// cleanupCandidateReasonPredicate for the full list of production callers and why that matters.
 	ClearCleanupSchedule(ctx context.Context, itemID string) error
 
 	// Issue #679, #680: Trial expiration - mark items as disconnected to preserve history
@@ -148,6 +154,66 @@ type LinkedItemRepository interface {
 	// legitimate no-op (not automatically a bug) and must not be conflated with a genuine
 	// database error.
 	MarkItemsDisconnected(ctx context.Context, ids []string) error
+
+	// MarkPlaidRemoved stamps linked_items.plaid_removed_at (migration 000131) for the given
+	// SPECIFIC linked items — the durable record that Plaid /item/remove has succeeded for them
+	// (including Plaid answering ITEM_NOT_FOUND, which means the Item is already gone and billing
+	// has already stopped). Issue #1495.
+	//
+	// WHY THIS EXISTS ALONGSIDE MarkItemsDisconnected, which looks like it already says this.
+	// It does not, for one row shape, and that row shape is the defect: MarkItemsDisconnected's
+	// WHERE guard REFUSES to overwrite 'replaced' (deliberately — overwriting it would destroy the
+	// replaced_at/replaced_by_id re-link chain; pinned by
+	// TestLinkedItemRepository_MarkItemsDisconnected_AlreadyReplacedIsNotReverted), yet a
+	// 'replaced' item's Plaid Item is STILL LIVE AND STILL BILLING because the re-link path
+	// (services/account_service.go) never calls /item/remove. status is a single slot and the
+	// re-link fact owns it, so before this column there was nowhere to record "Plaid is done" for
+	// such a row. This method has NO status filter at all and therefore CAN stamp a 'replaced'
+	// row — that is the entire point. See migration 000131's comment for the full rationale.
+	//
+	// Idempotent, and the FIRST stamp wins: the value is written as
+	// COALESCE(plaid_removed_at, <now>), so a re-run neither errors nor moves an
+	// already-recorded instant later. A nil or empty ids is a no-op (not an error).
+	//
+	// Returns ErrNoLinkedItemsUpdated (errors.Is-checkable) if the UPDATE matched zero rows despite
+	// a non-empty ids. Unlike MarkItemsDisconnected, where zero rows is the ROUTINE
+	// already-terminal case, zero rows here can only mean the ids do not exist (the row was
+	// deleted concurrently) — there is no status guard left to filter them out. Callers must still
+	// not escalate it into a permanent retry loop; see RemoveItem/cleanupItems for how each treats
+	// it.
+	MarkPlaidRemoved(ctx context.Context, ids []string) error
+
+	// MarkPlaidRemovalFailed records, on the given items, that a Plaid /item/remove attempt failed
+	// with an error we judge UNRECOVERABLE — writing plaid_removal_failed_at and
+	// plaid_removal_error_code (migration 000133). Issue #1494.
+	//
+	// THIS IS THE OPPOSITE FACT FROM MarkPlaidRemoved, not a variant of it, and conflating the two
+	// would recreate the defect #1495 closed. plaid_removed_at means "the Plaid side is DONE, billing
+	// has stopped". This means "the credential we hold cannot remove this Item, so retrying with it
+	// cannot change the outcome" — the Item may still exist and may still bill. The only thing this
+	// mark is allowed to unlock is DeleteUserCascade's C2 guard (uncleanedLinkedItemExistsClause),
+	// and only because the cascade first copies the row into plaid_orphaned_items so the obligation
+	// survives the erasure. It must never be written for an item that might yet be removable: see
+	// services.terminalPlaidRemovalFailure for the deliberately narrow code set, and for why
+	// anything unrecognised stays recoverable.
+	//
+	// SPLIT SEMANTICS, and the timestamp half is load-bearing. plaid_removal_failed_at is written
+	// COALESCE(existing, now) — FIRST occurrence wins, exactly like MarkPlaidRemoved — because C2 does
+	// not unblock on the mark's presence but on the verdict having PERSISTED for a cooling-off window
+	// (uncleanedLinkedItemPredicate). Overwriting it on every attempt would push that deadline forward on
+	// each daily retry and the guard would block forever, which is #1494 again with extra steps.
+	// plaid_removal_error_code IS overwritten, so it names the most recent code — that one has no history
+	// worth keeping and an operator wants the latest answer Plaid gave.
+	//
+	// GUARDED BY `plaid_removed_at IS NULL`: a row already proved removed must never acquire a
+	// failure verdict afterwards (a late-arriving error from a retry that raced a success would
+	// otherwise contradict the stronger fact). This makes the zero-row case AMBIGUOUS BY DESIGN, and
+	// callers must treat it as benign: it means either the row no longer exists, or it has already
+	// been proved removed. Both are outcomes in which no caller needs this mark.
+	//
+	// Returns ErrNoLinkedItemsUpdated (errors.Is-checkable) for that zero-row case, despite a
+	// non-empty ids. A nil or empty ids is a no-op (not an error).
+	MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error
 
 	// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
 	GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
@@ -179,8 +245,29 @@ const linkedItemSelectCols = `id, user_id, item_id, access_token_encrypted,
        investments_last_synced_date, liabilities_last_synced_at,
        status_changed_at`
 
-// NewLinkedItemRepository creates a new LinkedItemRepository instance
-func NewLinkedItemRepository(db DB, enc *appcrypto.FieldEncryptor) LinkedItemRepository {
+// NewLinkedItemRepository returns the CONCRETE *linkedItemRepository, not the LinkedItemRepository
+// interface — Issue #1469. It used to return the interface, which meant a method absent from that
+// wide interface was unreachable through the value main.go holds, so the paged
+// GetItemsForCleanupPage below could only be reached by ALSO adding it to the wide interface and to
+// every mock implementation of it (enumerate them with
+// `grep -rnE '^func \([a-zA-Z_]+ \*?[A-Za-z0-9_]+\) GetItemsForCleanupPage\(' internal/`; no total is
+// asserted here because three counting methods gave three different answers during review, and the
+// receiver name is not always `m`). Returning the concrete
+// type (exactly as NewProfileRepository already does) keeps the paged sweep method on the concrete
+// repository plus the ONE narrow consumer interface that needs it
+// (jobs.LinkedItemCleanupRepository), which is the placement the sibling scheduled-deletion fix
+// established. Every existing caller assigning the result to a LinkedItemRepository variable or
+// parameter still compiles unchanged — and the package-level `var _ LinkedItemRepository =
+// (*linkedItemRepository)(nil)` assertion below keeps that a COMPILE-TIME guarantee rather than an
+// incidental one, restoring the proof the old interface return type used to provide for free.
+// Compile-time proof that the concrete type still satisfies the wide interface. Issue #1469 changed
+// NewLinkedItemRepository's return type from LinkedItemRepository to *linkedItemRepository, which
+// silently removed the compiler's own check that every interface method is implemented — a later
+// signature drift would then only surface at whichever call site happens to assign the result to an
+// interface. This restores it explicitly and costs nothing at runtime.
+var _ LinkedItemRepository = (*linkedItemRepository)(nil)
+
+func NewLinkedItemRepository(db DB, enc *appcrypto.FieldEncryptor) *linkedItemRepository { //nolint:revive // deliberate: see doc comment (mirrors NewProfileRepository)
 	return &linkedItemRepository{db: db, enc: enc}
 }
 
@@ -333,14 +420,14 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1`
 
 	var item domain.LinkedItem
-	var statusRaw *string
+	var statusRaw, institutionIDRaw, institutionNameRaw *string
 	err := r.db.QueryRow(ctx, query, id).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
 		&item.AccessTokenEncrypted,
-		&item.InstitutionID,
-		&item.InstitutionName,
+		&institutionIDRaw,
+		&institutionNameRaw,
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
@@ -365,6 +452,8 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 	if err != nil {
 		return nil, err
 	}
+	item.InstitutionID = nilOrEmpty(institutionIDRaw)
+	item.InstitutionName = nilOrEmpty(institutionNameRaw)
 	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
@@ -394,14 +483,14 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
-		var statusRaw *string
+		var statusRaw, institutionIDRaw, institutionNameRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
 			&item.ItemID,
 			&item.AccessTokenEncrypted,
-			&item.InstitutionID,
-			&item.InstitutionName,
+			&institutionIDRaw,
+			&institutionNameRaw,
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
@@ -422,6 +511,8 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 		if err != nil {
 			return nil, err
 		}
+		item.InstitutionID = nilOrEmpty(institutionIDRaw)
+		item.InstitutionName = nilOrEmpty(institutionNameRaw)
 		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
@@ -448,14 +539,14 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE item_id_blind_idx = $1`
 
 	var item domain.LinkedItem
-	var statusRaw *string
+	var statusRaw, institutionIDRaw, institutionNameRaw *string
 	err := r.db.QueryRow(ctx, query, blindIdx).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
 		&item.AccessTokenEncrypted,
-		&item.InstitutionID,
-		&item.InstitutionName,
+		&institutionIDRaw,
+		&institutionNameRaw,
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
@@ -480,6 +571,8 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 	if err != nil {
 		return nil, err
 	}
+	item.InstitutionID = nilOrEmpty(institutionIDRaw)
+	item.InstitutionName = nilOrEmpty(institutionNameRaw)
 	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
@@ -624,14 +717,14 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1 AND user_id = $2`
 
 	var item domain.LinkedItem
-	var statusRaw *string
+	var statusRaw, institutionIDRaw, institutionNameRaw *string
 	err := r.db.QueryRow(ctx, query, id, userID).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
 		&item.AccessTokenEncrypted,
-		&item.InstitutionID,
-		&item.InstitutionName,
+		&institutionIDRaw,
+		&institutionNameRaw,
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
@@ -656,6 +749,8 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 	if err != nil {
 		return nil, err
 	}
+	item.InstitutionID = nilOrEmpty(institutionIDRaw)
+	item.InstitutionName = nilOrEmpty(institutionNameRaw)
 	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
@@ -717,14 +812,14 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1 FOR UPDATE`
 
 	var item domain.LinkedItem
-	var statusRaw *string
+	var statusRaw, institutionIDRaw, institutionNameRaw *string
 	err := tx.QueryRow(ctx, query, id).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
 		&item.AccessTokenEncrypted,
-		&item.InstitutionID,
-		&item.InstitutionName,
+		&institutionIDRaw,
+		&institutionNameRaw,
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
@@ -749,6 +844,8 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 	if err != nil {
 		return nil, err
 	}
+	item.InstitutionID = nilOrEmpty(institutionIDRaw)
+	item.InstitutionName = nilOrEmpty(institutionNameRaw)
 	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
@@ -772,14 +869,14 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 AND institution_id_blind_idx = $2 AND status = $3 ORDER BY created_at DESC LIMIT 1`
 
 	var item domain.LinkedItem
-	var statusRaw *string
+	var statusRaw, institutionIDRaw, institutionNameRaw *string
 	err := r.db.QueryRow(ctx, query, userID, institutionIDBlind, status).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
 		&item.AccessTokenEncrypted,
-		&item.InstitutionID,
-		&item.InstitutionName,
+		&institutionIDRaw,
+		&institutionNameRaw,
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
@@ -805,6 +902,8 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 	if err != nil {
 		return nil, err
 	}
+	item.InstitutionID = nilOrEmpty(institutionIDRaw)
+	item.InstitutionName = nilOrEmpty(institutionNameRaw)
 	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
@@ -816,50 +915,229 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 
 // Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
 
-// GetItemsForCleanup retrieves items that are candidates for cleanup.
-// Criteria:
-//   - Items in error/login_required state > errorDays
-//   - Items with revoked status (immediate cleanup candidate)
-//   - Items not synced > staleDays
-//   - Items with zero active accounts (no connected accounts remaining)
+// cleanupCandidateSelectQuery is the SELECT + WHERE of the cleanup sweep. It was extracted (Issue
+// #1469) so the paged GetItemsForCleanupPage could not drift from the unbounded GetItemsForCleanup it
+// replaced; that unbounded method was deleted in #1488, and GetItemsForCleanupPage is now the sole
+// consumer — but the constant stays split out because ClaimItemForCleanup shares its inner
+// cleanupCandidateReasonPredicate (#1486). $1 is the errorDays interval, $2 the staleDays interval; a
+// caller appending its own clauses must start numbering at $3.
 //
-// Only returns items that haven't been scheduled yet (cleanup_scheduled_at IS NULL).
-// Issue #668: Plaid Item Management for Cost Optimization
+// Issue #1495: the single `li.status NOT IN ('replaced', 'disconnected')` clause was SPLIT into two,
+// because it was doing two unrelated jobs under one spelling:
 //
-// Issue #1413 round-10 (#1444): NULL-safe status scan (see normalizeLinkedItemStatus) for
-// consistency with every other scan site in this file, even though `status NOT IN (...)` above
-// already structurally excludes a NULL-status row (SQL three-valued logic).
-func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
-	query := `
-		SELECT li.id, li.user_id, li.item_id, li.access_token_encrypted,
-		       li.institution_id, li.institution_name, li.provider, li.cursor, li.last_synced_at,
-		       li.status, li.error_code, li.error_message, li.last_error_at, li.retry_count, li.next_retry_at,
-		       li.replaced_at, li.replaced_by_id,
-		       li.cleanup_notified_at, li.cleanup_scheduled_at,
-		       li.created_at, li.updated_at, li.investments_last_synced_date, li.liabilities_last_synced_at
-		FROM linked_items li
-		WHERE li.cleanup_scheduled_at IS NULL
-		  AND li.status NOT IN ('replaced', 'disconnected')
-		  AND (
-		      -- Items in error state for > errorDays
-		      (li.status IN ('error', 'login_required') AND li.last_error_at < NOW() - $1::interval)
-		      -- OR items with revoked status (immediate cleanup candidate)
-		      OR li.status = 'revoked'
-		      -- OR items not synced for > staleDays
-		      OR (li.last_synced_at IS NOT NULL AND li.last_synced_at < NOW() - $2::interval)
-		      -- OR items with zero active accounts (immediate cleanup candidate)
-		      OR NOT EXISTS (
-		          SELECT 1 FROM accounts a
-		          WHERE a.linked_item_id = li.id AND a.status = 'active'
-		      )
-		  )
-		ORDER BY li.last_error_at ASC NULLS LAST, li.last_synced_at ASC NULLS LAST
-	`
+//   - the 'disconnected' half was an "is the Plaid side already done?" test, and status is not a
+//     sound answer to that question (a re-link writes 'replaced' without calling Plaid, and
+//     MarkItemsDisconnected refuses to overwrite 'replaced', so "done" was unrecordable for those
+//     rows). It is now `li.plaid_removed_at IS NULL`, the column that records the fact directly.
+//     Strictly wider AND strictly narrower than before, both in the right direction: a 'replaced'
+//     row whose Plaid side IS done is now excluded (it was already excluded, by the other half), and
+//     a 'disconnected' row whose Plaid side is somehow NOT recorded as done is now a candidate again
+//     instead of being permanently invisible.
+//   - the 'replaced' half is CANDIDACY, not Plaid state, and is unchanged in effect: the SWEEP still
+//     does not schedule cleanups for re-link leftovers (ClaimItemForCleanup and
+//     GetItemsPendingCleanup, the recovery paths, deliberately do not share this exclusion — see
+//     cleanupCandidateReasonPredicate's second bullet). It is now spelled NULL-safely
+//     (`status IS NULL OR status <> 'replaced'`) to match every sibling liveness predicate in this
+//     file; the previous bare `NOT IN` form silently EXCLUDED a NULL-status row from the sweep under
+//     SQL three-valued logic, the opposite of how every other predicate here treats NULL.
+//     Unreachable in practice since 000126 made status NOT NULL; corrected anyway, for the same
+//     reason its siblings are written that way.
+const cleanupCandidateSelectQuery = `
+	SELECT li.id, li.user_id, li.item_id, li.access_token_encrypted,
+	       li.institution_id, li.institution_name, li.provider, li.cursor, li.last_synced_at,
+	       li.status, li.error_code, li.error_message, li.last_error_at, li.retry_count, li.next_retry_at,
+	       li.replaced_at, li.replaced_by_id,
+	       li.cleanup_notified_at, li.cleanup_scheduled_at,
+	       li.created_at, li.updated_at, li.investments_last_synced_date, li.liabilities_last_synced_at,
+	       li.status_changed_at
+	FROM linked_items li
+	WHERE li.cleanup_scheduled_at IS NULL
+	  AND li.plaid_removed_at IS NULL
+	  AND (li.status IS NULL OR li.status <> 'replaced')
+	  AND ` + cleanupCandidateReasonPredicate + `
+`
 
-	rows, err := r.db.Query(ctx, query,
+// cleanupCandidateReasonPredicate is the four-legged OR that answers "is there still a REASON to
+// clean this item up?" — extracted from cleanupCandidateSelectQuery (Issue #1486) so the sweep that
+// SCHEDULES a cleanup and ClaimItemForCleanup, which re-verifies it at the moment the irreversible
+// Plaid /item/remove is about to run, share one piece of text and cannot drift. $1 is the errorDays
+// interval, $2 the staleDays interval, exactly as in cleanupCandidateSelectQuery; a caller splicing
+// this into a statement of its own must start its remaining parameters at $3, and must alias the
+// linked_items row as `li` (the NOT EXISTS leg is correlated on li.id).
+//
+// What is deliberately NOT in here, and why the split falls exactly at this line:
+//
+//   - `li.cleanup_scheduled_at IS NULL` is a CANDIDACY condition for the sweep only ("not already
+//     scheduled"). It is false by construction for every item ClaimItemForCleanup is ever asked
+//     about, because MarkForCleanup set it — so a recheck that reused it verbatim would deny every
+//     claim, and a recheck of "is it still scheduled" would be no recheck at all. Issue #1486 follow-up part E:
+//     there are FOUR production callers of ClearCleanupSchedule, not two, and only two are in
+//     queue/jobs/item_cleanup.go (one in ItemCleanupWorker.Work itself, one in the
+//     releaseDeclinedCleanupSchedule helper both of that worker's decline points share — Codex
+//     pass-5 Medium 2) — see Work's #1486 comment for the enumeration, and
+//     jobs.TestClearCleanupScheduleProductionCallers_MatchTheDocumentedSet, which fails if it drifts
+//     again (grep `\.ClearCleanupSchedule(`). The half this bullet actually rests on is unchanged and
+//     still true: NOTHING clears cleanup_scheduled_at on reconnection, so a
+//     reconnected, fully repaired item still carries its schedule.
+//     ClaimItemForCleanup therefore requires the INVERSE (IS NOT NULL) and adds it itself.
+//   - The sweep's own `li.plaid_removed_at IS NULL AND (li.status IS NULL OR li.status <> 'replaced')`
+//     pair is also sweep-only (Issue #1495 split what was one `li.status NOT IN ('replaced',
+//     'disconnected')` clause; see cleanupCandidateSelectQuery for why), and including the 'replaced'
+//     half in a recheck would be actively harmful: the re-link path (services/account_service.go,
+//     "re-link detected, soft-deleting old linked item") marks the OLD item 'replaced' WITHOUT calling
+//     Plaid /item/remove, so a 'replaced' item's Plaid item is still live and still billing. Declining
+//     to remove it would strand it forever — the sweep excludes 'replaced' too, so it would never be
+//     re-selected. Re-checking `plaid_removed_at IS NULL` would be harmless but pointless here for the
+//     same reason the 'disconnected' exclusion was: the item RemoveItem is about to remove has not
+//     been stamped yet by definition, and a second /item/remove against an already-removed Item is a
+//     wasted API call that PlaidItemCleanupService already maps to success, not a lost one.
+const cleanupCandidateReasonPredicate = `(
+	      -- Items in error state for > errorDays
+	      (li.status IN ('error', 'login_required') AND li.last_error_at < NOW() - $1::interval)
+	      -- OR items with revoked status (immediate cleanup candidate)
+	      OR li.status = 'revoked'
+	      -- OR items not synced for > staleDays
+	      OR (li.last_synced_at IS NOT NULL AND li.last_synced_at < NOW() - $2::interval)
+	      -- OR items with zero active accounts (immediate cleanup candidate)
+	      OR NOT EXISTS (
+	          SELECT 1 FROM accounts a
+	          WHERE a.linked_item_id = li.id AND a.status = 'active'
+	      )
+	  )`
+
+// cleanupCandidateSortKey is the ASC-NULLS-LAST ordering of the cleanup sweep, re-expressed with
+// COALESCE so the identical expression can appear inside a row-comparison keyset predicate — a
+// tuple comparison has no per-column NULLS FIRST/LAST clause, so `(a, b, c) > (x, y, z)` cannot
+// express "NULLs last" any other way. For timestamptz the two forms are equivalent: 'infinity'
+// sorts after every finite value, and nothing in this codebase ever writes an infinite
+// last_error_at/last_synced_at (every writer passes a Go time.Time or NULL).
+//
+// Coalescing is also what makes the row comparison usable at all: PostgreSQL row-wise comparison
+// yields NULL (not true/false) as soon as a compared element is NULL, so a keyset predicate over the
+// raw nullable columns would silently return no rows for any cursor whose components include a NULL.
+// Both the column side (here) and the parameter side (GetItemsForCleanupPage) are coalesced.
+//
+// Every component is ASC; each is spelled out so a future edit cannot silently apply a single
+// trailing ASC/DESC to the last column only.
+const cleanupCandidateSortKey = `COALESCE(li.last_error_at, 'infinity'::timestamptz) ASC, COALESCE(li.last_synced_at, 'infinity'::timestamptz) ASC, li.id ASC`
+
+// cleanupCandidateSortKeyTuple is cleanupCandidateSortKey's expressions WITHOUT the per-column ASC
+// keywords, for use inside the row-comparison keyset predicate (a tuple element cannot carry an
+// ASC/DESC keyword). Kept adjacent to its sibling so the two cannot drift.
+const cleanupCandidateSortKeyTuple = `COALESCE(li.last_error_at, 'infinity'::timestamptz), COALESCE(li.last_synced_at, 'infinity'::timestamptz), li.id`
+
+// itemCleanupSweepDefaultPageSize is the fallback for a non-positive limit passed to
+// GetItemsForCleanupPage. Mirrors retentionSweepDefaultPageSize / GetUsersScheduledForDeletionPage's
+// 500.
+const itemCleanupSweepDefaultPageSize = 500
+
+// ItemCleanupSweepCursor is a keyset-pagination position for GetItemsForCleanupPage, captured from
+// the last row of the previous page, matching that page's
+// ORDER BY (last_error_at, last_synced_at, id) ASC with NULLs last. A nil cursor starts from the
+// beginning.
+//
+// LastErrorAt and LastSyncedAt are POINTERS because both columns are nullable and a NULL is a
+// legitimate cursor position: the "zero active accounts" leg of the predicate matches items that
+// have never errored and never synced, so a page can genuinely end on a row where both are NULL.
+// A nil field is sent as SQL NULL and coalesced to 'infinity' by the query, which is exactly where
+// NULLS LAST puts it.
+type ItemCleanupSweepCursor struct {
+	LastErrorAt  *time.Time
+	LastSyncedAt *time.Time
+	ItemID       string
+}
+
+// GetItemsForCleanupPage returns up to `limit` cleanup candidates, ordered by
+// (last_error_at, last_synced_at, id) ASC with NULLs last, for deterministic keyset pagination —
+// Issue #1469. The WHERE clause is the unbounded GetItemsForCleanup's, unchanged
+// (cleanupCandidateSelectQuery), plus the keyset predicate. (That unbounded method was deleted in
+// #1488 once this one had taken over its last caller.)
+//
+// Why this exists: GetItemsForCleanup had no LIMIT, and its single caller,
+// ItemCleanupCheckWorker.Work (queue/jobs/item_cleanup_check.go), consumed the whole slice — marking
+// every row for cleanup and enqueueing an ItemCleanup job per row, which calls Plaid /item/remove.
+// That is irreversible (the user must re-link the institution through Plaid Link), and
+// ItemCleanupCheckPeriodicOpts registers the job with RunOnStart: true, so the first run after every
+// deploy acted on however many rows the table happened to hold. Same defect class as #1478 and as
+// the already-fixed GetUsersScheduledForDeletionPage.
+//
+// Why the li.id tie-breaker is load-bearing here specifically: BOTH pre-existing sort columns are
+// nullable, and the "zero active accounts" predicate leg matches items that have never errored and
+// never synced — so many rows can share (NULL, NULL) as their entire sort key. Keyset pagination
+// over a non-unique sort key skips and repeats rows. li.id (a uuid, NOT NULL, unique) makes the
+// order total. This is why the fix is not a bare `LIMIT n`, quite apart from the starvation argument.
+//
+// Why keyset pagination and not a bare LIMIT: an oldest-ranked row whose MarkForCleanup keeps
+// failing stays a candidate (the predicate requires cleanup_scheduled_at IS NULL, and a failed mark
+// leaves it NULL), so under a bare LIMIT the same oldest n rows would occupy every page of every run
+// and nothing ranked past them would ever be looked at. The cursor lets the caller step past
+// whatever it just saw within ONE run.
+//
+// The guarantee this buys, stated bounded by the cap (do NOT restate it as "no starvation" — that
+// claim shipped on maxUsersPerDeletionSweep and is only true below the cap): within a single run the
+// caller advances across pages until the repository returns a short page (exhausted) or the caller's
+// total-processed cap (maxItemsPerCleanupSweep, queue/jobs/item_cleanup_check.go) is reached. Across
+// runs, since Issue #1477, the caller PERSISTS the timestamp key a capped run stopped at (the
+// sweep_cursors table — repository/sweep_cursor_repository.go) and passes it back here as the next
+// run's `after`, so a head of UNMARKABLE rows larger than the cap no longer consumes every later
+// run's whole budget. Before #1477 it did, and nothing past the cap was EVER reached for as long as
+// they kept failing.
+//
+// ⚠ The starving head here must be UNMARKABLE, i.e. MarkForCleanup itself failing — a database
+// failure. It is NOT a Plaid failure: a successfully marked row sets cleanup_scheduled_at and stops
+// matching this predicate immediately, so however badly its downstream /item/remove goes, it is not
+// in this query's result set any more.
+//
+// The replacement guarantee is BOUNDED, not absolute — it is stated once, in full, in
+// repository/sweep_cursor_repository.go's header. Do not restate it as "no starvation".
+//
+// No index can serve this sort key, exactly as none could serve the unbounded query's: the closest
+// one, idx_linked_items_cleanup_candidates (status, last_error_at) WHERE status IN
+// ('error','login_required','revoked') AND cleanup_scheduled_at IS NULL, is partial on a status set
+// this predicate deliberately exceeds (the stale and zero-active-accounts legs match other statuses)
+// and leads on status, not on the sort expression — so each page is a fresh scan-and-sort. That is
+// unchanged by this fix, not introduced by it, and linked_items is a small table (roughly one row
+// per user per linked institution). It is worth a dedicated expression index if this table ever
+// grows large.
+func (r *linkedItemRepository) GetItemsForCleanupPage(ctx context.Context, errorDays, staleDays int, after *ItemCleanupSweepCursor, limit int) ([]domain.LinkedItem, error) {
+	if limit <= 0 {
+		limit = itemCleanupSweepDefaultPageSize
+	}
+
+	args := []interface{}{
 		strings.TrimSpace(fmt.Sprintf("%d days", errorDays)),
 		strings.TrimSpace(fmt.Sprintf("%d days", staleDays)),
-	)
+	}
+
+	query := cleanupCandidateSelectQuery
+	if after != nil {
+		// COALESCE on the parameter side too, so a NULL cursor component compares as 'infinity' —
+		// the same position NULLS LAST gives it in the ORDER BY.
+		query += `
+		  AND (` + cleanupCandidateSortKeyTuple + `) > (
+		      COALESCE($3::timestamptz, 'infinity'::timestamptz),
+		      COALESCE($4::timestamptz, 'infinity'::timestamptz),
+		      $5::uuid
+		  )
+	`
+		args = append(args, after.LastErrorAt, after.LastSyncedAt, after.ItemID)
+	}
+	query += `
+		ORDER BY ` + cleanupCandidateSortKey + `
+		LIMIT $` + strconv.Itoa(len(args)+1) + `
+	`
+	args = append(args, limit)
+
+	return r.queryCleanupCandidates(ctx, query, args...)
+}
+
+// queryCleanupCandidates runs a cleanupCandidateSelectQuery-shaped query and scans every row into a
+// domain.LinkedItem, applying the same NULL-safe institution/status handling and PII decryption both
+// cleanup queries need. Extracted (Issue #1469) so the unbounded GetItemsForCleanup and
+// GetItemsForCleanupPage could not drift in their scan order or their decryption behaviour; the
+// unbounded form is gone (#1488) and GetItemsForCleanupPage is now the only caller.
+func (r *linkedItemRepository) queryCleanupCandidates(ctx context.Context, query string, args ...interface{}) ([]domain.LinkedItem, error) {
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -868,14 +1146,14 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
-		var statusRaw *string
+		var statusRaw, institutionIDRaw, institutionNameRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
 			&item.ItemID,
 			&item.AccessTokenEncrypted,
-			&item.InstitutionID,
-			&item.InstitutionName,
+			&institutionIDRaw,
+			&institutionNameRaw,
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
@@ -898,6 +1176,8 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 		if err != nil {
 			return nil, err
 		}
+		item.InstitutionID = nilOrEmpty(institutionIDRaw)
+		item.InstitutionName = nilOrEmpty(institutionNameRaw)
 		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
@@ -915,11 +1195,42 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 	return items, nil
 }
 
-// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due.
+// GetItemsPendingCleanup retrieves items where cleanup is scheduled and past due. It is the
+// selection query for ItemCleanupCheckWorker's stranded-cleanup backstop (Issue #1486 follow-up
+// part C) — before that it had no production caller at all.
 //
-// Issue #1413 round-10 (#1444): NULL-safe status scan (see normalizeLinkedItemStatus) for
-// consistency with every other scan site in this file, even though `status NOT IN (...)` above
-// already structurally excludes a NULL-status row (SQL three-valued logic).
+// SELECTS ON plaid_removed_at, NOT ON status (Issue #1495), and that single change dissolves both
+// halves of the mess this predicate used to document:
+//
+//   - It used to exclude 'disconnected' and NOT 'replaced' — a deliberate asymmetry with the SWEEP's
+//     candidacy predicate (cleanupCandidateSelectQuery), because a 'replaced' item is STILL LIVE AND
+//     STILL BILLING at Plaid (the re-link path in services/account_service.go marks the OLD item
+//     'replaced' WITHOUT ever calling /item/remove) and this query is its ONLY recovery path: the
+//     candidate sweep requires cleanup_scheduled_at IS NULL and excludes 'replaced' on top of that.
+//     That reasoning is unchanged and still load-bearing — a 'replaced' row with no recorded Plaid
+//     removal is still selected here. Pinned by
+//     TestGetItemsPendingCleanup_Integration_ReplacedItemIsRecoverable.
+//   - But those exclusions did NOT add up to "every selected row still needs Plaid work", and could
+//     not be made to: MarkItemsDisconnected must not overwrite 'replaced', so a 'replaced' row whose
+//     Plaid side WAS already done had nowhere to say so and was re-selected on every run, costing one
+//     /item/remove per run that answers ITEM_NOT_FOUND. The prior version of this comment called that
+//     an accepted, self-healing limitation and named the fix: a dedicated plaid_removed_at column.
+//     That column now exists (migration 000131) and this predicate reads it, so the loop is closed at
+//     its cause rather than waiting on ItemCleanupWorker.Work's ClearCleanupSchedule to end it.
+//
+// 'disconnected' is no longer named here, and it does not need to be: MarkPlaidRemoved is called
+// immediately BEFORE MarkItemsDisconnected on every success path (RemoveItem and cleanupItems), and
+// migration 000132 backfilled pre-existing 'disconnected' rows, so a row carrying that status carries
+// a stamp too and is excluded by `plaid_removed_at IS NULL` for the reason that actually matters.
+//
+// NULL-safety: `plaid_removed_at IS NULL` is a two-valued IS NULL test, so the three-valued-logic
+// hole that required the old `status IS NULL OR` arm (#1444 — a bare `status NOT IN (...)` is UNKNOWN
+// rather than TRUE for a NULL-status row, silently excluding it from this backstop) cannot arise
+// here at all. The arm was not dropped as a simplification; the predicate it guarded is gone. Its
+// sibling in cleanupCandidateSelectQuery, which still reads status, keeps the NULL-safe spelling.
+//
+// Issue #1413 round-10 (#1444): NULL-safe status SCAN as well (see normalizeLinkedItemStatus), for
+// consistency with every other scan site in this file.
 func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
 	query := `
 		SELECT id, user_id, item_id, access_token_encrypted,
@@ -927,11 +1238,12 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
 		       replaced_at, replaced_by_id,
 		       cleanup_notified_at, cleanup_scheduled_at,
-		       created_at, updated_at, investments_last_synced_date, liabilities_last_synced_at
+		       created_at, updated_at, investments_last_synced_date, liabilities_last_synced_at,
+		       status_changed_at
 		FROM linked_items
 		WHERE cleanup_scheduled_at IS NOT NULL
 		  AND cleanup_scheduled_at < NOW()
-		  AND status NOT IN ('replaced', 'disconnected')
+		  AND plaid_removed_at IS NULL
 		ORDER BY cleanup_scheduled_at ASC
 	`
 
@@ -944,14 +1256,14 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
-		var statusRaw *string
+		var statusRaw, institutionIDRaw, institutionNameRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
 			&item.ItemID,
 			&item.AccessTokenEncrypted,
-			&item.InstitutionID,
-			&item.InstitutionName,
+			&institutionIDRaw,
+			&institutionNameRaw,
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
@@ -974,6 +1286,8 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 		if err != nil {
 			return nil, err
 		}
+		item.InstitutionID = nilOrEmpty(institutionIDRaw)
+		item.InstitutionName = nilOrEmpty(institutionNameRaw)
 		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
@@ -1017,7 +1331,74 @@ func (r *linkedItemRepository) MarkForCleanup(ctx context.Context, itemID string
 	return nil
 }
 
-// ClearCleanupSchedule clears the cleanup schedule for an item (e.g., if user reconnected).
+// ClaimItemForCleanup re-verifies, in ONE statement at the moment of the claim, that a single item
+// is STILL a cleanup candidate, and reports whether the caller may proceed with the irreversible
+// Plaid /item/remove. Issue #1486.
+//
+// Returns (true, nil) when the item is still scheduled AND still matches
+// cleanupCandidateReasonPredicate (see that constant for why the recheck is eligibility and not
+// merely "is it still scheduled"), and (false, nil) — a LEGITIMATE, EXPECTED outcome and NOT an
+// error — when it is not: the user repaired the connection through Plaid Link update mode, accounts
+// came back, the row was already removed, or the schedule was cancelled. Callers MUST treat
+// (false, nil) as success-with-nothing-to-do and MUST NOT call RemoveItem; they must fail closed on
+// a non-nil error rather than proceeding, because "we could not tell" is not "still eligible".
+//
+// errorDays/staleDays must be the SAME thresholds the sweep used when it scheduled the item
+// (queue/jobs/item_cleanup_check.go keeps both workers on one pair of defaults for exactly this
+// reason) — a recheck run with a stricter threshold than the sweep would deny claims the sweep
+// legitimately created and strand still-billing items.
+//
+// Why an UPDATE whose RowsAffected is the answer, mirroring ClaimForDeletion
+// (profile_repository.go), rather than a SELECT: the write takes a row lock, so a concurrent
+// repair transaction that has already written the row but not yet committed blocks this statement
+// instead of being invisible to it. Under READ COMMITTED an UPDATE re-evaluates its WHERE against
+// the freshly committed row once the lock is granted, so the repair correctly denies the claim; a
+// plain SELECT would have read the pre-repair snapshot and granted it, and the resulting
+// /item/remove cannot be undone. `SET updated_at = NOW()` is redundant with the
+// update_linked_items_updated_at BEFORE UPDATE trigger (which assigns NEW.updated_at
+// unconditionally) and is written out anyway to keep the statement's intent readable. A DENIED claim
+// writes nothing at all: the WHERE matches no row, so RowsAffected is 0 and neither the SET nor the
+// trigger runs — the re-verification leaves no trace on the row when it says no.
+//
+// This is a re-verification, NOT a lease: it grants no exclusivity that outlives the statement, and
+// nothing else supplies that exclusivity either. Do NOT credit ItemCleanupUniqueOpts with it: its
+// `ByArgs: true` keys on Kind PLUS the full Args, and Args carries Reason — so a sweep-enqueued
+// Reason:"stale" job and an accountService.DeleteAccount-enqueued Reason:"zero_accounts" job for the
+// SAME item are distinct unique keys and can coexist. What actually makes that benign is that the
+// loser of the race has nothing left to fail on, via two SEPARATE idempotency paths:
+//
+//   - Plaid-level: since Issue #1486 follow-up part B, PlaidItemCleanupService.RemoveItem propagates
+//     every genuine /item/remove error to the worker — it no longer swallows them. But in THIS race,
+//     the loser calls /item/remove only after the winner's call already succeeded, so Plaid answers
+//     the loser with ITEM_NOT_FOUND — the one outcome isPlaidItemAlreadyGone still treats as success
+//     (RemoveItem returns nil) rather than propagating. It never reaches the worker as an error.
+//   - Repository-level: if the winner already deleted the local row, RemoveItem's GetByID returns
+//     ErrLinkedItemNotFound, and THAT is what ItemCleanupWorker.Work's IsItemNotFoundError branch
+//     recognises (IsItemNotFoundError is errors.Is(err, repository.ErrLinkedItemNotFound) — it has
+//     nothing to do with Plaid's ITEM_NOT_FOUND code). The subsequent row Delete is a safe no-op.
+//
+// Two claims can therefore both be granted; the second one's work is simply redundant, not harmful.
+func (r *linkedItemRepository) ClaimItemForCleanup(ctx context.Context, itemID string, errorDays, staleDays int) (bool, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE linked_items li
+		SET updated_at = NOW()
+		WHERE li.id = $3
+		  AND li.cleanup_scheduled_at IS NOT NULL
+		  AND `+cleanupCandidateReasonPredicate,
+		strings.TrimSpace(fmt.Sprintf("%d days", errorDays)),
+		strings.TrimSpace(fmt.Sprintf("%d days", staleDays)),
+		itemID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("ClaimItemForCleanup: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
+}
+
+// ClearCleanupSchedule clears the cleanup schedule for an item. Despite the name's suggestion, it is
+// NOT called on reconnection — a user repairing an item through Plaid Link update mode leaves
+// cleanup_scheduled_at set, which is exactly why ClaimItemForCleanup re-verifies ELIGIBILITY instead
+// of re-reading the schedule. See cleanupCandidateReasonPredicate.
 func (r *linkedItemRepository) ClearCleanupSchedule(ctx context.Context, itemID string) error {
 	now := time.Now()
 
@@ -1089,7 +1470,84 @@ func (r *linkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: 0 of %d given id(s) matched", ErrNoLinkedItemsUpdated, len(ids))
+		return fmt.Errorf("%w (MarkItemsDisconnected): 0 of %d given id(s) matched", ErrNoLinkedItemsUpdated, len(ids))
+	}
+	return nil
+}
+
+// MarkPlaidRemoved stamps plaid_removed_at for the given items — see the interface method's doc
+// comment (Issue #1495) for why this cannot be folded into MarkItemsDisconnected.
+//
+// NO STATUS FILTER, deliberately, and this is the one line the whole change rests on: a 'replaced'
+// row MUST be stampable here, because that is precisely the row MarkItemsDisconnected refuses and
+// therefore the row that had no way to record "Plaid is done" at all. Adding a status guard here
+// would recreate the deadlock this column exists to break. Proved against real Postgres by
+// TestLinkedItemRepository_MarkPlaidRemoved_Integration_StampsReplacedRowWithoutRevertingStatus.
+//
+// COALESCE(plaid_removed_at, $1) rather than a bare assignment, plus no `plaid_removed_at IS NULL`
+// in the WHERE: the two together make the write idempotent (an already-stamped row keeps its
+// earlier, closer-to-the-truth instant) while keeping RowsAffected a statement about whether the
+// ROWS EXIST rather than about whether they were already stamped. With the WHERE guard instead, a
+// legitimate re-run would report zero rows and be indistinguishable from a vanished row.
+func (r *linkedItemRepository) MarkPlaidRemoved(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET plaid_removed_at = COALESCE(plaid_removed_at, $1),
+		    updated_at = $1
+		WHERE id = ANY($2)
+	`
+
+	tag, err := r.db.Exec(ctx, query, now, ids)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w (MarkPlaidRemoved): 0 of %d given id(s) matched", ErrNoLinkedItemsUpdated, len(ids))
+	}
+	return nil
+}
+
+// MarkPlaidRemovalFailed records an unrecoverable /item/remove failure — see the interface method's
+// doc comment (Issue #1494) for why this fact must stay separate from plaid_removed_at.
+//
+// DOES NOT clear plaid_removed_at, and DOES NOT touch status. Both omissions are deliberate: the
+// verdict recorded here is about our credential, not about the Item's existence, so it justifies no
+// other state change. In particular it must not write 'disconnected' — that status is read by the
+// cleanup loop's skip branch (services.cleanupItems), and a row that stopped being re-attempted
+// while still owing Plaid work is the exact "state marked, work never happened" shape this branch
+// has closed four times.
+//
+// The `plaid_removed_at IS NULL` guard is what makes the two columns non-contradictory in the one
+// direction that matters: a proved-removed row can never later be labelled unremovable. The reverse
+// IS allowed — MarkPlaidRemoved has no failure-column guard, so a row marked terminal here can
+// still be stamped removed later if the classification turns out to have been too wide, and the
+// failure columns are left in place as the only evidence that happened.
+func (r *linkedItemRepository) MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET plaid_removal_failed_at = COALESCE(plaid_removal_failed_at, $1),
+		    plaid_removal_error_code = $2,
+		    updated_at = $1
+		WHERE id = ANY($3)
+		  AND plaid_removed_at IS NULL
+	`
+
+	tag, err := r.db.Exec(ctx, query, now, errorCode, ids)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w (MarkPlaidRemovalFailed): 0 of %d given id(s) matched — row(s) gone, or already recorded as removed", ErrNoLinkedItemsUpdated, len(ids))
 	}
 	return nil
 }
@@ -1116,14 +1574,14 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
-		var statusRaw *string
+		var statusRaw, institutionIDRaw, institutionNameRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
 			&item.ItemID,
 			&item.AccessTokenEncrypted,
-			&item.InstitutionID,
-			&item.InstitutionName,
+			&institutionIDRaw,
+			&institutionNameRaw,
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
@@ -1144,6 +1602,8 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 		if err != nil {
 			return nil, err
 		}
+		item.InstitutionID = nilOrEmpty(institutionIDRaw)
+		item.InstitutionName = nilOrEmpty(institutionNameRaw)
 		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err

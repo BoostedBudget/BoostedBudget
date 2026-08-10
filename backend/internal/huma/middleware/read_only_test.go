@@ -113,11 +113,13 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		}{Message: "deleted"}}, nil
 	})
 
-	// Public (no security) POST endpoint — should not be gated by read-only middleware
+	// Public (no security) POST endpoint — should not be gated by read-only middleware.
+	// #1432: uses the REAL /webhooks/plaid path (corrected from the dead
+	// /api/v1/plaid/webhook string) so this fixture matches production route registration.
 	huma.Register(api, huma.Operation{
 		OperationID: "public-webhook",
 		Method:      http.MethodPost,
-		Path:        "/api/v1/plaid/webhook",
+		Path:        "/webhooks/plaid",
 	}, func(ctx context.Context, input *struct{}) (*struct {
 		Body struct {
 			Message string `json:"message"`
@@ -132,14 +134,15 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		}{Message: "webhook received"}}, nil
 	})
 
-	// #1413: Protected (Security-annotated) route at the /api/v1/paddle/webhook prefix
-	// whitelist entry. Unlike "public-webhook" above (no Security, bypasses the middleware
-	// entirely), this exercises the prefix-whitelist check itself — used by the
-	// "unresolved status" tests to prove the fail-closed branch runs AFTER whitelisting.
+	// #1413/#1432: Protected (Security-annotated) route at the /webhooks/paddle prefix
+	// whitelist entry (corrected from the dead /api/v1/paddle/webhook string — see #1432).
+	// Unlike "public-webhook" above (no Security, bypasses the middleware entirely), this
+	// exercises the prefix-whitelist check itself — used by the "unresolved status" tests to
+	// prove the fail-closed branch runs AFTER whitelisting.
 	huma.Register(api, huma.Operation{
 		OperationID: "paddle-webhook-readonly-test",
 		Method:      http.MethodPost,
-		Path:        "/api/v1/paddle/webhook",
+		Path:        "/webhooks/paddle",
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, func(ctx context.Context, input *struct{}) (*struct {
 		Body struct {
@@ -491,7 +494,7 @@ func TestReadOnlyMiddleware_PublicRoute_NoSecurity_Passthrough(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	// Plaid webhook has no Security annotation — should pass through even with inactive status
-	resp := doRequest(t, server, http.MethodPost, "/api/v1/plaid/webhook", "inactive")
+	resp := doRequest(t, server, http.MethodPost, "/webhooks/plaid", "inactive")
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -528,7 +531,7 @@ func TestReadOnlyMiddleware_POST_Unresolved_NonWhitelistedPath_Blocked503(t *tes
 func TestReadOnlyMiddleware_POST_Unresolved_PaddleWebhookPrefix_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
-	resp := doRequestUnresolved(t, server, http.MethodPost, "/api/v1/paddle/webhook")
+	resp := doRequestUnresolved(t, server, http.MethodPost, "/webhooks/paddle")
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode,

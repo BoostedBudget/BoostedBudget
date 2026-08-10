@@ -3,9 +3,35 @@ import { useGetSystemHealth } from '@boostedbudget/api-client/endpoints/admin/ad
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent';
 import { ANALYTICS_EVENTS } from '../../../shared/analytics';
 import { SummaryCard } from '@/features/admin';
-import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle } from 'lucide-react';
+import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle, Users, Timer, UserCheck, UserX, History } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
+
+// Issue #1458: formats a backlog gauge's age (seconds) as a short human string for the Job
+// Backlog SummaryCard grid — mirrors the Paddle Status section's "Avg Duration" precedent
+// (`${Math.round(ms / 1000)}s`) one level up in granularity, since these ages are backlog-scale
+// (potentially hours) rather than single-request-scale (milliseconds).
+const formatBacklogAge = (seconds: number): string => {
+  if (seconds <= 0) return '0s';
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${Math.round(seconds)}s`;
+};
+
+// Issue #1497 item 4/5: above this many failed automated removal attempts on a single unresolved
+// orphan record, the card turns warning. Mirrors the threshold in
+// observability.PlaidOrphanedItemMaxRetryAttempts's intended alert rule (backend), and is derived
+// the same way: the retry sweep runs daily and the retained credential expires after 30 days, so no
+// single row can ever accumulate much more than ~30 attempts before it becomes
+// manual-intervention work anyway. 20 therefore lights up with roughly a third of the retention
+// window left — early enough for a human to act at Plaid before the automated path runs out.
+//
+// ⚠ A HIGH COUNT IS NOT A STATE. The backend's AdminState deliberately ignores retry_attempt_count
+// (nothing in this system gives up on an attempt count), so this card answers a question the state
+// cards beside it cannot — "is the retrying futile?" — and the two must not be conflated.
+const ORPHAN_RETRY_ATTEMPT_WARN_THRESHOLD = 20;
 
 const statusToVariant = (status: string): 'success' | 'warning' | 'error' => {
   if (status === 'up' || status === 'healthy') return 'success';
@@ -57,6 +83,45 @@ export function HealthDashboardPage() {
   if (!data) {
     return null;
   }
+
+  // Issue #1458 follow-up G16: `available` distinguishes "queried successfully" (possibly a real
+  // zero backlog) from "the underlying query failed" — both currently read as the identical
+  // zero-valued numeric fields, so this flag is the ONLY signal the Job Backlog cards below have
+  // for telling them apart. Falsy (false or, for an older cached/mocked response, undefined) reads
+  // as unavailable — the fail-closed default, never a falsely-confident green zero.
+  //
+  // R3-7: `job_backlog` itself (not just `.available`) can be absent — a rolling deploy hitting an
+  // older API response, or a partial mock — in which case an unguarded `data.job_backlog.available`
+  // throws a TypeError and blanks the ENTIRE dashboard, the opposite of this field's fail-closed
+  // intent. Optional-chaining here is the only guard needed: every read of `data.job_backlog.*`
+  // below is already gated behind this `jobBacklogAvailable` boolean via `? :` short-circuiting
+  // (e.g. `jobBacklogAvailable ? data.job_backlog.x : 'Unavailable'`), so once this flag safely
+  // resolves to `undefined` (falsy) for a missing `job_backlog`, none of those reads are reached.
+  const jobBacklogAvailable = data.job_backlog?.available;
+
+  // Issue #1497 item 5. Same fail-closed shape, and the same optional-chaining guard, as
+  // jobBacklogAvailable above and for the same two reasons: a FAILED derivation and a genuinely
+  // EMPTY table both arrive as identical zero-valued fields, so this flag is the only signal that
+  // tells them apart; and `plaid_orphaned_items` itself can be absent entirely on an older cached
+  // response or a rolling deploy, where an unguarded read would throw and blank the whole
+  // dashboard.
+  //
+  // ⚠ IT MATTERS MORE HERE THAN FOR ANY OTHER GAUGE ON THIS PAGE. A green "0 needs manual removal"
+  // produced by a failed read tells an operator that no erased user's Plaid Item is still billing —
+  // a compliance claim nothing actually checked.
+  const orphanedItemsAvailable = data.plaid_orphaned_items?.available;
+
+  // Issue #1504. Same fail-closed shape and the same optional-chaining guard as the two flags above,
+  // for the same two reasons (a failed query and a genuine zero arrive as identical zero-valued
+  // fields; the section itself can be absent on an older cached response or mid-rolling-deploy).
+  const deletionResidueAvailable = data.deletion_residue?.available;
+
+  // The count has to be read BEFORE the age, and this is not a style preference. The backend returns
+  // `newest_record_seconds` as 0 both when there are no residue records at all and when one was
+  // written this very instant — the two readings on this page that could not matter more differently.
+  // `deletionResidueRecords` is the disambiguator, so the age card branches on it and renders 'None'
+  // rather than '0s' when there is nothing to age. See domain.DeletionResidueMetrics (backend).
+  const deletionResidueRecords = deletionResidueAvailable ? data.deletion_residue.records : 0;
 
   return (
     <div className="p-8 max-w-[1400px] mx-auto max-md:p-4">
@@ -178,6 +243,155 @@ export function HealthDashboardPage() {
             }
             icon={<RefreshCw size={24} />}
             status={data.paddle_status.last_reconciliation_at ? 'success' : 'warning'}
+          />
+        </div>
+      </section>
+
+      {/* Job Backlog Section (Issue #1458) — the 3 DB-derived Plaid-cleanup/manual-tier-override
+          backlog gauges PR #1443 introduced. Copies the Paddle Status SummaryCard grid above (the
+          ticket that scoped this section originally cited a Dead Letter Queue SummaryCard to copy,
+          but DLQ actually renders as the conditional alert banner above, not a SummaryCard — this
+          section follows Paddle Status instead). The other four metrics #1443 added (three
+          lifetime Prometheus counters plus the in-process JobLastSuccessTimestamp heartbeat)
+          deliberately stay Prometheus-only — see domain.JobBacklogMetrics's doc comment (backend)
+          for why.
+
+          Follow-up G16: `jobBacklogAvailable` (below) distinguishes a query that legitimately
+          found a real zero backlog from one that FAILED and silently reported the same zero —
+          #1458's own reasoning for excluding PlaidCleanupServiceNotConfiguredTotal from this
+          response ("unknown != zero") applied to those four metrics but not, until now, to these
+          three. `!available` renders 'Unavailable' with a warning accent instead of a green "0"
+          the operator would otherwise read as "no backlog" when the truth is "we don't know".
+          Scope discipline: this only makes the failure VISIBLE — whether a non-zero (or
+          unavailable) backlog should also degrade the overall /admin/health status is a separate
+          product decision #1458 never asked for, so `data.status` is untouched here. */}
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Job Backlog</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
+          <SummaryCard
+            title="Plaid Cleanup Outstanding Users"
+            value={jobBacklogAvailable ? data.job_backlog.plaid_cleanup_outstanding_users.toString() : 'Unavailable'}
+            icon={<Users size={24} />}
+            status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.plaid_cleanup_outstanding_users > 0 ? 'warning' : 'success')}
+          />
+          <SummaryCard
+            title="Plaid Cleanup Oldest Outstanding"
+            value={jobBacklogAvailable ? formatBacklogAge(data.job_backlog.plaid_cleanup_oldest_outstanding_seconds) : 'Unavailable'}
+            icon={<Clock size={24} />}
+            status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.plaid_cleanup_oldest_outstanding_seconds > 0 ? 'warning' : 'success')}
+          />
+          <SummaryCard
+            title="Manual Override Oldest Uncleared Expired"
+            value={jobBacklogAvailable ? formatBacklogAge(data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds) : 'Unavailable'}
+            icon={<Timer size={24} />}
+            status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds > 0 ? 'warning' : 'success')}
+          />
+        </div>
+      </section>
+
+      {/* Orphaned Plaid Items Section (Issue #1497 item 5) — Plaid Items that survived a GDPR
+          erasure. Placed immediately after Job Backlog because it is the same class of signal
+          ("how much stuck work is there, and does a human have to do it?") and reuses the same
+          SummaryCard grid.
+
+          ⚠ THE TWO ACTIONABLE STATES ARE TWO CARDS AND MUST STAY TWO CARDS. They call for OPPOSITE
+          responses: "Needs Manual Removal At Plaid" means go remove the Item in Plaid's own
+          dashboard or it may keep billing an erased user; "Auto-Retrying" means do nothing, a sweep
+          holds a live credential and is working on it. A single "unresolved" number — the obvious
+          shorter rendering — erases exactly that distinction. Resolved rows are history and are
+          deliberately not shown: they are never work, and nothing prunes them, so the count only
+          ever grows and would dominate the section visually while meaning nothing.
+
+          ⚠ Operator-attested rows (Issue #1497 item 2) ARE shown, unlike resolved ones, and that is
+          not an inconsistency: a resolved row is a removal Plaid confirmed, whereas an attested row
+          is one a colleague merely claimed, so it is still an open question rather than history. It
+          is deliberately not accented as success and its title says "unverified".
+
+          Scope discipline, matching the Job Backlog section: this only makes the state VISIBLE.
+          Whether outstanding orphans should degrade `data.status` is a product decision #1497 never
+          asked for, so it is untouched. */}
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Orphaned Plaid Items</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
+          <SummaryCard
+            title="Needs Manual Removal At Plaid"
+            value={orphanedItemsAvailable ? data.plaid_orphaned_items.manual_intervention_required.toString() : 'Unavailable'}
+            icon={<AlertTriangle size={24} />}
+            status={!orphanedItemsAvailable ? 'warning' : (data.plaid_orphaned_items.manual_intervention_required > 0 ? 'warning' : 'success')}
+          />
+          <SummaryCard
+            title="Auto-Retrying"
+            value={orphanedItemsAvailable ? data.plaid_orphaned_items.auto_retrying.toString() : 'Unavailable'}
+            icon={<RefreshCw size={24} />}
+            status={!orphanedItemsAvailable ? 'warning' : 'success'}
+          />
+          {/* ⚠ ITS OWN CARD, AND THE TITLE SAYS UNVERIFIED. This is the count of Items a colleague
+              SAID they removed by hand (Issue #1497 item 2); "Resolved" would be the count Plaid
+              confirmed. Summing them would produce a single "done" number whose accuracy nobody
+              could state, on the surface whose whole job is to report what is genuinely outstanding.
+              Status is deliberately never 'success': nothing here has been verified, and the
+              automated sweep is still re-attempting these rows precisely because it might yet
+              disprove the claim. */}
+          <SummaryCard
+            title="Operator-Attested (Unverified)"
+            value={orphanedItemsAvailable ? data.plaid_orphaned_items.operator_attested.toString() : 'Unavailable'}
+            icon={<UserCheck size={24} />}
+            status={!orphanedItemsAvailable ? 'warning' : 'neutral'}
+          />
+          <SummaryCard
+            title="Worst Retry Attempt Count"
+            value={orphanedItemsAvailable ? data.plaid_orphaned_items.max_unresolved_retry_attempt_count.toString() : 'Unavailable'}
+            icon={<Timer size={24} />}
+            status={!orphanedItemsAvailable ? 'warning' : (data.plaid_orphaned_items.max_unresolved_retry_attempt_count > ORPHAN_RETRY_ATTEMPT_WARN_THRESHOLD ? 'warning' : 'success')}
+          />
+        </div>
+      </section>
+
+      {/* Deletion Residue Section (Issue #1504) — GDPR deletions that were REVOKED after the user's
+          Paddle subscription-cancel call had already landed. The gate passed a moment earlier and a
+          network call cannot be recalled, so the cancel went through; the cascade then correctly
+          refused to delete anything. Each of these is a real person who kept their account and every
+          byte of their data, and has no subscription. Nobody tells them, and nothing automated
+          restores it — re-subscribing somebody automatically would be a worse failure than telling a
+          human, which is why this is a dashboard section and not a repair job.
+
+          Placed after Orphaned Plaid Items because it is the third instance of the same class of
+          signal on this page ("work only a human can finish"), and it reuses the same SummaryCard grid
+          rather than introducing a fourth shape.
+
+          ⚠ THIS COUNT NEVER GOES BACK DOWN, AND THAT IS DELIBERATE. There is no resolution column for
+          a residue record, nothing prunes audit_logs, and no record anywhere proves the affected user
+          was made whole — so a "handled" affordance here would be recording a claim as a proof, which
+          is precisely what the Operator-Attested card above exists to keep separate from Resolved. The
+          "Most Recent Occurrence" card carries the is-this-happening-now signal instead.
+
+          Scope discipline, matching both sections above: this only makes the residue VISIBLE. Whether
+          it should degrade `data.status` is a product decision #1504 never asked for, so `data.status`
+          is untouched. */}
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Deletion Residue</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
+          <SummaryCard
+            title="Subscriptions Cancelled By A Revoked Deletion"
+            value={deletionResidueAvailable ? deletionResidueRecords.toString() : 'Unavailable'}
+            icon={<UserX size={24} />}
+            status={!deletionResidueAvailable ? 'warning' : (deletionResidueRecords > 0 ? 'warning' : 'success')}
+          />
+          {/* ⚠ 'None' AND NOT '0s'. formatBacklogAge(0) renders '0s', which on an age card reads as
+              "this happened seconds ago" — the exact opposite of the truth when the real answer is
+              "this has never happened". The count is what distinguishes the two, so it gates the
+              branch. */}
+          <SummaryCard
+            title="Most Recent Occurrence"
+            value={
+              !deletionResidueAvailable
+                ? 'Unavailable'
+                : deletionResidueRecords === 0
+                  ? 'None'
+                  : `${formatBacklogAge(data.deletion_residue.newest_record_seconds)} ago`
+            }
+            icon={<History size={24} />}
+            status={!deletionResidueAvailable ? 'warning' : (deletionResidueRecords > 0 ? 'warning' : 'success')}
           />
         </div>
       </section>

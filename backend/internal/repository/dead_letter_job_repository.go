@@ -4,6 +4,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -206,23 +207,97 @@ func (r *DeadLetterJobRepository) DeleteOlderThan(ctx context.Context, before ti
 	return result.RowsAffected(), nil
 }
 
-// DeleteByFilters bulk-deletes dead letter jobs matching the given filters.
-// Returns the number of deleted rows.
-func (r *DeadLetterJobRepository) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {
+// CountByFilters returns how many dead letter jobs match the given filters, using the
+// same WHERE construction as DeleteByFilters so the preview and the delete can never
+// disagree about what "these filters" means. It is the read half of the bulk-delete
+// confirmation handshake in operations.BulkDeleteDLQJobs.
+func (r *DeadLetterJobRepository) CountByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {
+	where, args := buildDLQWhereClause(filters)
+	query := fmt.Sprintf(`SELECT COUNT(*) FROM dead_letter_jobs %s`, where)
+
+	var total int64
+	if err := r.db.QueryRow(ctx, query, args...).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// ErrDLQBulkDeleteCountDrifted reports that the number of rows the DELETE would have removed
+// was not the number the caller confirmed, so nothing was removed. It is a distinct error
+// because the correct operator response is to re-preview and re-confirm, not to retry blindly.
+var ErrDLQBulkDeleteCountDrifted = errors.New("dead letter bulk delete: matching row count changed since it was confirmed")
+
+// DeleteByFilters bulk-deletes dead letter jobs matching the given filters, but ONLY if
+// exactly `expected` rows match when the DELETE runs. Returns the number of deleted rows.
+//
+// Issue #1432, batch EE re-review. CountByFilters and this DELETE were two independent
+// statements, so under READ COMMITTED they took two snapshots: a dead letter job committed
+// between them was deleted without ever having been counted, previewed, or confirmed — the
+// confirmation handshake in operations.BulkDeleteDLQJobs was advisory rather than binding.
+// Running the DELETE in its own transaction and aborting unless RowsAffected equals the
+// confirmed count makes the handshake mean what it says: either the caller's number was
+// still true and the delete commits, or nothing at all is removed and the caller re-previews.
+// This is why `expected` is a parameter rather than something re-derived here — the number
+// that matters is the one the OPERATOR saw and confirmed, not a fresher one.
+//
+// The WHERE clause construction is unchanged and still shared with CountByFilters, so the two
+// can never disagree about what "these filters" means; the filterless case remains the
+// repository's deliberate unconditional DELETE, refused one layer up.
+func (r *DeadLetterJobRepository) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters, expected int64) (int64, error) {
 	where, args := buildDLQWhereClause(filters)
 	query := fmt.Sprintf(`DELETE FROM dead_letter_jobs %s`, where)
 
-	result, err := r.db.Exec(ctx, query, args...)
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	// Rollback after a successful Commit is a no-op in pgx, so the deferred abort is safe on
+	// every path, including a panic.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	result, err := tx.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	deleted := result.RowsAffected()
+	if deleted != expected {
+		return 0, fmt.Errorf("%w: confirmed %d, matched %d", ErrDLQBulkDeleteCountDrifted, expected, deleted)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }
 
-// AtomicMarkRetried atomically claims a DLQ job for retry using a compare-and-set.
-// Returns true if the claim succeeded (retried_at was NULL), false if already retried.
-// This prevents double-retry race conditions at the database level.
-func (r *DeadLetterJobRepository) AtomicMarkRetried(ctx context.Context, id int64, retryJobID int64) (bool, error) {
+// BeginRetryTx opens the transaction DeadLetterService.Retry runs its whole replay in — the claim,
+// the River insert (queue.JobQueue.EnqueueTx) and the retry-id write, committing as one unit.
+//
+// Issue #1508: those were three separate commits, and the first two could disagree. A claim that
+// committed without an insert spent the row's single replay slot on nothing; an insert whose id
+// write then failed left the row at the placeholder with a live job behind it. Both wrote
+// retry_job_id = 0, so the column could not tell them apart, and no reaper could be built on it.
+// One transaction removes the disagreement rather than trying to detect it: either the row is
+// claimed AND carries a real River job id AND that job exists, or none of the three happened.
+//
+// A tx handle is returned rather than taking a callback because the middle step is not a repository
+// operation at all — it is an insert River performs through the same pgx.Tx.
+func (r *DeadLetterJobRepository) BeginRetryTx(ctx context.Context) (pgx.Tx, error) {
+	return r.db.Begin(ctx)
+}
+
+// AtomicMarkRetriedInTx atomically claims a DLQ job for retry using a compare-and-set, inside the
+// caller's transaction. Returns true if the claim succeeded (retried_at was NULL), false if the row
+// was already retried or does not exist.
+//
+// The claim must stay BEFORE the enqueue (see DeadLetterService.Retry): claiming afterwards re-opens
+// the concurrent double-enqueue race this compare-and-set exists to close. Running it inside the
+// transaction preserves that order and strengthens it — the UPDATE takes a row lock that a
+// concurrent replay of the same row blocks on until this transaction ends, and then re-evaluates
+// `retried_at IS NULL` against the committed result.
+//
+// retryJobID is the 0 placeholder on the way in; MarkRetriedInTx overwrites it with the real River
+// job id before the same transaction commits, so no committed row is ever left at 0.
+func (r *DeadLetterJobRepository) AtomicMarkRetriedInTx(ctx context.Context, tx pgx.Tx, id int64, retryJobID int64) (bool, error) {
 	query := `
 		UPDATE dead_letter_jobs
 		SET retried_at = $1, retry_job_id = $2
@@ -230,7 +305,7 @@ func (r *DeadLetterJobRepository) AtomicMarkRetried(ctx context.Context, id int6
 		RETURNING id`
 
 	var returnedID int64
-	err := r.db.QueryRow(ctx, query, time.Now(), retryJobID, id).Scan(&returnedID)
+	err := tx.QueryRow(ctx, query, time.Now(), retryJobID, id).Scan(&returnedID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return false, nil
@@ -333,10 +408,16 @@ func (r *DeadLetterJobRepository) MarkNotified(ctx context.Context, id int64) er
 	return err
 }
 
-// MarkRetried records that a dead letter job was manually retried.
-func (r *DeadLetterJobRepository) MarkRetried(ctx context.Context, id int64, retryJobID int64) error {
+// MarkRetriedInTx records the River job id a manual retry produced, inside the transaction that
+// took the claim (AtomicMarkRetriedInTx) and made the insert.
+//
+// This is NOT best-effort — it was, until Issue #1508, and that is precisely what made
+// retry_job_id = 0 undecidable: a failed id write left a claimed row with a live job behind it,
+// indistinguishable from a claim whose enqueue never happened. Its error must therefore abort the
+// replay, taking the claim and the River insert with it.
+func (r *DeadLetterJobRepository) MarkRetriedInTx(ctx context.Context, tx pgx.Tx, id int64, retryJobID int64) error {
 	query := `UPDATE dead_letter_jobs SET retried_at = $1, retry_job_id = $2 WHERE id = $3`
-	_, err := r.db.Exec(ctx, query, time.Now(), retryJobID, id)
+	_, err := tx.Exec(ctx, query, time.Now(), retryJobID, id)
 	return err
 }
 
@@ -347,13 +428,42 @@ func (r *DeadLetterJobRepository) AddNotes(ctx context.Context, id int64, notes 
 	return err
 }
 
+
+// replayResolvedPredicate is the single definition of "this DLQ row's replay actually happened",
+// shared by GetStats and GetOldestJobAge so the success count and the age alarm can never disagree
+// about it — round 15, Tier E item 6.
+//
+// ⚠ `retried_at IS NOT NULL` ALONE IS NOT THAT QUESTION, and reading it as if it were is the defect.
+// The pre-#1508 two-commit path could commit the claim (retried_at set) with the id write never
+// landing, leaving the row at the retry_job_id = 0 placeholder — a state BeginRetryTx's own comment
+// describes as undecidable: the column cannot say whether a live River job sits behind it. Those
+// rows are historical and no new one can be created (AtomicMarkRetriedInTx and MarkRetriedInTx now
+// commit together or not at all), but the ones that exist were being read in the two most flattering
+// ways simultaneously:
+//
+//   - GetStats counted them under `retried`, i.e. as SUCCESSES. A row whose replay demonstrably did
+//     not complete was inflating the number an operator reads as "how many of these we recovered".
+//   - GetOldestJobAge's `WHERE retried_at IS NULL` filtered them OUT of the age alarm. So the one
+//     signal that says "something has been sitting in the dead letter queue too long" was blind to
+//     precisely the rows that are stuck with nobody looking at them.
+//
+// Both now use this predicate instead: a stranded row is not a success and it is not resolved, so it
+// counts as neither, and the age alarm sees it.
+//
+// ⚠ NO REAPER, AND THAT IS DELIBERATE. #1508 is explicit that these rows cannot be released
+// automatically without risking a double-enqueue of a job that may still be running. This change
+// makes them VISIBLE; deciding what to do with each one stays a human's job, which is what a dead
+// letter queue is for. The age alarm is clearable by an operator resolving or deleting the row —
+// it is not an alarm with no action behind it.
+const replayResolvedPredicate = `(retried_at IS NOT NULL AND retry_job_id IS NOT NULL AND retry_job_id <> 0)`
+
 // GetStats returns statistics about dead letter jobs.
 func (r *DeadLetterJobRepository) GetStats(ctx context.Context) (*DeadLetterStats, error) {
 	query := `
 		SELECT
 			COUNT(*) as total,
 			COUNT(*) FILTER (WHERE notified = FALSE AND user_id IS NOT NULL) as unnotified,
-			COUNT(*) FILTER (WHERE retried_at IS NOT NULL) as retried,
+			COUNT(*) FILTER (WHERE ` + replayResolvedPredicate + `) as retried,
 			COUNT(*) FILTER (WHERE failed_at > NOW() - INTERVAL '24 hours') as last_24h
 		FROM dead_letter_jobs`
 
@@ -396,13 +506,16 @@ func (r *DeadLetterJobRepository) GetStatsByKind(ctx context.Context) (map[strin
 	return stats, rows.Err()
 }
 
-// GetOldestJobAge returns the age in hours of the oldest unretried dead letter job.
-// Returns 0 if no unretried jobs exist.
+// GetOldestJobAge returns the age in hours of the oldest UNRESOLVED dead letter job.
+// Returns 0 if none exist.
+//
+// "Unresolved" is replayResolvedPredicate's complement, not `retried_at IS NULL` — see that const
+// for why the two differ and which rows fell through the gap (round 15, Tier E item 6).
 func (r *DeadLetterJobRepository) GetOldestJobAge(ctx context.Context) (int64, error) {
 	query := `
 		SELECT COALESCE(EXTRACT(epoch FROM (NOW() - MIN(failed_at)))::BIGINT / 3600, 0)
 		FROM dead_letter_jobs
-		WHERE retried_at IS NULL
+		WHERE NOT ` + replayResolvedPredicate + `
 	`
 
 	var ageHours int64

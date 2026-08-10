@@ -69,6 +69,35 @@ const mockHealthData = {
     last_reconciliation_at: '2026-03-22T10:00:00Z',
     reconciliation_discrepancies: 0,
   },
+  // Issue #1458: the 3 DB-derived Plaid-cleanup/manual-tier-override backlog gauges.
+  // Issue #1458 follow-up G16: `available: true` here represents a SUCCESSFUL query that
+  // legitimately found zero backlog — a verified zero, not an unknown. See the "unavailable" test
+  // below for the failed-query case this fixture is deliberately NOT exercising.
+  job_backlog: {
+    plaid_cleanup_outstanding_users: 0,
+    plaid_cleanup_oldest_outstanding_seconds: 0,
+    manual_tier_override_oldest_uncleared_expired_seconds: 0,
+    available: true,
+  },
+  // Issue #1497 item 5: the orphaned-Plaid-Item state counts. `available: true` with all-zero
+  // counts is a VERIFIED empty table, not an unknown — the failed-read case is exercised
+  // separately below.
+  plaid_orphaned_items: {
+    auto_retrying: 0,
+    manual_intervention_required: 0,
+    resolved: 0,
+    operator_attested: 0,
+    max_unresolved_retry_attempt_count: 0,
+    available: true,
+  },
+  // Issue #1504: the post-gate external-effect residue. `available: true` with a zero count is a
+  // VERIFIED "this has never happened", the reading this gauge exists to be able to make — the
+  // failed-read and absent-section cases are exercised separately below.
+  deletion_residue: {
+    records: 0,
+    newest_record_seconds: 0,
+    available: true,
+  },
 }
 
 const renderWithQueryClient = (component: React.ReactElement) => {
@@ -240,4 +269,499 @@ describe('HealthDashboardPage', () => {
       expect(screen.getByText('Never')).toBeInTheDocument()
     })
   })
+
+  // Issue #1458: the 3 DB-derived Plaid-cleanup/manual-tier-override backlog gauges, surfaced via
+  // the same SummaryCard grid idiom as the Paddle Status section above (there is no Dead Letter
+  // Queue SummaryCard to copy — DLQ renders as a conditional alert banner instead).
+  describe('Job Backlog section (Issue #1458)', () => {
+    // Reads a SummaryCard's value by its title, scoped via StatCard's own `data-slot="stat-value"`
+    // — this file's other numeric fixtures (active_syncs, job queue counts, etc.) can coincide
+    // with these gauges' values, so an unscoped `screen.getByText('<number>')` is ambiguous.
+    function backlogCardValue(title: string): string {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card.querySelector('[data-slot="stat-value"]')?.textContent ?? ''
+    }
+
+    it('should render the Job Backlog section with all three gauges', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          job_backlog: {
+            plaid_cleanup_outstanding_users: 42,
+            plaid_cleanup_oldest_outstanding_seconds: 7500,
+            manual_tier_override_oldest_uncleared_expired_seconds: 5400,
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Job Backlog/i)).toBeInTheDocument()
+        expect(screen.getByText('Plaid Cleanup Outstanding Users')).toBeInTheDocument()
+        expect(screen.getByText('Plaid Cleanup Oldest Outstanding')).toBeInTheDocument()
+        expect(screen.getByText('Manual Override Oldest Uncleared Expired')).toBeInTheDocument()
+      })
+
+      expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('42')
+      expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('2h 5m')
+      expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('1h 30m')
+    })
+
+    it('should render zero-state values without crashing when there is no backlog', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData, // job_backlog all zeros, available: true (a verified zero)
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Plaid Cleanup Outstanding Users')).toBeInTheDocument()
+      })
+
+      expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('0')
+      expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('0s')
+      expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('0s')
+    })
+
+    // Issue #1458 follow-up G16: before this fix, a FAILED backlog query and a genuinely EMPTY
+    // backlog were both represented by the identical zero-valued fields, so this section rendered
+    // a confident green "0" in both cases — indistinguishable, and wrong exactly when the operator
+    // most needed to know the gauge could not currently be trusted.
+    it('should render an "Unavailable" warning state, not a green zero, when the backlog query failed', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          job_backlog: {
+            plaid_cleanup_outstanding_users: 0,
+            plaid_cleanup_oldest_outstanding_seconds: 0,
+            manual_tier_override_oldest_uncleared_expired_seconds: 0,
+            available: false,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Plaid Cleanup Outstanding Users')).toBeInTheDocument()
+      })
+
+      // Every card in the section must read "Unavailable" (not the numeric "0" a real empty
+      // backlog would show, and not a green success accent).
+      expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('Unavailable')
+      expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('Unavailable')
+      expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('Unavailable')
+
+      // Confirms the cards are NOT rendered with the 'success' (green) accent StatCard maps
+      // status='success' to — the whole point being fixed here is that "unavailable" must never
+      // read as a healthy/confident state.
+      const outstandingUsersCard = screen.getByText('Plaid Cleanup Outstanding Users').closest('[data-slot="card"]')
+      expect(outstandingUsersCard).not.toBeNull()
+      expect(outstandingUsersCard?.className ?? '').not.toMatch(/success/i)
+    })
+
+    // Same "unknown != zero" signal, but for a client with an OLDER cached response predating
+    // this field's addition — `available` is simply absent (undefined), not explicitly `false`.
+    // Must degrade the same fail-closed way, not accidentally read as available.
+    it('treats a missing `available` field (older cached response) the same as unavailable', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          job_backlog: {
+            plaid_cleanup_outstanding_users: 0,
+            plaid_cleanup_oldest_outstanding_seconds: 0,
+            manual_tier_override_oldest_uncleared_expired_seconds: 0,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Plaid Cleanup Outstanding Users')).toBeInTheDocument()
+      })
+
+      expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('Unavailable')
+    })
+
+    // Defect R3-7: a rolling deploy against an older API response, or a partial mock, can omit
+    // `job_backlog` ENTIRELY (not just its nested `available` field, covered above). An unguarded
+    // `data.job_backlog.available` throws a TypeError on that shape and blanks the WHOLE
+    // dashboard — the opposite of the fail-closed "degrade to Unavailable" intent this section
+    // exists for. Must degrade exactly like the missing-`available` case above, not crash.
+    it('degrades to "Unavailable" (not a crash) when `job_backlog` itself is entirely absent', async () => {
+      const healthDataWithoutJobBacklog: Record<string, unknown> = { ...mockHealthData }
+      delete healthDataWithoutJobBacklog.job_backlog
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: healthDataWithoutJobBacklog,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/System Health/i)).toBeInTheDocument()
+      })
+
+      await waitFor(() => {
+        expect(screen.getByText('Plaid Cleanup Outstanding Users')).toBeInTheDocument()
+      })
+
+      expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('Unavailable')
+      expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('Unavailable')
+      expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('Unavailable')
+    })
+  })
+
+  // ─── Issue #1497 item 5: the Orphaned Plaid Items section ──────────────────────────────────────
+  //
+  // WHAT THIS SECTION IS FOR. Each `manual_intervention_required` row is a Plaid Item that survived
+  // a GDPR erasure, that nothing automated will ever finish removing, and that MAY STILL BE BILLING.
+  // Every assertion below names a NUMBER from a seeded fixture, and the two operator states are
+  // seeded to DIFFERENT numbers, so a UI that showed one "unresolved" total for both cannot pass —
+  // "auto-retrying" means do nothing, "needs manual removal" means go act at Plaid.
+  describe('Orphaned Plaid Items section (Issue #1497 item 5)', () => {
+    function orphanCardValue(title: string): string {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card.querySelector('[data-slot="stat-value"]')?.textContent ?? ''
+    }
+
+    it('renders each admin state as its own number, not one unresolved total', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          plaid_orphaned_items: {
+            auto_retrying: 2,
+            manual_intervention_required: 5,
+            operator_attested: 0,
+            resolved: 9,
+            max_unresolved_retry_attempt_count: 23,
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Orphaned Plaid Items/i)).toBeInTheDocument()
+      })
+
+      // 2, 5 and 7 (the unresolved total) are all distinct, so a conflated implementation fails.
+      expect(orphanCardValue('Needs Manual Removal At Plaid')).toBe('5')
+      expect(orphanCardValue('Auto-Retrying')).toBe('2')
+      expect(orphanCardValue('Worst Retry Attempt Count')).toBe('23')
+      expect(orphanCardValue('Needs Manual Removal At Plaid')).not.toBe('7')
+      expect(orphanCardValue('Auto-Retrying')).not.toBe('7')
+    })
+
+    // THE SIBLING: an outstanding manual-intervention count must NOT read as healthy, and a genuine
+    // zero must. Without both directions, a card hardcoded to one accent would pass.
+    it('accents an outstanding manual-intervention count as a warning and a verified zero as success', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          plaid_orphaned_items: {
+            auto_retrying: 0,
+            manual_intervention_required: 3,
+            operator_attested: 0,
+            resolved: 0,
+            max_unresolved_retry_attempt_count: 4,
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      const { unmount } = renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText('Needs Manual Removal At Plaid')).toBeInTheDocument()
+      })
+      const warnCard = screen.getByText('Needs Manual Removal At Plaid').closest('[data-slot="card"]')
+      expect(warnCard?.className ?? '').toMatch(/warning/i)
+      unmount()
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData, // verified zero
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText('Needs Manual Removal At Plaid')).toBeInTheDocument()
+      })
+      expect(orphanCardValue('Needs Manual Removal At Plaid')).toBe('0')
+      const okCard = screen.getByText('Needs Manual Removal At Plaid').closest('[data-slot="card"]')
+      expect(okCard?.className ?? '').not.toMatch(/warning/i)
+    })
+
+    // ⚠ THE FAIL-CLOSED PATH. A green "0" produced by a FAILED read would tell an operator that no
+    // erased user's Plaid Item is still billing — a claim nothing checked. Must read "Unavailable".
+    it('renders "Unavailable", not a green zero, when the derivation failed', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          plaid_orphaned_items: {
+            auto_retrying: 0,
+            manual_intervention_required: 0,
+            operator_attested: 0,
+            resolved: 0,
+            max_unresolved_retry_attempt_count: 0,
+            available: false,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Needs Manual Removal At Plaid')).toBeInTheDocument()
+      })
+
+      expect(orphanCardValue('Needs Manual Removal At Plaid')).toBe('Unavailable')
+      expect(orphanCardValue('Auto-Retrying')).toBe('Unavailable')
+      expect(orphanCardValue('Worst Retry Attempt Count')).toBe('Unavailable')
+
+      const card = screen.getByText('Needs Manual Removal At Plaid').closest('[data-slot="card"]')
+      expect(card?.className ?? '').not.toMatch(/success/i)
+    })
+
+    // ── Issue #1497 item 2: the operator-attested count reaches this dashboard ────────────────────
+    //
+    // ⚠ WHY IT MUST BE HERE AT ALL. The four state counts come from one hand-written switch in the
+    // backend and are rendered by a hand-written list of cards here, so a state added to the domain
+    // and not added to both simply disappears — an operator reading this page would see the four
+    // numbers no longer account for the table and have no way to tell.
+    it('shows the operator-attested count as its own number, never folded into a resolved total', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          plaid_orphaned_items: {
+            auto_retrying: 1,
+            manual_intervention_required: 2,
+            resolved: 9,
+            operator_attested: 4,
+            max_unresolved_retry_attempt_count: 6,
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(/Operator-Attested/i)).toBeInTheDocument()
+      })
+
+      // 4 is distinct from every other number in the fixture, so no other card's value can satisfy
+      // this and a card summing attested into resolved (13) cannot either.
+      expect(orphanCardValue('Operator-Attested (Unverified)')).toBe('4')
+      expect(orphanCardValue('Needs Manual Removal At Plaid')).toBe('2')
+
+      // ⚠ The label must say UNVERIFIED. This number is what colleagues said, not what Plaid
+      // confirmed, and a card titled merely "Attested" would read as a second kind of success.
+      expect(screen.getByText(/Operator-Attested \(Unverified\)/i)).toBeInTheDocument()
+    })
+
+    it('renders the attested count as Unavailable rather than a confident zero on a failed read', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          plaid_orphaned_items: {
+            auto_retrying: 0,
+            manual_intervention_required: 0,
+            resolved: 0,
+            operator_attested: 0,
+            max_unresolved_retry_attempt_count: 0,
+            available: false,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(/Operator-Attested/i)).toBeInTheDocument()
+      })
+      expect(orphanCardValue('Operator-Attested (Unverified)')).toBe('Unavailable')
+    })
+
+    // A rolling deploy, or an older cached response, can omit `plaid_orphaned_items` ENTIRELY. An
+    // unguarded read throws and blanks the WHOLE dashboard — the opposite of fail-closed. Same
+    // defect class as R3-7 for job_backlog above.
+    it('degrades to "Unavailable" (not a crash) when `plaid_orphaned_items` is entirely absent', async () => {
+      const withoutOrphans: Record<string, unknown> = { ...mockHealthData }
+      delete withoutOrphans.plaid_orphaned_items
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: withoutOrphans,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/System Health/i)).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(screen.getByText('Needs Manual Removal At Plaid')).toBeInTheDocument()
+      })
+
+      expect(orphanCardValue('Needs Manual Removal At Plaid')).toBe('Unavailable')
+    })
+  })
+
+  // Issue #1504. A residue record means a GDPR deletion was revoked AFTER the user's Paddle
+  // subscription-cancel had already landed: they keep their account and all their data, and have no
+  // subscription. Before this section, that row was read by nothing anywhere in the product.
+  describe('Deletion Residue section (Issue #1504)', () => {
+    function residueCardValue(title: string): string {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card.querySelector('[data-slot="stat-value"]')?.textContent ?? ''
+    }
+
+    const RECORDS_CARD = 'Subscriptions Cancelled By A Revoked Deletion'
+    const RECENT_CARD = 'Most Recent Occurrence'
+
+    // THE RED TEST: a residue record is visible to an operator.
+    it('surfaces a seeded residue count and the age of the most recent record', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          deletion_residue: {
+            records: 3,
+            newest_record_seconds: 7500,
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Deletion Residue/i)).toBeInTheDocument()
+      })
+
+      // 3, not the fixture's 0 and not the 7500 beside it — a card wired to the wrong field fails.
+      expect(residueCardValue(RECORDS_CARD)).toBe('3')
+      expect(residueCardValue(RECENT_CARD)).toBe('2h 5m ago')
+    })
+
+    // THE MANDATORY SIBLING. Without it the count card could render a constant and the test above
+    // would still pass. This is the ordinary-successful-deletion case: no residue at all.
+    it('reports a verified zero — and "None", never "0s" — when no deletion left residue', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData, // records: 0, newest_record_seconds: 0, available: true
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(RECORDS_CARD)).toBeInTheDocument()
+      })
+
+      expect(residueCardValue(RECORDS_CARD)).toBe('0')
+      // ⚠ THE WHOLE POINT OF THIS ASSERTION. The backend sends 0 seconds both for "never happened"
+      // and for "happened this instant", so a card that formatted the number unconditionally would
+      // render '0s ago' here — telling an operator this just happened when it never has.
+      expect(residueCardValue(RECENT_CARD)).toBe('None')
+      expect(residueCardValue(RECENT_CARD)).not.toBe('0s ago')
+    })
+
+    it('renders "Unavailable" rather than a confident zero when the residue query failed', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          deletion_residue: {
+            records: 0,
+            newest_record_seconds: 0,
+            available: false,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(RECORDS_CARD)).toBeInTheDocument()
+      })
+
+      expect(residueCardValue(RECORDS_CARD)).toBe('Unavailable')
+      expect(residueCardValue(RECENT_CARD)).toBe('Unavailable')
+    })
+
+    // A rolling deploy or an older cached response can omit `deletion_residue` entirely; an unguarded
+    // read throws and blanks the WHOLE dashboard. Same defect class as R3-7 for job_backlog.
+    it('degrades to "Unavailable" (not a crash) when `deletion_residue` is entirely absent', async () => {
+      const withoutResidue: Record<string, unknown> = { ...mockHealthData }
+      delete withoutResidue.deletion_residue
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: withoutResidue,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/System Health/i)).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(screen.getByText(RECORDS_CARD)).toBeInTheDocument()
+      })
+
+      expect(residueCardValue(RECORDS_CARD)).toBe('Unavailable')
+      expect(residueCardValue(RECENT_CARD)).toBe('Unavailable')
+    })
+  })
+
 })

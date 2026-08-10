@@ -2,8 +2,29 @@ version: '3.9'
 
 services:
   # PostgreSQL Database (QA)
+  #
+  # Pinned to 17 to match local development, CI's containers, and squawk's --pg-version=17. QA was
+  # the last environment left on 15, which meant QA validated the application against a different
+  # major version than everywhere else.
+  #
+  # ⚠️ THIS BUMP DESTROYS THE EXISTING QA DATABASE. A PostgreSQL 15 data directory cannot be read by
+  # a 17 server — the container will refuse to start with "database files are incompatible with
+  # server" — and `pull_policy: always` means the new image is fetched on the next deploy. The QA
+  # volume must be recreated and re-seeded as part of rolling this out:
+  #
+  #     RESET_VOLUMES=true ./scripts/deploy-qa.sh
+  #
+  # Use that, NOT a bare `docker compose -f docker-compose.qa.yml down -v`. The real QA deployment
+  # pins the Compose project name to "boostedbudget-qa" (scripts/deploy-qa.sh:25, passed as `-p` at
+  # :176/:181), so a `-p`-less docker compose command acts on the DIRECTORY-DERIVED project instead
+  # and leaves the incompatible PostgreSQL 15 volume untouched — the next real deploy then still
+  # fails with "database files are incompatible with server", and may also hit occupied ports.
+  # deploy-qa.sh already documents this flag at :552. Re-apply migrations and re-run the QA data
+  # populator afterwards.
+  #
+  # This is deliberate and coordinated, not incidental to a code change — see docs/MAC_MINI_QA_SETUP.md.
   postgres:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     pull_policy: always  # Always pull latest patches
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     environment:
@@ -75,6 +96,9 @@ services:
       PLAID_REDIRECT_URI: "${PLAID_REDIRECT_URI}"
       PLAID_WEBHOOK_URL: "${PLAID_WEBHOOK_URL}"
       ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+      # Issue #1432 (B2-1): explicit opt-in for the unauthenticated QA auth-bypass route.
+      # ENVIRONMENT=qa alone no longer registers it — see backend/internal/config/qa_auth_bypass_gate.go.
+      QA_AUTH_BYPASS_ENABLED: "true"
       QA_BYPASS_SECRET: "${QA_BYPASS_SECRET}"
       QA_ADMIN_CLERK_USER_ID: "${QA_ADMIN_CLERK_USER_ID}"
       QA_PREMIUM_CLERK_USER_ID: "${QA_PREMIUM_CLERK_USER_ID}"

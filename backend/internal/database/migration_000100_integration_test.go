@@ -38,7 +38,10 @@ func connectMigrationTestDB(t *testing.T) *pgxpool.Pool {
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set — skipping migration integration test")
 	}
-	pool, err := pgxpool.New(context.Background(), dsn)
+	// Issue #1461: route through NewPoolFromURL (not a bare pgxpool.New) so this test pool pins
+	// session TimeZone=UTC exactly like the production pool does — otherwise no integration test
+	// would ever exercise the pin, since every test built its own unpinned pool.
+	pool, err := NewPoolFromURL(context.Background(), dsn)
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 	return pool

@@ -160,6 +160,13 @@ go tool cover -func=coverage.out
 
 ## Environment Variables Needed
 
+> ⚠️ **`DELETION_WORKER_INTERVAL` removed from this block (Issue #1493).** It was listed here as a
+> required deletion knob and it controls nothing. Its only consumer was `workers.DeletionWorker`,
+> deleted in #1482 because River never registered it; `config.DeletionWorkerInterval` has since been
+> deleted too (`git grep -n DeletionWorkerInterval -- '*.go'` → no hits). Scheduled deletion runs as
+> the `scheduled_deletion_check` periodic River job, whose cadence comes from its own
+> `PeriodicJobOpts`. Setting the variable produces no error and no effect.
+
 ```bash
 # SendGrid
 SENDGRID_API_KEY=SG.xxx
@@ -171,7 +178,6 @@ CLERK_MANAGEMENT_CLIENT_SECRET=xxx
 
 # Deletion Configuration
 DELETION_GRACE_PERIOD_DAYS=30
-DELETION_WORKER_INTERVAL=1h
 DELETION_TOKEN_SECRET=your-secure-secret-here
 
 # Frontend

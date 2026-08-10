@@ -110,7 +110,7 @@ func TestAdminUserService_ListUsers_Success(t *testing.T) {
 	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(expectedUsers, 2, nil)
 
 	// Execute
-	response, err := service.ListUsers(ctx, filters, 1, 20)
+	response, err := service.ListUsers(ctx, filters, 1, 20, time.Now())
 
 	// Assert
 	require.NoError(t, err)
@@ -149,7 +149,7 @@ func TestAdminUserService_ListUsers_WithPagination(t *testing.T) {
 	mockRepo.On("ListUsers", ctx, filters, 20, 20).Return(expectedUsers, 50, nil)
 
 	// Execute
-	response, err := service.ListUsers(ctx, filters, 2, 20)
+	response, err := service.ListUsers(ctx, filters, 2, 20, time.Now())
 
 	// Assert
 	require.NoError(t, err)
@@ -173,7 +173,7 @@ func TestAdminUserService_ListUsers_LastPage(t *testing.T) {
 	mockRepo.On("ListUsers", ctx, filters, 20, 40).Return([]domain.AdminUserListItem{}, 50, nil)
 
 	// Execute
-	response, err := service.ListUsers(ctx, filters, 3, 20)
+	response, err := service.ListUsers(ctx, filters, 3, 20, time.Now())
 
 	// Assert
 	require.NoError(t, err)
@@ -196,7 +196,7 @@ func TestAdminUserService_ListUsers_WithFilters(t *testing.T) {
 	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return([]domain.AdminUserListItem{}, 0, nil)
 
 	// Execute
-	response, err := service.ListUsers(ctx, filters, 1, 20)
+	response, err := service.ListUsers(ctx, filters, 1, 20, time.Now())
 
 	// Assert
 	require.NoError(t, err)
@@ -217,7 +217,7 @@ func TestAdminUserService_ListUsers_RepositoryError(t *testing.T) {
 	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(nil, 0, errors.New("database error"))
 
 	// Execute
-	response, err := service.ListUsers(ctx, filters, 1, 20)
+	response, err := service.ListUsers(ctx, filters, 1, 20, time.Now())
 
 	// Assert
 	assert.Error(t, err)
@@ -235,7 +235,7 @@ func TestAdminUserService_ListUsers_InvalidPage(t *testing.T) {
 	filters := domain.AdminUserFilters{}
 
 	// Execute with page 0 (invalid)
-	response, err := service.ListUsers(ctx, filters, 0, 20)
+	response, err := service.ListUsers(ctx, filters, 0, 20, time.Now())
 
 	// Assert - should default to page 1
 	assert.Error(t, err)
@@ -252,7 +252,7 @@ func TestAdminUserService_ListUsers_InvalidPageSize(t *testing.T) {
 	filters := domain.AdminUserFilters{}
 
 	// Execute with page size > 100
-	response, err := service.ListUsers(ctx, filters, 1, 150)
+	response, err := service.ListUsers(ctx, filters, 1, 150, time.Now())
 
 	// Assert
 	assert.Error(t, err)
@@ -289,7 +289,7 @@ func TestAdminUserService_GetUserDetail_Success(t *testing.T) {
 	mockRepo.On("GetUserDetail", ctx, userID).Return(expectedDetail, nil)
 
 	// Execute
-	detail, err := service.GetUserDetail(ctx, userID)
+	detail, err := service.GetUserDetail(ctx, userID, time.Now())
 
 	// Assert
 	require.NoError(t, err)
@@ -312,7 +312,7 @@ func TestAdminUserService_GetUserDetail_NotFound(t *testing.T) {
 	mockRepo.On("GetUserDetail", ctx, userID).Return(nil, ErrAdminUserNotFound)
 
 	// Execute
-	detail, err := service.GetUserDetail(ctx, userID)
+	detail, err := service.GetUserDetail(ctx, userID, time.Now())
 
 	// Assert
 	assert.Error(t, err)
@@ -329,7 +329,7 @@ func TestAdminUserService_GetUserDetail_EmptyUserID(t *testing.T) {
 	ctx := context.Background()
 
 	// Execute with empty user ID
-	detail, err := service.GetUserDetail(ctx, "")
+	detail, err := service.GetUserDetail(ctx, "", time.Now())
 
 	// Assert
 	assert.Error(t, err)
@@ -399,7 +399,7 @@ func TestAdminUserService_ListUsers_EnrichesAdminStatus(t *testing.T) {
 	mockAdminService.On("IsHardcodedAdmin", "admin@boostedbudget.com").Return(true)
 
 	// Execute
-	response, err := service.ListUsers(ctx, filters, 1, 20)
+	response, err := service.ListUsers(ctx, filters, 1, 20, time.Now())
 
 	// Assert
 	require.NoError(t, err)
@@ -453,7 +453,7 @@ func TestAdminUserService_EnrichAdminUser_EffectiveStatus_LiveOverride(t *testin
 	filters := domain.AdminUserFilters{}
 	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
 
-	response, err := service.ListUsers(ctx, filters, 1, 20)
+	response, err := service.ListUsers(ctx, filters, 1, 20, time.Now())
 	require.NoError(t, err)
 	require.Len(t, response.Users, 1)
 
@@ -486,7 +486,7 @@ func TestAdminUserService_EnrichAdminUser_EffectiveStatus_NoOverride(t *testing.
 	filters := domain.AdminUserFilters{}
 	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
 
-	response, err := service.ListUsers(ctx, filters, 1, 20)
+	response, err := service.ListUsers(ctx, filters, 1, 20, time.Now())
 	require.NoError(t, err)
 	require.Len(t, response.Users, 1)
 
@@ -524,7 +524,7 @@ func TestAdminUserService_EnrichAdminUser_EffectiveStatus_ExpiredOverride(t *tes
 	filters := domain.AdminUserFilters{}
 	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
 
-	response, err := service.ListUsers(ctx, filters, 1, 20)
+	response, err := service.ListUsers(ctx, filters, 1, 20, time.Now())
 	require.NoError(t, err)
 	require.Len(t, response.Users, 1)
 
@@ -567,7 +567,7 @@ func TestAdminUserService_EnrichAdminUser_EffectiveStatus_MalformedOverride_Fall
 	filters := domain.AdminUserFilters{}
 	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
 
-	response, err := service.ListUsers(ctx, filters, 1, 20)
+	response, err := service.ListUsers(ctx, filters, 1, 20, time.Now())
 	require.NoError(t, err)
 	require.Len(t, response.Users, 1)
 
@@ -607,7 +607,7 @@ func TestAdminUserService_EnrichAdminUser_EffectiveStatus_ValidOverride_WithTier
 	filters := domain.AdminUserFilters{}
 	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
 
-	response, err := service.ListUsers(ctx, filters, 1, 20)
+	response, err := service.ListUsers(ctx, filters, 1, 20, time.Now())
 	require.NoError(t, err)
 	require.Len(t, response.Users, 1)
 
@@ -646,7 +646,7 @@ func TestAdminUserService_EnrichAdminUser_EffectiveStatus_HardcodedAdmin_Consist
 	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
 	mockAdminService.On("IsHardcodedAdmin", "admin@boostedbudget.com").Return(true)
 
-	response, err := service.ListUsers(ctx, filters, 1, 20)
+	response, err := service.ListUsers(ctx, filters, 1, 20, time.Now())
 	require.NoError(t, err)
 	require.Len(t, response.Users, 1)
 
@@ -685,7 +685,7 @@ func TestAdminUserService_GetUserDetail_EnrichesAdminStatus(t *testing.T) {
 	mockAdminService.On("IsHardcodedAdmin", "admin@boostedbudget.com").Return(true)
 
 	// Execute
-	detail, err := service.GetUserDetail(ctx, userID)
+	detail, err := service.GetUserDetail(ctx, userID, time.Now())
 
 	// Assert
 	require.NoError(t, err)
@@ -698,6 +698,106 @@ func TestAdminUserService_GetUserDetail_EnrichesAdminStatus(t *testing.T) {
 
 	mockRepo.AssertExpectations(t)
 	mockAdminService.AssertExpectations(t)
+}
+
+// TestAdminUserService_GetUserDetail_EffectiveStatus_DerivedFromPassedInstant_NotLaterClockRead is
+// the regression test for a Codex adversarial review finding on Issue #1462/#1413: GetUserDetail
+// must compute EffectiveStatus from the SAME instant its caller captured as `as_of`
+// (admin.go / admin_subscriptions.go each do `asOf := time.Now()` BEFORE calling this method), not
+// from a second, independent time.Now() read taken later inside enrichAdminUser. Before this fix,
+// enrichAdminUser called the ambient domain.User.EffectiveStatusWithActiveOverride() (which reads
+// its own fresh clock); a request whose processing crossed the override's expiry boundary between
+// the handler's as_of capture and enrichAdminUser's internal read would return an `as_of` and an
+// `effective_status` describing two different moments in time — the exact "two clocks describing
+// one user" defect #1462 exists to fix, reintroduced one layer up.
+//
+// This is made deterministic (no flaky timing race) as follows: `asOf` is captured FIRST, the
+// override is set to expire shortly after `asOf`, and only THEN — after an artificial sleep well
+// past that expiry — is GetUserDetail called, passing the ORIGINAL `asOf`. As of `asOf`, the
+// override was still live, so a correct implementation must report EffectiveStatus "active". A
+// service that instead reads a fresh time.Now() internally (the pre-fix behavior) would run that
+// read AFTER the sleep, see an EXPIRED override, and wrongly report the raw "inactive" status —
+// so this test fails on the pre-fix code and passes on the fix.
+func TestAdminUserService_GetUserDetail_EffectiveStatus_DerivedFromPassedInstant_NotLaterClockRead(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	asOf := time.Now()
+	override := "household_2"
+	// Still live AT asOf, but will have expired by the time the sleep below elapses.
+	overrideEndsAt := asOf.Add(20 * time.Millisecond)
+
+	repoDetail := &domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID:                 userID,
+			Email:              "boundary-crossing@example.com",
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "inactive",
+			ManualTierOverride: &override,
+			ManualTierEndsAt:   &overrideEndsAt,
+			IsActive:           true,
+		},
+	}
+	mockRepo.On("GetUserDetail", ctx, userID).Return(repoDetail, nil)
+
+	// Simulate request-processing time crossing the override's expiry boundary BETWEEN the
+	// caller's as_of capture (asOf, above) and this call into the service.
+	time.Sleep(60 * time.Millisecond)
+
+	detail, err := service.GetUserDetail(ctx, userID, asOf)
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+
+	assert.Equal(t, "inactive", detail.SubscriptionStatus, "raw status must stay untouched")
+	assert.Equal(t, "active", detail.EffectiveStatus,
+		"EffectiveStatus must be derived from asOf (when the override was still live), not a later internal clock read taken after it had already expired")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_GetOwnedHouseholdActiveMemberCount_PassesThroughToRepo proves
+// AdminUserService exposes AdminUserRepository.GetOwnedHouseholdActiveMemberCount unchanged
+// (Issue #1452) — the admin subscription-detail handler needs this count to warn BEFORE an
+// override is applied (rather than only after, in UpdateUserTier's existing post-apply
+// warning), and the handler only has access to AdminUserService, not the repository directly.
+func TestAdminUserService_GetOwnedHouseholdActiveMemberCount_PassesThroughToRepo(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	mockRepo.On("GetOwnedHouseholdActiveMemberCount", ctx, userID).Return(3, nil)
+
+	count, err := service.GetOwnedHouseholdActiveMemberCount(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_GetOwnedHouseholdActiveMemberCount_PropagatesRepoError proves a repository
+// failure is surfaced to the caller rather than silently swallowed — unlike UpdateUserTier's
+// best-effort seat-capacity check (which logs and skips on error since it must never block a
+// tier change), this is a direct read the admin subscription-detail GET needs to render
+// accurately, so a failure here should fail the request rather than silently show 0 members.
+func TestAdminUserService_GetOwnedHouseholdActiveMemberCount_PropagatesRepoError(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	mockRepo.On("GetOwnedHouseholdActiveMemberCount", ctx, userID).Return(0, errors.New("db error"))
+
+	count, err := service.GetOwnedHouseholdActiveMemberCount(ctx, userID)
+
+	assert.Error(t, err)
+	assert.Equal(t, 0, count)
+	mockRepo.AssertExpectations(t)
 }
 
 // TestAdminUserService_ListUsers_NilAdminService tests graceful handling of nil AdminService
@@ -723,7 +823,7 @@ func TestAdminUserService_ListUsers_NilAdminService(t *testing.T) {
 	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
 
 	// Execute
-	response, err := service.ListUsers(ctx, filters, 1, 20)
+	response, err := service.ListUsers(ctx, filters, 1, 20, time.Now())
 
 	// Assert - should work without enrichment
 	require.NoError(t, err)

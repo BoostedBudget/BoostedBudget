@@ -5,6 +5,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -37,8 +38,10 @@ type TrialRepository interface {
 
 	// SetRetentionDates starts the retention clock (#930) — both dates are computed in Postgres
 	// (clock_timestamp() + make_interval); see ProfileRepository.SetRetentionDates's doc comment
-	// (repository/profile_repository.go) for why a Go-computed date is never passed in.
-	SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error
+	// (repository/profile_repository.go) for why a Go-computed date is never passed in, and
+	// RetentionClockGuard's doc comment for why the authorising condition is passed in by this
+	// caller rather than hardcoded in the repository.
+	SetRetentionDates(ctx context.Context, userID string, guard repository.RetentionClockGuard, retentionMonths int) error
 }
 
 // trialExpirationClaimLease is the lease duration requested for ActionTrialExpiration — matches
@@ -332,8 +335,28 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 	// in profile_repository.go for why the two grace windows are governed by separate columns.
 	// retention's own belt-and-braces repair (GetUsersNeedingRetentionClockRepair) exists
 	// independently as a backstop if this write itself fails.
-	if retErr := s.repo.SetRetentionDates(ctx, userID, s.retentionMonths); retErr != nil {
-		s.logger.Warn("failed to set retention dates on trial expiry", "user_id", userID, "error", retErr)
+	//
+	// Issue #1500 residual (Codex review, PR #1443 follow-up): this call carries an authorising
+	// condition too, and it is NOT the cancellation webhook's. What authorises it is the CAS
+	// immediately above: ExpireTrialIfNoOverride flips 'trial' -> 'inactive' and returns true only
+	// for the row it actually moved, so the state this write is entitled to act on is
+	// "still 'inactive'". `flipped` proves that was true a moment ago, not that it is true now —
+	// the user can resubscribe in the window between the CAS and this line (the checkout webhook
+	// writes 'active' and calls ClearRetentionDates), and this write would then re-arm a six-month
+	// deletion clock on a paying customer, exactly the defect the cancellation path had. The guard
+	// is therefore genuinely required here; it is simply a DIFFERENT condition, which is why the
+	// repository takes it from the caller instead of hardcoding 'cancelled'.
+	//
+	// A lost precondition is a legitimate skip, not a failure: the user is no longer inactive, so
+	// nobody wants this clock armed. Logged at Info, distinct from a real write failure (Warn), for
+	// which GetUsersNeedingRetentionClockRepair remains the backstop.
+	if retErr := s.repo.SetRetentionDates(ctx, userID, repository.RetentionClockRequiresStatus(domain.SubscriptionStatusInactive), s.retentionMonths); retErr != nil {
+		if errors.Is(retErr, repository.ErrRetentionClockPreconditionLost) {
+			s.logger.Info("retention clock not started on trial expiry — the user is no longer inactive (resubscribed or comped concurrently)",
+				"user_id", userID)
+		} else {
+			s.logger.Warn("failed to set retention dates on trial expiry", "user_id", userID, "error", retErr)
+		}
 	}
 
 	s.logger.Info("trial expired for user",

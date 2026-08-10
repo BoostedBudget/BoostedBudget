@@ -28,6 +28,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/database"
 )
 
 // rowQuerier is satisfied by *pgxpool.Pool and *pgxpool.Conn.
@@ -43,7 +45,11 @@ func connectTestDB(t *testing.T) *pgxpool.Pool {
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set — skipping EXPLAIN integration test")
 	}
-	pool, err := pgxpool.New(context.Background(), dsn)
+	// Issue #1461: route through database.NewPoolFromURL (not a bare pgxpool.New) so this pool —
+	// used by every repository-package integration test via this shared helper — pins session
+	// TimeZone=UTC exactly like the production pool does. Without this, no integration test in
+	// this package would ever exercise NewPool's TimeZone pin.
+	pool, err := database.NewPoolFromURL(context.Background(), dsn)
 	require.NoError(t, err, "connect to test database")
 	t.Cleanup(pool.Close)
 	return pool

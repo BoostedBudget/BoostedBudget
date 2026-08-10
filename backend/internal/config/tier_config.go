@@ -76,11 +76,17 @@ func findConfigFile(filename string) string {
 // Priority:
 // 1. SUBSCRIPTION_TIERS_CONFIG env var (explicit override)
 // 2. config/subscription_tiers.{PADDLE_ENVIRONMENT}.yaml (e.g., sandbox, production)
-// 3. config/subscription_tiers.yaml (default/template)
-func getConfigPath() string {
+// 3. config/subscription_tiers.yaml (default/template) — ONLY when PADDLE_ENVIRONMENT is unset
+//
+// Fails closed (returns an error) when PADDLE_ENVIRONMENT IS set but no matching
+// config/subscription_tiers.<env>.yaml exists. This used to warn and silently fall back to
+// the default/template catalogue — which can carry sandbox Paddle price IDs — meaning a
+// production deploy with a typo'd PADDLE_ENVIRONMENT, or one where the environment-specific
+// file was never created, could boot serving the wrong catalogue with no failure at all.
+func getConfigPath() (string, error) {
 	// Check for explicit config path override
 	if explicitPath := getEnv("SUBSCRIPTION_TIERS_CONFIG", ""); explicitPath != "" {
-		return explicitPath
+		return explicitPath, nil
 	}
 
 	// Check for environment-specific config based on PADDLE_ENVIRONMENT
@@ -89,20 +95,25 @@ func getConfigPath() string {
 		found := findConfigFile(envSpecificPath)
 		if found != envSpecificPath {
 			fmt.Printf("Loading environment-specific config: %s\n", found)
-			return found
+			return found, nil
 		}
-		fmt.Printf("Warning: PADDLE_ENVIRONMENT=%s but %s not found, using default config\n",
+		return "", fmt.Errorf(
+			"PADDLE_ENVIRONMENT=%s requires %s, but it was not found. Refusing to silently fall back to the default/template catalogue (config/subscription_tiers.yaml), which may carry sandbox Paddle price IDs. Create the environment-specific file, or set SUBSCRIPTION_TIERS_CONFIG explicitly if this is intentional",
 			paddleEnv, envSpecificPath)
 	}
 
-	// Fall back to default config
-	return "config/subscription_tiers.yaml"
+	// PADDLE_ENVIRONMENT unset: fall back to default config. This is the one case where
+	// "no environment-specific file" is expected, not a misconfiguration.
+	return "config/subscription_tiers.yaml", nil
 }
 
 // loadTierConfigFromFile reads and parses the subscription tiers YAML file
 // Automatically selects environment-specific config based on PADDLE_ENVIRONMENT
 func loadTierConfigFromFile() (*TierConfig, error) {
-	configPath := getConfigPath()
+	configPath, err := getConfigPath()
+	if err != nil {
+		return nil, err
+	}
 
 	// Make path absolute if it's relative
 	if !filepath.IsAbs(configPath) {
@@ -152,15 +163,53 @@ func loadTierConfigFromFile() (*TierConfig, error) {
 	return config, nil
 }
 
+// canonicalTierUsersIncluded is the canonical tier name set (backend/internal/domain/subscription.go)
+// mapped to the household seat count each tier's name advertises. Every subscription tier
+// catalogue (config/subscription_tiers*.yaml) must define exactly this key set — validate()
+// previously only checked len(tc.Tiers) == 5, which a catalogue with 5 WRONG tier names (e.g. a
+// typo'd "household_6" swapped in for "household_5") would still have passed.
+var canonicalTierUsersIncluded = map[domain.TierName]int{
+	domain.TierPremium:    1,
+	domain.TierHousehold2: 2,
+	domain.TierHousehold3: 3,
+	domain.TierHousehold4: 4,
+	domain.TierHousehold5: 5,
+}
+
+// canonicalTierNamesSorted returns the canonical tier names in a stable, human-readable order
+// for error messages.
+func canonicalTierNamesSorted() []string {
+	return []string{
+		string(domain.TierPremium),
+		string(domain.TierHousehold2),
+		string(domain.TierHousehold3),
+		string(domain.TierHousehold4),
+		string(domain.TierHousehold5),
+	}
+}
+
 // validate checks that the tier configuration is valid
 func (tc *TierConfig) validate() error {
 	if len(tc.Tiers) == 0 {
 		return fmt.Errorf("no tiers defined in configuration")
 	}
 
-	// Expect 5 tiers: premium, household_2, household_3, household_4, household_5
-	if len(tc.Tiers) != 5 {
-		return fmt.Errorf("expected 5 tiers (premium + 4 household tiers), got %d", len(tc.Tiers))
+	if len(tc.Tiers) != len(canonicalTierUsersIncluded) {
+		return fmt.Errorf("expected %d tiers (%v), got %d", len(canonicalTierUsersIncluded), canonicalTierNamesSorted(), len(tc.Tiers))
+	}
+
+	// Assert the EXACT canonical key set, not just the count: a catalogue with the right
+	// number of tiers but a wrong/misspelled name would previously slip past the count-only
+	// check with no other guard catching it before runtime lookups (e.g. GetTier) failed.
+	for name := range tc.Tiers {
+		if _, canonical := canonicalTierUsersIncluded[name]; !canonical {
+			return fmt.Errorf("tier '%s' is not one of the canonical tier names %v", name, canonicalTierNamesSorted())
+		}
+	}
+	for _, name := range canonicalTierNamesSorted() {
+		if _, exists := tc.Tiers[domain.TierName(name)]; !exists {
+			return fmt.Errorf("canonical tier '%s' is missing from configuration (expected %v)", name, canonicalTierNamesSorted())
+		}
 	}
 
 	// Check that default tier exists
@@ -179,6 +228,26 @@ func (tc *TierConfig) validate() error {
 		if tier.Limits.TransactionHistoryDays < 0 {
 			return fmt.Errorf("tier '%s' has invalid transaction_history_days: %d", name, tier.Limits.TransactionHistoryDays)
 		}
+
+		// Advertised prices must be positive — a zero or negative price_monthly/yearly (or
+		// mobile_price_yearly) would either give the tier away for free or reject valid
+		// payments, and neither should ever reach production silently.
+		if tier.Pricing.PriceMonthly <= 0 {
+			return fmt.Errorf("tier '%s' has invalid price_monthly: %v (must be > 0)", name, tier.Pricing.PriceMonthly)
+		}
+		if tier.Pricing.PriceYearly <= 0 {
+			return fmt.Errorf("tier '%s' has invalid price_yearly: %v (must be > 0)", name, tier.Pricing.PriceYearly)
+		}
+		if tier.Pricing.MobilePriceYearly <= 0 {
+			return fmt.Errorf("tier '%s' has invalid mobile_price_yearly: %v (must be > 0)", name, tier.Pricing.MobilePriceYearly)
+		}
+
+		// users_included must match the tier's own name (household_3 must include 3 users,
+		// etc.) — this is presentation-critical (mismatched seat counts are user-facing) and
+		// has no legitimate reason to diverge from the tier's identity today.
+		if expected, ok := canonicalTierUsersIncluded[name]; ok && tier.Pricing.UsersIncluded != expected {
+			return fmt.Errorf("tier '%s' has users_included=%d, expected %d to match its tier name", name, tier.Pricing.UsersIncluded, expected)
+		}
 	}
 
 	// Validate PastDueConfig (Issue #898)
@@ -186,6 +255,25 @@ func (tc *TierConfig) validate() error {
 		return err
 	}
 
+	// Validate Trial config
+	if err := tc.validateTrial(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateTrial checks that the trial configuration references a real tier with a sane duration.
+func (tc *TierConfig) validateTrial() error {
+	if tc.Trial.Tier == "" {
+		return fmt.Errorf("trial.tier must be set")
+	}
+	if _, exists := tc.Tiers[tc.Trial.Tier]; !exists {
+		return fmt.Errorf("trial.tier '%s' not found in tier definitions", tc.Trial.Tier)
+	}
+	if tc.Trial.DurationDays <= 0 {
+		return fmt.Errorf("trial.duration_days must be > 0, got %d", tc.Trial.DurationDays)
+	}
 	return nil
 }
 
