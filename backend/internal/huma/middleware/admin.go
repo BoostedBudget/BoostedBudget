@@ -23,6 +23,12 @@ import (
 //  4. Role check: Returns 403 if user doesn't have admin role in Clerk privateMetadata
 //     (and 500, i.e. refused, if the role lookup itself fails — fail closed)
 //
+// Issue #1432 (batch ED, finding B2-3): step 4 is a CLERK API lookup of privateMetadata, not a
+// database check — this codebase has no roles table. Positive (role-granting) results are held
+// in an in-process cache, so a role revoked in the Clerk dashboard keeps working until that
+// entry expires; the window is bounded by AdminService's positiveRoleCacheTTLCap. Do not reason
+// about this path as if revocation were immediate, and do not describe it as a database check.
+//
 // Issue #1499: there is deliberately NO environment check. Admin endpoints used to return
 // 404 outside qa/staging, which made the admin dashboard — system health, user management,
 // subscription admin, the dead-letter queue — unreachable in production for actual admins.

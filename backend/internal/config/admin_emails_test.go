@@ -11,8 +11,15 @@ import (
 )
 
 // Issue #1498: config/admin_emails.yaml grants admin access by email, bypassing the
-// database/Clerk role check entirely (internal/huma/middleware/admin.go, the
-// IsHardcodedAdmin branch returns before HasRole is consulted). Since #1499 removed the
+// role check entirely (internal/huma/middleware/admin.go, the IsHardcodedAdmin branch
+// returns before HasRole is consulted).
+//
+// Issue #1432 (batch ED, finding B2-3) corrected the wording above: this used to read
+// "database/Clerk role check". There is NO database role check. Roles live in Clerk
+// privateMetadata and are read over the Clerk API (services/admin_service.go GetRoles);
+// this codebase has no roles table and never queries one. The phrase was load-bearing —
+// reviewers reasoned about this path as if a revocation took effect on the next request
+// against a local table, when in fact positive results are cached in process. Since #1499 removed the
 // admin middleware's environment gate, that file is a live PRODUCTION ACL — and two of
 // its entries were CI/QA test accounts.
 //
