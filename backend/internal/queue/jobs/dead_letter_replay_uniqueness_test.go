@@ -68,6 +68,10 @@ func (s *stubDLQRepo) AddNotes(_ context.Context, _ int64, _ string) error { ret
 
 func (s *stubDLQRepo) DeleteByID(_ context.Context, _ int64) error { return nil }
 
+func (s *stubDLQRepo) CountByFilters(_ context.Context, _ domain.DeadLetterJobFilters) (int64, error) {
+	return 0, nil
+}
+
 func (s *stubDLQRepo) DeleteByFilters(_ context.Context, _ domain.DeadLetterJobFilters) (int64, error) {
 	return 0, nil
 }

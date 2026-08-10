@@ -273,6 +273,44 @@ func TestDeadLetterJobRepository_DeleteOlderThan_IncludesNotes(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// --- CountByFilters ---
+
+func TestDeadLetterJobRepository_CountByFilters_WithKindFilter(t *testing.T) {
+	mock, repo := setupDLQMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	kind := "plaid_sync"
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM dead_letter_jobs WHERE kind = $1`)).
+		WithArgs(kind).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(12)))
+
+	count, err := repo.CountByFilters(ctx, domain.DeadLetterJobFilters{Kind: &kind})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(12), count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// The preview must count the same rows the delete would remove, including the
+// unfiltered case — the handler, not this method, is what refuses that request.
+func TestDeadLetterJobRepository_CountByFilters_NoFilters(t *testing.T) {
+	mock, repo := setupDLQMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM dead_letter_jobs `)).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(9001)))
+
+	count, err := repo.CountByFilters(ctx, domain.DeadLetterJobFilters{})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(9001), count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // --- DeleteByFilters ---
 
 func TestDeadLetterJobRepository_DeleteByFilters_NoFilters(t *testing.T) {

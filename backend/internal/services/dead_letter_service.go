@@ -63,6 +63,7 @@ type deadLetterRepo interface {
 	MarkRetriedInTx(ctx context.Context, tx pgx.Tx, id int64, retryJobID int64) error
 	AddNotes(ctx context.Context, id int64, notes string) error
 	DeleteByID(ctx context.Context, id int64) error
+	CountByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
 	DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
 	GetStats(ctx context.Context) (*repository.DeadLetterStats, error)
 	GetStatsByKind(ctx context.Context) (map[string]int64, error)
@@ -77,6 +78,9 @@ type DeadLetterService interface {
 	Retry(ctx context.Context, id int64) (*domain.DeadLetterRetryResponse, error)
 	AddNotes(ctx context.Context, id int64, notes string) error
 	Delete(ctx context.Context, id int64) error
+	// CountByFilters previews how many rows DeleteByFilters would remove for the same
+	// filters — the read half of the bulk-delete confirmation handshake.
+	CountByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
 	DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
 	GetStats(ctx context.Context) (*domain.DeadLetterStatsResponse, error)
 	Cleanup(ctx context.Context, retentionDays int) (int64, error)
@@ -358,6 +362,11 @@ func (s *deadLetterService) AddNotes(ctx context.Context, id int64, notes string
 // Delete permanently removes a single dead letter job.
 func (s *deadLetterService) Delete(ctx context.Context, id int64) error {
 	return s.repo.DeleteByID(ctx, id)
+}
+
+// CountByFilters returns how many dead letter jobs match the given filters.
+func (s *deadLetterService) CountByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {
+	return s.repo.CountByFilters(ctx, filters)
 }
 
 // DeleteByFilters bulk-deletes dead letter jobs matching the given filters.

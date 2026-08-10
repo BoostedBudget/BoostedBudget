@@ -91,11 +91,19 @@ type MaskedDeadLetterJob struct {
 
 // DeadLetterBulkDeleteRequest is the request body for bulk-deleting dead letter jobs.
 type DeadLetterBulkDeleteRequest struct {
-	Kind      *string `json:"kind,omitempty"`
-	UserID    *string `json:"user_id,omitempty"`
-	StartDate *string `json:"start_date,omitempty"`
-	EndDate   *string `json:"end_date,omitempty"`
+	Kind   *string `json:"kind,omitempty"`
+	UserID *string `json:"user_id,omitempty"`
+	// StartDate/EndDate carry format:"date" so the published contract stops advertising a
+	// bare string here. The format is necessary but NOT sufficient: "0001-01-01" satisfies
+	// it and still selects every row, which is why the handler also bounds the row count.
+	StartDate *string `json:"start_date,omitempty" format:"date" doc:"Inclusive lower bound on failed_at (YYYY-MM-DD)"`
+	EndDate   *string `json:"end_date,omitempty" format:"date" doc:"Inclusive upper bound on failed_at (YYYY-MM-DD)"`
 	Retried   *bool   `json:"retried,omitempty"`
+	// ExpectedCount confirms a deletion larger than MaxUnconfirmedDLQBulkDelete. It is a
+	// confirmation token, not a limit: the value must equal the count the server itself
+	// computed for these exact filters, so it can only be supplied after the server has
+	// disclosed that count in a 409. It cannot be used to raise the ceiling.
+	ExpectedCount *int64 `json:"expected_count,omitempty" minimum:"0" doc:"Exact number of rows the caller expects to delete; required when the match exceeds the unconfirmed ceiling"`
 }
 
 // DeadLetterBulkDeleteResponse is returned after a bulk delete operation.
