@@ -150,11 +150,19 @@ func TestExecuteDeletion_NoSubscriptionCancelled_RecordsNoResidueOnRevocation(t 
 	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything, mock.Anything)
 }
 
-// A failed residue write must not turn a legitimate outcome into a job failure — the deletion is
-// already over and retrying it would not un-cancel anything — but it must not be silent either. The
-// flow still returns nil; the failure is logged at Error (see the call site), which is the only
-// escalation available once the record itself cannot be written.
-func TestExecuteDeletion_ResidueWriteFails_StillReturnsTheLegitimateOutcome(t *testing.T) {
+// ⚠ THE JUSTIFICATION THIS TEST USED TO CARRY WAS FALSE, AND IT WAS INHERITED. It read: "a failed
+// residue write must not turn a legitimate outcome into a job failure — the deletion is already over
+// and retrying it would not un-cancel anything." That was true of the OLD post-hoc mechanism, which
+// wrote the record after the run. It is not true of this one: the record is written BEFORE the call,
+// so at the moment the write fails the irreversible effect has NOT happened yet, and refusing to
+// proceed prevents it outright rather than papering over it. Proceeding reproduced, on a narrower
+// path, exactly the defect the whole mechanism exists to close — an irreversible external effect
+// with no durable record. Found by the EE re-review (issue #1432).
+//
+// The record is therefore FAIL-CLOSED: no record, no call. The cost is that a deletion is deferred
+// while audit_logs is unwritable — which is retryable, unlike an anonymised Paddle customer, and
+// which the 30-day GDPR grace period has room for.
+func TestExecuteDeletion_ResidueWriteFails_RefusesToIssueTheIrreversibleCall(t *testing.T) {
 	ctx := context.Background()
 	h := newRevocationHarness(t, ctx)
 
@@ -172,8 +180,34 @@ func TestExecuteDeletion_ResidueWriteFails_StillReturnsTheLegitimateOutcome(t *t
 		})
 
 	err := h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested)
-	require.NoError(t, err,
-		"the deletion outcome is unchanged by whether the visibility record could be written")
+	require.Error(t, err,
+		"an irreversible external call must not be issued when its durable record could not be written")
 	h.repo.AssertCalled(t, "RecordDeletionResidue", mock.Anything, h.userID,
 		repository.DeletionResiduePaddleSubscriptionCancelled)
+	// The load-bearing assertion: Paddle was never reached, so there is nothing unrecorded.
+	h.paddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
+	h.paddle.AssertNotCalled(t, "ArchiveAndAnonymizeCustomer", mock.Anything, mock.Anything, mock.Anything)
+	assert.NotContains(t, *h.callOrder, "PaddleCancel")
+}
+
+// The MANDATORY sibling: fail-closed must not be passing merely by refusing everything. With the
+// record write healthy, the same harness still issues the cancel and still completes.
+func TestExecuteDeletion_ResidueWriteSucceeds_StillIssuesTheCall(t *testing.T) {
+	ctx := context.Background()
+	h := newRevocationHarness(t, ctx)
+
+	h.repo.ExpectedCalls = nil
+	h.repo.On("GetUserByID", ctx, h.userID).Return(h.user, nil)
+	h.repo.On("ClaimForDeletion", ctx, h.userID).Return(true, nil)
+	h.repo.On("RecordDeletionResidue", mock.Anything, h.userID, mock.Anything).Return(nil)
+
+	h.paddle.ExpectedCalls = nil
+	h.paddle.On("CancelSubscriptionImmediately", ctx, h.subID).Return(nil).
+		Run(func(mock.Arguments) {
+			*h.callOrder = append(*h.callOrder, "PaddleCancel")
+			*h.authorised = false
+		})
+
+	require.NoError(t, h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested))
+	assert.Contains(t, *h.callOrder, "PaddleCancel")
 }

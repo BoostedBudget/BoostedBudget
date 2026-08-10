@@ -277,8 +277,15 @@ func TestExecuteDeletion_CascadeResidueWriteFails_StillReturnsTheCascadeError(t 
 	h.repo.ExpectedCalls = nil
 	h.repo.On("GetUserByID", ctx, h.userID).Return(h.user, nil)
 	h.repo.On("ClaimForDeletion", ctx, h.userID).Return(true, nil)
-	h.repo.On("RecordDeletionResidue", mock.Anything, h.userID, mock.Anything).
+	// Scoped to the POST-cascade effect on purpose. The PRE-issue writes are fail-closed since
+	// the EE re-review — a failure there refuses the Paddle call and the run never reaches the
+	// cascade at all — so failing every residue write indiscriminately would make this test
+	// assert the wrong abort. What is under test here is the post-hoc write, which stays
+	// best-effort because the external work has already landed and cannot be un-issued.
+	h.repo.On("RecordDeletionResidue", mock.Anything, h.userID,
+		repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed).
 		Return(errors.New("audit insert failed"))
+	h.repo.On("RecordDeletionResidue", mock.Anything, h.userID, mock.Anything).Return(nil)
 	h.repo.On("DeleteUserCascade", ctx, h.userID, mock.Anything).Return(false, wrapPgError("42501"))
 
 	err := h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested)

@@ -4,6 +4,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -221,17 +222,51 @@ func (r *DeadLetterJobRepository) CountByFilters(ctx context.Context, filters do
 	return total, nil
 }
 
-// DeleteByFilters bulk-deletes dead letter jobs matching the given filters.
-// Returns the number of deleted rows.
-func (r *DeadLetterJobRepository) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {
+// ErrDLQBulkDeleteCountDrifted reports that the number of rows the DELETE would have removed
+// was not the number the caller confirmed, so nothing was removed. It is a distinct error
+// because the correct operator response is to re-preview and re-confirm, not to retry blindly.
+var ErrDLQBulkDeleteCountDrifted = errors.New("dead letter bulk delete: matching row count changed since it was confirmed")
+
+// DeleteByFilters bulk-deletes dead letter jobs matching the given filters, but ONLY if
+// exactly `expected` rows match when the DELETE runs. Returns the number of deleted rows.
+//
+// Issue #1432, batch EE re-review. CountByFilters and this DELETE were two independent
+// statements, so under READ COMMITTED they took two snapshots: a dead letter job committed
+// between them was deleted without ever having been counted, previewed, or confirmed — the
+// confirmation handshake in operations.BulkDeleteDLQJobs was advisory rather than binding.
+// Running the DELETE in its own transaction and aborting unless RowsAffected equals the
+// confirmed count makes the handshake mean what it says: either the caller's number was
+// still true and the delete commits, or nothing at all is removed and the caller re-previews.
+// This is why `expected` is a parameter rather than something re-derived here — the number
+// that matters is the one the OPERATOR saw and confirmed, not a fresher one.
+//
+// The WHERE clause construction is unchanged and still shared with CountByFilters, so the two
+// can never disagree about what "these filters" means; the filterless case remains the
+// repository's deliberate unconditional DELETE, refused one layer up.
+func (r *DeadLetterJobRepository) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters, expected int64) (int64, error) {
 	where, args := buildDLQWhereClause(filters)
 	query := fmt.Sprintf(`DELETE FROM dead_letter_jobs %s`, where)
 
-	result, err := r.db.Exec(ctx, query, args...)
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	// Rollback after a successful Commit is a no-op in pgx, so the deferred abort is safe on
+	// every path, including a panic.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	result, err := tx.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	deleted := result.RowsAffected()
+	if deleted != expected {
+		return 0, fmt.Errorf("%w: confirmed %d, matched %d", ErrDLQBulkDeleteCountDrifted, expected, deleted)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }
 
 // BeginRetryTx opens the transaction DeadLetterService.Retry runs its whole replay in — the claim,

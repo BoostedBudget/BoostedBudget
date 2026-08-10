@@ -13,6 +13,17 @@ import (
 // Clerk instance, holding which real users, the process talks to.
 const clerkLiveSecretKeyPrefix = "sk_live_"
 
+// clerkTestSecretKeyPrefix is Clerk's prefix for a DEVELOPMENT/STAGING instance secret key.
+// The gate requires this POSITIVELY rather than merely refusing clerkLiveSecretKeyPrefix:
+// refusing one known-bad prefix reads the ABSENCE of that prefix as affirmative evidence of
+// non-production, so an empty key, a key from another issuer, or a production prefix Clerk
+// has not shipped yet all sailed through. Every non-production configuration in this
+// repository already carries sk_test_ (.env.qa, .env.example, apps/web/.env.local,
+// apps/web/.env.e2e), and the route cannot function without a working Clerk key anyway — it
+// mints a sign-in token through Clerk — so demanding the positive fact costs nothing
+// legitimate. Issue #1432, batch EE re-review.
+const clerkTestSecretKeyPrefix = "sk_test_"
+
 // paddleProductionEnvironment is the PADDLE_ENVIRONMENT value that selects the live Paddle
 // catalogue and bills real money. backend/fly.toml sets "production"; backend/fly.staging.toml
 // sets "sandbox"; the QA compose stack leaves it at the "sandbox" default.
@@ -78,6 +89,12 @@ func (c *Config) QAAuthBypassRefusalReason() string {
 	}
 	if strings.EqualFold(strings.TrimSpace(c.PaddleEnvironment), paddleProductionEnvironment) {
 		return "refusing the QA auth-bypass route: PADDLE_ENVIRONMENT=production means this deployment bills the live catalogue despite ENVIRONMENT=" + c.Environment
+	}
+	// The POSITIVE half of the same signal. The sk_live_ refusal above still runs first so
+	// its message can name the strongest evidence; this one catches everything that is not a
+	// recognisable Clerk test key, which the sk_live_ check alone silently permitted.
+	if !strings.HasPrefix(strings.TrimSpace(c.ClerkSecretKey), clerkTestSecretKeyPrefix) {
+		return "refusing the QA auth-bypass route: CLERK_SECRET_KEY is not a recognised Clerk test key (" + clerkTestSecretKeyPrefix + "…); the route is only permitted where the sign-in token is minted in a non-production Clerk instance"
 	}
 
 	if c.QABypassSecret == "" {

@@ -366,8 +366,15 @@ var (
 		Help: "Current number of users whose manual_tier_override does not name a configured tier (config/subscription_tiers.yaml). Should always be 0 post-migration-000127; any sustained non-zero value means a writer bypassed write-time validation.",
 	})
 
-	// HouseholdOwnerDeletionBlockedTotal counts every time DeleteUserCascade
-	// (profile_repository.go) refused to hard-delete a household owner because doing so would
+	// HouseholdOwnerDeletionBlockedTotal counts every time an erasure was refused because the
+	// target is a household owner. It is incremented in TWO places, and that is not a double
+	// count: DeletionService.ExecuteDeletion's pre-cleanup precheck (deletion_service.go) fires
+	// it for the ordinary case, before any external effect is spent, and DeleteUserCascade
+	// (profile_repository.go) fires it for the race the precheck cannot see — an invite accepted
+	// between the precheck's read and the cascade's FOR UPDATE. A single occasion trips exactly
+	// one of them, because a run that the precheck refuses never reaches the cascade at all.
+	//
+	// Either way the refusal is there because hard-deleting the owner would
 	// CASCADE away another real user's data — households.owner_user_id CASCADEs the household row
 	// itself (taking every other active member's household_members row with it), and
 	// subscription_entitlements.payer_user_id CASCADEs away any entitlement this owner funds for
@@ -386,7 +393,7 @@ var (
 	// rate: it means a GDPR deletion deadline is going unmet for a real, specific household.
 	HouseholdOwnerDeletionBlockedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "household_owner_deletion_blocked_total",
-		Help: "Total DeleteUserCascade calls refused because the target is a household owner whose CASCADE would destroy another real user's household_members or subscription_entitlements data. Requires human resolution (ownership transfer, member removal, or entitlement reconciliation) — alert on any sustained non-zero rate.",
+		Help: "Total account erasures refused because the target is a household owner whose CASCADE would destroy another real user's household_members or subscription_entitlements data — counted at ExecuteDeletion's pre-cleanup precheck, or inside DeleteUserCascade for the race that precheck cannot see. Requires human resolution (ownership transfer, member removal, or entitlement reconciliation) — alert on any sustained non-zero rate.",
 	})
 
 	// OrphanedFKlessUserScopedRowsCount is Issue #1440 round-3 Finding 5's monitoring gauge: the

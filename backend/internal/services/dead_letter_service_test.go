@@ -70,8 +70,8 @@ func (m *mockDLQRepo) CountByFilters(ctx context.Context, filters domain.DeadLet
 	return args.Get(0).(int64), args.Error(1)
 }
 
-func (m *mockDLQRepo) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {
-	args := m.Called(ctx, filters)
+func (m *mockDLQRepo) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters, expected int64) (int64, error) {
+	args := m.Called(ctx, filters, expected)
 	return args.Get(0).(int64), args.Error(1)
 }
 
@@ -582,9 +582,9 @@ func TestDeadLetterService_DeleteByFilters_Success(t *testing.T) {
 	kindFilter := "plaid_sync"
 	filters := domain.DeadLetterJobFilters{Kind: &kindFilter}
 
-	repo.On("DeleteByFilters", ctx, filters).Return(int64(3), nil)
+	repo.On("DeleteByFilters", ctx, filters, int64(3)).Return(int64(3), nil)
 
-	count, err := svc.DeleteByFilters(ctx, filters)
+	count, err := svc.DeleteByFilters(ctx, filters, 3)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), count)
 	repo.AssertExpectations(t)
@@ -597,9 +597,9 @@ func TestDeadLetterService_DeleteByFilters_RepoError(t *testing.T) {
 	ctx := context.Background()
 	filters := domain.DeadLetterJobFilters{}
 
-	repo.On("DeleteByFilters", ctx, filters).Return(int64(0), errors.New("db error"))
+	repo.On("DeleteByFilters", ctx, filters, int64(0)).Return(int64(0), errors.New("db error"))
 
-	_, err := svc.DeleteByFilters(ctx, filters)
+	_, err := svc.DeleteByFilters(ctx, filters, 0)
 	require.Error(t, err)
 	repo.AssertExpectations(t)
 }

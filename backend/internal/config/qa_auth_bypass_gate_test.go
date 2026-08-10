@@ -117,6 +117,45 @@ func TestQAAuthBypassRefusalReason_RefusesOnProductionOnlySignals(t *testing.T) 
 	}
 }
 
+// TestQAAuthBypassRefusalReason_RequiresAPositiveTestClerkKey closes the residual the EE
+// re-review named: refusing sk_live_ is a NEGATIVE heuristic, so absence of that one prefix
+// was being read as affirmative evidence of non-production. Anything that is not a
+// recognisable Clerk TEST key — an empty key, a key from some other issuer, a future
+// production prefix Clerk has not shipped yet — sailed through. The gate now demands the
+// positive fact (sk_test_…), which every non-production configuration in this repository
+// already carries (.env.qa, .env.example, apps/web/.env.local, .env.e2e) and which a
+// production deployment by construction cannot.
+func TestQAAuthBypassRefusalReason_RequiresAPositiveTestClerkKey(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "empty key", key: ""},
+		{name: "whitespace-only key", key: "   "},
+		{name: "unrecognised issuer prefix", key: "sk_prod_realusers"},
+		{name: "publishable key pasted by mistake", key: "pk_test_abc123"},
+		{name: "bare secret with no Clerk prefix", key: "abc123"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := qaEnabledConfig()
+			cfg.ClerkSecretKey = tt.key
+
+			reason := cfg.QAAuthBypassRefusalReason()
+			if reason == "" {
+				t.Fatal("the QA bypass route must require a positively-recognised Clerk TEST secret key, not merely the absence of sk_live_")
+			}
+			// Bind to the specific cause: qaEnabledConfig() satisfies every other
+			// condition, so a refusal that does not name CLERK_SECRET_KEY would be this
+			// test passing for the wrong reason.
+			if !strings.Contains(reason, "CLERK_SECRET_KEY") {
+				t.Fatalf("refusal must name CLERK_SECRET_KEY; got %q", reason)
+			}
+		})
+	}
+}
+
 // TestQAAuthBypassRefusalReason_RefusesWithoutExplicitOptIn pins condition 3.
 func TestQAAuthBypassRefusalReason_RefusesWithoutExplicitOptIn(t *testing.T) {
 	cfg := qaEnabledConfig()
