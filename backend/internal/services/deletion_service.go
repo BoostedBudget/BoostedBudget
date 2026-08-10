@@ -886,12 +886,12 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 			if effects.subscriptionCancel {
 				_ = s.recordIssuedExternalEffect(ctx, userID, kind,
 					repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed,
-					"the cascade failed with a non-transient error after the subscription cancel had been issued: "+err.Error())
+					"the cascade failed with a non-transient error after the subscription cancel had been issued: "+err.Error(), false)
 			}
 			if effects.customerArchive {
 				_ = s.recordIssuedExternalEffect(ctx, userID, kind,
 					repository.DeletionResiduePaddleCustomerArchivedCascadeFailed,
-					"the cascade failed with a non-transient error after the customer archive had been issued: "+err.Error())
+					"the cascade failed with a non-transient error after the customer archive had been issued: "+err.Error(), false)
 			}
 		}
 		reportSurvivingResidue("the cascade failed after external work had already been issued: " + err.Error())
@@ -1200,7 +1200,7 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 				// the record commits, because a refusal here means the call is never made and
 				// there is nothing issued to report.
 				if recErr := s.recordIssuedExternalEffect(ctx, userID, kind, repository.DeletionResiduePaddleSubscriptionCancelled,
-					"about to cancel Paddle subscription "+*user.PaddleSubscriptionID); recErr != nil {
+					"about to cancel Paddle subscription "+*user.PaddleSubscriptionID, true); recErr != nil {
 					return recErr
 				}
 				issued.subscriptionCancel = true
@@ -1234,7 +1234,7 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 		// Fail-closed on the one act the comment above calls unrecoverable: if the record
 		// cannot be written, the archive is not attempted at all.
 		if recErr := s.recordIssuedExternalEffect(ctx, userID, kind, repository.DeletionResiduePaddleCustomerArchived,
-			"about to archive and anonymise Paddle customer "+*user.PaddleCustomerID); recErr != nil {
+			"about to archive and anonymise Paddle customer "+*user.PaddleCustomerID, true); recErr != nil {
 			return issued, recErr
 		}
 		issued.customerArchive = true
@@ -1288,7 +1288,14 @@ const deletionResidueWriteTimeout = 5 * time.Second
 // a database problem. That asymmetry existed only because this write was added later, next to the
 // Release calls, without inheriting the reasoning printed above them.
 //
-// ⚠ IT IS FAIL-CLOSED, AND IT USED NOT TO BE (EE re-review). A failure is logged at Error AND
+// ⚠ `preventable` NAMES WHICH SITUATION THE CALLER IS IN, and it decides both the failure message
+// and what the caller does with the returned error. true at the two PRE-ISSUE sites, where the
+// external call has not happened yet and can still be refused; false at the two POST-CASCADE sites,
+// where it has already landed and the record is only an operator work item. Passing it explicitly
+// rather than inferring it keeps the asymmetry visible at every call site — the one-message version
+// told operators an effect had been "refused" when it had in fact already landed.
+//
+// ⚠ IT IS FAIL-CLOSED WHERE IT CAN BE, AND IT USED NOT TO BE (EE re-review). A failure is logged at Error AND
 // returned, and both call sites abort WITHOUT issuing their external call. The earlier best-effort
 // shape carried an argument inherited from the old post-hoc mechanism — "the write cannot change the
 // outcome of the deletion around it" — which stopped being true the moment the record moved BEFORE
@@ -1300,15 +1307,24 @@ const deletionResidueWriteTimeout = 5 * time.Second
 //
 // ⚠ IT IS NOT REMEDIATION. Nothing here re-subscribes anyone or restores a Paddle customer; see
 // ProfileRepository.RecordDeletionResidue's doc comment for why that is deliberate.
-func (s *deletionService) recordIssuedExternalEffect(ctx context.Context, userID string, kind repository.DeletionClaimKind, effect repository.DeletionResidueEffect, reason string) error {
+func (s *deletionService) recordIssuedExternalEffect(ctx context.Context, userID string, kind repository.DeletionClaimKind, effect repository.DeletionResidueEffect, reason string, preventable bool) error {
 	slog.Default().Info("recording an irreversible external effect before issuing it — this record is removed again by a deletion that completes",
 		"user_id", userID, "claim_kind", string(kind), "residue_effect", string(effect), "reason", reason)
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deletionResidueWriteTimeout)
 	defer cancel()
 	if recErr := s.profileRepo.RecordDeletionResidue(rctx, userID, effect); recErr != nil {
-		slog.Default().Error("refusing to issue an irreversible external effect: its durable record could not be written — the user KEEPS their account and this run will be retried",
-			"user_id", userID, "residue_effect", string(effect), "error", recErr)
-		return fmt.Errorf("record irreversible external effect %s before issuing it: %w", string(effect), recErr)
+		// ⚠ THE MESSAGE HAS TO MATCH THE CALLER'S SITUATION, and it did not: the same line said
+		// "refusing to issue" at the post-cascade sites, where the Paddle call had ALREADY
+		// landed and nothing was being refused. An operator reading that during an incident
+		// would conclude the opposite of the truth. Found by the EE re-review.
+		if preventable {
+			slog.Default().Error("refusing to issue an irreversible external effect: its durable record could not be written — the user KEEPS their account and this run will be retried",
+				"user_id", userID, "residue_effect", string(effect), "error", recErr)
+		} else {
+			slog.Default().Error("an irreversible external effect HAS ALREADY LANDED and its stuck-state record could not be written — the effect itself is unaffected and the run's own error is the authority; this record was the operator's work item",
+				"user_id", userID, "residue_effect", string(effect), "error", recErr)
+		}
+		return fmt.Errorf("record irreversible external effect %s: %w", string(effect), recErr)
 	}
 	return nil
 }

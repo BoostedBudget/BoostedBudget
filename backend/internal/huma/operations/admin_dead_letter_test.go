@@ -620,6 +620,45 @@ func TestAdminDLQ_BulkDelete_CorrectExpectedCountBelowCeiling_Proceeds(t *testin
 	mockSvc.AssertExpectations(t)
 }
 
+// TestAdminDLQ_BulkDelete_WrongExpectedCountWithZeroMatches_Returns409 closes the second
+// re-review Low: the zero-match success return sat BEFORE the confirmation check, so
+// expected_count=1 against zero matching rows answered 200/deleted=0 — a caller who believed
+// a row existed was told the delete succeeded. Nothing was destroyed, but the field's whole
+// purpose is to make the server and the caller agree about what they are looking at, and here
+// they disagreed silently.
+func TestAdminDLQ_BulkDelete_WrongExpectedCountWithZeroMatches_Returns409(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	kind := "plaid_sync"
+	wrong := int64(1)
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(0), nil)
+
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Kind: &kind, ExpectedCount: &wrong}}
+	_, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusConflict)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The sibling: zero matches with NO confirmation supplied is still an ordinary success, so the
+// check above cannot be passing by turning every empty result into an error.
+func TestAdminDLQ_BulkDelete_ZeroMatchesWithoutConfirmation_Succeeds(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	kind := "plaid_sync"
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(0), nil)
+
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Kind: &kind}}
+	out, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), out.Body.Deleted)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
+}
+
 // TestAdminDLQ_BulkDelete_PassesServerComputedCountToTheDelete pins the other half of the
 // EE re-review's finding: COUNT and DELETE ran as two independent statements against two
 // PostgreSQL snapshots, so a row committed in between was deleted without ever having been
