@@ -134,17 +134,37 @@ assert_spotlight_exclusions() {
     echo "$created"
 }
 
-# mediaanalysisd relaunches on demand; killing it buys back the CPU and the page-cache churn
-# until macOS decides to try again. Durable suppression needs sudo and is recorded in
-# README.md rather than attempted here — a guard that needs a password cannot run from cron.
+# ⚠ THIS CANNOT STOP mediaanalysisd, AND SAYS SO RATHER THAN CLAIMING IT DID.
+#
+# Measured 2026-08-10 on this host, in this order:
+#   * `launchctl bootout gui/501/com.apple.mediaanalysisd`
+#         -> "Boot-out failed: 150: Operation not permitted while System Integrity
+#            Protection is engaged". SIP protects it; sudo does not help.
+#   * `killall mediaanalysisd` / `kill -TERM <pid>`
+#         -> returns success, and the process keeps the SAME PID. It ignores SIGTERM.
+#
+# An earlier version of this function counted processes, signalled them, and logged
+# "remediated: stopped N process(es)" — which was FALSE, and was exactly the defect class
+# this whole guard exists to detect: a mechanism reporting success for work it did not do.
+#
+# So it now VERIFIES by PID and reports the truth. It still attempts the signal, because on
+# a host where SIP is disabled or a future macOS relents, the attempt is free.
+#
+# Echoes "<attempted>:<actually_stopped>".
 stop_media_analysis() {
-    local n
-    n="$(pgrep -f 'MediaAnalysis.framework.*mediaanalysisd' 2>/dev/null | wc -l | tr -d ' ')"
-    if [ "${n:-0}" -gt 0 ]; then
-        killall mediaanalysisd 2>/dev/null || true
-        killall mediaanalysisd-access 2>/dev/null || true
-    fi
-    echo "${n:-0}"
+    local before after stopped=0
+    before="$(pgrep -f 'MediaAnalysis.framework' 2>/dev/null | head -1)"
+    [ -z "$before" ] && { echo "0:0"; return; }
+
+    killall mediaanalysisd 2>/dev/null || true
+    killall mediaanalysisd-access 2>/dev/null || true
+    sleep 2
+
+    after="$(pgrep -f 'MediaAnalysis.framework' 2>/dev/null | head -1)"
+    # A different PID (or none) means it really died. The SAME pid means the signal was
+    # ignored — do not report that as remediation.
+    if [ -z "$after" ] || [ "$after" != "$before" ]; then stopped=1; fi
+    echo "1:${stopped}"
 }
 
 # --- main --------------------------------------------------------------------------------
@@ -191,11 +211,21 @@ main() {
     log "  load:    $(sysctl -n vm.loadavg 2>/dev/null) on $(sysctl -n hw.ncpu 2>/dev/null) cores"
     log "  jobs:    $(pgrep -f 'Runner.Worker' 2>/dev/null | wc -l | tr -d ' ') runner workers, $(docker ps -q 2>/dev/null | wc -l | tr -d ' ') containers"
 
-    local killed markers
-    killed="$(stop_media_analysis)"
+    local ma attempted stopped markers
+    ma="$(stop_media_analysis)"; attempted="${ma%%:*}"; stopped="${ma##*:}"
     markers="$(assert_spotlight_exclusions)"
-    [ "${killed:-0}" -gt 0 ] && log "  remediated: stopped ${killed} mediaanalysisd process(es)"
-    [ "${markers:-0}" -gt 0 ] && log "  remediated: re-created ${markers} Spotlight exclusion marker(s)"
+
+    if [ "${attempted:-0}" -gt 0 ] && [ "${stopped:-0}" -eq 1 ]; then
+        log "  remediated: mediaanalysisd stopped (it WILL relaunch on demand)"
+    elif [ "${attempted:-0}" -gt 0 ]; then
+        log "  ⚠ NOT remediated: mediaanalysisd ignored the signal (same PID). SIP blocks"
+        log "    bootout, and sudo does not help. It cannot be stopped from a cron job — the"
+        log "    only levers are removing/relocating the Photos library it is analysing, or"
+        log "    letting the analysis finish. Do not read this alert as self-healing."
+    fi
+    [ "${markers:-0}" -gt 0 ] && log "  re-created ${markers} Spotlight exclusion marker(s) (affects NEW content only;"
+    [ "${markers:-0}" -gt 0 ] && log "    mds_stores continues working its existing backlog — measured at 57-83% CPU"
+    [ "${markers:-0}" -gt 0 ] && log "    DURING a CI run, against Runner.Worker at 17%)"
 
     if [ "$critical" -eq 1 ]; then
         # The honest instruction, corrected twice during the investigation that wrote it.
