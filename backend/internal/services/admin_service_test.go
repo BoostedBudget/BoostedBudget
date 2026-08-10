@@ -359,3 +359,144 @@ func TestNewAdminService_ReturnsNonNilService(t *testing.T) {
 	assert.True(t, svc.IsHardcodedAdmin("admin@example.com"), "hardcoded admin must be recognized")
 	assert.False(t, svc.IsHardcodedAdmin("other@example.com"), "non-admin must not be recognized")
 }
+
+// Issue #1432 (batch ED, finding B2-3): revoking a Clerk admin role used to leave the revoked
+// person in authority for up to the FULL cache TTL — five minutes — because GetRoles served a
+// positive (role-granting) result straight out of the cache without contacting Clerk.
+//
+// Two reviewers disagreed on the severity: a Claude reviewer graded it Low ("self-correcting",
+// the window closes on its own); Codex graded it High. Codex's reasoning governs and is
+// recorded here so the next reader does not re-derive it: the window matters PRECISELY because
+// you revoke when you have stopped trusting the person, and irreversible admin operations are
+// reachable inside it — the dead-letter bulk delete (no undo outside a Postgres PITR) and
+// subscription tier overrides among them.
+//
+// The fix caps how long a POSITIVE result is served from cache (positiveRoleCacheTTLCap),
+// leaving the negative/empty case on the full TTL. Choosing to shorten rather than to wire
+// InvalidateCache is not a shortcut: there is no event to wire it TO. Roles live in Clerk
+// privateMetadata, this app has no Clerk webhook endpoint (the only webhook routes are
+// /webhooks/paddle and /webhooks/plaid), and nothing in the codebase writes privateMetadata —
+// clerk_service.go's UpdateUserMetadata writes PUBLIC metadata (subscription tier). A role is
+// granted or revoked in the Clerk dashboard, out of band, so InvalidateCache has no caller it
+// could acquire without first building a Clerk webhook receiver, which is a separate feature.
+
+// fakeClockAdminService builds an adminService whose clock the test controls, so the
+// five-minute and thirty-second windows can be crossed without sleeping.
+func fakeClockAdminService(t *testing.T, getter ClerkUserGetter, ttl time.Duration) (*adminService, func(time.Duration)) {
+	t.Helper()
+
+	svc := newAdminServiceInternal([]string{}, getter, ttl)
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	return svc, func(d time.Duration) { now = now.Add(d) }
+}
+
+// TestAdminService_HasRole_PositiveResultExpiresWellBeforeTheFullTTL is the RED for B2-3.
+func TestAdminService_HasRole_PositiveResultExpiresWellBeforeTheFullTTL(t *testing.T) {
+	mockClerk := new(MockClerkUserGetter)
+	svc, advance := fakeClockAdminService(t, mockClerk, defaultRoleCacheTTL)
+
+	clerkUserID := "user_still_admin"
+	mockClerk.On("GetUser", mock.Anything, clerkUserID).Return(
+		createMockClerkUser(clerkUserID, "admin@example.com", []string{"admin"}), nil)
+
+	ctx := context.Background()
+	hasRole, err := svc.HasRole(ctx, clerkUserID, domain.RoleAdmin)
+	require.NoError(t, err)
+	require.True(t, hasRole)
+	mockClerk.AssertNumberOfCalls(t, "GetUser", 1)
+
+	// Control: inside the cap the cache is still doing its job — this is what makes the
+	// assertion below evidence of a SHORTER window rather than of caching being broken.
+	advance(positiveRoleCacheTTLCap / 2)
+	_, err = svc.HasRole(ctx, clerkUserID, domain.RoleAdmin)
+	require.NoError(t, err)
+	mockClerk.AssertNumberOfCalls(t, "GetUser", 1)
+
+	// Past the cap but FAR short of the full five-minute TTL: Clerk must be consulted again,
+	// so a role revoked in the Clerk dashboard takes effect here.
+	advance(positiveRoleCacheTTLCap)
+	hasRole, err = svc.HasRole(ctx, clerkUserID, domain.RoleAdmin)
+	require.NoError(t, err)
+	assert.True(t, hasRole, "a legitimately-current admin must still pass after the cache re-checks")
+	mockClerk.AssertNumberOfCalls(t, "GetUser", 2)
+
+	require.Less(t, positiveRoleCacheTTLCap, defaultRoleCacheTTL,
+		"the positive-result cap must be strictly shorter than the general TTL, or it caps nothing")
+}
+
+// TestAdminService_HasRole_RevokedRoleStopsWorkingAfterTheCap binds the fix to the harm it is
+// about: the Clerk answer CHANGES, and authority must follow it.
+func TestAdminService_HasRole_RevokedRoleStopsWorkingAfterTheCap(t *testing.T) {
+	mockClerk := new(MockClerkUserGetter)
+	svc, advance := fakeClockAdminService(t, mockClerk, defaultRoleCacheTTL)
+
+	clerkUserID := "user_revoked"
+	mockClerk.On("GetUser", mock.Anything, clerkUserID).Return(
+		createMockClerkUser(clerkUserID, "ex-admin@example.com", []string{"admin"}), nil).Once()
+	mockClerk.On("GetUser", mock.Anything, clerkUserID).Return(
+		createMockClerkUser(clerkUserID, "ex-admin@example.com", []string{}), nil)
+
+	ctx := context.Background()
+	hasRole, err := svc.HasRole(ctx, clerkUserID, domain.RoleAdmin)
+	require.NoError(t, err)
+	require.True(t, hasRole)
+
+	advance(positiveRoleCacheTTLCap + time.Second)
+
+	hasRole, err = svc.HasRole(ctx, clerkUserID, domain.RoleAdmin)
+	require.NoError(t, err)
+	assert.False(t, hasRole, "a role revoked in Clerk must stop granting admin authority once the positive cache cap elapses")
+}
+
+// TestAdminService_HasRole_NegativeResultKeepsTheFullTTL is the sibling that stops the fix from
+// degenerating into "disable the cache". The overwhelmingly common case — an ordinary user with
+// no roles — is what the cache exists to absorb, and caching it longer costs nothing:
+// a newly-GRANTED role arriving late is an availability inconvenience, not an authority leak.
+func TestAdminService_HasRole_NegativeResultKeepsTheFullTTL(t *testing.T) {
+	mockClerk := new(MockClerkUserGetter)
+	svc, advance := fakeClockAdminService(t, mockClerk, defaultRoleCacheTTL)
+
+	clerkUserID := "user_ordinary"
+	mockClerk.On("GetUser", mock.Anything, clerkUserID).Return(
+		createMockClerkUser(clerkUserID, "user@example.com", []string{}), nil)
+
+	ctx := context.Background()
+	hasRole, err := svc.HasRole(ctx, clerkUserID, domain.RoleAdmin)
+	require.NoError(t, err)
+	require.False(t, hasRole)
+	mockClerk.AssertNumberOfCalls(t, "GetUser", 1)
+
+	// Well past the positive cap, still inside the general TTL: no second Clerk call.
+	advance(positiveRoleCacheTTLCap * 4)
+	_, err = svc.HasRole(ctx, clerkUserID, domain.RoleAdmin)
+	require.NoError(t, err)
+	mockClerk.AssertNumberOfCalls(t, "GetUser", 1)
+
+	// Past the general TTL: refreshed as before.
+	advance(defaultRoleCacheTTL)
+	_, err = svc.HasRole(ctx, clerkUserID, domain.RoleAdmin)
+	require.NoError(t, err)
+	mockClerk.AssertNumberOfCalls(t, "GetUser", 2)
+}
+
+// TestAdminService_ShortConfiguredTTLIsNotLengthenedByTheCap: the cap is a CAP, never a floor.
+// A caller that asks for a 10ms TTL (the existing expiry test does) must not have positive
+// results held for thirty seconds instead.
+func TestAdminService_ShortConfiguredTTLIsNotLengthenedByTheCap(t *testing.T) {
+	mockClerk := new(MockClerkUserGetter)
+	svc, advance := fakeClockAdminService(t, mockClerk, 10*time.Millisecond)
+
+	clerkUserID := "user_short_ttl"
+	mockClerk.On("GetUser", mock.Anything, clerkUserID).Return(
+		createMockClerkUser(clerkUserID, "admin@example.com", []string{"admin"}), nil)
+
+	ctx := context.Background()
+	_, err := svc.HasRole(ctx, clerkUserID, domain.RoleAdmin)
+	require.NoError(t, err)
+
+	advance(20 * time.Millisecond)
+	_, err = svc.HasRole(ctx, clerkUserID, domain.RoleAdmin)
+	require.NoError(t, err)
+	mockClerk.AssertNumberOfCalls(t, "GetUser", 2)
+}
