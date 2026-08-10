@@ -167,6 +167,18 @@ func TestExecuteDeletion_Integration_ResidueTransientCascadeError_IsRecorded(t *
 
 // The other half of round 14's classifier, still doing its job: a NON-transient cascade error adds
 // the second, different work item — "and this is stuck, fix the database fault too".
+//
+// ⚠ ROUND 15, TIER E ITEM 8 — THE EXPECTED LIST GREW BY ONE, AND THE OLD LIST WAS THE DEFECT. This
+// fixture cancels AND archives, so BOTH irreversible effects are stuck on this fault; the stuck row
+// used to be gated on the subscription cancel alone, so the archive — the act the service calls the
+// one action nothing can undo — got a landing record and no stuck row. An operator filtering for
+// stuck deletions would have found the subscription to restore and nothing telling them the Paddle
+// customer is also unrecoverable and also waiting on the same database fix.
+//
+// The archive-ONLY shape (an ex-subscriber on the retention path, where this asymmetry is total
+// rather than partial) is pinned by
+// TestExecuteDeletion_CascadeFailsWithNoSubscriptionCancelled_RecordsTheArchiveResidue, and the
+// boundary — a recognised-transient failure records no stuck row at all — by its sibling above.
 func TestExecuteDeletion_Integration_ResiduePersistentCascadeError_AlsoRecordsTheStuckKind(t *testing.T) {
 	r := newResidueFixture(t, "residue-persistent", "active", func() (bool, error) { return false, wrapPgError("42501") })
 
@@ -174,9 +186,11 @@ func TestExecuteDeletion_Integration_ResiduePersistentCascadeError_AlsoRecordsTh
 
 	assert.Equal(t, []string{
 		"user.deletion_residue.paddle_customer_archived",
+		"user.deletion_residue.paddle_customer_archived_cascade_failed",
 		"user.deletion_residue.paddle_subscription_cancelled",
 		"user.deletion_residue.paddle_subscription_cancelled_cascade_failed",
-	}, r.residueActions(t))
+	}, r.residueActions(t),
+		"both irreversible effects went out and both are stuck on the same non-transient fault — each must name itself, or the operator fixes one and never learns of the other")
 }
 
 // ⚠ SIBLING, MANDATORY, AND THE ONE THAT MAKES WRITE-AHEAD RECORDING DEFENSIBLE AT ALL. An ordinary
