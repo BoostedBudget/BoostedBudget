@@ -1308,7 +1308,14 @@ const deletionResidueWriteTimeout = 5 * time.Second
 // ⚠ IT IS NOT REMEDIATION. Nothing here re-subscribes anyone or restores a Paddle customer; see
 // ProfileRepository.RecordDeletionResidue's doc comment for why that is deliberate.
 func (s *deletionService) recordIssuedExternalEffect(ctx context.Context, userID string, kind repository.DeletionClaimKind, effect repository.DeletionResidueEffect, reason string, preventable bool) error {
-	slog.Default().Info("recording an irreversible external effect before issuing it — this record is removed again by a deletion that completes",
+	// Branched on `preventable` for the same reason the failure message below is: the single
+	// wording said "before issuing it" at the post-cascade sites too, where it contradicted the
+	// structured `reason` printed on the very same line.
+	msg := "recording an irreversible external effect that HAS ALREADY LANDED — this record is the operator's work item and is removed again by a deletion that completes"
+	if preventable {
+		msg = "recording an irreversible external effect before issuing it — this record is removed again by a deletion that completes"
+	}
+	slog.Default().Info(msg,
 		"user_id", userID, "claim_kind", string(kind), "residue_effect", string(effect), "reason", reason)
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deletionResidueWriteTimeout)
 	defer cancel()
