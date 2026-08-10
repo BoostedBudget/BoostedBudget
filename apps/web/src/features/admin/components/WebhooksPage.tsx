@@ -326,7 +326,13 @@ export function WebhooksPage() {
                 className="inline-flex items-center px-2.5 py-1.5 border border-border rounded-md bg-background text-foreground text-[0.8125rem] font-medium cursor-pointer font-[inherit] transition-colors hover:bg-primary hover:border-primary hover:text-primary-foreground disabled:opacity-45 disabled:cursor-not-allowed"
                 onClick={() => replayMutation.mutate({ id: event.id ?? '' })}
                 disabled={replayMutation.isPending}
-                aria-label={`Replay webhook ${event.event_id}`}
+                // Structural label, NOT a mask: data-ph-mask covers text nodes only —
+                // PostHog session replay records DOM attributes verbatim
+                // (docs/security/posthog-pii-masking.md), so no mask can cover an aria-label.
+                // The Paddle event id is a per-customer identifier, so it is replaced with a
+                // stable descriptor plus the non-PII operational event type. Same remedy as
+                // ReviewInboxPage's "Select transaction" (R9.4).
+                aria-label={`Replay ${event.event_type} webhook`}
               >
                 Replay
               </button>

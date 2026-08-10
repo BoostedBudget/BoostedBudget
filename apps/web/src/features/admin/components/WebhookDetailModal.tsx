@@ -56,7 +56,11 @@ export function WebhookDetailModal({ webhookId, onClose }: WebhookDetailModalPro
             <div className="flex flex-col gap-3.5 my-4">
               <div className="flex items-start gap-2">
                 <span className="text-[0.8125rem] font-semibold text-muted-foreground min-w-[110px] shrink-0">Event ID:</span>
-                <span className="text-sm text-foreground break-all">{event.event_id}</span>
+                {/* Masked at the ELEMENT, not the row: the label stays legible so an operator
+                    can still see which field is hidden. WebhooksPage masks the same field in
+                    its table (maskedColumnIds={['event_id', 'error']}) — the modal one click
+                    deeper must not be the weaker surface. */}
+                <span className="text-sm text-foreground break-all" data-ph-mask>{event.event_id}</span>
               </div>
               <div className="flex items-start gap-2">
                 <span className="text-[0.8125rem] font-semibold text-muted-foreground min-w-[110px] shrink-0">Status:</span>
@@ -71,7 +75,10 @@ export function WebhookDetailModal({ webhookId, onClose }: WebhookDetailModalPro
               {event.processing_error && (
                 <div className="flex items-start gap-2">
                   <span className="text-[0.8125rem] font-semibold text-muted-foreground min-w-[110px] shrink-0">Error:</span>
-                  <span className="text-sm text-destructive break-all">{event.processing_error}</span>
+                  {/* A handler error message is free text that routinely quotes the payload it
+                      failed on — customer email, amounts, Paddle ids. Untruncated here, unlike
+                      the table. Masked at the element so the "Error:" label stays readable. */}
+                  <span className="text-sm text-destructive break-all" data-ph-mask>{event.processing_error}</span>
                 </div>
               )}
               <div className="flex items-start gap-2">
