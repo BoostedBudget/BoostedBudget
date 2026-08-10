@@ -544,7 +544,7 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 //     contends for the users row at all, so no lock strength taken here can make it wait for an
 //     event (its own INSERT) that has not been issued to Postgres yet. Concretely: a user with a
 //     LIVE comp is not read-only and CAN link (the read-only allow-list contains only
-//     /api/v1/plaid/webhook, so this is the only reachable window); if LinkAccounts starts before
+//     /webhooks/plaid, so this is the only reachable window); if LinkAccounts starts before
 //     an admin removes that comp, the removal's EXISTS can see "no live item" (the INSERT hasn't
 //     landed yet), commit with the marker left NULL, and only THEN does LinkAccounts' insert land —
 //     a cancelled user with a live bank connection and a NULL marker, invisible to

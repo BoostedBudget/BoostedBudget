@@ -20,7 +20,15 @@
 E2E_POSTGRES_USER="${E2E_POSTGRES_USER:-test}"
 E2E_POSTGRES_PASSWORD="${E2E_POSTGRES_PASSWORD:-test}"
 E2E_POSTGRES_DB="${E2E_POSTGRES_DB:-test}"
-E2E_POSTGRES_IMAGE="${E2E_POSTGRES_IMAGE:-postgres:15}"
+# postgres:17 to match CI's own containers, docker-compose, and squawk's --pg-version=17.
+#
+# This defaulted to postgres:15 while everything else moved to 17, and because this harness runs the
+# WHOLE E2E suite — applying all 129 migrations via run_migrations() below — the suite's results were
+# being produced against a different major version than the application is developed and linted
+# against. It was the last and least visible place that drift survived: a sibling commit bumped
+# docker-compose from 15 to 17 and claimed to close the local-vs-CI gap, but never touched this file,
+# so the gap simply moved here. Found by a round-3 audit.
+E2E_POSTGRES_IMAGE="${E2E_POSTGRES_IMAGE:-postgres:17}"
 
 # Container name (set by start_postgres)
 E2E_POSTGRES_CONTAINER=""

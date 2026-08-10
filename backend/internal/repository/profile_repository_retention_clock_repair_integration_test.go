@@ -5,7 +5,7 @@ package repository
 // Integration tests for GetUsersNeedingRetentionClockRepair / RepairRetentionClock (Issue #1413
 // round-3 finding H5 residual, belt-and-braces repair path).
 //
-// CancelIfPastDueWithRetention closes the specific race on the past-due grace-cancel path going
+// CancelIfPastDueOccurrenceWithRetention closes the specific race on the past-due grace-cancel path going
 // forward, but this repair path also catches: (a) any row already stuck read-only-status with a
 // NULL retention_expires_at from before that fix existed, and (b) any other, currently-unknown
 // path that might leave a user in this state. pgxmock cannot validate the WHERE predicates or
@@ -124,7 +124,8 @@ func TestRetentionClockRepair_Integration_ExcludesUserWithExistingClock(t *testi
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) })
 
-	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, 6))
+	// RetentionClockUnguarded: fixture setup for the repair pass, not a subscription transition.
+	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, RetentionClockUnguarded, 6))
 	// Read the persisted value back rather than trusting a Go-computed expectation — SetRetentionDates
 	// now computes retention_expires_at entirely in Postgres (clock_timestamp() + make_interval), so
 	// asserting against a Go time.Now().AddDate(0, 6, 0) value would only coincidentally agree (and

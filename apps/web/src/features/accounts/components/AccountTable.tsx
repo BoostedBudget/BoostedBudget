@@ -120,6 +120,8 @@ export function AccountTable({
       defaultSize: 220,
       minSize: 160,
       render: (row) => {
+        // linked_item_status === 'disconnected' can mean the subscription lapsed (#679/#680) OR that
+        // orphan cleanup removed the Plaid item successfully; status alone can't tell which.
         const isDisconnected = row.linked_item_status === 'disconnected'
         const displayName = row.nickname || row.name
         return (
@@ -136,7 +138,7 @@ export function AccountTable({
                 variant="warning"
                 size="sm"
                 className="ml-2"
-                title="Account disconnected - resubscribe to reconnect"
+                title="This connection is no longer active"
               >
                 <Unplug className="h-2.5 w-2.5" aria-hidden="true" />
                 Disconnected

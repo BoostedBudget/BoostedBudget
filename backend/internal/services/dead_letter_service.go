@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -17,18 +18,53 @@ import (
 var (
 	ErrDeadLetterJobNotFound      = errors.New("dead letter job not found")
 	ErrDeadLetterJobAlreadyRetried = errors.New("dead letter job has already been retried")
+
+	// ErrDeadLetterRetryKindUnknown means no uniqueness policy is registered for the row's kind,
+	// so the replay was refused rather than enqueued without one. See UniqueOptsResolver.
+	ErrDeadLetterRetryKindUnknown = errors.New("dead letter job kind has no registered uniqueness policy")
+
+	// ErrDeadLetterRetryDeduplicated means the replay was deduplicated away by the kind's own
+	// uniqueness options — River enqueued NOTHING (JobResult.UniqueSkipped). Either a live job for
+	// these args already exists, or the kind's ByPeriod window has not elapsed. Since #1508 the
+	// claim is taken inside the replay's transaction, so returning this error rolls it back and the
+	// row is replayable again once that stops being true — no compensating write is involved, and
+	// therefore none can fail.
+	ErrDeadLetterRetryDeduplicated = errors.New("dead letter retry was deduplicated against an existing job")
 )
+
+// UniqueOptsResolver reports the uniqueness options a REPLAY of the given River job kind must
+// carry, plus whether kind is a job kind the resolver knows at all. A known kind may legitimately
+// have no uniqueness (nil opts, known true) — five kinds are enqueued by their real producers with no
+// options at all, and a replay must not invent a dedup key those producers never used.
+//
+// Why this is injected rather than looked up here (#1490/#1491): internal/services cannot import
+// internal/queue/jobs — jobs imports services, so the *UniqueOpts() functions that define each
+// kind's dedup contract are unreachable from this file. That same cycle is why six args types are
+// mirrored into this package. cmd/server/main.go already imports jobs and is where the resolver is
+// wired from (jobs.UniqueOptsForKind), which keeps the kind→options mapping in the package that owns
+// the options.
+//
+// That placement does NOT make the mapping drift-proof. The producers live in three packages and pass
+// their options in four different shapes, so no test binds the mapping to them; it rests on the manual
+// producer audit recorded in internal/queue/jobs/unique_opts_by_kind.go — which found three kinds
+// whose *UniqueOpts() helper no producer actually calls.
+type UniqueOptsResolver func(kind string) (opts *queue.UniqueOpts, known bool)
 
 // deadLetterRepo defines the repository methods the service depends on.
 // This interface allows unit testing with a mock.
 type deadLetterRepo interface {
 	GetByID(ctx context.Context, id int64) (*domain.DeadLetterJob, error)
 	ListAll(ctx context.Context, filters domain.DeadLetterJobFilters, limit, offset int) ([]*domain.DeadLetterJob, int, error)
-	AtomicMarkRetried(ctx context.Context, id, retryJobID int64) (bool, error)
-	MarkRetried(ctx context.Context, id int64, retryJobID int64) error
+	// BeginRetryTx, AtomicMarkRetriedInTx and MarkRetriedInTx are the three halves of one atomic
+	// replay — see Retry, and BeginRetryTx's own comment for why #1508 needed them to share a
+	// transaction with the River insert.
+	BeginRetryTx(ctx context.Context) (pgx.Tx, error)
+	AtomicMarkRetriedInTx(ctx context.Context, tx pgx.Tx, id, retryJobID int64) (bool, error)
+	MarkRetriedInTx(ctx context.Context, tx pgx.Tx, id int64, retryJobID int64) error
 	AddNotes(ctx context.Context, id int64, notes string) error
 	DeleteByID(ctx context.Context, id int64) error
-	DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
+	CountByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
+	DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters, expected int64) (int64, error)
 	GetStats(ctx context.Context) (*repository.DeadLetterStats, error)
 	GetStatsByKind(ctx context.Context) (map[string]int64, error)
 	DeleteOlderThan(ctx context.Context, before time.Time, skipWithNotes bool) (int64, error)
@@ -42,24 +78,37 @@ type DeadLetterService interface {
 	Retry(ctx context.Context, id int64) (*domain.DeadLetterRetryResponse, error)
 	AddNotes(ctx context.Context, id int64, notes string) error
 	Delete(ctx context.Context, id int64) error
-	DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
+	// CountByFilters previews how many rows DeleteByFilters would remove for the same
+	// filters — the read half of the bulk-delete confirmation handshake.
+	CountByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
+	// DeleteByFilters removes the matching rows only if EXACTLY `expected` of them are
+	// still there when the DELETE runs — see the repository implementation for why the
+	// count cannot be re-derived here.
+	DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters, expected int64) (int64, error)
 	GetStats(ctx context.Context) (*domain.DeadLetterStatsResponse, error)
 	Cleanup(ctx context.Context, retentionDays int) (int64, error)
 }
 
 type deadLetterService struct {
-	repo     deadLetterRepo
-	jobQueue queue.JobQueue
-	logger   *slog.Logger
+	repo          deadLetterRepo
+	jobQueue      queue.JobQueue
+	uniqueOptsFor UniqueOptsResolver
+	logger        *slog.Logger
 }
 
 // NewDeadLetterService creates a new DeadLetterService.
 // jobQueue may be nil; retry operations will return an error if nil.
-func NewDeadLetterService(repo deadLetterRepo, jobQueue queue.JobQueue) DeadLetterService {
+//
+// uniqueOptsFor may be nil, and then EVERY Retry fails with ErrDeadLetterRetryKindUnknown. That is
+// deliberate: the alternative default — replaying with no uniqueness options — is exactly the
+// silent, every-kind bug #1492 fixed, and a wiring mistake must not restore it invisibly. Callers
+// that never retry (most unit tests) can pass nil.
+func NewDeadLetterService(repo deadLetterRepo, jobQueue queue.JobQueue, uniqueOptsFor UniqueOptsResolver) DeadLetterService {
 	return &deadLetterService{
-		repo:     repo,
-		jobQueue: jobQueue,
-		logger:   slog.Default(),
+		repo:          repo,
+		jobQueue:      jobQueue,
+		uniqueOptsFor: uniqueOptsFor,
+		logger:        slog.Default(),
 	}
 }
 
@@ -123,14 +172,54 @@ func (s *deadLetterService) GetRawArgs(ctx context.Context, id int64) (json.RawM
 	return job.Args, nil
 }
 
-// Retry re-enqueues a dead letter job with the original kind, args, queue, and max attempts.
+// Retry re-enqueues a dead letter job with the original kind, args, queue, max attempts, and the
+// uniqueness options its kind's real producers use.
 // Returns ErrDeadLetterJobAlreadyRetried if the job has already been retried.
 //
-// Flow (claim-first to prevent double-enqueue):
+// Flow (claim-first to prevent double-enqueue, all of steps 3-6 in ONE transaction):
 //  1. Fetch job and check RetriedAt (fast pre-check for better error messages)
-//  2. AtomicMarkRetried (CAS with placeholder 0) — claims the retry slot before enqueueing
-//  3. Enqueue new River job using RawJobArgs (preserves original queue/maxAttempts)
-//  4. MarkRetried to update the tracked job ID (best-effort)
+//  2. Resolve the kind's uniqueness options — BEFORE claiming, so a kind with no registered policy
+//     is refused without opening a transaction or spending the row's one retry
+//  3. BeginRetryTx
+//  4. AtomicMarkRetriedInTx (CAS with placeholder 0) — claims the retry slot before enqueueing
+//  5. EnqueueTx the new River job using RawJobArgs (preserves original queue/maxAttempts/uniqueness)
+//  6. MarkRetriedInTx to record the real job ID, then COMMIT
+//
+// ⚠ Steps 4 and 5 must stay in this order. Claiming after a successful enqueue re-opens the
+// concurrent double-enqueue race the compare-and-set exists to close; the transaction preserves the
+// order rather than replacing it.
+//
+// Issue #1508 — why one transaction. The claim and the enqueue used to be separate commits, so they
+// could disagree: a committed claim with no job (the row's one replay spent on nothing), or a job
+// with no recorded id (best-effort MarkRetried failing). Both left retry_job_id = 0, which is why
+// that column could not discriminate them and why no reaper could be built on it. Now every failure
+// after step 3 — a queue error, a dedup, a failed id write, a failed COMMIT — rolls the whole thing
+// back, so the only committed outcomes are "claimed, with a real job id, and that job exists" and
+// "nothing happened". The rollback IS the release; there is no compensating write left to fail.
+//
+// ⚠ ROUND 12, FINDING AB-3 — THIS TRANSACTION CAN OUTLIVE A GDPR ERASURE IT RACES. Recorded here,
+// assessed, and deliberately not guarded; the full argument is at the DELETE FROM dead_letter_jobs
+// statement in repository.DeleteUserCascade, which is the other half of the race.
+//
+// In short: the claim at step 4 takes a row lock on dead_letter_jobs that DeleteUserCascade's own
+// erasure of that table then blocks on, from inside a transaction already holding the user's row FOR
+// UPDATE, with no statement_timeout or lock_timeout anywhere in this codebase to bound the wait. No
+// cycle exists (this transaction never asks for anything the cascade holds), so Postgres will not
+// break it. If this transaction commits first, the cascade erases the user AND the dead_letter_jobs
+// row that sourced this replay — but the river_job inserted at step 5 is in a table the cascade does
+// not touch, so it survives and stays runnable.
+//
+// ⚠ What survives is NOT PII: job args deliberately carry none (see the note in
+// queue/jobs/email_change_propagation.go), so it is an internal UUID referencing nothing, in a job
+// that will no-op. The reason no guard is added is that the only guard that would actually close the
+// race requires locking the users row from inside THIS transaction, which converts an unbounded
+// one-way wait into a real lock cycle with the cascade — a worse trade.
+//
+// River's insert is safe to make through the caller's transaction: it inserts into river_job on
+// that connection and sends its "new job" notification in the same transaction, so no producer can
+// see or work the job before COMMIT, and a rollback removes it (river v0.38.0, client.go InsertTx:
+// "Because of snapshot visibility guarantees across transactions, the job will not be worked until
+// the transaction has committed, and if the transaction rolls back, so too is the inserted job").
 func (s *deadLetterService) Retry(ctx context.Context, id int64) (*domain.DeadLetterRetryResponse, error) {
 	job, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -145,9 +234,45 @@ func (s *deadLetterService) Retry(ctx context.Context, id int64) (*domain.DeadLe
 		return nil, errors.New("job queue not configured")
 	}
 
+	// Issue #1492: this is the third, kind-agnostic producer of every job kind, and until now the
+	// only one that passed no uniqueness options — so a replay silently dropped the dedup guarantee
+	// its kind was designed around. Resolve before claiming: an unknown kind is refused fail-closed
+	// (enqueueing it without uniqueness is the bug this fixes, and doing that silently is worse than
+	// making an operator add the missing registry entry), and refusing before the claim leaves the
+	// row's single retry intact for after that entry exists.
+	if s.uniqueOptsFor == nil {
+		s.logger.ErrorContext(ctx, "dead letter retry refused: no uniqueness resolver wired",
+			"dead_letter_id", id, "kind", job.Kind)
+		return nil, ErrDeadLetterRetryKindUnknown
+	}
+	uniqueOpts, known := s.uniqueOptsFor(job.Kind)
+	if !known {
+		s.logger.ErrorContext(ctx, "dead letter retry refused: unknown job kind",
+			"dead_letter_id", id, "kind", job.Kind)
+		return nil, fmt.Errorf("%w: %s", ErrDeadLetterRetryKindUnknown, job.Kind)
+	}
+
+	tx, err := s.repo.BeginRetryTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin dead letter retry transaction: %w", err)
+	}
+	// Every path below except the final COMMIT leaves the replay undone. Rollback after a commit is
+	// a no-op error (pgx.ErrTxClosed) and is not worth reporting; anything else is logged, because a
+	// rollback that does not happen is the one way a claim could still outlive its replay.
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			s.logger.ErrorContext(ctx, "dead letter retry transaction could not be rolled back",
+				"dead_letter_id", id, "error", rbErr)
+		}
+	}()
+
 	// Claim the retry slot first — prevents concurrent double-enqueue.
-	// Use 0 as placeholder; updated after enqueueing.
-	claimed, err := s.repo.AtomicMarkRetried(ctx, id, 0)
+	// Use 0 as placeholder; overwritten with the real job ID before this transaction commits.
+	claimed, err := s.repo.AtomicMarkRetriedInTx(ctx, tx, id, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to claim dead letter job for retry: %w", err)
 	}
@@ -166,21 +291,48 @@ func (s *deadLetterService) Retry(ctx context.Context, id int64) (*domain.DeadLe
 	if job.MaxAttempts > 0 {
 		enqOpts = append(enqOpts, queue.WithMaxAttempts(job.MaxAttempts))
 	}
+	if uniqueOpts != nil {
+		enqOpts = append(enqOpts, queue.WithUnique(*uniqueOpts))
+	}
 
-	result, err := s.jobQueue.Enqueue(ctx, rawArgs, enqOpts...)
+	result, err := s.jobQueue.EnqueueTx(ctx, tx, rawArgs, enqOpts...)
 	if err != nil {
-		// Slot claimed but enqueue failed — job is marked retried with no real job ID.
-		// Log prominently so ops can investigate.
+		// The claim is inside this transaction, so returning here undoes it: an enqueue error can no
+		// longer permanently consume the row's only retry.
+		//
+		// It also no longer matters that an enqueue error is not PROOF that nothing was inserted. The
+		// insert went through THIS transaction, so whatever it did dies with the rollback — where the
+		// old autocommit Insert could have committed a job whose response was lost, leaving a
+		// release to trade a stranded row against a possible duplicate.
 		s.logger.ErrorContext(ctx, "dead letter retry enqueue failed after claiming",
 			"dead_letter_id", id, "error", err)
 		return nil, fmt.Errorf("failed to enqueue retry job: %w", err)
 	}
 
-	// Update claim with real job ID (best-effort — failure doesn't affect job execution)
-	if updateErr := s.repo.MarkRetried(ctx, id, result.ID); updateErr != nil {
-		s.logger.ErrorContext(ctx, "failed to update retry job ID",
-			"dead_letter_id", id, "new_job_id", result.ID, "error", updateErr)
+	if result.UniqueSkipped {
+		// River deduplicated the replay against an existing job and inserted nothing — result.ID is
+		// the EXISTING job's ID, not a new one. Reporting success here would tell the operator a
+		// retry is running when none was created. Rolling back returns the slot.
+		s.logger.WarnContext(ctx, "dead letter retry deduplicated against existing job",
+			"dead_letter_id", id, "kind", job.Kind, "existing_job_id", result.ID)
+		return nil, fmt.Errorf("%w: existing job %d", ErrDeadLetterRetryDeduplicated, result.ID)
 	}
+
+	// Replace the 0 placeholder with the real job ID. No longer best-effort: it is what makes a
+	// committed row's retry_job_id trustworthy, so its failure must take the whole replay with it.
+	if err := s.repo.MarkRetriedInTx(ctx, tx, id, result.ID); err != nil {
+		s.logger.ErrorContext(ctx, "failed to record retry job ID; rolling the replay back",
+			"dead_letter_id", id, "new_job_id", result.ID, "error", err)
+		return nil, fmt.Errorf("failed to record retry job id: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		// A COMMIT whose response is lost may in fact have committed — and that is fine here, because
+		// what would then be committed is the CONSISTENT outcome: claim, real retry_job_id, and the
+		// job. The operator sees an error over a row that either replayed completely or not at all.
+		return nil, fmt.Errorf("failed to commit dead letter retry: %w", err)
+	}
+	committed = true
 
 	newJobID := result.ID
 	return &domain.DeadLetterRetryResponse{
@@ -190,6 +342,20 @@ func (s *deadLetterService) Retry(ctx context.Context, id int64) (*domain.DeadLe
 		DeadLetterID: id,
 	}, nil
 }
+
+// Both residual holes the pre-#1508 compensating release left open are now closed by construction,
+// and neither has a detector because neither has a state to detect:
+//
+//   - A failed release (Postgres unavailable for both the enqueue and the release) stranded the
+//     claim permanently. There is no release any more — the rollback is the release, and a
+//     transaction whose connection dies is aborted by the server, so the claim never commits.
+//   - A crash between the claim committing and the enqueue stranded it the same way. The claim no
+//     longer commits on its own.
+//
+// What remains uncovered is HISTORY: rows stranded at retry_job_id = 0 by the old two-commit path
+// before this change. They are still undecidable in exactly the way #1508 describes — the column
+// cannot say whether a live job sits behind them — so no reaper is shipped for them, and releasing
+// them automatically could double-enqueue a running job. See the issue for the disposition.
 
 // AddNotes sets admin notes on a dead letter job.
 func (s *deadLetterService) AddNotes(ctx context.Context, id int64, notes string) error {
@@ -201,9 +367,15 @@ func (s *deadLetterService) Delete(ctx context.Context, id int64) error {
 	return s.repo.DeleteByID(ctx, id)
 }
 
-// DeleteByFilters bulk-deletes dead letter jobs matching the given filters.
-func (s *deadLetterService) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {
-	return s.repo.DeleteByFilters(ctx, filters)
+// CountByFilters returns how many dead letter jobs match the given filters.
+func (s *deadLetterService) CountByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {
+	return s.repo.CountByFilters(ctx, filters)
+}
+
+// DeleteByFilters bulk-deletes dead letter jobs matching the given filters, refusing unless
+// exactly `expected` rows match at DELETE time.
+func (s *deadLetterService) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters, expected int64) (int64, error) {
+	return s.repo.DeleteByFilters(ctx, filters, expected)
 }
 
 // GetStats returns aggregate statistics about dead letter jobs.

@@ -23,7 +23,7 @@ BoostedBudget is a global budgeting platform that helps users optimize their fin
 
 **Backend:**
 - Go 1.25+ with Echo framework
-- PostgreSQL 15
+- PostgreSQL 17
 - Redis 7
 - RabbitMQ 3
 - OpenAPI 3.1 specification
@@ -200,6 +200,7 @@ curl -H "Authorization: Bearer mock-token" http://localhost:4010/user/profile
 - **[Deployment Guide](./boosted-budget-fly-deployment.md)** - Fly.io deployment instructions
 - **[CLAUDE.md](./CLAUDE.md)** - Development guidelines and patterns
 - **[GitHub Secrets Setup](./docs/GITHUB_SECRETS_SETUP.md)** - CI/CD secrets configuration
+- **[Self-hosted runner maintenance](./infra/runners/README.md)** - disk-guard, post-job cleanup, and maintenance scripts for the self-hosted CI runners
 - **[OpenAPI Spec](./api/openapi.yaml)** - API documentation
 
 ## 🔧 Project Structure

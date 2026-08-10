@@ -81,6 +81,29 @@ func (m *MockDeadLetterJobRepository) GetOldestJobAge(ctx context.Context) (int6
 	return args.Get(0).(int64), args.Error(1)
 }
 
+// MockJobHealthRepository mocks repository.JobHealthRepository — the two backlog gauge queries
+// backing SystemHealthResponse.JobBacklog (Issue #1458), plus the deletion-residue count backing
+// SystemHealthResponse.DeletionResidue (Issue #1504).
+type MockJobHealthRepository struct {
+	mock.Mock
+}
+
+func (m *MockJobHealthRepository) GetOldestUnclearedExpiredManualTierOverrideAge(ctx context.Context) (time.Duration, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(time.Duration), args.Error(1)
+}
+
+func (m *MockJobHealthRepository) GetOutstandingPlaidCleanupStats(ctx context.Context) (int, time.Duration, error) {
+	args := m.Called(ctx)
+	return args.Int(0), args.Get(1).(time.Duration), args.Error(2)
+}
+
+// GetDeletionResidueStats backs SystemHealthResponse.DeletionResidue (Issue #1504).
+func (m *MockJobHealthRepository) GetDeletionResidueStats(ctx context.Context) (int, time.Duration, error) {
+	args := m.Called(ctx)
+	return args.Int(0), args.Get(1).(time.Duration), args.Error(2)
+}
+
 // Mock pool for database checks
 type MockPool struct {
 	mock.Mock
@@ -512,4 +535,226 @@ func TestGetSystemHealth_PaddleMetricsError_UsesZeroValues(t *testing.T) {
 	assert.Equal(t, int64(0), result.PaddleStatus.TotalWebhooks24h)
 
 	mockHealthRepo.AssertExpectations(t)
+}
+
+// TestGetSystemHealth_JobBacklogMetricsPopulated proves the three DB-derived backlog gauges
+// (Issue #1458) are populated from repository.JobHealthRepository — the same queries the
+// retention-cleanup repair job and the manual-tier-override expiry worker use, never
+// duplicated SQL.
+func TestGetSystemHealth_JobBacklogMetricsPopulated(t *testing.T) {
+	mockHealthRepo := new(MockSystemHealthRepository)
+	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+	mockPool := new(MockPool)
+	mockJobHealthRepo := new(MockJobHealthRepository)
+	// Issue #1504: these tests predate the deletion-residue gauge and assert nothing about it, but
+	// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
+	// call it does not care about, nor demand one.
+	mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
+
+	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
+	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(3, 2*time.Hour, nil)
+	mockJobHealthRepo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(90*time.Minute, nil)
+
+	service := &systemHealthService{
+		healthRepo:     mockHealthRepo,
+		deadLetterRepo: mockDeadLetterRepo,
+		pool:           mockPool,
+		jobHealthRepo:  mockJobHealthRepo,
+	}
+
+	result, err := service.GetSystemHealth(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), result.JobBacklog.PlaidCleanupOutstandingUsers)
+	assert.Equal(t, int64(2*60*60), result.JobBacklog.PlaidCleanupOldestOutstandingSeconds)
+	assert.Equal(t, int64(90*60), result.JobBacklog.ManualTierOverrideOldestUnclearedExpiredSeconds)
+	assert.True(t, result.JobBacklog.Available, "a successful query must be marked available (Issue #1458 follow-up G16)")
+
+	mockJobHealthRepo.AssertExpectations(t)
+}
+
+// TestGetSystemHealth_JobBacklogMetrics_NilRepo_ZeroValues proves an unwired jobHealthRepo (nil)
+// degrades to zero values rather than panicking — mirrors every other optional-dependency
+// nil-safety convention in this codebase (e.g. SubscriptionService.overrideTierValidator).
+func TestGetSystemHealth_JobBacklogMetrics_NilRepo_ZeroValues(t *testing.T) {
+	mockHealthRepo := new(MockSystemHealthRepository)
+	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+	mockPool := new(MockPool)
+
+	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
+
+	service := &systemHealthService{
+		healthRepo:     mockHealthRepo,
+		deadLetterRepo: mockDeadLetterRepo,
+		pool:           mockPool,
+		// jobHealthRepo intentionally left nil.
+	}
+
+	result, err := service.GetSystemHealth(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.JobBacklogMetrics{}, result.JobBacklog)
+}
+
+// TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues mirrors
+// TestGetSystemHealth_PaddleMetricsError_UsesZeroValues's "partial data over none" convention —
+// a job-health query failure must not fail the whole /admin/health response.
+//
+// Issue #1458 follow-up G16: this also proves the failure is marked `Available: false`, not just
+// zero-valued — see TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguishable
+// below for why the two must be distinguishable at all (a bare zero-value-struct equality check,
+// which this test used before G16, cannot tell "query failed" apart from "query succeeded, found
+// nothing" — both produce the exact same zero-valued domain.JobBacklogMetrics{}).
+func TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues(t *testing.T) {
+	mockHealthRepo := new(MockSystemHealthRepository)
+	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+	mockPool := new(MockPool)
+	mockJobHealthRepo := new(MockJobHealthRepository)
+	// Issue #1504: these tests predate the deletion-residue gauge and assert nothing about it, but
+	// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
+	// call it does not care about, nor demand one.
+	mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
+
+	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
+	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), errors.New("db error"))
+
+	service := &systemHealthService{
+		healthRepo:     mockHealthRepo,
+		deadLetterRepo: mockDeadLetterRepo,
+		pool:           mockPool,
+		jobHealthRepo:  mockJobHealthRepo,
+	}
+
+	result, err := service.GetSystemHealth(context.Background())
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, domain.JobBacklogMetrics{}, result.JobBacklog)
+	assert.False(t, result.JobBacklog.Available, "a failed job-backlog query must be marked unavailable, not silently reported as a real zero")
+
+	mockJobHealthRepo.AssertExpectations(t)
+}
+
+// TestGetSystemHealth_JobBacklogMetrics_SecondQueryError_DiscardsFirstQuerysGoodData is the
+// coverage gap Codex flagged for Issue #1458 (batch R4 Task 4): every existing error test above
+// stubs ONLY the FIRST query (GetOutstandingPlaidCleanupStats) to fail. Nothing pinned what
+// happens when that first query SUCCEEDS with real, non-zero data and the SECOND query
+// (GetOldestUnclearedExpiredManualTierOverrideAge) is the one that fails — a genuinely different
+// code path through getJobBacklogMetrics's two sequential, independently-failable calls.
+//
+// Codex verified the implementation is already correct here (a coverage gap, not a behaviour
+// bug): getJobBacklogMetrics returns (nil, err) on the second query's failure, so the first
+// query's outstandingUsers/oldestOutstanding are discarded rather than surfaced as a
+// partially-populated JobBacklogMetrics — see that method's own doc comment (system_health_service.go)
+// for why discarding (not partial-reporting) is the deliberate choice. This test pins that
+// discard behaviour so it can no longer regress silently.
+func TestGetSystemHealth_JobBacklogMetrics_SecondQueryError_DiscardsFirstQuerysGoodData(t *testing.T) {
+	mockHealthRepo := new(MockSystemHealthRepository)
+	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+	mockPool := new(MockPool)
+	mockJobHealthRepo := new(MockJobHealthRepository)
+	// Issue #1504: these tests predate the deletion-residue gauge and assert nothing about it, but
+	// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
+	// call it does not care about, nor demand one.
+	mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
+
+	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
+	// First query succeeds with real, non-zero data.
+	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(5, 3*time.Hour, nil)
+	// Second query fails.
+	mockJobHealthRepo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(time.Duration(0), errors.New("db error"))
+
+	service := &systemHealthService{
+		healthRepo:     mockHealthRepo,
+		deadLetterRepo: mockDeadLetterRepo,
+		pool:           mockPool,
+		jobHealthRepo:  mockJobHealthRepo,
+	}
+
+	result, err := service.GetSystemHealth(context.Background())
+
+	require.NoError(t, err, "a job-backlog query failure must not fail the whole /admin/health response")
+	assert.Equal(t, domain.JobBacklogMetrics{}, result.JobBacklog,
+		"the first query's good data (5 outstanding users, 3h oldest) must be DISCARDED, not partially surfaced, when the second query fails")
+	assert.Equal(t, int64(0), result.JobBacklog.PlaidCleanupOutstandingUsers,
+		"the first query's real, non-zero result must not leak through even though it succeeded")
+	assert.False(t, result.JobBacklog.Available, "a failed second query must mark the whole gauge unavailable")
+
+	mockJobHealthRepo.AssertExpectations(t)
+}
+
+// TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguishable is the RED/GREEN
+// pin for Issue #1458 follow-up G16 (the gap between #1458's own reasoning — applied to the FOUR
+// metrics it excluded from this response — and these THREE, which it included but still let a
+// failed query masquerade as a healthy zero).
+//
+// Before this fix, a query ERROR and a query that SUCCEEDS with a genuinely empty backlog were
+// both represented by the exact same value: a zero-valued domain.JobBacklogMetrics{}. No field on
+// the struct could tell them apart, so HealthDashboardPage.tsx rendered both as a confident green
+// "0" — exactly backwards, since the failed-query case is the one moment the operator most needs
+// a signal that the gauge cannot currently be trusted.
+//
+// This test proves the two cases are now distinguishable via `Available`: a REAL zero backlog
+// (the repository call succeeds and legitimately returns 0/0) is marked `Available: true`, while a
+// FAILED query is marked `Available: false` — even though every numeric field reads identically
+// (0) in both cases.
+func TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguishable(t *testing.T) {
+	t.Run("a successful query reporting a real, verified zero backlog is marked Available", func(t *testing.T) {
+		mockHealthRepo := new(MockSystemHealthRepository)
+		mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+		mockPool := new(MockPool)
+		mockJobHealthRepo := new(MockJobHealthRepository)
+		// Issue #1504: these tests predate the deletion-residue gauge and assert nothing about it, but
+		// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
+		// call it does not care about, nor demand one.
+		mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
+
+		setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
+		mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), nil)
+		mockJobHealthRepo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(time.Duration(0), nil)
+
+		service := &systemHealthService{
+			healthRepo:     mockHealthRepo,
+			deadLetterRepo: mockDeadLetterRepo,
+			pool:           mockPool,
+			jobHealthRepo:  mockJobHealthRepo,
+		}
+
+		result, err := service.GetSystemHealth(context.Background())
+
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), result.JobBacklog.PlaidCleanupOutstandingUsers)
+		assert.True(t, result.JobBacklog.Available, "a successful query that legitimately finds zero backlog must be marked available — this is a VERIFIED zero, not an unknown")
+
+		mockJobHealthRepo.AssertExpectations(t)
+	})
+
+	t.Run("a failed query is marked unavailable even though every numeric field is also zero", func(t *testing.T) {
+		mockHealthRepo := new(MockSystemHealthRepository)
+		mockDeadLetterRepo := new(MockDeadLetterJobRepository)
+		mockPool := new(MockPool)
+		mockJobHealthRepo := new(MockJobHealthRepository)
+		// Issue #1504: these tests predate the deletion-residue gauge and assert nothing about it, but
+		// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
+		// call it does not care about, nor demand one.
+		mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
+
+		setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
+		mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), errors.New("db error"))
+
+		service := &systemHealthService{
+			healthRepo:     mockHealthRepo,
+			deadLetterRepo: mockDeadLetterRepo,
+			pool:           mockPool,
+			jobHealthRepo:  mockJobHealthRepo,
+		}
+
+		result, err := service.GetSystemHealth(context.Background())
+
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), result.JobBacklog.PlaidCleanupOutstandingUsers, "numeric fields still read zero on error — Available is the only signal that distinguishes this from the real-zero case above")
+		assert.False(t, result.JobBacklog.Available, "a failed query must never be marked available")
+
+		mockJobHealthRepo.AssertExpectations(t)
+	})
 }

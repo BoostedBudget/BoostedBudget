@@ -210,7 +210,7 @@ type User struct {
 	//     within one repair-pass interval.
 	//
 	// In short: writers owe correctness; the backstop owes recovery. Neither excuses the other. The
-	// known SET sites are: UpdateSubscriptionFromPaddle, CancelIfPastDueWithRetention(Occurrence),
+	// known SET sites are: UpdateSubscriptionFromPaddle, CancelIfPastDueOccurrenceWithRetention,
 	// ExpireTrialIfNoOverride, UpdateTrialStatus (all profile_repository.go — this last one's own
 	// eligible-status branch COALESCEs a fresh value in exactly like its siblings; see its doc
 	// comment for the "granting a trial to a cancelled user with an outstanding marker" case this
@@ -259,16 +259,23 @@ type User struct {
 	// formerly documented here as round-14 finding L1's "not a SET/CLEAR site"). It wrote
 	// subscription_status directly without ever touching this column, and `rg` confirmed zero
 	// production callers, so it was deleted rather than left as a live trap. The durable reason
-	// this matters is NOT the method's name, it's the invariant gap it exposed: both self-healing
-	// backstops (StampMissingPlaidCleanupMarkers, ClearCompletedPlaidCleanupMarkers) are gated on
-	// an ineligible-status predicate, so this invariant's FIRST branch — status not ineligible ⇒
-	// marker must be NULL — has NO backstop at all. Any future status-only writer (one that sets
-	// subscription_status without also transitioning this column, the same shape
-	// UpdateSubscriptionStatus had) reintroduces the identical unguarded gap and MUST maintain
-	// plaid_cleanup_pending_at itself, the way every writer below already does — do not assume a
-	// backstop will catch it. The known CLEAR sites are: UpdateSubscriptionFromPaddle, ClearRetentionDates,
-	// ClearPlaidCleanupPending/ClearPlaidCleanupPendingIfMatches, UpdateTrialStatus, and
-	// ClearCompletedPlaidCleanupMarkers (all profile_repository.go). AdminUserRepository's
+	// this matters is NOT the method's name, it's the invariant gap it exposed: until Issue #1455,
+	// both self-healing backstops (StampMissingPlaidCleanupMarkers, ClearCompletedPlaidCleanupMarkers)
+	// were gated on an ineligible-status predicate, so this invariant's FIRST branch — status not
+	// ineligible ⇒ marker must be NULL — had NO backstop at all. Issue #1455's
+	// ClearMarkersOnEligibleStatus (profile_repository.go) closes that gap: a THIRD self-healing
+	// backstop, called from repairPlaidDisconnects (retention_cleanup_check.go, internal/queue/jobs)
+	// alongside the other two, that clears any non-NULL marker it finds on a row whose raw status is
+	// not inactive/cancelled — see that method's own doc comment for the full reasoning. Any future
+	// status-only writer (one that sets subscription_status without also transitioning this column,
+	// the same shape UpdateSubscriptionStatus had) still MUST maintain plaid_cleanup_pending_at
+	// itself — round 17's framing above applies here exactly as it does to the other two backstops:
+	// "the backstop will catch it eventually" bounds how long a violation can persist, it does not
+	// excuse a writer from getting this right in the first place. The known CLEAR sites are:
+	// UpdateSubscriptionFromPaddle, ClearRetentionDates,
+	// ClearPlaidCleanupPending/ClearPlaidCleanupPendingIfMatches, UpdateTrialStatus,
+	// ClearCompletedPlaidCleanupMarkers, and ClearMarkersOnEligibleStatus (all profile_repository.go).
+	// AdminUserRepository's
 	// updateUserTierQuery (comp grant/extend)
 	// deliberately does NOT touch this column at all as of round-13 — see its own doc comment.
 	// See each site's own doc comment for its justification against this invariant, and
@@ -398,8 +405,28 @@ func (u *User) ComputeEffectiveStatus() string {
 //
 // hasOverride is false whenever there is no CURRENTLY ACTIVE override (none set, or expired); in
 // that case status is simply the raw SubscriptionStatus and overrideValue is "".
+//
+// Delegates to EffectiveStatusWithActiveOverrideAt(time.Now()) — see that method's doc comment
+// for why a caller assembling a response around a single already-captured snapshot instant (e.g.
+// an `as_of` field) MUST call the -At variant with that instant instead of this method, which
+// reads its own fresh clock.
 func (u *User) EffectiveStatusWithActiveOverride() (status string, overrideValue string, hasOverride bool) {
-	now := time.Now()
+	return u.EffectiveStatusWithActiveOverrideAt(time.Now())
+}
+
+// EffectiveStatusWithActiveOverrideAt is the -At twin of EffectiveStatusWithActiveOverride,
+// evaluated against the given instant instead of an internal time.Now() read.
+//
+// Added for Codex round-N review of Issue #1462/#1413: a caller that has already captured a
+// snapshot instant (e.g. an admin handler's `asOf := time.Now()`, echoed back to the client as
+// `as_of`) must derive EVERY value in that same response — including EffectiveStatus — from that
+// identical instant. Calling the no-arg EffectiveStatusWithActiveOverride() instead would read a
+// SECOND, independent time.Now(), so a request whose processing crosses the override's expiry
+// boundary between the two reads would return an `as_of` and an `effective_status` describing two
+// different moments — the exact "two clocks describing one user" defect #1462 was meant to fix,
+// reintroduced one layer up. See TestAdminUserService_GetUserDetail_EffectiveStatus_DerivedFromPassedInstant_NotLaterClockRead
+// (admin_user_service_test.go) for the regression test.
+func (u *User) EffectiveStatusWithActiveOverrideAt(now time.Time) (status string, overrideValue string, hasOverride bool) {
 	if u.hasActiveManualOverrideAt(now) {
 		return string(SubscriptionStatusActive), *u.ManualTierOverride, true
 	}
@@ -425,8 +452,30 @@ func (u *User) EffectiveStatusWithActiveOverride() (status string, overrideValue
 //
 // hasOverride is false whenever there is no CURRENTLY ACTIVE override (none set, or expired); in
 // that case tier is simply the raw SubscriptionTier and overrideValue is "".
+//
+// Delegates to EffectiveTierWithActiveOverrideAt(time.Now()) — see that method's doc comment for
+// why a caller assembling a response around a single already-captured snapshot instant (e.g. an
+// `as_of` field) MUST call the -At variant with that instant instead of this method, which reads
+// its own fresh clock.
 func (u *User) EffectiveTierWithActiveOverride() (tier string, overrideValue string, hasOverride bool) {
-	now := time.Now()
+	return u.EffectiveTierWithActiveOverrideAt(time.Now())
+}
+
+// EffectiveTierWithActiveOverrideAt is the -At twin of EffectiveTierWithActiveOverride,
+// evaluated against the given instant instead of an internal time.Now() read.
+//
+// Added for Issue #1466 (a #1462 residual, found by Codex adversarial review of PR #1465's
+// gap-fix commits): PR #1465 threaded a caller-captured instant through the STATUS axis
+// (EffectiveStatusWithActiveOverrideAt) but left the TIER axis reading its own time.Now() — so a
+// caller assembling a response around a single snapshot instant (e.g. an admin handler's
+// `asOf := time.Now()`, echoed back to the client as `as_of`) could still return an
+// `effective_tier` computed at a LATER instant than the one `as_of`/`effective_status` describe,
+// if the override's expiry boundary fell between the handler's asOf capture and this call — the
+// exact "two clocks describing one user" defect #1462/#1465 fixed on the status axis,
+// reintroduced on the tier axis. See
+// TestGetUserSubscription_EffectiveTier_DerivedFromAsOf_NotLaterClockRead
+// (admin_subscriptions_test.go) for the regression test.
+func (u *User) EffectiveTierWithActiveOverrideAt(now time.Time) (tier string, overrideValue string, hasOverride bool) {
 	if u.hasActiveManualOverrideAt(now) {
 		return *u.ManualTierOverride, *u.ManualTierOverride, true
 	}

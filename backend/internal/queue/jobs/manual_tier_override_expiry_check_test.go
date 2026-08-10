@@ -653,6 +653,13 @@ func TestManualTierOverrideExpiryCheckPeriodicOpts_RunOnStart(t *testing.T) {
 // ManualTierOverrideExpiryCheckUniqueOpts() to a zero value while leaving RunOnStart: true in
 // place would let a start-of-process catch-up run double-fire alongside an already-scheduled
 // run; this test fails first.
+func TestManualTierOverrideExpiryCheckPeriodicOpts_ID(t *testing.T) {
+	opts := ManualTierOverrideExpiryCheckPeriodicOpts()
+
+	require.NotNil(t, opts)
+	assert.Equal(t, "manual_tier_override_expiry_check", opts.ID)
+}
+
 func TestManualTierOverrideExpiryCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
 	periodicOpts := ManualTierOverrideExpiryCheckPeriodicOpts()
 	require.True(t, periodicOpts.RunOnStart, "this pairing guarantee only matters when RunOnStart is true")

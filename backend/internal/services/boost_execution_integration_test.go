@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
@@ -36,7 +37,9 @@ func connectIntegrationDB(t *testing.T) *pgxpool.Pool {
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set — skipping integration test")
 	}
-	pool, err := pgxpool.New(context.Background(), dsn)
+	// Issue #1461: route through database.NewPoolFromURL (not a bare pgxpool.New) so this pool
+	// pins session TimeZone=UTC exactly like the production pool does.
+	pool, err := database.NewPoolFromURL(context.Background(), dsn)
 	require.NoError(t, err, "connect to test database")
 	t.Cleanup(pool.Close)
 	return pool
@@ -169,7 +172,7 @@ func buildCategoryScopedBoostReq(t *testing.T, budgetID, categoryID, fromAccount
 	}
 }
 
-// TestRuleExecution_CategoryScoped_Integration exercises the full category-scoped rule stack
+// TestBoostExecution_CategoryScoped_Integration exercises the full category-scoped rule stack
 // against a real Postgres database. It is gated on DATABASE_URL and skips automatically in
 // environments without a live database.
 func TestBoostExecution_CategoryScoped_Integration(t *testing.T) {

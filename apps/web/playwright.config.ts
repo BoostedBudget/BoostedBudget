@@ -190,11 +190,27 @@ export default defineConfig({
     {
       // Pass env vars to backend for E2E testing:
       // - PORT: Dynamic port allocation
-      // - ENVIRONMENT: Set to "qa" to enable admin endpoints
+      // - ENVIRONMENT: Set to "qa". DO NOT REMOVE — since #1499 admin endpoints are
+      //   reachable in every environment, so this is no longer what "enables" them; but
+      //   since #1498 it IS what grants this suite's user admin. "qa" is on the
+      //   non-production allowlist (backend/internal/domain/admin.go), which is the only
+      //   reason e2e+clerk_test@boostedbudget.com resolves as an admin — it lives in
+      //   config/admin_emails.yaml's non_production_admin_emails list, which is excluded
+      //   under production AND whenever ENVIRONMENT is unset. Dropping this var makes every
+      //   admin spec 403.
       // - DATABASE_URL: PostgreSQL connection (set by run-e2e-with-ports.sh)
       // - CLERK_SECRET_KEY: For Clerk API calls (admin role verification)
       // - CLERK_PUBLISHABLE_KEY: For JWT validation
-      command: `cd ../../backend && PORT=${backendPort} ENVIRONMENT=qa DATABASE_URL="${databaseUrl}" CLERK_SECRET_KEY="${process.env.CLERK_SECRET_KEY || ''}" CLERK_PUBLISHABLE_KEY="${process.env.CLERK_PUBLISHABLE_KEY || ''}" ./bin/server`,
+      // - RATE_LIMIT_IP: Issue #1441 — every Playwright worker's traffic arrives from the
+      //   same client IP (localhost). The backend's per-IP rate limiter defaults to 100
+      //   req/min (backend/internal/middleware/rate_limit.go), which a single page load
+      //   alone can approach (profile, notifications x2, check-role, households x2, tags,
+      //   budgets, ...); 2 local workers running many spec files easily blows past it,
+      //   producing floods of 429s that manifest as assorted "element not found" timeouts
+      //   with no direct signal that rate limiting was the cause. This is a test-only
+      //   override (only reaches this backend process, started fresh per E2E run) — it does
+      //   not touch the production default of 100.
+      command: `cd ../../backend && PORT=${backendPort} ENVIRONMENT=qa DATABASE_URL="${databaseUrl}" CLERK_SECRET_KEY="${process.env.CLERK_SECRET_KEY || ''}" CLERK_PUBLISHABLE_KEY="${process.env.CLERK_PUBLISHABLE_KEY || ''}" RATE_LIMIT_IP=100000 ./bin/server`,
       url: `http://localhost:${backendPort}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,

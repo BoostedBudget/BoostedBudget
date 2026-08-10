@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { RefreshCw, AlertCircle, AlertTriangle } from 'lucide-react'
@@ -8,7 +10,10 @@ import {
   useRetryAdminDeadLetterJob,
   useDeleteAdminDeadLetterJob,
   useBulkDeleteAdminDeadLetterJobs,
+  getListAdminDeadLetterJobsQueryKey,
+  getGetAdminDeadLetterJobStatsQueryKey,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
+import { mutationFailureMessage } from '../lib/mutationFailureMessage'
 import { SummaryCard } from '@/features/admin'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -59,6 +64,7 @@ export function DeadLetterPage() {
     query: { refetchInterval: autoRefresh ? 30000 : false },
   })
 
+  const queryClient = useQueryClient()
   const retryMutation = useRetryAdminDeadLetterJob()
   const deleteMutation = useDeleteAdminDeadLetterJob()
   const bulkDeleteMutation = useBulkDeleteAdminDeadLetterJobs()
@@ -158,16 +164,45 @@ export function DeadLetterPage() {
     },
   ]
 
+  // Issue #1496: this used to pass `onSuccess` only, so a rejected replay was indistinguishable
+  // from a successful one — the operator clicked Retry and the page said nothing. The reachable
+  // rejections are the 409 (deduplicated away, nothing enqueued) and the 422 (unknown job kind);
+  // an already-retried row can't get here because its button is disabled.
   const handleRetry = (jobId: number) => {
     retryMutation.mutate({ id: jobId }, {
-      onSuccess: () => trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_RETRY, { job_id: jobId }),
+      onSuccess: () => {
+        trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_RETRY, { job_id: jobId })
+        toast.success(`Job #${jobId} re-enqueued`)
+        // The row's status and the retried/unretried counts both change on a successful replay,
+        // and neither is refetched by the mutation itself — without this the operator waits out
+        // the 30s poll (or sees nothing at all with auto-refresh off).
+        void queryClient.invalidateQueries({ queryKey: getListAdminDeadLetterJobsQueryKey() })
+        void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
+      },
+      onError: (err) => {
+        toast.error(`Failed to retry job #${jobId}: ${mutationFailureMessage(err)}`)
+      },
     })
   }
 
+  // Issue #1496: this used to pass `onSuccess` only, so a rejected delete left the confirmation
+  // dialog open with no explanation — the operator saw nothing happen, twice over (no error, no
+  // dismissal). A failed delete still means there's nothing left to confirm, so the dialog is
+  // dismissed on failure the same as on success; only the toast tells the two apart.
   const handleDeleteConfirm = (jobId: number) => {
     deleteMutation.mutate({ id: jobId }, {
       onSuccess: () => {
         trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_DELETE, { job_id: jobId })
+        toast.success(`Job #${jobId} deleted`)
+        setConfirmDeleteJobId(null)
+        // The deleted row and the summary counts are both stale now, and nothing else refreshes
+        // them: with Auto-refresh OFF there is no poll at all, so the phantom row stays on screen
+        // forever and a second delete on it produces a spurious error toast.
+        void queryClient.invalidateQueries({ queryKey: getListAdminDeadLetterJobsQueryKey() })
+        void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
+      },
+      onError: (err) => {
+        toast.error(`Failed to delete job #${jobId}: ${mutationFailureMessage(err)}`)
         setConfirmDeleteJobId(null)
       },
     })
@@ -181,9 +216,14 @@ export function DeadLetterPage() {
       ...(filters.startDate && { start_date: filters.startDate }),
       ...(filters.endDate && { end_date: filters.endDate }),
     }
+    // Same fix as per-row delete: dismiss the confirmation dialog on failure too, so it doesn't
+    // stay stuck open. Unlike per-row delete, the filters/page reset stays onSuccess-only —
+    // nothing was actually deleted on failure, so the current filtered view is still accurate
+    // and resetting it would just discard the operator's filter state for no reason.
     bulkDeleteMutation.mutate({ data: filters_payload }, {
       onSuccess: (result) => {
         trackEvent(ANALYTICS_EVENTS.ADMIN_DLQ_BULK_DELETE, { deleted: result?.deleted })
+        toast.success(`Deleted ${result?.deleted ?? 0} job(s)`)
         setConfirmBulkDelete(false)
         setKind('')
         setUserId('')
@@ -191,6 +231,16 @@ export function DeadLetterPage() {
         setStartDate('')
         setEndDate('')
         setPage(1)
+        // ⚠ THE FILTER RESET ABOVE IS NOT A REFRESH. It happens to change the LIST query key, so
+        // the list refetches incidentally — and would stop doing so the moment a bulk delete runs
+        // with no filters set. The STATS query takes no params, so its key never changes and the
+        // summary cards would stay wrong indefinitely with or without the reset.
+        void queryClient.invalidateQueries({ queryKey: getListAdminDeadLetterJobsQueryKey() })
+        void queryClient.invalidateQueries({ queryKey: getGetAdminDeadLetterJobStatsQueryKey() })
+      },
+      onError: (err) => {
+        toast.error(`Failed to delete matching jobs: ${mutationFailureMessage(err)}`)
+        setConfirmBulkDelete(false)
       },
     })
   }

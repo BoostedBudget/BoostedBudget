@@ -226,6 +226,87 @@ func (r *featureRepository) GetByUserID(ctx context.Context, userID string, limi
 }
 ```
 
+### Nullable columns: never scan SQL `NULL` into a non-pointer field (Issue #1444)
+
+**This is a convention, not an enforced lint rule** — the repo has no `.golangci.yml`/`.yaml`
+anywhere, so `golangci-lint run` uses its stock defaults only, and none of those defaults catch
+this.
+
+**Failure mode:** scanning a nullable SQL column directly into a non-pointer Go field (e.g.
+`&f.Name` where `Name string` and the column allows `NULL`) panics or errors the moment a real
+`NULL` row is read — pgx (and `database/sql`) cannot convert SQL `NULL` into a non-pointer string,
+int, etc. This is a repo-wide risk anywhere a `SELECT` scans a nullable column straight into a
+struct field typed as the bare Go type rather than a pointer or null-aware wrapper.
+
+**Three remedies, pick whichever fits the column:**
+
+1. **`COALESCE` in the SQL** — `SELECT COALESCE(status, 'unknown') FROM ...` — cheapest when a
+   sensible non-NULL default exists and the column's NULL-ness is incidental, not meaningful.
+2. **A nullable intermediate** — scan into `*string` or `sql.NullString` (or the `*int`/`sql.Null*`
+   equivalent), then convert to the domain type with the actual NULL-vs-value branching made
+   explicit in Go, when NULL carries real meaning the caller needs to distinguish from a value.
+3. **A `NOT NULL` migration** — if the column is never supposed to be NULL by design, fix the
+   schema instead of coding around it (see the three-step `NOT NULL` migration pattern in
+   `db-migration-guide`'s Grace-Window Timestamps section) so the scan target's non-pointer type is
+   actually guaranteed correct rather than assumed.
+
+**The trap that hides this bug from you:** a `WHERE status NOT IN ('a', 'b')` or `WHERE status <>
+'x'` predicate on a nullable column evaluates to `UNKNOWN` (not `TRUE`) for a `NULL` row in SQL's
+three-valued logic, so those rows are silently excluded from the result set. That means a query
+guarded by exactly this kind of predicate can scan cleanly in production for a long time — not
+because no row is ever NULL, but because the predicate itself is quietly filtering the NULL rows
+out before they ever reach the non-pointer scan. The panic surfaces only once a query without that
+filter (a new caller, a broadened `WHERE`, an admin report) reads one of those rows directly.
+
+**Testing consequence:** a RED test for this must **seed the NULL via raw SQL** (a direct `INSERT`
+or `UPDATE ... SET col = NULL`), not through the normal fixture/factory path. If no production
+writer can actually produce a NULL in that column, a fixture-built test will pass before the fix is
+even applied — proving nothing about the real hazard. The test only has teeth if it reproduces the
+same on-disk state a real NULL row would leave, independent of whether the application's own
+writers currently know how to create one.
+
+### Keyset pagination: a tie-breaker no test ever ties on is indistinguishable from an absent one (#1478/#1469)
+
+Every bounded sweep in this repo pages with a keyset cursor rather than `OFFSET`, and every one of
+them needs a **total** order — a unique final column, in practice `id`:
+
+```sql
+ORDER BY sort_col ASC, id ASC
+WHERE (sort_col, id) > ($1, $2)      -- tuple must match the ORDER BY exactly
+```
+
+Two rules that are easy to satisfy in the SQL and easy to leave unverified in the tests:
+
+**1. Seed a tie, or you have not tested the tie-breaker.** Three separate paged sweeps on this repo
+shipped with an `id` tie-breaker that **no test could detect the removal of** — deleting `id` from
+both the `ORDER BY` and the cursor tuple left the whole suite green. The cause was identical each
+time: the fixture helper seeded strictly increasing timestamps
+(`epoch.Add(time.Duration(i) * time.Minute)` — the conversion is required; `i * time.Minute` does not
+compile), so a
+tie never existed to disambiguate. Seed **N rows sharing one `sort_col` value** and assert each row
+is returned **exactly once** across pages. Without a tie in the fixture, the tie-breaker is decoration.
+
+**2. Assert the cursor the *worker* builds, not just the one the test builds.** The same three sweeps
+had tests that constructed cursors themselves and passed them to the repository — so nothing
+connected the worker's cursor-construction code to the query. A worker that built
+`(time.Time{}, lastID)` instead of the real timestamp passed every test, while in production the
+tuple's first element decides every comparison, the query returns the **head page forever**, and any
+row whose per-row action fails sits at the head of every page and consumes the entire sweep budget.
+That is the exact unbounded-scan starvation the cap was added to prevent, reintroduced through the
+cursor. Assert the timestamp component of the cursor the worker produces.
+
+**Nullable sort columns:** a row-value comparison `(a, b) > (x, y)` takes **no per-column
+`NULLS FIRST/LAST` clause**, so it cannot express `ORDER BY a ASC NULLS LAST` directly. Wrap both
+sides in the same total-order expression — `COALESCE(col, 'infinity'::timestamptz)` reproduces
+`NULLS LAST` under `ASC` — and keep one shared constant for the sort key so the `ORDER BY` and the
+cursor cannot drift apart. These `COALESCE` wrappers look redundant; they are load-bearing.
+
+**Cap prose:** every sweep here restarts from a nil cursor, so a per-run cap does **not** give you
+"no starvation" — above the cap the oldest rows block everything behind them **permanently** until
+the backlog drains. State the guarantee bounded by the cap; an unqualified "no starvation" claim is
+false. And a per-run cap is not a per-day ceiling: River's `ByPeriod` rounds inserts into **fixed
+buckets**, not a rolling window, so two runs either side of a boundary can execute close together.
+
 ## Domain Model Pattern
 
 ```go
@@ -388,6 +469,66 @@ func (p *FeatureProcessor) process(ctx context.Context) error {
     return nil
 }
 ```
+
+### A River job's key is its `Kind()` string, not its Go type name (#1486/#1490)
+
+River pairs a producer with a worker by the **`Kind()` string**, then deserializes `river_job.args`
+into the **worker's** args type. Two consequences that have each already cost this repo a defect:
+
+**1. Enumerate producers by kind string, and know that grep is not enough.** `internal/services`
+cannot import `internal/queue/jobs` (jobs imports services), so it declares six **mirror** args
+structs locally — `plaidSyncJobArgs`, `investmentHoldingsSyncJobArgs`,
+`investmentTransactionsSyncJobArgs`, `itemCleanupJobArgs`, `effectiveCategoryRefreshJobArgs`,
+`emailChangePropagationArgs` — each re-declaring its counterpart's JSON tags and returning the same
+`Kind()`. **#1486 was Critical because it was audited by Go type name**: a second producer of
+`item_cleanup` lived in a package the `ItemCleanupArgs` grep never touched, so a new recheck
+predicate silently left Plaid items billing. Start from:
+
+```bash
+cd backend && grep -rn 'Kind() string { return "' internal/services internal/workers
+```
+
+**That command is necessary but NOT sufficient.** `queue.RawJobArgs.Kind()` returns a *stored*
+string (`internal/queue/raw_job.go`), and `deadLetterService.Retry` re-enqueues **any**
+dead-lettered kind through it. So **every kind has one producer no static grep can see**, and it can
+resurrect a job whose preconditions have since changed. Audit each kind assuming a replay is
+possible: the worker must re-verify its own preconditions rather than trust the producer
+(`PlaidSyncWorker` is the model — it re-checks item existence and ownership and returns `nil` for
+both).
+
+> ⚠️ **CORRECTION.** This paragraph used to end *"…with the original queue and max-attempts but **no
+> `UniqueOpts`**. So … it can bypass deduplication."* **Both halves are false today.**
+>
+> - **Issue #1492** added `jobs.UniqueOptsForKind` (`internal/queue/jobs/unique_opts_by_kind.go`).
+>   `Retry` now resolves the kind's uniqueness options **before** it claims the row, applies them via
+>   `queue.WithUnique`, and **fails closed** on a kind with no registry entry
+>   (`ErrDeadLetterRetryKindUnknown`) rather than replaying it unguarded. A replay no longer bypasses
+>   deduplication — and if River *does* deduplicate it, the replay is refused with
+>   `ErrDeadLetterRetryDeduplicated` instead of reporting a success that created no job. **Adding a new
+>   job kind means adding its entry to that registry**, or its dead-letter rows become unreplayable.
+> - **Issue #1508** then made the whole replay **one transaction**: the claim
+>   (`AtomicMarkRetriedInTx`), the River insert (`EnqueueTx`) and the retry-id write
+>   (`MarkRetriedInTx`) commit together or not at all, and `tx.Rollback` replaced the compensating
+>   `ReleaseRetryClaim` UPDATE (now deleted). The claim-before-enqueue **order is unchanged** —
+>   reversing it re-opens the double-enqueue race. Consequence for anyone reading
+>   `dead_letter_jobs`: a **committed** row now always carries a real `retry_job_id`; no new row can
+>   reach `retry_job_id = 0`. Rows still at 0 are **historical**, written by the old two-commit path,
+>   and for those the column remains undecidable between "never enqueued" and "enqueued, bookkeeping
+>   failed" — which is why no reaper is built on it.
+
+**2. A mirror that drifts fails in production, not in CI — unless it is pinned.** Nothing about the
+mirrors is compile-checked; the two types are in packages that cannot see each other. A renamed or
+dropped JSON tag means the worker reads a **zero value** for a field the producer thought it set.
+`queue.MirroredJobArgsShapes` (`internal/queue/job_arg_shapes.go`) declares each kind's field set,
+its `omitempty` subset, and any field the mirror may legitimately omit; the two halves of the pin
+live in `internal/queue/jobs/job_arg_shapes_pin_test.go` and
+`internal/services/job_arg_shapes_pin_test.go`. **Adding a mirror means adding a table entry** —
+otherwise the new pair is unpinned.
+
+When you write such a pin, declare the expectation; never derive it from the thing under test. Two
+of these assertions read a type's `omitempty` tags and then checked that same type's output against
+them, and stayed green in **both** directions of the mutation until the expectation moved into the
+table.
 
 ## Wiring in main.go
 

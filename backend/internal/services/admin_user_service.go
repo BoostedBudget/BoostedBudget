@@ -36,11 +36,30 @@ const (
 
 // AdminUserService handles admin user management operations
 type AdminUserService interface {
-	// ListUsers returns a paginated list of users with optional filtering
-	ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int) (*domain.AdminUserListResponse, error)
+	// ListUsers returns a paginated list of users with optional filtering.
+	//
+	// now is the single instant every row's EffectiveStatus on this page must be computed from —
+	// the caller's own already-captured `as_of` snapshot (see AdminUserListResponse.AsOf's doc
+	// comment) — NOT a fresh time.Now() read inside this method or enrichAdminUser. Passing the
+	// caller's own instant keeps the returned `as_of` and every row's `effective_status` describing
+	// the identical moment (Codex review finding on Issue #1462/#1413).
+	ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int, now time.Time) (*domain.AdminUserListResponse, error)
 
-	// GetUserDetail returns detailed user information with statistics
-	GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error)
+	// GetUserDetail returns detailed user information with statistics.
+	//
+	// now is the single instant EffectiveStatus must be computed from — the caller's own
+	// already-captured `as_of` snapshot (see AdminUserDetail.AsOf's doc comment), for the same
+	// reason documented on ListUsers above.
+	GetUserDetail(ctx context.Context, userID string, now time.Time) (*domain.AdminUserDetail, error)
+
+	// GetOwnedHouseholdActiveMemberCount returns the number of active members in the household
+	// owned by userID (0 if the user owns no household) — a direct passthrough to
+	// AdminUserRepository.GetOwnedHouseholdActiveMemberCount, exposed here because the admin
+	// subscription-detail handler only has access to this service, not the repository directly
+	// (Issue #1452). Reused by UpdateUserTier's own post-apply seat-capacity warning below, and
+	// by GetUserSubscription (admin_subscriptions.go) to surface the same count BEFORE an
+	// override is applied — same underlying query, two different call sites.
+	GetOwnedHouseholdActiveMemberCount(ctx context.Context, userID string) (int, error)
 
 	// UpdateUserTier updates a user's subscription tier natively and in Clerk.
 	//
@@ -134,7 +153,7 @@ func (s *adminUserService) SetGDPRAnalytics(a phclient.GDPRAnalytics) {
 }
 
 // ListUsers returns a paginated list of users with optional filtering
-func (s *adminUserService) ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int) (*domain.AdminUserListResponse, error) {
+func (s *adminUserService) ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int, now time.Time) (*domain.AdminUserListResponse, error) {
 	// Validate page
 	if page < 1 {
 		return nil, ErrInvalidPageNumber
@@ -159,8 +178,9 @@ func (s *adminUserService) ListUsers(ctx context.Context, filters domain.AdminUs
 		users = []domain.AdminUserListItem{}
 	}
 
-	// Enrich users with admin status and override tier for admins
-	s.enrichUsersWithAdminStatus(users)
+	// Enrich users with admin status and override tier for admins, from the SAME instant the
+	// caller will report as `as_of` — never a fresh clock read here.
+	s.enrichUsersWithAdminStatus(users, now)
 
 	// Calculate pagination metadata
 	totalPages := 0
@@ -179,7 +199,7 @@ func (s *adminUserService) ListUsers(ctx context.Context, filters domain.AdminUs
 }
 
 // GetUserDetail returns detailed user information with statistics
-func (s *adminUserService) GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error) {
+func (s *adminUserService) GetUserDetail(ctx context.Context, userID string, now time.Time) (*domain.AdminUserDetail, error) {
 	// Validate user ID
 	if userID == "" {
 		return nil, ErrUserIDRequired
@@ -190,23 +210,37 @@ func (s *adminUserService) GetUserDetail(ctx context.Context, userID string) (*d
 		return nil, err
 	}
 
-	// Enrich with admin status and override tier for admins
-	s.enrichAdminUser(&detail.AdminUserListItem)
+	// Enrich with admin status and override tier for admins, from the SAME instant the caller
+	// will report as `as_of` — never a fresh clock read here.
+	s.enrichAdminUser(&detail.AdminUserListItem, now)
 
 	return detail, nil
 }
 
+// GetOwnedHouseholdActiveMemberCount is a direct passthrough to
+// AdminUserRepository.GetOwnedHouseholdActiveMemberCount — see the interface doc comment for why
+// this exists as its own method rather than being folded into GetUserDetail's response (Issue
+// #1452): GetUserSubscription needs it as a standalone value, and GetUserDetail's own
+// domain.AdminUserDetail type is shared with the plain (non-subscription) admin user-detail
+// endpoint, which has no use for a household seat count.
+func (s *adminUserService) GetOwnedHouseholdActiveMemberCount(ctx context.Context, userID string) (int, error) {
+	return s.repo.GetOwnedHouseholdActiveMemberCount(ctx, userID)
+}
+
 // enrichUsersWithAdminStatus sets IsAdmin flag and overrides tier for admin users.
 // Admins always show as "premium" tier with "active" status.
-func (s *adminUserService) enrichUsersWithAdminStatus(users []domain.AdminUserListItem) {
+//
+// now is threaded straight through to enrichAdminUser for every row — see that method's doc
+// comment for why this must be the caller's single already-captured instant, not time.Now().
+func (s *adminUserService) enrichUsersWithAdminStatus(users []domain.AdminUserListItem, now time.Time) {
 	for i := range users {
-		s.enrichAdminUser(&users[i])
+		s.enrichAdminUser(&users[i], now)
 	}
 }
 
 // enrichAdminUser checks if user is admin and updates their info accordingly, and populates
 // EffectiveStatus (Issue #1413) via the single shared domain predicate
-// (domain.User.EffectiveStatusWithActiveOverride) — never reimplemented here.
+// (domain.User.EffectiveStatusWithActiveOverrideAt) — never reimplemented here.
 //
 // Issue #1413 (this task): manual_tier_override is an unconstrained VARCHAR(50) with no CHECK
 // constraint, so it can hold a value naming no configured tier. This site used to call the bare,
@@ -219,7 +253,15 @@ func (s *adminUserService) enrichUsersWithAdminStatus(users []domain.AdminUserLi
 // PaddleCheckoutHandler.isConfiguredOverrideTier) rather than adding a third seam; nil-safe: a
 // nil tierConfig skips validation, matching every other SetOverrideTierValidator call site's
 // documented nil semantics.
-func (s *adminUserService) enrichAdminUser(user *domain.AdminUserListItem) {
+//
+// now MUST be the caller's own already-captured `as_of` snapshot instant, threaded all the way
+// from the HTTP handler (admin.go / admin_subscriptions.go). Calling the ambient
+// domain.User.EffectiveStatusWithActiveOverride() here (which reads its own time.Now()) would let
+// this enrichment disagree with the `as_of` the response also carries whenever a request happens
+// to straddle the override's expiry boundary between the handler's clock read and this one — the
+// exact "two clocks describing one user" defect Issue #1462 exists to fix, reintroduced one layer
+// up (Codex review finding).
+func (s *adminUserService) enrichAdminUser(user *domain.AdminUserListItem, now time.Time) {
 	// Build a scratch domain.User from this row's raw tier/status/override fields so
 	// EffectiveStatus is computed by the one canonical predicate everything else uses.
 	scratch := &domain.User{
@@ -228,7 +270,7 @@ func (s *adminUserService) enrichAdminUser(user *domain.AdminUserListItem) {
 		ManualTierOverride: user.ManualTierOverride,
 		ManualTierEndsAt:   user.ManualTierEndsAt,
 	}
-	status, overrideValue, hasOverride := scratch.EffectiveStatusWithActiveOverride()
+	status, overrideValue, hasOverride := scratch.EffectiveStatusWithActiveOverrideAt(now)
 	if hasOverride && s.tierConfig != nil {
 		if _, err := s.tierConfig.GetTier(domain.TierName(overrideValue)); err != nil {
 			slog.Warn("rejecting manual tier override in admin list: value does not name a configured tier",

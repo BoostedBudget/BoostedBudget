@@ -125,6 +125,9 @@ const HealthDashboardPage = lazy(() =>
 const WebhooksPage = lazy(() =>
   import('./features/admin').then(m => ({ default: m.WebhooksPage }))
 )
+const PlaidOrphanedItemsPage = lazy(() =>
+  import('./features/admin').then(m => ({ default: m.PlaidOrphanedItemsPage }))
+)
 const DeadLetterPage = lazy(() =>
   import('./features/admin').then(m => ({ default: m.DeadLetterPage }))
 )
@@ -541,6 +544,8 @@ function App() {
               <Route path="health" element={<Suspense fallback={<PageSkeleton />}><HealthDashboardPage /></Suspense>} />
               <Route path="webhooks" element={<Suspense fallback={<PageSkeleton />}><WebhooksPage /></Suspense>} />
               <Route path="dead-letter" element={<Suspense fallback={<PageSkeleton />}><DeadLetterPage /></Suspense>} />
+              {/* Issue #1497 — path matches ADMIN_ROUTES.PLAID_ORPHANED_ITEMS and the endpoint it reads. */}
+              <Route path="plaid/orphaned-items" element={<Suspense fallback={<PageSkeleton />}><PlaidOrphanedItemsPage /></Suspense>} />
             </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Routes>

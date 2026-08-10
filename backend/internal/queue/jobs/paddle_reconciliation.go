@@ -244,6 +244,36 @@ func PaddleReconciliationUniqueOpts() *queue.UniqueOpts {
 			queue.JobStateRunning,
 			queue.JobStateRetryable,
 			queue.JobStatePending,
+			// Completed is REQUIRED because this job is registered with RunOnStart: true
+			// (Issue #1448). Without it, a run that COMPLETED minutes ago does not
+			// deduplicate the start-of-process catch-up insert, so every deploy or leader
+			// election enqueues a redundant duplicate. Matches the two jobs that already
+			// had RunOnStart: true before #1448 (RetentionCleanupCheckUniqueOpts,
+			// ManualTierOverrideExpiryCheckUniqueOpts). Found by the final branch-wide
+			// Codex review.
+			queue.JobStateCompleted,
 		},
 	}
+}
+
+// PaddleReconciliationInsertOpts returns the *river.InsertOpts this job's periodic
+// registration in main.go must use — Queue: "low" plus the uniqueness options from
+// PaddleReconciliationUniqueOpts(), converted to river's UniqueOpts type.
+//
+// Issue #1448: PaddleReconciliationUniqueOpts() existed but was never called by main.go's
+// periodic registration — the same "defined, tested, never wired" defect class as
+// RetentionCleanupCheckUniqueOpts's original bug (Issue #1413 Finding 2).
+func PaddleReconciliationInsertOpts() *river.InsertOpts {
+	return riverInsertOptsFromUnique(queue.QueueLow, PaddleReconciliationUniqueOpts())
+}
+
+// PaddleReconciliationPeriodicOpts returns the *river.PeriodicJobOpts this job's periodic
+// registration in main.go must use. RunOnStart: true is only safe because
+// PaddleReconciliationInsertOpts() above always carries PaddleReconciliationUniqueOpts()'s
+// dedup — previously this job used RunOnStart: false, meaning it could be enqueued zero
+// times ever on a deploy cadence faster than its interval (Issue #1448). ID is set so River
+// restores nextRunAt across restarts/leader elections instead of recomputing now+interval
+// every time.
+func PaddleReconciliationPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: PaddleReconciliationArgs{}.Kind()}
 }

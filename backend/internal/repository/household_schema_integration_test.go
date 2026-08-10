@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/database"
 )
 
 // setupHouseholdSchemaDB creates an isolated DB pool for schema tests and
@@ -35,9 +37,11 @@ func setupHouseholdSchemaDB(t *testing.T) *pgxpool.Pool {
 		t.Skip("DATABASE_URL not set — skipping integration test")
 	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
+	// Issue #1461: route through database.NewPoolFromURL (not a bare pgxpool.New) so this pool
+	// pins session TimeZone=UTC exactly like the production pool does.
+	pool, err := database.NewPoolFromURL(ctx, dsn)
 	if err != nil {
-		t.Fatalf("pgxpool.New: %v", err)
+		t.Fatalf("database.NewPoolFromURL: %v", err)
 	}
 	t.Cleanup(pool.Close)
 	return pool

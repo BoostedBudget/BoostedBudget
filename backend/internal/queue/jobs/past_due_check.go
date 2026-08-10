@@ -122,6 +122,37 @@ func PastDueCheckUniqueOpts() *queue.UniqueOpts {
 			queue.JobStateRunning,
 			queue.JobStateRetryable,
 			queue.JobStatePending,
+			// Completed is REQUIRED because this job is registered with RunOnStart: true
+			// (Issue #1448). Without it, a run that COMPLETED minutes ago does not
+			// deduplicate the start-of-process catch-up insert, so every deploy or leader
+			// election enqueues a redundant duplicate. Matches the two jobs that already
+			// had RunOnStart: true before #1448 (RetentionCleanupCheckUniqueOpts,
+			// ManualTierOverrideExpiryCheckUniqueOpts). Found by the final branch-wide
+			// Codex review.
+			queue.JobStateCompleted,
 		},
 	}
+}
+
+// PastDueCheckInsertOpts returns the *river.InsertOpts this job's periodic registration in
+// main.go must use — Queue: "low" plus the uniqueness options from PastDueCheckUniqueOpts(),
+// converted to river's UniqueOpts type.
+//
+// Issue #1448: main.go's periodic registration previously built a bare
+// &river.InsertOpts{Queue: "low"} and never called PastDueCheckUniqueOpts() at all — even
+// though its PeriodicJobOpts already set RunOnStart: true, the unsafe
+// RunOnStart-without-dedup combination this package's retention/manual-tier helpers document
+// explicitly. This job disconnects Plaid at 14 days past due and auto-cancels at 21 —
+// duplicate runs risk re-processing the same user twice in one pass.
+func PastDueCheckInsertOpts() *river.InsertOpts {
+	return riverInsertOptsFromUnique(queue.QueueLow, PastDueCheckUniqueOpts())
+}
+
+// PastDueCheckPeriodicOpts returns the *river.PeriodicJobOpts this job's periodic
+// registration in main.go must use. RunOnStart: true is only safe because
+// PastDueCheckInsertOpts() above always carries PastDueCheckUniqueOpts()'s dedup. ID is set
+// so River restores nextRunAt across restarts/leader elections instead of recomputing
+// now+interval every time — Issue #1448.
+func PastDueCheckPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: PastDueCheckArgs{}.Kind()}
 }

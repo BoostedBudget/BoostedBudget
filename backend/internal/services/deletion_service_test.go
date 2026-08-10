@@ -22,6 +22,64 @@ import (
 // MockProfileRepositoryForDeletion for testing deletion service
 type MockProfileRepositoryForDeletion struct {
 	mock.Mock
+	// LastClaimKind records the repository.DeletionClaimKind the last ClaimForDeletion call passed
+	// (Issue #1440, T0). Asserted by TestExecuteDeletion_ThreadsClaimKindToRepository.
+	LastClaimKind repository.DeletionClaimKind
+
+	// Issue #1494 — CountUncleanedLinkedItems's fields. Field-driven rather than testify-driven on
+	// purpose: this method is reached ONLY on ExecuteDeletion's Plaid-less branch, which several
+	// pre-existing tests in this file exercise (they construct the service with a nil
+	// plaidCleanupSvc), and an unmatched testify expectation panics. The zero value is 0/nil — "no
+	// outstanding Plaid work" — which is exactly the behaviour those tests were written against.
+	UncleanedLinkedItemCount int
+	// UncleanedLinkedItemCountErr, when set, makes the count fail — the fail-closed case.
+	UncleanedLinkedItemCountErr error
+	// UncleanedLinkedItemCountCalls counts the calls, so a test can pin that the Plaid-less branch
+	// actually consulted the count rather than reaching its conclusion some other way.
+	UncleanedLinkedItemCountCalls int
+
+	// AuthorisedFn answers DeletionStillAuthorised — ExecuteDeletion's use-time re-verification of
+	// the authorisation it was claimed under. Field-driven for the same reason as
+	// CountUncleanedLinkedItems above: every pre-existing test in this file reaches it, and a nil
+	// AuthorisedFn means "still authorised", which is exactly the behaviour they were written
+	// against. Tests that care flip it mid-flow.
+	AuthorisedFn func(ctx context.Context) (bool, error)
+	// AuthorisedKinds / AuthorisedOccurrences record what each recheck was ASKED, so a test can pin
+	// that the question matches the authorisation this run was claimed under rather than a union.
+	AuthorisedKinds       []repository.DeletionClaimKind
+	AuthorisedOccurrences []*time.Time
+
+	// Round 15, finding D2 — HouseholdOwnerBlocksDeletion's fields. Field-driven for the same reason
+	// as CountUncleanedLinkedItems above: ExecuteDeletion now asks this on EVERY run, before any
+	// external cleanup, so every pre-existing test in this package reaches it and an unmatched testify
+	// expectation would panic. The zero value is false/nil — "no household blocks this deletion" —
+	// which is exactly the behaviour those tests were written against.
+	HouseholdOwnerBlocks bool
+	// HouseholdOwnerBlocksErr, when set, makes the precondition undeterminable — the fail-closed case.
+	HouseholdOwnerBlocksErr error
+	// HouseholdOwnerBlocksCalls counts the calls, so a test can pin that the decision was made from
+	// the precondition rather than reached some other way.
+	HouseholdOwnerBlocksCalls int
+}
+
+// HouseholdOwnerBlocksDeletion — round 15, finding D2. See the struct's field comments for why this
+// is field-driven rather than a testify expectation.
+func (m *MockProfileRepositoryForDeletion) HouseholdOwnerBlocksDeletion(ctx context.Context, userID string) (bool, error) {
+	m.HouseholdOwnerBlocksCalls++
+	if m.HouseholdOwnerBlocksErr != nil {
+		return false, m.HouseholdOwnerBlocksErr
+	}
+	return m.HouseholdOwnerBlocks, nil
+}
+
+// DeletionStillAuthorised — the use-time recheck. See the struct's field comments.
+func (m *MockProfileRepositoryForDeletion) DeletionStillAuthorised(ctx context.Context, userID string, kind repository.DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	m.AuthorisedKinds = append(m.AuthorisedKinds, kind)
+	m.AuthorisedOccurrences = append(m.AuthorisedOccurrences, expectedDeletionRequestedAt)
+	if m.AuthorisedFn == nil {
+		return true, nil
+	}
+	return m.AuthorisedFn(ctx)
 }
 
 func (m *MockProfileRepositoryForDeletion) GetUserByID(ctx context.Context, userID string) (*domain.User, error) {
@@ -78,17 +136,54 @@ func (m *MockProfileRepositoryForDeletion) CancelDeletion(ctx context.Context, u
 	return args.Error(0)
 }
 
-func (m *MockProfileRepositoryForDeletion) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
+// RecordDeletionResidue (Issue #1504) records that a deletion performed an irreversible external
+// effect. See repository.ProfileRepository for the contract.
+//
+// ⚠ ROUND 15: THE PERMISSIVE DEFAULT IS DELIBERATE. Since each irreversible external Paddle call now
+// records itself AS IT IS ISSUED (deletionService.recordIssuedExternalEffect) rather than being
+// inferred from an in-memory flag at the end of the run, this method is reached by EVERY test that
+// gets as far as the Paddle leg — some fifty of them, almost none of which are about the residue
+// record. Registering a permissive default here rather than in fifty test bodies keeps those tests
+// about their own subject.
+//
+// It does not weaken the residue tests. testify still records the call, so their AssertCalled /
+// AssertNotCalled assertions see exactly what they saw before; and a test that registers its own
+// expectation (e.g. one that makes the write fail) registered it during setup, so testify finds that
+// one first and this default is never installed at all.
+func (m *MockProfileRepositoryForDeletion) RecordDeletionResidue(ctx context.Context, userID string, effect repository.DeletionResidueEffect) error {
+	if !m.hasExpectationFor("RecordDeletionResidue") {
+		m.On("RecordDeletionResidue", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	}
-	return args.Get(0).([]*domain.User), args.Error(1)
+	args := m.Called(ctx, userID, effect)
+	return args.Error(0)
+}
+
+// hasExpectationFor reports whether the test has already programmed this method. Reads
+// ExpectedCalls without testify's own mutex, which is safe here and only here: these mocks are
+// programmed during single-goroutine test setup and this check runs on the same goroutine as the
+// call it guards.
+func (m *MockProfileRepositoryForDeletion) hasExpectationFor(method string) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == method {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *MockProfileRepositoryForDeletion) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
 	return args.Bool(0), args.Error(1)
+}
+
+// CountUncleanedLinkedItems — Issue #1494. See the struct's field comments for why this is
+// field-driven rather than a testify expectation.
+func (m *MockProfileRepositoryForDeletion) CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error) {
+	m.UncleanedLinkedItemCountCalls++
+	if m.UncleanedLinkedItemCountErr != nil {
+		return 0, m.UncleanedLinkedItemCountErr
+	}
+	return m.UncleanedLinkedItemCount, nil
 }
 
 // Issue #679, #680: Trial expiration methods
@@ -136,7 +231,7 @@ func (m *MockProfileRepositoryForDeletion) GetEffectiveSubscriptionStatusByUserI
 	args := m.Called(ctx, userID)
 	return args.String(0), args.Error(1)
 }
-func (m *MockProfileRepositoryForDeletion) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
+func (m *MockProfileRepositoryForDeletion) SetRetentionDates(ctx context.Context, userID string, guard repository.RetentionClockGuard, retentionMonths int) error {
 	return nil
 }
 func (m *MockProfileRepositoryForDeletion) ClearRetentionDates(ctx context.Context, userID string) error {
@@ -154,9 +249,6 @@ func (m *MockProfileRepositoryForDeletion) GetUsersNeedingRetention30dNotice(ctx
 func (m *MockProfileRepositoryForDeletion) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
-func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
-	return nil, nil
-}
 func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
@@ -172,13 +264,9 @@ func (m *MockProfileRepositoryForDeletion) GetUsersInPastDue(ctx context.Context
 	return []domain.User{}, nil
 }
 
-// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
-// (Issue #1413 H5 residual) are not exercised by these deletion-service tests; stubbed to satisfy
-// the widened ProfileRepository interface.
-func (m *MockProfileRepositoryForDeletion) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
-	return false, nil
-}
-
+// GetUsersNeedingRetentionClockRepair, RepairRetentionClock (Issue #1413 H5 residual) are not
+// exercised by these deletion-service tests; stubbed to satisfy the widened ProfileRepository
+// interface.
 func (m *MockProfileRepositoryForDeletion) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
 	return []*domain.User{}, nil
 }
@@ -206,17 +294,10 @@ func (m *MockProfileRepositoryForDeletion) ExpireTrialIfNoOverride(ctx context.C
 // m.Called so individual tests can assert the claimed/not-claimed branch explicitly — unlike
 // the other narrow-interface CAS stubs above, ExecuteDeletion's own tests need to control this
 // return value directly.
-func (m *MockProfileRepositoryForDeletion) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+func (m *MockProfileRepositoryForDeletion) ClaimForDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) (bool, error) {
+	m.LastClaimKind = kind
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
-}
-
-func (m *MockProfileRepositoryForDeletion) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-
-func (m *MockProfileRepositoryForDeletion) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
-	return false, nil
 }
 
 func (m *MockProfileRepositoryForDeletion) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
@@ -589,14 +670,17 @@ func TestExecuteDeletion_CascadesAllData(t *testing.T) {
 	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.NoError(t, err)
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID, mock.Anything)
 	mockClerk.AssertCalled(t, "DeleteUser", ctx, user.ClerkUserID)
-	mockAudit.AssertCalled(t, "Log", ctx, "user.deleted", "user", user.ID)
+	// Issue #1507: the `user.deleted` entry is written INSIDE DeleteUserCascade's transaction
+	// (repository.LogInTx), not by this service afterwards. A call here would be a SECOND row per
+	// deletion. The durable single-row property is asserted where it can actually be observed, in
+	// TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion.
+	mockAudit.AssertNotCalled(t, "Log", ctx, "user.deleted", "user", user.ID)
 }
 
 // TestExecuteDeletion_DeletesClerkUser verifies Clerk deletion
@@ -621,9 +705,8 @@ func TestExecuteDeletion_DeletesClerkUser(t *testing.T) {
 	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.NoError(t, err)
 	mockClerk.AssertExpectations(t)
@@ -649,7 +732,7 @@ func TestExecuteDeletion_HandlesAlreadyDeleted(t *testing.T) {
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.NoError(t, err, "Should not error on already deleted user")
 	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything, mock.Anything)
@@ -678,47 +761,57 @@ func TestExecuteDeletion_HandlesClerkError(t *testing.T) {
 	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(errors.New("Clerk API error"))
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	// Should still succeed even if Clerk fails (our data is deleted)
 	assert.NoError(t, err)
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID, mock.Anything)
-	mockAudit.AssertCalled(t, "Log", ctx, "user.deleted", "user", user.ID)
+	// Issue #1507: written inside the cascade's transaction, not here — see
+	// TestExecuteDeletion_CascadesAllData's note.
+	mockAudit.AssertNotCalled(t, "Log", ctx, "user.deleted", "user", user.ID)
 }
 
 // MockPlaidItemCleanupService is a mock for PlaidItemCleanupService
 type MockPlaidItemCleanupService struct {
 	mock.Mock
+
+	// LastRemoveAllRecheck is the eligibility callback the last RemoveAllUserItems call was handed.
+	// Captured in a FIELD rather than passed to m.Called so that every pre-existing two-argument
+	// `.On("RemoveAllUserItems", ctx, userID)` expectation in this package keeps matching — a func
+	// value is also not comparable, which makes it a poor testify argument regardless.
+	// TestExecuteDeletion_HandsPlaidCleanupALiveEligibilityRecheck reads it; nil here is the defect
+	// this parameter exists to prevent.
+	LastRemoveAllRecheck func(ctx context.Context) (bool, error)
+	// RemoveAllRecheckWasNil distinguishes "captured a nil callback" from "was never called".
+	RemoveAllRecheckWasNil bool
 }
 
-func (m *MockPlaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID string) error {
+func (m *MockPlaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
+	m.LastRemoveAllRecheck = recheck
+	m.RemoveAllRecheckWasNil = recheck == nil
 	args := m.Called(ctx, userID)
 	return args.Error(0)
 }
 
-func (m *MockPlaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID string) error {
+// RemoveItem's use-time eligibility recheck (Codex pass-5 Medium 2) is excluded from the expectation
+// arguments: DeletionService never calls RemoveItem at all, and the recheck's behaviour is asserted
+// where it lives (plaid_item_cleanup_removeitem_recheck_test.go and the worker's own tests).
+func (m *MockPlaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID string, _ func(ctx context.Context) (bool, error)) error {
 	args := m.Called(ctx, linkedItemID)
 	return args.Error(0)
 }
 
-// Issue #679, #680: DisconnectAllUserItems for trial expiration
-func (m *MockPlaidItemCleanupService) DisconnectAllUserItems(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
-}
-
-// DisconnectAllUserItemsIfEligible (Issue #1413 round-7) is never called through this mock —
-// DeletionService only calls RemoveAllUserItems/DisconnectAllUserItems on its plaidCleanupSvc
-// field; the per-item recheck variant is used solely by the retention-cleanup Plaid-disconnect
-// repair pass. Bare no-op stubbed only to satisfy the widened PlaidItemCleanupService interface.
+// DisconnectAllUserItemsIfEligible is never called through this mock — DeletionService only calls
+// RemoveAllUserItems on its plaidCleanupSvc field. Bare no-op stubbed only to satisfy the
+// PlaidItemCleanupService interface. (Its nil-recheck twin, DisconnectAllUserItems, was deleted
+// outright by Issue #1500 and no longer needs stubbing here.)
 func (m *MockPlaidItemCleanupService) DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
 	return nil
 }
 
 // SetWorkClaimsRepo (Issue #1413 H1) is never called through this mock — DeletionService only
-// calls RemoveAllUserItems/DisconnectAllUserItems on its plaidCleanupSvc field; the claims repo
+// calls RemoveAllUserItems on its plaidCleanupSvc field; the claims repo
 // is wired directly onto the concrete PlaidItemCleanupService in main.go, not via DeletionService.
 // Bare no-op (no m.Called) to avoid an unregistered-expectation panic; stubbed only to satisfy
 // the widened PlaidItemCleanupService interface.
@@ -757,9 +850,8 @@ func TestExecuteDeletion_CallsPlaidCleanupBeforeDBDelete(t *testing.T) {
 		callOrder = append(callOrder, "DeleteUserCascade")
 	})
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.NoError(t, err)
 	mockPlaidCleanup.AssertCalled(t, "RemoveAllUserItems", ctx, user.ID)
@@ -812,7 +904,7 @@ func TestExecuteDeletion_PlaidCleanupFails_AbortsDeletion(t *testing.T) {
 	// an unstubbed testify mock call panics, a stronger proof than AssertNotCalled alone that
 	// the abort actually happens before any of them.
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	require.Error(t, err, "a failed Plaid cleanup must abort the deletion, not be swallowed")
 	assert.ErrorIs(t, err, plaidErr)
@@ -850,9 +942,8 @@ func TestSetPlaidCleanupService(t *testing.T) {
 	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.NoError(t, err)
 	// Verify the cleanup service was called (proving the setter worked)
@@ -912,9 +1003,8 @@ func TestExecuteDeletion_ActiveSubscription_CancelsImmediately(t *testing.T) {
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 	assert.NoError(t, err)
 	mockPaddle.AssertCalled(t, "CancelSubscriptionImmediately", ctx, paddleSubID)
 	mockPaddle.AssertCalled(t, "ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail)
@@ -941,9 +1031,8 @@ func TestExecuteDeletion_TrialSubscription_CancelsImmediately(t *testing.T) {
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 	assert.NoError(t, err)
 	mockPaddle.AssertCalled(t, "CancelSubscriptionImmediately", ctx, paddleSubID)
 }
@@ -969,9 +1058,8 @@ func TestExecuteDeletion_TrialingSubscription_CancelsImmediately(t *testing.T) {
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 	assert.NoError(t, err)
 	mockPaddle.AssertCalled(t, "CancelSubscriptionImmediately", ctx, paddleSubID)
 }
@@ -997,9 +1085,8 @@ func TestExecuteDeletion_PastDueSubscription_CancelsImmediately(t *testing.T) {
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 	assert.NoError(t, err)
 	mockPaddle.AssertCalled(t, "CancelSubscriptionImmediately", ctx, paddleSubID)
 }
@@ -1025,9 +1112,8 @@ func TestExecuteDeletion_CancelledSubscription_DoesNotCancelAgain(t *testing.T) 
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 	assert.NoError(t, err)
 	mockPaddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
 	mockPaddle.AssertCalled(t, "ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail)
@@ -1063,9 +1149,8 @@ func TestExecuteDeletion_InactiveSubscription_DoesNotCancel(t *testing.T) {
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 	assert.NoError(t, err)
 	mockPaddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
 }
@@ -1124,9 +1209,8 @@ func TestExecuteDeletion_CompedUser_RawCancelled_DoesNotCancelRealSubscription(t
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindUserRequested)
 	assert.NoError(t, err)
 	mockPaddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
 	mockPaddle.AssertCalled(t, "ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail)
@@ -1160,9 +1244,8 @@ func TestExecuteDeletion_NoPaddleCustomerID_SkipsArchive(t *testing.T) {
 	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 	assert.NoError(t, err)
 	mockPaddle.AssertNotCalled(t, "ArchiveAndAnonymizeCustomer", mock.Anything, mock.Anything, mock.Anything)
 }
@@ -1210,7 +1293,7 @@ func TestExecuteDeletion_PaddleCancelFails_AbortsDeletion(t *testing.T) {
 	// unstubbed — an unstubbed testify mock call panics, proving the abort happens before any
 	// of them, not just before the cascade.
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	require.Error(t, err, "a failed Paddle cancel must abort the deletion, not be swallowed")
 	assert.ErrorIs(t, err, paddleErr)
@@ -1256,7 +1339,7 @@ func TestExecuteDeletion_PaddleSideEffectClaimBusy_Aborts_ReleasesFlowClaim(t *t
 	// deletion are deliberately left unstubbed — an unstubbed testify mock call panics, proving
 	// the Paddle collaborator is never reached at all.
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	require.Error(t, err, "a busy side-effect claim must abort this deletion attempt so it retries")
 	assert.ErrorIs(t, err, ErrSideEffectClaimBusy)
@@ -1302,7 +1385,7 @@ func TestExecuteDeletion_PaddleArchiveFails_AbortsDeletion(t *testing.T) {
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(archiveErr)
 	// DeleteUserCascade and Clerk deletion are deliberately left unstubbed.
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	require.Error(t, err, "a failed Paddle archive must abort the deletion, not be swallowed")
 	assert.ErrorIs(t, err, archiveErr)
@@ -1332,17 +1415,30 @@ func TestSetPaddleCleanupService_WiresCorrectly(t *testing.T) {
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 	assert.NoError(t, err)
 	// Both mock methods called proves setter worked
 	mockPaddle.AssertExpectations(t)
 }
 
-// TestExecuteDeletion_PaddleRunsBeforePlaidAndDB verifies the execution order:
-// Paddle cleanup → Plaid cleanup → DB cascade. Issue #1006.
-func TestExecuteDeletion_PaddleRunsBeforePlaidAndDB(t *testing.T) {
+// TestExecuteDeletion_PlaidRunsBeforePaddleAndDB verifies the execution order:
+// Plaid cleanup → Paddle cleanup → DB cascade. Issue #1006 established the ordering; the ordering
+// itself was REVERSED afterwards, and this test's name and expectation were reversed with it.
+//
+// ⚠ IT USED TO ASSERT THE OPPOSITE (named "...PaddleRunsBeforePlaidAndDB"), and that expectation was
+// wrong in a way the test could not see, because it only ever exercised the all-succeeds path. The
+// two external legs are NOT equally reversible: a Plaid disconnect costs the user a re-link, whereas
+// ArchiveAndAnonymizeCustomer destroys PII at Paddle and cannot be undone by us or by Paddle. With
+// Paddle first, EVERY abort after it — a Plaid outage, the routine ErrSideEffectClaimBusy deferral,
+// or (the case that prompted this) the user cancelling their deletion mid-flight — left a user whose
+// deletion did not happen with their subscription already cancelled and their Paddle customer
+// already anonymised. Reversing the order means the widest exposure window carries the cheapest
+// possible loss, and the irreversible call is preceded by the freshest authorisation check.
+//
+// See deletion_service_authorisation_revoked_test.go for the tests that make the ordering
+// load-bearing rather than incidental.
+func TestExecuteDeletion_PlaidRunsBeforePaddleAndDB(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
@@ -1373,14 +1469,14 @@ func TestExecuteDeletion_PaddleRunsBeforePlaidAndDB(t *testing.T) {
 		callOrder = append(callOrder, "DeleteUserCascade")
 	})
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		[]string{"CancelSubscription", "ArchiveCustomer", "RemoveAllUserItems", "DeleteUserCascade"},
+		[]string{"RemoveAllUserItems", "CancelSubscription", "ArchiveCustomer", "DeleteUserCascade"},
 		callOrder,
-		"Execution order must be: Paddle cancel, Paddle archive, Plaid remove, DB cascade",
+		"Execution order must be: Plaid remove, Paddle cancel, Paddle archive, DB cascade — "+
+			"recoverable external work first, the irreversible anonymisation last",
 	)
 }
 
@@ -1656,7 +1752,7 @@ func TestExecuteDeletion_ActiveComp_NoDeletionRequest_SkipsDeletion(t *testing.T
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.NoError(t, err, "a skipped auto-deletion is a legitimate outcome, not an error")
 	mockPlaidCleanup.AssertNotCalled(t, "RemoveAllUserItems", mock.Anything, mock.Anything)
@@ -1686,9 +1782,8 @@ func TestExecuteDeletion_ActiveComp_WithDeletionRequest_ProceedsAnyway(t *testin
 	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindUserRequested)
 
 	assert.NoError(t, err)
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID, mock.Anything)
@@ -1739,7 +1834,7 @@ func TestExecuteDeletion_ExpiredComp_NoDeletionRequest_BeltAndBracesDoesNotShort
 	// no deletion request (see the doc comment above for the live-DB proof this mirrors).
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(false, nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.NoError(t, err, "a denied claim is a legitimate skip, not an error")
 	mockRepo.AssertCalled(t, "ClaimForDeletion", ctx, user.ID) // proves the belt-and-braces short-circuit did NOT fire here
@@ -1771,12 +1866,47 @@ func TestExecuteDeletion_NonComped_ProceedsNormally(t *testing.T) {
 	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.NoError(t, err)
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID, mock.Anything)
+}
+
+// TestExecuteDeletion_ThreadsClaimKindToRepository proves ExecuteDeletion passes the CALLER's
+// declared authorisation through to ClaimForDeletion verbatim, rather than deriving one from the
+// user's row (Issue #1440, T0). Deriving it is exactly what cannot work: a user who cancelled has a
+// row indistinguishable from a retention candidate, so an inferred kind would authorise the
+// deletion the split exists to refuse.
+//
+// The user object here has no deletion request and no comp, so it is a plausible retention
+// candidate on its face — which is precisely why the user-requested case must still forward
+// user-requested and not "correct" it.
+func TestExecuteDeletion_ThreadsClaimKindToRepository(t *testing.T) {
+	for _, kind := range []repository.DeletionClaimKind{
+		repository.DeletionKindUserRequested,
+		repository.DeletionKindRetention,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			ctx := context.Background()
+			mockRepo := new(MockProfileRepositoryForDeletion)
+			mockClerk := new(MockClerkService)
+			mockAudit := new(MockAuditLogger)
+
+			service := NewDeletionService(mockRepo, new(MockEmailService), mockClerk, mockAudit, nil, 30, "test-secret-key")
+			service.SetWorkClaimsRepo(newAllowingClaimsRepo())
+
+			user := &domain.User{ID: "user-123", ClerkUserID: "user_123", Email: "test@example.com"}
+			mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+			mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+			mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
+			mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+
+			require.NoError(t, service.ExecuteDeletion(ctx, user.ID, kind))
+			assert.Equal(t, kind, mockRepo.LastClaimKind,
+				"the caller's declared claim kind must reach ClaimForDeletion unmodified")
+		})
+	}
 }
 
 // --- Issue #1413 Critical finding C2 (closed for real, round 3): TWO claim gates now guard
@@ -1834,7 +1964,7 @@ func TestExecuteDeletion_WorkClaimNotGranted_SkipsWithoutPredicateOrCleanup(t *t
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	// ClaimForDeletion and everything below is deliberately left unstubbed on purpose.
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.NoError(t, err, "a claim not won is a legitimate skip, not an error")
 	mockRepo.AssertNotCalled(t, "ClaimForDeletion", mock.Anything, mock.Anything)
@@ -1874,7 +2004,7 @@ func TestExecuteDeletion_WorkClaimErrors_PropagatesAndSkipsPredicateAndCleanup(t
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	// Nothing below is stubbed on purpose.
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.Error(t, err)
 	mockRepo.AssertNotCalled(t, "ClaimForDeletion", mock.Anything, mock.Anything)
@@ -1916,7 +2046,7 @@ func TestExecuteDeletion_PredicateDenied_ReleasesClaimAndSkipsCleanup(t *testing
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(false, nil)
 	// Everything below is deliberately left unstubbed on purpose.
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.NoError(t, err, "a denied predicate re-check is a legitimate skip, not an error")
 	mockPaddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
@@ -1958,7 +2088,7 @@ func TestExecuteDeletion_PredicateErrors_ReleasesClaimAndPropagates(t *testing.T
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(false, errors.New("db unavailable"))
 	// Nothing below is stubbed on purpose.
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.Error(t, err)
 	mockPlaidCleanup.AssertNotCalled(t, "RemoveAllUserItems", mock.Anything, mock.Anything)
@@ -2000,9 +2130,8 @@ func TestExecuteDeletion_BothClaimsGranted_ProceedsWithFullCleanupAndCompletes(t
 	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.NoError(t, err)
 	mockPlaidCleanup.AssertCalled(t, "RemoveAllUserItems", ctx, user.ID)
@@ -2050,14 +2179,13 @@ func TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed(t *testing.T) {
 	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
 	var logBuf bytes.Buffer
 	prevLogger := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
 	defer slog.SetDefault(prevLogger)
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	assert.NoError(t, err, "the cascade already ran; a lost lease at Complete time must not be reported as a deletion failure")
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID, mock.Anything)
@@ -2107,11 +2235,64 @@ func TestExecuteDeletion_CascadeFails_ReleasesClaim(t *testing.T) {
 	// Clerk deletion and audit log deliberately left unstubbed — an unstubbed testify mock
 	// call panics, proving the failure return happens before either of them.
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, cascadeErr)
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+}
+
+// TestExecuteDeletion_CascadeHouseholdOwnerGuard_ReleasesClaimAndPropagatesError is Issue #1440's
+// Critical-finding regression at the SERVICE layer (Codex review): DeleteUserCascade now returns
+// (false, domain.ErrHouseholdHasActiveMembers) — NOT a normal (false, nil) skip like a lapsed comp
+// or an un-cleaned Plaid item — when the target is a household owner whose deletion would CASCADE
+// away another real user's data (households.owner_user_id -> household_members /
+// subscription_entitlements.payer_user_id). Unlike TestExecuteDeletion_CascadeAbortedByGuard above,
+// this condition cannot self-heal on the next scheduled run, so it MUST be treated as a genuine
+// error: ExecuteDeletion must propagate it (so every caller's existing Error-level logging fires,
+// and the River-job callers retry and eventually surface it in the dead-letter queue) while still
+// releasing the work claim so a future run — after a human resolves the household — is not stuck
+// waiting out the rest of the 15-minute lease. The real DB proof that DeleteUserCascade itself
+// returns this error in exactly this situation lives in
+// profile_repository_delete_user_cascade_integration_test.go
+// (TestDeleteUserCascade_Integration_HouseholdOwnerWithActiveNonOwnerMember_NotDeleted and its
+// orphaned-entitlement sibling); this test is the service-layer proof that ExecuteDeletion responds
+// to that signal correctly — as an error, not a silent skip.
+func TestExecuteDeletion_CascadeHouseholdOwnerGuard_ReleasesClaimAndPropagatesError(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+
+	user := &domain.User{
+		ID:          "user-123",
+		ClerkUserID: "user_123",
+		Email:       "test@example.com",
+		IsDeleted:   false,
+	}
+
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(false, domain.ErrHouseholdHasActiveMembers)
+	// Clerk deletion and audit log deliberately left unstubbed — an unstubbed testify mock call
+	// panics, proving the error return happens before either of them (the user was NOT deleted).
+
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
+
+	require.Error(t, err, "a household-owner guard trip must be a genuine error, not a silent (nil) skip — it cannot self-heal without a human resolving the household")
+	assert.ErrorIs(t, err, domain.ErrHouseholdHasActiveMembers)
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestExecuteDeletion_CascadeAbortedByGuard_ReleasesClaimNotCompleteAndReturnsNoError proves
@@ -2158,7 +2339,7 @@ func TestExecuteDeletion_CascadeAbortedByGuard_ReleasesClaimNotCompleteAndReturn
 	// Clerk deletion and audit log deliberately left unstubbed — an unstubbed testify mock call
 	// panics, proving ExecuteDeletion returns before reaching either: the user was not deleted.
 
-	err := service.ExecuteDeletion(ctx, user.ID)
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 
 	require.NoError(t, err, "an aborted cascade is a normal, expected outcome — not a job failure")
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
@@ -2214,7 +2395,7 @@ func TestExecuteDeletion_ReleasesClaim_WithIndependentContext_EvenIfCallerContex
 	cascadeErr := errors.New("db write failed")
 	mockRepo.On("DeleteUserCascade", baseCtx, user.ID, mock.Anything).Return(false, cascadeErr)
 
-	err := service.ExecuteDeletion(baseCtx, user.ID)
+	err := service.ExecuteDeletion(baseCtx, user.ID, repository.DeletionKindRetention)
 
 	require.Error(t, err)
 	require.True(t, releaseCalled, "Release must still be called even with a cancelled caller context")
@@ -2257,7 +2438,7 @@ func TestExecuteDeletion_PanicDuringCascade_ReleasesClaimThenRePanics(t *testing
 	}).Return(false, nil)
 
 	require.Panics(t, func() {
-		_ = service.ExecuteDeletion(ctx, user.ID)
+		_ = service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
 	}, "the panic must still propagate — this proves the claim is released first, not that panics are swallowed")
 
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))

@@ -1610,3 +1610,129 @@ func TestGetEffectiveSubscriptionStatusByUserID_MalformedOverride_NoValidatorCon
 	assert.Equal(t, "active", status)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// ─── Issue #1453: GetUsersWithMalformedTierOverride — the monitoring query ─────────────────────
+
+// malformedTierOverrideWhereClauseForTest mirrors malformedTierOverrideWhereClause's exact text
+// (profile_repository.go), the same convention activePaddleSubsWhereClause above already uses for
+// a hand-verified copy of a production WHERE-clause constant.
+const malformedTierOverrideWhereClauseForTest = ` WHERE manual_tier_override IS NOT NULL AND manual_tier_override <> '' AND is_deleted = FALSE ORDER BY id`
+
+// TestGetUsersWithMalformedTierOverride_FiltersToOnlyMalformedRows is the RED test for Issue #1453's
+// monitoring query: given two candidate rows (both non-empty overrides — the SQL WHERE clause's own
+// job), one naming a configured tier and one naming garbage, only the garbage one must come back.
+// The SQL layer deliberately does NOT distinguish them (see the method's own doc comment for why —
+// no hand-copied tier list in SQL); the Go-side filter against r.overrideTierValidator is what this
+// test actually exercises.
+func TestGetUsersWithMalformedTierOverride_FiltersToOnlyMalformedRows(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewProfileRepository(mock, newTestFieldEncryptor(t))
+	repo.SetOverrideTierValidator(fakeOverrideTierValidator("premium", "household_2", "household_3", "household_4", "household_5"))
+
+	ctx := context.Background()
+	validID := uuid.New().String()
+	malformedID := uuid.New().String()
+	now := time.Now()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
+		"timezone", "timezone_source",
+		"past_due_started_at", "plaid_cleanup_pending_at",
+	}).AddRow(
+		validID, "clerk_valid", "valid@example.com", true,
+		"premium", "cancelled", &now, nil,
+		nil, nil, false,
+		stringPtr("cus_valid"), nil, "iad", true, false,
+		nil, nil, now, now, &now, stringPtr("household_2"), nil, nil, nil, nil, nil, "UTC", "default", nil, nil,
+	).AddRow(
+		malformedID, "clerk_malformed", "malformed@example.com", true,
+		"premium", "cancelled", &now, nil,
+		nil, nil, false,
+		stringPtr("cus_malformed"), nil, "iad", true, false,
+		nil, nil, now, now, &now, stringPtr("not_a_tier"), nil, nil, nil, nil, nil, "UTC", "default", nil, nil,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest + malformedTierOverrideWhereClauseForTest)).
+		WillReturnRows(rows)
+
+	malformed, err := repo.GetUsersWithMalformedTierOverride(ctx)
+
+	require.NoError(t, err)
+	require.Len(t, malformed, 1, "only the row naming no configured tier must be returned")
+	assert.Equal(t, malformedID, malformed[0].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetUsersWithMalformedTierOverride_NoValidatorConfigured_ReturnsNilNotEmpty proves the
+// deliberate (nil, nil) contract when no validator has been wired: "unknown whether any rows are
+// malformed" must not collapse into the same shape as "checked, found zero" — see the method's own
+// doc comment. Mirrors GetEffectiveSubscriptionStatusByUserID's identical nil-validator convention.
+func TestGetUsersWithMalformedTierOverride_NoValidatorConfigured_ReturnsNilNotEmpty(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewProfileRepository(mock, newTestFieldEncryptor(t)) // no SetOverrideTierValidator call
+	ctx := context.Background()
+
+	malformed, err := repo.GetUsersWithMalformedTierOverride(ctx)
+
+	require.NoError(t, err)
+	assert.Nil(t, malformed, "no validator wired means 'unknown', not 'zero found' — must not silently report all-clear")
+	assert.NoError(t, mock.ExpectationsWereMet(), "no query should run at all when no validator is configured")
+}
+
+// TestGetUsersWithMalformedTierOverride_AllValid_ReturnsEmptySlice proves the positive control: when
+// every candidate row names a configured tier, the result is an empty (non-nil) slice, not nil —
+// distinguishing "checked, found zero" from the no-validator (nil, nil) case above.
+func TestGetUsersWithMalformedTierOverride_AllValid_ReturnsEmptySlice(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewProfileRepository(mock, newTestFieldEncryptor(t))
+	repo.SetOverrideTierValidator(fakeOverrideTierValidator("premium", "household_2", "household_3", "household_4", "household_5"))
+
+	ctx := context.Background()
+	validID := uuid.New().String()
+	now := time.Now()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "clerk_user_id", "email", "email_verified",
+		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
+		"trial_started_at", "trial_ends_at", "had_trial",
+		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
+		"deletion_requested_at", "deletion_scheduled_at",
+		"created_at", "updated_at", "last_login_at",
+		"manual_tier_override", "manual_tier_ends_at",
+		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
+		"timezone", "timezone_source",
+		"past_due_started_at", "plaid_cleanup_pending_at",
+	}).AddRow(
+		validID, "clerk_valid", "valid@example.com", true,
+		"premium", "cancelled", &now, nil,
+		nil, nil, false,
+		stringPtr("cus_valid"), nil, "iad", true, false,
+		nil, nil, now, now, &now, stringPtr("household_3"), nil, nil, nil, nil, nil, "UTC", "default", nil, nil,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(userSelectQueryForTest + malformedTierOverrideWhereClauseForTest)).
+		WillReturnRows(rows)
+
+	malformed, err := repo.GetUsersWithMalformedTierOverride(ctx)
+
+	require.NoError(t, err)
+	assert.NotNil(t, malformed, "checked-and-found-zero must be an empty slice, not nil")
+	assert.Empty(t, malformed)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

@@ -123,23 +123,27 @@ test.describe('Admin email prefix search', () => {
   })
 
   test('typing ≥3 chars fires API with search param', async ({ page }) => {
-    // No onSearch callback needed — we assert on URL instead of captured requests.
     await mockUsersSearch(page, FIXTURE_RESULTS)
 
     await page.goto('/admin/users')
     await page.waitForLoadState('networkidle')
 
+    const searchRequestPromise = page.waitForRequest((request) => {
+      const url = new URL(request.url())
+      return (
+        request.method() === 'GET' &&
+        url.pathname === '/api/v1/admin/users' &&
+        url.searchParams.get('search') === 'test@'
+      )
+    })
+
     await page
       .getByPlaceholder('Search by email prefix (min. 3 chars)...')
       .fill('test@')
 
-    // setSearch calls setSearchParams synchronously inside React's onChange handler,
-    // so the URL updates in the same event flush as the input change.
-    // expect(page).toHaveURL() polls until the pattern matches (≤10s expect.timeout).
-    // This is the same pattern used by all passing admin-sort.auth.spec.ts tests:
-    //   click column header → await expect(page).toHaveURL(/sort=.../)
-    // URL containing search= proves useUserFilters gated the param correctly (≥3 chars).
-    await expect(page).toHaveURL(/[?&]search=test/)
+    const searchRequest = await searchRequestPromise
+    expect(new URL(searchRequest.url()).searchParams.get('search')).toBe('test@')
+    expect(new URL(page.url()).searchParams.has('search')).toBe(false)
   })
 
   test('typing <3 chars suppresses API search param and shows hint', async ({ page }) => {

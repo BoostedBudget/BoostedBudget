@@ -9,6 +9,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/riverqueue/river"
 )
 
@@ -141,4 +142,35 @@ func (w *SavingsStatsWorker) Work(ctx context.Context, job *river.Job[SavingsSta
 	)
 
 	return nil
+}
+
+// SavingsStatsUniqueOpts returns the recommended uniqueness options. Constrains to one
+// snapshot job per 24h period — defense in depth on top of WriteSnapshot's own
+// ON CONFLICT DO UPDATE upsert (idempotent per UTC date).
+//
+// Issue #1448: main.go's periodic registration previously built this ByPeriod-only
+// river.UniqueOpts{} literal inline and had no named helper — its own comment even
+// referenced a "SavingsStatsUniqueOpts" that did not exist anywhere in the repo. This
+// function is what that comment always meant to point at.
+func SavingsStatsUniqueOpts() *queue.UniqueOpts {
+	return &queue.UniqueOpts{
+		ByPeriod: 24 * time.Hour,
+	}
+}
+
+// SavingsStatsInsertOpts returns the *river.InsertOpts this job's periodic registration in
+// main.go must use — Queue: queue.QueueLow plus the uniqueness options from
+// SavingsStatsUniqueOpts(), converted to river's UniqueOpts type.
+func SavingsStatsInsertOpts() *river.InsertOpts {
+	return riverInsertOptsFromUnique(queue.QueueLow, SavingsStatsUniqueOpts())
+}
+
+// SavingsStatsPeriodicOpts returns the *river.PeriodicJobOpts this job's periodic
+// registration in main.go must use. RunOnStart: true is safe because
+// SavingsStatsInsertOpts() above carries SavingsStatsUniqueOpts()'s ByPeriod dedup AND
+// WriteSnapshot's own upsert is naturally idempotent. ID is set so River restores
+// nextRunAt across restarts/leader elections instead of recomputing now+interval every
+// time (Issue #1448).
+func SavingsStatsPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: SavingsStatsArgs{}.Kind()}
 }

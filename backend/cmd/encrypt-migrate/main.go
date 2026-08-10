@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
+	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
@@ -50,15 +51,15 @@ func main() {
 		log.Fatal("Failed to create field encryptor:", err)
 	}
 
-	db, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	// Issue #1461: this CLI writes encrypted PII directly and must run on the same session
+	// TimeZone basis (UTC, pinned by database.NewPool) as the server — a bare pgxpool.New here
+	// previously bypassed that pin, so encrypt-migrate could disagree with the server's clock
+	// basis for any session-TimeZone-dependent SQL depending on which host it ran on.
+	db, err := database.NewPool(context.Background(), database.DefaultConfig(cfg.DatabaseURL))
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)
 	}
 	defer db.Close()
-
-	if err := db.Ping(context.Background()); err != nil {
-		log.Fatal("Database ping failed:", err)
-	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 

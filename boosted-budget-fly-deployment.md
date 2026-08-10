@@ -701,7 +701,7 @@ services:
     command: pnpm run dev
 
   postgres:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     environment:
       POSTGRES_USER: devuser
       POSTGRES_PASSWORD: devpass

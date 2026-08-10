@@ -29,9 +29,6 @@ type Config struct {
 	// Defaults to 500ms.
 	FetchPollInterval time.Duration
 
-	// RetryPolicy configures the retry backoff strategy.
-	RetryPolicy *RetryPolicy
-
 	// PeriodicJobs configures recurring jobs that run on a schedule.
 	PeriodicJobs []*river.PeriodicJob
 
@@ -59,25 +56,6 @@ type WorkerConfig struct {
 	Low int
 }
 
-// RetryPolicy configures retry behavior.
-type RetryPolicy struct {
-	// MaxAttempts is the default maximum retry attempts.
-	// Defaults to 5.
-	MaxAttempts int
-
-	// BackoffMultiplier is the exponential backoff multiplier.
-	// Defaults to 4 (30s, 2min, 8min, 32min, 2hr).
-	BackoffMultiplier float64
-
-	// InitialBackoff is the initial retry delay.
-	// Defaults to 30 seconds.
-	InitialBackoff time.Duration
-
-	// MaxBackoff is the maximum retry delay.
-	// Defaults to 2 hours.
-	MaxBackoff time.Duration
-}
-
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
 	return Config{
@@ -86,7 +64,6 @@ func DefaultConfig() Config {
 		RescueStuckJobsAfter: 1 * time.Hour,
 		FetchCooldown:        200 * time.Millisecond,
 		FetchPollInterval:    500 * time.Millisecond,
-		RetryPolicy:          DefaultRetryPolicy(),
 	}
 }
 
@@ -97,17 +74,6 @@ func DefaultWorkerConfig() *WorkerConfig {
 		Default:       20,
 		Notifications: 5,
 		Low:           3,
-	}
-}
-
-// DefaultRetryPolicy returns the default retry policy.
-// Uses exponential backoff: 30s, 2min, 8min, 32min, 2hr
-func DefaultRetryPolicy() *RetryPolicy {
-	return &RetryPolicy{
-		MaxAttempts:       5,
-		BackoffMultiplier: 4,
-		InitialBackoff:    30 * time.Second,
-		MaxBackoff:        2 * time.Hour,
 	}
 }
 
@@ -124,23 +90,4 @@ func (wc *WorkerConfig) ToRiverQueues() map[string]river.QueueConfig {
 		"notifications": {MaxWorkers: wc.Notifications},
 		"low":           {MaxWorkers: wc.Low},
 	}
-}
-
-// NextRetry calculates the next retry time based on attempt number.
-func (rp *RetryPolicy) NextRetry(attempt int) time.Duration {
-	if attempt < 1 {
-		return rp.InitialBackoff
-	}
-
-	// Exponential backoff: initial * (multiplier ^ (attempt - 1))
-	backoff := float64(rp.InitialBackoff)
-	for i := 1; i < attempt; i++ {
-		backoff *= rp.BackoffMultiplier
-	}
-
-	result := time.Duration(backoff)
-	if result > rp.MaxBackoff {
-		return rp.MaxBackoff
-	}
-	return result
 }

@@ -59,6 +59,61 @@ function matchPII(text: string, sentinels: PIISentinel[]): string | undefined {
   return undefined;
 }
 
+/**
+ * Derive PII sentinels from a fixture by walking every string leaf.
+ *
+ * WHY THIS EXISTS. The gate's denominator used to be a hand-written list of sentinel VALUES
+ * per component: adding a field to a fixture did nothing unless someone also remembered to add
+ * it to the sentinel array, and which fields had been skipped was invisible. That is exactly
+ * how WebhookDetailModal sat inside the gate while rendering `processing_error` unmasked.
+ *
+ * This inverts the default. Every string leaf in the fixture is a sentinel unless its key is
+ * explicitly opted OUT — because it is structural (ids, enums, timestamps) or because it must
+ * stay legible to an operator (an attester id, an event type). Opting a field out is a visible,
+ * reviewable line of code; forgetting to opt a field IN is no longer possible.
+ *
+ * `skipKeys` entries match either a leaf key name (`event_type`) or a full dotted path
+ * (`data.customer.email`). Matching is exact, not by prefix.
+ *
+ * ⚠ What this still cannot catch is recorded at the call sites and in the batch report: a field
+ * absent from the fixture, a component nobody imported, a value the component reformats before
+ * rendering (so string inclusion misses it), and attribute text the component constructs rather
+ * than copying from the fixture.
+ */
+export function sentinelsFromFixture(
+  fixture: unknown,
+  options: { skipKeys?: readonly string[]; minLength?: number; label?: string } = {},
+): PIISentinel[] {
+  const skip = new Set(options.skipKeys ?? []);
+  const minLength = options.minLength ?? 3;
+  const label = options.label ? `${options.label}.` : '';
+  const seen = new Set<string>();
+  const out: PIISentinel[] = [];
+
+  const walk = (value: unknown, path: string, key: string) => {
+    if (skip.has(key) || (path && skip.has(path))) return;
+    if (typeof value === 'string') {
+      if (value.trim().length < minLength) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      out.push({ value, fieldDescription: `${label}${path || key}` });
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, i) => walk(item, `${path}[${i}]`, key));
+      return;
+    }
+    if (value && typeof value === 'object') {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        walk(v, path ? `${path}.${k}` : k, k);
+      }
+    }
+  };
+
+  walk(fixture, '', '');
+  return out;
+}
+
 export function scanForUnmaskedPII(
   container: HTMLElement,
   sentinels: PIISentinel[],

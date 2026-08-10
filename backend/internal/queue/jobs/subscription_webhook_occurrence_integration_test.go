@@ -50,7 +50,10 @@ func TestSubscriptionWebhook_Occurrence_CancelResubscribeCancelAgain_BothDisconn
 	// fixture rather than a freshly generated ID.
 	const userID = "user_2abc123def456"
 	clerkUserID := "clerk_user_123"
-	canceledUser := &domain.User{ID: userID, ClerkUserID: clerkUserID, SubscriptionTier: "premium"}
+	// SubscriptionStatus models the post-write world the re-reads see (including the one guarding the
+	// retention-clock write): the mocked repository does not apply this handler's own
+	// UpdateSubscriptionFromPaddle write to the row it hands back.
+	canceledUser := &domain.User{ID: userID, ClerkUserID: clerkUserID, SubscriptionTier: "premium", SubscriptionStatus: string(domain.SubscriptionStatusCancelled)}
 
 	firstWebhook := loadWebhookFixture(t, "subscription_canceled.json")
 	firstWebhook.ID = "webhook-first-cancellation"
@@ -91,7 +94,7 @@ func TestSubscriptionWebhook_Occurrence_CancelResubscribeCancelAgain_BothDisconn
 	mockClerk.On("UpdateUserMetadata", ctx, clerkUserID, mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, userID).Return(nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, userID).Return(nil).Twice()
-	mockProfileRepo.On("SetRetentionDates", ctx, userID, mock.AnythingOfType("int")).Return(nil).Twice()
+	mockProfileRepo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.AnythingOfType("int")).Return(nil).Twice()
 	mockWebhookRepo.On("MarkProcessed", ctx, "webhook-first-cancellation").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "webhook-second-cancellation").Return(nil)
 
@@ -137,7 +140,10 @@ func TestSubscriptionWebhook_Occurrence_SameEventRedelivered_SecondDeliveryDoesN
 	// extracts userID from THAT JSON field, not from any test parameter.
 	const userID = "user_2abc123def456"
 	clerkUserID := "clerk_user_123"
-	canceledUser := &domain.User{ID: userID, ClerkUserID: clerkUserID, SubscriptionTier: "premium"}
+	// SubscriptionStatus models the post-write world the re-reads see (including the one guarding the
+	// retention-clock write): the mocked repository does not apply this handler's own
+	// UpdateSubscriptionFromPaddle write to the row it hands back.
+	canceledUser := &domain.User{ID: userID, ClerkUserID: clerkUserID, SubscriptionTier: "premium", SubscriptionStatus: string(domain.SubscriptionStatusCancelled)}
 
 	webhook := loadWebhookFixture(t, "subscription_canceled.json")
 	webhook.ID = "webhook-redelivered"
@@ -158,7 +164,7 @@ func TestSubscriptionWebhook_Occurrence_SameEventRedelivered_SecondDeliveryDoesN
 	mockClerk.On("UpdateUserMetadata", ctx, clerkUserID, mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, userID).Return(nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, userID).Return(nil).Once()
-	mockProfileRepo.On("SetRetentionDates", ctx, userID, mock.AnythingOfType("int")).Return(nil).Once()
+	mockProfileRepo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.AnythingOfType("int")).Return(nil).Once()
 	mockWebhookRepo.On("MarkProcessed", ctx, "webhook-redelivered").Return(nil)
 
 	job := createRiverJob(SubscriptionWebhookArgs{

@@ -157,6 +157,20 @@ describe('AccountTable', () => {
     })
   })
 
+  describe('Disconnected badge copy (issue #1495: generalised, cause-agnostic wording)', () => {
+    it('shows "This connection is no longer active" rather than a subscription-specific claim', () => {
+      const accountsWithDisconnected = [
+        createMockAccount({ linked_item_status: 'disconnected' }),
+        ...mockAccounts.slice(1),
+      ]
+
+      render(<AccountTable accounts={accountsWithDisconnected} />)
+
+      const badge = screen.getByText('Disconnected')
+      expect(badge.closest('[title]')).toHaveAttribute('title', 'This connection is no longer active')
+    })
+  })
+
   describe('Row Actions', () => {
     it('should call onEdit when edit button is clicked', () => {
       const onEdit = mock(() => {})

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1824,17 +1825,31 @@ func (m *mockProfileRepoForCursorTests) CancelDeletion(ctx context.Context, user
 	return args.Error(0)
 }
 
-func (m *mockProfileRepoForCursorTests) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*domain.User), args.Error(1)
+// RecordDeletionResidue (Issue #1504) records that a deletion performed an irreversible external
+// effect and then did not complete. See repository.ProfileRepository for the contract.
+func (m *mockProfileRepoForCursorTests) RecordDeletionResidue(ctx context.Context, userID string, effect repository.DeletionResidueEffect) error {
+	args := m.Called(ctx, userID, effect)
+	return args.Error(0)
 }
 
 func (m *mockProfileRepoForCursorTests) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
 	return args.Bool(0), args.Error(1)
+}
+
+// CountUncleanedLinkedItems — Issue #1494. Only DeletionService's Plaid-less branch calls this; these
+// tests never reach it, so this is a plain stub rather than a testify expectation (which would panic
+// unmatched).
+func (m *mockProfileRepoForCursorTests) CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error) {
+	return 0, nil
+}
+
+// HouseholdOwnerBlocksDeletion — round 15, finding D2. Only DeletionService's pre-cleanup
+// precondition calls this; these tests never reach it, so it is a plain stub for the same reason as
+// the one above. It returns FALSE (nothing blocks) so a test that ever DID reach it would exercise
+// the proceed path rather than an unexplained abort.
+func (m *mockProfileRepoForCursorTests) HouseholdOwnerBlocksDeletion(ctx context.Context, userID string) (bool, error) {
+	return false, nil
 }
 
 // Issue #679, #680: Trial expiration - methods for trial management
@@ -1880,13 +1895,12 @@ func (m *mockProfileRepoForCursorTests) GetUsersWithActivePaddleSubscriptions(ct
 
 // Retention tracking stubs (#930)
 func (m *mockProfileRepoForCursorTests) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) { return "", nil }
-func (m *mockProfileRepoForCursorTests) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error { return nil }
+func (m *mockProfileRepoForCursorTests) SetRetentionDates(ctx context.Context, userID string, guard repository.RetentionClockGuard, retentionMonths int) error { return nil }
 func (m *mockProfileRepoForCursorTests) ClearRetentionDates(ctx context.Context, userID string) error { return nil }
 func (m *mockProfileRepoForCursorTests) SetRetentionNotice30dSent(ctx context.Context, userID string) error { return nil }
 func (m *mockProfileRepoForCursorTests) SetRetentionNotice7dSent(ctx context.Context, userID string) error { return nil }
 func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) { return nil, nil }
 func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) { return nil, nil }
-func (m *mockProfileRepoForCursorTests) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) { return nil, nil }
 func (m *mockProfileRepoForCursorTests) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
@@ -1895,13 +1909,8 @@ func (m *mockProfileRepoForCursorTests) ClearPastDueStartedAt(ctx context.Contex
 func (m *mockProfileRepoForCursorTests) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{}, nil
 }
-// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
-// (Issue #1413 H5 residual) are not exercised by these cursor tests; stubbed to satisfy the
-// widened ProfileRepository interface.
-func (m *mockProfileRepoForCursorTests) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
-	return false, nil
-}
-
+// GetUsersNeedingRetentionClockRepair, RepairRetentionClock (Issue #1413 H5 residual) are not
+// exercised by these cursor tests; stubbed to satisfy the widened ProfileRepository interface.
 func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
 	return []*domain.User{}, nil
 }
@@ -1922,17 +1931,16 @@ func (m *mockProfileRepoForCursorTests) ExpireTrialIfNoOverride(ctx context.Cont
 	return false, nil
 }
 
-// ClaimForDeletion, IsRetentionNotice30dEligible, IsRetentionNotice7dEligible (Issue #1413 Codex
-// review round 3) are not exercised by these cursor tests; stubbed to satisfy the widened
+// ClaimForDeletion (Issue #1413 Codex review round 3) is not exercised by these cursor tests;
+// stubbed to satisfy the widened ProfileRepository interface.
+func (m *mockProfileRepoForCursorTests) ClaimForDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) (bool, error) {
+	return false, nil
+}
+
+// DeletionStillAuthorised — unreachable from these cursor tests; stubbed to satisfy the widened
 // ProfileRepository interface.
-func (m *mockProfileRepoForCursorTests) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-func (m *mockProfileRepoForCursorTests) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-func (m *mockProfileRepoForCursorTests) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
-	return false, nil
+func (m *mockProfileRepoForCursorTests) DeletionStillAuthorised(ctx context.Context, userID string, kind repository.DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	return true, nil
 }
 func (m *mockProfileRepoForCursorTests) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) { return nil, nil }
 func (m *mockProfileRepoForCursorTests) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {

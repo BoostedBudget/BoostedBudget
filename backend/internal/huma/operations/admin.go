@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/danielgtaylor/huma/v2"
@@ -26,7 +27,8 @@ type TrialGranter interface {
 }
 
 // AdminHandler handles admin-only endpoints for testing and troubleshooting.
-// Routes are protected by AdminMiddleware with role validation and environment checks.
+// Routes are protected by AdminMiddleware, which authorizes by identity and admin role in
+// every environment (Issue #1499 removed its environment check).
 type AdminHandler struct {
 	plaidService          services.PlaidService
 	linkedItemRepo        repository.LinkedItemRepository
@@ -38,6 +40,10 @@ type AdminHandler struct {
 	paddleTransactionRepo repository.PaddleTransactionRepository
 	paddleWebhookRepo     repository.PaddleWebhookRepository
 	deadLetterService     services.DeadLetterService
+	// plaidOrphanedItemRepo backs the orphaned-Plaid-Item admin listing (Issue #1497). Read-only:
+	// there is no admin re-attempt action, because the automated retry sweep already re-attempts every
+	// unresolved record on its own cadence and a button would only duplicate it.
+	plaidOrphanedItemRepo repository.PlaidOrphanedItemRepository
 	jobQueue              queue.JobQueue
 	config                *config.Config
 }
@@ -87,6 +93,13 @@ func (h *AdminHandler) WithJobQueue(q queue.JobQueue) *AdminHandler {
 // WithDeadLetterService sets the DeadLetterService on the handler (builder pattern).
 func (h *AdminHandler) WithDeadLetterService(svc services.DeadLetterService) *AdminHandler {
 	h.deadLetterService = svc
+	return h
+}
+
+// WithPlaidOrphanedItemRepo sets the PlaidOrphanedItemRepository on the handler (builder pattern).
+// Issue #1497.
+func (h *AdminHandler) WithPlaidOrphanedItemRepo(repo repository.PlaidOrphanedItemRepository) *AdminHandler {
+	h.plaidOrphanedItemRepo = repo
 	return h
 }
 
@@ -232,9 +245,14 @@ type GetSystemHealthOutput struct {
 
 // --- Handler Methods ---
 
-// FireWebhook fires a Plaid webhook for testing in QA environment.
+// FireWebhook fires a Plaid webhook for testing.
 //
 // POST /api/v1/admin/plaid/fire-webhook
+//
+// Issue #1498: this is registered and admin-reachable in EVERY environment — #1499 removed
+// the admin middleware's environment gate. What actually confines it is
+// plaidService.FireWebhook's PlaidEnv != "sandbox" check, so in production (PLAID_ENV=production)
+// it returns an error rather than firing anything. Do not describe it as "QA only".
 //
 // Error Responses:
 //   - 400: Invalid request body or validation failure
@@ -242,7 +260,16 @@ type GetSystemHealthOutput struct {
 //   - 403: Not an admin (checked by AdminMiddleware)
 //   - 404: Linked item not found
 //   - 500: Decryption failure or Plaid API error
+//   - 503: Plaid service not configured
 func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput) (*FireWebhookOutput, error) {
+	// Issue #1499: admin routes are now registered even when Plaid is unconfigured, so that a
+	// non-Plaid deployment still gets system health, user management, subscription admin, the
+	// dead-letter queue and the orphaned-items view. This is the one admin handler with a
+	// Plaid dependency, so it refuses the same way the other under-configured ones do.
+	if h.plaidService == nil || h.linkedItemRepo == nil {
+		return nil, huma.Error503ServiceUnavailable("Plaid service not configured")
+	}
+
 	// 1. Fetch linked item by Plaid item ID (not database primary key)
 	// Issue #331: item_id is the Plaid identifier, not the database primary key
 	linkedItem, err := h.linkedItemRepo.GetByItemID(ctx, input.Body.ItemID)
@@ -274,6 +301,16 @@ func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput)
 // Issue #698: Used by E2E tests to ensure test user has active subscription.
 //
 // POST /api/v1/admin/subscription/grant-trial
+//
+// Issue #1498 — DELIBERATE DECISION, do not "fix" this by adding an environment gate.
+// Issue #1499 removed the admin middleware's environment gate, so this endpoint is now
+// reachable in production. That was reviewed and accepted: granting a trial is a
+// legitimate admin action, and any real admin can already change a user's subscription
+// through the other admin subscription endpoints (see AdminUserService's tier-override
+// and subscription-management paths). Gating this one endpoint would buy no security
+// while breaking the E2E flow. The OpenAPI summary used to say "QA only"; it now says
+// "(admin)" and states the every-environment availability, so the contract matches reality.
+// Recorded in docs/decisions/2026-08-06-admin-authorization-posture.md.
 //
 // Error Responses:
 //   - 401: Not authenticated
@@ -363,6 +400,12 @@ func (h *AdminHandler) CheckRole(ctx context.Context, input *CheckRoleInput) (*C
 //   - 500: Internal server error
 //   - 503: Admin user service not configured
 func (h *AdminHandler) ListUsers(ctx context.Context, input *ListUsersInput) (*ListUsersOutput, error) {
+	// Issue #1462 follow-up G2: captured before the rest of this handler's work, mirroring
+	// GetUserSubscription's `as_of` capture in admin_subscriptions.go — a single server instant
+	// for the WHOLE page, so UsersPage.tsx can anchor every row's isOverrideActive/
+	// getOverrideStatus liveness check to one shared, trusted clock instead of the browser's.
+	asOf := time.Now()
+
 	// Check if admin user service is configured
 	if h.adminUserService == nil {
 		return nil, huma.Error503ServiceUnavailable("Admin user service not configured")
@@ -383,11 +426,13 @@ func (h *AdminHandler) ListUsers(ctx context.Context, input *ListUsersInput) (*L
 		SortDir: input.SortDir,
 	}
 
-	// Get users from service
-	response, err := h.adminUserService.ListUsers(ctx, filters, input.Page, input.PageSize)
+	// Get users from service, computed from the SAME instant (asOf) that will be reported below —
+	// never a fresh clock read inside the service (Codex review finding on Issue #1462/#1413).
+	response, err := h.adminUserService.ListUsers(ctx, filters, input.Page, input.PageSize, asOf)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to list users: %w", err))
 	}
+	response.AsOf = asOf
 
 	return &ListUsersOutput{Body: response}, nil
 }
@@ -404,19 +449,28 @@ func (h *AdminHandler) ListUsers(ctx context.Context, input *ListUsersInput) (*L
 //   - 500: Internal server error
 //   - 503: Admin user service not configured
 func (h *AdminHandler) GetUserDetail(ctx context.Context, input *GetUserDetailInput) (*GetUserDetailOutput, error) {
+	// Issue #1462 follow-up G2: captured before the rest of this handler's work, mirroring
+	// GetUserSubscription's `as_of` capture in admin_subscriptions.go — lets UserDetailModal.tsx
+	// anchor its own isOverrideActive/getOverrideStatus liveness check to this server instant
+	// instead of the browser's clock.
+	asOf := time.Now()
+
 	// Check if admin user service is configured
 	if h.adminUserService == nil {
 		return nil, huma.Error503ServiceUnavailable("Admin user service not configured")
 	}
 
-	// Get user detail from service
-	detail, err := h.adminUserService.GetUserDetail(ctx, input.UserID)
+	// Get user detail from service, computed from the SAME instant (asOf) that will be reported
+	// below — never a fresh clock read inside the service (Codex review finding on Issue
+	// #1462/#1413).
+	detail, err := h.adminUserService.GetUserDetail(ctx, input.UserID, asOf)
 	if err != nil {
 		if err == services.ErrAdminUserNotFound {
 			return nil, huma.Error404NotFound("User not found")
 		}
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get user detail: %w", err))
 	}
+	detail.AsOf = asOf
 
 	return &GetUserDetailOutput{Body: detail}, nil
 }
@@ -447,29 +501,42 @@ func (h *AdminHandler) GetSystemHealth(ctx context.Context, input *GetSystemHeal
 }
 
 // RegisterAdminRoutes registers admin routes with the Huma API.
-// Routes are protected by AdminMiddleware (environment and role validation).
+// Routes are protected by AdminMiddleware (role validation, all environments — Issue #1499).
+// Safe to call with a nil plaidService/linkedItemRepo: FireWebhook is the only handler that
+// needs them and it returns 503 when they are absent.
 func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
-	// POST /api/v1/admin/plaid/fire-webhook - Fire a Plaid webhook (QA only)
+	// POST /api/v1/admin/plaid/fire-webhook - Fire a Plaid webhook
+	// Issue #1498: the summary/description used to say "QA only", which misstated the security
+	// boundary in the generated contract (api/openapi.yaml, and from there the MCP capability
+	// manifest and the TS client). This endpoint is admin-reachable in every environment; what
+	// confines it is the sandbox-only check in plaidService.FireWebhook.
 	huma.Register(api, huma.Operation{
 		OperationID: "fireWebhook",
 		Method:      http.MethodPost,
 		Path:        "/api/v1/admin/plaid/fire-webhook",
-		Summary:     "Fire a Plaid webhook (QA only)",
-		Description: "Fires a Plaid webhook for testing in QA environment. Requires Clerk authentication.",
-		Tags:        []string{"Admin"},
-		Security:    []map[string][]string{{"clerk": {}}},
+		Summary:     "Fire a Plaid webhook (sandbox Plaid only)",
+		Description: "Fires a Plaid webhook for testing. Requires Clerk authentication and admin " +
+			"authorization. Reachable in every environment, but only functions when PLAID_ENV=sandbox; " +
+			"it returns an error otherwise.",
+		Tags:     []string{"Admin"},
+		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.FireWebhook)
 
-	// POST /api/v1/admin/subscription/grant-trial - Grant trial to current user (QA only)
+	// POST /api/v1/admin/subscription/grant-trial - Grant trial to current user
 	// Issue #698: Used by E2E tests to ensure test user has active subscription.
+	// Issue #1498: the summary used to say "QA only". This endpoint is DELIBERATELY reachable in
+	// production — see the decision note on AdminHandler.GrantTrial — so that wording misstated
+	// the security boundary in the generated contract. Do not re-add it.
 	huma.Register(api, huma.Operation{
 		OperationID: "grantTrial",
 		Method:      http.MethodPost,
 		Path:        "/api/v1/admin/subscription/grant-trial",
-		Summary:     "Grant trial subscription (QA only)",
-		Description: "Grants a 60-day trial to the authenticated user. For E2E testing. Returns success if user already has trial.",
-		Tags:        []string{"Admin"},
-		Security:    []map[string][]string{{"clerk": {}}},
+		Summary:     "Grant trial subscription (admin)",
+		Description: "Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but " +
+			"deliberately available in every environment — any admin can already change subscriptions " +
+			"through the other admin endpoints. Returns success if the user already has or had a trial.",
+		Tags:     []string{"Admin"},
+		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.GrantTrial)
 
 	// GET /api/v1/admin/check-role - Check if current user is admin
@@ -530,4 +597,7 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 
 	// --- Admin Dead Letter Queue Routes (Issue #633) ---
 	RegisterAdminDeadLetterOperations(api, handler)
+
+	// --- Orphaned Plaid Items surviving a GDPR erasure (Issue #1497) ---
+	RegisterAdminPlaidOrphanedItemOperations(api, handler)
 }

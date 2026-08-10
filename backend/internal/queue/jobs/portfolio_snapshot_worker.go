@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/riverqueue/river"
 )
@@ -133,4 +134,33 @@ func (w *PortfolioSnapshotWorker) Work(ctx context.Context, job *river.Job[Portf
 		return fmt.Errorf("portfolio snapshot: %d/%d upserts failed", failCount, len(userIDs))
 	}
 	return nil
+}
+
+// PortfolioSnapshotUniqueOpts returns the recommended uniqueness options. Constrains to one
+// snapshot job per 24h period — defense in depth on top of Upsert's own ON CONFLICT DO
+// UPDATE (idempotent per user per day).
+//
+// Issue #1448: main.go's periodic registration previously built this ByPeriod-only
+// river.UniqueOpts{} literal inline with no named helper.
+func PortfolioSnapshotUniqueOpts() *queue.UniqueOpts {
+	return &queue.UniqueOpts{
+		ByPeriod: 24 * time.Hour,
+	}
+}
+
+// PortfolioSnapshotInsertOpts returns the *river.InsertOpts this job's periodic
+// registration in main.go must use — Queue: queue.QueueLow plus the uniqueness options from
+// PortfolioSnapshotUniqueOpts(), converted to river's UniqueOpts type.
+func PortfolioSnapshotInsertOpts() *river.InsertOpts {
+	return riverInsertOptsFromUnique(queue.QueueLow, PortfolioSnapshotUniqueOpts())
+}
+
+// PortfolioSnapshotPeriodicOpts returns the *river.PeriodicJobOpts this job's periodic
+// registration in main.go must use. RunOnStart: true is safe because
+// PortfolioSnapshotInsertOpts() above carries PortfolioSnapshotUniqueOpts()'s ByPeriod
+// dedup AND Upsert's own upsert is naturally idempotent. ID is set so River restores
+// nextRunAt across restarts/leader elections instead of recomputing now+interval every
+// time (Issue #1448).
+func PortfolioSnapshotPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: PortfolioSnapshotArgs{}.Kind()}
 }

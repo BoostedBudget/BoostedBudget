@@ -18,9 +18,11 @@ import { Badge } from '@/components/ui/badge'
 import type { BadgeProps } from '@/components/ui/badge'
 import { Loader2, User, Calendar, MapPin, CreditCard, Link2, Zap, Receipt, PiggyBank, Shield } from 'lucide-react'
 import type { AdminUserDetail } from '@boostedbudget/api-client/models'
+import { resolveServerSnapshotTime } from '@/shared/dates'
 import { useRegions } from '../../../shared/hooks/useRegions'
 import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
 import { KNOWN_TIER_NAMES } from '../lib/knownTiers'
+import { SnapshotAgeLabel } from './SnapshotAgeLabel'
 
 export interface UserDetailModalProps {
   /** User detail data */
@@ -71,6 +73,14 @@ const overrideStatusVariant = (variant: string): BadgeProps['variant'] => {
 export function UserDetailModal({ user, loading, open, onClose }: UserDetailModalProps) {
   const { getRegionWithFlag } = useRegions()
 
+  // Issue #1462 follow-up G2: anchors this modal's override-liveness arithmetic to the server's
+  // own snapshot instant (`user.as_of`, populated on AdminUserDetail) instead of a fresh
+  // browser-clock read — the same fix SubscriptionOverrideModal already applies via
+  // AdminSubscriptionDetailOutputBody.as_of. Falls back to the browser clock only when `user`
+  // hasn't loaded yet or `as_of` is absent/unparseable (e.g. an older cached response) —
+  // display-only, must never crash the modal.
+  const now = resolveServerSnapshotTime(user?.as_of)
+
   // Whether a manual tier override is currently live for this user. Must NOT be derived from
   // `effective_status` — that field answers "does this user currently have write access", which
   // is also true when access comes from someone else's household plan, so it would badge users
@@ -80,7 +90,7 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
   // SubscriptionOverrideModal.tsx's `isLiveOverride`, reused rather than reinvented so all three
   // surfaces agree.
   const hasLiveOverride = user
-    ? isOverrideActive(user.manual_tier_override, user.manual_tier_ends_at, KNOWN_TIER_NAMES)
+    ? isOverrideActive(user.manual_tier_override, user.manual_tier_ends_at, KNOWN_TIER_NAMES, now)
     : false
 
   // An expired (or malformed-tier) override must NOT be shown as the effective tier — falls back
@@ -88,8 +98,9 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
   const effectiveTier = user ? (hasLiveOverride ? (user.manual_tier_override as string) : user.subscription_tier) : ''
 
   // Presentational only (Permanent / Expires in Nd / Expired / null) — independent of tier-name
-  // validity, matching UsersPage.tsx's "Override Status" column exactly.
-  const overrideStatus = user ? getOverrideStatus(user.manual_tier_override, user.manual_tier_ends_at) : null
+  // validity, matching UsersPage.tsx's "Override Status" column exactly. Anchored to the same
+  // server-snapshot `now` as hasLiveOverride above (Issue #1462 follow-up G2).
+  const overrideStatus = user ? getOverrideStatus(user.manual_tier_override, user.manual_tier_ends_at, now) : null
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -104,7 +115,10 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <User className="w-5 h-5 text-primary" />
-                {user.email}
+                {/* Email is a MUST-mask field (docs/security/posthog-pii-masking.md). UsersPage
+                    masks the email COLUMN; this modal is the same address one click deeper, and
+                    the admin's consent to session replay is not the subject's. */}
+                <span data-ph-mask>{user.email}</span>
                 {user.is_admin && (
                   <Badge variant="warning" className="ml-2 gap-1">
                     <Shield size={14} />
@@ -146,6 +160,12 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
                           </Badge>
                         )}
                       </span>
+                      {/* Issue #1462 follow-up G2 / R3-10: hasLiveOverride/overrideStatus above are
+                          anchored to `now`, a FROZEN read of `user.as_of` that never refreshes on a
+                          timer. Discloses that snapshot's age so an admin who leaves this modal open
+                          can tell the Comped/status badges above may no longer reflect the server's
+                          current answer — mirrors SubscriptionOverrideModal's identical disclosure. */}
+                      <SnapshotAgeLabel asOf={user.as_of} className="text-[0.7rem]" />
                     </div>
                   </div>
 

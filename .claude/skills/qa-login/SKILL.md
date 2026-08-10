@@ -50,8 +50,23 @@ Parse the `url` field from the JSON response:
 | Response | Cause | Fix |
 |----------|-------|-----|
 | `401` RFC 9457 format (`{"status":401,"title":"Unauthorized"}`) | Wrong secret | Check `QA_BYPASS_SECRET` in `.env.qa` |
-| `404` | Endpoint not registered | Env vars missing from Docker container; redeploy using `deploy-qa.yml` from the feature branch |
+| `404` | Endpoint not registered | The registration gate refused — see below |
+
 | `401` plain format (`{"message":"Missing authorization header"}`) | Route not registered | Same as 404 cause — env vars not in container |
+
+**Why a `404` happens (issue #1432, finding B2-1).** This route is the only unauthenticated path
+to admin authority in the codebase — it mints a five-minute Clerk *admin* sign-in token — so it is
+no longer registered on `ENVIRONMENT` alone. `config.Config.QAAuthBypassRefusalReason`
+(`backend/internal/config/qa_auth_bypass_gate.go`) requires **all** of:
+
+1. `ENVIRONMENT` set **explicitly** to `qa` or `staging`,
+2. `QA_AUTH_BYPASS_ENABLED=true` — the explicit opt-in,
+3. `QA_BYPASS_SECRET`, `QA_ADMIN_CLERK_USER_ID`, `QA_PREMIUM_CLERK_USER_ID` all non-empty,
+4. **no production-only signal**: a `sk_live_` `CLERK_SECRET_KEY` or `PADDLE_ENVIRONMENT=production`
+   refuse the route outright, whatever `ENVIRONMENT` claims.
+
+The backend logs the specific refusal reason at startup (`refusing the QA auth-bypass route: …`)
+whenever any QA setting is configured — read that line rather than guessing which check failed.
 
 ## Step 4: Authenticate with agent-browser
 
