@@ -96,7 +96,8 @@ config/
 - All auth via Clerk (JWT middleware), never custom auth
 - `*InRegion` method signatures for future multi-region
 - No money movement—suggestions only
-- DataTable (`shared/components/DataTable/`) — TanStack Table v8 facade; `BBColumnDef<T>` (`ColumnDef<T>`) is the only column type used in consumers; `data-ph-mask` always applied by DataTable's own `<td>` renderer — never delegate to flexRender
+- DataTable (`shared/components/DataTable/`) — TanStack Table v8 facade; `BBColumnDef<T>` (`ColumnDef<T>`) is the only column type used in consumers
+- ⚠ **DataTable does NOT mask by default.** `data-ph-mask` is applied to a `<td>` **only when that column's `id` appears in the consumer's `maskedColumnIds` prop** (`DataTable.tsx` ~:530, ~:564); a column left off the list gets no attribute at all, and `DataTable.test.tsx` pins that behaviour deliberately. "It's a DataTable, so it's masked" is false — check the consumer's `maskedColumnIds`. What DataTable *does* guarantee is that the `<td>` is rendered by its own markup, never `flexRender`, so the attribute placement stays in DataTable's control. Two consequences: (1) **PII outside a listed column — a detail modal, a card view, an `aria-label` — is masked by nothing**; (2) masking is per-column, so adding a column id to the list masks the *whole cell*, which is why free text inside a mixed cell is masked at the element instead (see `PlaidOrphanedItemsPage.tsx` ~:351, which keeps the attester id legible). Attributes are recorded verbatim by session replay and **cannot** be covered by any mask — they need a structural (de-PII'd) label.
 - All 11 tabular UIs use shared `<DataTable>`; no raw `<table>` in `src/features/`
 - `useTablePreferences(tableId, knownColumnIds)` — localStorage persistence namespaced by Clerk userId + tableId; version-gated by `knownColumnIds.join(',')`
 

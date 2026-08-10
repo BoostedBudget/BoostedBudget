@@ -4,9 +4,15 @@
  *
  * URL-synced state management for admin user list filters.
  * Manages search, tier filter, and pagination state.
+ *
+ * ⚠ `search` is deliberately NOT URL-synced. It holds an email (or email prefix) of a data
+ * subject, and PostHog session replay records the full URL verbatim — the anti-pattern named in
+ * docs/security/posthog-pii-masking.md ("URL search params with PII"). It is held in useState,
+ * matching the sibling useDeadLetterFilters, which keeps its own user filter out of the URL.
+ * Tier/page/page_size/sort carry no personal data and stay bookmarkable.
  */
 
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import type { ListAdminUsersParams, ListAdminUsersSortBy, ListAdminUsersSortDir } from '@boostedbudget/api-client/models'
 import { parseSortParam, serializeSortParam } from '@/shared/hooks/useSortUrlState'
@@ -74,6 +80,8 @@ export interface UseUserFiltersResult {
  */
 export function useUserFilters(): UseUserFiltersResult {
   const [searchParams, setSearchParams] = useSearchParams()
+  // Held in component state, never in the URL — see the file header.
+  const [search, setSearchState] = useState('')
 
   // Parse sort from URL
   const sort = useMemo<SortState>(
@@ -110,10 +118,10 @@ export function useUserFilters(): UseUserFiltersResult {
     return {
       page: pageStr ? parseInt(pageStr, 10) : DEFAULT_PAGE,
       pageSize: pageSizeStr ? parseInt(pageSizeStr, 10) : DEFAULT_PAGE_SIZE,
-      search: searchParams.get('search') ?? '',
+      search,
       tier: searchParams.get('tier') ?? '',
     }
-  }, [searchParams])
+  }, [searchParams, search])
 
   // Helper to update a filter and reset page
   const updateFilterAndResetPage = useCallback(
@@ -135,10 +143,21 @@ export function useUserFilters(): UseUserFiltersResult {
     [setSearchParams]
   )
 
-  // Set search (resets page)
+  // Set search (resets page). The value goes to component state; only the page reset
+  // touches the URL, so the email prefix never reaches the address bar.
   const setSearch = useCallback(
-    (search: string) => updateFilterAndResetPage('search', search),
-    [updateFilterAndResetPage]
+    (next: string) => {
+      setSearchState(next)
+      setSearchParams(
+        (prev) => {
+          const params = new URLSearchParams(prev)
+          params.delete('page') // Reset to page 1
+          return params
+        },
+        { replace: true }
+      )
+    },
+    [setSearchParams]
   )
 
   // Set tier (resets page)
@@ -188,6 +207,7 @@ export function useUserFilters(): UseUserFiltersResult {
 
   // Clear all filters (preserves sort — sort is not a "filter" in this hook's model)
   const clearFilters = useCallback(() => {
+    setSearchState('')
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams()

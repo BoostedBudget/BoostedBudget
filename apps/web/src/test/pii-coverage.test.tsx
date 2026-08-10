@@ -19,7 +19,7 @@ import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 
-import { scanForUnmaskedPII, type PIISentinel } from './pii-masking'
+import { scanForUnmaskedPII, sentinelsFromFixture, type PIISentinel } from './pii-masking'
 import { ThemeProvider } from '@/shared/theme/ThemeProvider'
 
 // --- Centralized mocks (preloaded via bunfig.toml) ---
@@ -80,6 +80,21 @@ import {
   mockUseRecordAdminPlaidOrphanedItemOperatorResolution,
   mockUseGetAdminPaddleWebhookDetail,
   mockUseReplayAdminPaddleWebhook,
+} from '@/test/mocks/admin-api'
+// Round 16 (batch EC): the five admin surfaces that were not imported by this gate at all.
+import {
+  mockUseListAdminDeadLetterJobs,
+  mockUseGetAdminDeadLetterJobStats,
+  mockUseGetAdminDeadLetterJobDetail,
+  mockUseGetAdminDeadLetterJobArgs,
+  mockUseRetryAdminDeadLetterJob,
+  mockUseAddAdminDeadLetterJobNotes,
+  mockUseDeleteAdminDeadLetterJob,
+  mockUseBulkDeleteAdminDeadLetterJobs,
+  mockUseListAdminUsers,
+  mockUseListAdminPaddleWebhooks,
+  mockUseGetAdminPaddleWebhookStats,
+  mockUseGetSystemHealth,
 } from '@/test/mocks/admin-api'
 // EChartsChart mock — must be imported before any chart component dynamic imports
 // so that mock.module('@/shared/charts') is registered at load time.
@@ -153,6 +168,13 @@ const { CreateSavingsGoalDialog } = await import('@/features/savings/components/
 const { PlaidOrphanedItemsPage } = await import('@/features/admin/components/PlaidOrphanedItemsPage')
 const { UserDetailModal } = await import('@/features/admin/components/UserDetailModal')
 const { WebhookDetailModal } = await import('@/features/admin/components/WebhookDetailModal')
+
+// --- Round 16 (batch EC): the five admin components the gate never imported ---
+const { DeadLetterPage } = await import('@/features/admin/components/DeadLetterPage')
+const { DeadLetterDetailModal } = await import('@/features/admin/components/DeadLetterDetailModal')
+const { UsersPage } = await import('@/features/admin/components/UsersPage')
+const { WebhooksPage } = await import('@/features/admin/components/WebhooksPage')
+const { HealthDashboardPage } = await import('@/features/admin/components/HealthDashboardPage')
 
 const SENTINEL_MERCHANT = 'SENTINEL_MERCHANT_XYZ'
 const SENTINEL_NICKNAME = 'SENTINEL_NICKNAME_ABC'
@@ -2087,11 +2109,18 @@ describe('PII coverage — Round 15: WebhookDetailModal Paddle payload', () => {
     mockUseGetAdminPaddleWebhookDetail.mockReturnValue({
       data: {
         id: 'wh-pii',
-        event_id: 'evt_pii',
+        // Distinctive so it can serve as a sentinel: the modal rendered the event id
+        // unmasked while WebhooksPage masked the same field in its table.
+        event_id: 'evt_SENTINEL_pii01',
         event_type: 'subscription.updated',
         status: 'processed',
         created_at: '2026-08-01T10:00:00Z',
         processed_at: '2026-08-01T10:00:01Z',
+        // The processing error is a verbatim handler message about a specific customer —
+        // it routinely quotes the Paddle payload it failed on. Omitting it from this fixture
+        // is why the gate passed 18/18 while the modal rendered it unmasked.
+        processing_error: `charge failed for ${SENTINEL_EMAIL}`,
+        processing_attempts: 3,
         // A real Paddle payload carries the customer's email and the billed amount.
         payload: { data: { customer: { email: SENTINEL_EMAIL }, totals: { total: '99999.99' } } },
       },
@@ -2112,6 +2141,10 @@ describe('PII coverage — Round 15: WebhookDetailModal Paddle payload', () => {
     })
     const sentinels = [
       { value: SENTINEL_EMAIL, fieldDescription: 'customer email inside the Paddle webhook payload' },
+      // Batch EC / C1: the same three fields WebhooksPage masks in its table were bare in this
+      // modal one click deeper, and untruncated. The email sentinel above covers
+      // processing_error, which quotes it; event_id needs its own.
+      { value: 'evt_SENTINEL_pii01', fieldDescription: 'Paddle event id in the detail modal' },
     ]
     await waitForSentinels(sentinels)
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
@@ -2127,5 +2160,353 @@ describe('PII coverage — Round 15: WebhookDetailModal Paddle payload', () => {
       timeout: 3000,
     })
     expect(screen.getByText('subscription.updated').closest('[data-ph-mask]')).toBeNull()
+  })
+})
+
+// ── Round 16 (batch EC): the five admin components the gate never imported ────────────────────
+//
+// THE DENOMINATOR WAS THE DEFECT. The scanner is sound, but which components it saw was a
+// hand-maintained, opt-in list, and DeadLetterPage, DeadLetterDetailModal, UsersPage,
+// WebhooksPage and HealthDashboardPage were not in it at all. Worse, coverage inside a listed
+// component was per-FIELD and equally opt-in: WebhookDetailModal WAS listed and still missed
+// its `processing_error` leak because the fixture omitted the field.
+//
+// These sections use sentinelsFromFixture(), which makes every string in the fixture a sentinel
+// by default and requires a visible skipKeys entry to opt one OUT. Adding a field to a fixture
+// now widens coverage automatically; forgetting to list a field no longer silently narrows it.
+//
+// ⚠ WHAT THIS STILL CANNOT CATCH, stated plainly so nobody reads a green gate as proof of
+// absence:
+//   1. A field absent from the fixture entirely — the API can return keys these objects do not
+//      have, and an absent key renders nothing to scan.
+//   2. A component nobody imported here. There is still no import sweep and no lint rule; a new
+//      admin page displaying PII is caught by nothing until someone adds a section below.
+//   3. A value the component reformats before rendering (truncation past the sentinel, currency
+//      formatting, date parsing) — string inclusion misses the transformed text.
+//   4. Attribute text the component CONSTRUCTS rather than copies (a template literal that
+//      derives an identifier), and any PII that only appears after an interaction no test drives.
+//   5. Anything outside the DOM: network payloads, console logs, and PostHog event properties
+//      are not what this scanner looks at.
+
+const SENTINEL_DLQ_SUBJECT = 'user_2SENTINELsubjectID'
+
+describe('PII coverage — Round 16: DeadLetterPage list', () => {
+  const dlqJob = {
+    id: 4242,
+    original_job_id: 900100,
+    kind: 'sync_transactions',
+    queue: 'default',
+    max_attempts: 3,
+    created_at: '2026-04-01T10:00:00Z',
+    failed_at: '2026-04-01T11:00:00Z',
+    user_id: SENTINEL_DLQ_SUBJECT,
+    notified: false,
+    retried_at: undefined,
+    retry_job_id: undefined,
+    // Free text a staff member typed about one failing job, on a screen filtered by user_id.
+    // Kept short: the column truncates at 40 chars, so a sentinel pushed past that would make
+    // this test pass for the wrong reason.
+    notes: `Called ${SENTINEL_EMAIL}`,
+  }
+
+  // Structural / operational fields that carry no personal data and must stay legible to an
+  // operator. Every OTHER string in the fixture is a sentinel automatically.
+  const DLQ_SKIP = ['kind', 'queue', 'created_at', 'failed_at', 'retried_at'] as const
+
+  beforeEach(() => {
+    cleanup()
+    mockUseListAdminDeadLetterJobs.mockReturnValue({
+      data: { jobs: [dlqJob], total: 1, page: 1, page_size: 20, total_pages: 1, has_more: false },
+      isLoading: false,
+      error: null,
+    } as never)
+    mockUseGetAdminDeadLetterJobStats.mockReturnValue({
+      data: { total: 1, unnotified: 1, retried: 0, last_24_hours: 1, by_kind: { sync_transactions: 1 } },
+      isLoading: false,
+      error: null,
+    } as never)
+    mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: () => {}, isPending: false } as never)
+    mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: () => {}, isPending: false } as never)
+    mockUseBulkDeleteAdminDeadLetterJobs.mockReturnValue({ mutate: () => {}, isPending: false } as never)
+  })
+
+  test('scanForUnmaskedPII returns [] — subject id and staff notes are masked', async () => {
+    render(<DeadLetterPage />, { wrapper: createWrapper() })
+    const sentinels = sentinelsFromFixture(dlqJob, { skipKeys: DLQ_SKIP, label: 'dlq_job' })
+    // Guard the derivation itself: if the helper stopped producing sentinels this test would
+    // pass vacuously.
+    expect(sentinels.map((s) => s.value).sort()).toEqual(
+      [SENTINEL_DLQ_SUBJECT, `Called ${SENTINEL_EMAIL}`].sort()
+    )
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  // Sibling, failing in the opposite direction: the job kind is the operator's whole reason for
+  // being on this page. A blanket mask over the table would satisfy the test above and blind the
+  // operator — round 11 established masking at the element, never at the column, for this reason.
+  test('the job kind is NOT masked in the table', async () => {
+    render(<DeadLetterPage />, { wrapper: createWrapper() })
+    // Scoped to the TABLE. The kind filter <select> also renders "sync_transactions" as an
+    // <option>, and it is never inside a masked cell — asserting on the first document-wide
+    // match would grab that option and pass even with the kind column fully masked.
+    const table = await waitFor(() => {
+      const t = document.body.querySelector('table')
+      expect(t).not.toBeNull()
+      return t as HTMLElement
+    }, { timeout: 3000 })
+    const kindCell = within(table).getByText('sync_transactions')
+    expect(kindCell.closest('[data-ph-mask]')).toBeNull()
+  })
+})
+
+describe('PII coverage — Round 16: DeadLetterDetailModal (the surface one click deeper)', () => {
+  const dlqDetail = {
+    id: 77,
+    original_job_id: 900101,
+    kind: 'plaid_sync',
+    queue: 'default',
+    max_attempts: 3,
+    created_at: '2026-04-01T10:00:00Z',
+    failed_at: '2026-04-01T11:00:00Z',
+    user_id: SENTINEL_DLQ_SUBJECT,
+    notified: false,
+    // MaskJobArgs redacts a fixed denylist of TOP-LEVEL string keys only — `user_id` and a
+    // free-text `reason` survive it, so the "masked" args view is not PII-free.
+    args: { user_id: SENTINEL_DLQ_SUBJECT, reason: `manual replay for ${SENTINEL_EMAIL}` },
+    errors: [{ message: `no account found for ${SENTINEL_EMAIL}` }],
+    notes: `Spoke to ${SENTINEL_EMAIL} on the phone`,
+  }
+  const rawArgs = { user_id: SENTINEL_DLQ_SUBJECT, access_token: '[REDACTED]', note: SENTINEL_EMAIL }
+  const DETAIL_SKIP = ['kind', 'queue', 'created_at', 'failed_at', 'retried_at', 'access_token'] as const
+
+  beforeEach(() => {
+    cleanup()
+    mockUseGetAdminDeadLetterJobDetail.mockReturnValue({
+      data: dlqDetail,
+      isLoading: false,
+      error: null,
+    } as never)
+    mockUseGetAdminDeadLetterJobArgs.mockReturnValue({
+      data: rawArgs,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    } as never)
+    mockUseRetryAdminDeadLetterJob.mockReturnValue({ mutate: () => {}, isPending: false } as never)
+    mockUseAddAdminDeadLetterJobNotes.mockReturnValue({ mutate: () => {}, isPending: false } as never)
+    mockUseDeleteAdminDeadLetterJob.mockReturnValue({ mutate: () => {}, isPending: false } as never)
+  })
+
+  test('scanForUnmaskedPII returns [] — notes, server-masked args and errors are all masked', async () => {
+    render(<DeadLetterDetailModal jobId={77} onClose={() => {}} />, { wrapper: createWrapper() })
+    const sentinels = sentinelsFromFixture(dlqDetail, { skipKeys: DETAIL_SKIP, label: 'dlq_detail' })
+    expect(sentinels.length).toBeGreaterThanOrEqual(4)
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  test('scanForUnmaskedPII returns [] after Reveal — the raw args block is masked too', async () => {
+    const user = userEvent.setup()
+    render(<DeadLetterDetailModal jobId={77} onClose={() => {}} />, { wrapper: createWrapper() })
+    await user.click(screen.getByRole('button', { name: /reveal/i }))
+    const sentinels = sentinelsFromFixture(rawArgs, { skipKeys: DETAIL_SKIP, label: 'dlq_raw_args' })
+    expect(sentinels.map((s) => s.value)).toContain(SENTINEL_EMAIL)
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  // Sibling: the queue is operational routing metadata and must stay legible, so a blanket mask
+  // over the whole dialog would fail here rather than pass the tests above by brute force.
+  test('the queue name is NOT masked', async () => {
+    render(<DeadLetterDetailModal jobId={77} onClose={() => {}} />, { wrapper: createWrapper() })
+    await waitFor(() => expect(screen.getByText('default')).toBeInTheDocument(), { timeout: 3000 })
+    expect(screen.getByText('default').closest('[data-ph-mask]')).toBeNull()
+  })
+})
+
+describe('PII coverage — Round 16: UsersPage list', () => {
+  const adminUser = {
+    id: 'user-pii-1',
+    email: SENTINEL_EMAIL,
+    subscription_tier: 'premium',
+    subscription_status: 'active',
+    manual_tier_override: null,
+    manual_tier_ends_at: null,
+    primary_region: 'iad',
+    created_at: '2024-01-15T10:00:00Z',
+    last_login_at: '2024-03-15T14:30:00Z',
+    is_active: true,
+    is_admin: false,
+    linked_accounts_count: 5,
+    boosts_count: 10,
+    referrals_count: 2,
+  }
+  const USERS_SKIP = [
+    'id',
+    'subscription_tier',
+    'subscription_status',
+    'primary_region',
+    'created_at',
+    'last_login_at',
+  ] as const
+
+  beforeEach(() => {
+    cleanup()
+    mockUseListAdminUsers.mockReturnValue({
+      data: { users: [adminUser], total_count: 1, page: 1, page_size: 20, total_pages: 1, has_more: false },
+      isLoading: false,
+      error: null,
+    } as never)
+  })
+
+  test('scanForUnmaskedPII returns [] — the user email is masked in the table', async () => {
+    render(<UsersPage />, { wrapper: createWrapper() })
+    const sentinels = sentinelsFromFixture(adminUser, { skipKeys: USERS_SKIP, label: 'admin_user' })
+    expect(sentinels.map((s) => s.value)).toEqual([SENTINEL_EMAIL])
+    await waitForSentinels(sentinels)
+    // Scoped to the results table. UsersPage's tier filter <select> statically enumerates every
+    // configured tier's display label, including parenthetical seat counts like "Household (4)",
+    // which the scanner's currency regex reads as a parenthesized negative amount — the same
+    // documented false positive as the SubscriptionOverrideModal sections above, and unrelated to
+    // email masking. Every field of a user RECORD renders inside this table, so scoping here does
+    // not narrow what is under test; the assertion below proves the sentinel is actually in it.
+    const table = document.body.querySelector('table') as HTMLElement | null
+    expect(table).not.toBeNull()
+    expect(within(table as HTMLElement).getByText(SENTINEL_EMAIL)).toBeInTheDocument()
+    expect(scanForUnmaskedPII(table as HTMLElement, sentinels)).toEqual([])
+  })
+})
+
+describe('PII coverage — Round 16: WebhooksPage list', () => {
+  const webhookEvent = {
+    id: 'wh-pii-1',
+    event_id: 'evt_SENTINEL_01hxyz',
+    event_type: 'subscription.updated',
+    payload: { data: {} },
+    processed: false,
+    processed_at: null,
+    processing_error: `charge failed for ${SENTINEL_EMAIL}`,
+    processing_attempts: 3,
+    created_at: '2026-03-22T08:00:00Z',
+    updated_at: '2026-03-22T08:30:00Z',
+  }
+  const WEBHOOK_SKIP = ['id', 'event_type', 'created_at', 'updated_at', 'processed_at'] as const
+
+  beforeEach(() => {
+    cleanup()
+    mockUseListAdminPaddleWebhooks.mockReturnValue({
+      data: { Events: [webhookEvent], Total: 1, Page: 1, PageSize: 20, TotalPages: 1, HasMore: false },
+      isLoading: false,
+      error: null,
+    } as never)
+    mockUseGetAdminPaddleWebhookStats.mockReturnValue({
+      data: {
+        Total: 1,
+        Processed: 0,
+        Failed: 1,
+        Unprocessed: 0,
+        AvgProcessingTimeMs: 42,
+        EventTypeBreakdown: null,
+        TimeRangeHours: 24,
+      },
+      isLoading: false,
+      error: null,
+    } as never)
+    mockUseGetAdminPaddleWebhookDetail.mockReturnValue({ data: undefined, isLoading: false, error: null } as never)
+    mockUseReplayAdminPaddleWebhook.mockReturnValue({
+      mutate: () => {},
+      isPending: false,
+      isSuccess: false,
+      isError: false,
+    } as never)
+  })
+
+  test('scanForUnmaskedPII returns [] — event id and processing error are masked', async () => {
+    render(<WebhooksPage />, { wrapper: createWrapper() })
+    const sentinels = sentinelsFromFixture(webhookEvent, { skipKeys: WEBHOOK_SKIP, label: 'webhook' })
+    expect(sentinels.map((s) => s.value).sort()).toEqual(
+      ['evt_SENTINEL_01hxyz', `charge failed for ${SENTINEL_EMAIL}`].sort()
+    )
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  // C4: the Replay button's aria-label used to interpolate the Paddle event id. Session replay
+  // records attributes VERBATIM — data-ph-mask covers text nodes only and cannot reach an
+  // attribute — so the remedy is a structural label, not a mask. scanForUnmaskedPII already
+  // scans aria-label, but this asserts the structural intent directly so a future edit that
+  // reintroduces the identifier fails with an obvious message.
+  test('the Replay button aria-label carries no event identifier', async () => {
+    render(<WebhooksPage />, { wrapper: createWrapper() })
+    // Queried by the loose /replay/i accessible name, NOT by the exact structural label — an
+    // exact-name query would make this test fail on "element not found" when the identifier is
+    // reintroduced, i.e. pass its mutation for the wrong reason.
+    const replay = (await screen.findAllByRole('button', { name: /replay/i }))[0]
+    expect(replay.getAttribute('aria-label')).not.toContain('evt_SENTINEL_01hxyz')
+    expect(replay.getAttribute('aria-label')).toContain('Replay')
+  })
+})
+
+describe('PII coverage — Round 16: HealthDashboardPage', () => {
+  // This page renders aggregate operational counters only — no per-subject field exists to
+  // sentinel, so its value here is (a) being inside the gate at all, and (b) the scanner's
+  // currency and account-mask regexes, which fire on any monetary or masked-account text that
+  // a future metric might introduce.
+  beforeEach(() => {
+    cleanup()
+    mockUseGetSystemHealth.mockReturnValue({
+      data: {
+        status: 'healthy',
+        timestamp: '2026-01-25T12:00:00Z',
+        services: {
+          database: {
+            status: 'up',
+            connections: { active: 10, idle: 5, max: 100, constructing: 2, total: 17 },
+            latency_ms: 5,
+          },
+          clerk: { status: 'up', latency_ms: 100 },
+          plaid: { status: 'up', environment: 'sandbox' },
+        },
+        job_queues: {
+          default: { pending: 5, running: 2, failed: 0, completed_last_hour: 100 },
+        },
+        sync_status: { active_syncs: 3, failed_last_hour: 1, average_duration_ms: 3500 },
+        dead_letter_queue: { count: 2, oldest_job_age_hours: 5 },
+        paddle_status: {
+          active_subscriptions: 150,
+          webhook_success_rate_24h: 98.5,
+          failed_webhooks_24h: 2,
+          total_webhooks24h: 134,
+          last_reconciliation_at: '2026-03-22T10:00:00Z',
+          reconciliation_discrepancies: 0,
+        },
+        job_backlog: {
+          plaid_cleanup_outstanding_users: 0,
+          plaid_cleanup_oldest_outstanding_seconds: 0,
+          manual_tier_override_oldest_uncleared_expired_seconds: 0,
+          available: true,
+        },
+        plaid_orphaned_items: {
+          auto_retrying: 0,
+          manual_intervention_required: 0,
+          resolved: 0,
+          operator_attested: 0,
+          max_unresolved_retry_attempt_count: 0,
+          available: true,
+        },
+      },
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    } as never)
+  })
+
+  test('scanForUnmaskedPII returns [] — no currency or account-mask text escapes unmasked', async () => {
+    render(<HealthDashboardPage />, { wrapper: createWrapper() })
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^Services$/ })).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
 })

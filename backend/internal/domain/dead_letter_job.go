@@ -70,24 +70,20 @@ type DeadLetterStatsResponse struct {
 	ByKind      map[string]int64 `json:"by_kind"`
 }
 
-// MaskedDeadLetterJob is the same as DeadLetterJob but with Args and Errors redacted
-// to prevent exposing sensitive data in list/detail views.
-type MaskedDeadLetterJob struct {
-	ID            int64           `json:"id"`
-	OriginalJobID int64           `json:"original_job_id"`
-	Kind          string          `json:"kind"`
-	Queue         string          `json:"queue"`
-	Args          json.RawMessage `json:"args"`
-	Errors        json.RawMessage `json:"errors"`
-	MaxAttempts   int             `json:"max_attempts"`
-	CreatedAt     time.Time       `json:"created_at"`
-	FailedAt      time.Time       `json:"failed_at"`
-	UserID        *string         `json:"user_id,omitempty"`
-	Notified      bool            `json:"notified"`
-	RetriedAt     *time.Time      `json:"retried_at,omitempty"`
-	RetryJobID    *int64          `json:"retry_job_id,omitempty"`
-	Notes         *string         `json:"notes,omitempty"`
-}
+// MaskedDeadLetterJob was DELETED (round 16, batch EC). It claimed "Args and Errors redacted",
+// which nothing implemented: it had no constructor, no conversion, and no reference outside its
+// own declaration, while `DeadLetterJob` had 44. It documented a contract the code does not
+// honour, and reviewers on this branch cited it as evidence that DLQ args were safe.
+//
+// The masking that actually runs is services.MaskJobArgs / services.MaskJobErrors, and it is
+// PARTIAL by design: MaskJobArgs redacts a fixed 7-entry denylist of TOP-LEVEL string keys with
+// no recursion, so real args keep `user_id`, `clerk_user_id`, `linked_item_id`, `item_id` and a
+// free-text `reason`. It was deliberately left as-is rather than given recursion: recursion
+// would not redact any of those five (they are not on the denylist), so it would deepen the
+// false impression of completeness without removing a single field that leaks today. The
+// admin-facing exposure is closed where it mattered — DeadLetterDetailModal now carries
+// data-ph-mask on both the server-masked and the revealed raw args blocks, so session replay
+// no longer transmits either. Widening the denylist is a separate, deliberate decision.
 
 // DeadLetterBulkDeleteRequest is the request body for bulk-deleting dead letter jobs.
 type DeadLetterBulkDeleteRequest struct {

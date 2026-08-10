@@ -248,7 +248,11 @@ export function DeadLetterDetailModal({ jobId, onClose }: DeadLetterDetailModalP
                     </pre>
                   )
                 ) : (
-                  <pre className={cn(preClass, 'text-muted-foreground')}>
+                  // Server-side masking (services.MaskJobArgs) only redacts a fixed denylist of
+                  // TOP-LEVEL string keys — real job args carry user_id, clerk_user_id,
+                  // linked_item_id and free-text `reason` that survive it. So the "masked" view
+                  // is not PII-free and must be masked in replay just like the raw view above.
+                  <pre className={cn(preClass, 'text-muted-foreground')} data-ph-mask>
                     {formatJson(job.args) || '[REDACTED]'}
                   </pre>
                 )}
@@ -298,7 +302,16 @@ export function DeadLetterDetailModal({ jobId, onClose }: DeadLetterDetailModalP
                   </div>
                 ) : (
                   <p className="text-sm text-foreground">
-                    {job.notes || <span className="text-muted-foreground italic">No notes yet.</span>}
+                    {job.notes
+                      ? (
+                        // Free text a staff member typed about ONE failing job, on a screen
+                        // filtered by user_id — the same shape as the orphaned-item operator
+                        // note. DeadLetterPage masks the `notes` column; this untruncated
+                        // detail view must not be the weaker surface. Masked at the element,
+                        // never on the row, so the surrounding labels stay legible.
+                        <span data-ph-mask>{job.notes}</span>
+                      )
+                      : <span className="text-muted-foreground italic">No notes yet.</span>}
                   </p>
                 )}
               </div>
