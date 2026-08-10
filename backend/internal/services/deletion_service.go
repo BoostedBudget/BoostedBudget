@@ -538,6 +538,51 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 		return false, nil
 	}
 
+	// ⚠ ROUND 15, FINDING D2 — THE HOUSEHOLD-OWNER PRECONDITION, ASKED BEFORE THE FIRST IRREVERSIBLE
+	// EFFECT RATHER THAN AFTER THE LAST ONE.
+	//
+	// DeleteUserCascade already refuses to erase a household owner whose household still has another
+	// active member or another beneficiary's live entitlement — households.owner_user_id CASCADEs, so
+	// erasing them destroys a DIFFERENT real user's rows (Issue #1440). But that guard is evaluated
+	// inside the cascade's own transaction, which is the LAST thing this function does. By then every
+	// Plaid Item has been disconnected and the Paddle customer has been cancelled and archived — the
+	// act this file itself calls "THE ONE ACTION NOTHING CAN UNDO".
+	//
+	// ⚠ AND THIS CONDITION CANNOT SELF-HEAL. Its own guard comment says so: nothing in the system will
+	// transfer the ownership, remove the member, or reconcile the stale entitlement. So the retention
+	// path — which reaches ExecuteDeletion directly (retention_cleanup_check.go calls it in process)
+	// and therefore never passes through RequestDeletion's #1367 owner check — did the whole
+	// irreversible sequence, was refused, and then DID IT AGAIN THE NEXT DAY, indefinitely.
+	//
+	// ⚠ THIS IS A REORDER, NOT A NEW RULE, AND DELIBERATELY SO. It asks the same SQL predicate the
+	// cascade asks (householdOwnerBlocksDeletionClause, shared verbatim), and it is a pure local-state
+	// question needing no external call, so asking it here costs one round-trip and removes the entire
+	// class. It is placed BEFORE the first abortIfUnauthorised/Plaid leg for exactly that reason.
+	//
+	// ⚠ THE IN-CASCADE GUARD STAYS — defence in depth, and it is not redundant. This read runs outside
+	// the cascade's transaction and its FOR UPDATE lock: an invite accepted in the interval is caught
+	// only in there. This check shrinks the window in which the harm is irreversible; that guard is
+	// what makes the outcome correct.
+	//
+	// Returns a genuine error, matching the cascade guard's own choice and for its reason: a silent
+	// (false, nil) skip would let a GDPR deadline go unmet forever with no visible signal, and this is
+	// the one deletion stop that requires a human to actually resolve the household. The metric is
+	// left to the cascade's guard so the counter keeps meaning "an erasure was blocked on ownership"
+	// once per occasion rather than twice.
+	householdBlocks, err := s.profileRepo.HouseholdOwnerBlocksDeletion(ctx, userID)
+	if err != nil {
+		// Fail closed: not knowing whether erasing this user would destroy someone else's data is not
+		// permission to start disconnecting banks and archiving Paddle customers.
+		releaseClaim(err.Error())
+		return fmt.Errorf("aborting deletion before any external cleanup — could not establish whether this user owns a household that blocks deletion: %w", err)
+	}
+	if householdBlocks {
+		releaseClaim("household ownership blocks deletion — refusing before any irreversible external work")
+		slog.Default().Error("aborting deletion before any external cleanup — this user owns a household with another active member or another beneficiary's live entitlement, so erasing them would destroy a different user's data; this needs a human to transfer or disband the household",
+			"user_id", userID, "claim_kind", string(kind))
+		return fmt.Errorf("aborting deletion — %w", domain.ErrHouseholdHasActiveMembers)
+	}
+
 	// ⚠ ORDERING IS DELIBERATE AND WAS CHANGED: PLAID FIRST, PADDLE SECOND. It used to be the other
 	// way round. The two legs are not equally reversible — a Plaid disconnect costs the user a
 	// re-link through Plaid Link, whereas ArchiveAndAnonymizeCustomer destroys PII at Paddle and
@@ -633,6 +678,39 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 			// Info: we are completing an erasure while a live Plaid Item may still be billing, which is
 			// an operator's problem the moment it happens, not a routine event.
 			if errors.Is(err, ErrPlaidRemovalUnrecoverable) {
+				// ⚠ ROUND 15, FINDING D1 — PROCEEDING IS ONLY CORRECT ONCE C2 CAN ACTUALLY BE PASSED, AND
+				// ON THE PASS THAT WRITES THE VERDICT IT PROVABLY CANNOT.
+				//
+				// The paragraph above is right that C2 makes proceeding SAFE. What it missed is that on
+				// this pass C2 is not merely a backstop, it is a CERTAINTY: uncleanedLinkedItemPredicate
+				// blocks while `plaid_removal_failed_at > now() - INTERVAL '7 days'`, and the verdict that
+				// produced this sentinel was written by this very pass. So the old code went on to cancel
+				// the subscription and archive-and-anonymise the Paddle customer — irreversibly — and then
+				// hit a refusal that was guaranteed before the first of those calls was made. Daily, for a
+				// week, each run now also emitting its own residue record with nothing to dedupe them.
+				//
+				// ⚠ THE 7-DAY WINDOW IS NOT THE BUG AND IS NOT TOUCHED. Its argument (see
+				// uncleanedLinkedItemPredicate) is sound: Plaid returns INVALID_ACCESS_TOKEN both for a
+				// genuinely dead token and for a token used against the wrong environment or client_id, so
+				// the terminal verdict is an INFERENCE. The window exists to convert it into an
+				// OBSERVATION, and the daily retries that happen during it are the mechanism — unblocking
+				// on first sight would let one misconfigured deploy erase over the whole estate. Shortening
+				// or conditioning the window would weaken exactly that. So the window keeps its full
+				// length, and what changes is that this flow stops spending irreversible external effects
+				// on a wait it is guaranteed to lose. The waiting was always the design; only the
+				// spending-while-waiting was not.
+				//
+				// #1494 SURVIVES INTACT. This is a deferral bounded by the same window C2 already imposes,
+				// not a return to the permanent abort #1494 fixed: once the verdict ages past seven days
+				// the count falls to zero, this branch proceeds exactly as before, and the erasure
+				// completes. The claim is released so the next daily sweep retries — and those retries are
+				// precisely what makes the window an observation.
+				//
+				// FAIL CLOSED on an undeterminable count, like every other unknown in this function.
+				deferred, deferErr := s.deferIfCascadeGuardWillRefuse(ctx, userID, kind, releaseClaim)
+				if deferred {
+					return deferErr
+				}
 				slog.Default().Error("proceeding with deletion despite Plaid item(s) that can never be removed — the obligation is recorded and will be preserved in plaid_orphaned_items; the Item(s) may still exist and still bill at Plaid",
 					"user_id", userID, "error", err)
 			} else {
@@ -962,6 +1040,40 @@ func (s *deletionService) SetHouseholdReader(r HouseholdReader) {
 // #1367 — Phase 3.
 func (s *deletionService) SetHouseholdInviteRevoker(r HouseholdInviteRevoker) {
 	s.inviteRevoker = r
+}
+
+// deferIfCascadeGuardWillRefuse answers, before the Paddle leg spends anything irreversible, whether
+// DeleteUserCascade's C2 guard is ALREADY certain to refuse this user — round 15, finding D1. See the
+// ErrPlaidRemovalUnrecoverable call site for the full argument, including why the 7-day cooling-off
+// window it defers to is left at its full length rather than shortened.
+//
+// Returns (handled, err) in ExecuteDeletion's established shape: handled==true means the caller must
+// return err directly and do nothing else. A deferral is a legitimate, expected outcome and returns a
+// nil error, exactly like the authorisation-revoked and claim-busy stops; only an UNDETERMINABLE count
+// is an error, because not knowing whether the guard will refuse is not permission to start
+// irreversible external work.
+//
+// It reads the guard's own population through CountUncleanedLinkedItems, which shares
+// uncleanedLinkedItemPredicate with C2 verbatim, so this can only disagree with the guard if the rows
+// changed in between. That staleness is harmless in both directions and cannot produce an erasure the
+// guard would refuse — the guard still runs, unchanged, and is still the authority.
+func (s *deletionService) deferIfCascadeGuardWillRefuse(ctx context.Context, userID string, kind repository.DeletionClaimKind, releaseClaim func(reason string)) (bool, error) {
+	outstanding, err := s.profileRepo.CountUncleanedLinkedItems(ctx, userID)
+	if err != nil {
+		releaseClaim(err.Error())
+		return true, fmt.Errorf("aborting deletion before irreversible Paddle cleanup — Plaid removal is unrecoverable and the outstanding linked-item count could not be established: %w", err)
+	}
+	if outstanding == 0 {
+		return false, nil
+	}
+	releaseClaim(fmt.Sprintf("terminal Plaid removal verdict is still inside its cooling-off window — %d linked item(s) would make the cascade guard refuse", outstanding))
+	// Info, not Error: this is a bounded, self-resolving wait that needs no operator, and it is the
+	// alarm this finding was really about. Reporting it as "this needs a human" every day for a week —
+	// which is what the old flow did, after doing the irreversible work first — is how a real signal
+	// gets tuned out.
+	slog.Default().Info("deferring deletion before any Paddle cleanup — every remaining Plaid removal failed terminally, but that verdict is still inside its cooling-off window, so the cascade guard would refuse; no irreversible external work is spent on a run that cannot complete",
+		"user_id", userID, "claim_kind", string(kind), "outstanding_linked_items", outstanding)
+	return true, nil
 }
 
 // SetDB wires transaction capability for the household owner-guard. #1367 — Phase 3.

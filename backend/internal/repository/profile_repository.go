@@ -326,7 +326,40 @@ type ProfileRepository interface {
 	// Do NOT use this as a pre-check to decide whether to call DeleteUserCascade: it runs outside the
 	// cascade's transaction and its FOR UPDATE lock, so its answer can be stale by the time the
 	// cascade runs. The guard inside the transaction is the authority; this is an explanation.
+	//
+	// ⚠ ROUND 15, D1 — THE SECOND CALLER, AND WHY IT DOES NOT VIOLATE THE PARAGRAPH ABOVE.
+	// ExecuteDeletion's ErrPlaidRemovalUnrecoverable branch now consults this count too, to decide
+	// whether to SKIP the irreversible Paddle work — NOT to decide whether to call the cascade. The
+	// cascade is still called and its C2 guard is still the authority. Staleness is therefore
+	// one-directional and harmless in both directions: a stale non-zero defers a run by one day (the
+	// sweep is daily and the next pass re-reads), and a stale zero merely reproduces the behaviour
+	// this branch had before the check existed. Neither can produce an erasure C2 would have refused,
+	// because C2 is untouched. See that call site for the full argument.
 	CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error)
+
+	// HouseholdOwnerBlocksDeletion reports whether erasing userID would destroy a DIFFERENT user's
+	// data through households.owner_user_id's CASCADE — the exact question DeleteUserCascade's own
+	// in-transaction household guard asks, asked EARLY. Issue #1440 follow-up, round 15 finding D2.
+	//
+	// WHY IT EXISTS SEPARATELY FROM THE CASCADE'S GUARD, AND WHY THAT GUARD STAYS. The cascade's
+	// guard is evaluated inside the deletion transaction, i.e. AFTER ExecuteDeletion has already
+	// disconnected every Plaid Item and cancelled and archived the user's Paddle customer. Its own
+	// doc comment records that this condition — unlike every other skip in that function — CANNOT
+	// SELF-HEAL: nothing in the system will transfer the ownership, remove the member, or reconcile
+	// the stale entitlement. So a retention-expired household owner had their banks disconnected and
+	// their Paddle customer irreversibly archived, was then refused, and the next daily sweep
+	// repeated the whole sequence — forever.
+	//
+	// This is a pure LOCAL-STATE precondition. It needs no external call and no lock, so it can be
+	// asked before the first irreversible effect, which removes the entire class rather than
+	// reporting it. It is a REORDER, not a new rule: the predicate is literally the same SQL const.
+	//
+	// ⚠ DEFENCE IN DEPTH — DO NOT REMOVE THE IN-CASCADE GUARD ON THE STRENGTH OF THIS ONE. This
+	// query runs outside the cascade's transaction and its FOR UPDATE lock, so an invite accepted
+	// between this call and the cascade is caught only by the guard inside it. This check shrinks the
+	// window in which the harm is IRREVERSIBLE; the in-transaction guard is what makes the outcome
+	// correct.
+	HouseholdOwnerBlocksDeletion(ctx context.Context, userID string) (bool, error)
 
 	// DeletionStillAuthorised reports whether a hard delete of userID is STILL authorised under
 	// `kind`, judged against committed state at the moment it is asked, for the deletion episode
@@ -2026,6 +2059,22 @@ func (r *profileRepository) CountUncleanedLinkedItems(ctx context.Context, userI
 		return 0, fmt.Errorf("CountUncleanedLinkedItems: %w", err)
 	}
 	return count, nil
+}
+
+// HouseholdOwnerBlocksDeletion implements ProfileRepository.HouseholdOwnerBlocksDeletion — see that
+// interface method's doc comment (round 15, D2) for why this exists and what it must not replace.
+//
+// Shares householdOwnerBlocksDeletionClause with DeleteUserCascade's in-transaction guard VERBATIM,
+// for the same reason CountUncleanedLinkedItems shares uncleanedLinkedItemPredicate: a hand-written
+// second spelling of the same question is how #1444 (Site C) happened, and the copy that diverged was
+// the one nobody re-read. If this answers differently from the guard, the only permissible cause is
+// that the underlying rows changed in between.
+func (r *profileRepository) HouseholdOwnerBlocksDeletion(ctx context.Context, userID string) (bool, error) {
+	var blocks bool
+	if err := r.db.QueryRow(ctx, `SELECT `+householdOwnerBlocksDeletionClause, userID).Scan(&blocks); err != nil {
+		return false, fmt.Errorf("HouseholdOwnerBlocksDeletion: %w", err)
+	}
+	return blocks, nil
 }
 
 // DeletionResidueEffect names the irreversible external effect an account deletion had ALREADY

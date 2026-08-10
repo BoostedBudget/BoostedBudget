@@ -48,6 +48,28 @@ type MockProfileRepositoryForDeletion struct {
 	// that the question matches the authorisation this run was claimed under rather than a union.
 	AuthorisedKinds       []repository.DeletionClaimKind
 	AuthorisedOccurrences []*time.Time
+
+	// Round 15, finding D2 — HouseholdOwnerBlocksDeletion's fields. Field-driven for the same reason
+	// as CountUncleanedLinkedItems above: ExecuteDeletion now asks this on EVERY run, before any
+	// external cleanup, so every pre-existing test in this package reaches it and an unmatched testify
+	// expectation would panic. The zero value is false/nil — "no household blocks this deletion" —
+	// which is exactly the behaviour those tests were written against.
+	HouseholdOwnerBlocks bool
+	// HouseholdOwnerBlocksErr, when set, makes the precondition undeterminable — the fail-closed case.
+	HouseholdOwnerBlocksErr error
+	// HouseholdOwnerBlocksCalls counts the calls, so a test can pin that the decision was made from
+	// the precondition rather than reached some other way.
+	HouseholdOwnerBlocksCalls int
+}
+
+// HouseholdOwnerBlocksDeletion — round 15, finding D2. See the struct's field comments for why this
+// is field-driven rather than a testify expectation.
+func (m *MockProfileRepositoryForDeletion) HouseholdOwnerBlocksDeletion(ctx context.Context, userID string) (bool, error) {
+	m.HouseholdOwnerBlocksCalls++
+	if m.HouseholdOwnerBlocksErr != nil {
+		return false, m.HouseholdOwnerBlocksErr
+	}
+	return m.HouseholdOwnerBlocks, nil
 }
 
 // DeletionStillAuthorised — the use-time recheck. See the struct's field comments.

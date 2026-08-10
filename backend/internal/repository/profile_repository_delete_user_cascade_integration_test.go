@@ -1720,3 +1720,77 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM budget_categories WHERE id = $1", budgetCategoryID).Scan(&budgetCategoryCount))
 	assert.Equal(t, 0, budgetCategoryCount, "budget_categories must cascade away transitively via budgets")
 }
+
+// ─── Round 15, finding D2: the same predicate, asked BEFORE the irreversible external work ───────
+//
+// HouseholdOwnerBlocksDeletion exists so DeletionService.ExecuteDeletion can refuse a household
+// owner's retention deletion before it disconnects their banks and archives their Paddle customer —
+// a stop that, uniquely, CANNOT self-heal, and which the cascade could previously only report after
+// all of that had already happened. Its entire correctness claim is that it AGREES with the
+// in-transaction guard, which it achieves by sharing householdOwnerBlocksDeletionClause verbatim.
+//
+// ⚠ These tests are the check on that claim, and they are deliberately run over the SAME fixture
+// shapes the guard's own tests above use — including the two that must NOT block, since a predicate
+// that answered "blocked" for everyone would stop every account deletion in the product.
+func TestHouseholdOwnerBlocksDeletion_Integration_AgreesWithTheCascadeGuard(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	// ⚠ NOT t.Context(): fixture cleanup registered by the helpers below must outlive the test's own
+	// context, or its rows leak into the shared integration database and break OTHER packages' tests.
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	// Shape 1 — an active non-owner member. The guard blocks; so must this.
+	blockedOwner := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "d2-blocked-owner-"+suffix, nil, nil, nil)
+	blockedMember := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "d2-blocked-member-"+suffix, nil, nil, nil)
+	var blockedHouseholdID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO households (owner_user_id, name) VALUES ($1, 'D2 blocked') RETURNING id`, blockedOwner.ID,
+	).Scan(&blockedHouseholdID))
+	execNoErr(t, ctx, pool,
+		`INSERT INTO household_members (household_id, user_id, role, status) VALUES ($1, $2, 'owner', 'active')`,
+		blockedHouseholdID, blockedOwner.ID)
+	execNoErr(t, ctx, pool,
+		`INSERT INTO household_members (household_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')`,
+		blockedHouseholdID, blockedMember.ID)
+
+	// Shape 2 — a sole active self-paying owner. The guard lets this through; so must this.
+	soleOwner := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "d2-sole-owner-"+suffix, nil, nil, nil)
+	var soleHouseholdID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO households (owner_user_id, name) VALUES ($1, 'D2 sole') RETURNING id`, soleOwner.ID,
+	).Scan(&soleHouseholdID))
+	execNoErr(t, ctx, pool,
+		`INSERT INTO household_members (household_id, user_id, role, status) VALUES ($1, $2, 'owner', 'active')`,
+		soleHouseholdID, soleOwner.ID)
+
+	// Shape 3 — an ordinary user in no household at all. The overwhelmingly common case, and the one
+	// a wrong answer would break the product on.
+	loneUser := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "d2-lone-"+suffix, nil, nil, nil)
+
+	t.Run("blocks an owner with an active non-owner member", func(t *testing.T) {
+		blocks, err := repo.HouseholdOwnerBlocksDeletion(ctx, blockedOwner.ID)
+		require.NoError(t, err)
+		assert.True(t, blocks, "this is the exact shape DeleteUserCascade refuses with ErrHouseholdHasActiveMembers — the pre-check must reach that verdict WITHOUT any external work having happened first")
+	})
+
+	t.Run("does not block a sole active self-paying owner", func(t *testing.T) {
+		blocks, err := repo.HouseholdOwnerBlocksDeletion(ctx, soleOwner.ID)
+		require.NoError(t, err)
+		assert.False(t, blocks, "the guard deletes this owner; a pre-check that refused them would strand a GDPR erasure the cascade would have completed")
+	})
+
+	t.Run("does not block a user who owns no household", func(t *testing.T) {
+		blocks, err := repo.HouseholdOwnerBlocksDeletion(ctx, loneUser.ID)
+		require.NoError(t, err)
+		assert.False(t, blocks, "a predicate that blocked here would stop every ordinary account deletion in the product")
+	})
+
+	t.Run("does not block a member who is not the owner", func(t *testing.T) {
+		blocks, err := repo.HouseholdOwnerBlocksDeletion(ctx, blockedMember.ID)
+		require.NoError(t, err)
+		assert.False(t, blocks, "the CASCADE hazard is households.owner_user_id — a MEMBER's deletion destroys nobody else's rows and must not be blocked")
+	})
+}

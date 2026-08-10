@@ -150,8 +150,17 @@ func TestExecuteDeletion_UnrecoverablePlaidRemoval_ProceedsToCascade(t *testing.
 	require.NoError(t, err, "an item that can NEVER be removed must not block this user's erasure forever — that is #1494")
 	repo.AssertCalled(t, "DeleteUserCascade", mock.Anything, user.ID, mock.Anything)
 	claims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken)
-	assert.Equal(t, 0, repo.UncleanedLinkedItemCountCalls,
-		"the count is the nil-service branch's diagnosis only; with a wired service the pass result is the authority")
+	// ⚠ ROUND 15, D1 — THIS ASSERTION WAS INVERTED, AND THE OLD ONE WAS WRONG ON ITS OWN TERMS. It
+	// read `assert.Equal(t, 0, ...)`, justified as "with a wired service the pass result is the
+	// authority". The pass result is NOT the authority on whether the erasure can complete: C2's
+	// seven-day cooling-off window is, and the verdict this pass just wrote sits inside it. The count
+	// is now consulted precisely so the irreversible Paddle work is not spent on a run C2 will refuse
+	// (deferIfCascadeGuardWillRefuse). This test keeps its subject — #1494's escape still exists —
+	// with the fixture's zero count standing for a verdict already older than the window; the
+	// inside-the-window case is TestExecuteDeletion_UnrecoverablePlaidRemovalInsideCoolingOffWindow_SpendsNoPaddleEffects.
+	assert.Equal(t, 1, repo.UncleanedLinkedItemCountCalls,
+		"the terminal-verdict branch must ask whether the cascade guard would already refuse before "+
+			"spending anything irreversible")
 }
 
 // TestExecuteDeletion_GenuinePlaidFailure_StillAborts is the guard that keeps the test above from
