@@ -5,11 +5,13 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -67,6 +69,43 @@ func TestExecuteDeletion_HouseholdOwnerBlocks_PerformsNoExternalEffects(t *testi
 	h.clerk.AssertNotCalled(t, "DeleteUser", mock.Anything, mock.Anything)
 	// No irreversible effect was issued, so there is nothing for an operator to reconcile.
 	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestExecuteDeletion_HouseholdOwnerBlocks_IncrementsTheBlockedCounter is the EE re-review's
+// finding. The reorder above is correct about WHERE to refuse and was wrong about what the
+// refusal reports: the only HouseholdOwnerDeletionBlockedTotal.Inc() lives inside
+// DeleteUserCascade, which the early guard now never reaches — so the one purpose-built alert
+// for a GDPR deletion that cannot self-heal went permanently flat, and the comment at the guard
+// claiming the metric is "left to the cascade's guard" was false the moment the reorder landed.
+//
+// The counter still increments at most once per occasion: the cascade's own Inc() only runs on
+// the race this precheck cannot see (an invite accepted between the two reads), which is a
+// DIFFERENT occasion, not a double count of this one.
+func TestExecuteDeletion_HouseholdOwnerBlocks_IncrementsTheBlockedCounter(t *testing.T) {
+	ctx := context.Background()
+	h := newRevocationHarness(t, ctx)
+	h.repo.HouseholdOwnerBlocks = true
+
+	before := testutil.ToFloat64(observability.HouseholdOwnerDeletionBlockedTotal)
+	err := h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindRetention)
+	require.Error(t, err)
+
+	after := testutil.ToFloat64(observability.HouseholdOwnerDeletionBlockedTotal)
+	assert.Equal(t, before+1, after,
+		"the pre-cleanup refusal must fire the same alert the in-cascade guard fires; it is the only "+
+			"dedicated signal that a GDPR erasure is blocked on a household nothing can resolve automatically")
+}
+
+// The MANDATORY sibling: the counter must not move on a deletion that is NOT household-blocked,
+// or the assertion above would pass against an unconditional Inc().
+func TestExecuteDeletion_NoHouseholdBlock_LeavesTheBlockedCounterAlone(t *testing.T) {
+	ctx := context.Background()
+	h := newRevocationHarness(t, ctx)
+
+	before := testutil.ToFloat64(observability.HouseholdOwnerDeletionBlockedTotal)
+	_ = h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindRetention)
+
+	assert.Equal(t, before, testutil.ToFloat64(observability.HouseholdOwnerDeletionBlockedTotal))
 }
 
 // ⚠ SIBLING, MANDATORY — and it is the more dangerous direction to get wrong. A precondition that

@@ -72,7 +72,7 @@ func (s *stubDLQRepo) CountByFilters(_ context.Context, _ domain.DeadLetterJobFi
 	return 0, nil
 }
 
-func (s *stubDLQRepo) DeleteByFilters(_ context.Context, _ domain.DeadLetterJobFilters) (int64, error) {
+func (s *stubDLQRepo) DeleteByFilters(_ context.Context, _ domain.DeadLetterJobFilters, _ int64) (int64, error) {
 	return 0, nil
 }
 

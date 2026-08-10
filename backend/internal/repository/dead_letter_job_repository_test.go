@@ -313,19 +313,52 @@ func TestDeadLetterJobRepository_CountByFilters_NoFilters(t *testing.T) {
 
 // --- DeleteByFilters ---
 
+// The unconditional-DELETE shape is deliberate and stays: the WHERE clause is the caller's
+// business, and the handler (operations.BulkDeleteDLQJobs) is what refuses a filterless
+// request. What is NEW here is the transaction and the row-count equality — see
+// DeleteByFilters' own comment.
 func TestDeadLetterJobRepository_DeleteByFilters_NoFilters(t *testing.T) {
 	mock, repo := setupDLQMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
 
+	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM dead_letter_jobs`)).
 		WillReturnResult(pgxmock.NewResult("DELETE", 3))
+	mock.ExpectCommit()
 
-	count, err := repo.DeleteByFilters(ctx, domain.DeadLetterJobFilters{})
+	count, err := repo.DeleteByFilters(ctx, domain.DeadLetterJobFilters{}, 3)
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDeadLetterJobRepository_DeleteByFilters_CountDrift_RollsBack is the EE re-review's
+// finding at the layer that can actually close it. The handler counted in one statement and
+// deleted in another, so the two saw two different PostgreSQL snapshots and a row committed
+// in between was deleted having never been counted or confirmed. Binding the DELETE to the
+// count that authorised it, inside one transaction, means a drifted delete commits nothing.
+//
+// pgxmock proves only that the rollback path is taken; that nothing survives the abort is
+// proved against a real planner in dead_letter_bulk_delete_atomicity_integration_test.go.
+func TestDeadLetterJobRepository_DeleteByFilters_CountDrift_RollsBack(t *testing.T) {
+	mock, repo := setupDLQMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM dead_letter_jobs`)).
+		WillReturnResult(pgxmock.NewResult("DELETE", 4))
+	mock.ExpectRollback()
+
+	count, err := repo.DeleteByFilters(ctx, domain.DeadLetterJobFilters{}, 3)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrDLQBulkDeleteCountDrifted)
+	assert.Equal(t, int64(0), count, "a rolled-back delete must not report rows as deleted")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

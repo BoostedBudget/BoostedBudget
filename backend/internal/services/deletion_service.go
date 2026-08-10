@@ -13,6 +13,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
@@ -566,9 +567,18 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	//
 	// Returns a genuine error, matching the cascade guard's own choice and for its reason: a silent
 	// (false, nil) skip would let a GDPR deadline go unmet forever with no visible signal, and this is
-	// the one deletion stop that requires a human to actually resolve the household. The metric is
-	// left to the cascade's guard so the counter keeps meaning "an erasure was blocked on ownership"
-	// once per occasion rather than twice.
+	// the one deletion stop that requires a human to actually resolve the household.
+	//
+	// ⚠ AND IT FIRES THE COUNTER, WHICH THE REORDER INITIALLY DID NOT (EE re-review). The comment
+	// here used to say the metric was "left to the cascade's guard so the counter keeps meaning
+	// ... once per occasion rather than twice" — an argument that was true of the ORDER it
+	// replaced and false the moment this check began returning before the cascade ran. The only
+	// Inc() lives inside DeleteUserCascade, which this branch never reaches, so the one dedicated
+	// alert for a non-self-healing GDPR block went permanently flat while the block itself got
+	// MORE common (the retention path now stops here every day instead of inside the cascade).
+	// It is still at most once per occasion: the cascade's Inc() now only fires for the race this
+	// read cannot see — an invite accepted between this statement and the cascade's FOR UPDATE —
+	// which is a different occasion, not this one counted twice.
 	householdBlocks, err := s.profileRepo.HouseholdOwnerBlocksDeletion(ctx, userID)
 	if err != nil {
 		// Fail closed: not knowing whether erasing this user would destroy someone else's data is not
@@ -577,6 +587,7 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 		return fmt.Errorf("aborting deletion before any external cleanup — could not establish whether this user owns a household that blocks deletion: %w", err)
 	}
 	if householdBlocks {
+		observability.HouseholdOwnerDeletionBlockedTotal.Inc()
 		releaseClaim("household ownership blocks deletion — refusing before any irreversible external work")
 		slog.Default().Error("aborting deletion before any external cleanup — this user owns a household with another active member or another beneficiary's live entitlement, so erasing them would destroy a different user's data; this needs a human to transfer or disband the household",
 			"user_id", userID, "claim_kind", string(kind))
@@ -866,14 +877,19 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 		// would put a false statement in an operator-facing action, which is what the original gate
 		// was correctly avoiding. Each irreversible effect that was issued gets the stuck row that
 		// names IT.
+		// ⚠ THESE TWO ARE STILL BEST-EFFORT, AND THAT IS NOT AN INCONSISTENCY WITH THE FAIL-CLOSED
+		// PRE-ISSUE WRITES. Fail-closed is meaningful only while the effect is still preventable;
+		// here the external work has ALREADY landed and the cascade has already failed, so there is
+		// nothing left to refuse. The error is discarded deliberately — recordIssuedExternalEffect
+		// has already logged it at Error, and there is no better escalation available.
 		if !cascadeErrorIsRecognisedTransient(err) {
 			if effects.subscriptionCancel {
-				s.recordIssuedExternalEffect(ctx, userID, kind,
+				_ = s.recordIssuedExternalEffect(ctx, userID, kind,
 					repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed,
 					"the cascade failed with a non-transient error after the subscription cancel had been issued: "+err.Error())
 			}
 			if effects.customerArchive {
-				s.recordIssuedExternalEffect(ctx, userID, kind,
+				_ = s.recordIssuedExternalEffect(ctx, userID, kind,
 					repository.DeletionResiduePaddleCustomerArchivedCascadeFailed,
 					"the cascade failed with a non-transient error after the customer archive had been issued: "+err.Error())
 			}
@@ -1180,9 +1196,14 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 				// closure when another flow holds the side-effect claim, and that case is a known
 				// nothing-happened, not an ambiguity. Recording it would hand an operator a work
 				// item for a subscription that is demonstrably untouched.
+				// Fail-closed, and the ORDER matters: issued.subscriptionCancel is set only after
+				// the record commits, because a refusal here means the call is never made and
+				// there is nothing issued to report.
+				if recErr := s.recordIssuedExternalEffect(ctx, userID, kind, repository.DeletionResiduePaddleSubscriptionCancelled,
+					"about to cancel Paddle subscription "+*user.PaddleSubscriptionID); recErr != nil {
+					return recErr
+				}
 				issued.subscriptionCancel = true
-				s.recordIssuedExternalEffect(ctx, userID, kind, repository.DeletionResiduePaddleSubscriptionCancelled,
-					"about to cancel Paddle subscription "+*user.PaddleSubscriptionID)
 				return s.paddleCleanupSvc.CancelSubscriptionImmediately(ctx, *user.PaddleSubscriptionID)
 			})
 			if err != nil {
@@ -1210,9 +1231,13 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 		// unrecoverable could not be reported by any path. It is recorded here, before the call, on
 		// exactly the same terms as the cancel — an anonymised Paddle customer cannot be restored,
 		// so "issued" is again the strongest honest claim, and the strongest one worth making.
+		// Fail-closed on the one act the comment above calls unrecoverable: if the record
+		// cannot be written, the archive is not attempted at all.
+		if recErr := s.recordIssuedExternalEffect(ctx, userID, kind, repository.DeletionResiduePaddleCustomerArchived,
+			"about to archive and anonymise Paddle customer "+*user.PaddleCustomerID); recErr != nil {
+			return issued, recErr
+		}
 		issued.customerArchive = true
-		s.recordIssuedExternalEffect(ctx, userID, kind, repository.DeletionResiduePaddleCustomerArchived,
-			"about to archive and anonymise Paddle customer "+*user.PaddleCustomerID)
 		if err := s.paddleCleanupSvc.ArchiveAndAnonymizeCustomer(ctx, *user.PaddleCustomerID, anonymizedEmail); err != nil {
 			if s.analytics != nil {
 				s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "archive_customer"})
@@ -1263,22 +1288,29 @@ const deletionResidueWriteTimeout = 5 * time.Second
 // a database problem. That asymmetry existed only because this write was added later, next to the
 // Release calls, without inheriting the reasoning printed above them.
 //
-// ⚠ IT REMAINS BEST-EFFORT. A failure is logged at Error and not propagated: the write cannot change
-// the outcome of the deletion around it, and making it blocking would let an audit_logs hiccup stop
-// a GDPR erasure. The residual is honest and stated — if this write fails, the effect is once again
-// visible only in logs.
+// ⚠ IT IS FAIL-CLOSED, AND IT USED NOT TO BE (EE re-review). A failure is logged at Error AND
+// returned, and both call sites abort WITHOUT issuing their external call. The earlier best-effort
+// shape carried an argument inherited from the old post-hoc mechanism — "the write cannot change the
+// outcome of the deletion around it" — which stopped being true the moment the record moved BEFORE
+// the call. When this write fails, the irreversible effect has not happened yet; proceeding anyway
+// reproduced the exact defect the mechanism exists to close, on the one call the code itself calls
+// unrecoverable. The trade is deliberate and asymmetric: a deletion deferred while audit_logs is
+// unwritable is retryable and has the 30-day GDPR grace period to retry in, whereas an anonymised
+// Paddle customer cannot be restored by us or by Paddle.
 //
 // ⚠ IT IS NOT REMEDIATION. Nothing here re-subscribes anyone or restores a Paddle customer; see
 // ProfileRepository.RecordDeletionResidue's doc comment for why that is deliberate.
-func (s *deletionService) recordIssuedExternalEffect(ctx context.Context, userID string, kind repository.DeletionClaimKind, effect repository.DeletionResidueEffect, reason string) {
+func (s *deletionService) recordIssuedExternalEffect(ctx context.Context, userID string, kind repository.DeletionClaimKind, effect repository.DeletionResidueEffect, reason string) error {
 	slog.Default().Info("recording an irreversible external effect before issuing it — this record is removed again by a deletion that completes",
 		"user_id", userID, "claim_kind", string(kind), "residue_effect", string(effect), "reason", reason)
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deletionResidueWriteTimeout)
 	defer cancel()
 	if recErr := s.profileRepo.RecordDeletionResidue(rctx, userID, effect); recErr != nil {
-		slog.Default().Error("failed to record an irreversible external effect — if this deletion does not complete, the effect will be visible ONLY in logs",
+		slog.Default().Error("refusing to issue an irreversible external effect: its durable record could not be written — the user KEEPS their account and this run will be retried",
 			"user_id", userID, "residue_effect", string(effect), "error", recErr)
+		return fmt.Errorf("record irreversible external effect %s before issuing it: %w", string(effect), recErr)
 	}
+	return nil
 }
 
 // transientCascadeSQLSTATEClasses are the SQLSTATE classes for which "this run failed but the next

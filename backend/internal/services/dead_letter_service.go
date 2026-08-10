@@ -64,7 +64,7 @@ type deadLetterRepo interface {
 	AddNotes(ctx context.Context, id int64, notes string) error
 	DeleteByID(ctx context.Context, id int64) error
 	CountByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
-	DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
+	DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters, expected int64) (int64, error)
 	GetStats(ctx context.Context) (*repository.DeadLetterStats, error)
 	GetStatsByKind(ctx context.Context) (map[string]int64, error)
 	DeleteOlderThan(ctx context.Context, before time.Time, skipWithNotes bool) (int64, error)
@@ -81,7 +81,10 @@ type DeadLetterService interface {
 	// CountByFilters previews how many rows DeleteByFilters would remove for the same
 	// filters — the read half of the bulk-delete confirmation handshake.
 	CountByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
-	DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error)
+	// DeleteByFilters removes the matching rows only if EXACTLY `expected` of them are
+	// still there when the DELETE runs — see the repository implementation for why the
+	// count cannot be re-derived here.
+	DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters, expected int64) (int64, error)
 	GetStats(ctx context.Context) (*domain.DeadLetterStatsResponse, error)
 	Cleanup(ctx context.Context, retentionDays int) (int64, error)
 }
@@ -369,9 +372,10 @@ func (s *deadLetterService) CountByFilters(ctx context.Context, filters domain.D
 	return s.repo.CountByFilters(ctx, filters)
 }
 
-// DeleteByFilters bulk-deletes dead letter jobs matching the given filters.
-func (s *deadLetterService) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {
-	return s.repo.DeleteByFilters(ctx, filters)
+// DeleteByFilters bulk-deletes dead letter jobs matching the given filters, refusing unless
+// exactly `expected` rows match at DELETE time.
+func (s *deadLetterService) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters, expected int64) (int64, error) {
+	return s.repo.DeleteByFilters(ctx, filters, expected)
 }
 
 // GetStats returns aggregate statistics about dead letter jobs.

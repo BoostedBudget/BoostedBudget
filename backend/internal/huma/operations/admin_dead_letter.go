@@ -14,6 +14,7 @@ import (
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
@@ -322,14 +323,33 @@ func (h *AdminHandler) BulkDeleteDLQJobs(ctx context.Context, input *BulkDeleteD
 		// Nothing to delete, and no count for the caller to confirm.
 		return &BulkDeleteDLQJobsOutput{Body: &domain.DeadLetterBulkDeleteResponse{Deleted: 0}}, nil
 	}
-	if matching > MaxUnconfirmedDLQBulkDelete && (req.ExpectedCount == nil || *req.ExpectedCount != matching) {
+	// A SUPPLIED confirmation is honoured wherever it appears, not only above the ceiling.
+	// The EE re-review found the equality gated on `matching > ceiling`, so a caller who sent
+	// expected_count=1 against filters matching 100 rows had all 100 deleted — while
+	// api/openapi.yaml documents the field as the exact number the caller expects. Honouring
+	// it everywhere can only ever narrow the outcome; omitting it still leaves the ceiling in
+	// force, so this is not a way to opt out of the bound.
+	if req.ExpectedCount != nil && *req.ExpectedCount != matching {
+		return nil, huma.Error409Conflict(fmt.Sprintf(
+			"these filters match %d dead letter jobs, not the %d confirmed; resend with expected_count=%d to confirm",
+			matching, *req.ExpectedCount, matching))
+	}
+	if matching > MaxUnconfirmedDLQBulkDelete && req.ExpectedCount == nil {
 		return nil, huma.Error409Conflict(fmt.Sprintf(
 			"these filters match %d dead letter jobs, which exceeds the unconfirmed bulk-delete ceiling of %d; resend with expected_count=%d to confirm",
 			matching, MaxUnconfirmedDLQBulkDelete, matching))
 	}
 
-	count, err := h.deadLetterService.DeleteByFilters(ctx, filters)
+	// `matching` is handed down so the DELETE is bound to the count that authorised it.
+	// COUNT and DELETE are two statements against two snapshots; without this the handshake
+	// was advisory and a row committed in between was deleted unconfirmed. See
+	// repository.DeadLetterJobRepository.DeleteByFilters.
+	count, err := h.deadLetterService.DeleteByFilters(ctx, filters, matching)
 	if err != nil {
+		if errors.Is(err, repository.ErrDLQBulkDeleteCountDrifted) {
+			return nil, huma.Error409Conflict(
+				"the set of matching dead letter jobs changed while this delete was being confirmed; nothing was deleted — re-run the request to see the current count")
+		}
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 	return &BulkDeleteDLQJobsOutput{Body: &domain.DeadLetterBulkDeleteResponse{Deleted: count}}, nil

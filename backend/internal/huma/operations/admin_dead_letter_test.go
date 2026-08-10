@@ -74,8 +74,8 @@ func (m *MockDeadLetterService) Delete(ctx context.Context, id int64) error {
 	return m.Called(ctx, id).Error(0)
 }
 
-func (m *MockDeadLetterService) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {
-	args := m.Called(ctx, filters)
+func (m *MockDeadLetterService) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters, expected int64) (int64, error) {
+	args := m.Called(ctx, filters, expected)
 	return args.Get(0).(int64), args.Error(1)
 }
 
@@ -378,7 +378,7 @@ func TestAdminDLQ_BulkDelete_Success(t *testing.T) {
 
 	kind := "plaid_sync"
 	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(3), nil)
-	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(3), nil)
+	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters"), mock.AnythingOfType("int64")).Return(int64(3), nil)
 
 	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Kind: &kind}}
 	out, err := h.BulkDeleteDLQJobs(context.Background(), input)
@@ -398,11 +398,11 @@ func TestAdminDLQ_BulkDelete_EmptyFilters_Returns400(t *testing.T) {
 
 	require.Error(t, err)
 	assertHTTPStatus(t, err, http.StatusBadRequest)
-	// Arity must match MockDeadLetterService.DeleteByFilters' m.Called(ctx, filters): the zero-argument
+	// Arity must match MockDeadLetterService.DeleteByFilters' m.Called(ctx, filters, expected): the zero-argument
 	// form this replaced could never fail, because testify silently passes an AssertNotCalled whose
 	// argument count does not match the recorded call. Pre-existing (not part of #1492), fixed here
 	// because this file is already open and the same trap was measured in internal/services this round.
-	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestAdminDLQ_BulkDelete_ServiceError(t *testing.T) {
@@ -411,7 +411,7 @@ func TestAdminDLQ_BulkDelete_ServiceError(t *testing.T) {
 
 	kind := "plaid_sync"
 	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(3), nil)
-	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(0), errors.New("db error"))
+	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters"), mock.AnythingOfType("int64")).Return(int64(0), errors.New("db error"))
 
 	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Kind: &kind}}
 	_, err := h.BulkDeleteDLQJobs(context.Background(), input)
@@ -440,7 +440,7 @@ func TestAdminDLQ_BulkDelete_EmptyStringDate_Returns400(t *testing.T) {
 
 	require.Error(t, err)
 	assertHTTPStatus(t, err, http.StatusBadRequest)
-	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // A malformed date must be reported AS a malformed date. The assertion on the message is
@@ -467,7 +467,7 @@ func TestAdminDLQ_BulkDelete_MalformedDate_Returns400(t *testing.T) {
 			assertHTTPStatus(t, err, http.StatusBadRequest)
 			assert.Contains(t, err.Error(), "start_date")
 			mockSvc.AssertNotCalled(t, "CountByFilters", mock.Anything, mock.Anything)
-			mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+			mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
 		})
 	}
 }
@@ -484,7 +484,7 @@ func TestAdminDLQ_BulkDelete_MalformedEndDate_Returns400(t *testing.T) {
 	assertHTTPStatus(t, err, http.StatusBadRequest)
 	assert.Contains(t, err.Error(), "end_date")
 	mockSvc.AssertNotCalled(t, "CountByFilters", mock.Anything, mock.Anything)
-	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // The sharp case for the discarded parse error: paired with a valid filter, a swallowed
@@ -503,7 +503,7 @@ func TestAdminDLQ_BulkDelete_MalformedDateWithValidKind_Returns400(t *testing.T)
 	require.Error(t, err)
 	assertHTTPStatus(t, err, http.StatusBadRequest)
 	mockSvc.AssertNotCalled(t, "CountByFilters", mock.Anything, mock.Anything)
-	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // --- BulkDeleteDLQJobs: blast radius (B2-2) ---
@@ -527,7 +527,7 @@ func TestAdminDLQ_BulkDelete_BroadValidFilter_Returns409WithoutConfirmation(t *t
 	require.Error(t, err)
 	assertHTTPStatus(t, err, http.StatusConflict)
 	assert.Contains(t, err.Error(), "5000", "the refusal must disclose the count the caller has to confirm")
-	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestAdminDLQ_BulkDelete_BroadRetriedFilter_Returns409WithoutConfirmation(t *testing.T) {
@@ -542,7 +542,7 @@ func TestAdminDLQ_BulkDelete_BroadRetriedFilter_Returns409WithoutConfirmation(t 
 
 	require.Error(t, err)
 	assertHTTPStatus(t, err, http.StatusConflict)
-	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestAdminDLQ_BulkDelete_WrongExpectedCount_Returns409(t *testing.T) {
@@ -558,7 +558,7 @@ func TestAdminDLQ_BulkDelete_WrongExpectedCount_Returns409(t *testing.T) {
 
 	require.Error(t, err)
 	assertHTTPStatus(t, err, http.StatusConflict)
-	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestAdminDLQ_BulkDelete_ExactExpectedCount_Proceeds(t *testing.T) {
@@ -568,13 +568,76 @@ func TestAdminDLQ_BulkDelete_ExactExpectedCount_Proceeds(t *testing.T) {
 	start := "0001-01-01"
 	confirmed := int64(5000)
 	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(5000), nil)
-	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(5000), nil)
+	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters"), mock.AnythingOfType("int64")).Return(int64(5000), nil)
 
 	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{StartDate: &start, ExpectedCount: &confirmed}}
 	out, err := h.BulkDeleteDLQJobs(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(5000), out.Body.Deleted)
+	mockSvc.AssertExpectations(t)
+}
+
+// TestAdminDLQ_BulkDelete_WrongExpectedCountBelowCeiling_Returns409 closes the EE re-review's
+// finding: the equality was only consulted ABOVE the ceiling, so a caller who said
+// expected_count=1 and whose filters matched 100 rows had all 100 deleted — while
+// api/openapi.yaml documents the field as the exact number the caller expects. A supplied
+// confirmation is now honoured wherever it appears; it can only ever narrow the outcome,
+// never widen it, because omitting it still leaves the ceiling in force.
+func TestAdminDLQ_BulkDelete_WrongExpectedCountBelowCeiling_Returns409(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	retried := false
+	wrong := int64(1)
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(100), nil)
+
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Retried: &retried, ExpectedCount: &wrong}}
+	_, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusConflict)
+	assert.Contains(t, err.Error(), "100", "the refusal must disclose the count the server actually computed")
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The sibling: a correct confirmation below the ceiling still proceeds, so the new equality
+// cannot be passing above merely by refusing everything.
+func TestAdminDLQ_BulkDelete_CorrectExpectedCountBelowCeiling_Proceeds(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	retried := false
+	confirmed := int64(12)
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(12), nil)
+	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters"), int64(12)).Return(int64(12), nil)
+
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Retried: &retried, ExpectedCount: &confirmed}}
+	out, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(12), out.Body.Deleted)
+	mockSvc.AssertExpectations(t)
+}
+
+// TestAdminDLQ_BulkDelete_PassesServerComputedCountToTheDelete pins the other half of the
+// EE re-review's finding: COUNT and DELETE ran as two independent statements against two
+// PostgreSQL snapshots, so a row committed in between was deleted without ever having been
+// counted or confirmed. The handler must hand the count it authorised down to the delete,
+// which is where the atomic check lives.
+func TestAdminDLQ_BulkDelete_PassesServerComputedCountToTheDelete(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	kind := "plaid_sync"
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(9), nil)
+	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters"), int64(9)).Return(int64(9), nil)
+
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Kind: &kind}}
+	out, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(9), out.Body.Deleted)
 	mockSvc.AssertExpectations(t)
 }
 
@@ -590,7 +653,7 @@ func TestAdminDLQ_BulkDelete_NarrowFilter_NeedsNoConfirmation(t *testing.T) {
 	mockSvc.On("CountByFilters", mock.Anything, mock.MatchedBy(func(f domain.DeadLetterJobFilters) bool {
 		return f.Kind != nil && *f.Kind == kind && f.StartDate != nil && f.EndDate != nil
 	})).Return(int64(7), nil)
-	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(7), nil)
+	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters"), mock.AnythingOfType("int64")).Return(int64(7), nil)
 
 	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Kind: &kind, StartDate: &start, EndDate: &end}}
 	out, err := h.BulkDeleteDLQJobs(context.Background(), input)
@@ -613,7 +676,7 @@ func TestAdminDLQ_BulkDelete_ZeroMatches_ReturnsZero(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), out.Body.Deleted)
-	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // An expected_count on its own is not a filter: it must not satisfy the "at least one
@@ -629,7 +692,7 @@ func TestAdminDLQ_BulkDelete_ExpectedCountOnly_Returns400(t *testing.T) {
 	require.Error(t, err)
 	assertHTTPStatus(t, err, http.StatusBadRequest)
 	mockSvc.AssertNotCalled(t, "CountByFilters", mock.Anything, mock.Anything)
-	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestAdminDLQ_BulkDelete_CountError_Propagates(t *testing.T) {
@@ -643,5 +706,5 @@ func TestAdminDLQ_BulkDelete_CountError_Propagates(t *testing.T) {
 	_, err := h.BulkDeleteDLQJobs(context.Background(), input)
 
 	require.Error(t, err)
-	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything, mock.Anything)
 }
