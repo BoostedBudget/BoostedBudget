@@ -34,9 +34,16 @@
 export interface DeadLetterBulkDeleteRequest {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  /** Inclusive upper bound on failed_at (YYYY-MM-DD) */
   end_date?: string;
+  /**
+     * Exact number of rows the caller expects to delete; required when the match exceeds the unconfirmed ceiling
+     * @minimum 0
+     */
+  expected_count?: number;
   kind?: string;
   retried?: boolean;
+  /** Inclusive lower bound on failed_at (YYYY-MM-DD) */
   start_date?: string;
   user_id?: string;
 }

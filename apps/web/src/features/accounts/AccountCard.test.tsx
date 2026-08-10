@@ -221,6 +221,20 @@ describe('AccountCard', () => {
     })
   })
 
+  describe('disconnected badge copy (issue #1495: generalised, cause-agnostic wording)', () => {
+    it('shows "This connection is no longer active" rather than a subscription-specific claim', () => {
+      const disconnectedAccount: Account = {
+        ...mockAccount,
+        linked_item_status: 'disconnected',
+      }
+
+      renderWithRouter(<AccountCard account={disconnectedAccount} />)
+
+      const badge = screen.getByText('Disconnected')
+      expect(badge.closest('[title]')).toHaveAttribute('title', 'This connection is no longer active')
+    })
+  })
+
   describe('onDelete behavior (Task 8: remove window.confirm)', () => {
     it('calls onDelete with the full account object when Delete Account is clicked', () => {
       const onDelete = mock(() => {})

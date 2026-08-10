@@ -6,7 +6,24 @@
 # Target PostgreSQL version (matches Neon production)
 pg_version = "17"
 
-# Assume migrations run in transactions (golang-migrate default behavior)
+# Assume migrations run in transactions. Verified empirically (2026-08 audit, Issue #1461/#1464
+# follow-up): TRUE for the standalone `migrate` CLI (used by CI's backend-integration-test job,
+# backend/scripts/docker-entrypoint.sh, and scripts/test-migrations.sh) — golang-migrate's postgres
+# driver sends each migration file's full contents as one query string, which Postgres's simple
+# query protocol implicitly wraps in a single transaction (confirmed: a later-statement error
+# rolled back an earlier statement's already-"successful" INSERT in the same file).
+#
+# FALSE for `make migrate-up`/`migrate-down`: those targets bypass golang-migrate entirely and
+# pipe each file into `psql -f -` with no `-1`/`--single-transaction` flag, so psql executes each
+# statement in its own autocommitted transaction (confirmed empirically: two `SELECT
+# txid_current()` statements sent via one `psql -f -` invocation returned two different txids, and
+# an INSERT that ran before a later failing statement in the same file was NOT rolled back).
+#
+# This setting only affects Squawk's own transaction-aware lint rules (e.g. rules that check
+# whether a lock is held for the rest of "the transaction"); it does not change what golang-migrate
+# or psql actually do. Not changing the value — `true` is still the more accurate default for the
+# migrate-CLI-driven paths CI actually uses — but the value should NOT be assumed to describe
+# `make migrate-up`.
 assume_in_transaction = true
 
 # Exclude .down.sql files - rollback migrations NEED DROP TABLE statements

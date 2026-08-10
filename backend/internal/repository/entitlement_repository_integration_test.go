@@ -21,7 +21,7 @@ func TestEntitlementRepository_GetActiveEntitlement_NotFound(t *testing.T) {
 	repo := repository.NewEntitlementRepository(pool)
 	userID := insertTestUser(t, pool)
 
-	_, err := repo.GetActiveEntitlement(context.Background(), userID)
+	_, err := repo.GetActiveEntitlement(context.Background(), userID, time.Now())
 	if !errors.Is(err, repository.ErrEntitlementNotFound) {
 		t.Fatalf("expected ErrEntitlementNotFound, got %v", err)
 	}
@@ -44,7 +44,7 @@ func TestEntitlementRepository_GetActiveEntitlement_OwnSubscription(t *testing.T
 		pool.Exec(context.Background(), `DELETE FROM subscription_entitlements WHERE user_id = $1`, userID) //nolint:errcheck
 	})
 
-	ent, err := repo.GetActiveEntitlement(ctx, userID)
+	ent, err := repo.GetActiveEntitlement(ctx, userID, time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestEntitlementRepository_GetActiveEntitlement_ExpiredRowExcluded(t *testin
 		pool.Exec(context.Background(), `DELETE FROM subscription_entitlements WHERE user_id = $1`, userID) //nolint:errcheck
 	})
 
-	_, err = repo.GetActiveEntitlement(ctx, userID)
+	_, err = repo.GetActiveEntitlement(ctx, userID, time.Now())
 	if !errors.Is(err, repository.ErrEntitlementNotFound) {
 		t.Fatalf("expected ErrEntitlementNotFound for a closed-epoch row, got %v", err)
 	}
@@ -103,7 +103,7 @@ func TestEntitlementRepository_GetActiveEntitlement_HouseholdCoverage(t *testing
 		pool.Exec(context.Background(), `DELETE FROM subscription_entitlements WHERE user_id = $1`, memberID) //nolint:errcheck
 	})
 
-	ent, err := repo.GetActiveEntitlement(ctx, memberID)
+	ent, err := repo.GetActiveEntitlement(ctx, memberID, time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestEntitlementRepository_ExpireActiveHouseholdEntitlement_ExpiresMatchingR
 		t.Fatalf("ExpireActiveHouseholdEntitlement: %v", err)
 	}
 
-	_, err = repo.GetActiveEntitlement(ctx, memberID)
+	_, err = repo.GetActiveEntitlement(ctx, memberID, time.Now())
 	if !errors.Is(err, repository.ErrEntitlementNotFound) {
 		t.Fatalf("expected the matching household entitlement to be expired (ErrEntitlementNotFound), got: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestEntitlementRepository_ExpireActiveHouseholdEntitlement_DoesNotTouchOwnS
 		t.Fatalf("ExpireActiveHouseholdEntitlement: %v", err)
 	}
 
-	ent, err := repo.GetActiveEntitlement(ctx, memberID)
+	ent, err := repo.GetActiveEntitlement(ctx, memberID, time.Now())
 	if err != nil {
 		t.Fatalf("own_subscription entitlement should still be active, got err: %v", err)
 	}

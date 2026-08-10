@@ -94,6 +94,83 @@ describe('buildExecuteHandler', () => {
     expect(auditEvents[0]).toMatchObject({ operationId: 'checkRole', result: 'denied' })
   })
 
+  // ── The denied-call audit class (round 14, finding CC-1) ────────────────────
+  //
+  // `operationClass` used to be computed from `capability?.confirmationRequired`
+  // BEFORE the excluded check and then reused INSIDE it. Every excluded entry is
+  // built by capability-manifest.ts's `excluded()` helper, which hard-codes
+  // `confirmationRequired: false` — so a denied `deleteAccount` or `grantTrial`
+  // persisted an `mcp_audit_log` row saying `operation_class = 'read'`. The call
+  // never runs (host-proxy.ts throws on `entry.excluded` before any gate), so the
+  // harm is confined to the audit trail — but the audit trail is the whole point
+  // of recording a denial, and it was wrong about the one field an operator would
+  // filter on when asking "did anyone try to reach a mutating admin operation?".
+  //
+  // ⚠ This is NOT the sibling defect. The spec index's `manifestClass` field is
+  // ALSO 'read' on 45 mutating excluded entries, from the same default block. That
+  // is a different field with no consumer today and is deliberately left alone.
+  const DENIAL_SPEC_ENTRIES = [
+    { operationId: 'deleteAccount', method: 'DELETE', path: '/api/v1/accounts/{id}' },
+    { operationId: 'grantTrial', method: 'POST', path: '/api/v1/admin/subscription/grant-trial' },
+    { operationId: 'checkRole', method: 'GET', path: '/api/v1/admin/check-role' },
+  ]
+
+  it.each([
+    ['deleteAccount', 'DELETE'],
+    ['grantTrial', 'POST'],
+  ])('audits a denied mutating operation (%s, %s) as write, not read', async (operationId) => {
+    const proxy = makeFailingProxy('excluded', `Operation '${operationId}' is not available via MCP`)
+    const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
+
+    const { auditEvents } = await handler({ calls: [{ operationId }] })
+
+    expect(auditEvents).toHaveLength(1)
+    expect(auditEvents[0]?.result).toBe('denied')
+    expect(auditEvents[0]?.operationClass).not.toBe('read')
+    expect(auditEvents[0]?.operationClass).toBe('write')
+    // The deny path itself must be untouched: nothing may be invoked.
+    expect(proxy.invoke).not.toHaveBeenCalled()
+  })
+
+  // Paired control for THIS claim, not for the tool: the fix must classify the
+  // denial from the operation's real HTTP method, so an excluded READ still
+  // records 'read'. Without this, "always write" would pass the assertion above
+  // while being just as dishonest in the other direction.
+  it('audits a denied read-only operation as read', async () => {
+    const proxy = makeFailingProxy('excluded', "Operation 'checkRole' is not available via MCP")
+    const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
+
+    const { auditEvents } = await handler({ calls: [{ operationId: 'checkRole' }] })
+
+    expect(auditEvents).toHaveLength(1)
+    expect(auditEvents[0]).toMatchObject({ operationId: 'checkRole', operationClass: 'read', result: 'denied' })
+  })
+
+  // An operationId that is in NO manifest and NO spec index — a hallucinated or
+  // misspelled name. There is no evidence either way, so the denial records the
+  // class that gets an operator's attention rather than the one that hides.
+  it('audits a denial for an unknown operationId as write', async () => {
+    const proxy = makeProxy()
+    const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
+
+    const { auditEvents } = await handler({ calls: [{ operationId: 'notAnOperation' }] })
+
+    expect(auditEvents).toHaveLength(1)
+    expect(auditEvents[0]).toMatchObject({ operationId: 'notAnOperation', operationClass: 'write', result: 'denied' })
+  })
+
+  // The mandatory sibling: fixing the denied branch must not disturb the ordinary
+  // permitted-read branch, which still takes its class from the manifest.
+  it('still audits an ordinary permitted read as read', async () => {
+    const proxy = makeProxy({ transactions: [] })
+    const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
+
+    const { auditEvents } = await handler({ calls: [{ operationId: 'getTransactions' }] })
+
+    expect(auditEvents).toHaveLength(1)
+    expect(auditEvents[0]).toMatchObject({ operationId: 'getTransactions', operationClass: 'read', result: 'success' })
+  })
+
   it('executes multiple operations in sequence — emits one audit event per call', async () => {
     const proxy = makeProxy({ ok: true })
     const handler = buildExecuteHandler(proxy)

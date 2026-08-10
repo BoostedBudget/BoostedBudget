@@ -1394,6 +1394,33 @@ export function AccountLimitsBanner({ stats, tier }: AccountLimitsBannerProps) {
 
 ## GDPR Compliance
 
+> **⚠️ Superseded (2026-08-02).** The section below no longer matches shipped behavior. The rest
+> of this document (bank-connection deletion abuse prevention, lifetime tracking) is unaffected
+> and remains `Status: Proposed` — only this GDPR section is superseded. See
+> [`docs/decisions/2026-08-01-gdpr-erasure-hard-delete.md`](../decisions/2026-08-01-gdpr-erasure-hard-delete.md)
+> for the actual, implemented, and decided erasure policy. Specifically, the design below is wrong
+> in three ways:
+>
+> - The `hardDeleteUserData` sketch below calls `s.deleteAuditLogs(userID)` — i.e., it *deletes*
+>   audit-log rows. Shipped behavior deliberately does the opposite: it **redacts and keeps** them
+>   (`UPDATE audit_logs SET changes = NULL WHERE resource_id = $1 OR user_id = $1`), preserving the
+>   tamper-evident trail while removing the PII payload. See the decision record's Decision 1.
+> - The sketch hand-enumerates seven tables (`deleteTransactions`, `deleteAccounts`,
+>   `deleteLinkedItems`, `deleteBudgetRules`, `deletePrivacySettings`, `deleteAuditLogs`,
+>   `deleteUserProfile`). Shipped behavior deletes exactly one row —
+>   `DELETE FROM users WHERE id = $1` — and lets the schema's 37 `ON DELETE CASCADE` + 2
+>   `ON DELETE SET NULL` foreign keys erase everything else, plus three explicit statements for the
+>   handful of user-scoped tables with no FK to `users` at all (`dead_letter_jobs`,
+>   `idempotency_keys`, `mcp_audit_log`). See the decision record's Decisions 2 and 3.
+> - The `gdpr_erasure_requests` table sketched below does not exist. The shipped mechanism reuses
+>   columns already on `users` (`deletion_requested_at`, `deletion_scheduled_at`,
+>   `plaid_cleanup_pending_at`) via `ProfileRepository.RequestDeletion` / `CancelDeletion` /
+>   `DeleteUserCascade`, not a separate request-tracking table.
+>
+> The 30-day grace period and the "email notification, cancel during grace" shape below are
+> directionally correct and match the shipped flow; only the storage/implementation sketch and the
+> audit-log disposition are wrong.
+
 ### Right to Erasure (Hard Delete)
 
 **Process**:

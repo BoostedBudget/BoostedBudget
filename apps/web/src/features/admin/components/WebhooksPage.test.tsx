@@ -3,8 +3,9 @@
  * Issue #747: Paddle Webhook Admin UI
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router'
 import {
@@ -13,6 +14,11 @@ import {
   mockUseReplayAdminPaddleWebhook,
   mockUseGetAdminPaddleWebhookDetail,
 } from '@/test/mocks/admin-api'
+import { mockToastError, mockToastSuccess } from '@/test/mocks/sonner'
+import {
+  getListAdminPaddleWebhooksQueryKey,
+  getGetAdminPaddleWebhookStatsQueryKey,
+} from '@boostedbudget/api-client/endpoints/admin/admin'
 import { WebhooksPage } from './WebhooksPage'
 
 // Note: WebhookDetailModal is not explicitly mocked here to avoid worker-level contamination.
@@ -380,6 +386,133 @@ describe('WebhooksPage', () => {
       expect(screen.getByRole('menuitemcheckbox', { name: /event id/i })).toBeInTheDocument()
       expect(screen.getByRole('menuitemcheckbox', { name: /attempts/i })).toBeInTheDocument()
       expect(screen.getByRole('menuitemcheckbox', { name: /error/i })).toBeInTheDocument()
+    })
+  })
+
+  // Round 15, Tier E item 2 — Issue #1496's defect, still live on the Paddle replay. The mutation
+  // was invoked as `.mutate({ id })` with NO options object at all: no onSuccess, no onError, no
+  // invalidation. So a rejected replay looked exactly like a successful one, and a SUCCESSFUL replay
+  // left the row's processed/attempts/error and the summary counts stale until the 30s poll — or
+  // indefinitely, with auto-refresh off, which is when an operator clicks Replay a second time.
+  //
+  // Copied from DeadLetterPage.test.tsx's #1496 suite rather than reinvented, because the fix is a
+  // copy of that fix.
+  describe('Issue #1496 – Paddle replay outcome is reported to the operator', () => {
+    type ReplayOptions = {
+      onSuccess?: (data: unknown) => void
+      onError?: (err: unknown) => void
+    } | undefined
+
+    const axiosError = (status: number, detail: string) => ({
+      response: { status, data: { detail } },
+      message: `Request failed with status code ${status}`,
+      isAxiosError: true,
+    })
+
+    const REPLAY_FAILURE_DETAIL = 'webhook event has already been processed; replay refused'
+
+    function primeQueries() {
+      mockUseListAdminPaddleWebhooks.mockReturnValue({ data: mockListResponse, isLoading: false, error: null })
+      mockUseGetAdminPaddleWebhookStats.mockReturnValue({ data: mockStatsResponse, isLoading: false, error: null })
+    }
+
+    function renderPage() {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      const invalidateQueries = mock(() => Promise.resolve())
+      queryClient.invalidateQueries = invalidateQueries as unknown as typeof queryClient.invalidateQueries
+
+      function Wrapper({ children }: { children: React.ReactNode }) {
+        return (
+          <QueryClientProvider client={queryClient}>
+            <BrowserRouter>{children}</BrowserRouter>
+          </QueryClientProvider>
+        )
+      }
+
+      render(<WebhooksPage />, { wrapper: Wrapper })
+      return { invalidateQueries }
+    }
+
+    beforeEach(() => {
+      mockToastError.mockClear()
+      mockToastSuccess.mockClear()
+    })
+
+    it('surfaces a rejected replay to the operator', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      mockUseReplayAdminPaddleWebhook.mockReturnValue({
+        mutate: mock((_vars: unknown, options: ReplayOptions) => {
+          options?.onError?.(axiosError(409, REPLAY_FAILURE_DETAIL))
+        }),
+        isPending: false,
+      })
+
+      renderPage()
+      await user.click(screen.getAllByRole('button', { name: /replay .* webhook/i })[0])
+
+      expect(mockToastError).toHaveBeenCalledTimes(1)
+      expect(mockToastError).toHaveBeenCalledWith(expect.stringContaining(REPLAY_FAILURE_DETAIL))
+      expect(mockToastSuccess).not.toHaveBeenCalled()
+    })
+
+    it('falls back to the transport message when the body carries no detail', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      mockUseReplayAdminPaddleWebhook.mockReturnValue({
+        mutate: mock((_vars: unknown, options: ReplayOptions) => {
+          options?.onError?.(new Error('Network Error'))
+        }),
+        isPending: false,
+      })
+
+      renderPage()
+      await user.click(screen.getAllByRole('button', { name: /replay .* webhook/i })[0])
+
+      expect(mockToastError).toHaveBeenCalledWith(expect.stringContaining('Network Error'))
+    })
+
+    // ⚠ SIBLING, MANDATORY. Without it the two tests above would also pass if replay were broken
+    // outright — never issuing the request, never reporting success. This one pins the id actually
+    // sent, the success toast, and — the half the old code omitted entirely — the invalidation.
+    it('reports success and refreshes the list and the stats when the replay succeeds', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      const replayMutate = mock((_vars: unknown, options: ReplayOptions) => {
+        options?.onSuccess?.({})
+      })
+      mockUseReplayAdminPaddleWebhook.mockReturnValue({ mutate: replayMutate, isPending: false })
+
+      const { invalidateQueries } = renderPage()
+      await user.click(screen.getAllByRole('button', { name: /replay .* webhook/i })[0])
+
+      expect(replayMutate).toHaveBeenCalledWith({ id: 'wh-1' }, expect.any(Object))
+      expect(mockToastSuccess).toHaveBeenCalledTimes(1)
+      expect(mockToastError).not.toHaveBeenCalled()
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: getListAdminPaddleWebhooksQueryKey() })
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: getGetAdminPaddleWebhookStatsQueryKey() })
+    })
+
+    // The toast is operator-facing text and must not carry the Paddle event id, for the same reason
+    // the button's aria-label does not: it is a per-customer identifier, and PostHog session replay
+    // records both verbatim. The event TYPE is the non-PII operational fact.
+    it('names the event type, never the Paddle event id, in either toast', async () => {
+      const user = userEvent.setup()
+      primeQueries()
+      mockUseReplayAdminPaddleWebhook.mockReturnValue({
+        mutate: mock((_vars: unknown, options: ReplayOptions) => {
+          options?.onSuccess?.({})
+        }),
+        isPending: false,
+      })
+
+      renderPage()
+      await user.click(screen.getAllByRole('button', { name: /replay .* webhook/i })[0])
+
+      const message = mockToastSuccess.mock.calls[0]?.[0] as string
+      expect(message).toContain('subscription.created')
+      expect(message).not.toContain('evt_01abc')
+      expect(message).not.toContain('wh-1')
     })
   })
 })

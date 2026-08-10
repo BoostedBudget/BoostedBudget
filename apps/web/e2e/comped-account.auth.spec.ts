@@ -115,10 +115,30 @@ test.describe('Comped account', () => {
     await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
     await expect(page.getByText(/subscription has expired/i)).not.toBeVisible()
 
-    // Not read-only: ReadOnlyGuard renders its children un-wrapped (no inert container)
-    // when write access is present, so the Edit button is a real, clickable button.
-    // .first(): the dashboard renders an Edit control per widget, so a bare role query is a
-    // strict-mode violation. Any one of them being enabled and clickable proves write access.
+    // Issue #1441: a bare getByRole('button', { name: 'Edit' }) assertion is not enough
+    // here. Under contention (parallel local workers, or backend rate limiting — #1441),
+    // a dashboard that is merely slow to render produces the SAME "element not found"
+    // timeout as a real regression that never grants write access at all — isolated
+    // rerun success was previously the only thing telling those two apart.
+    //
+    // Its counterpart, frozen-account.auth.spec.ts's "write controls are disabled/inert
+    // via ReadOnlyGuard on /dashboard", asserts this exact wrapper IS present (same
+    // title, `[title="Resubscribe to customize your dashboard"]`) for a genuinely
+    // read-only user. Here we assert the opposite state affirmatively:
+    //
+    // 1. Locate the Edit button via a DOM-level locator (not a role query) first, to prove
+    //    the dashboard genuinely rendered — this resolves regardless of read-only state,
+    //    since ReadOnlyGuard's `inert` wrapper doesn't remove its children from the DOM.
+    //    A dashboard that's merely slow (the contention case) times out right here, with
+    //    the ordinary "not attached" signature.
+    // 2. Only once rendering is confirmed, assert NO ReadOnlyGuard wrapper exists anywhere
+    //    on the page. If write access were lost, this exact wrapper would be present, so
+    //    this failure is a concrete "expected 0, found 1" mismatch — not a bare timeout.
+    const editButtonNode = page.locator('button', { hasText: 'Edit' }).first()
+    await expect(editButtonNode).toBeAttached()
+
+    await expect(page.locator('[title="Resubscribe to customize your dashboard"]')).toHaveCount(0)
+
     const editButton = page.getByRole('button', { name: 'Edit' }).first()
     await expect(editButton).toBeVisible()
     await expect(editButton).toBeEnabled()

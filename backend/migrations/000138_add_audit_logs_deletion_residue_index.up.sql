@@ -1,0 +1,45 @@
+-- Issue #1504: partial index making the post-gate external-effect residue COUNTABLE.
+--
+-- WHAT THE INDEXED ROWS ARE. RecordDeletionResidue (backend/internal/repository/profile_repository.go)
+-- writes one audit_logs row when a GDPR deletion was revoked AFTER the user's Paddle
+-- subscription-cancel call had already landed: the user keeps their account and all their data, and
+-- has no subscription. Nothing automated can undo it. The row is the only trace, it deliberately
+-- carries no `changes` payload (so the erasure cascade's redaction has nothing to strip), and until
+-- this migration nothing read it — the whole point of #1504's second half.
+--
+-- WHY AN INDEX IS REQUIRED AND NOT AN OPTIMISATION. idx_audit_logs_action (migration 000003) already
+-- indexes `action`, and it CANNOT serve this predicate. A default-opclass btree on text orders by the
+-- database collation (en_US.utf8 here), and Postgres only rewrites `LIKE 'prefix%'` into an index
+-- range scan when the ordering is byte-wise — i.e. under the C collation or a
+-- varchar_pattern_ops/text_pattern_ops index. Measured on postgres:17-alpine with 200k audit_logs
+-- rows:
+--
+--   without this index:  Seq Scan, 2470 shared buffers, 13.4 ms, 200000 rows removed by filter
+--   with this index:     Index Only Scan, 2 buffers, 0.04 ms
+--
+-- audit_logs is append-only and nothing prunes it, so the sequential scan degrades forever and
+-- /admin/health calls this on every request. This is the same mistake the plaid_orphaned_items health
+-- scan made and had to correct: assuming a table is small "by construction" when nothing bounds it.
+--
+-- WHY THE PREDICATE IS SPELLED EXACTLY LIKE THE QUERY'S. Postgres uses a partial index only when it
+-- can PROVE the query's WHERE implies the index's predicate, and for a LIKE clause that proof is an
+-- expression-tree equality — not a semantic one. So the pattern here and the pattern in
+-- GetDeletionResidueStats (backend/internal/repository/job_health_repository.go) must be the SAME
+-- literal, and the query must inline it rather than bind it as a parameter (a parameter's value is not
+-- known when implication is tested). Both facts are pinned by
+-- TestJobHealthRepository_Integration_DeletionResidue_IsServedByThePartialIndex.
+--
+-- WHY created_at IS THE INDEXED COLUMN. The gauge reports two things: how many residue records exist,
+-- and how old the NEWEST one is. COUNT(*) and MAX(created_at) are both answered by this index without
+-- touching the heap. It is MAX and not MIN deliberately — nothing ever resolves or deletes a residue
+-- record, so the oldest one's age climbs forever and says nothing; the newest one's age is what tells
+-- an operator whether this has just happened again.
+--
+-- SAFETY. CONCURRENTLY as the sole statement in this file (mirrors 000077/000082 — golang-migrate runs
+-- the file without wrapping it in a transaction, which CONCURRENTLY requires). IF NOT EXISTS makes it
+-- idempotent. Squawk's require-concurrent-index-creation is in .squawk.toml's excluded_rules, so the
+-- linter would not have caught a non-concurrent form; CONCURRENTLY is used here on the merits, because
+-- audit_logs is the one table every write path appends to and a plain CREATE INDEX would hold a
+-- write-blocking ShareLock on it for the duration.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_logs_deletion_residue
+    ON audit_logs (created_at) WHERE action LIKE 'user.deletion_residue.%';

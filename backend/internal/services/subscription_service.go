@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -61,14 +62,22 @@ func (s *SubscriptionService) SetOverrideTierValidator(validator func(tierName s
 	s.overrideTierValidator = validator
 }
 
-// effectiveTierName returns the user's effective tier name, validating an active manual override
-// against the injected overrideTierValidator (see SetOverrideTierValidator) and falling back to
-// the raw SubscriptionTier when it names no configured tier. Reuses
-// domain.User.EffectiveTierWithActiveOverride so this and every other tier-axis call site share
+// effectiveTierNameAt returns the user's effective tier name as of `now`, validating an active
+// manual override against the injected overrideTierValidator (see SetOverrideTierValidator) and
+// falling back to the raw SubscriptionTier when it names no configured tier. Reuses
+// domain.User.EffectiveTierWithActiveOverrideAt so this and every other tier-axis call site share
 // exactly one definition of "is the override active" with the tier/status computations
 // elsewhere.
-func (s *SubscriptionService) effectiveTierName(user *domain.User) string {
-	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverride()
+//
+// Takes `now` explicitly (Issue #1466) rather than reading time.Now() itself, so
+// GetEffectiveSubscriptionAt can derive the tier from the SAME instant its caller already
+// captured (e.g. an admin handler's `asOf`) instead of a second, independent clock read. This
+// method has exactly one caller (GetEffectiveSubscriptionAt) — there is no longer a no-arg
+// wrapper delegating to it, since nothing else needs one; GetEffectiveSubscription's own no-arg
+// convenience form threads time.Now() through GetEffectiveSubscriptionAt at the OUTER layer
+// instead.
+func (s *SubscriptionService) effectiveTierNameAt(user *domain.User, now time.Time) string {
+	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverrideAt(now)
 	if hasOverride && s.overrideTierValidator != nil && !s.overrideTierValidator(overrideValue) {
 		slog.Warn("rejecting manual tier override on tier axis: value does not name a configured tier",
 			"user_id", user.ID, "manual_tier_override", overrideValue)
@@ -104,20 +113,62 @@ func (s *SubscriptionService) ListTiers(ctx context.Context) ([]domain.Subscript
 // GetEffectiveSubscription returns the effective subscription for a user
 // Combines base tier limits with any user-specific overrides and, if an
 // entitlement resolver is injected, household coverage (Issue #1366).
+//
+// Delegates to GetEffectiveSubscriptionAt(ctx, user, time.Now()) — see that method's doc comment
+// for why a caller assembling a response around a single already-captured snapshot instant (e.g.
+// an admin handler's `asOf` echoed back as `as_of`) must call the -At variant with that instant
+// instead of this method, which reads its own fresh clock. Every other call site (GetTier,
+// GetDefaultTier, ListTiers aside — this method's own siblings GetHistoricalDepthLimit and
+// CanUserAccessFeature, both below) is unaffected by this delegation and needs no change.
 func (s *SubscriptionService) GetEffectiveSubscription(
 	ctx context.Context,
 	user *domain.User,
 ) (*domain.EffectiveSubscription, error) {
+	return s.GetEffectiveSubscriptionAt(ctx, user, time.Now())
+}
+
+// GetEffectiveSubscriptionAt is the -At twin of GetEffectiveSubscription, evaluated against the
+// given instant instead of an internal time.Now() read.
+//
+// Added for Issue #1466 (a #1462 residual): the admin subscription-detail handler
+// (GetUserSubscription, admin_subscriptions.go) captures a single `asOf := time.Now()` and echoes
+// it back as `as_of`, alongside an `effective_status` already derived from that same instant
+// (domain.User.EffectiveStatusWithActiveOverrideAt, via AdminUserService.GetUserDetail — Issue
+// #1465). Before this fix, `effective_tier` was computed via the no-arg GetEffectiveSubscription,
+// which read a SECOND, independent time.Now() through effectiveTierName ->
+// domain.User.EffectiveTierWithActiveOverride() — so a request whose processing crossed the
+// override's expiry boundary between the handler's asOf capture and this call could return an
+// as_of/effective_status describing one instant and an effective_tier describing a later one.
+//
+// Batch S2 Task 1: the injected HouseholdEntitlementResolver (SetEntitlementResolver) IS now
+// threaded through this `now` via ResolveEffectiveEntitlementAt. Before this fix, the resolver's
+// plain ResolveEffectiveEntitlement(ctx, user) had no instant parameter at all, so it fell back to
+// its OWN internal time.Now() — a SECOND, independent clock read taken later than `now`/asOf. That
+// silently overwrote tierName (see the unconditional assignment below) for EVERY user the resolver
+// is asked about whenever one is wired, not only household members: main.go's production wiring
+// (SetEntitlementResolver(householdEntitlementService)) is unconditional for every request, and
+// even the resolver's "own" (no household row) branch — the common case — used to read its own
+// clock. A previous version of this doc comment scoped the gap to "a household member's tier",
+// which understated it. See
+// TestGetEffectiveSubscriptionAt_ProductionWiring_RealResolver_TierDerivedFromAsOf_NotResolversOwnClock
+// (subscription_service_test.go) for the regression proof, and
+// HouseholdEntitlementResolver.ResolveEffectiveEntitlementAt's own doc comment
+// (household_entitlement_service.go) for the resolver-side half of this fix.
+func (s *SubscriptionService) GetEffectiveSubscriptionAt(
+	ctx context.Context,
+	user *domain.User,
+	now time.Time,
+) (*domain.EffectiveSubscription, error) {
 	// Determine the effective tier: manual override takes precedence if set, not expired, and
-	// (Issue #1413) names a real configured tier — see effectiveTierName's doc comment.
-	tierName := domain.TierName(s.effectiveTierName(user))
+	// (Issue #1413) names a real configured tier — see effectiveTierNameAt's doc comment.
+	tierName := domain.TierName(s.effectiveTierNameAt(user, now))
 
 	// If a household entitlement resolver is injected, let it override the tier — but
 	// fail open on any resolver error so an entitlements-table hiccup never breaks
 	// limit/feature resolution for solo users too. The error is logged (not silently
 	// dropped) so a systemic entitlement-resolution outage is visible in production.
 	if s.entitlementResolver != nil {
-		eff, err := s.entitlementResolver.ResolveEffectiveEntitlement(ctx, user)
+		eff, err := s.entitlementResolver.ResolveEffectiveEntitlementAt(ctx, user, now)
 		if err != nil {
 			slog.Warn("household entitlement resolution failed; falling back to own tier",
 				"user_id", user.ID, "error", err)
@@ -140,7 +191,7 @@ func (s *SubscriptionService) GetEffectiveSubscription(
 	var activeOverridesCount int
 
 	if s.overrideRepo != nil {
-		overrides, err := s.overrideRepo.GetActiveOverrides(ctx, user.ID)
+		overrides, err := s.overrideRepo.GetActiveOverrides(ctx, user.ID, now)
 		if err != nil {
 			// Log error but continue with base limits
 			// In production, you might want to handle this differently
@@ -213,16 +264,39 @@ func (s *SubscriptionService) RemoveOverride(
 	return nil
 }
 
-// GetUserOverrides returns all active overrides for a user
+// GetUserOverrides returns all active overrides for a user.
+//
+// Delegates to GetUserOverridesAt(ctx, userID, time.Now()) — see that method's doc comment for
+// why a caller assembling a response around a single already-captured snapshot instant (the admin
+// subscription-detail handler's `asOf`) must call the -At variant instead of this method, which
+// reads its own fresh clock.
 func (s *SubscriptionService) GetUserOverrides(
 	ctx context.Context,
 	userID string,
+) ([]domain.UserSubscriptionOverride, error) {
+	return s.GetUserOverridesAt(ctx, userID, time.Now())
+}
+
+// GetUserOverridesAt is the -At twin of GetUserOverrides, evaluated against the given instant
+// instead of an internal time.Now() read.
+//
+// Added for Batch S2 Task 2: GetUserSubscription (admin_subscriptions.go) calls this a SECOND
+// time in the same handler invocation, after GetEffectiveSubscriptionAt already queried
+// GetActiveOverrides once internally (for ActiveOverridesCount/limits) — both must filter
+// against the SAME `asOf` the handler already captured and echoes back as `as_of`, or the
+// returned resource_overrides list could show an override as active/expired inconsistently with
+// active_overrides_count in the very same response, purely because a moment of NOW() elapsed
+// between the two independent live queries.
+func (s *SubscriptionService) GetUserOverridesAt(
+	ctx context.Context,
+	userID string,
+	asOf time.Time,
 ) ([]domain.UserSubscriptionOverride, error) {
 	if s.overrideRepo == nil {
 		return []domain.UserSubscriptionOverride{}, nil
 	}
 
-	overrides, err := s.overrideRepo.GetActiveOverrides(ctx, userID)
+	overrides, err := s.overrideRepo.GetActiveOverrides(ctx, userID, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user overrides: %w", err)
 	}

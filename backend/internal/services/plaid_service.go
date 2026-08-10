@@ -71,8 +71,14 @@ type PlaidService interface {
 	//   - accessToken: The Plaid access token for the Item to remove
 	//
 	// Returns error if the Plaid API call fails, nil on success.
-	// Note: If this fails, the Item should still be deleted from the database as the
-	// access token is likely already invalid.
+	//
+	// Issue #1486 follow-up part F: this used to say "if this fails, the Item should still be
+	// deleted from the database as the access token is likely already invalid." That is FALSE for
+	// the purpose that matters — Plaid bills per ITEM, and an Item with an unusable token is still a
+	// billable Item until /item/remove succeeds — and acting on it CREATED orphans instead of
+	// preventing them. A non-nil return means the Item is still live: callers must NOT delete local
+	// state. See the implementation's doc comment for the full reasoning and for the one exception
+	// (Plaid's ITEM_NOT_FOUND, isPlaidItemAlreadyGone, which genuinely IS "already gone").
 	RemoveItem(ctx context.Context, accessToken string) error
 
 	// TransactionsSync calls Plaid /transactions/sync API for a single page of transactions.
@@ -398,8 +404,20 @@ func (s *plaidService) CreateUpdateModeLinkToken(ctx context.Context, userID str
 //   - All accounts associated with this Item are disconnected
 //
 // This method should be called when a user disconnects an institution from BoostedBudget.
-// Even if this call fails (e.g., token already invalid), the Item should still be deleted
-// from the database since the access token cannot be used anyway.
+//
+// Issue #1486 follow-up part F: this comment used to say "even if this call fails (e.g., token already
+// invalid), the Item should still be deleted from the database since the access token cannot be used
+// anyway." That is FALSE for the purpose that matters. Plaid bills per ITEM, and an Item with an
+// unusable access token is still an Item — and still billable — until /item/remove succeeds. Deleting
+// the local row on a failed call therefore does not tidy up an orphan, it CREATES one: a live,
+// still-billing Plaid Item with no local record it ever existed, which is also the exact state
+// DeleteUserCascade's C2 guard (repository.uncleanedLinkedItemExistsClause) exists to prevent and
+// cannot detect once the row is gone.
+//
+// Callers must therefore treat a non-nil return as "the Item is still live" and NOT delete local
+// state — see accountService.DisconnectInstitution and PlaidItemCleanupService.RemoveItem, both of
+// which do, and both of which map Plaid's ITEM_NOT_FOUND (the genuine "already gone, nothing to do"
+// case, isPlaidItemAlreadyGone) to success rather than treating every failure as benign.
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
@@ -489,10 +507,24 @@ func (s *plaidService) TransactionsSync(
 // staging environments where webhooks cannot be delivered due to network restrictions
 // (e.g., Tailscale private network).
 //
-// Security: Triple-layer protection ensures this only works in sandbox:
-//   1. Route registration: Only registered when Environment=="staging" (main.go)
-//   2. AdminMiddleware: Returns 404 in non-staging environments
-//   3. This method: Returns error if PlaidEnv != "sandbox"
+// Security: the check below is the ONLY thing that confines this to sandbox.
+//
+// Issue #1498 — this comment used to claim triple-layer protection. Two of those three
+// layers do not exist:
+//   - "Only registered when Environment==\"staging\"": false. RegisterAdminRoutes
+//     registers fire-webhook unconditionally (internal/huma/operations/admin.go), and
+//     since #1499 registration is not gated on the environment or on plaidService either.
+//   - "AdminMiddleware returns 404 in non-staging environments": false since #1499, which
+//     deliberately removed the admin middleware's environment gate. The middleware
+//     authorizes by identity and admin role, in production too.
+//
+// What actually holds:
+//  1. Admin authorization — an admin role (or the hardcoded owner allowlist) is required
+//     to reach the handler at all, in every environment.
+//  2. The PlaidEnv != "sandbox" check below — production runs PLAID_ENV=production, so
+//     this returns an error there rather than firing anything.
+//
+// Do not restore the deleted layers in a comment without also implementing them.
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
@@ -517,10 +549,11 @@ func (s *plaidService) FireWebhook(
 		return nil, fmt.Errorf("webhook code cannot be empty")
 	}
 
-	// Sandbox-only validation (defense in depth - third layer of security)
-	// Layer 1: Route registration (main.go) only in staging environment
-	// Layer 2: AdminMiddleware returns 404 in production
-	// Layer 3: This check (prevents accidental misconfiguration)
+	// Sandbox-only validation. Per the security note on this method (#1498), this is the
+	// only environment-scoped guard that actually exists — the two "layers" this comment
+	// used to cite above it (staging-only route registration, and a 404 from
+	// AdminMiddleware outside staging) are both false. Admin authorization is the other
+	// real guard, but it does not distinguish environments.
 	if s.config.PlaidEnv != "sandbox" {
 		return nil, fmt.Errorf(
 			"FireWebhook is only available in sandbox environment, current environment: %s",

@@ -139,15 +139,6 @@ func (m *MockLinkedItemRepository) GetByUserAndInstitution(ctx context.Context, 
 	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
-// GetItemsForCleanup - Issue #668: Plaid Item Management for Cost Optimization
-func (m *MockLinkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
-	args := m.Called(ctx, errorDays, staleDays)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]domain.LinkedItem), args.Error(1)
-}
-
 // GetItemsPendingCleanup - Issue #668
 func (m *MockLinkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
 	args := m.Called(ctx)
@@ -190,6 +181,19 @@ func (m *MockLinkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Cont
 // package would otherwise fail to compile) — see the #1413 P3 report for detail.
 func (m *MockLinkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []string) error {
 	args := m.Called(ctx, ids)
+	return args.Error(0)
+}
+
+// MarkPlaidRemoved (Issue #1495) is not exercised by these sync-job tests either; stubbed for the
+// same compile-only reason as MarkItemsDisconnected above.
+func (m *MockLinkedItemRepository) MarkPlaidRemoved(ctx context.Context, ids []string) error {
+	args := m.Called(ctx, ids)
+	return args.Error(0)
+}
+
+// MarkPlaidRemovalFailed records an unrecoverable Plaid removal verdict — Issue #1494.
+func (m *MockLinkedItemRepository) MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error {
+	args := m.Called(ctx, ids, errorCode)
 	return args.Error(0)
 }
 

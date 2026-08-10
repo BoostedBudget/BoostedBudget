@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -13,6 +14,7 @@ import (
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
@@ -226,6 +228,19 @@ func (h *AdminHandler) RetryDLQJob(ctx context.Context, input *RetryDLQJobInput)
 		if errors.Is(err, services.ErrDeadLetterJobAlreadyRetried) {
 			return nil, huma.Error409Conflict("dead letter job has already been retried")
 		}
+		// Issue #1492: with uniqueness restored on the replay path, a replay can be deduplicated away
+		// — nothing was enqueued, so this must not return 200. The service attempts to release the row's
+		// retry slot, so the same request should succeed once the live job finishes or the kind's period
+		// elapses (unless that release itself failed, which the service logs at Error).
+		if errors.Is(err, services.ErrDeadLetterRetryDeduplicated) {
+			return nil, huma.Error409Conflict("a matching job already exists for this kind; retry was deduplicated and not enqueued")
+		}
+		// Fail-closed refusal: no uniqueness policy is registered for this job kind, so replaying it
+		// would silently drop the dedup guarantee the kind was designed around. Nothing about the
+		// request can fix it — jobs.uniqueOptsByKind needs the entry.
+		if errors.Is(err, services.ErrDeadLetterRetryKindUnknown) {
+			return nil, huma.Error422UnprocessableEntity("this job kind has no registered uniqueness policy; retry refused")
+		}
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 	return &RetryDLQJobOutput{Body: resp}, nil
@@ -267,21 +282,98 @@ func (h *AdminHandler) BulkDeleteDLQJobs(ctx context.Context, input *BulkDeleteD
 	if h.deadLetterService == nil {
 		return nil, huma.Error503ServiceUnavailable("dead letter service not configured")
 	}
-	// Require at least one filter to prevent accidental full-table delete.
 	req := input.Body
-	if req.Kind == nil && req.UserID == nil && req.Retried == nil && req.StartDate == nil && req.EndDate == nil {
+
+	// Layer 1 — validate the input. buildDLQBulkFilters now propagates its parse errors: a
+	// malformed date has to be a 4xx, because the pre-EA code discarded that error and a
+	// discarded error becomes a dropped filter, which becomes a broader delete.
+	filters, err := buildDLQBulkFilters(req)
+	if err != nil {
+		return nil, err
+	}
+	// Require at least one filter that actually reaches SQL. The pre-EA guard tested the
+	// NIL-ness of the request pointers, which `{"start_date": ""}` satisfies while
+	// contributing no condition — the filter set arrived empty and the repository's
+	// deliberate unconditional DELETE wiped the table. Checking the BUILT filters closes
+	// the whole class rather than the one spelling of it. expected_count is deliberately
+	// not consulted here: a confirmation token must never count as a filter.
+	if !dlqBulkFiltersSelective(filters) {
 		return nil, huma.Error400BadRequest("at least one filter is required for bulk delete")
 	}
-	filters := buildDLQBulkFilters(req)
-	count, err := h.deadLetterService.DeleteByFilters(ctx, filters)
+
+	// Layer 2 — bound the blast radius. Validation alone cannot do this: "0001-01-01" is a
+	// well-formed date that builds a real `failed_at >= $1` clause matching every row
+	// (failed_at defaults to NOW()), and `{"retried": false}` matches every row that has
+	// never been replayed. Both are legitimate-looking filters with table-scale effect, and
+	// the effect is irreversible in-product — recovery is a Postgres PITR, and the rows
+	// destroyed include the operator-triaged ones DLQ retention preserves indefinitely.
+	//
+	// Chosen bound: count-preview-then-confirm, NOT a row cap with a caller-supplied
+	// override. A cap that a request parameter can raise is not a bound — it only renames
+	// the hazard. Here the caller must echo the exact count the SERVER computed for these
+	// exact filters, a value it can only learn from the 409 this endpoint returns, so
+	// confirming a table-scale delete is necessarily a second, deliberate act on a number
+	// the caller has seen. A plain cap would also have to either block legitimate large
+	// cleanups outright or grow an escape hatch, and the escape hatch is the bug.
+	matching, err := h.deadLetterService.CountByFilters(ctx, filters)
 	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	// A SUPPLIED confirmation is honoured wherever it appears, not only above the ceiling.
+	// The EE re-review found the equality gated on `matching > ceiling`, so a caller who sent
+	// expected_count=1 against filters matching 100 rows had all 100 deleted — while
+	// api/openapi.yaml documents the field as the exact number the caller expects. Honouring
+	// it everywhere can only ever narrow the outcome; omitting it still leaves the ceiling in
+	// force, so this is not a way to opt out of the bound.
+	if req.ExpectedCount != nil && *req.ExpectedCount != matching {
+		return nil, huma.Error409Conflict(fmt.Sprintf(
+			"these filters match %d dead letter jobs, not the %d confirmed; resend with expected_count=%d to confirm",
+			matching, *req.ExpectedCount, matching))
+	}
+	// AFTER the equality, not before it (second re-review Low): a zero-match early success sat
+	// ahead of the check, so expected_count=1 against zero rows answered 200/deleted=0 and a
+	// caller who believed a row existed was told the delete had succeeded.
+	if matching == 0 {
+		// Nothing to delete, and — the confirmation having already agreed — nothing to confirm.
+		return &BulkDeleteDLQJobsOutput{Body: &domain.DeadLetterBulkDeleteResponse{Deleted: 0}}, nil
+	}
+	if matching > MaxUnconfirmedDLQBulkDelete && req.ExpectedCount == nil {
+		return nil, huma.Error409Conflict(fmt.Sprintf(
+			"these filters match %d dead letter jobs, which exceeds the unconfirmed bulk-delete ceiling of %d; resend with expected_count=%d to confirm",
+			matching, MaxUnconfirmedDLQBulkDelete, matching))
+	}
+
+	// `matching` is handed down so the DELETE is bound to the count that authorised it.
+	// COUNT and DELETE are two statements against two snapshots; without this the handshake
+	// was advisory and a row committed in between was deleted unconfirmed. See
+	// repository.DeadLetterJobRepository.DeleteByFilters.
+	count, err := h.deadLetterService.DeleteByFilters(ctx, filters, matching)
+	if err != nil {
+		if errors.Is(err, repository.ErrDLQBulkDeleteCountDrifted) {
+			return nil, huma.Error409Conflict(
+				"the set of matching dead letter jobs changed while this delete was being confirmed; nothing was deleted — re-run the request to see the current count")
+		}
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 	return &BulkDeleteDLQJobsOutput{Body: &domain.DeadLetterBulkDeleteResponse{Deleted: count}}, nil
 }
 
+// MaxUnconfirmedDLQBulkDelete is the largest match a bulk delete may remove without the
+// caller confirming the exact row count. It is a package constant on purpose: no request
+// field, query parameter or header may raise it.
+const MaxUnconfirmedDLQBulkDelete int64 = 100
+
+// dlqBulkFiltersSelective reports whether the built filters produce at least one SQL
+// condition — i.e. whether buildDLQWhereClause will emit a WHERE at all. It mirrors the
+// fields that function consumes; a new filter field must be added to both.
+func dlqBulkFiltersSelective(filters domain.DeadLetterJobFilters) bool {
+	return filters.Kind != nil || filters.UserID != nil || filters.Retried != nil ||
+		filters.StartDate != nil || filters.EndDate != nil
+}
+
 // buildDLQBulkFilters converts a BulkDeleteRequest into DeadLetterJobFilters.
-func buildDLQBulkFilters(req domain.DeadLetterBulkDeleteRequest) domain.DeadLetterJobFilters {
+// A malformed date is returned as the huma 400 that dateutil produced, never swallowed.
+func buildDLQBulkFilters(req domain.DeadLetterBulkDeleteRequest) (domain.DeadLetterJobFilters, error) {
 	filters := domain.DeadLetterJobFilters{}
 	if req.Kind != nil {
 		filters.Kind = req.Kind
@@ -293,16 +385,20 @@ func buildDLQBulkFilters(req domain.DeadLetterBulkDeleteRequest) domain.DeadLett
 		filters.Retried = req.Retried
 	}
 	if req.StartDate != nil {
-		if t, _ := dateutil.ParseOptionalDate(*req.StartDate, "start_date"); t != nil {
-			filters.StartDate = t
+		t, err := dateutil.ParseOptionalDate(*req.StartDate, "start_date")
+		if err != nil {
+			return domain.DeadLetterJobFilters{}, err
 		}
+		filters.StartDate = t
 	}
 	if req.EndDate != nil {
-		if t, _ := dateutil.ParseOptionalDate(*req.EndDate, "end_date"); t != nil {
-			filters.EndDate = t
+		t, err := dateutil.ParseOptionalDate(*req.EndDate, "end_date")
+		if err != nil {
+			return domain.DeadLetterJobFilters{}, err
 		}
+		filters.EndDate = t
 	}
-	return filters
+	return filters, nil
 }
 
 // RegisterAdminDeadLetterOperations registers all DLQ admin endpoints.

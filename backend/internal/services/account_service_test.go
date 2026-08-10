@@ -195,15 +195,6 @@ func (m *MockLinkedItemRepository) GetByUserAndInstitution(ctx context.Context, 
 	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
-// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
-func (m *MockLinkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
-	args := m.Called(ctx, errorDays, staleDays)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]domain.LinkedItem), args.Error(1)
-}
-
 func (m *MockLinkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
@@ -240,6 +231,21 @@ func (m *MockLinkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Cont
 // stubbed to satisfy the widened LinkedItemRepository interface.
 func (m *MockLinkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []string) error {
 	args := m.Called(ctx, ids)
+	return args.Error(0)
+}
+
+// MarkPlaidRemoved (Issue #1495) is not exercised by these account-service tests; stubbed to
+// satisfy the widened LinkedItemRepository interface. NOTE for anyone extending these tests: the
+// re-link path under test here deliberately does NOT stamp plaid_removed_at — a re-link never calls
+// Plaid /item/remove, so the old item's Plaid Item is still live. That is the defect #1495 closed.
+func (m *MockLinkedItemRepository) MarkPlaidRemoved(ctx context.Context, ids []string) error {
+	args := m.Called(ctx, ids)
+	return args.Error(0)
+}
+
+// MarkPlaidRemovalFailed records an unrecoverable Plaid removal verdict — Issue #1494.
+func (m *MockLinkedItemRepository) MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error {
+	args := m.Called(ctx, ids, errorCode)
 	return args.Error(0)
 }
 
@@ -451,17 +457,39 @@ func (m *MockUserRepository) CancelDeletion(ctx context.Context, userID string) 
 	return args.Error(0)
 }
 
-func (m *MockUserRepository) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*domain.User), args.Error(1)
+// RecordDeletionResidue (Issue #1504) records that a deletion performed an irreversible external
+// effect and then did not complete. See repository.ProfileRepository for the contract.
+func (m *MockUserRepository) RecordDeletionResidue(ctx context.Context, userID string, effect repository.DeletionResidueEffect) error {
+	args := m.Called(ctx, userID, effect)
+	return args.Error(0)
 }
 
 func (m *MockUserRepository) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
 	return args.Bool(0), args.Error(1)
+}
+
+// CountUncleanedLinkedItems — Issue #1494. Only DeletionService's Plaid-less branch calls this; these
+// tests never reach it, so this is a plain stub rather than a testify expectation (which would panic
+// unmatched).
+func (m *MockUserRepository) CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error) {
+	return 0, nil
+}
+
+// HouseholdOwnerBlocksDeletion — round 15, finding D2. Only DeletionService's pre-cleanup
+// precondition calls this; these tests never reach it, so it is a plain stub for the same reason as
+// the one above. It returns FALSE (nothing blocks) so a test that ever DID reach it would exercise
+// the proceed path rather than an unexplained abort.
+func (m *MockUserRepository) HouseholdOwnerBlocksDeletion(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+// DeletionStillAuthorised — ExecuteDeletion's use-time authorisation recheck. Only that flow calls
+// it; these tests never reach it, so it is a plain stub for the same reason as the one above. It
+// returns TRUE (still authorised) so that a test which ever DID reach it would exercise the
+// proceed path rather than being silently short-circuited into a green no-op.
+func (m *MockUserRepository) DeletionStillAuthorised(ctx context.Context, userID string, kind repository.DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	return true, nil
 }
 
 // Issue #679, #680: Trial expiration methods
@@ -513,8 +541,8 @@ func (m *MockUserRepository) GetEffectiveSubscriptionStatusByUserID(ctx context.
 
 // Retention tracking methods (#930)
 
-func (m *MockUserRepository) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
-	args := m.Called(ctx, userID, retentionMonths)
+func (m *MockUserRepository) SetRetentionDates(ctx context.Context, userID string, guard repository.RetentionClockGuard, retentionMonths int) error {
+	args := m.Called(ctx, userID, guard, retentionMonths)
 	return args.Error(0)
 }
 
@@ -542,14 +570,6 @@ func (m *MockUserRepository) GetUsersNeedingRetention30dNotice(ctx context.Conte
 }
 
 func (m *MockUserRepository) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*domain.User), args.Error(1)
-}
-
-func (m *MockUserRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -585,14 +605,9 @@ func (m *MockUserRepository) ClearPastDueStartedAt(ctx context.Context, userID s
 	return args.Error(0)
 }
 
-// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
-// (Issue #1413 H5 residual) are not exercised by these account-service tests; stubbed to satisfy
-// the widened ProfileRepository interface.
-func (m *MockUserRepository) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
-	args := m.Called(ctx, userID, retentionStarted, retentionExpires)
-	return args.Bool(0), args.Error(1)
-}
-
+// GetUsersNeedingRetentionClockRepair, RepairRetentionClock (Issue #1413 H5 residual) are not
+// exercised by these account-service tests; stubbed to satisfy the widened ProfileRepository
+// interface.
 func (m *MockUserRepository) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
@@ -626,20 +641,9 @@ func (m *MockUserRepository) ExpireTrialIfNoOverride(ctx context.Context, userID
 	return args.Bool(0), args.Error(1)
 }
 
-// ClaimForDeletion, IsRetentionNotice30dEligible, IsRetentionNotice7dEligible (Issue #1413
-// Codex review round 3) are not exercised by these account-service tests; stubbed to satisfy
-// the widened ProfileRepository interface.
-func (m *MockUserRepository) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
-	args := m.Called(ctx, userID)
-	return args.Bool(0), args.Error(1)
-}
-
-func (m *MockUserRepository) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
-	args := m.Called(ctx, userID)
-	return args.Bool(0), args.Error(1)
-}
-
-func (m *MockUserRepository) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
+// ClaimForDeletion (Issue #1413 Codex review round 3) is not exercised by these account-service
+// tests; stubbed to satisfy the widened ProfileRepository interface.
+func (m *MockUserRepository) ClaimForDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
 }
@@ -1105,12 +1109,18 @@ func TestDeleteAccount_DeleteError(t *testing.T) {
 func TestDeleteAccount_EnqueuesCleanupWhenZeroRemaining(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := &MockAccountRepository{}
+	// linkedItemRepo is required as of Issue #1486: the zero-account path now stamps
+	// cleanup_scheduled_at before enqueueing, so the worker's eligibility recheck has something to
+	// re-verify. See TestDeleteAccount_MarksItemForCleanupBeforeEnqueue for what that pins.
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockLinkedItemRepo.On("MarkForCleanup", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockJobQueue := &MockJobQueue{}
 
 	service := &accountService{
-		accountRepo: mockAccountRepo,
-		jobQueue:    mockJobQueue,
-		logger:      slog.Default(),
+		accountRepo:    mockAccountRepo,
+		linkedItemRepo: mockLinkedItemRepo,
+		jobQueue:       mockJobQueue,
+		logger:         slog.Default(),
 	}
 
 	ctx := context.Background()
@@ -1147,6 +1157,178 @@ func TestDeleteAccount_EnqueuesCleanupWhenZeroRemaining(t *testing.T) {
 	require.NoError(t, err, "DeleteAccount should succeed")
 	mockAccountRepo.AssertExpectations(t)
 	mockJobQueue.AssertExpectations(t)
+}
+
+// TestDeleteAccount_MarksItemForCleanupBeforeEnqueue is Issue #1486's second failing-first test, and
+// it covers a producer that the first round of that fix missed entirely.
+//
+// There are TWO production producers of "item_cleanup" jobs. The sweep
+// (queue/jobs/item_cleanup_check.go) calls MarkForCleanup and then enqueues. This method is the
+// other one: it enqueues itemCleanupJobArgs — a MIRROR of jobs.ItemCleanupArgs, declared locally to
+// break a services -> jobs -> services import cycle, which is exactly why a
+// `grep "ItemCleanupArgs{"` audit cannot see it — with Reason "zero_accounts" and used to enqueue
+// WITHOUT stamping cleanup_scheduled_at.
+//
+// ItemCleanupWorker.Work now re-verifies eligibility via ClaimItemForCleanup, whose predicate
+// requires the item to still be SCHEDULED. On an unstamped item that claim is denied, and a denied
+// claim is deliberately a benign no-op: the worker logs, returns nil, and River records SUCCESS. So
+// this path would have silently stopped removing the Plaid item — no error, no retry, no metric,
+// and Plaid keeps billing. That is worse than the bug #1486 set out to fix, and it is reachable
+// from a live endpoint (DELETE /api/v1/accounts/{id}).
+//
+// The invariant this test pins is therefore cross-producer: EVERY producer of an item_cleanup job
+// must leave the item carrying a cleanup schedule, so the worker's recheck has something to
+// re-verify.
+//
+// ORDERING is pinned too, and via a SHARED recorder rather than per-mock call indices. The first
+// version of this test claimed to assert ordering while comparing nothing: it read `markIdx` from
+// mockLinkedItemRepo.Calls and `enqueueIdx` from mockJobQueue.Calls — two independent mock objects
+// with independent Calls slices, whose indices are not comparable to each other in any case — and
+// then only asserted each was found. Moving the stamp after the enqueue left it GREEN. Both mocks
+// now append to one `callOrder` slice from their Run hooks, so the sequence itself is the assertion.
+// Ordering matters because the enqueued job can be picked up immediately (no grace period on this
+// leg): a stamp that landed after the enqueue would race the worker's claim and lose.
+//
+// No lock guards callOrder: DeleteAccount's zero-account branch is straight-line synchronous code on
+// the caller's goroutine, and both Run hooks fire inside it.
+func TestDeleteAccount_MarksItemForCleanupBeforeEnqueue(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		accountRepo:    mockAccountRepo,
+		linkedItemRepo: mockLinkedItemRepo,
+		jobQueue:       mockJobQueue,
+		logger:         slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{ID: accountID, LinkedItemID: linkedItemID, UserID: userID}
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+
+	// One shared recorder both mocks append to — the only way the relative order of calls on two
+	// separate mock objects can be observed at all.
+	var callOrder []string
+
+	before := time.Now()
+	mockLinkedItemRepo.On("MarkForCleanup", ctx, linkedItemID, mock.AnythingOfType("time.Time")).
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "MarkForCleanup") }).
+		Return(nil).Once()
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "item_cleanup"
+	}), mock.Anything).
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "Enqueue") }).
+		Return(&queue.JobResult{ID: 1}, nil).Once()
+
+	require.NoError(t, service.DeleteAccount(ctx, accountID, userID))
+	after := time.Now()
+
+	mockLinkedItemRepo.AssertExpectations(t)
+	mockJobQueue.AssertExpectations(t)
+
+	// The stamp must be "now": this leg has no grace period, matching the sweep's own
+	// isImmediate/zero_accounts branch, so the job the enqueue creates is eligible immediately.
+	cleanupAt := findMarkForCleanupTime(t, mockLinkedItemRepo, linkedItemID)
+	assert.False(t, cleanupAt.Before(before), "cleanup_scheduled_at must be stamped at ~now, not in the past")
+	assert.False(t, cleanupAt.After(after), "cleanup_scheduled_at must be stamped at ~now, not in the future")
+
+	// Ordering: the stamp must precede the enqueue, or the enqueued job — which is eligible
+	// immediately on this leg — could reach ItemCleanupWorker's claim before the schedule lands, and
+	// the claim would be denied on an item that genuinely needs cleanup.
+	assert.Equal(t, []string{"MarkForCleanup", "Enqueue"}, callOrder,
+		"the cleanup schedule must be stamped BEFORE the job is enqueued")
+}
+
+// findMarkForCleanupTime returns the cleanupAt argument of the recorded MarkForCleanup call.
+func findMarkForCleanupTime(t *testing.T, m *MockLinkedItemRepository, itemID string) time.Time {
+	t.Helper()
+	for _, call := range m.Calls {
+		if call.Method == "MarkForCleanup" && call.Arguments.String(1) == itemID {
+			return call.Arguments.Get(2).(time.Time)
+		}
+	}
+	t.Fatalf("no MarkForCleanup call recorded for item %s", itemID)
+	return time.Time{}
+}
+
+// TestDeleteAccount_AlreadyScheduled_StillEnqueues pins that an item the daily sweep already
+// stamped is NOT treated as a failure. MarkForCleanup's WHERE includes
+// `cleanup_scheduled_at IS NULL` and it returns ErrLinkedItemNotFound on zero rows, so "already
+// scheduled" and "no such row" are indistinguishable to the caller — and both mean the enqueue
+// should still happen: an already-scheduled item satisfies the worker's claim, and a vanished row
+// makes the job a harmless no-op the worker already handles.
+func TestDeleteAccount_AlreadyScheduled_StillEnqueues(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		accountRepo:    mockAccountRepo,
+		linkedItemRepo: mockLinkedItemRepo,
+		jobQueue:       mockJobQueue,
+		logger:         slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{ID: accountID, LinkedItemID: linkedItemID, UserID: userID}
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+	mockLinkedItemRepo.On("MarkForCleanup", ctx, linkedItemID, mock.AnythingOfType("time.Time")).
+		Return(repository.ErrLinkedItemNotFound)
+	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
+		return job.Kind() == "item_cleanup"
+	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil).Once()
+
+	require.NoError(t, service.DeleteAccount(ctx, accountID, userID))
+	mockJobQueue.AssertExpectations(t)
+}
+
+// TestDeleteAccount_MarkForCleanupError_SkipsDoomedEnqueue pins the other direction: on a GENUINE
+// database error the schedule did not land, so the worker's claim is guaranteed to be denied and the
+// job would report success while the Plaid item kept billing. Enqueueing it would manufacture
+// exactly the silent-success defect this whole change exists to remove, so the enqueue is skipped
+// and the item is left to the daily sweep — which will re-select it, because it has zero active
+// accounts and an unstamped schedule. The account deletion itself still succeeds: the user asked to
+// delete an account, not to reconcile Plaid billing.
+func TestDeleteAccount_MarkForCleanupError_SkipsDoomedEnqueue(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		accountRepo:    mockAccountRepo,
+		linkedItemRepo: mockLinkedItemRepo,
+		jobQueue:       mockJobQueue,
+		logger:         slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{ID: accountID, LinkedItemID: linkedItemID, UserID: userID}
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+	mockLinkedItemRepo.On("MarkForCleanup", ctx, linkedItemID, mock.AnythingOfType("time.Time")).
+		Return(errors.New("database is down"))
+
+	require.NoError(t, service.DeleteAccount(ctx, accountID, userID),
+		"a billing-cleanup bookkeeping failure must not fail the user's account deletion")
+	mockJobQueue.AssertNotCalled(t, "Enqueue", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestDeleteAccount_DoesNotCleanupWhenAccountsRemain tests that no cleanup is triggered
@@ -1286,12 +1468,16 @@ func TestDeleteAccount_SkipsZeroAccountCheckWhenNoJobQueue(t *testing.T) {
 func TestDeleteAccount_EnqueueErrorDoesNotFailDeletion(t *testing.T) {
 	// Setup mocks
 	mockAccountRepo := &MockAccountRepository{}
+	// linkedItemRepo required as of Issue #1486 — see TestDeleteAccount_EnqueuesCleanupWhenZeroRemaining.
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockLinkedItemRepo.On("MarkForCleanup", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockJobQueue := &MockJobQueue{}
 
 	service := &accountService{
-		accountRepo: mockAccountRepo,
-		jobQueue:    mockJobQueue,
-		logger:      slog.Default(),
+		accountRepo:    mockAccountRepo,
+		linkedItemRepo: mockLinkedItemRepo,
+		jobQueue:       mockJobQueue,
+		logger:         slog.Default(),
 	}
 
 	ctx := context.Background()
@@ -1317,6 +1503,9 @@ func TestDeleteAccount_EnqueueErrorDoesNotFailDeletion(t *testing.T) {
 
 	// Mock enqueue failure
 	mockJobQueue.On("Enqueue", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("queue error"))
+	// A failed enqueue releases the stamp it just set, so the sweep can recover the item — see
+	// TestDeleteAccount_EnqueueFailureReleasesCleanupStamp, which is what pins that behaviour.
+	mockLinkedItemRepo.On("ClearCleanupSchedule", mock.Anything, mock.Anything).Return(nil)
 
 	// Execute
 	err := service.DeleteAccount(ctx, accountID, userID)
@@ -1324,6 +1513,56 @@ func TestDeleteAccount_EnqueueErrorDoesNotFailDeletion(t *testing.T) {
 	// Assert - deletion should still succeed despite enqueue error
 	require.NoError(t, err, "DeleteAccount should succeed even if enqueue fails")
 	mockAccountRepo.AssertExpectations(t)
+	mockJobQueue.AssertExpectations(t)
+}
+
+// TestDeleteAccount_EnqueueFailureReleasesCleanupStamp is the failing-first test for the recovery
+// defect the #1486 stamp introduced: cleanup_scheduled_at is a DURABLE "hidden from the sweep"
+// marker (the sweep's candidate predicate requires cleanup_scheduled_at IS NULL —
+// repository.cleanupCandidateSelectQuery), so a stamp left set with no job in flight hides a
+// still-billing Plaid item from EVERY future sweep. Before the stamp existed, an enqueue failure
+// left the row untouched and the next daily sweep re-selected it; keeping the stamp on that path
+// is therefore strictly worse than the pre-#1486 behaviour, not merely unimproved.
+//
+// Releasing the stamp cannot lose the race the stamp exists to prevent: the race is with a worker
+// running the job, and the enqueue that would have created that job failed.
+//
+// Before the fix this failed on ClearCleanupSchedule not being called at all.
+func TestDeleteAccount_EnqueueFailureReleasesCleanupStamp(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockJobQueue := &MockJobQueue{}
+
+	service := &accountService{
+		accountRepo:    mockAccountRepo,
+		linkedItemRepo: mockLinkedItemRepo,
+		jobQueue:       mockJobQueue,
+		logger:         slog.Default(),
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{
+		ID:           accountID,
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
+	mockLinkedItemRepo.On("MarkForCleanup", ctx, linkedItemID, mock.Anything).Return(nil)
+	mockJobQueue.On("Enqueue", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("queue error"))
+	mockLinkedItemRepo.On("ClearCleanupSchedule", ctx, linkedItemID).Return(nil)
+
+	require.NoError(t, service.DeleteAccount(ctx, accountID, userID),
+		"an enqueue failure must not fail the deletion the user asked for")
+
+	mockLinkedItemRepo.AssertCalled(t, "ClearCleanupSchedule", ctx, linkedItemID)
+	mockLinkedItemRepo.AssertExpectations(t)
 	mockJobQueue.AssertExpectations(t)
 }
 
@@ -1337,12 +1576,20 @@ func TestDeleteAccount_HidesUserAccountWhenLastAccount(t *testing.T) {
 	mockAccountRepo := &MockAccountRepository{}
 	mockJobQueue := &MockJobQueue{}
 	mockUserAccountSvc := &MockUserAccountService{}
+	// linkedItemRepo is no longer optional on this path as of Issue #1486: the zero-account branch
+	// this test walks through stamps cleanup_scheduled_at before enqueueing. Passing a real mock
+	// rather than nil-guarding the production call is deliberate — accountService already
+	// dereferences this field unguarded elsewhere (DisconnectInstitution), main.go always supplies
+	// it, and a nil guard would silently skip the stamp and re-open the very silent-success defect
+	// the stamp exists to close.
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockLinkedItemRepo.On("MarkForCleanup", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	userAccountID := uuid.New().String()
 
 	svc := NewAccountService(
 		nil, // plaid not needed
-		nil, // linkedItemRepo not needed
+		mockLinkedItemRepo,
 		mockAccountRepo,
 		nil, // userRepo not needed
 		nil, // db not needed
@@ -1442,12 +1689,15 @@ func TestDeleteAccount_DoesNotHideWhenOtherAccountsRemain(t *testing.T) {
 func TestDeleteAccount_SkipsHidingWhenUserAccountSvcNil(t *testing.T) {
 	mockAccountRepo := &MockAccountRepository{}
 	mockJobQueue := &MockJobQueue{}
+	// linkedItemRepo required as of Issue #1486 — see TestDeleteAccount_HidesUserAccountWhenLastAccount.
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockLinkedItemRepo.On("MarkForCleanup", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	userAccountID := uuid.New().String()
 
 	svc := NewAccountService(
 		nil,
-		nil,
+		mockLinkedItemRepo,
 		mockAccountRepo,
 		nil,
 		nil,
@@ -1489,10 +1739,13 @@ func TestDeleteAccount_SkipsHidingWhenUserAccountIDNil(t *testing.T) {
 	mockAccountRepo := &MockAccountRepository{}
 	mockJobQueue := &MockJobQueue{}
 	mockUserAccountSvc := &MockUserAccountService{}
+	// linkedItemRepo required as of Issue #1486 — see TestDeleteAccount_HidesUserAccountWhenLastAccount.
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockLinkedItemRepo.On("MarkForCleanup", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	svc := NewAccountService(
 		nil,
-		nil,
+		mockLinkedItemRepo,
 		mockAccountRepo,
 		nil,
 		nil,
@@ -1594,9 +1847,28 @@ func TestDisconnectInstitution_LinkedItemNotFound(t *testing.T) {
 	mockLinkedItemRepo.AssertExpectations(t)
 }
 
-// TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds tests when Plaid fails but DB deletion succeeds
-func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
-	// Setup mocks
+// TestDisconnectInstitution_GenuinePlaidFailure_DoesNotDeleteTheRow is Issue #1486 follow-up part F's
+// failing-first test. It replaces TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds, which
+// pinned the defect as intended behaviour ("should succeed even if Plaid fails").
+//
+// This is the SAME defect as parts A/B, on a second, user-initiated path. (An earlier version of this
+// comment called it "the MORE frequent path"; that was unsupported — `useDisconnectInstitution` has no
+// consumer in apps/web/src outside the test mocks — and is removed rather than softened. The defect
+// being identical and irreversible is the whole argument; frequency was never needed.)
+// It logged the Plaid failure
+// and then unconditionally DeleteByUser'd the row, which CASCADE-deletes the accounts too — leaving a
+// live, still-billing Plaid Item with no local record it ever existed, and DeleteUserCascade's C2
+// guard (an EXISTS over linked_items) with nothing left to see.
+//
+// The rationale it inherited from plaidService.RemoveItem's doc comment — "even if this call fails,
+// the Item should still be deleted from the database since the access token cannot be used anyway" —
+// is false for the purpose that matters: Plaid bills per ITEM, and an Item with an unusable token is
+// still an Item until /item/remove succeeds. That comment is corrected in the same change.
+//
+// Leaving the row is recoverable in the ordinary way: the user retries the disconnect. The item is
+// NOT automatically retried by the cleanup sweep (a healthy, recently-synced item is not a candidate),
+// which is exactly why the error must reach the user rather than being swallowed into a false success.
+func TestDisconnectInstitution_GenuinePlaidFailure_DoesNotDeleteTheRow(t *testing.T) {
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockPlaidService := &MockPlaidService{}
 
@@ -1610,7 +1882,6 @@ func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
 	userID := uuid.New().String()
 	accessToken := "access-sandbox-test-token"
 
-	// AccessToken is populated by the repository layer (repo-layer encryption)
 	linkedItem := &domain.LinkedItem{
 		ID:              linkedItemID,
 		UserID:          userID,
@@ -1620,16 +1891,48 @@ func TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds(t *testing.T) {
 		InstitutionName: "Chase",
 	}
 
-	// Mock Plaid removal fails but database deletion succeeds
 	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
+	// A Plaid outage / rate limit / network failure — NOT ITEM_NOT_FOUND. The Item is still live and
+	// still billing.
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(assert.AnError)
-	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(nil)
 
-	// Execute
 	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
 
-	// Assert - Should succeed even if Plaid fails (we still clean up database)
-	require.NoError(t, err, "DisconnectInstitution should succeed even if Plaid fails")
+	require.Error(t, err, "a genuine Plaid /item/remove failure must not be reported as a successful disconnect")
+	// The load-bearing assertion: the local row is the ONLY remaining record that this Plaid Item
+	// exists, and the C2 guard reads exactly that row.
+	mockLinkedItemRepo.AssertNotCalled(t, "DeleteByUser", mock.Anything, mock.Anything, mock.Anything)
+	mockPlaidService.AssertExpectations(t)
+}
+
+// TestDisconnectInstitution_PlaidItemAlreadyGone_StillDeletesTheRow is part F's other half, and the
+// reason part F is not simply "propagate the error".
+//
+// ITEM_NOT_FOUND means Plaid has already forgotten this Item — billing has stopped and /item/remove
+// has nothing left to do. Treating it as a failure would make the disconnect button permanently
+// unusable for any item in that state: the row would never be deletable and the user could never
+// clear it from their UI. This is the same asymmetry parts A and B close in RemoveItem, applied here.
+func TestDisconnectInstitution_PlaidItemAlreadyGone_StillDeletesTheRow(t *testing.T) {
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockPlaidService := &MockPlaidService{}
+
+	service := &accountService{
+		linkedItemRepo: mockLinkedItemRepo,
+		plaidService:   mockPlaidService,
+	}
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	userID := uuid.New().String()
+	accessToken := "access-sandbox-test-token"
+
+	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).
+		Return(&domain.LinkedItem{ID: linkedItemID, UserID: userID, AccessToken: accessToken}, nil)
+	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(plaidItemNotFoundErr())
+	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(nil)
+
+	require.NoError(t, service.DisconnectInstitution(ctx, linkedItemID, userID),
+		"ITEM_NOT_FOUND means the Item is already gone from Plaid — billing has stopped, so the disconnect succeeded")
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockPlaidService.AssertExpectations(t)
 }

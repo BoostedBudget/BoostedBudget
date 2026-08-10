@@ -141,6 +141,267 @@ BEGIN
 END $$;
 ```
 
+## Grace-Window Timestamps and Large Backfills (Issue #1464)
+
+An adversarial audit of migrations `000119`-`000122` (Issue #1413 / PR #1443) found two hazard
+classes that every existing gate — Squawk and the 5-suite migration test — passed cleanly. Both
+are recorded here as conventions so they don't recur, not because those migrations were wrong to
+merge (they are already applied and immutable; see the down-migration note below).
+
+### Use a statement-time clock for grace-window/deadline anchors, never `NOW()`
+
+**A migration that writes a grace-window or deadline anchor column must compute that value with a
+statement-time clock (`clock_timestamp()`), not `NOW()`/`CURRENT_TIMESTAMP`.**
+
+PostgreSQL evaluates `NOW()` and `CURRENT_TIMESTAMP` once, at **transaction start** — not at the
+moment the statement actually runs. A migration transaction that runs long, or blocks waiting on a
+lock, writes a marker that is **backdated by however long the transaction took to reach that
+statement**, while application code compares the marker against the live, current clock. If the
+anchor gates an irreversible action, that gap silently eats into (or eliminates) the grace period
+the anchor exists to provide.
+
+This is not hypothetical for this codebase: `users.plaid_cleanup_pending_at` anchors a 72-hour
+grace window before a lapsed user's Plaid bank connections are disconnected — an irreversible
+external API call. Real instances that use `NOW()` for this column:
+
+- `000120_fix_plaid_cleanup_pending_at_backfill.up.sql:30` — `SET plaid_cleanup_pending_at = NOW()`, with no floor at all.
+- `000119_add_plaid_cleanup_pending_at.up.sql:47-48` and `000121_backfill_plaid_cleanup_pending_at_excluded_overrides.up.sql:56-57` — both compute their 48-hour safety floor as `NOW() - INTERVAL '48 hours'`.
+
+PR #1443 spent rounds 19-23 migrating every **application** writer of this same column
+(`StampMissingPlaidCleanupMarkers`, `UpdateSubscriptionFromPaddle`, `removeUserTierOverrideUpdate`)
+off `NOW()` onto `clock_timestamp()`, for exactly this reason — see
+`ExpireTrialIfNoOverride` in `backend/internal/repository/profile_repository.go` for the corrected
+pattern. The migrations that wrote the same column were never held to the same standard. Apply the
+lesson to migrations too: anywhere a migration stamps a grace-window or deadline column, use
+`clock_timestamp()`.
+
+### Never combine DDL with a large backfill in one transaction
+
+**Split a schema change and its data backfill into two separate migrations**: one migration that
+does only the `ALTER` (fast, holds its lock briefly), then a follow-up migration that does the
+backfill.
+
+Each migration file runs as a single transaction by default. If an `ALTER TABLE` and a full-table
+`UPDATE` share that transaction, the `ALTER`'s lock — `ACCESS EXCLUSIVE` for `ADD COLUMN` — is held
+for the **entire transaction**, not just for the instant the `ALTER` statement executes. Every
+read and write against that table blocks until the backfill finishes and the transaction commits.
+
+Real instance: `000119_add_plaid_cleanup_pending_at.up.sql` does `ALTER TABLE users ADD COLUMN IF
+NOT EXISTS plaid_cleanup_pending_at TIMESTAMPTZ;` at line 27, then a full-table `UPDATE users ...`
+backfill at lines 45-52, in the same transaction. At production row counts, that holds
+`ACCESS EXCLUSIVE` on `users` — one of the hottest tables in the schema — for as long as the
+backfill takes to run, blocking subscription, admin, deletion, and webhook writes for that entire
+window.
+
+### Batch large backfills
+
+Where a backfill must touch a large or unbounded number of rows, **batch it** — a bounded loop over
+a key range (e.g. `WHERE id BETWEEN $1 AND $2`, looping in application code or a `DO` block with a
+row-count-limited `UPDATE ... LIMIT`) rather than one unbounded full-table `UPDATE`. A batched
+backfill holds its row locks for a fraction of a second per batch instead of monopolizing them for
+the whole run.
+
+### Adding `NOT NULL` to an existing column: never a bare `SET NOT NULL`
+
+`ALTER TABLE ... ALTER COLUMN x SET NOT NULL` performs a **mandatory full-table validation scan while
+holding `ACCESS EXCLUSIVE`**, blocking every read and write to the table until it finishes. Backfilling
+the NULLs in an earlier migration does **not** avoid this: the scan still reads every row regardless of
+whether it finds a violation. (Issue #1444's first draft made exactly that mistake, and argued the scan
+was cheap "because the backfill already ran" — a Codex adversarial review caught it.)
+
+Use the three-step transition instead, **one migration per step**:
+
+```sql
+-- Step 1 (migration N):   instant. ACCESS EXCLUSIVE for a catalog write only, NO scan.
+ALTER TABLE t ADD CONSTRAINT t_x_not_null CHECK (x IS NOT NULL) NOT VALID;
+
+-- Step 2 (migration N+1): performs the scan under SHARE UPDATE EXCLUSIVE, which does NOT block
+--                         concurrent SELECT/INSERT/UPDATE/DELETE. This is the point of the split.
+ALTER TABLE t VALIDATE CONSTRAINT t_x_not_null;
+
+-- Step 3 (migration N+2): PostgreSQL 12+ proves non-nullness from the VALIDATED check and SKIPS the
+--                         scan; then drop the now-redundant constraint.
+ALTER TABLE t ALTER COLUMN x SET NOT NULL;
+ALTER TABLE t DROP CONSTRAINT IF EXISTS t_x_not_null;
+```
+
+**The steps must be separate migrations, not separate statements in one file.** golang-migrate wraps
+each migration in a single transaction, so combining them holds step 1's `ACCESS EXCLUSIVE` right
+through step 2's scan — reproducing the exact hazard. This is the same reason DDL and backfills must be
+split (above).
+
+Two properties worth knowing:
+
+- **A `NOT VALID` CHECK still rejects new rows.** `NOT VALID` exempts only rows that already existed
+  when the constraint was added, so from step 1 onward no fresh NULL can be introduced even though the
+  column is still formally nullable. There is no window of weakened enforcement.
+- **Step 2 is where a bad deploy fails, and it fails safely.** If a NULL survived the backfill, `VALIDATE`
+  errors — leaving the column nullable and the constraint un-validated, a coherent state the application
+  still runs against. Worth a dedicated migration test asserting this fail-closed behaviour, paired with
+  a clean-data test that must succeed, so the pair distinguishes on data rather than passing vacuously.
+
+Reference implementation: `000124`/`000125`/`000126` (`linked_items.status`), with
+`backend/internal/database/migration_000123_000126_integration_test.go` covering all four steps.
+
+Lock modes verified empirically rather than assumed: while `VALIDATE CONSTRAINT` was held open in a
+transaction, `pg_locks` reported `ShareUpdateExclusiveLock` and a concurrent `SELECT` completed; the
+identical `SELECT` against a deliberately held `ACCESS EXCLUSIVE` lock failed with `canceling statement
+due to statement timeout`. If you change this pattern, re-verify the same way — Squawk cannot tell you
+(see below).
+
+### Escape hatch: `ADD COLUMN IF NOT EXISTS` lets an operator pre-empt the lock
+
+Because `000119`'s `ALTER` is written as `ADD COLUMN IF NOT EXISTS`, an operator can run that exact
+`ALTER` ahead of time, in its own short transaction, during a low-traffic window. When the real
+migration runs later, its `ALTER ... IF NOT EXISTS` becomes a no-op (the column already exists), so
+no `ACCESS EXCLUSIVE` lock is acquired at all when the backfill statement runs — only the backfill's
+own (still worth batching) row locks apply. This is a useful general mitigation for a DDL-plus-backfill
+migration that, for whatever reason, can't be split into two files before it ships: write the `ALTER`
+as `IF NOT EXISTS` even when a same-migration backfill follows it, so the escape hatch exists even if
+it isn't used.
+
+### Why Squawk and the CI migration-test suites do not catch either of these
+
+Neither hazard above trips an existing gate — this is *why* they need to be a documented convention
+rather than something to rely on tooling to flag:
+
+- **Squawk lints statements, not transactions.** `squawk --pg-version=17` inspects each SQL
+  statement in isolation. An `ALTER TABLE ADD COLUMN` statement is fine on its own; a full-table
+  `UPDATE` is fine on its own. The hazard is entirely that the two statements share one transaction
+  — a property Squawk has no visibility into. It reported 0 issues across all nine of #1443's
+  migrations.
+- **`scripts/test-migrations.sh`'s five suites (idempotency, perf, data, schema, rollback) run
+  against a near-empty database.** A full-table backfill over a handful of test rows is
+  instantaneous, so the "perf" suite sees no slow migration and the lock-duration hazard never
+  materializes in CI. The job reported `success` for the same reason it would report success on a
+  migration that scales linearly to hours at production row counts.
+
+**A green Squawk run and a green Migration Tests job are not evidence that a migration is safe to
+apply against a production-sized table.** Review DDL-plus-backfill migrations and grace-window
+timestamp writers by eye against the two conventions above; don't rely on the gates having caught
+it.
+
+### Migrations do not receive the application pool's UTC time zone pin (Issue #1461/#1464 follow-up)
+
+**Any calendar arithmetic in a migration must pin its time zone explicitly with `AT TIME ZONE
+'UTC'` — the session-default time zone a migration runs under is not UTC and is not guaranteed.**
+
+`backend/internal/database/pgx.go` sets `poolConfig.ConnConfig.RuntimeParams["TimeZone"] = "UTC"`
+on every connection the **application** opens (Issue #1461), because Postgres performs
+calendar-interval arithmetic — `make_interval(months => N)`, `INTERVAL 'N days'`, `CURRENT_DATE` —
+in the **session** time zone, not UTC, and the unpinned session default (confirmed locally to be
+`America/New_York`) silently shifts the computed instant depending on deployment environment and
+DST.
+
+**No migration path goes through that pool.** Every way this repo applies migrations shells out to
+either `psql` or the standalone `migrate` CLI against `$DATABASE_URL`, none of which touch
+`pgx.go`'s `RuntimeParams`:
+
+- `Makefile`'s `migrate-up`/`migrate-down` pipe each `.sql` file into `docker-compose exec ...
+  psql`.
+- `.github/workflows/test.yml`'s `backend-integration-test` job runs `migrate -database
+  "$DATABASE_URL" -path backend/migrations up`.
+- `backend/scripts/docker-entrypoint.sh` and `scripts/test-migrations.sh` both run the same
+  `migrate -database ... up` CLI invocation.
+
+So a migration doing calendar arithmetic on a `timestamptz` runs under whatever time zone the
+connecting Postgres server/session defaults to — silently reintroducing the exact bug #1461 fixed,
+in the one place the pool-level fix cannot reach.
+
+**This is not latent — it has already been triggered, twice, in already-applied migrations:**
+
+- `000105_add_past_due_started_at.up.sql:10` — `NOW() - INTERVAL '20 days'`, written into
+  `past_due_started_at`, the anchor for the 21-day auto-cancel grace window.
+- `000016_create_balance_snapshots_table.up.sql:48` — `CURRENT_DATE AS snapshot_date`, backfilled
+  into a `snapshot_date DATE NOT NULL` column.
+
+Both are already applied and immutable; see "The inventory of session-TZ-dependent SQL" below for
+the full list, including two more sites in `000017`'s rollback and one CURRENT_TIMESTAMP site in
+`000004` found while auditing this claim. The seven migrations added alongside #1461/#1464
+follow-up work (`000123`-`000129` — not `000123`-`000128`; `000129` is the current highest
+migration in the repo) only use `NOW()` for `updated_at`, whose absolute value is
+timezone-independent, so they don't add to the list — but the next migration that computes a
+deadline or backfills a calendar-relative column will add to it if this isn't caught in review.
+
+Expressions that are session-time-zone-dependent and therefore unsafe unpinned in a migration:
+
+- **`make_interval(...)` added to or subtracted from a `timestamptz`** — its **calendar** components
+  (`years`, `months`, `weeks`, `days`) are evaluated in the session zone before converting back to
+  an absolute instant. Its **fixed-duration** components (`hours`, `mins`, `secs`) are exact and
+  are *not* session-dependent — so `make_interval(hours => 72)` is safe unpinned while
+  `make_interval(months => 6)` is not. Getting this distinction wrong in either direction wastes a
+  review round: the repo has several `INTERVAL '<n> hours'` / `'<n> seconds'` sites that are
+  genuinely unaffected.
+- **`INTERVAL 'N days'` (or any calendar unit) added to a `timestamptz`** — the *days* component is
+  applied as calendar days in the session zone, preserving local wall-clock time rather than adding
+  exactly 24h × N. This is easy to miss because it looks like pure duration arithmetic; it isn't,
+  once the interval carries a calendar unit rather than a fixed-duration one.
+- **`CURRENT_DATE`** — resolves to "today" in the session zone, which can be a different calendar
+  date than "today" in UTC near a day boundary.
+
+**Squawk cannot detect this**, for the same reason it misses the DDL-plus-backfill hazard above: it
+lints individual SQL statements, not the session context a migration transaction executes under.
+Review any migration that does calendar arithmetic on a `timestamptz` by eye, and wrap the
+time-zone-sensitive expression in `AT TIME ZONE 'UTC'` (or compute the value in application code
+under the pinned pool, if the migration can be restructured to do so) rather than trusting the
+gates to catch an unpinned session zone.
+
+### The inventory of session-TZ-dependent SQL (Issue #1461) — application code, plus the migration sites the pool pin cannot reach
+
+Recorded here because it previously existed only in a commit message and four inline comments — and
+because the **first** attempt at this inventory undercounted it as "two lines", which is how four of
+these sites shipped unguarded. A **second** attempt scoped this list to application Go code only
+and, in doing so, implicitly (and wrongly) suggested migrations were clear — see the "currently
+latent" claim corrected earlier in this document. This list cannot claim completeness either; it
+is what two audit passes found, not a proof no more exist.
+
+**Ten sites in application Go code, in three families.** All ten are deterministic today *only*
+because `NewPool` pins every pooled connection to UTC (`backend/internal/database/pgx.go`); none of
+them is safe if that pin is lost.
+
+| Family | Count | Where |
+|---|---|---|
+| `CURRENT_DATE` written into a `DATE` column | 2 | `savings_contribution_repository.go` |
+| `clock_timestamp() + make_interval(months => N)` on a `timestamptz` | 4 | `profile_repository.go` ×3, `admin_user_repository.go` ×1 |
+| `timestamptz - INTERVAL '<n> days'` (the 30-day and 7-day GDPR pre-deletion notice boundaries) | 4 | `profile_repository.go` |
+
+**The distinction that decides membership**, and the one the first sweep got wrong: an interval's
+**calendar** components (`years`, `months`, `weeks`, `days`) are applied in the session zone, so day
+arithmetic preserves local wall-clock time rather than adding exactly 24h. Its **fixed-duration**
+components (`hours`, `mins`, `secs`) are exact and are *not* session-dependent. So
+`INTERVAL '30 days'` belongs on this list and `INTERVAL '72 hours'` does not — and the repo has
+several exact-unit interval sites that are genuinely unaffected. Conflating the two wastes a review
+round in either direction.
+
+**None of the ten application sites is reached by the migration paths described above — but three
+more sites, resident in migration SQL itself, are not reached by the `NewPool` pin either, and are
+therefore in the same unsafe category, not a safe one:**
+
+| Site | What |
+|---|---|
+| `000105_add_past_due_started_at.up.sql:10` | `NOW() - INTERVAL '20 days'` |
+| `000016_create_balance_snapshots_table.up.sql:48` | `CURRENT_DATE AS snapshot_date` |
+| `000017_migrate_to_timestamp_snapshots.down.sql:20` | `DATE(bs2.snapshot_at) = DATE(bs1.snapshot_at)` inside a `DELETE FROM balance_snapshots bs1` — decides which duplicate rows the rollback deletes |
+| `000017_migrate_to_timestamp_snapshots.down.sql:27` | `USING DATE(snapshot_at)` in the column-type-conversion `ALTER TABLE` |
+| `000004_create_subscription_overrides_table.up.sql:8-9` | `created_at`/`updated_at` declared as a naked `TIMESTAMP` (no time zone) with `DEFAULT CURRENT_TIMESTAMP` — found independently while building the migration-content scanner test, not previously documented anywhere |
+
+All five of these are already applied and immutable; a scanner test
+(`backend/internal/database/migration_tz_hazard_scan_test.go`) allowlists each occurrence by exact
+matched text so no *new* occurrence in a future migration can slip in silently.
+
+**Re-deriving the `AT TIME ZONE` count**, since a prior version of this document asserted "all 20"
+without showing the count: application Go code (non-test, non-comment) has **19** `AT TIME ZONE`
+sites — `savings_impact_repository.go` (1), `balance_snapshot_repository.go` (9),
+`analytics_repository.go` (9) — and all 19 pin `'UTC'` explicitly. Migration SQL separately
+contains 7 raw occurrences of the text `AT TIME ZONE` across `000017`, `000092`, `000096`, of which
+most are inside `--` comments or a `COMMENT ON COLUMN` doc string, not executable code; only 3 are
+live code (`000017.up.sql:25`, `:38`, `000092.up.sql:55`), and all 3 pin `'UTC'`. A single combined
+count spanning both Go and SQL depends heavily on which of those categories you include, so no
+single "N total" figure is asserted here — use the two counts above, which are each independently
+reproducible. Every `DATE_TRUNC` in application code operates on a `DATE` column; `::date` casts in
+application code are either on `DATE` columns or on explicitly-typed parameters; there are no
+`CURRENT_TIME` uses.
+
 ## Rollback Patterns (.down.sql)
 
 ### Drop Table
@@ -187,11 +448,16 @@ cd backend
 squawk migrations/*.sql --pg-version=17
 ```
 
-**Squawk catches:**
-- Dangerous DROP TABLE/COLUMN operations
-- NOT NULL columns without defaults
-- Non-concurrent index creation
-- Type changes that require rewrites
+**Squawk catches** (per `.squawk.toml`'s `excluded_rules`, verified against the config, not assumed):
+- Dangerous DROP TABLE/COLUMN operations (`ban-drop-table`/`ban-drop-column`, enabled)
+- NOT NULL columns without defaults (`adding-not-nullable-field`, enabled)
+- Foreign key additions that may lock tables (`adding-foreign-key-constraint`, enabled)
+- Unique constraints that may lock (`disallowed-unique-constraint`, enabled)
+
+**Squawk does NOT catch, in this repo's config** (both are in `.squawk.toml`'s `excluded_rules`,
+so Squawk reports 0 issues for either even though the rules exist upstream):
+- Non-concurrent index creation (`require-concurrent-index-creation` excluded — "Small tables initially")
+- Column type changes that require a table rewrite (`changing-column-type` excluded — "Intentional schema evolutions")
 
 ### Apply Migrations
 

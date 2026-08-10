@@ -50,6 +50,8 @@ target_amount, current_amount, total_saved
 - User-authored names: budget names, rule names, savings-goal names, category names (custom only — not Plaid system categories)
 - User-authored transaction tags
 - Custom rule descriptions
+- **Staff-authored free text about a user** — e.g. the orphaned-Plaid-Item operator resolution note (`PlaidOrphanedItemsPage`). Nothing prevents an operator typing a name into it, and in that table the subject has already been erased. Masked on the note element, **not** via `maskedColumnIds`: masking the whole `<td>` would hide the attesting staff id and make the attestation anonymous, which is what the feature exists to prevent. Round 15 in `pii-coverage.test.tsx` enforces both directions.
+- **Verbatim vendor payloads** — the Paddle webhook `payload` block (`WebhookDetailModal`) is shown precisely because nobody knows in advance what is in it; it routinely carries customer email and billed totals. Masked on the `<pre>`, matching `DeadLetterDetailModal`'s raw-args and error blocks.
 - **Security / holding names** — ticker symbols (e.g. `AAPL`), full security names (e.g. "Apple Inc."), and fund names reveal portfolio composition. The hand-built holdings table in `PortfolioHoldingsWidget` masks these per-cell via `data-ph-mask`; the `PortfolioHoldingsWidget` PII regression (Round 14 in `pii-coverage.test.tsx`) enforces this with a named sentinel (`SENTINEL_SECURITY_NAME`).
 
 ### MAY leave unmasked
@@ -125,7 +127,7 @@ Radix Dialog content renders in a portal but typically inherits `data-ph-mask` f
 ## How to verify
 
 ```bash
-# Automated regression gate (10 page-level tests)
+# Automated regression gate (Rounds 1–15; run the whole file, the round count moves)
 cd apps/web && bun run test src/test/pii-coverage.test.tsx -v
 
 # Full frontend suite

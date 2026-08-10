@@ -338,6 +338,30 @@ flyctl releases --app boostedbudget-api
 flyctl releases rollback <release-id> --app boostedbudget-api
 ```
 
+#### Coordinated app-and-schema rollback (Issue #1464)
+
+**`flyctl releases rollback` alone does not roll back the database schema, and rolling back the
+schema alone is unsafe.** The down migrations are correctly written (fail-closed), but they are not
+safe to run against the *currently deployed* application binary in isolation:
+
+- Rolling back migration `000119` (`backend/migrations/000119_add_plaid_cleanup_pending_at.down.sql`)
+  drops `users.plaid_cleanup_pending_at`. Current application code (the Plaid-disconnect repair pass,
+  `ExpireTrialIfNoOverride`, `UpdateSubscriptionFromPaddle`, and others in
+  `backend/internal/repository/profile_repository.go`) reads and writes that column unconditionally
+  — dropping it out from under the running binary causes SQL failures on those code paths, not a
+  clean revert.
+- Rolling back migration `000115` (`backend/migrations/000115_add_work_claims_lease_token.down.sql`)
+  drops `work_claims.lease_token`. Every destructive flow that uses a durable work claim
+  (`DeletionService`, `PastDueService`, `SubscriptionWebhookWorker`, `TrialService`) requires that
+  column to exist — the same failure mode applies.
+
+**Rollback must be coordinated: roll back the application release to a version that predates the
+column's introduction *before or together with* rolling back the migration that dropped it** — never
+roll back the schema against a binary that still expects the newer columns to exist. If only the app
+needs to roll back (schema unaffected), `flyctl releases rollback` alone is fine. If a migration must
+be reverted, treat it as a joint app+schema operation, not a `migrate down` run against whatever
+binary happens to be live.
+
 ## Troubleshooting
 
 ### Certificate Issues

@@ -34,7 +34,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,7 +47,6 @@ import (
 type Client struct {
 	client *river.Client[pgx.Tx]
 	pool   *pgxpool.Pool
-	config Config
 }
 
 // Ensure Client implements the interfaces
@@ -62,10 +60,6 @@ func NewClient(pool *pgxpool.Pool, workers *river.Workers, cfg Config) (*Client,
 	if cfg.Workers == nil {
 		cfg.Workers = DefaultWorkerConfig()
 	}
-	if cfg.RetryPolicy == nil {
-		cfg.RetryPolicy = DefaultRetryPolicy()
-	}
-
 	riverConfig := &river.Config{
 		Queues:               cfg.Workers.ToRiverQueues(),
 		Workers:              workers,
@@ -85,7 +79,6 @@ func NewClient(pool *pgxpool.Pool, workers *river.Workers, cfg Config) (*Client,
 	return &Client{
 		client: riverClient,
 		pool:   pool,
-		config: cfg,
 	}, nil
 }
 
@@ -274,23 +267,4 @@ func (c *Client) toJobResult(result *rivertype.JobInsertResult) *queue.JobResult
 		ScheduledAt:   result.Job.ScheduledAt,
 		UniqueSkipped: result.UniqueSkippedAsDuplicate,
 	}
-}
-
-// CustomRetryPolicy implements River's RetryPolicy interface with our exponential backoff.
-type CustomRetryPolicy struct {
-	policy *RetryPolicy
-}
-
-// NewCustomRetryPolicy creates a retry policy from our configuration.
-func NewCustomRetryPolicy(policy *RetryPolicy) *CustomRetryPolicy {
-	if policy == nil {
-		policy = DefaultRetryPolicy()
-	}
-	return &CustomRetryPolicy{policy: policy}
-}
-
-// NextRetry implements river.RetryPolicy.
-func (p *CustomRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
-	backoff := p.policy.NextRetry(job.Attempt)
-	return time.Now().Add(backoff)
 }

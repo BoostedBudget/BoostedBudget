@@ -173,6 +173,22 @@ func (w *HouseholdMemberCleanupCheckWorker) purgeExpiredMemberships(ctx context.
 // HouseholdOverCapacityCheckUniqueOpts's doc comment for the full Round 8 rationale
 // (deliberately not time-windowed via ByPeriod, which could let a still-running instance
 // bridge past a period-bucket boundary and reopen a duplicate-processing window).
+//
+// ⚠️ DO NOT ADD queue.JobStateCompleted HERE. The final branch-wide Codex review of Issue
+// #1448 flagged all ten newly-RunOnStart:true jobs for omitting Completed, and for the eight
+// that carry a real ByPeriod that is correct — without it, a run that finished minutes ago
+// does not suppress the start-of-process catch-up insert, so every deploy enqueues a
+// duplicate. This job is one of the two exceptions, because ByPeriod is deliberately UNSET
+// (above): with no time bucket, Completed would mean "a completed instance exists, therefore
+// never enqueue again" — permanently, since completed rows persist. The job would run exactly
+// once in the lifetime of the database and then silently stop forever.
+// TestHouseholdMemberCleanupCheckUniqueOpts's `assert.Zero(t, opts.ByPeriod)` plus its
+// ElementsMatch on exactly these five states is what catches that mistake; it caught this
+// author making it.
+//
+// The RunOnStart duplicate this omission permits is bounded and harmless here: dedup still
+// covers every non-terminal state, so a catch-up insert can only land once the previous run
+// has already finished — never concurrently with it.
 func HouseholdMemberCleanupCheckUniqueOpts() *queue.UniqueOpts {
 	return &queue.UniqueOpts{
 		ByArgs: false, // All check jobs are equivalent
@@ -184,4 +200,27 @@ func HouseholdMemberCleanupCheckUniqueOpts() *queue.UniqueOpts {
 			queue.JobStatePending,
 		},
 	}
+}
+
+// HouseholdMemberCleanupCheckInsertOpts returns the *river.InsertOpts this job's periodic
+// registration in main.go must use — Queue: "low" plus the uniqueness options from
+// HouseholdMemberCleanupCheckUniqueOpts(), converted to river's UniqueOpts type.
+//
+// Issue #1448 (following on from issue1371_wiring_drift_test.go's Round 8 finding):
+// main.go previously hand-duplicated this UniqueOpts shape as an inline river.UniqueOpts{}
+// literal instead of calling this package's own helper, so nothing enforced the two stay in
+// sync. main.go now calls this function directly.
+func HouseholdMemberCleanupCheckInsertOpts() *river.InsertOpts {
+	return riverInsertOptsFromUnique(queue.QueueLow, HouseholdMemberCleanupCheckUniqueOpts())
+}
+
+// HouseholdMemberCleanupCheckPeriodicOpts returns the *river.PeriodicJobOpts this job's
+// periodic registration in main.go must use. RunOnStart: true is only safe because
+// HouseholdMemberCleanupCheckInsertOpts() above always carries
+// HouseholdMemberCleanupCheckUniqueOpts()'s dedup — previously this job used
+// RunOnStart: false, meaning it could be enqueued zero times ever on a deploy cadence
+// faster than its interval (Issue #1448). ID is set so River restores nextRunAt across
+// restarts/leader elections instead of recomputing now+interval every time.
+func HouseholdMemberCleanupCheckPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: HouseholdMemberCleanupCheckArgs{}.Kind()}
 }

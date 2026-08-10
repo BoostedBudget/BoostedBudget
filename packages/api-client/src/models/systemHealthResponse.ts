@@ -31,7 +31,10 @@
  * OpenAPI spec version: 1.0.0
  */
 import type { DeadLetterMetrics } from './deadLetterMetrics';
+import type { DeletionResidueMetrics } from './deletionResidueMetrics';
+import type { JobBacklogMetrics } from './jobBacklogMetrics';
 import type { PaddleStatusMetrics } from './paddleStatusMetrics';
+import type { PlaidOrphanedItemMetrics } from './plaidOrphanedItemMetrics';
 import type { ServiceHealthStatuses } from './serviceHealthStatuses';
 import type { SyncStatusMetrics } from './syncStatusMetrics';
 import type { SystemHealthResponseJobQueues } from './systemHealthResponseJobQueues';
@@ -40,8 +43,11 @@ export interface SystemHealthResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   dead_letter_queue: DeadLetterMetrics;
+  deletion_residue: DeletionResidueMetrics;
+  job_backlog: JobBacklogMetrics;
   job_queues: SystemHealthResponseJobQueues;
   paddle_status: PaddleStatusMetrics;
+  plaid_orphaned_items: PlaidOrphanedItemMetrics;
   services: ServiceHealthStatuses;
   status: string;
   sync_status: SyncStatusMetrics;

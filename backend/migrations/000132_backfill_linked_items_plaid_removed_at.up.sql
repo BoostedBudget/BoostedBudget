@@ -1,0 +1,48 @@
+-- Issue #1495: backfill linked_items.plaid_removed_at (added by 000131) for rows whose Plaid side is
+-- already known to be done, so tightening DeleteUserCascade's C2 guard onto the new column does not
+-- block the erasure of users whose cleanup genuinely already ran.
+--
+-- WHAT IS ASSUMED VERSUS MEASURED — read this before trusting any value in this column.
+--
+--   * 'disconnected' rows ARE assumed removed. That status has exactly two production writers,
+--     LinkedItemRepository.MarkItemsDisconnected and MarkAllUserItemsDisconnected (re-derived with
+--     `grep -rn "status = 'disconnected'" backend/internal --include='*.go'`, which finds no other
+--     writer), and MarkItemsDisconnected is only ever called AFTER a successful Plaid /item/remove
+--     (or after Plaid answered ITEM_NOT_FOUND, i.e. the Item is already gone) — see
+--     plaid_item_cleanup_service.go's RemoveItem and cleanupItems. MarkAllUserItemsDisconnected has
+--     NO production caller at all today (same grep, plus `grep -rn 'MarkAllUserItemsDisconnected('`
+--     finding only the interface declarations and the implementation), so it cannot be the source of
+--     any existing 'disconnected' row.
+--
+--   * THE TIMESTAMP IS NOT A MEASUREMENT. Nothing in the schema ever recorded WHEN a historical
+--     /item/remove call happened, so no value written here can be one. The value below means
+--     "assumed removed; the actual instant is UNKNOWN and this is the best available proxy" —
+--     status_changed_at (the instant the row last changed status, which for a 'disconnected' row IS
+--     the marking write) falling back to updated_at and then created_at. Do NOT read this column's
+--     value as evidence of when Plaid was called for any row this migration touched. Only its
+--     NULL-ness carries a load-bearing meaning, and only NULL-ness is what any predicate reads
+--     (all three read `plaid_removed_at IS NULL`, never the value).
+--
+--   * 'replaced' rows are DELIBERATELY LEFT NULL — i.e. still owing Plaid work. This is the point of
+--     the whole change: the re-link path (account_service.go, "re-link detected, soft-deleting old
+--     linked item") sets status = 'replaced' WITHOUT calling /item/remove, so those Items are still
+--     live and still billing. Any other status (active/error/login_required/revoked/NULL) is left
+--     NULL for the same reason: no evidence of removal exists.
+--
+-- No clock function and no calendar arithmetic is used, so this migration is immune to the
+-- session-time-zone hazard documented in .claude/skills/db-migration-guide (migrations do not run
+-- under the application pool's UTC pin). status_changed_at/updated_at/created_at are all existing
+-- timestamptz values copied verbatim — absolute instants, timezone-independent.
+--
+-- Not batched, and why that is defensible here rather than an oversight: this is a single UPDATE
+-- over `status = 'disconnected'` rows only, in its own transaction (000131 did the ALTER), and
+-- production currently has zero users and therefore zero linked_items rows. If that ever changes
+-- before this migration runs somewhere large, the row locks it takes are on soft-deleted rows that
+-- no live read path writes to.
+--
+-- Idempotent: the `plaid_removed_at IS NULL` guard makes a re-run a no-op, and it also means this
+-- migration can never overwrite a genuinely measured value written later by the application.
+UPDATE linked_items
+SET plaid_removed_at = COALESCE(status_changed_at, updated_at, created_at)
+WHERE status = 'disconnected'
+  AND plaid_removed_at IS NULL;

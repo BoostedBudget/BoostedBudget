@@ -106,6 +106,14 @@ export const ANALYTICS_EVENTS = {
   ADMIN_DLQ_RETRY: 'admin_dlq_retry',
   ADMIN_DLQ_DELETE: 'admin_dlq_delete',
   ADMIN_DLQ_BULK_DELETE: 'admin_dlq_bulk_delete',
+  // Round 15, Tier E item 2: replaying a Paddle webhook is an operator-initiated retry of a
+  // billing-state transition — the same class of action as ADMIN_DLQ_RETRY above, and it was
+  // untracked while its DLQ twin was. Carries the event TYPE only: the Paddle event id is a
+  // per-customer identifier.
+  ADMIN_WEBHOOK_REPLAY: 'admin_webhook_replay',
+  // Issue #1497 item 2: an operator ATTESTED (unverified) that they removed a stranded Plaid
+  // Item by hand. Deliberately not named *_resolved: it is a claim, not a proved removal.
+  ADMIN_ORPHANED_PLAID_ITEM_ATTESTED: 'admin_orphaned_plaid_item_attested',
   // Issue #1413: Admin subscription override (comp tier apply/remove)
   ADMIN_SUBSCRIPTION_OVERRIDE_APPLIED: 'admin_subscription_override_applied',
   ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED: 'admin_subscription_override_removed',

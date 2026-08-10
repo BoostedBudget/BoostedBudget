@@ -363,7 +363,7 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, currency_code,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -424,7 +424,7 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, currency_code,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -488,7 +488,7 @@ func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requesting
 	query := "WITH " + householdAccountsCTEForBalancesAsOf() + `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, a.currency_code,
+		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
 		       a.created_at, a.updated_at
 		FROM accounts a
@@ -546,13 +546,21 @@ func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requesting
 
 // GetAccountsWithInstitution retrieves all accounts for a user with institution names from linked_items.
 // Includes status and re-link fields so callers can distinguish active vs. replaced accounts.
+//
+// Issue #1444: a.currency_code and l.institution_name are both nullable (accounts.currency_code:
+// migration 000007:22 — DEFAULT 'USD' but no NOT NULL; linked_items.institution_name: migration
+// 000006:14 — no NOT NULL, no default) but were scanned directly into bare (non-pointer) string
+// fields — "cannot scan NULL into *string". COALESCE guarantees a non-NULL scan target: 'USD' for
+// currency_code (matching the column's own default intent), '' for institution_name (the natural
+// zero for this omitempty field, matching GetAccountsWithInstitutionFiltered's established rule
+// for the same column).
 func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, a.currency_code,
+		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
-		       a.created_at, a.updated_at, l.institution_name
+		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
 		WHERE a.user_id = $1 AND a.status = 'active'
@@ -672,7 +680,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, currency_code,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
 		       user_account_id,
@@ -718,7 +726,7 @@ func (r *accountRepository) GetByUserAccountIDAndUser(ctx context.Context, userA
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, currency_code,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
 		       user_account_id,
@@ -846,7 +854,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, a.currency_code,
+		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
@@ -865,6 +873,15 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	var accounts []domain.Account
 	for rows.Next() {
 		var account domain.Account
+		// Issue #1444 (Site A): l.institution_name and l.status are both nullable columns in
+		// linked_items (see domain.Account.InstitutionName/LinkedItemStatus's own "From
+		// linked_items JOIN (optional)" comments) but were scanned directly into bare
+		// (non-pointer) string fields — "cannot scan NULL into *string". The LEFT JOIN itself
+		// can never miss (accounts.linked_item_id is UUID NOT NULL with an FK), but the joined
+		// row's own column values can genuinely be NULL, so both must scan through *string
+		// intermediates. A NULL status normalizes to "active" via normalizeLinkedItemStatus (the
+		// established rule elsewhere in this package); a NULL institution_name surfaces as "".
+		var institutionNameRaw, linkedItemStatusRaw *string
 		err := rows.Scan(
 			&account.ID, &account.LinkedItemID, &account.UserID, &account.PlaidAccountID,
 			&account.Name, &account.OfficialName, &account.Type, &account.Subtype, &account.Mask,
@@ -872,11 +889,15 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 			&account.DisplayOrder, &account.IsHidden,
 			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID,
-			&account.CreatedAt, &account.UpdatedAt, &account.InstitutionName, &account.LinkedItemStatus,
+			&account.CreatedAt, &account.UpdatedAt, &institutionNameRaw, &linkedItemStatusRaw,
 		)
 		if err != nil {
 			return nil, err
 		}
+		if institutionNameRaw != nil {
+			account.InstitutionName = *institutionNameRaw
+		}
+		account.LinkedItemStatus = string(normalizeLinkedItemStatus(linkedItemStatusRaw))
 		if err := r.decryptAccountPIIFields(&account); err != nil {
 			return nil, err
 		}
@@ -896,7 +917,7 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, currency_code,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       user_account_id, status, replaced_at, replaced_by_id,
 		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
 		       created_at, updated_at
@@ -945,7 +966,7 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, currency_code,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       user_account_id, status, replaced_at, replaced_by_id,
 		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
 		       created_at, updated_at
@@ -1030,11 +1051,23 @@ func (r *accountRepository) CheckFingerprintOwnership(ctx context.Context, finge
 		LIMIT 1
 	`
 
+	// Issue #1444 (Site B): li.status WAS nullable (linked_items.status) and was scanned directly
+	// into ownership.ItemStatus, a bare domain.LinkedItemStatus (string) field — "cannot scan
+	// NULL into *string". Scan into a *string intermediate and normalize through
+	// normalizeLinkedItemStatus (the established NULL-means-active rule) instead. This backs the
+	// Issue #1010 cross-user Plaid-item uniqueness gate (account_service.go's LinkAccounts) —
+	// security-relevant, so a NULL status must not silently fail the scan.
+	//
+	// Migration 000126 (also Issue #1444) has since made the column NOT NULL, so no new NULL can
+	// arise. The intermediate is kept deliberately: it costs nothing, it stays correct against an
+	// older or partially-migrated database, and removing it would put the panic back one migration
+	// rollback away on a security-relevant path.
 	var ownership FingerprintOwnership
+	var statusRaw *string
 	err := r.db.QueryRow(ctx, query, fingerprintBlindIdx, excludeUserID).Scan(
 		&ownership.UserID,
 		&ownership.LinkedItemID,
-		&ownership.ItemStatus,
+		&statusRaw,
 		&ownership.StatusChangedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1043,6 +1076,7 @@ func (r *accountRepository) CheckFingerprintOwnership(ctx context.Context, finge
 	if err != nil {
 		return nil, err
 	}
+	ownership.ItemStatus = normalizeLinkedItemStatus(statusRaw)
 	return &ownership, nil
 }
 

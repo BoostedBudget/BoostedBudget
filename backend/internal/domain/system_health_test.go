@@ -1,10 +1,12 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Note: Status calculation logic is tested in service layer (TestSystemHealthService_CalculateOverallStatus)
@@ -93,6 +95,45 @@ func TestDeadLetterMetrics_Validation(t *testing.T) {
 
 	assert.Equal(t, int64(5), metrics.Count)
 	assert.Equal(t, int64(12), metrics.OldestJobAgeHours)
+}
+
+// TestJobBacklogMetrics_FieldsRoundTrip (renamed from TestJobBacklogMetrics_Validation, a
+// tautological struct-literal smoke test that only read back literals it had just assigned) was
+// deleted in #1464 batch T2 (G5-9). Deleting it does not improve coverage — it removes dead
+// weight. Real fail-closed coverage for JobBacklogMetrics.Available already exists at the SERVICE
+// layer, where the producer (getJobBacklogMetrics, an unexported method of systemHealthService)
+// actually lives: TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues (first query fails),
+// TestGetSystemHealth_JobBacklogMetrics_SecondQueryError_DiscardsFirstQuerysGoodData (second query
+// fails), and TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguishable (all
+// in system_health_service_test.go, verified present before this deletion).
+
+// TestJobBacklogMetrics_Available_SerializesEvenWhenFalse is a genuinely falsifiable
+// domain-level test (Batch S2 Task 5): it exercises the actual `available` JSON tag on the wire
+// type, not a hand-constructed literal. Available's own doc comment (system_health.go) says it
+// "defaults to the Go zero value (false) — the fail-closed direction" specifically so a caller
+// that forgot to set it reads as unavailable, NOT as an absent/undefined field. That guarantee
+// would silently break if a future edit added `,omitempty` to the `available` json tag: Go's
+// encoding/json omits a `false` bool with omitempty, so the key would vanish from the response
+// entirely for the "never queried, zero value" case — indistinguishable on the wire from a field
+// that was never added at all, rather than explicit `false`.
+//
+// Falsified by adding `,omitempty` to Available's json tag in system_health.go: this test then
+// fails because `"available"` no longer appears in the marshaled output at all.
+func TestJobBacklogMetrics_Available_SerializesEvenWhenFalse(t *testing.T) {
+	var zeroValue JobBacklogMetrics // Available is false, the Go zero value — never explicitly set
+
+	b, err := json.Marshal(zeroValue)
+	require.NoError(t, err)
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(b, &decoded))
+
+	availableValue, present := decoded["available"]
+	require.True(t, present,
+		"the \"available\" key must be present in the marshaled JSON even when Available is the "+
+			"Go zero value (false) — an omitempty tag would drop it, making a genuinely-unavailable "+
+			"gauge indistinguishable on the wire from a field that was never added")
+	assert.Equal(t, false, availableValue)
 }
 
 func TestSystemHealthResponse_Timestamp(t *testing.T) {

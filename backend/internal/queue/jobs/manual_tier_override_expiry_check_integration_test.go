@@ -39,6 +39,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
+	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
@@ -71,7 +72,9 @@ func connectJobsTestDB(t *testing.T) *pgxpool.Pool {
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set — skipping integration test")
 	}
-	pool, err := pgxpool.New(context.Background(), dsn)
+	// Issue #1461: route through database.NewPoolFromURL (not a bare pgxpool.New) so this pool
+	// pins session TimeZone=UTC exactly like the production pool does.
+	pool, err := database.NewPoolFromURL(context.Background(), dsn)
 	require.NoError(t, err, "connect to test database")
 	t.Cleanup(pool.Close)
 	return pool
@@ -97,20 +100,30 @@ func dbNow(t *testing.T, pool *pgxpool.Pool) time.Time {
 	return now
 }
 
-// dbAddMonths computes ts + months entirely in Postgres via make_interval — the SAME semantics
-// AdminUserRepository.RemoveUserTierOverride's SQL uses for retention_expires_at, and the same
-// helper (mirrored here for this package) as admin_user_repository_remove_tier_override_integration_test.go's
-// dbAddMonths. Go's time.Time.AddDate normalizes month overflow FORWARD (2026-07-31 + 9mo ->
-// 2027-05-01); Postgres's make_interval CLAMPS to the target month's last day (-> 2027-04-30)
-// instead. Computing the expectation here — instead of via AddDate — keeps this assertion
-// calendar-immune by construction: expectation and actual value are both computed by Postgres,
-// so they can never disagree regardless of what day of the month the test runs on.
+// dbAddMonthsQuery computes ts + months entirely in Postgres via make_interval, pinned to UTC
+// BEFORE the calendar addition (Issue #1461) — mirrors the identically-named constant in
+// admin_user_repository_remove_tier_override_integration_test.go's own dbAddMonthsQuery
+// (re-declared here for this package). The same semantics as
+// AdminUserRepository.RemoveUserTierOverride's SQL uses for retention_expires_at.
+//
+// Historically (pre-#1461) this was `$1::timestamptz + make_interval(months => $2)`, with no pin
+// of its own — the same unpinned expression production uses, so both sides drifted identically
+// with whatever session TimeZone the shared pool happened to have, and this test fence could never
+// detect a regression in NewPool's UTC pin. The AT TIME ZONE 'UTC' conversion makes this
+// expectation independent of the connection's own session TimeZone.
+//
+// Go's time.Time.AddDate normalizes month overflow FORWARD (2026-07-31 + 9mo -> 2027-05-01);
+// Postgres's make_interval CLAMPS to the target month's last day (-> 2027-04-30) instead.
+// Computing the expectation here — instead of via AddDate — keeps this assertion calendar-immune
+// by construction: expectation and actual value are both computed by Postgres, so they can never
+// disagree regardless of what day of the month the test runs on.
+const dbAddMonthsQuery = `SELECT ($1::timestamptz AT TIME ZONE 'UTC') + make_interval(months => $2)`
+
 func dbAddMonths(t *testing.T, pool *pgxpool.Pool, ts time.Time, months int) time.Time {
 	t.Helper()
 	var result time.Time
-	require.NoError(t, pool.QueryRow(context.Background(),
-		"SELECT $1::timestamptz + make_interval(months => $2)", ts, months).Scan(&result))
-	return result
+	require.NoError(t, pool.QueryRow(context.Background(), dbAddMonthsQuery, ts, months).Scan(&result))
+	return result.UTC()
 }
 
 // assertBetweenFence asserts ts falls within [before, after] inclusive — mirrors the

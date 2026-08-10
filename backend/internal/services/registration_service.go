@@ -242,10 +242,11 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 
 	// Step 6: Log audit event for new user registration
 	if s.auditLogger != nil {
-		if err := s.auditLogger.Log(ctx, "user.registration", "user", user.ID); err != nil {
-			// Log error but don't fail registration
-			// Audit logging failure shouldn't block user registration
-		}
+		// Non-fatal — a failed audit write must not block a registration whose user row has
+		// already been committed — but never silent: the empty error branch that used to stand
+		// here was indistinguishable from the stub logger that never failed. Issue #1505.
+		logAuditFailure(ctx, s.auditLogger.Log(ctx, "user.registration", "user", user.ID),
+			"user.registration", user.ID)
 	}
 
 	return user, nil

@@ -37,13 +37,13 @@ func (r *postgresSubscriptionOverrideRepository) CreateOverride(ctx context.Cont
 	return nil
 }
 
-func (r *postgresSubscriptionOverrideRepository) GetActiveOverrides(ctx context.Context, userID string) ([]domain.UserSubscriptionOverride, error) {
+func (r *postgresSubscriptionOverrideRepository) GetActiveOverrides(ctx context.Context, userID string, asOf time.Time) ([]domain.UserSubscriptionOverride, error) {
 	query := `
-		SELECT id, user_id, resource_type, limit_value, reason, expires_at, created_at, updated_at 
-		FROM user_subscription_overrides 
-		WHERE user_id = $1 AND (expires_at IS NULL OR expires_at > NOW())
+		SELECT id, user_id, resource_type, limit_value, reason, expires_at, created_at, updated_at
+		FROM user_subscription_overrides
+		WHERE user_id = $1 AND (expires_at IS NULL OR expires_at > $2)
 	`
-	rows, err := r.db.Query(ctx, query, userID)
+	rows, err := r.db.Query(ctx, query, userID, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query active overrides: %w", err)
 	}
@@ -104,10 +104,24 @@ func (r *postgresSubscriptionOverrideRepository) GetOverrideByID(ctx context.Con
 	return &o, nil
 }
 
+// UpdateOverride's updated_at deliberately stays NOW() (the database's own transaction-time
+// clock), NOT a threaded asOf parameter (Batch S2 Task 2 decision, made explicit rather than left
+// implicit as the task brief required): updated_at here is a WRITE audit timestamp — "when this
+// row was actually persisted" — not a READ-side filter predicate that needs to agree with a
+// caller's already-captured response snapshot. No current caller needs this write to line up with
+// any request's `asOf` (ApplyOverride/RemoveOverride have no asOf to thread, and the admin
+// subscription-detail handler never calls UpdateOverride at all). This also matches this
+// codebase's established convention for every OTHER write-audit timestamp on this branch
+// (UpdateSubscriptionFromPaddle, UpdateTrialStatus, ClaimForDeletion, etc.) — all use the
+// database's own NOW()/clock_timestamp() for `updated_at`, reserving Go-computed instant
+// parameters for read-side WHERE-clause predicates that must match a caller's own snapshot.
+// Threading asOf through here would require plumbing it through ApplyOverride/RemoveOverride's
+// call chains for no caller-visible benefit, purely to look "consistent" with the read-side fixes
+// above — not worth the churn.
 func (r *postgresSubscriptionOverrideRepository) UpdateOverride(ctx context.Context, override *domain.UserSubscriptionOverride) error {
 	query := `
-		UPDATE user_subscription_overrides 
-		SET limit_value = $1, reason = $2, expires_at = $3, updated_at = NOW() 
+		UPDATE user_subscription_overrides
+		SET limit_value = $1, reason = $2, expires_at = $3, updated_at = NOW()
 		WHERE id = $4
 		RETURNING updated_at
 	`

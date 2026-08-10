@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
@@ -272,57 +273,163 @@ func TestDeadLetterJobRepository_DeleteOlderThan_IncludesNotes(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// --- CountByFilters ---
+
+func TestDeadLetterJobRepository_CountByFilters_WithKindFilter(t *testing.T) {
+	mock, repo := setupDLQMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	kind := "plaid_sync"
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM dead_letter_jobs WHERE kind = $1`)).
+		WithArgs(kind).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(12)))
+
+	count, err := repo.CountByFilters(ctx, domain.DeadLetterJobFilters{Kind: &kind})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(12), count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// The preview must count the same rows the delete would remove, including the
+// unfiltered case — the handler, not this method, is what refuses that request.
+func TestDeadLetterJobRepository_CountByFilters_NoFilters(t *testing.T) {
+	mock, repo := setupDLQMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM dead_letter_jobs `)).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(9001)))
+
+	count, err := repo.CountByFilters(ctx, domain.DeadLetterJobFilters{})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(9001), count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // --- DeleteByFilters ---
 
+// The unconditional-DELETE shape is deliberate and stays: the WHERE clause is the caller's
+// business, and the handler (operations.BulkDeleteDLQJobs) is what refuses a filterless
+// request. What is NEW here is the transaction and the row-count equality — see
+// DeleteByFilters' own comment.
 func TestDeadLetterJobRepository_DeleteByFilters_NoFilters(t *testing.T) {
 	mock, repo := setupDLQMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
 
+	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM dead_letter_jobs`)).
 		WillReturnResult(pgxmock.NewResult("DELETE", 3))
+	mock.ExpectCommit()
 
-	count, err := repo.DeleteByFilters(ctx, domain.DeadLetterJobFilters{})
+	count, err := repo.DeleteByFilters(ctx, domain.DeadLetterJobFilters{}, 3)
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), count)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// --- AtomicMarkRetried ---
-
-func TestDeadLetterJobRepository_AtomicMarkRetried_Success(t *testing.T) {
+// TestDeadLetterJobRepository_DeleteByFilters_CountDrift_RollsBack is the EE re-review's
+// finding at the layer that can actually close it. The handler counted in one statement and
+// deleted in another, so the two saw two different PostgreSQL snapshots and a row committed
+// in between was deleted having never been counted or confirmed. Binding the DELETE to the
+// count that authorised it, inside one transaction, means a drifted delete commits nothing.
+//
+// pgxmock proves only that the rollback path is taken; that nothing survives the abort is
+// proved against a real planner in dead_letter_bulk_delete_atomicity_integration_test.go.
+func TestDeadLetterJobRepository_DeleteByFilters_CountDrift_RollsBack(t *testing.T) {
 	mock, repo := setupDLQMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
 
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM dead_letter_jobs`)).
+		WillReturnResult(pgxmock.NewResult("DELETE", 4))
+	mock.ExpectRollback()
+
+	count, err := repo.DeleteByFilters(ctx, domain.DeadLetterJobFilters{}, 3)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrDLQBulkDeleteCountDrifted)
+	assert.Equal(t, int64(0), count, "a rolled-back delete must not report rows as deleted")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- AtomicMarkRetriedInTx / MarkRetriedInTx (#1508) ---
+
+// beginDLQRetryTx opens the mock transaction the claim and the id write share. pgxmock records the
+// statements issued through it, which is all these tests can check: it matches SQL as text and never
+// evaluates a WHERE clause or a transaction boundary. That the two writes and River's insert really
+// do commit or roll back together is proved against a real planner in
+// dead_letter_retry_atomicity_integration_test.go.
+func beginDLQRetryTx(t *testing.T, mock pgxmock.PgxPoolIface, repo *DeadLetterJobRepository) pgx.Tx {
+	t.Helper()
+	mock.ExpectBegin()
+	tx, err := repo.BeginRetryTx(context.Background())
+	require.NoError(t, err)
+	return tx
+}
+
+func TestDeadLetterJobRepository_AtomicMarkRetriedInTx_Success(t *testing.T) {
+	mock, repo := setupDLQMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	tx := beginDLQRetryTx(t, mock, repo)
+
 	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE dead_letter_jobs`)).
 		WithArgs(pgxmock.AnyArg(), int64(999), int64(1)).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow(int64(1)))
 
-	claimed, err := repo.AtomicMarkRetried(ctx, 1, 999)
+	claimed, err := repo.AtomicMarkRetriedInTx(ctx, tx, 1, 999)
 
 	require.NoError(t, err)
 	assert.True(t, claimed)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestDeadLetterJobRepository_AtomicMarkRetried_AlreadyRetried(t *testing.T) {
+func TestDeadLetterJobRepository_AtomicMarkRetriedInTx_AlreadyRetried(t *testing.T) {
 	mock, repo := setupDLQMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
+	tx := beginDLQRetryTx(t, mock, repo)
 
 	// No rows returned = already retried or not found
 	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE dead_letter_jobs`)).
 		WithArgs(pgxmock.AnyArg(), int64(999), int64(1)).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}))
 
-	claimed, err := repo.AtomicMarkRetried(ctx, 1, 999)
+	claimed, err := repo.AtomicMarkRetriedInTx(ctx, tx, 1, 999)
 
 	require.NoError(t, err)
 	assert.False(t, claimed)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDeadLetterJobRepository_MarkRetriedInTx_WritesTheRealJobIDThroughTheSameTx pins the half that
+// used to be a separate best-effort statement: the id write must reach the caller's transaction, so
+// that rolling it back also un-claims the row.
+func TestDeadLetterJobRepository_MarkRetriedInTx_WritesTheRealJobIDThroughTheSameTx(t *testing.T) {
+	mock, repo := setupDLQMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	tx := beginDLQRetryTx(t, mock, repo)
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE dead_letter_jobs SET retried_at = $1, retry_job_id = $2 WHERE id = $3`)).
+		WithArgs(pgxmock.AnyArg(), int64(4242), int64(1)).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectRollback()
+
+	require.NoError(t, repo.MarkRetriedInTx(ctx, tx, 1, 4242))
+	require.NoError(t, tx.Rollback(ctx))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

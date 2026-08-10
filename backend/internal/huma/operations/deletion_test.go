@@ -37,7 +37,7 @@ func (m *mockDeletionService) CancelDeletion(ctx context.Context, token string) 
 	return m.cancelErr
 }
 
-func (m *mockDeletionService) ExecuteDeletion(ctx context.Context, userID string) error {
+func (m *mockDeletionService) ExecuteDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) error {
 	return nil
 }
 

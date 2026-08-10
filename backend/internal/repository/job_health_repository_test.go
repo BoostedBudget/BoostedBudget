@@ -126,3 +126,66 @@ func TestJobHealthRepository_GetOutstandingPlaidCleanupStats_QueryError(t *testi
 	assert.Equal(t, time.Duration(0), age)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// --- GetDeletionResidueStats (Issue #1504 — the post-gate external-effect residue gauge) ---
+//
+// pgxmock proves the query is issued and both columns are scanned/wrapped correctly. It cannot prove
+// the predicate selects the right rows, nor that the partial index serves it — see
+// job_health_repository_deletion_residue_integration_test.go (real Postgres, -tags integration).
+
+func TestJobHealthRepository_GetDeletionResidueStats_Success(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	twoHoursSeconds := float64(2 * 60 * 60)
+	rows := pgxmock.NewRows([]string{"count", "age_seconds"}).AddRow(int64(4), twoHoursSeconds)
+
+	mock.ExpectQuery(regexp.QuoteMeta("user.deletion_residue.%")).WillReturnRows(rows)
+
+	count, newest, err := repo.GetDeletionResidueStats(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, 4, count)
+	assert.Equal(t, 2*time.Hour, newest)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestJobHealthRepository_GetDeletionResidueStats_NoRows_ReturnsZero(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	rows := pgxmock.NewRows([]string{"count", "age_seconds"}).AddRow(int64(0), float64(0))
+	mock.ExpectQuery(regexp.QuoteMeta("user.deletion_residue.%")).WillReturnRows(rows)
+
+	count, newest, err := repo.GetDeletionResidueStats(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Equal(t, time.Duration(0), newest)
+}
+
+func TestJobHealthRepository_GetDeletionResidueStats_QueryError(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("user.deletion_residue.%")).
+		WillReturnError(errors.New("db unavailable"))
+
+	count, newest, err := repo.GetDeletionResidueStats(context.Background())
+
+	assert.Error(t, err)
+	assert.Equal(t, 0, count)
+	assert.Equal(t, time.Duration(0), newest)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestJobHealthRepository_DeletionResidueStatsQuery_UsesTheWriterSharedPrefix is the drift guard, and
+// it runs without a database so it cannot be skipped. The read predicate and the write's action are
+// the same Go constant; a second hand-typed literal here is exactly how a gauge comes to report zero
+// forever while records are being written.
+func TestJobHealthRepository_DeletionResidueStatsQuery_UsesTheWriterSharedPrefix(t *testing.T) {
+	assert.Contains(t, deletionResidueStatsQuery, "'"+deletionResidueActionPrefix+"%'",
+		"the LIKE pattern must be built from deletionResidueActionPrefix — the same constant RecordDeletionResidue writes")
+	assert.Contains(t, deletionResidueStatsQuery, "MAX(created_at)",
+		"the age reported is the NEWEST record's, not the oldest: nothing prunes audit_logs, so MIN would climb forever and tell an operator nothing about whether this just happened")
+}

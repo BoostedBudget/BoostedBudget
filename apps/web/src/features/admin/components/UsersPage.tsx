@@ -29,9 +29,11 @@ import { UserDetailModal } from './UserDetailModal'
 import { SubscriptionOverrideModal } from './SubscriptionOverrideModal'
 import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
+import { resolveServerSnapshotTime } from '@/shared/dates'
 import { getSubscriptionPresentation } from '../../subscription/lib/subscriptionPresentation'
 import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
 import { KNOWN_TIER_NAMES } from '../lib/knownTiers'
+import { SnapshotAgeLabel } from './SnapshotAgeLabel'
 
 const TIER_OPTIONS = [
   { value: '', label: 'All Tiers' },
@@ -86,9 +88,15 @@ const tierBadgeVariant = (tier: string): BadgeProps['variant'] => {
  * so it can hold a value naming no configured tier (Issue #1413, this task) — KNOWN_TIER_NAMES
  * is passed here so such a row is treated as "not comped", matching the backend's own rejection
  * of the same malformed value.
+ *
+ * `now` is REQUIRED (not defaulted) — Issue #1462 follow-up G2: callers must anchor it to
+ * `data.as_of`, the single per-page server snapshot instant `AdminUserListResponse` now carries,
+ * the same fix SubscriptionOverrideModal already applies via `AdminSubscriptionDetailOutputBody.
+ * as_of`. A bare `new Date()` default here would silently reintroduce the browser/server
+ * clock-skew divergence #1462 exists to close.
  */
-function hasLiveOverride(user: AdminUserListItem): boolean {
-  return isOverrideActive(user.manual_tier_override, user.manual_tier_ends_at, KNOWN_TIER_NAMES)
+function hasLiveOverride(user: AdminUserListItem, now: Date): boolean {
+  return isOverrideActive(user.manual_tier_override, user.manual_tier_ends_at, KNOWN_TIER_NAMES, now)
 }
 
 const overrideStatusVariant = (variant: string): BadgeProps['variant'] => {
@@ -143,6 +151,15 @@ export function UsersPage() {
   const users = data?.users ?? []
   const isEmpty = !isLoading && users.length === 0
 
+  // Issue #1462 follow-up G2: `now` anchors every row's override-liveness arithmetic
+  // (hasLiveOverride/getOverrideStatus below) to the server's own per-page snapshot instant
+  // (`data.as_of`) instead of a fresh browser-clock read, so this page's chips cannot disagree
+  // with SubscriptionOverrideModal's about the same row due to client/server clock skew. Falls
+  // back to the browser clock only while `data` hasn't loaded yet or `as_of` is absent/
+  // unparseable (e.g. an older cached response) — mirrors the identical fallback in
+  // SubscriptionOverrideModal.tsx.
+  const now = resolveServerSnapshotTime(data?.as_of)
+
   const { sizing, onSizingChange, columnVisibility, onColumnVisibilityChange } = useTablePreferences(
     'admin-users',
     [...ADMIN_USERS_COLUMN_IDS]
@@ -177,7 +194,7 @@ export function UsersPage() {
       render: (user) => {
         // An expired override must NOT be shown as the effective tier — it falls back to the
         // raw subscription_tier, same as the backend's ComputeEffectiveTier (Issue #1413).
-        const effectiveTier = hasLiveOverride(user)
+        const effectiveTier = hasLiveOverride(user, now)
           ? (user.manual_tier_override as string)
           : user.subscription_tier
         return (
@@ -196,7 +213,7 @@ export function UsersPage() {
       maxSize: 140,
       render: (user) => {
         const presentation = getSubscriptionPresentation({ status: user.subscription_status })
-        const comped = hasLiveOverride(user)
+        const comped = hasLiveOverride(user, now)
         return (
           <div className="flex items-center gap-1.5">
             <Badge variant={presentation.badgeVariant} className="capitalize">
@@ -225,7 +242,9 @@ export function UsersPage() {
       minSize: 110,
       maxSize: 180,
       render: (user) => {
-        const overrideStatus = getOverrideStatus(user.manual_tier_override, user.manual_tier_ends_at)
+        // Same server-anchored `now` as hasLiveOverride above (Issue #1462 follow-up G2) — both
+        // derive liveness from the same per-page `data.as_of` snapshot, never the browser clock.
+        const overrideStatus = getOverrideStatus(user.manual_tier_override, user.manual_tier_ends_at, now)
         return overrideStatus ? (
           <Badge variant={overrideStatusVariant(overrideStatus.variant)}>
             {overrideStatus.label}
@@ -320,6 +339,12 @@ export function UsersPage() {
           <p className="text-sm text-muted-foreground m-0">
             View and manage users. Click a row to see details, or use Override to set a manual subscription tier.
           </p>
+          {/* Issue #1462 follow-up G2 / R3-10: this page's Tier/Comped/Override Status columns
+              anchor their liveness arithmetic to `now` (above), a FROZEN read of `data.as_of` that
+              never refreshes on a timer. Discloses that snapshot's age so an admin who leaves this
+              page open can tell it's grown stale, mirroring SubscriptionOverrideModal's identical
+              disclosure for the same server-anchored-`now` hazard. */}
+          <SnapshotAgeLabel asOf={data?.as_of} className="text-xs" />
         </div>
       </header>
 

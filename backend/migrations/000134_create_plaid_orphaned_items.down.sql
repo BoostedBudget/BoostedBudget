@@ -1,0 +1,27 @@
+-- Issue #1494: reverse 000134.
+--
+-- DATA LOSS, and it is the most consequential rollback on this branch: every record of a live,
+-- possibly-still-billing Plaid Item stranded by a completed GDPR erasure is destroyed, and there is
+-- nothing else anywhere that carries it — the linked_items rows those records came from were deleted
+-- by the same cascade that wrote them. After this rollback those Items are unfindable from this
+-- system, which is precisely the state 000134 exists to prevent.
+--
+-- DO NOT roll this back to "undo #1494" without exporting this table's contents somewhere first.
+--
+-- ⚠ CORRECTION to what this comment said when it was written, because it named the wrong hazard and an
+-- adversarial review caught it. It claimed that dropping this table while plaid_removal_failed_at still
+-- lets C2 through would make erasures "proceed and strand Items with no record at all". It would NOT:
+-- DeleteUserCascade's INSERT into this table is mandatory and inside the cascade's transaction, so with
+-- the table gone that statement ERRORS and the whole cascade rolls back. The real consequence of
+-- rolling back this migration alone is therefore the opposite one — EVERY account deletion fails, for
+-- every user with any not-provably-removed linked item, with a "relation does not exist" error rather
+-- than a clean refusal. Fail-closed, loudly, and not a leak; but a broken deletion path all the same, so
+-- roll 000133 back too (or restore C2's block) if the intent is to undo #1494 as a whole.
+--
+-- ban-drop-table is an ENABLED Squawk rule, and .down.sql files are excluded from linting
+-- (excluded_paths in .squawk.toml) precisely so rollbacks can contain the DROP that reverses their
+-- .up.sql. This is that case.
+--
+-- Idempotent: DROP TABLE IF EXISTS. Dropping the table drops its constraint and all COMMENTs with
+-- it, so there is nothing else to undo.
+DROP TABLE IF EXISTS plaid_orphaned_items;

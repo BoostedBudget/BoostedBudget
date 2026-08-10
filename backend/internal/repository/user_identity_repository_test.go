@@ -2,15 +2,14 @@ package repository
 
 import (
 	"context"
-	
 	"errors"
 	"regexp"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
-	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,7 +49,7 @@ func TestGetByClerkID_Success(t *testing.T) {
 		now, now, &now,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE clerk_user_id_blind_idx = $1`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, COALESCE(email, '') AS email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE clerk_user_id_blind_idx = $1`)).
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
@@ -79,7 +78,7 @@ func TestGetByClerkID_NotFound(t *testing.T) {
 	ctx := context.Background()
 	clerkUserID := "google-oauth2|nonexistent"
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE clerk_user_id_blind_idx = $1`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, COALESCE(email, '') AS email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE clerk_user_id_blind_idx = $1`)).
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -120,7 +119,7 @@ func TestGetByUserID_Success(t *testing.T) {
 			now, now, nil,
 		)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE user_id = $1 ORDER BY is_primary DESC, created_at ASC`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, COALESCE(email, '') AS email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE user_id = $1 ORDER BY is_primary DESC, created_at ASC`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -153,7 +152,7 @@ func TestGetByUserID_NotFound(t *testing.T) {
 		"created_at", "updated_at", "last_used_at",
 	})
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE user_id = $1 ORDER BY is_primary DESC, created_at ASC`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, clerk_user_id, provider, provider_user_id, COALESCE(email, '') AS email, email_verified, is_primary, created_at, updated_at, last_used_at FROM user_identities WHERE user_id = $1 ORDER BY is_primary DESC, created_at ASC`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 

@@ -35,6 +35,7 @@ import type { AdminUserListItem } from './adminUserListItem';
 export interface AdminUserListResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  as_of: string;
   has_more: boolean;
   page: number;
   page_size: number;
