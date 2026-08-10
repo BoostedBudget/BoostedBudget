@@ -79,6 +79,11 @@ func (m *MockDeadLetterService) DeleteByFilters(ctx context.Context, filters dom
 	return args.Get(0).(int64), args.Error(1)
 }
 
+func (m *MockDeadLetterService) CountByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {
+	args := m.Called(ctx, filters)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 func (m *MockDeadLetterService) GetStats(ctx context.Context) (*domain.DeadLetterStatsResponse, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
@@ -372,6 +377,7 @@ func TestAdminDLQ_BulkDelete_Success(t *testing.T) {
 	h := newDLQHandler(mockSvc)
 
 	kind := "plaid_sync"
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(3), nil)
 	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(3), nil)
 
 	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Kind: &kind}}
@@ -404,6 +410,7 @@ func TestAdminDLQ_BulkDelete_ServiceError(t *testing.T) {
 	h := newDLQHandler(mockSvc)
 
 	kind := "plaid_sync"
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(3), nil)
 	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(0), errors.New("db error"))
 
 	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Kind: &kind}}
@@ -411,4 +418,230 @@ func TestAdminDLQ_BulkDelete_ServiceError(t *testing.T) {
 
 	require.Error(t, err)
 	mockSvc.AssertExpectations(t)
+}
+
+// --- BulkDeleteDLQJobs: input validation (B1) ---
+//
+// B1: the pre-EA guard tested only the NIL-ness of the five filter pointers, and
+// buildDLQBulkFilters discarded every date parse error. Both of these bodies therefore
+// reached the repository as a filter set with zero conditions, and
+// DeadLetterJobRepository.DeleteByFilters interpolates an empty WHERE clause into
+// `DELETE FROM dead_letter_jobs` — a full-table wipe reported to the caller as success.
+// Restoration is Postgres PITR only, and it destroys precisely the operator-triaged rows
+// that DLQ retention keeps forever (DeleteOlderThan's skipWithNotes leg).
+
+func TestAdminDLQ_BulkDelete_EmptyStringDate_Returns400(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	empty := ""
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{StartDate: &empty}}
+	_, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusBadRequest)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+}
+
+// A malformed date must be reported AS a malformed date. The assertion on the message is
+// load-bearing: with the parse error discarded the filter simply vanishes, and a request
+// carrying only a bad date still ends in a 400 — from the empty-filter guard, for a
+// different reason. Only the message distinguishes "rejected" from "silently widened".
+func TestAdminDLQ_BulkDelete_MalformedDate_Returns400(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		start string
+	}{
+		{name: "wrong layout", start: "01/15/2026"},
+		{name: "out of range", start: "2026-13-45"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockSvc := new(MockDeadLetterService)
+			h := newDLQHandler(mockSvc)
+
+			start := tc.start
+			input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{StartDate: &start}}
+			_, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+			require.Error(t, err)
+			assertHTTPStatus(t, err, http.StatusBadRequest)
+			assert.Contains(t, err.Error(), "start_date")
+			mockSvc.AssertNotCalled(t, "CountByFilters", mock.Anything, mock.Anything)
+			mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+		})
+	}
+}
+
+func TestAdminDLQ_BulkDelete_MalformedEndDate_Returns400(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	end := "01/15/2026"
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{EndDate: &end}}
+	_, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusBadRequest)
+	assert.Contains(t, err.Error(), "end_date")
+	mockSvc.AssertNotCalled(t, "CountByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+}
+
+// The sharp case for the discarded parse error: paired with a valid filter, a swallowed
+// bad date does not produce an empty filter set — it produces a WIDER one. The request
+// asked for one month of one kind; dropping the dates asks for every row of that kind.
+func TestAdminDLQ_BulkDelete_MalformedDateWithValidKind_Returns400(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	kind := "plaid_sync"
+	start := "2026-13-45"
+	end := "2026-01-31"
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Kind: &kind, StartDate: &start, EndDate: &end}}
+	_, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusBadRequest)
+	mockSvc.AssertNotCalled(t, "CountByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+}
+
+// --- BulkDeleteDLQJobs: blast radius (B2-2) ---
+//
+// B2-2: validation alone does NOT close B1. `{"start_date":"0001-01-01"}` is
+// schema-valid and parses cleanly; it builds a real, non-empty WHERE clause
+// (`failed_at >= year 1`) that matches every ordinary row, because failed_at defaults to
+// NOW() (000030_add_river_queue.up.sql:177). `{"retried":false}` does the same whenever
+// no row has been replayed. The bound has to be on the row count, not on the input.
+
+func TestAdminDLQ_BulkDelete_BroadValidFilter_Returns409WithoutConfirmation(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	start := "0001-01-01"
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(5000), nil)
+
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{StartDate: &start}}
+	_, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusConflict)
+	assert.Contains(t, err.Error(), "5000", "the refusal must disclose the count the caller has to confirm")
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+}
+
+func TestAdminDLQ_BulkDelete_BroadRetriedFilter_Returns409WithoutConfirmation(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	retried := false
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(1200), nil)
+
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Retried: &retried}}
+	_, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusConflict)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+}
+
+func TestAdminDLQ_BulkDelete_WrongExpectedCount_Returns409(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	start := "0001-01-01"
+	wrong := int64(4999)
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(5000), nil)
+
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{StartDate: &start, ExpectedCount: &wrong}}
+	_, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusConflict)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+}
+
+func TestAdminDLQ_BulkDelete_ExactExpectedCount_Proceeds(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	start := "0001-01-01"
+	confirmed := int64(5000)
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(5000), nil)
+	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(5000), nil)
+
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{StartDate: &start, ExpectedCount: &confirmed}}
+	out, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(5000), out.Body.Deleted)
+	mockSvc.AssertExpectations(t)
+}
+
+// A narrow delete under the unconfirmed ceiling must still work with no extra ceremony —
+// the bound exists to stop table-scale deletions, not routine triage cleanup.
+func TestAdminDLQ_BulkDelete_NarrowFilter_NeedsNoConfirmation(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	kind := "plaid_sync"
+	start := "2026-01-01"
+	end := "2026-01-31"
+	mockSvc.On("CountByFilters", mock.Anything, mock.MatchedBy(func(f domain.DeadLetterJobFilters) bool {
+		return f.Kind != nil && *f.Kind == kind && f.StartDate != nil && f.EndDate != nil
+	})).Return(int64(7), nil)
+	mockSvc.On("DeleteByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(7), nil)
+
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Kind: &kind, StartDate: &start, EndDate: &end}}
+	out, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), out.Body.Deleted)
+	mockSvc.AssertExpectations(t)
+}
+
+// Nothing matches: report zero without asking for a confirmation nobody can give.
+func TestAdminDLQ_BulkDelete_ZeroMatches_ReturnsZero(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	kind := "plaid_sync"
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(0), nil)
+
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Kind: &kind}}
+	out, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), out.Body.Deleted)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+}
+
+// An expected_count on its own is not a filter: it must not satisfy the "at least one
+// filter" guard, or it becomes the parameter that raises the bound.
+func TestAdminDLQ_BulkDelete_ExpectedCountOnly_Returns400(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	confirmed := int64(5000)
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{ExpectedCount: &confirmed}}
+	_, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.Error(t, err)
+	assertHTTPStatus(t, err, http.StatusBadRequest)
+	mockSvc.AssertNotCalled(t, "CountByFilters", mock.Anything, mock.Anything)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
+}
+
+func TestAdminDLQ_BulkDelete_CountError_Propagates(t *testing.T) {
+	mockSvc := new(MockDeadLetterService)
+	h := newDLQHandler(mockSvc)
+
+	kind := "plaid_sync"
+	mockSvc.On("CountByFilters", mock.Anything, mock.AnythingOfType("domain.DeadLetterJobFilters")).Return(int64(0), errors.New("db error"))
+
+	input := &BulkDeleteDLQJobsInput{Body: domain.DeadLetterBulkDeleteRequest{Kind: &kind}}
+	_, err := h.BulkDeleteDLQJobs(context.Background(), input)
+
+	require.Error(t, err)
+	mockSvc.AssertNotCalled(t, "DeleteByFilters", mock.Anything, mock.Anything)
 }

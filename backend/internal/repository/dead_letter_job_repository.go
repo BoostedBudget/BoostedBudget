@@ -206,6 +206,21 @@ func (r *DeadLetterJobRepository) DeleteOlderThan(ctx context.Context, before ti
 	return result.RowsAffected(), nil
 }
 
+// CountByFilters returns how many dead letter jobs match the given filters, using the
+// same WHERE construction as DeleteByFilters so the preview and the delete can never
+// disagree about what "these filters" means. It is the read half of the bulk-delete
+// confirmation handshake in operations.BulkDeleteDLQJobs.
+func (r *DeadLetterJobRepository) CountByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {
+	where, args := buildDLQWhereClause(filters)
+	query := fmt.Sprintf(`SELECT COUNT(*) FROM dead_letter_jobs %s`, where)
+
+	var total int64
+	if err := r.db.QueryRow(ctx, query, args...).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
 // DeleteByFilters bulk-deletes dead letter jobs matching the given filters.
 // Returns the number of deleted rows.
 func (r *DeadLetterJobRepository) DeleteByFilters(ctx context.Context, filters domain.DeadLetterJobFilters) (int64, error) {

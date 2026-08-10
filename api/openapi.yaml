@@ -2559,12 +2559,21 @@ components:
           readOnly: true
           type: string
         end_date:
+          description: Inclusive upper bound on failed_at (YYYY-MM-DD)
+          format: date
           type: string
+        expected_count:
+          description: Exact number of rows the caller expects to delete; required when the match exceeds the unconfirmed ceiling
+          format: int64
+          minimum: 0
+          type: integer
         kind:
           type: string
         retried:
           type: boolean
         start_date:
+          description: Inclusive lower bound on failed_at (YYYY-MM-DD)
+          format: date
           type: string
         user_id:
           type: string
