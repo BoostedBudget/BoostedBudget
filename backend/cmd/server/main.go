@@ -1874,7 +1874,10 @@ func main() {
 
 		// Register Huma admin routes (Issue #559: Huma migration)
 		// Security: AdminMiddleware authorizes by identity and role — 401 unauthenticated,
-		// 403 without domain.RoleAdmin, 500 (refused) if the role lookup fails. Issue #1499
+		// 403 without domain.RoleAdmin, 500 (refused) if the role lookup fails. The role lookup
+		// reads CLERK privateMetadata, not the database (#1432 B2-3), and its positive results
+		// are cached, so a revocation takes effect within AdminService.positiveRoleCacheTTLCap
+		// rather than instantly. Issue #1499
 		// removed its environment check, so this surface is reachable in production BY ADMINS;
 		// the role gate, not the deployment environment, is what keeps everyone else out.
 		// Issue #698: Pass trialService for E2E test trial grant endpoint
@@ -1898,13 +1901,29 @@ func main() {
 		appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)", "plaid_configured", plaidService != nil)
 
 		// Issue #821: QA auth bypass endpoint (QA/Staging only).
-		// Guard 1: Environment check here. Guard 2: Handler rejects production in Bypass().
-		if (cfg.Environment == "qa" || cfg.Environment == "staging") &&
-			cfg.QABypassSecret != "" && cfg.QAAdminClerkUserID != "" && cfg.QAPremiumClerkUserID != "" {
+		// Guard 1: the registration gate below. Guard 2: the handler re-checks the environment
+		// against domain.IsQAAuthBypassEnvironment in Bypass().
+		//
+		// Issue #1432 batch ED, finding B2-1: this condition used to be
+		// `cfg.Environment == "qa" || cfg.Environment == "staging"` plus three non-empty QA
+		// settings — a single mislabelled ENVIRONMENT string exposed the only unauthenticated
+		// path to admin authority in this codebase. The decision now lives in
+		// Config.QAAuthBypassRefusalReason (internal/config/qa_auth_bypass_gate.go), which
+		// additionally requires ENVIRONMENT to have been set EXPLICITLY, requires the
+		// QA_AUTH_BYPASS_ENABLED opt-in, and refuses outright when a production-only signal
+		// (a Clerk sk_live_ key, PADDLE_ENVIRONMENT=production) is present. Keep the decision
+		// there — it is unit-tested; an inline equality here is not.
+		if refusal := cfg.QAAuthBypassRefusalReason(); refusal == "" {
 			qaBypassService := services.NewQAAuthBypassService(cfg.QAAdminClerkUserID, cfg.QAPremiumClerkUserID, nil)
 			qaBypassHandler := operations.NewQAAuthBypassHandler(qaBypassService, cfg.QABypassSecret, cfg.Environment)
 			operations.RegisterQAAuthBypassRoutes(humaAPI, qaBypassHandler)
-			appLogger.Info("QA auth bypass route registered")
+			appLogger.Warn("QA auth bypass route registered — this route mints admin sign-in tokens without authentication and must never exist in production",
+				"environment", cfg.Environment)
+		} else if cfg.QABypassSecret != "" || cfg.QAAdminClerkUserID != "" || cfg.QAPremiumClerkUserID != "" || cfg.QAAuthBypassEnabled {
+			// Only log the refusal when SOMETHING QA-shaped was configured. A production
+			// deployment with none of these set is the normal case and needs no noise; a
+			// deployment that meant to enable the route needs to know which check refused.
+			appLogger.Warn(refusal)
 		}
 
 		// All API v1 routes fully migrated to Huma (Issue #559)

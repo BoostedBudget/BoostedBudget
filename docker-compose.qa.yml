@@ -96,6 +96,9 @@ services:
       PLAID_REDIRECT_URI: "${PLAID_REDIRECT_URI}"
       PLAID_WEBHOOK_URL: "${PLAID_WEBHOOK_URL}"
       ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+      # Issue #1432 (B2-1): explicit opt-in for the unauthenticated QA auth-bypass route.
+      # ENVIRONMENT=qa alone no longer registers it — see backend/internal/config/qa_auth_bypass_gate.go.
+      QA_AUTH_BYPASS_ENABLED: "true"
       QA_BYPASS_SECRET: "${QA_BYPASS_SECRET}"
       QA_ADMIN_CLERK_USER_ID: "${QA_ADMIN_CLERK_USER_ID}"
       QA_PREMIUM_CLERK_USER_ID: "${QA_PREMIUM_CLERK_USER_ID}"
