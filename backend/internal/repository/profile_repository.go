@@ -256,6 +256,24 @@ type ProfileRepository interface {
 	// an IRREVERSIBLE EXTERNAL EFFECT and then did not complete — so the user still exists, and
 	// something has been done to them that they did not ask for. Issue #1504.
 	//
+	// ⚠ ROUND 15 CHANGED WHEN THIS IS CALLED, AND THEREFORE WHAT A ROW MEANS WHILE A DELETION IS
+	// STILL RUNNING. The caller now writes one record per irreversible external call, immediately
+	// BEFORE issuing it, instead of inferring the whole thing from an in-memory flag once the run is
+	// over. An end-of-run inference cannot describe a call whose acknowledgement was lost, a panic,
+	// or a process that was killed mid-flight — and the flag it used only ever named the subscription
+	// cancel, so the customer archive could not be recorded at all.
+	//
+	// The row therefore asserts "this call was ISSUED and the user is still here", which is the
+	// strongest honest claim available from this side of a network boundary. It is not weaker in
+	// practice: what an operator does with it — check Paddle, then reconcile — is the same either way.
+	//
+	// ⚠ THE LIFECYCLE IS NOW WRITE-THEN-RETRACT, and the retraction is not optional. DeleteUserCascade
+	// DELETEs this user's rows in this namespace inside the same transaction that deletes the user
+	// (see its own comment at that statement). A deletion that COMPLETES therefore leaves none, which
+	// is what keeps the meaning above true and keeps both Prometheus gauges quiet on ordinary
+	// deletions. Any future caller of this method must either be inside a flow that completes that
+	// way, or own its own retraction.
+	//
 	// THE CASE IT EXISTS FOR is irreducible and cannot be engineered away: ExecuteDeletion gates
 	// every irreversible external call on a fresh authorisation read, but if the user revokes their
 	// deletion WHILE the Paddle subscription-cancel call is in flight, the cancel still lands. The
@@ -1637,6 +1655,39 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return false, fmt.Errorf("DeleteUserCascade: redact audit log PII: %w", err)
 	}
 
+	// ROUND 15, TIER A: RETRACT THIS USER'S DELETION-RESIDUE RECORDS. This is the other half of
+	// making the residue mechanism durable, and without it that mechanism would be unusable.
+	//
+	// Since round 15, DeletionService records each irreversible external Paddle call BEFORE it is
+	// issued rather than inferring it from an in-memory flag at the end of the run (see
+	// recordIssuedExternalEffect, deletion_service.go, for why an end-of-run inference cannot survive
+	// a lost acknowledgement, a panic, or process death). A residue record asserts one thing:
+	// "irreversible external work was done to a user WHO IS STILL HERE". The moment this transaction
+	// commits that assertion is false — the user is gone and the cancellation was the intended
+	// outcome — so the record must go with them.
+	//
+	// ⚠ IT MUST BE THIS TRANSACTION, NOT A BEST-EFFORT CALL AFTER IT. Both Prometheus gauges alert on
+	// `increase(deletion_residue_records[15m])`, so a window in which a completed deletion's rows are
+	// still visible is a false alarm on every ordinary deletion of a paying user — and a crash inside
+	// that window would leave a permanent one, for a user nobody can look up. Doing it here means no
+	// reader ever observes the intermediate state at all: the rows and the user disappear together or
+	// neither does.
+	//
+	// ⚠ DELETE, NOT REDACT. The redaction above deliberately KEEPS rows: they are the tamper-evident
+	// GDPR trail. A residue row is not part of that trail — it carries no `changes` payload by
+	// construction and describes no action taken against the user's data. It is an OPERATOR WORK ITEM,
+	// and this statement is the only thing that ever closes one. Note the ordering is immaterial to
+	// the redaction (residue rows have nothing to redact); it is placed here to sit with the other
+	// audit_logs statement rather than for any dependency.
+	//
+	// Matched by the same literal prefix the operator query, the gauges and migration 000138's partial
+	// index use — via deletionResidueActionPrefix, so it cannot drift away from what is written.
+	if _, err = tx.Exec(ctx,
+		`DELETE FROM audit_logs WHERE resource_id = $1 AND action LIKE $2`,
+		userID, deletionResidueActionPrefix+"%"); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: retract deletion-residue records: %w", err)
+	}
+
 	// Issue #1494: PRESERVE THE OBLIGATION BEFORE DESTROYING ITS ONLY RECORD.
 	//
 	// The DELETE below removes this user's linked_items rows (via user_id's ON DELETE CASCADE). Every
@@ -1983,10 +2034,15 @@ func (r *profileRepository) CountUncleanedLinkedItems(ctx context.Context, userI
 // what an operator queries on: a typo'd or ad-hoc value would be a record nobody finds.
 type DeletionResidueEffect string
 
-// DeletionResiduePaddleSubscriptionCancelled is the one effect this can currently report, and the
-// only one that is IRREDUCIBLE: the Paddle subscription-cancel call landed and the deletion then
-// stopped (revocation caught by the customer-archive gate, or the cascade's own guard refusing), so
-// the user keeps their account with their subscription cancelled.
+// DeletionResiduePaddleSubscriptionCancelled is the IRREDUCIBLE effect this vocabulary was built
+// for: the Paddle subscription-cancel call was issued and the deletion then stopped (revocation
+// caught by the customer-archive gate, the cascade's own guard refusing, or any of the ways a run
+// simply ends), so the user keeps their account with their subscription cancelled.
+//
+// ⚠ ROUND 15 WIDENED IT FROM "LANDED" TO "ISSUED", deliberately. It used to be written only after
+// CancelSubscriptionImmediately had RETURNED SUCCESSFULLY, which silently excluded the case where
+// Paddle acted and the response was lost (finding A2) — the ambiguity is unresolvable from this side,
+// and reporting nothing resolved it in the one direction that costs a real user a real subscription.
 //
 // The Plaid leg has no counterpart here on purpose: a disconnect is RECOVERABLE — the user relinks —
 // and it is already reported to the user in-product. This constant is for the effect nobody can undo
@@ -2009,6 +2065,31 @@ const DeletionResiduePaddleSubscriptionCancelled DeletionResidueEffect = "paddle
 // It shares deletionResidueActionPrefix, so the operator query, the partial index (migration 000138)
 // and both Prometheus gauges pick it up with no change: the vocabulary widened, the namespace did not.
 const DeletionResiduePaddleSubscriptionCancelledCascadeFailed DeletionResidueEffect = "paddle_subscription_cancelled_cascade_failed"
+
+// DeletionResiduePaddleCustomerArchived is the effect the code that performs it calls "THE ONE
+// ACTION NOTHING CAN UNDO" (cleanupPaddleResources, deletion_service.go): the Paddle customer is
+// archived and its email overwritten with deleted_<id>@deleted.local. A cancelled subscription can
+// be re-created; an anonymised Paddle customer cannot be recovered by us or by Paddle.
+//
+// ⚠ ROUND 15, FINDING A1 — WHY IT DID NOT EXIST UNTIL NOW, AND WHY THAT WAS THE ROOT DEFECT. Both
+// constants above name the SUBSCRIPTION, and the service's whole recording mechanism keyed off a
+// single in-memory `subscriptionCancelled` bool set only by the cancel. The archive set no flag and
+// had no vocabulary, so an archive-WITHOUT-a-cancel could not be recorded by any path — and that is
+// not a corner: it is the deterministic shape of the retention sweep meeting an ex-subscriber
+// (subscription_status='cancelled', paddle_customer_id still set) whose Plaid removal failed
+// terminally. The archive lands, the cascade's C2 guard then refuses for seven days, and an Info log
+// was the entire trace of an unrecoverable act.
+//
+// It is a SEPARATE kind rather than a reuse of the subscription constants because it hands an
+// operator a different job: there is no subscription to restore, and there is nothing to restore at
+// Paddle at all. What they can do is reconcile — the local users row survived and still names the
+// customer id, so the person can be contacted and a fresh Paddle customer created if they resubscribe.
+//
+// Shares deletionResidueActionPrefix, so the operator query, migration 000138's partial index
+// (predicate `action LIKE 'user.deletion_residue.%'`) and both Prometheus gauges pick it up with NO
+// migration: the vocabulary widened, the namespace did not. Verified, not assumed — see
+// TestRecordDeletionResidue_Integration_CustomerArchived_IsCountedByTheExistingNamespace.
+const DeletionResiduePaddleCustomerArchived DeletionResidueEffect = "paddle_customer_archived"
 
 // deletionResidueActionPrefix is the audit_logs.action namespace these records live in. Kept as one
 // constant so the operator query in RecordDeletionResidue's doc comment

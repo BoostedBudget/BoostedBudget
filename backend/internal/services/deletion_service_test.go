@@ -115,10 +115,38 @@ func (m *MockProfileRepositoryForDeletion) CancelDeletion(ctx context.Context, u
 }
 
 // RecordDeletionResidue (Issue #1504) records that a deletion performed an irreversible external
-// effect and then did not complete. See repository.ProfileRepository for the contract.
+// effect. See repository.ProfileRepository for the contract.
+//
+// ⚠ ROUND 15: THE PERMISSIVE DEFAULT IS DELIBERATE. Since each irreversible external Paddle call now
+// records itself AS IT IS ISSUED (deletionService.recordIssuedExternalEffect) rather than being
+// inferred from an in-memory flag at the end of the run, this method is reached by EVERY test that
+// gets as far as the Paddle leg — some fifty of them, almost none of which are about the residue
+// record. Registering a permissive default here rather than in fifty test bodies keeps those tests
+// about their own subject.
+//
+// It does not weaken the residue tests. testify still records the call, so their AssertCalled /
+// AssertNotCalled assertions see exactly what they saw before; and a test that registers its own
+// expectation (e.g. one that makes the write fail) registered it during setup, so testify finds that
+// one first and this default is never installed at all.
 func (m *MockProfileRepositoryForDeletion) RecordDeletionResidue(ctx context.Context, userID string, effect repository.DeletionResidueEffect) error {
+	if !m.hasExpectationFor("RecordDeletionResidue") {
+		m.On("RecordDeletionResidue", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	}
 	args := m.Called(ctx, userID, effect)
 	return args.Error(0)
+}
+
+// hasExpectationFor reports whether the test has already programmed this method. Reads
+// ExpectedCalls without testify's own mutex, which is safe here and only here: these mocks are
+// programmed during single-goroutine test setup and this check runs on the same goroutine as the
+// call it guards.
+func (m *MockProfileRepositoryForDeletion) hasExpectationFor(method string) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == method {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *MockProfileRepositoryForDeletion) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {

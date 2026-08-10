@@ -76,12 +76,18 @@ type JobHealthRepository interface {
 	// how long ago the NEWEST one was written — (0, 0) when there are none. Issue #1504.
 	//
 	// WHAT ONE RECORD MEANS, because nothing else about this method makes sense without it: a GDPR
-	// deletion was revoked AFTER the Paddle subscription-cancel call had already landed (the gate
-	// passed a moment earlier; a network call cannot be recalled). The user keeps their account and
-	// every byte of their data, and has no subscription. See
+	// deletion ISSUED an irreversible external call against the user's Paddle account — a
+	// subscription cancel, or the customer archive-and-anonymise that nobody can undo — and the run
+	// then ended with the user still here. The user keeps their account and every byte of their data,
+	// and has had something done to them that they did not ask for. See
 	// ProfileRepository.RecordDeletionResidue, which writes these rows, and
-	// DeletionService.ExecuteDeletion's recordPaddleCancelResidue, which calls it from both paths that
-	// can end that way.
+	// DeletionService.recordIssuedExternalEffect, which calls it from each irreversible call site
+	// BEFORE the call goes out.
+	//
+	// ⚠ THE COUNT CAN GO DOWN, since round 15. DeleteUserCascade retracts a user's records inside the
+	// transaction that deletes them, so a run that later completes closes its own work items. This
+	// method is therefore a count of OPEN residue, not an all-time total; see the gauge's own comment
+	// in observability/metrics.go for what that means for the alert rule.
 	//
 	// Reads audit_logs through deletionResidueActionPrefix — the SAME Go constant the writer builds
 	// its action from, never a second hand-typed literal. That constant exists precisely so the
