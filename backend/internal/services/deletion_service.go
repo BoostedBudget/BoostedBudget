@@ -848,13 +848,35 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 		// a retry will not clear", which is a second, different task for the operator. That is what
 		// the extra ..._cascade_failed row says, over and above the landing records.
 		//
-		// It is gated on the subscription cancel having been issued because that is what its name
-		// claims. An archive-only run that fails this way is still visible — its own landing record is
-		// on file and reportSurvivingResidue below fires — it simply does not get the second row.
-		if effects.subscriptionCancel && !cascadeErrorIsRecognisedTransient(err) {
-			s.recordIssuedExternalEffect(ctx, userID, kind,
-				repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed,
-				"the cascade failed with a non-transient error after the subscription cancel had been issued: "+err.Error())
+		// ⚠ ROUND 15, TIER E ITEM 8 — THE ARCHIVE-ONLY RUN NOW GETS ITS OWN STUCK ROW.
+		//
+		// This used to read `if effects.subscriptionCancel && ...` alone, justified as: the constant
+		// NAMES the subscription, and an archive-only run "is still visible — its own landing record
+		// is on file and reportSurvivingResidue fires — it simply does not get the second row". That
+		// is right about the constant and wrong about the operator. The landing record says WHAT was
+		// lost; neither it nor the log says whether the deletion is OVER or STUCK, and that
+		// distinction is the entire reason a second kind exists. So an operator filtering for stuck
+		// deletions saw every ex-subscriber's and none of the archive-only ones — and the archive-only
+		// shape is not exotic: it is the deterministic retention-sweep case (an ex-subscriber whose
+		// subscription is already cancelled, so there is nothing to cancel and only the customer to
+		// archive).
+		//
+		// The remedy is a PARALLEL constant, not a widened one: recording
+		// `..._subscription_cancelled_cascade_failed` for a run in which no subscription was cancelled
+		// would put a false statement in an operator-facing action, which is what the original gate
+		// was correctly avoiding. Each irreversible effect that was issued gets the stuck row that
+		// names IT.
+		if !cascadeErrorIsRecognisedTransient(err) {
+			if effects.subscriptionCancel {
+				s.recordIssuedExternalEffect(ctx, userID, kind,
+					repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed,
+					"the cascade failed with a non-transient error after the subscription cancel had been issued: "+err.Error())
+			}
+			if effects.customerArchive {
+				s.recordIssuedExternalEffect(ctx, userID, kind,
+					repository.DeletionResiduePaddleCustomerArchivedCascadeFailed,
+					"the cascade failed with a non-transient error after the customer archive had been issued: "+err.Error())
+			}
 		}
 		reportSurvivingResidue("the cascade failed after external work had already been issued: " + err.Error())
 		return fmt.Errorf("failed to cascade delete user data: %w", err)

@@ -2140,6 +2140,31 @@ const DeletionResiduePaddleSubscriptionCancelledCascadeFailed DeletionResidueEff
 // TestRecordDeletionResidue_Integration_CustomerArchived_IsCountedByTheExistingNamespace.
 const DeletionResiduePaddleCustomerArchived DeletionResidueEffect = "paddle_customer_archived"
 
+// DeletionResiduePaddleCustomerArchivedCascadeFailed is to DeletionResiduePaddleCustomerArchived
+// exactly what DeletionResiduePaddleSubscriptionCancelledCascadeFailed is to
+// DeletionResiduePaddleSubscriptionCancelled: the same loss, reached the way that means the deletion
+// is STILL STUCK rather than over — the cascade returned an error this codebase does not recognise as
+// transient (cascadeErrorIsRecognisedTransient, deletion_service.go).
+//
+// ⚠ ROUND 15, TIER E ITEM 8 — WHY IT WAS MISSING, AND WHY THE GAP WAS NOT COSMETIC. The "stuck" row
+// was gated on `effects.subscriptionCancel`, and the previous batch recorded that as deliberate: the
+// constant NAMES the subscription, so an archive-only run "simply does not get the second row". That
+// reasoning is correct about the constant and wrong about the operator. The two constants encode two
+// different JOBS — "the deletion is over, restore what was lost" versus "the deletion is stuck, fix
+// the database fault too, and until you do every retry rewrites this" — and an archive-only run that
+// fails non-transitively is stuck in precisely the same way. The landing record and
+// reportSurvivingResidue's Error log do report the loss, but neither distinguishes stuck from over,
+// which is the whole reason the second kind exists. An operator filtering for stuck deletions found
+// every ex-subscriber's and none of the archive-only ones.
+//
+// The fix is a parallel constant rather than widening the subscription one, because widening it
+// would put "the subscription was cancelled" in an operator-facing action for a run in which no
+// subscription was cancelled — the mislabelling the gate was, rightly, avoiding.
+//
+// Shares deletionResidueActionPrefix, so the operator query, migration 000138's partial index and
+// both Prometheus gauges pick it up with NO migration, for the same reason its three siblings do.
+const DeletionResiduePaddleCustomerArchivedCascadeFailed DeletionResidueEffect = "paddle_customer_archived_cascade_failed"
+
 // deletionResidueActionPrefix is the audit_logs.action namespace these records live in. Kept as one
 // constant so the operator query in RecordDeletionResidue's doc comment
 // (action LIKE 'user.deletion_residue.%') cannot drift away from what is actually written.

@@ -196,6 +196,58 @@ func TestExecuteDeletion_CascadeFailsWithNoSubscriptionCancelled_RecordsTheArchi
 		repository.DeletionResiduePaddleSubscriptionCancelled)
 	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything,
 		repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed)
+	// ⚠ ROUND 15, TIER E ITEM 8 — AND IT MUST ALSO GET A *STUCK* ROW. 42501 is not a recognised
+	// transient error, so this deletion is not over: it will re-run and fail the same way until the
+	// database fault is fixed. Before this, the stuck row was gated on the subscription cancel alone,
+	// so an operator filtering for stuck deletions saw every ex-subscriber's and none of these —
+	// even though the archive-only shape is the DETERMINISTIC retention-sweep case, not an exotic one.
+	h.repo.AssertCalled(t, "RecordDeletionResidue", mock.Anything, h.userID,
+		repository.DeletionResiduePaddleCustomerArchivedCascadeFailed)
+}
+
+// ⚠ SIBLING, MANDATORY — the boundary of item 8's fix, and the one that stops it from becoming
+// "record a stuck row on every cascade error". A RECOGNISED-TRANSIENT failure after an archive-only
+// run must get its landing record and NO stuck row: the retry premise genuinely holds there, and
+// DeleteUserCascade retracts the landing record inside the transaction that finally succeeds. This
+// is the assertion the widened branch could otherwise have satisfied by dropping the classifier.
+func TestExecuteDeletion_CascadeFailsTransientlyAfterArchiveOnly_RecordsNoStuckRow(t *testing.T) {
+	ctx := context.Background()
+	h := newRevocationHarnessWithStatus(t, context.Background(), "cancelled")
+
+	h.repo.ExpectedCalls = nil
+	h.repo.On("GetUserByID", ctx, h.userID).Return(h.user, nil)
+	h.repo.On("ClaimForDeletion", ctx, h.userID).Return(true, nil)
+	h.repo.On("RecordDeletionResidue", mock.Anything, h.userID, mock.Anything).Return(nil).Maybe()
+	// 40001 (serialization_failure) is the classifier's canonical recognised-transient case.
+	h.repo.On("DeleteUserCascade", ctx, h.userID, mock.Anything).Return(false, wrapPgError("40001"))
+
+	require.Error(t, h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested))
+
+	h.repo.AssertCalled(t, "RecordDeletionResidue", mock.Anything, h.userID,
+		repository.DeletionResiduePaddleCustomerArchived)
+	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything,
+		repository.DeletionResiduePaddleCustomerArchivedCascadeFailed)
+}
+
+// ⚠ SIBLING, MANDATORY — the OTHER direction. A run that cancelled AND archived is stuck on both
+// counts and must get BOTH stuck rows: the operator has a subscription to restore and a Paddle
+// customer they can no longer recover, and collapsing either into the other hides one of the two.
+func TestExecuteDeletion_CascadeFailsAfterBothPaddleEffects_RecordsBothStuckRows(t *testing.T) {
+	ctx := context.Background()
+	h := newRevocationHarness(t, ctx)
+
+	h.repo.ExpectedCalls = nil
+	h.repo.On("GetUserByID", ctx, h.userID).Return(h.user, nil)
+	h.repo.On("ClaimForDeletion", ctx, h.userID).Return(true, nil)
+	h.repo.On("RecordDeletionResidue", mock.Anything, h.userID, mock.Anything).Return(nil).Maybe()
+	h.repo.On("DeleteUserCascade", ctx, h.userID, mock.Anything).Return(false, wrapPgError("42501"))
+
+	require.Error(t, h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested))
+
+	h.repo.AssertCalled(t, "RecordDeletionResidue", mock.Anything, h.userID,
+		repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed)
+	h.repo.AssertCalled(t, "RecordDeletionResidue", mock.Anything, h.userID,
+		repository.DeletionResiduePaddleCustomerArchivedCascadeFailed)
 }
 
 // SIBLING THREE, MANDATORY — the ordinary success path. Its counterpart for the revocation half is
