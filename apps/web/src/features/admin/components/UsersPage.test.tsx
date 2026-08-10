@@ -458,6 +458,132 @@ describe('UsersPage', () => {
     })
   })
 
+  // Issue #1462 follow-up G2: `data.as_of` now exists on AdminUserListResponse — this proves
+  // the page actually anchors its per-row override-liveness arithmetic to it, not just that some
+  // shared `now` variable was threaded through unchanged (a purely structural pin the ticket
+  // explicitly says does not satisfy it). Each fixture below makes the SERVER snapshot and the
+  // REAL browser clock disagree about whether the override has lapsed, and asserts the rendered
+  // Tier/Comped/Override-Status cells follow the server's answer, not the browser's.
+  describe('Clock-skew / stale-server-snapshot boundary (Issue #1462 follow-up G2)', () => {
+    it('treats the override as LIVE per the server snapshot even if the browser clock alone would call it expired', () => {
+      // manual_tier_ends_at is 1 hour in the PAST relative to the real wall clock at test-run
+      // time — a browser-clock-only check would call this expired. But `as_of` (the page's
+      // server snapshot instant) is an hour BEFORE that, i.e. the override had not yet lapsed as
+      // of the server's own snapshot — the server's effective_status style reasoning would treat
+      // it as live, and this page must agree.
+      const endsAt = new Date(Date.now() - 60 * 60 * 1000)
+      const asOf = new Date(endsAt.getTime() - 60 * 60 * 1000).toISOString()
+
+      const usersWithSkewedOverride = [
+        {
+          ...mockUsers[1],
+          subscription_tier: 'household_2',
+          subscription_status: 'inactive',
+          manual_tier_override: 'premium',
+          manual_tier_ends_at: endsAt.toISOString(),
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithSkewedOverride, total_count: 1, as_of: asOf },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      const table = screen.getByRole('table')
+      // Live: Comped chip shown, Tier column shows the override tier, not the raw base tier, and
+      // the Override Status column does NOT read "Expired" — a stale-clock-only implementation
+      // (a bare `new Date()`) would get every one of these backwards.
+      expect(within(table).getByText('Comped')).toBeInTheDocument()
+      expect(within(table).getByText('Premium')).toBeInTheDocument()
+      expect(within(table).queryByText('Household 2')).not.toBeInTheDocument()
+      expect(screen.queryByText('Expired')).not.toBeInTheDocument()
+    })
+
+    it('treats the override as EXPIRED per the server snapshot even though manual_tier_ends_at is still in the FUTURE relative to the real browser clock', () => {
+      // manual_tier_ends_at is 30 minutes in the FUTURE relative to the real wall clock — a
+      // browser-clock-only check would call this live. But `as_of` is an hour AFTER that expiry —
+      // the server's own snapshot had already observed it lapse. This is the differentiating
+      // case: the OLD browser-clock code would render a live-looking Comped chip and override
+      // tier for an override the server already considers expired.
+      const endsAt = new Date(Date.now() + 30 * 60 * 1000)
+      const asOf = new Date(endsAt.getTime() + 60 * 60 * 1000).toISOString()
+
+      const usersWithSkewedOverride = [
+        {
+          ...mockUsers[1],
+          subscription_tier: 'household_2',
+          subscription_status: 'inactive',
+          manual_tier_override: 'premium',
+          manual_tier_ends_at: endsAt.toISOString(),
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithSkewedOverride, total_count: 1, as_of: asOf },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      const table = screen.getByRole('table')
+      expect(within(table).queryByText('Comped')).not.toBeInTheDocument()
+      expect(within(table).getByText('Household 2')).toBeInTheDocument()
+      expect(within(table).queryByText('Premium')).not.toBeInTheDocument()
+      expect(screen.getByText('Expired')).toBeInTheDocument()
+    })
+  })
+
+  // Issue #1462 follow-up G2 / R3-10: the Tier/Comped/Override Status columns anchor their
+  // liveness arithmetic to `now`, a FROZEN read of `data.as_of` (never refreshed on a timer) —
+  // this page had no disclosure of that staleness, unlike SubscriptionOverrideModal's identical
+  // `SnapshotAgeLabel`. Mirrors SubscriptionOverrideModal.test.tsx's "Snapshot age label" block.
+  describe('Snapshot age label (Issue #1462 G3 / R3-10)', () => {
+    it("renders the snapshot's age when data.as_of is present", () => {
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, as_of: fiveMinutesAgo },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      // Bucketed by formatRelativeTime (minutes, not an exact value).
+      expect(screen.getByText(/snapshot:\s*\d+m ago/i)).toBeInTheDocument()
+    })
+
+    it('degrades to a placeholder rather than crashing when data.as_of is absent (e.g. an older cached response)', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: mockListResponse, // no as_of field
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.getByText(/snapshot:\s*—/i)).toBeInTheDocument()
+      expect(screen.queryByText(/\bago\b/i)).not.toBeInTheDocument()
+    })
+
+    it('never renders the literal string "Invalid Date" for a malformed (present but unparseable) data.as_of', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, as_of: 'not-a-real-date' },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      const snapshotEl = screen.getByText(/snapshot:\s*—/i)
+      expect(snapshotEl).toBeInTheDocument()
+      expect(document.body.textContent ?? '').not.toMatch(/invalid date/i)
+    })
+  })
+
   describe('Status column regression', () => {
     it('still renders the raw subscription_status text', () => {
       mockUseListAdminUsers.mockReturnValue({

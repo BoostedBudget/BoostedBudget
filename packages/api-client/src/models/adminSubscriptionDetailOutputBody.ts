@@ -38,12 +38,14 @@ export interface AdminSubscriptionDetailOutputBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   active_overrides_count: number;
+  as_of: string;
   base_tier: string;
   deletion_requested_at?: string;
   deletion_scheduled_at?: string;
   effective_status: string;
   effective_tier: string;
   features: SubscriptionFeatures;
+  household_active_member_count: number;
   limits: SubscriptionLimits;
   manual_tier_ends_at?: string;
   manual_tier_override?: string;

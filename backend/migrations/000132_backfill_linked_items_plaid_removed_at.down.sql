@@ -1,0 +1,20 @@
+-- Issue #1495: reverse 000132's backfill.
+--
+-- DELIBERATE NO-OP, and this is a judgement call, not laziness.
+--
+-- 000132 wrote plaid_removed_at for 'disconnected' rows. By the time a rollback runs, the
+-- application (LinkedItemRepository.MarkPlaidRemoved) may have written the SAME column for the same
+-- rows for a genuine, measured reason. Nothing distinguishes a backfilled value from an
+-- application-written one — 000132's value is a copy of status_changed_at and MarkPlaidRemoved's is
+-- a fresh clock read, and both land in the same column on rows whose status is 'disconnected' either
+-- way. So `UPDATE ... SET plaid_removed_at = NULL WHERE status = 'disconnected'` would silently
+-- destroy real removal records, and re-declare Plaid work as owed for Items that are genuinely gone
+-- — re-enqueueing /item/remove for them and blocking those users' GDPR erasure until it "succeeds".
+-- An un-reversed backfill is strictly less harmful than a reversal that clears real facts.
+--
+-- The full rollback path is unaffected by this choice: 000131's own .down.sql drops the column
+-- outright, so `migrate down` past this point removes the backfilled data along with everything else
+-- in the column, and the up->down->up schema comparison in scripts/test-migrations.sh sees no
+-- difference. A no-op down file is still required — golang-migrate needs the file to exist to step
+-- down past this version at all.
+SELECT 1;

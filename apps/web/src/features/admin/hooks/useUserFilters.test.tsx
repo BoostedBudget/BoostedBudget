@@ -44,13 +44,32 @@ describe('useUserFilters', () => {
       })
     })
 
-    it('parses search param from URL', () => {
+    // Batch EC / C4: `search` holds an email (or email prefix) of a data subject, and PostHog
+    // session replay records the full URL verbatim — the anti-pattern named in
+    // docs/security/posthog-pii-masking.md. It is deliberately NOT read from or written to the
+    // URL any more, matching the sibling useDeadLetterFilters. These two tests pin both halves.
+    it('IGNORES a search param in the URL (PII must not be URL state)', () => {
       window.history.replaceState({}, '', '/admin/users?search=test%40example.com')
       const { result } = renderHook(() => useUserFilters(), {
         wrapper: createWrapper(),
       })
 
-      expect(result.current.filters.search).toBe('test@example.com')
+      expect(result.current.filters.search).toBe('')
+    })
+
+    it('never writes the search term into the URL', () => {
+      window.history.replaceState({}, '', '/admin/users')
+      const { result } = renderHook(() => useUserFilters(), {
+        wrapper: createWrapper(),
+      })
+
+      act(() => {
+        result.current.setSearch('victim@example.com')
+      })
+
+      expect(result.current.filters.search).toBe('victim@example.com')
+      expect(window.location.search).not.toContain('victim')
+      expect(window.location.search).not.toContain('search=')
     })
 
     it('parses tier param from URL', () => {
@@ -81,7 +100,8 @@ describe('useUserFilters', () => {
     })
 
     it('parses multiple params from URL', () => {
-      window.history.replaceState({}, '', '/admin/users?search=john&tier=free&page=2&page_size=10')
+      // `search` is intentionally absent from the URL — see the two tests above.
+      window.history.replaceState({}, '', '/admin/users?tier=free&page=2&page_size=10')
       const { result } = renderHook(() => useUserFilters(), {
         wrapper: createWrapper(),
       })
@@ -89,7 +109,7 @@ describe('useUserFilters', () => {
       expect(result.current.filters).toEqual({
         page: 2,
         pageSize: 10,
-        search: 'john',
+        search: '',
         tier: 'free',
       })
     })
@@ -124,10 +144,14 @@ describe('useUserFilters', () => {
     })
 
     it('clears search when empty string passed', () => {
-      window.history.replaceState({}, '', '/admin/users?search=existing')
       const { result } = renderHook(() => useUserFilters(), {
         wrapper: createWrapper(),
       })
+
+      act(() => {
+        result.current.setSearch('existing')
+      })
+      expect(result.current.filters.search).toBe('existing')
 
       act(() => {
         result.current.setSearch('')
@@ -178,9 +202,13 @@ describe('useUserFilters', () => {
     })
 
     it('does not reset other filters when page changes', () => {
-      window.history.replaceState({}, '', '/admin/users?search=test&tier=premium')
+      window.history.replaceState({}, '', '/admin/users?tier=premium')
       const { result } = renderHook(() => useUserFilters(), {
         wrapper: createWrapper(),
+      })
+
+      act(() => {
+        result.current.setSearch('test')
       })
 
       act(() => {
@@ -222,10 +250,17 @@ describe('useUserFilters', () => {
 
   describe('clearFilters', () => {
     it('clears all filters and resets to defaults', () => {
-      window.history.replaceState({}, '', '/admin/users?search=test&tier=premium&page=3&page_size=50')
+      window.history.replaceState({}, '', '/admin/users?tier=premium&page=3&page_size=50')
       const { result } = renderHook(() => useUserFilters(), {
         wrapper: createWrapper(),
       })
+
+      // search lives in component state now, so seed it through the setter — otherwise this
+      // test would pass without clearFilters ever having to clear it.
+      act(() => {
+        result.current.setSearch('test')
+      })
+      expect(result.current.filters.search).toBe('test')
 
       act(() => {
         result.current.clearFilters()
@@ -250,9 +285,12 @@ describe('useUserFilters', () => {
     })
 
     it('returns true when search is active', () => {
-      window.history.replaceState({}, '', '/admin/users?search=test')
       const { result } = renderHook(() => useUserFilters(), {
         wrapper: createWrapper(),
+      })
+
+      act(() => {
+        result.current.setSearch('test')
       })
 
       expect(result.current.hasActiveFilters).toBe(true)
@@ -279,9 +317,17 @@ describe('useUserFilters', () => {
 
   describe('apiParams', () => {
     it('returns params formatted for API call', () => {
-      window.history.replaceState({}, '', '/admin/users?search=test&tier=premium&page=2&page_size=50')
+      window.history.replaceState({}, '', '/admin/users?tier=premium&page_size=50')
       const { result } = renderHook(() => useUserFilters(), {
         wrapper: createWrapper(),
+      })
+
+      // setSearch resets the page, so set it afterwards to reach the state under test.
+      act(() => {
+        result.current.setSearch('test')
+      })
+      act(() => {
+        result.current.setPage(2)
       })
 
       expect(result.current.apiParams).toEqual({
@@ -306,26 +352,26 @@ describe('useUserFilters', () => {
 
   describe('apiParams search gating', () => {
     it('includes search in apiParams when search.length >= 3', () => {
-      window.history.replaceState({}, '', '/admin/users?search=abc')
       const { result } = renderHook(() => useUserFilters(), {
         wrapper: createWrapper(),
       })
+      act(() => result.current.setSearch('abc'))
       expect(result.current.apiParams.search).toBe('abc')
     })
 
     it('excludes search from apiParams when search.length === 2', () => {
-      window.history.replaceState({}, '', '/admin/users?search=ab')
       const { result } = renderHook(() => useUserFilters(), {
         wrapper: createWrapper(),
       })
+      act(() => result.current.setSearch('ab'))
       expect(result.current.apiParams.search).toBeUndefined()
     })
 
     it('excludes search from apiParams when search.length === 1', () => {
-      window.history.replaceState({}, '', '/admin/users?search=a')
       const { result } = renderHook(() => useUserFilters(), {
         wrapper: createWrapper(),
       })
+      act(() => result.current.setSearch('a'))
       expect(result.current.apiParams.search).toBeUndefined()
     })
 
@@ -338,10 +384,10 @@ describe('useUserFilters', () => {
     })
 
     it('includes search in apiParams when search.length === 3 exactly', () => {
-      window.history.replaceState({}, '', '/admin/users?search=xyz')
       const { result } = renderHook(() => useUserFilters(), {
         wrapper: createWrapper(),
       })
+      act(() => result.current.setSearch('xyz'))
       expect(result.current.apiParams.search).toBe('xyz')
     })
   })
@@ -410,7 +456,7 @@ describe('useUserFilters', () => {
 
     it('clearFilters preserves active sort', () => {
       const { result } = renderHook(() => useUserFilters(), {
-        wrapper: createMemoryWrapper('/admin/users?search=test&tier=premium&sort=created_at:desc'),
+        wrapper: createMemoryWrapper('/admin/users?tier=premium&sort=created_at:desc'),
       })
 
       expect(result.current.hasActiveFilters).toBe(true)

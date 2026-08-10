@@ -29,20 +29,28 @@ type MockAdminUserService struct {
 	mock.Mock
 }
 
-func (m *MockAdminUserService) ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int) (*domain.AdminUserListResponse, error) {
-	args := m.Called(ctx, filters, page, pageSize)
+func (m *MockAdminUserService) ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int, now time.Time) (*domain.AdminUserListResponse, error) {
+	args := m.Called(ctx, filters, page, pageSize, now)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.AdminUserListResponse), args.Error(1)
 }
 
-func (m *MockAdminUserService) GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error) {
-	args := m.Called(ctx, userID)
+func (m *MockAdminUserService) GetUserDetail(ctx context.Context, userID string, now time.Time) (*domain.AdminUserDetail, error) {
+	args := m.Called(ctx, userID, now)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.AdminUserDetail), args.Error(1)
+}
+
+// GetOwnedHouseholdActiveMemberCount (Issue #1452) backs GetUserSubscription's
+// household_active_member_count field — the pre-apply seat-reduction warning needs this count
+// available BEFORE an override is applied, not just in UpdateUserTier's existing post-apply one.
+func (m *MockAdminUserService) GetOwnedHouseholdActiveMemberCount(ctx context.Context, userID string) (int, error) {
+	args := m.Called(ctx, userID)
+	return args.Int(0), args.Error(1)
 }
 
 func (m *MockAdminUserService) UpdateUserTier(ctx context.Context, actorUserID string, targetUserID string, tier string, reason string, expiresAt *time.Time) (services.UpdateUserTierResult, error) {
@@ -243,7 +251,7 @@ func TestGetUserSubscription_Success(t *testing.T) {
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "free",
@@ -294,7 +302,7 @@ func TestGetUserSubscription_ReturnsEffectiveStatus(t *testing.T) {
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",
@@ -304,6 +312,7 @@ func TestGetUserSubscription_ReturnsEffectiveStatus(t *testing.T) {
 			ManualTierEndsAt:   &futureEnd,
 		},
 	}, nil)
+	mockService.On("GetOwnedHouseholdActiveMemberCount", mock.Anything, targetUserID).Return(0, nil)
 
 	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
 	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
@@ -330,7 +339,7 @@ func TestGetUserSubscription_EffectiveStatus_NoOverride_MirrorsRawStatus(t *test
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",
@@ -338,6 +347,7 @@ func TestGetUserSubscription_EffectiveStatus_NoOverride_MirrorsRawStatus(t *test
 			EffectiveStatus:    "past_due",
 		},
 	}, nil)
+	mockService.On("GetOwnedHouseholdActiveMemberCount", mock.Anything, targetUserID).Return(0, nil)
 
 	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
 	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
@@ -369,7 +379,7 @@ func TestGetUserSubscription_IncludesDeletionFields_WhenPending(t *testing.T) {
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                  targetUserID,
 			SubscriptionTier:    "premium",
@@ -379,6 +389,7 @@ func TestGetUserSubscription_IncludesDeletionFields_WhenPending(t *testing.T) {
 			DeletionScheduledAt: &scheduledAt,
 		},
 	}, nil)
+	mockService.On("GetOwnedHouseholdActiveMemberCount", mock.Anything, targetUserID).Return(0, nil)
 
 	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
 	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
@@ -417,7 +428,7 @@ func TestGetUserSubscription_OmitsDeletionFields_WhenNoPendingDeletion(t *testin
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",
@@ -425,6 +436,7 @@ func TestGetUserSubscription_OmitsDeletionFields_WhenNoPendingDeletion(t *testin
 			EffectiveStatus:    "active",
 		},
 	}, nil)
+	mockService.On("GetOwnedHouseholdActiveMemberCount", mock.Anything, targetUserID).Return(0, nil)
 
 	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
 	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
@@ -437,6 +449,157 @@ func TestGetUserSubscription_OmitsDeletionFields_WhenNoPendingDeletion(t *testin
 	_, hasScheduled := asMap["deletion_scheduled_at"]
 	assert.False(t, hasRequested, "deletion_requested_at must be omitted when no deletion is pending")
 	assert.False(t, hasScheduled, "deletion_scheduled_at must be omitted when no deletion is pending")
+
+	mockService.AssertExpectations(t)
+	mockAdmin.AssertExpectations(t)
+}
+
+// TestGetUserSubscription_IncludesHouseholdActiveMemberCount proves the response surfaces the
+// owned household's active member count (Issue #1452) — the modal needs this BEFORE an override
+// is applied to warn about a seat-reduction downgrade, rather than only after (the existing
+// post-apply toast, PR #1443).
+func TestGetUserSubscription_IncludesHouseholdActiveMemberCount(t *testing.T) {
+	api, mockService, mockAdmin := setupAdminSubscriptionsAPI(t)
+
+	clerkUserID := "user_" + uuid.New().String()
+	actorUserID := uuid.New().String()
+	targetUserID := uuid.New().String()
+
+	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID:                 targetUserID,
+			SubscriptionTier:   "household_4",
+			SubscriptionStatus: "active",
+			EffectiveStatus:    "active",
+		},
+	}, nil)
+	mockService.On("GetOwnedHouseholdActiveMemberCount", mock.Anything, targetUserID).Return(4, nil)
+
+	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
+	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
+
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var asMap map[string]interface{}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &asMap))
+	assert.Equal(t, float64(4), asMap["household_active_member_count"])
+
+	mockService.AssertExpectations(t)
+	mockAdmin.AssertExpectations(t)
+}
+
+// TestGetUserSubscription_HouseholdActiveMemberCount_ZeroForNonOwner proves the field is present
+// (not omitted) and explicitly 0 for a user who does not own a household — the frontend must be
+// able to tell "0 members" from "field absent", mirroring EffectiveStatus's no-omitempty
+// precedent on this same response type.
+func TestGetUserSubscription_HouseholdActiveMemberCount_ZeroForNonOwner(t *testing.T) {
+	api, mockService, mockAdmin := setupAdminSubscriptionsAPI(t)
+
+	clerkUserID := "user_" + uuid.New().String()
+	actorUserID := uuid.New().String()
+	targetUserID := uuid.New().String()
+
+	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID:                 targetUserID,
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "active",
+			EffectiveStatus:    "active",
+		},
+	}, nil)
+	mockService.On("GetOwnedHouseholdActiveMemberCount", mock.Anything, targetUserID).Return(0, nil)
+
+	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
+	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
+
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var asMap map[string]interface{}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &asMap))
+	countRaw, present := asMap["household_active_member_count"]
+	require.True(t, present, "household_active_member_count must always be present, never omitted")
+	assert.Equal(t, float64(0), countRaw)
+
+	mockService.AssertExpectations(t)
+	mockAdmin.AssertExpectations(t)
+}
+
+// TestGetUserSubscription_HouseholdActiveMemberCountError_Returns500 proves a repository failure
+// fetching the seat count fails the request rather than silently rendering 0 — an admin deciding
+// whether to downgrade a household owner needs an accurate count, not a value that looks like
+// "no household" when it might really be "lookup failed".
+func TestGetUserSubscription_HouseholdActiveMemberCountError_Returns500(t *testing.T) {
+	api, mockService, mockAdmin := setupAdminSubscriptionsAPI(t)
+
+	clerkUserID := "user_" + uuid.New().String()
+	actorUserID := uuid.New().String()
+	targetUserID := uuid.New().String()
+
+	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID:                 targetUserID,
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "active",
+			EffectiveStatus:    "active",
+		},
+	}, nil)
+	mockService.On("GetOwnedHouseholdActiveMemberCount", mock.Anything, targetUserID).Return(0, errors.New("db down"))
+
+	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
+	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
+
+	assert.Equal(t, http.StatusInternalServerError, resp.Code, resp.Body.String())
+
+	mockService.AssertExpectations(t)
+	mockAdmin.AssertExpectations(t)
+}
+
+// TestGetUserSubscription_IncludesAsOf proves the response carries an `as_of` timestamp (Issue
+// #1462) — a single server snapshot instant the modal can anchor its own override-liveness
+// arithmetic to, instead of the browser's clock, so the chip and the effective badge cannot
+// disagree due to client/server clock skew.
+func TestGetUserSubscription_IncludesAsOf(t *testing.T) {
+	api, mockService, mockAdmin := setupAdminSubscriptionsAPI(t)
+
+	clerkUserID := "user_" + uuid.New().String()
+	actorUserID := uuid.New().String()
+	targetUserID := uuid.New().String()
+
+	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID:                 targetUserID,
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "active",
+			EffectiveStatus:    "active",
+		},
+	}, nil)
+	mockService.On("GetOwnedHouseholdActiveMemberCount", mock.Anything, targetUserID).Return(0, nil)
+
+	before := time.Now()
+	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
+	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
+	after := time.Now()
+
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var asMap map[string]interface{}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &asMap))
+	asOfRaw, present := asMap["as_of"]
+	require.True(t, present, "as_of must always be present")
+
+	asOf, err := time.Parse(time.RFC3339, asOfRaw.(string))
+	require.NoError(t, err)
+	assert.False(t, asOf.Before(before.Add(-time.Second)), "as_of must be captured at request time, not a fixed/zero value")
+	assert.False(t, asOf.After(after.Add(time.Second)), "as_of must be captured at request time, not a fixed/zero value")
 
 	mockService.AssertExpectations(t)
 	mockAdmin.AssertExpectations(t)
@@ -556,7 +719,7 @@ func TestGetUserSubscription_MalformedOverride_FallsBackToRawTier_NotServerError
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",
@@ -566,6 +729,7 @@ func TestGetUserSubscription_MalformedOverride_FallsBackToRawTier_NotServerError
 			ManualTierEndsAt:   &futureEnd,
 		},
 	}, nil)
+	mockService.On("GetOwnedHouseholdActiveMemberCount", mock.Anything, targetUserID).Return(0, nil)
 
 	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
 	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
@@ -602,7 +766,7 @@ func TestGetUserSubscription_ValidOverride_ResolvesToOverrideTier(t *testing.T) 
 	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
 	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
 
-	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).Return(&domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
 			ID:                 targetUserID,
 			SubscriptionTier:   "premium",
@@ -612,6 +776,7 @@ func TestGetUserSubscription_ValidOverride_ResolvesToOverrideTier(t *testing.T) 
 			ManualTierEndsAt:   &futureEnd,
 		},
 	}, nil)
+	mockService.On("GetOwnedHouseholdActiveMemberCount", mock.Anything, targetUserID).Return(0, nil)
 
 	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
 	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
@@ -620,6 +785,80 @@ func TestGetUserSubscription_ValidOverride_ResolvesToOverrideTier(t *testing.T) 
 	var body getUserSubscriptionResponseBody
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
 	assert.Equal(t, "household_3", body.EffectiveTier, "a valid override must still resolve to the override tier — over-tightening would silently un-comp legitimately comped users")
+
+	mockService.AssertExpectations(t)
+	mockAdmin.AssertExpectations(t)
+}
+
+// TestGetUserSubscription_EffectiveTier_DerivedFromAsOf_NotLaterClockRead is the RED test for
+// Issue #1466 (the tier-axis residual of #1462, left for PR #1465 to defer): GetUserSubscription
+// captures `asOf := time.Now()` (admin_subscriptions.go) BEFORE calling
+// h.adminUserService.GetUserDetail, and echoes that SAME instant back as `as_of`. Before this fix,
+// EffectiveTier was computed afterward via SubscriptionService.GetEffectiveSubscription ->
+// effectiveTierName -> domain.User.EffectiveTierWithActiveOverride(), which read a SECOND,
+// independent time.Now() — so a request whose processing crossed the override's expiry boundary
+// between the asOf capture and that later call would return an `as_of`/`effective_status`
+// describing one instant and an `effective_tier` describing a later one.
+//
+// Modeled on
+// TestAdminUserService_GetUserDetail_EffectiveStatus_DerivedFromPassedInstant_NotLaterClockRead
+// (admin_user_service_test.go), which pinned the identical defect on the status axis for PR #1465.
+// Made deterministic (no flaky timing race) the same way: the override is set to expire shortly
+// after the request begins, and an artificial delay is injected INSIDE the mocked GetUserDetail
+// call — simulating request-processing time — to push the second (pre-fix) clock read past the
+// override's expiry boundary. As of asOf (captured before the delay), the override was still
+// live, so a correct implementation must report the override tier ("household_3"). The pre-fix
+// implementation instead re-reads time.Now() AFTER the delay, sees an EXPIRED override, and wrongly
+// falls back to the raw tier ("premium") — so this test fails on the pre-fix code and passes on
+// the fix.
+func TestGetUserSubscription_EffectiveTier_DerivedFromAsOf_NotLaterClockRead(t *testing.T) {
+	tierConfig := literalAdminSubscriptionsTierConfig()
+	subService := services.NewSubscriptionService(tierConfig, nil)
+	subService.SetOverrideTierValidator(func(tier string) bool {
+		_, err := tierConfig.GetTier(domain.TierName(tier))
+		return err == nil
+	})
+	api, mockService, mockAdmin := setupAdminSubscriptionsAPIWithSubService(t, subService)
+
+	clerkUserID := "user_" + uuid.New().String()
+	actorUserID := uuid.New().String()
+	targetUserID := uuid.New().String()
+	override := "household_3"
+	// Still live when the handler captures asOf (just before GetUserDetail is called), but will
+	// have expired by the time the injected delay below elapses.
+	overrideEndsAt := time.Now().Add(20 * time.Millisecond)
+
+	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	mockService.On("GetUserDetail", mock.Anything, targetUserID, mock.Anything).
+		Run(func(args mock.Arguments) {
+			// Simulate request-processing time crossing the override's expiry boundary BETWEEN
+			// the handler's asOf capture (already taken before this call) and
+			// GetEffectiveSubscription's own (pre-fix) internal clock read, taken after this call
+			// returns.
+			time.Sleep(60 * time.Millisecond)
+		}).
+		Return(&domain.AdminUserDetail{
+			AdminUserListItem: domain.AdminUserListItem{
+				ID:                 targetUserID,
+				SubscriptionTier:   "premium",
+				SubscriptionStatus: "active",
+				EffectiveStatus:    "active",
+				ManualTierOverride: &override,
+				ManualTierEndsAt:   &overrideEndsAt,
+			},
+		}, nil)
+	mockService.On("GetOwnedHouseholdActiveMemberCount", mock.Anything, targetUserID).Return(0, nil)
+
+	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
+	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
+
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var body getUserSubscriptionResponseBody
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	assert.Equal(t, "household_3", body.EffectiveTier,
+		"effective_tier must be derived from as_of (when the override was still live), not a later internal clock read taken after it had already expired")
 
 	mockService.AssertExpectations(t)
 	mockAdmin.AssertExpectations(t)

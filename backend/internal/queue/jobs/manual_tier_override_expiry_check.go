@@ -20,7 +20,6 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/rivertype"
 )
 
 // expireManualTierOverrideReason is the audit-log "reason" recorded for every system-initiated
@@ -342,10 +341,7 @@ func ManualTierOverrideExpiryCheckUniqueOpts() *queue.UniqueOpts {
 
 // ManualTierOverrideExpiryCheckInsertOpts returns the *river.InsertOpts this job's periodic
 // registration in main.go must use — Queue: "low" plus the uniqueness options from
-// ManualTierOverrideExpiryCheckUniqueOpts(), converted from this package's queue-runner-agnostic
-// queue.UniqueOpts to the river.UniqueOpts type river.InsertOpts.UniqueOpts actually requires
-// (the same conversion internal/queue/river/client.go's toRiverUniqueOpts performs for the
-// general-purpose enqueue path).
+// ManualTierOverrideExpiryCheckUniqueOpts(), converted to river's UniqueOpts type.
 //
 // Issue #1413 G3: main.go's periodic-job registration previously passed only
 // &river.InsertOpts{Queue: "low"} — a hand-written literal that never called
@@ -353,26 +349,10 @@ func ManualTierOverrideExpiryCheckUniqueOpts() *queue.UniqueOpts {
 // TestManualTierOverrideExpiryCheckUniqueOpts asserts) was never actually enforced in
 // production. main.go now calls THIS function directly instead of hand-writing the InsertOpts
 // literal, so main.go is no longer a second, independently-maintained expression of the same
-// shape (unlike this package's other periodic jobs' *UniqueOpts() helpers, which main.go still
-// hand-duplicates inline) — a future change to ManualTierOverrideExpiryCheckUniqueOpts()
-// automatically propagates to what actually ships.
+// shape — a future change to ManualTierOverrideExpiryCheckUniqueOpts() automatically propagates
+// to what actually ships.
 func ManualTierOverrideExpiryCheckInsertOpts() *river.InsertOpts {
-	unique := ManualTierOverrideExpiryCheckUniqueOpts()
-
-	states := make([]rivertype.JobState, len(unique.ByState))
-	for i, s := range unique.ByState {
-		states[i] = rivertype.JobState(s)
-	}
-
-	return &river.InsertOpts{
-		Queue: "low",
-		UniqueOpts: river.UniqueOpts{
-			ByArgs:   unique.ByArgs,
-			ByPeriod: unique.ByPeriod,
-			ByQueue:  unique.ByQueue,
-			ByState:  states,
-		},
-	}
+	return riverInsertOptsFromUnique(queue.QueueLow, ManualTierOverrideExpiryCheckUniqueOpts())
 }
 
 // ManualTierOverrideExpiryCheckPeriodicOpts returns the *river.PeriodicJobOpts this job's
@@ -385,16 +365,23 @@ func ManualTierOverrideExpiryCheckInsertOpts() *river.InsertOpts {
 // fixed the duplicate half by extracting ManualTierOverrideExpiryCheckInsertOpts() above. This
 // fixes the missed half: river.NewPeriodicJob's doc comment says the periodic scheduler keeps
 // only in-memory state — every process restart or leader election recomputes nextRunAt as
-// ScheduleFunc(now) (now+24h) unless PeriodicJobOpts.ID is set, which this job (like all 14 in
-// main.go) leaves unset. With RunOnStart false, the catch-up insert is skipped
-// (river@v0.38.0 internal/maintenance/periodic_job_enqueuer.go:424-426), so on a repo that
-// deploys several times a day this daily job could be enqueued zero times, ever.
+// ScheduleFunc(now) (now+24h) unless PeriodicJobOpts.ID is set — at the time this comment
+// was first written, this job (like all 14 in main.go) left ID unset; Issue #1448 fixed
+// that for all 14, this job included (see ManualTierOverrideExpiryCheckPeriodicOpts below).
+// With RunOnStart false, the catch-up insert is skipped (river@v0.38.0
+// internal/maintenance/periodic_job_enqueuer.go:424-426), so on a repo that deploys several
+// times a day this daily job could be enqueued zero times, ever.
 //
 // RunOnStart: true is only safe here because ManualTierOverrideExpiryCheckInsertOpts() (used by
 // main.go's periodic registration) always carries ManualTierOverrideExpiryCheckUniqueOpts()'s
 // dedup, preventing a start-of-process catch-up run from double-firing alongside an
 // already-scheduled run. The two are only safe together: do not flip this to true for a job
 // whose InsertOpts lacks an equivalent UniqueOpts.
+//
+// Issue #1448: ID is now set (Kind()'s own "manual_tier_override_expiry_check" string) so
+// River restores nextRunAt across restarts/leader elections instead of recomputing
+// now+interval every time — this function's own doc history previously said this job "like
+// all 14 in main.go" left ID unset; that is no longer true for any of the 14.
 func ManualTierOverrideExpiryCheckPeriodicOpts() *river.PeriodicJobOpts {
-	return &river.PeriodicJobOpts{RunOnStart: true}
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: ManualTierOverrideExpiryCheckArgs{}.Kind()}
 }

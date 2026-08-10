@@ -75,8 +75,14 @@ type itemCleanupJobArgs struct {
 // Kind returns the job type identifier. Must match jobs.ItemCleanupArgs.Kind()
 func (itemCleanupJobArgs) Kind() string { return "item_cleanup" }
 
-// itemCleanupUniqueOpts returns uniqueness options for item cleanup jobs.
-// Mirrors jobs.ItemCleanupUniqueOpts() to prevent duplicate cleanups.
+// itemCleanupUniqueOpts returns uniqueness options for item cleanup jobs, mirroring
+// jobs.ItemCleanupUniqueOpts().
+//
+// It does NOT prevent duplicate cleanups of the same item: `ByArgs: true` keys on Kind PLUS the full
+// Args, and Args carries Reason — so a sweep-enqueued Reason:"stale" job and the Reason:"zero_accounts"
+// job enqueued below are distinct unique keys for the same linked item and can coexist. What makes
+// that benign is the Plaid side, not this option; see ClaimItemForCleanup in
+// repository/linked_item_repository.go.
 // Issue #668: Plaid Item Management for Cost Optimization
 func itemCleanupUniqueOpts() *queue.UniqueOpts {
 	return &queue.UniqueOpts{
@@ -140,6 +146,10 @@ type AccountService interface {
 	// This also calls Plaid /item/remove to stop monthly billing.
 	// Only the institution owner can disconnect it.
 	// Returns repository.ErrLinkedItemNotFound if item doesn't exist or user doesn't own it.
+	//
+	// Issue #1486 follow-up part F: returns a non-nil error, WITHOUT deleting anything, if /item/remove fails
+	// for any reason other than ITEM_NOT_FOUND — the Item would still be live and still billing, and
+	// the local row is the only record of it. See the implementation's doc comment.
 	DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error
 
 	// SetJobQueue sets the job queue for auto-sync after linking (Issue #658).
@@ -606,7 +616,12 @@ func (s *accountService) GetAccounts(ctx context.Context, userID string) ([]doma
 // 1. Gets the account to retrieve its linked_item_id
 // 2. Delegates to the repository layer which validates ownership via WHERE id = $1 AND user_id = $2
 // 3. After deletion, checks if the linked item now has zero active accounts
-// 4. If zero accounts remain, enqueues a cleanup job to remove the Plaid item (stop billing)
+// 4. If zero accounts remain, stamps cleanup_scheduled_at and enqueues a Plaid-item cleanup job
+//
+// Issue #1486 — step 4's stamp (MarkForCleanup) is NOT optional and must precede the enqueue:
+// ItemCleanupWorker re-verifies eligibility before calling Plaid and requires the item to still be
+// scheduled, so an unstamped job is declined and silently reports success while Plaid keeps billing.
+// See the inline comment at the enqueue site for the full argument.
 //
 // Use case: User wants to remove a single account (e.g., closed credit card) while
 // keeping other accounts from the same institution.
@@ -642,27 +657,119 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 				)
 			}
 		} else if remainingCount == 0 {
-			// Step 5: If no accounts remain, enqueue cleanup job
-			cleanupJob := itemCleanupJobArgs{
-				LinkedItemID: linkedItemID,
-				UserID:       userID,
-				Reason:       "zero_accounts",
-			}
-			_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*itemCleanupUniqueOpts()))
-			if err != nil {
+			// Step 5: If no accounts remain, stamp the cleanup schedule and THEN enqueue.
+			//
+			// Issue #1486 — why the MarkForCleanup call is here and must stay here. This method is
+			// the SECOND production producer of "item_cleanup" jobs; the sweep
+			// (queue/jobs/item_cleanup_check.go) is the first, and it has always called
+			// MarkForCleanup before enqueueing. ItemCleanupWorker.Work now re-verifies eligibility
+			// through ClaimItemForCleanup before calling Plaid /item/remove, and that predicate
+			// requires the item to still be SCHEDULED. Enqueueing without stamping produced a job
+			// the worker was GUARANTEED to decline — and a declined claim is deliberately a benign
+			// no-op, so the worker logged, returned nil, and River recorded SUCCESS while the Plaid
+			// item went on billing. No error, no retry, no metric.
+			//
+			// The daily sweep is NOT a reliable backstop for that, which is why this is a stamp
+			// rather than a comment: accountRepository.GetByIDAndUser applies no status filter, so an
+			// account belonging to a 'replaced' or 'disconnected' linked item is deletable, and the
+			// sweep's candidate predicate excludes both statuses. Such an item would have been
+			// stranded permanently, still billing.
+			//
+			// So both producers now uphold ONE invariant: every item_cleanup job's item carries a
+			// cleanup schedule. No grace period — cleanupAt is now, matching the sweep's own
+			// isImmediate branch for the zero_accounts leg.
+			//
+			// ErrLinkedItemNotFound is EXPECTED and benign: MarkForCleanup's WHERE includes
+			// `cleanup_scheduled_at IS NULL`, so it reports that sentinel both when the sweep has
+			// already stamped this item (the claim will succeed anyway) and when the row is gone (the
+			// job becomes a no-op the worker already handles). Any OTHER error means the schedule did
+			// not land, so the job would be a guaranteed silent no-op — do not create it; leave the
+			// item to the sweep, which can still see it precisely because the stamp failed.
+			//
+			// NON-ATOMIC, disclosed rather than fixed: accountRepo.Delete above is a standalone
+			// autocommit Exec, so it has already committed by the time this stamp runs as a separate
+			// statement. A crash in that window leaves the account gone, cleanup_scheduled_at NULL and
+			// no job — the sweep re-selects most such items, but not a 'replaced'/'disconnected' one
+			// (it excludes both statuses), which is then stranded and still billing. Pre-existing in
+			// kind — the same window previously sat between Delete and Enqueue — and widened by this
+			// one statement, so not a regression; closing it would need a transaction spanning the
+			// account delete, which is out of scope here.
+			//
+			// Structured as a flag rather than an early return so Step 6 below (hiding an orphaned
+			// user_account) still runs on the stamp-failure path — it is unrelated bookkeeping and
+			// must not be skipped.
+			scheduleStamped := true
+			if markErr := s.linkedItemRepo.MarkForCleanup(ctx, linkedItemID, time.Now()); markErr != nil &&
+				!errors.Is(markErr, repository.ErrLinkedItemNotFound) {
+				scheduleStamped = false
 				if s.logger != nil {
-					s.logger.Warn("failed to enqueue item cleanup job",
+					s.logger.Warn("failed to mark zero-account item for cleanup, not enqueueing a job the worker would decline",
 						"linked_item_id", linkedItemID,
 						"user_id", userID,
-						"error", err,
+						"error", markErr,
 					)
 				}
-			} else if s.logger != nil {
-				s.logger.Info("enqueued item cleanup job for zero-account item",
-					"linked_item_id", linkedItemID,
-					"user_id", userID,
-					"reason", "zero_accounts",
-				)
+			}
+
+			if scheduleStamped {
+				cleanupJob := itemCleanupJobArgs{
+					LinkedItemID: linkedItemID,
+					UserID:       userID,
+					Reason:       "zero_accounts",
+				}
+				_, err := s.jobQueue.Enqueue(ctx, cleanupJob, queue.WithUnique(*itemCleanupUniqueOpts()))
+				if err != nil {
+					if s.logger != nil {
+						s.logger.Warn("failed to enqueue item cleanup job, releasing the cleanup stamp",
+							"linked_item_id", linkedItemID,
+							"user_id", userID,
+							"error", err,
+						)
+					}
+
+					// Release the stamp we just set. cleanup_scheduled_at is a DURABLE marker that
+					// hides a row from the sweep (repository.cleanupCandidateSelectQuery requires
+					// cleanup_scheduled_at IS NULL), so a stamp left set with no job in flight is
+					// not a harmless leftover — it removes a still-billing Plaid item from every
+					// future sweep permanently. Before the stamp existed this path left the row
+					// untouched and the next daily sweep recovered it; keeping the stamp here would
+					// make a transient queue error strictly worse than the old behaviour.
+					//
+					// Safe from the race the stamp guards against: that race is with a worker
+					// executing the job, and the enqueue that would have created it just failed, so
+					// no worker can be mid-flight.
+					if clearErr := s.linkedItemRepo.ClearCleanupSchedule(ctx, linkedItemID); clearErr != nil && s.logger != nil {
+						// Both writes failed. The row keeps cleanup_scheduled_at with no job, so it is
+						// invisible to the CANDIDATE sweep (cleanupCandidateSelectQuery requires
+						// cleanup_scheduled_at IS NULL) and Plaid keeps billing for it.
+						//
+						// Issue #1486 follow-up part C corrected this comment, which used to say the
+						// item stays hidden "until cleanup_scheduled_at is cleared manually". That is
+						// no longer true: stamped-and-overdue with no live job is EXACTLY the state
+						// ItemCleanupCheckWorker's stranded-cleanup backstop selects for
+						// (GetItemsPendingCleanup), so the next daily sweep re-enqueues it without any
+						// operator involvement. This same correction was applied to the structurally
+						// identical release in ItemCleanupCheckWorker.Work; this site was missed in
+						// that pass and is fixed in fix round 1.
+						//
+						// Still logged at Error, on narrower grounds: recovery is now automatic but
+						// DELAYED by up to one sweep interval, during which Plaid keeps billing, and a
+						// double write failure is a signal about the database worth surfacing on its
+						// own. Do not downgrade it to Warn on the argument that the backstop handles
+						// it — the backstop bounds the damage, it does not make it free.
+						s.logger.Error("failed to release cleanup stamp after a failed enqueue; item is hidden from the candidate sweep and still billing until the stranded-cleanup backstop re-enqueues it on a later run",
+							"linked_item_id", linkedItemID,
+							"user_id", userID,
+							"error", clearErr,
+						)
+					}
+				} else if s.logger != nil {
+					s.logger.Info("enqueued item cleanup job for zero-account item",
+						"linked_item_id", linkedItemID,
+						"user_id", userID,
+						"reason", "zero_accounts",
+					)
+				}
 			}
 		}
 	}
@@ -706,8 +813,39 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 // 3. Call Plaid /item/remove to stop monthly billing (critical for cost control - Issue #226)
 // 4. Delete the linked item from database (CASCADE deletes all associated accounts)
 //
-// Note: If Plaid removal fails, we still delete from database since the access token
-// is likely already invalid. This prevents orphaned database records.
+// Issue #1486 follow-up part F: step 4 is CONDITIONAL on step 3 having succeeded. Until this fix a
+// Plaid failure was logged and the row deleted anyway, which is the same defect as parts A/B
+// (PlaidItemCleanupService.RemoveItem) on a second, user-initiated path.
+//
+// On FREQUENCY, since an earlier version of this comment claimed this path "runs far more often than
+// the daily cleanup sweep": that was asserted, not measured, and it is currently FALSE. The frontend
+// hook `useDisconnectInstitution` has no consumer in apps/web/src outside test/mocks/accounts-api.ts,
+// and no E2E spec exercises disconnect — the endpoint exists and is reachable by API, but nothing in
+// the shipped UI calls it. The claim is removed rather than softened; the fix stands on the defect
+// being identical and irreversible, which needs no frequency argument. Do not reintroduce a frequency
+// claim here without a measurement.
+//
+// Deleting here CASCADE-deletes the accounts too,
+// leaving a live, still-billing Plaid Item with no local record it ever existed, and
+// DeleteUserCascade's C2 guard (repository.uncleanedLinkedItemExistsClause, an EXISTS over
+// linked_items) with nothing left to see.
+//
+// The inherited rationale — "the access token is likely already invalid, so delete anyway; this
+// prevents orphaned database records" — traded a harmless orphan (a local row) for a harmful one (a
+// billing Plaid Item nobody can find), and rested on plaidService.RemoveItem's doc comment, which
+// asserted the same thing and is corrected alongside this. Plaid bills per ITEM: an Item with an
+// unusable token is still an Item until /item/remove succeeds.
+//
+// The ONE Plaid failure still treated as success is ITEM_NOT_FOUND (isPlaidItemAlreadyGone): Plaid
+// has already forgotten the Item, so billing has stopped and there is nothing left to remove.
+// Without that branch this method would refuse forever for any such item and the user could never
+// clear it from their UI — the same asymmetry parts A and B close in RemoveItem.
+//
+// On a genuine failure the row and its accounts are LEFT IN PLACE and the error is returned to the
+// caller (a 500 via the handler). Recovery is the ordinary one: the user retries the disconnect.
+// Note the cleanup sweep will NOT retry it automatically — a healthy, recently-synced item is not a
+// cleanup candidate — which is precisely why the failure must surface rather than be swallowed into
+// a false success.
 //
 // Returns repository.ErrLinkedItemNotFound if item doesn't exist or user doesn't own it.
 func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error {
@@ -717,20 +855,29 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 		return err // Returns ErrLinkedItemNotFound if not found or not owned
 	}
 
-	// Step 3: Call Plaid to remove the item (stops monthly billing)
-	// This is critical for cost control per Issue #226
-	// Log the error but continue - access token may already be invalid
-	// We still want to clean up our database even if Plaid call fails
-	if err := s.plaidService.RemoveItem(ctx, linkedItem.AccessToken); err != nil {
+	// Step 3: Call Plaid to remove the item (stops monthly billing).
+	// This is critical for cost control per Issue #226.
+	if removeErr := s.plaidService.RemoveItem(ctx, linkedItem.AccessToken); removeErr != nil {
+		if !isPlaidItemAlreadyGone(removeErr) {
+			if s.logger != nil {
+				s.logger.Error("plaid RemoveItem failed; NOT deleting the linked item, which is the only local record of a still-billing Plaid Item",
+					"item_id", linkedItemID,
+					"user_id", userID,
+					"error", removeErr,
+				)
+			}
+			return fmt.Errorf("failed to remove Plaid item %s; the institution was not disconnected: %w", linkedItemID, removeErr)
+		}
 		if s.logger != nil {
-			s.logger.Warn("plaid RemoveItem failed for item",
+			s.logger.Info("plaid item already gone (ITEM_NOT_FOUND), treating the disconnect as successful",
 				"item_id", linkedItemID,
-				"error", err,
+				"user_id", userID,
 			)
 		}
 	}
 
-	// Step 4: Delete from database (CASCADE deletes all accounts)
+	// Step 4: Delete from database (CASCADE deletes all accounts). Reached only when Plaid billing
+	// really has stopped — see the doc comment.
 	return s.linkedItemRepo.DeleteByUser(ctx, linkedItemID, userID)
 }
 

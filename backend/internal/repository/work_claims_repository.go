@@ -14,7 +14,8 @@ package repository
 // any application-level locking.
 //
 // This repository is a foundation only: it establishes exclusivity. The existing
-// conditional state-transition predicates (e.g. claimForDeletionPredicate) still
+// conditional state-transition predicates (e.g. ClaimForDeletion's userRequestedDeletionClaimPredicate
+// / retentionDeletionClaimPredicate, profile_repository.go) still
 // establish CORRECTNESS ("is this user still eligible") and must be re-checked,
 // inside the same call, after the claim is won and before any irreversible
 // external work. See the required call shape in the #1413 design doc:

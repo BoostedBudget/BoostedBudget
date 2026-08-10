@@ -33,7 +33,6 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
 	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/rivertype"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 )
 
@@ -281,6 +280,20 @@ func main() {
 	// Issue #1087 R4-7: Declare idempotency cleanup worker (always active)
 	var idempotencyCleanupWorker *jobs.IdempotencyCleanupWorker
 
+	// Issue #1497: Declare the two orphaned-Plaid-Item sweeps. They are declared TOGETHER and
+	// gated DIFFERENTLY on purpose, and the difference is the compliance property:
+	//
+	//   - the token PURGE worker is ALWAYS ACTIVE. DeleteUserCascade retains a Plaid access token
+	//     on every plaid_orphaned_items row it writes, whether or not Plaid is configured at the
+	//     time, and migration 000135 promises that credential is purged at its 30-day deadline (at the
+	//     first sweep at or after it — see domain.OrphanedItemTokenPurgeInterval for the bound)
+	//     regardless of anything else. Gating it on Plaid config would make a GDPR retention limit
+	//     conditional on a feature flag.
+	//   - the RETRY worker needs a Plaid client, so it is nil when Plaid is not configured — which
+	//     is exactly why the purge is not allowed to live inside it.
+	var plaidOrphanTokenPurgeWorker *jobs.PlaidOrphanTokenPurgeWorker
+	var plaidOrphanRetryWorker *jobs.PlaidOrphanRetryWorker
+
 	// Issue #1007: Declare email change propagation worker.
 	// Issue #1015: Created unconditionally (before Plaid block); registered with River after.
 	var emailChangePropagationWorker *jobs.EmailChangePropagationWorker
@@ -409,15 +422,21 @@ func main() {
 		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)                                // Issue #639: Admin user management
 		systemHealthRepo := repository.NewSystemHealthRepository(db)                                          // Issue #640: System health monitoring
 		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)                                        // Issue #640: Dead letter queue metrics
-		securityRepo := repository.NewSecurityRepository(db)                                                  // Issue #659: Plaid Investments
-		holdingRepo := repository.NewHoldingRepository(db)                                                    // Issue #659: Plaid Investments
-		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)                                // Issue #659: Plaid Investments
-		portfolioSnapshotRepo := repository.NewPortfolioSnapshotRepository(db)                                // Issue #138: Portfolio snapshots
-		investmentAnalyticsRepo := repository.NewInvestmentAnalyticsRepository(db)                            // Issue #138: Investment analytics
-		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)                                    // Issue #910: Plaid Liabilities
-		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)                // Issue #910: Plaid Liabilities
-		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor)          // Issue #910: Plaid Liabilities
-		merchantRepo := repository.NewMerchantRepository(db)                                                  // Issue #1163: Merchant batch-upsert
+		plaidOrphanedItemRepo := repository.NewPlaidOrphanedItemRepository(db, fieldEncryptor)                // Issue #1497: orphaned Plaid Items surviving a GDPR erasure (enc: every identifying column is ciphertext)
+		// Issue #1458: a second, bound JobHealthRepository instance for systemHealthService below —
+		// distinct from the one constructed inline at startJobHealthMetricsCollector's call site
+		// above, which is unbound (passed directly as an argument, never stored) and so can't be
+		// reused here.
+		jobHealthRepoForHealth := repository.NewJobHealthRepository(db)
+		securityRepo := repository.NewSecurityRepository(db)                                         // Issue #659: Plaid Investments
+		holdingRepo := repository.NewHoldingRepository(db)                                           // Issue #659: Plaid Investments
+		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)                       // Issue #659: Plaid Investments
+		portfolioSnapshotRepo := repository.NewPortfolioSnapshotRepository(db)                       // Issue #138: Portfolio snapshots
+		investmentAnalyticsRepo := repository.NewInvestmentAnalyticsRepository(db)                   // Issue #138: Investment analytics
+		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)                           // Issue #910: Plaid Liabilities
+		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)       // Issue #910: Plaid Liabilities
+		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor) // Issue #910: Plaid Liabilities
+		merchantRepo := repository.NewMerchantRepository(db)                                         // Issue #1163: Merchant batch-upsert
 		// NewWorkClaimsOutcomeRepository (not NewWorkClaimsRepository): the subscription-cancellation
 		// webhook needs the wider WorkClaimsOutcomeRepository view (#1413 round-3 finding H3, see
 		// SubscriptionWebhookWorker.SetWorkClaimsRepo). Every other consumer below still declares its
@@ -425,6 +444,15 @@ func main() {
 		// WorkClaimsOutcomeRepository value satisfies that automatically (its method set is a
 		// superset) — so this single swap requires no other changes at any other call site.
 		workClaimsRepo := repository.NewWorkClaimsOutcomeRepository(db) // Issue #1413: durable leased claims for destructive actions
+
+		// Issue #1477: the persisted cross-run resume position shared by the four capped periodic
+		// sweeps (scheduled_deletion_check, retention_cleanup_check's deleteExpiredAccounts,
+		// item_cleanup_check, plaid_orphan_retry). Each worker treats it as optional and nil-safe,
+		// so leaving it unwired would not break anything visibly — it would silently restore the
+		// pre-#1477 behaviour in which a permanently-failing head of the queue starves everything
+		// behind it. It is therefore wired here unconditionally, alongside the other shared
+		// repositories, and passed to all four workers below.
+		sweepCursorRepo := repository.NewSweepCursorRepository(db)
 
 		// Create GDPR-consent-gated analytics client.
 		// User-behavior analytics events (e.g. transfer suggestion accept/reject) use
@@ -434,8 +462,11 @@ func main() {
 		consentChecker := phclient.NewPrivacyConsentAdapter(privacyRepo)
 		gdprClient := phclient.NewGDPRClient(phClient, consentChecker, appLogger)
 
-		// Create mock audit logger (will be replaced with real implementation later)
-		auditLogger := &mockAuditLogger{}
+		// GDPR audit trail. Until Issue #1505 this was &mockAuditLogger{} — a stub that logged a
+		// line and persisted nothing, while audit_logs existed and was already being queried and
+		// redacted elsewhere. repository.AuditLogRepository satisfies services.AuditLogger
+		// structurally; see its doc comment for the column semantics.
+		auditLogger := repository.NewAuditLogRepository(db)
 
 		// Clerk Backend API service — used by deletion service and email propagation worker
 		clerkService := services.NewClerkService(cfg.ClerkSecretKey)
@@ -706,6 +737,9 @@ func main() {
 				ProfileRepo: profileRepo,
 				JobQueue:    nil, // Set later after River client is created
 				Logger:      appLogger,
+				// Issue #1477: resume a capped run where it stopped instead of restarting from the
+				// oldest eligible user every run.
+				SweepCursors: sweepCursorRepo,
 			})
 			appLogger.Info("Scheduled deletion check worker created (River)")
 
@@ -737,6 +771,15 @@ func main() {
 			DeletionService: deletionService,
 			RetentionMonths: cfg.RetentionPeriodMonths,
 			Logger:          appLogger,
+			// Issue #1497 item 4: Step 0e publishes the orphaned-Plaid-Item state gauges and the
+			// worst unresolved retry_attempt_count. Wired unconditionally for the same reason as
+			// the /admin/health derivation below: the manual-intervention population is largest
+			// exactly when Plaid is unconfigured, so gating this on plaidService would silence the
+			// signal in the deployment that needs it most.
+			PlaidOrphanedItemRepo: plaidOrphanedItemRepo,
+			// Issue #1477: resume a capped deleteExpiredAccounts run where it stopped instead of
+			// restarting from the oldest expired user every run.
+			SweepCursors: sweepCursorRepo,
 		})
 		// Issue #1413 Medium finding M9 (Codex review round 3): required for
 		// send30dNotices/send7dNotices to gain EXCLUSIVITY on ActionRetentionNotice30d/7d
@@ -988,7 +1031,7 @@ func main() {
 					linkedItemRepo,
 					plaidService,
 				)
-				// Issue #1413 H1: required for RemoveAllUserItems/DisconnectAllUserItems to gain
+				// Issue #1413 H1: required for RemoveAllUserItems/DisconnectAllUserItemsIfEligible to gain
 				// EXCLUSIVITY on ActionPlaidDisconnectUser before any Plaid /item/remove call —
 				// closes the race where deletion, past-due dunning, the subscription-cancellation
 				// webhook, and trial expiration (all sharing this one service instance) could each
@@ -1178,24 +1221,57 @@ func main() {
 				// Issue #668: Create ItemCleanupCheckWorker for periodic orphaned item detection
 				// Checks for items in error state, revoked, stale, or with zero accounts
 				itemCleanupCheckWorker = jobs.NewItemCleanupCheckWorker(jobs.ItemCleanupCheckWorkerDeps{
-					LinkedItemRepo:     linkedItemRepo,
-					AccountRepo:        accountRepo, // For zero-account detection
-					JobQueue:           nil,         // Set after River client created (circular dependency)
-					Logger:             appLogger,
-					GracePeriodDays:    7,  // Days to wait before cleanup (error/stale/revoked items)
-					ErrorDaysThreshold: 30, // Days in error state before cleanup candidate
-					StaleDaysThreshold: 60, // Days since last sync before cleanup candidate
+					LinkedItemRepo:  linkedItemRepo,
+					AccountRepo:     accountRepo, // For zero-account detection
+					JobQueue:        nil,         // Set after River client created (circular dependency)
+					Logger:          appLogger,
+					GracePeriodDays: 7, // Days to wait before cleanup (error/stale/revoked items)
+					// ErrorDaysThreshold / StaleDaysThreshold are deliberately LEFT UNSET here
+					// (Issue #1486). They must equal ItemCleanupWorker's, which re-verifies
+					// eligibility with them immediately before the irreversible Plaid /item/remove;
+					// a stricter pair there would silently decline cleanups this sweep legitimately
+					// scheduled, and each affected item would keep its cleanup_scheduled_at — hiding
+					// it from every future sweep while Plaid kept billing. Passing literals to each
+					// constructor separately made that parity comment-enforced and one-sidedly
+					// editable. Unset means both constructors read the SAME
+					// defaultCleanupErrorDays / defaultCleanupStaleDays (30 / 60, unchanged from the
+					// literals this replaced), so the invariant is structural.
+
+					// Issue #1477: resume a capped run where it stopped instead of restarting from
+					// the oldest candidate item every run.
+					SweepCursors: sweepCursorRepo,
 				})
 				appLogger.Info("Item cleanup check worker created")
 
 				// Issue #668: Create ItemCleanupWorker for executing individual item cleanup
 				// Calls Plaid /item/remove to stop billing for orphaned items
+				// ErrorDaysThreshold/StaleDaysThreshold are left unset for the same reason as the
+				// check worker's above (Issue #1486) — both then read the one shared pair of
+				// constants, so the two cannot drift apart.
 				itemCleanupWorker = jobs.NewItemCleanupWorker(jobs.ItemCleanupWorkerDeps{
 					PlaidCleanupSvc: plaidCleanupService,
 					LinkedItemRepo:  linkedItemRepo,
 					Logger:          appLogger,
 				})
 				appLogger.Info("Item cleanup worker created")
+
+				// Issue #1497: re-attempt /item/remove for Items stranded by a completed GDPR erasure,
+				// using the credential retained on the orphan record until its 30-day deadline.
+				//
+				// It takes plaidService (not plaidCleanupService): the linked_items row those helpers
+				// operate on no longer exists — that is what makes the Item an orphan — so the only
+				// operation available is the raw /item/remove with the retained token.
+				plaidOrphanRetrySvc := services.NewPlaidOrphanRetryService(plaidOrphanedItemRepo, plaidService)
+				plaidOrphanRetrySvc.SetLogger(appLogger)
+				plaidOrphanRetryWorker = jobs.NewPlaidOrphanRetryWorker(jobs.PlaidOrphanRetryWorkerDeps{
+					Service: plaidOrphanRetrySvc,
+					Logger:  appLogger,
+					// Issue #1477: the fourth sweep of the same shape. Unwired, a record whose
+					// /item/remove keeps failing at Plaid holds the head of the candidate set and
+					// nothing past the per-run cap is ever retried.
+					SweepCursors: sweepCursorRepo,
+				})
+				appLogger.Info("Plaid orphaned-item retry worker created")
 
 				appLogger.Info("Transaction sync service initialized")
 				appLogger.Info("Item error service initialized")
@@ -1219,318 +1295,27 @@ func main() {
 			riverConfig.ErrorHandler = deadLetterHandler.ErrorHandlerFunc()
 			appLogger.Info("Dead letter handler configured for failed jobs")
 
-			// Configure periodic jobs (all nil-guarded)
-			var periodicJobs []*river.PeriodicJob
-
-			// Scheduled deletion check (hourly)
-			if scheduledDeletionCheckWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(1*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.ScheduledDeletionCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low",
-							}
-					},
-					&river.PeriodicJobOpts{RunOnStart: true},
-				))
-				appLogger.Info("Scheduled deletion check periodic job configured (hourly)")
-			}
-
-			// Issue #668: Item cleanup check (daily) — Plaid-specific, nil-guarded
-			if itemCleanupCheckWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.ItemCleanupCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low",
-							}
-					},
-					&river.PeriodicJobOpts{RunOnStart: false},
-				))
-				appLogger.Info("Item cleanup check periodic job configured (daily)")
-			}
-
-			// Issue #679, #680: Trial expiration check (daily)
-			if trialExpirationCheckWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.TrialExpirationCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low",
-							}
-					},
-					&river.PeriodicJobOpts{RunOnStart: true},
-				))
-				appLogger.Info("Trial expiration check periodic job configured (daily)")
-			}
-
-			// Issue #898: Past-due check (daily) — disconnects Plaid at 14d and auto-cancels at 21d
-			if pastDueCheckWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.PastDueCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low",
-							}
-					},
-					&river.PeriodicJobOpts{RunOnStart: true},
-				))
-				appLogger.Info("Past-due check periodic job configured (daily)")
-			}
-
-			// Issue #762: Paddle reconciliation check (daily)
-			if paddleReconciliationWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.PaddleReconciliationArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low",
-							}
-					},
-					&river.PeriodicJobOpts{RunOnStart: false},
-				))
-				appLogger.Info("Paddle reconciliation periodic job configured (daily)")
-			}
-
-			// Issue #930: Retention cleanup check (daily)
-			//
-			// Issue #1413 Finding 2 (Codex review, PR #1443): InsertOpts (Queue + UniqueOpts) is
-			// built by jobs.RetentionCleanupCheckInsertOpts() rather than hand-written here — a
-			// previous version of this literal called jobs.RetentionCleanupCheckUniqueOpts() from
-			// NOWHERE, hand-copying its OWN independent (and stale) ByState list instead, so the
-			// round that added Completed to that function's ByState was a no-op in production: a
-			// completed retention job still failed to block a RunOnStart insertion after every
-			// process restart or leader election, silently re-running the 30-day/7-day GDPR
-			// pre-deletion notices and deleteExpiredAccounts on every deploy. This is the third
-			// "defined, tested, never wired" instance on this branch — see
-			// jobs.ManualTierOverrideExpiryCheckInsertOpts's doc comment (used one registration
-			// below this one) for the identical failure mode recurring in the sibling job. main.go
-			// now calls jobs.RetentionCleanupCheckInsertOpts() directly instead of hand-writing the
-			// InsertOpts literal, so main.go is no longer a second, independently-maintained
-			// expression of the same shape — a future change to jobs.RetentionCleanupCheckUniqueOpts()
-			// automatically propagates to what actually ships.
-			if retentionCleanupCheckWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.RetentionCleanupCheckArgs{
-							TriggerSource: "periodic",
-						}, jobs.RetentionCleanupCheckInsertOpts()
-					},
-					// Issue #1413 P0: RunOnStart MUST be true — see
-					// jobs.RetentionCleanupCheckPeriodicOpts()'s doc comment for the full
-					// River in-memory-scheduler rationale. Safe only because
-					// jobs.RetentionCleanupCheckInsertOpts() above always carries UniqueOpts.
-					jobs.RetentionCleanupCheckPeriodicOpts(),
-				))
-				appLogger.Info("Retention cleanup check periodic job configured (daily)")
-			}
-
-			// Issue #1413 (Task 9): Manual tier override expiry check (daily) — the
-			// time-triggered twin of the admin "remove override" endpoint (Issue #1414 /
-			// Task 7). HasActiveManualOverride() derives comp state at read time only, so
-			// nothing else re-arms retention / re-syncs Clerk / audits a comp that lapses on
-			// its own without an admin manually clearing it.
-			//
-			// Issue #1413 G3: InsertOpts (Queue + UniqueOpts) is built by
-			// jobs.ManualTierOverrideExpiryCheckInsertOpts() rather than hand-written here —
-			// a previous version of this literal omitted UniqueOpts entirely, silently
-			// leaving ManualTierOverrideExpiryCheckUniqueOpts()'s documented dedup
-			// unenforced. That job is the ONLY thing bounding how long
-			// noManualOverrideAtAllPredicate keeps a user out of the retention pipeline
-			// (profile_repository.go), so duplicate or missed runs directly affect whether
-			// accounts are ever deleted.
-			//
-			// Issue #1413 Finding 2 (Codex review, PR #1443): the IDENTICAL failure mode this
-			// comment describes recurred one job ABOVE this one — the retention cleanup check's
-			// periodic registration hand-wrote its own InsertOpts literal instead of calling
-			// jobs.RetentionCleanupCheckInsertOpts(), the fix G3 established here. That was the
-			// third "defined, tested, never wired" instance on this branch; it is now fixed the
-			// same way. If a THIRD job's registration is ever found hand-writing UniqueOpts
-			// instead of calling its own *InsertOpts() builder, treat it as this same recurring
-			// class of bug, not a one-off.
-			if manualTierOverrideExpiryCheckWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.ManualTierOverrideExpiryCheckArgs{
-							TriggerSource: "periodic",
-						}, jobs.ManualTierOverrideExpiryCheckInsertOpts()
-					},
-					// Issue #1413 P0: RunOnStart MUST be true — see
-					// jobs.ManualTierOverrideExpiryCheckPeriodicOpts()'s doc comment for the
-					// full River in-memory-scheduler rationale. Safe only because
-					// ManualTierOverrideExpiryCheckInsertOpts() above always carries UniqueOpts.
-					jobs.ManualTierOverrideExpiryCheckPeriodicOpts(),
-				))
-				appLogger.Info("Manual tier override expiry check periodic job configured (daily)")
-			}
-
-			// Issue #1371 — Phase 7 (Task 2): Household member cleanup check (daily)
-			// HouseholdMemberCleanupCheckUniqueOpts (household_member_cleanup_check.go)
-			// documents the same shape below as the source of truth this must stay in
-			// sync with. UniqueOpts constrains to one check job in any non-terminal
-			// state AT ALL (no ByPeriod time window — see that function's doc comment
-			// for the Round 8 rationale) so that concurrent River clients/schedulers
-			// can't double-run the check and race to purge the same removed-membership
-			// rows twice (this worker only purges rows — no email is sent here, unlike
-			// its over-capacity sibling below).
-			if householdMemberCleanupCheckWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.HouseholdMemberCleanupCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low",
-								UniqueOpts: river.UniqueOpts{
-									ByArgs: false,
-									ByState: []rivertype.JobState{
-										rivertype.JobStateAvailable,
-										rivertype.JobStateScheduled,
-										rivertype.JobStateRunning,
-										rivertype.JobStateRetryable,
-										rivertype.JobStatePending,
-									},
-								},
-							}
-					},
-					&river.PeriodicJobOpts{RunOnStart: false},
-				))
-				appLogger.Info("Household member cleanup check periodic job configured (daily)")
-			}
-
-			// Issue #1371 — Phase 7 (Task 6): Household over-capacity check (daily)
-			// HouseholdOverCapacityCheckUniqueOpts (household_over_capacity_check.go)
-			// documents the same shape below as the source of truth this must stay in
-			// sync with. UniqueOpts constrains to one check job in any non-terminal
-			// state AT ALL (no ByPeriod time window — see that function's doc comment
-			// for the Round 8 rationale) — this worker sends a notice email BEFORE
-			// stamping *_sent_at (so a failed send retries next run), and two
-			// overlapping runs would both see "not yet sent" and both send a
-			// duplicate email.
-			if householdOverCapacityCheckWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.HouseholdOverCapacityCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low",
-								UniqueOpts: river.UniqueOpts{
-									ByArgs: false,
-									ByState: []rivertype.JobState{
-										rivertype.JobStateAvailable,
-										rivertype.JobStateScheduled,
-										rivertype.JobStateRunning,
-										rivertype.JobStateRetryable,
-										rivertype.JobStatePending,
-									},
-								},
-							}
-					},
-					&river.PeriodicJobOpts{RunOnStart: false},
-				))
-				appLogger.Info("Household over-capacity check periodic job configured (daily)")
-			}
-
-			// Issue #633: DLQ cleanup check (daily)
-			if dlqCleanupCheckWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.DLQCleanupCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low",
-							}
-					},
-					&river.PeriodicJobOpts{RunOnStart: false},
-				))
-				appLogger.Info("DLQ cleanup check periodic job configured (daily)")
-			}
-
-			// Issue #972: Budget period close check (daily) — detects closed budget periods and fires events
-			if budgetPeriodCloseCheckWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.BudgetPeriodCloseCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: queue.QueueLow,
-							}
-					},
-					&river.PeriodicJobOpts{RunOnStart: false},
-				))
-				appLogger.Info("Budget period close check periodic job configured (daily)")
-			}
-
-			// Issue #972: Savings stats snapshot (daily) — aggregate completed transfer amounts.
-			// SavingsStatsUniqueOpts constrains to one snapshot job per 24h period (queue-level
-			// dedup on top of the ON CONFLICT upsert in WriteSnapshot). We use river.UniqueOpts
-			// directly because the periodic job constructor takes *river.InsertOpts, not queue opts.
-			if savingsStatsWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.SavingsStatsArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: queue.QueueLow,
-								UniqueOpts: river.UniqueOpts{
-									ByPeriod: 24 * time.Hour,
-								},
-							}
-					},
-					&river.PeriodicJobOpts{RunOnStart: false},
-				))
-				appLogger.Info("Savings stats snapshot periodic job configured (daily)")
-			}
-
-			// Issue #138: Portfolio snapshot (daily) — per-user holdings aggregate upsert.
-			// UniqueOpts constrains to one snapshot job per 24h period (on top of ON CONFLICT upsert).
-			if portfolioSnapshotWorker != nil {
-				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-					river.PeriodicInterval(24*time.Hour),
-					func() (river.JobArgs, *river.InsertOpts) {
-						return jobs.PortfolioSnapshotArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: queue.QueueLow,
-								UniqueOpts: river.UniqueOpts{
-									ByPeriod: 24 * time.Hour,
-								},
-							}
-					},
-					&river.PeriodicJobOpts{RunOnStart: false},
-				))
-				appLogger.Info("Portfolio snapshot periodic job configured (daily)")
-			}
-
-			// Issue #1087 R4-7: Idempotency keys cleanup (daily — deletes expired rows)
-			periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-				river.PeriodicInterval(24*time.Hour),
-				func() (river.JobArgs, *river.InsertOpts) {
-					return jobs.IdempotencyCleanupArgs{
-							TriggerSource: "periodic",
-						}, &river.InsertOpts{
-							Queue: "low",
-						}
-				},
-				&river.PeriodicJobOpts{RunOnStart: false},
-			))
-			appLogger.Info("Idempotency cleanup periodic job configured (daily)")
+			// Configure periodic jobs (all nil-guarded). Extracted to buildPeriodicJobs
+			// (periodic_jobs.go) — Issue #1448 — so the "every registration has RunOnStart:
+			// true, a non-empty PeriodicJobOpts.ID, and a real dedup guarantee" invariant is
+			// unit-tested directly (periodic_jobs_test.go) instead of enforced only by a
+			// main.go text scan.
+			periodicJobs := buildPeriodicJobs(periodicJobsDeps{
+				scheduledDeletionCheckWorker:        scheduledDeletionCheckWorker,
+				itemCleanupCheckWorker:              itemCleanupCheckWorker,
+				trialExpirationCheckWorker:          trialExpirationCheckWorker,
+				pastDueCheckWorker:                  pastDueCheckWorker,
+				paddleReconciliationWorker:          paddleReconciliationWorker,
+				retentionCleanupCheckWorker:         retentionCleanupCheckWorker,
+				manualTierOverrideExpiryCheckWorker: manualTierOverrideExpiryCheckWorker,
+				householdMemberCleanupCheckWorker:   householdMemberCleanupCheckWorker,
+				householdOverCapacityCheckWorker:    householdOverCapacityCheckWorker,
+				dlqCleanupCheckWorker:               dlqCleanupCheckWorker,
+				budgetPeriodCloseCheckWorker:        budgetPeriodCloseCheckWorker,
+				savingsStatsWorker:                  savingsStatsWorker,
+				portfolioSnapshotWorker:             portfolioSnapshotWorker,
+				plaidOrphanRetryWorker:              plaidOrphanRetryWorker,
+			}, appLogger)
 
 			if len(periodicJobs) > 0 {
 				riverConfig.PeriodicJobs = periodicJobs
@@ -1544,6 +1329,15 @@ func main() {
 				Logger: appLogger,
 			})
 			appLogger.Info("Idempotency cleanup worker created (River)")
+
+			// Issue #1497: constructed HERE, unconditionally, alongside idempotency cleanup rather than
+			// inside the Plaid block above — see this worker's var declaration for why its activation must
+			// not depend on Plaid being configured. Its only dependency is the database.
+			plaidOrphanTokenPurgeWorker = jobs.NewPlaidOrphanTokenPurgeWorker(jobs.PlaidOrphanTokenPurgeWorkerDeps{
+				Repo:   plaidOrphanedItemRepo,
+				Logger: appLogger,
+			})
+			appLogger.Info("Plaid orphaned-item credential purge worker created (River)")
 
 			// Register ALL workers with nil-guards.
 			// Non-Plaid workers are always non-nil when their config gates are met.
@@ -1603,6 +1397,17 @@ func main() {
 			if idempotencyCleanupWorker != nil {
 				river.AddWorker(riverWorkers, idempotencyCleanupWorker)
 				appLogger.Info("Idempotency cleanup worker registered with River")
+			}
+			// Issue #1497: the credential purge. Registered in the NON-Plaid block deliberately — its
+			// periodic registration is unconditional (periodic_jobs.go), so a job would be enqueued with
+			// no worker to run it if this registration ever moved inside the Plaid gate below.
+			if plaidOrphanTokenPurgeWorker != nil {
+				river.AddWorker(riverWorkers, plaidOrphanTokenPurgeWorker)
+				appLogger.Info("Plaid orphaned-item credential purge worker registered with River")
+			}
+			if plaidOrphanRetryWorker != nil {
+				river.AddWorker(riverWorkers, plaidOrphanRetryWorker)
+				appLogger.Info("Plaid orphaned-item retry worker registered with River")
 			}
 			if subscriptionWebhookWorker != nil {
 				river.AddWorker(riverWorkers, subscriptionWebhookWorker)
@@ -1745,13 +1550,75 @@ func main() {
 		appLogger.Info("Huma read-only enforcement middleware applied")
 
 		// Load admin email config and create AdminService (Issue #309)
-		adminEmailConfig, err := config.LoadAdminEmailConfig()
+		//
+		// Issue #1498: resolve the two lists against the environment. The hardcoded list
+		// bypasses the role check, so the CI/QA entries in non_production_admin_emails must
+		// not load in production — nor under an unset or unrecognised ENVIRONMENT, both of
+		// which EffectiveAdminEmails treats as production. Never pass AdminEmails directly.
+		//
+		// cfg.AdminAllowlistEnvironment(), NOT cfg.Environment: the latter defaults to
+		// "development" when ENVIRONMENT is unset, and development is a recognised
+		// non-production environment, so using it would load the test admins on a
+		// production deployment that forgot the variable. The same value also decides whether
+		// the ADMIN_EMAILS_CONFIG relocation override is honoured at all — one notion of
+		// "is this production?" for the whole authorization path, not two.
+		allowlistEnv := cfg.AdminAllowlistEnvironment()
+		adminEmailConfig, err := config.LoadAdminEmailConfig(allowlistEnv)
 		if err != nil {
 			appLogger.Warn("Failed to load admin email config (using empty list)", "error", err)
 			adminEmailConfig = &domain.AdminEmailConfig{AdminEmails: []string{}}
 		}
-		adminService := services.NewAdminService(cfg.ClerkSecretKey, adminEmailConfig.AdminEmails)
-		appLogger.Info("Admin service initialized", "hardcoded_admin_emails", len(adminEmailConfig.AdminEmails))
+		effectiveAdminEmails := adminEmailConfig.EffectiveAdminEmails(allowlistEnv)
+		adminService := services.NewAdminService(cfg.ClerkSecretKey, effectiveAdminEmails)
+
+		// Log the posture, never the addresses: an operator must be able to see from the
+		// startup log which of the two postures is live, and why.
+		adminEmailMode := "production-safe (non-production admin entries excluded)"
+		if domain.IsNonProductionEnvironment(allowlistEnv) {
+			adminEmailMode = "non-production (test admin entries loaded)"
+		}
+		appLogger.Info("Admin service initialized",
+			"environment", cfg.Environment,
+			"environment_explicitly_set", cfg.EnvironmentExplicitlySet,
+			"admin_email_mode", adminEmailMode,
+			"effective_hardcoded_admin_emails", len(effectiveAdminEmails),
+			"non_production_admin_emails_in_file", len(adminEmailConfig.NonProductionAdminEmails))
+		// Warn on BOTH ways of arriving at the production posture by accident, not just the
+		// unset one: ENVIRONMENT=" " or ENVIRONMENT=prod counts as explicitly set, so an
+		// `if !EnvironmentExplicitlySet` check alone would stay silent about a misconfigured
+		// value while still (correctly) refusing to load the test admins.
+		switch {
+		case !cfg.EnvironmentExplicitlySet:
+			appLogger.Warn("ENVIRONMENT is not set; the admin allowlist is resolving as production. "+
+				"Set ENVIRONMENT explicitly (development/qa/staging/production).",
+				"effective_environment", cfg.Environment)
+		case !domain.IsNonProductionEnvironment(allowlistEnv) && allowlistEnv != "production":
+			appLogger.Warn("ENVIRONMENT is set to a value this build does not recognise; the admin "+
+				"allowlist is resolving as production. Expected one of "+
+				"development/qa/staging/production.",
+				"environment", cfg.Environment)
+		}
+		// The admin allowlist is an ACL, so ADMIN_EMAILS_CONFIG is an authorization input.
+		// Issue #1498: outside a recognised non-production environment the loader REFUSES it and
+		// reads the committed config/admin_emails.yaml instead — a warning after the fact would
+		// be detective, not preventive. Say either outcome loudly; a silently-ignored override is
+		// its own trap.
+		if override, honoured := config.AdminEmailsConfigOverride(allowlistEnv); override != "" {
+			if honoured {
+				appLogger.Warn("Admin email allowlist loaded from an ADMIN_EMAILS_CONFIG override, "+
+					"not the committed config/admin_emails.yaml",
+					"path", override,
+					"effective_hardcoded_admin_emails", len(effectiveAdminEmails))
+			} else {
+				appLogger.Error("ADMIN_EMAILS_CONFIG was set and REJECTED: the admin allowlist may "+
+					"only be relocated in a recognised non-production environment. Loaded the "+
+					"committed config/admin_emails.yaml instead.",
+					"rejected_path", override,
+					"admin_allowlist_environment", allowlistEnv,
+					"environment_explicitly_set", cfg.EnvironmentExplicitlySet,
+					"effective_hardcoded_admin_emails", len(effectiveAdminEmails))
+			}
+		}
 
 		// Issue #639: Admin user management - needs adminService for admin status checks
 		// Issue #1414: clerkService re-syncs Clerk metadata on tier-override removal;
@@ -1770,10 +1637,22 @@ func main() {
 			deadLetterJobRepo,
 			&dbPoolAdapter{db},
 			cfg.PlaidEnv,
+			jobHealthRepoForHealth, // Issue #1458: backs the 3 backlog gauges on /admin/health
+			// Issue #1497 item 5: backs the orphaned-Plaid-Item state counts on /admin/health.
+			// The SAME repository the admin list view and both sweeps use, narrowed at the
+			// interface to List alone (services.PlaidOrphanedItemLister) so a read surface cannot
+			// purge a retained credential. NOT gated on plaidService != nil, for the reason #1499
+			// ungated the admin routes themselves: these rows exist because a GDPR erasure
+			// happened, whether or not this deployment can talk to Plaid, and a deployment without
+			// Plaid credentials is precisely the one where nothing automated will ever clear them.
+			plaidOrphanedItemRepo,
 		)
 
-		// Issue #633: Dead letter queue admin service
-		deadLetterService := services.NewDeadLetterService(deadLetterJobRepo, jobQueue)
+		// Issue #633: Dead letter queue admin service.
+		// Issue #1492: jobs.UniqueOptsForKind gives the replay path the same uniqueness options each
+		// kind's real producers pass. It is injected here because internal/services cannot import
+		// internal/queue/jobs (jobs imports services), and this file already imports both.
+		deadLetterService := services.NewDeadLetterService(deadLetterJobRepo, jobQueue, jobs.UniqueOptsForKind)
 
 		// Apply Huma Admin middleware for admin routes (Issue #309)
 		humaAdminMiddleware := humamiddleware.NewAdminMiddleware(cfg, adminService)
@@ -1994,29 +1873,57 @@ func main() {
 		appLogger.Info("Huma category preview routes registered")
 
 		// Register Huma admin routes (Issue #559: Huma migration)
-		// Security: AdminMiddleware handles environment check (404 in non-qa) and role validation (Issue #309)
+		// Security: AdminMiddleware authorizes by identity and role — 401 unauthenticated,
+		// 403 without domain.RoleAdmin, 500 (refused) if the role lookup fails. The role lookup
+		// reads CLERK privateMetadata, not the database (#1432 B2-3), and its positive results
+		// are cached, so a revocation takes effect within AdminService.positiveRoleCacheTTLCap
+		// rather than instantly. Issue #1499
+		// removed its environment check, so this surface is reachable in production BY ADMINS;
+		// the role gate, not the deployment environment, is what keeps everyone else out.
 		// Issue #698: Pass trialService for E2E test trial grant endpoint
 		// Issue #638: Pass adminService for check-role endpoint
 		// Issue #639: Pass adminUserService for user management endpoints
 		// Issue #640: Pass systemHealthService for system health monitoring
-		if plaidService != nil {
-			humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
-				WithPaddleTransactionRepo(paddleTransactionRepo).
-				WithPaddleWebhookRepo(paddleWebhookRepo).
-				WithJobQueue(jobQueue).
-				WithDeadLetterService(deadLetterService)
-			operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
-			appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)")
-		}
+		//
+		// Issue #1499: registration is deliberately NOT gated on plaidService != nil. It used to
+		// be, which meant a deployment without Plaid credentials silently lost all 24 admin
+		// endpoints — system health, user management, subscription admin, the dead-letter queue
+		// and the orphaned-Plaid-Item view — none of which is Plaid-specific. plaidService and
+		// linkedItemRepo feed exactly one handler (FireWebhook, a QA webhook-firing helper),
+		// which returns 503 when either is nil rather than dereferencing it.
+		humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
+			WithPaddleTransactionRepo(paddleTransactionRepo).
+			WithPaddleWebhookRepo(paddleWebhookRepo).
+			WithJobQueue(jobQueue).
+			WithDeadLetterService(deadLetterService).
+			WithPlaidOrphanedItemRepo(plaidOrphanedItemRepo)
+		operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
+		appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)", "plaid_configured", plaidService != nil)
 
 		// Issue #821: QA auth bypass endpoint (QA/Staging only).
-		// Guard 1: Environment check here. Guard 2: Handler rejects production in Bypass().
-		if (cfg.Environment == "qa" || cfg.Environment == "staging") &&
-			cfg.QABypassSecret != "" && cfg.QAAdminClerkUserID != "" && cfg.QAPremiumClerkUserID != "" {
+		// Guard 1: the registration gate below. Guard 2: the handler re-checks the environment
+		// against domain.IsQAAuthBypassEnvironment in Bypass().
+		//
+		// Issue #1432 batch ED, finding B2-1: this condition used to be
+		// `cfg.Environment == "qa" || cfg.Environment == "staging"` plus three non-empty QA
+		// settings — a single mislabelled ENVIRONMENT string exposed the only unauthenticated
+		// path to admin authority in this codebase. The decision now lives in
+		// Config.QAAuthBypassRefusalReason (internal/config/qa_auth_bypass_gate.go), which
+		// additionally requires ENVIRONMENT to have been set EXPLICITLY, requires the
+		// QA_AUTH_BYPASS_ENABLED opt-in, and refuses outright when a production-only signal
+		// (a Clerk sk_live_ key, PADDLE_ENVIRONMENT=production) is present. Keep the decision
+		// there — it is unit-tested; an inline equality here is not.
+		if refusal := cfg.QAAuthBypassRefusalReason(); refusal == "" {
 			qaBypassService := services.NewQAAuthBypassService(cfg.QAAdminClerkUserID, cfg.QAPremiumClerkUserID, nil)
 			qaBypassHandler := operations.NewQAAuthBypassHandler(qaBypassService, cfg.QABypassSecret, cfg.Environment)
 			operations.RegisterQAAuthBypassRoutes(humaAPI, qaBypassHandler)
-			appLogger.Info("QA auth bypass route registered")
+			appLogger.Warn("QA auth bypass route registered — this route mints admin sign-in tokens without authentication and must never exist in production",
+				"environment", cfg.Environment)
+		} else if cfg.QABypassSecret != "" || cfg.QAAdminClerkUserID != "" || cfg.QAPremiumClerkUserID != "" || cfg.QAAuthBypassEnabled {
+			// Only log the refusal when SOMETHING QA-shaped was configured. A production
+			// deployment with none of these set is the normal case and needs no noise; a
+			// deployment that meant to enable the route needs to know which check refused.
+			appLogger.Warn(refusal)
 		}
 
 		// All API v1 routes fully migrated to Huma (Issue #559)
@@ -2026,6 +1933,20 @@ func main() {
 		// email fallback that the Huma middleware provides).
 
 		appLogger.Info("Authenticated routes enabled (Clerk + Database)")
+	} else if msg, attrs, warranted := clerkGateWarning(db != nil, cfg.ClerkSecretKey != ""); warranted {
+		// Issue #1450: this whole block (background job registration + Huma admin/authenticated
+		// routes) is gated on cfg.ClerkSecretKey != "", not just db != nil. The gate is
+		// intentional — Clerk is this app's identity source and most of the above touches user
+		// records — but a closed gate used to leave NOTHING behind to say background processing
+		// stopped. Concretely, every periodic job configured inside the gate above never runs,
+		// including RetentionCleanupCheckWorker — the ONLY place that runs retention-clock
+		// repair, the 30-day/7-day GDPR pre-deletion notices, deleteExpiredAccounts, and the
+		// Plaid-disconnect repair pass.
+		//
+		// The decision and the message live in clerkGateWarning (clerk_gate_warning.go) so a test
+		// can assert on their real values instead of text-scanning this file — see that file's
+		// header for why the original inline version's test was unsound.
+		appLogger.Warn(msg, attrs...)
 	}
 
 	// Issue #972: Savings impact routes (public aggregate + per-user) require DB but NOT Clerk,
@@ -2219,15 +2140,6 @@ func main() {
 	appLogger.Info("Server stopped gracefully")
 }
 
-// mockAuditLogger is a placeholder audit logger for deletion operations
-// TODO: Replace with real audit logging implementation
-type mockAuditLogger struct{}
-
-func (m *mockAuditLogger) Log(ctx context.Context, action, resourceType, resourceID string) error {
-	slog.Info("AUDIT", "action", action, "resource_type", resourceType, "resource_id", resourceID)
-	return nil
-}
-
 // dbPoolAdapter adapts *pgxpool.Pool to services.DatabasePool interface (Issue #640)
 // Lightweight wrapper that embeds pgxpool and delegates to its methods
 type dbPoolAdapter struct {
@@ -2278,39 +2190,84 @@ func createClerkCheck() func() error {
 // startJobHealthMetricsCollector runs a goroutine that periodically refreshes
 // observability.ManualTierOverrideOldestUnclearedExpiredSeconds and, since Issue #1413's
 // Plaid-cleanup-backlog follow-up, observability.PlaidCleanupOutstandingUsers/
-// PlaidCleanupOldestOutstandingSeconds from the database. Lives here — not in the observability
+// PlaidCleanupOldestOutstandingSeconds and, since Issue #1504, observability.DeletionResidueRecords/
+// DeletionResidueNewestSeconds from the database. Lives here — not in the observability
 // package alongside observability.StartDBMetricsCollector, which it otherwise mirrors — because it
 // needs repository.JobHealthRepository, and internal/repository already imports
 // internal/observability; putting this collector there would create an import cycle. A failed
 // query is logged and skipped for THAT metric only (not fatal, and not allowed to block the
 // other): a transient DB hiccup here must not crash the whole process, and each gauge simply keeps
 // its last-known value until its next tick succeeds. The goroutine stops when ctx is cancelled.
+//
+// ⚠ IT READS ONCE BEFORE THE TICKER STARTS, and that is not a latency optimisation. Every gauge
+// here is now an observability.UnmeasuredGauge — absent from the scrape until this function
+// publishes it — precisely so that "nobody has looked yet" and "measured, and it is zero" are
+// different scrapes. Before both halves of that change, these were plain Gauges exporting 0 from
+// process start and untouched for the first five minutes, so each process asserted "no backlog, no
+// residue, nothing expired" with nothing having queried anything. For
+// observability.DeletionResidueRecords that was worse than a stale number: its prescribed rule is
+// `increase(deletion_residue_records[15m]) > 0`, and on any process with pre-existing residue the
+// 0 → N step five minutes into the process LOOKED LIKE N NEW INCIDENTS. A restart paged somebody
+// about a GDPR failure that had not happened.
+//
+// ⚠ AND A FAILED READ — startup or tick — STILL PUBLISHES NOTHING. There is no "publish 0 and log
+// it" branch anywhere below, on purpose: a zero produced by a failed query is the same false claim
+// as a zero produced by never having queried, just later. On the first pass that leaves the series
+// absent (the absent()/staleness rules documented at each gauge's declaration are what report it);
+// on a later pass it leaves the last real reading in place, which staleness likewise reports.
 func startJobHealthMetricsCollector(ctx context.Context, repo repository.JobHealthRepository, logger *slog.Logger) {
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
+		// The initial measurement, before the loop: the first sample any scrape can see is therefore a
+		// reading rather than a default, and the unmeasured window is one query long instead of one
+		// tick long.
+		refreshJobHealthMetrics(ctx, repo, logger)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
-				if err != nil {
-					logger.Warn("failed to refresh manual tier override job-health gauge", "error", err)
-				} else {
-					observability.ManualTierOverrideOldestUnclearedExpiredSeconds.Set(age.Seconds())
-				}
-
-				plaidCount, plaidOldestAge, err := repo.GetOutstandingPlaidCleanupStats(ctx)
-				if err != nil {
-					logger.Warn("failed to refresh Plaid-cleanup job-health gauges", "error", err)
-				} else {
-					observability.PlaidCleanupOutstandingUsers.Set(float64(plaidCount))
-					observability.PlaidCleanupOldestOutstandingSeconds.Set(plaidOldestAge.Seconds())
-				}
+				refreshJobHealthMetrics(ctx, repo, logger)
 			}
 		}
 	}()
+}
+
+// refreshJobHealthMetrics performs one pass over every job-health gauge. Extracted from
+// startJobHealthMetricsCollector's loop so the startup read and the periodic read are literally the
+// same code — two copies of this would be two chances for the startup pass to drift into publishing
+// something the tick does not, which is the class of bug this whole change is about.
+//
+// Per-metric error isolation throughout: one failing query must not suppress the others, and none of
+// them is fatal.
+func refreshJobHealthMetrics(ctx context.Context, repo repository.JobHealthRepository, logger *slog.Logger) {
+	age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
+	if err != nil {
+		logger.Warn("failed to refresh manual tier override job-health gauge", "error", err)
+	} else {
+		observability.ManualTierOverrideOldestUnclearedExpiredSeconds.WithLabelValues().Set(age.Seconds())
+	}
+
+	plaidCount, plaidOldestAge, err := repo.GetOutstandingPlaidCleanupStats(ctx)
+	if err != nil {
+		logger.Warn("failed to refresh Plaid-cleanup job-health gauges", "error", err)
+	} else {
+		observability.PlaidCleanupOutstandingUsers.WithLabelValues().Set(float64(plaidCount))
+		observability.PlaidCleanupOldestOutstandingSeconds.WithLabelValues().Set(plaidOldestAge.Seconds())
+	}
+
+	// Issue #1504: the deletion-residue pair. Same per-metric error isolation as the two above — a
+	// failure here logs and leaves both gauges as they were (absent before the first success, at their
+	// last-known value after it) rather than zeroing them, because a zeroed monotonic gauge would read
+	// as "the residue went away", which is the one thing it can never mean.
+	residueCount, residueNewestAge, err := repo.GetDeletionResidueStats(ctx)
+	if err != nil {
+		logger.Warn("failed to refresh deletion-residue gauges", "error", err)
+	} else {
+		observability.DeletionResidueRecords.WithLabelValues().Set(float64(residueCount))
+		observability.DeletionResidueNewestSeconds.WithLabelValues().Set(residueNewestAge.Seconds())
+	}
 }
 
 func boolStatus(configured bool) string {

@@ -243,3 +243,52 @@ func TestSavingsStatsWorker_SnapshotTimestamp(t *testing.T) {
 type errMockJobs string
 
 func (e errMockJobs) Error() string { return string(e) }
+
+// ─── Issue #1448: main.go's comment referenced a "SavingsStatsUniqueOpts" that did not
+// exist anywhere in the repo, and RunOnStart was false with no ID set. ────────────────────
+
+func TestSavingsStatsUniqueOpts(t *testing.T) {
+	opts := SavingsStatsUniqueOpts()
+
+	assert.Equal(t, 24*time.Hour, opts.ByPeriod)
+	assert.False(t, opts.ByArgs)
+	assert.Empty(t, opts.ByState)
+}
+
+func TestSavingsStatsInsertOpts_Queue(t *testing.T) {
+	opts := SavingsStatsInsertOpts()
+	require.NotNil(t, opts)
+	assert.Equal(t, "low", opts.Queue)
+}
+
+func TestSavingsStatsInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := SavingsStatsInsertOpts()
+	want := SavingsStatsUniqueOpts()
+
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
+	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
+	assert.False(t, opts.UniqueOpts.ByQueue, "uniqueness must stay global across queues")
+	assert.Empty(t, opts.UniqueOpts.ByState,
+		"SavingsStatsUniqueOpts() sets no ByState (ByPeriod-only dedup) — an unexpected "+
+			"ByState here means the conversion helper stopped preserving that")
+}
+
+func TestSavingsStatsPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := SavingsStatsPeriodicOpts()
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart)
+}
+
+func TestSavingsStatsPeriodicOpts_ID(t *testing.T) {
+	opts := SavingsStatsPeriodicOpts()
+	assert.Equal(t, "savings_stats", opts.ID)
+}
+
+func TestSavingsStatsPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	opts := SavingsStatsPeriodicOpts()
+	require.True(t, opts.RunOnStart)
+
+	unique := SavingsStatsUniqueOpts()
+	require.NotZero(t, unique.ByPeriod,
+		"RunOnStart: true's catch-up insert is only safe when deduped by a non-zero ByPeriod window")
+}

@@ -33,6 +33,9 @@ import {
     mockUseUpdateAdminUserTier,
     mockUseRemoveAdminUserTierOverride,
 } from '@/test/mocks/admin-subscriptions-api'
+// Issue #1452: the pre-apply seat-capacity warning needs the TARGET tier's seat count, which
+// lives in the tier catalogue (GET /subscription/tiers), not on the subscription-detail response.
+import { mockUseGetSubscriptionTiers } from '@/test/mocks/subscription-api'
 
 function wrapper({ children }: { children: ReactNode }) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -152,6 +155,19 @@ const SUB_DETAIL_DELETION_SCHEDULED = {
     deletion_scheduled_at: '2026-11-15T12:00:00Z',
 }
 
+// Issue #1452: the tier catalogue's per-tier `pricing.users_included` — the seat count for each
+// TARGET tier a downgrade might be applied to. Mirrors config/subscription_tiers.yaml's real
+// seat counts (premium=1 ... household_5=5) so the fixture reads like the real data.
+const TIER_CATALOGUE = {
+    tiers: {
+        premium: { pricing: { users_included: 1 } },
+        household_2: { pricing: { users_included: 2 } },
+        household_3: { pricing: { users_included: 3 } },
+        household_4: { pricing: { users_included: 4 } },
+        household_5: { pricing: { users_included: 5 } },
+    },
+}
+
 describe('SubscriptionOverrideModal', () => {
     beforeEach(() => {
         mockUseGetAdminUserSubscription.mockClear()
@@ -167,6 +183,9 @@ describe('SubscriptionOverrideModal', () => {
         mockToastInfo.mockClear()
         mockTrackEvent.mockClear()
         mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: () => { }, isPending: false })
+        // Issue #1452: default to "not loaded" so tests that don't care about the seat-capacity
+        // warning never accidentally inherit a previous test's tier catalogue.
+        mockUseGetSubscriptionTiers.mockReturnValue({ data: undefined, isLoading: true, error: null, refetch: () => { } })
     })
 
     it('renders date picker for expires at field', () => {
@@ -582,6 +601,122 @@ describe('SubscriptionOverrideModal', () => {
         })
     })
 
+    // Issue #1452: previously this warning was surfaced only AFTER an override was applied (a
+    // post-apply toast — see "Downgrade seat/offboard warning (G4)" above, PR #1443). This proves
+    // it now appears BEFORE the admin commits, computed from the new
+    // `household_active_member_count` field plus the TARGET tier's `pricing.users_included` from
+    // the tier catalogue (GET /subscription/tiers) — never from the CURRENT tier's own limits,
+    // which describe the wrong tier for this comparison.
+    describe('Pre-apply seat-capacity warning (#1452)', () => {
+        it('shows the warning and does not call the mutation yet, for an over-capacity downgrade', () => {
+            const mockMutate = mock(() => { })
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: { ...SUB_DETAIL, base_tier: 'household_4', effective_tier: 'household_4', household_active_member_count: 4 },
+            })
+            mockUseGetSubscriptionTiers.mockReturnValue({ data: TIER_CATALOGUE, isLoading: false, error: null, refetch: () => { } })
+            mockUseUpdateAdminUserTier.mockReturnValue({ mutate: mockMutate, isPending: false })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            fireEvent.change(screen.getByLabelText(/new tier/i), { target: { value: 'premium' } })
+            fireEvent.change(screen.getByPlaceholderText(/gifted upgrade/i), { target: { value: 'Downgrade for billing reasons' } })
+            fireEvent.click(screen.getByRole('button', { name: /save override/i }))
+
+            const dialog = screen.getByRole('alertdialog')
+            expect(dialog).toHaveTextContent(/4 active member/i)
+            expect(dialog).toHaveTextContent(/1 seat/i)
+            expect(mockMutate).not.toHaveBeenCalled()
+        })
+
+        it('does not show the warning for an upgrade', () => {
+            const mockMutate = mock((data: unknown, options: { onSuccess?: () => void } | undefined) => {
+                options?.onSuccess?.()
+            })
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: { ...SUB_DETAIL, base_tier: 'household_2', effective_tier: 'household_2', household_active_member_count: 2 },
+            })
+            mockUseGetSubscriptionTiers.mockReturnValue({ data: TIER_CATALOGUE, isLoading: false, error: null, refetch: () => { } })
+            mockUseUpdateAdminUserTier.mockReturnValue({ mutate: mockMutate, isPending: false })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            fireEvent.change(screen.getByLabelText(/new tier/i), { target: { value: 'household_5' } })
+            fireEvent.change(screen.getByPlaceholderText(/gifted upgrade/i), { target: { value: 'Gifted upgrade' } })
+            fireEvent.click(screen.getByRole('button', { name: /save override/i }))
+
+            expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+            expect(mockMutate).toHaveBeenCalled()
+        })
+
+        it('does not show the warning for a same-seat change', () => {
+            const mockMutate = mock((data: unknown, options: { onSuccess?: () => void } | undefined) => {
+                options?.onSuccess?.()
+            })
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: { ...SUB_DETAIL, base_tier: 'household_3', effective_tier: 'household_3', household_active_member_count: 3 },
+            })
+            mockUseGetSubscriptionTiers.mockReturnValue({ data: TIER_CATALOGUE, isLoading: false, error: null, refetch: () => { } })
+            mockUseUpdateAdminUserTier.mockReturnValue({ mutate: mockMutate, isPending: false })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            fireEvent.change(screen.getByLabelText(/new tier/i), { target: { value: 'household_3' } })
+            fireEvent.change(screen.getByPlaceholderText(/gifted upgrade/i), { target: { value: 'Extend the same tier' } })
+            fireEvent.click(screen.getByRole('button', { name: /save override/i }))
+
+            expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+            expect(mockMutate).toHaveBeenCalled()
+        })
+
+        it('still applies the override when the admin proceeds anyway (advisory only, does not block)', async () => {
+            const mockMutate = mock((data: unknown, options: { onSuccess?: () => void } | undefined) => {
+                options?.onSuccess?.()
+            })
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: { ...SUB_DETAIL, base_tier: 'household_4', effective_tier: 'household_4', household_active_member_count: 4 },
+            })
+            mockUseGetSubscriptionTiers.mockReturnValue({ data: TIER_CATALOGUE, isLoading: false, error: null, refetch: () => { } })
+            mockUseUpdateAdminUserTier.mockReturnValue({ mutate: mockMutate, isPending: false })
+            const onClose = mock(() => { })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={onClose} />,
+                { wrapper }
+            )
+
+            fireEvent.change(screen.getByLabelText(/new tier/i), { target: { value: 'premium' } })
+            fireEvent.change(screen.getByPlaceholderText(/gifted upgrade/i), { target: { value: 'Downgrade for billing reasons' } })
+            fireEvent.click(screen.getByRole('button', { name: /save override/i }))
+
+            const dialog = screen.getByRole('alertdialog')
+            fireEvent.click(within(dialog).getByRole('button', { name: /apply override anyway/i }))
+
+            await waitFor(() => {
+                expect(mockMutate).toHaveBeenCalledWith(
+                    {
+                        userId: 'u1',
+                        data: { tier: 'premium', reason: 'Downgrade for billing reasons', expires_at: null },
+                    },
+                    expect.anything()
+                )
+                expect(onClose).toHaveBeenCalled()
+            })
+        })
+    })
+
     describe('Remove Override', () => {
         it('is not rendered when there is no override', () => {
             mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
@@ -962,28 +1097,31 @@ describe('SubscriptionOverrideModal', () => {
         })
     })
 
-    // Codex adversarial review (round 9 follow-up, on the Part 2 fix): overrideStatus.test.ts
-    // proves getOverrideStatus/isOverrideActive ACCEPT an injected `now`, but nothing proved this
-    // component's three call sites actually PASS one. Those arguments could be deleted —
-    // reintroducing an independent `new Date()` read at each call site — and every behavioral
-    // test above would still pass, because every fixture in this file is computed relative to
-    // Date.now(), so an independent real-clock read produces the same answer as the shared `now`
-    // in any practical (non-racing) test run. A genuine race — an expiry lapsing in the
-    // microseconds between two synchronous `new Date()` calls in the same render — is not
-    // reliably forceable through a rendered component, so a behavioral test here would be the
-    // same "test that cannot fail" shape flagged elsewhere in this file. This pins the actual
-    // regression class (the argument being silently deleted) structurally instead, the same way
-    // "Structural invariants (G7 Fix 8)" above pins JSX placement that no DOM assertion happens
-    // to cover.
-    describe('Single `now` threaded through override-status calls (Issue #1413 round 9, Part 2 follow-up)', () => {
+    // Codex adversarial review (round 9 follow-up, on the Part 2 fix) originally pinned that this
+    // component's three call sites PASS a shared `now` rather than each independently reading the
+    // clock. Issue #1462 changes WHERE that shared `now` comes from (the server's `sub.as_of`
+    // snapshot, not a fresh browser-clock read) — obsoleting the original pin's literal
+    // `const now = new Date()` assertion — but the underlying same-render invariant (one shared
+    // instant, threaded into every call site) still holds and is still worth pinning structurally,
+    // for the same "test that cannot fail behaviorally" reason the original comment gave: a
+    // genuine clock-skew/race window isn't reliably forceable through a rendered component.
+    describe('Shared `now` anchored to the server snapshot, not the browser clock (Issue #1462)', () => {
         const SOURCE = readFileSync(join(import.meta.dir, 'SubscriptionOverrideModal.tsx'), 'utf-8')
 
-        it('declares exactly one shared `now` binding for the render', () => {
-            const declarations = SOURCE.match(/const now = new Date\(\)/g) ?? []
+        it('derives `now` from `sub.as_of`, never a fresh browser-clock read', () => {
+            // The round-9 pin asserted a literal `const now = new Date()`. That shape is now
+            // OBSOLETE BY DESIGN (Issue #1462) — asserting its absence here is deliberate: a
+            // regression that restores a bare `new Date()` would silently reintroduce the
+            // browser/server clock-skew divergence this fix exists to close.
+            expect(SOURCE).not.toMatch(/const now = new Date\(\)/)
+            expect(SOURCE).toMatch(/sub\?\.as_of/)
+            // The round-9 "exactly one shared `now` binding per render" invariant is unchanged —
+            // only its source changed from a literal clock read to the server snapshot.
+            const declarations = SOURCE.match(/const now = /g) ?? []
             expect(declarations).toHaveLength(1)
         })
 
-        it('passes that binding into getOverrideStatus and both isOverrideActive calls', () => {
+        it('still passes that single binding into getOverrideStatus and both isOverrideActive calls (round 9 same-render invariant)', () => {
             expect(SOURCE).toMatch(/getOverrideStatus\([^)]*,\s*now\)/)
 
             const isOverrideActiveCalls = SOURCE.match(/isOverrideActive\([^)]*\)/g) ?? []
@@ -992,6 +1130,162 @@ describe('SubscriptionOverrideModal', () => {
             for (const call of isOverrideActiveCalls) {
                 expect(call).toMatch(/,\s*now\)$/)
             }
+        })
+    })
+
+    // Issue #1462: a fixture where the SERVER's snapshot (`effective_status` + `as_of`) and the
+    // BROWSER's real-time clock disagree about whether the override has expired — the exact
+    // "stale server snapshot" axis the round-9 fix never covered (that fix only proved both
+    // client-side call sites shared ONE clock read, not that the clock read agreed with the
+    // server). Before this fix, the chip (client-clock liveness) and the effective badge
+    // (server-computed status) could contradict each other in this window; after it, both are
+    // anchored to `as_of` and must agree.
+    describe('Clock-skew / stale-server-snapshot boundary (Issue #1462)', () => {
+        it('treats the override as LIVE per the server snapshot even if the browser clock alone would call it expired', async () => {
+            // as_of is BEFORE manual_tier_ends_at (override still live as of the server's snapshot
+            // instant) — effective_status reflects that (a live comp forces "active"). The real
+            // wall clock at test-run time may already be past manual_tier_ends_at (simulating
+            // request latency / clock skew between the snapshot and this render); the component
+            // must still render as live, because it evaluates `manual_tier_ends_at` against
+            // `as_of`, never against `Date.now()`.
+            const endsAt = new Date(Date.now() - 60 * 60 * 1000) // 1 hour in the past, real-clock-wise
+            const asOf = new Date(endsAt.getTime() - 60 * 60 * 1000).toISOString() // 1 hour before that
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: {
+                    ...SUB_DETAIL,
+                    subscription_status: 'inactive',
+                    effective_status: 'active',
+                    effective_tier: 'household_4',
+                    manual_tier_override: 'household_4',
+                    manual_tier_ends_at: endsAt.toISOString(),
+                    as_of: asOf,
+                },
+            })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            // The chip must read as a LIVE override (no "(expired)"), consistent with the
+            // "Complimentary" badge effective_status: 'active' produces — not a stale-clock
+            // "(expired)" chip beside a live-looking badge.
+            expect(await screen.findByText(/manual override active/i)).toBeInTheDocument()
+            expect(screen.queryByText(/\(expired\)/i)).not.toBeInTheDocument()
+            expect(screen.getByText(/complimentary/i)).toBeInTheDocument()
+        })
+
+        it('treats the override as EXPIRED per the server snapshot even though manual_tier_ends_at is still in the FUTURE relative to the real browser clock', async () => {
+            // manual_tier_ends_at is 30 minutes in the future relative to the real wall clock at
+            // test-run time — a naive browser-clock-only check (the pre-#1462 behavior) would call
+            // this LIVE. But as_of (the server's snapshot instant) is an hour AFTER that expiry —
+            // the server had already observed it lapse by the time it computed effective_status,
+            // which reflects that (no live comp; raw status shows through). This is the
+            // differentiating case: the OLD `now = new Date()` code would render a live-looking
+            // "Manual override active" chip (and, since isComped wins outright, a wrongly
+            // "Complimentary" badge) contradicting effective_status: 'past_due' — the exact
+            // one-card-two-answers bug #1462 exists to close.
+            const endsAt = new Date(Date.now() + 30 * 60 * 1000)
+            const asOf = new Date(endsAt.getTime() + 60 * 60 * 1000).toISOString() // 1 hour after expiry
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: {
+                    ...SUB_DETAIL,
+                    subscription_status: 'past_due',
+                    effective_status: 'past_due',
+                    effective_tier: 'premium',
+                    manual_tier_override: 'household_4',
+                    manual_tier_ends_at: endsAt.toISOString(),
+                    as_of: asOf,
+                },
+            })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            // The chip must read as EXPIRED, consistent with effective_status: 'past_due' NOT
+            // rendering the "Complimentary" badge — not a live-looking chip beside a non-comped
+            // badge.
+            expect(await screen.findByText(/\(expired\)/i)).toBeInTheDocument()
+            expect(screen.queryByText(/complimentary/i)).not.toBeInTheDocument()
+        })
+    })
+
+    // Issue #1462 G3: `as_of` is consumed (anchors `now`, above) but was never RENDERED — so an
+    // admin had no way to tell a freshly-opened modal from one that had been sitting open for
+    // several minutes off a frozen snapshot (useAdminSubscriptionDetail has no refetchInterval,
+    // and the global QueryClient sets staleTime: 5 minutes + refetchOnWindowFocus: false — see
+    // main.tsx — so nothing refreshes an open modal on a timer). #1462 option 3 was conjunctive:
+    // anchor to the server clock AND label the snapshot's age; only the first half shipped
+    // originally.
+    describe('Snapshot age label (Issue #1462 G3)', () => {
+        it("renders the snapshot's age next to the effective-status badge when as_of is present", () => {
+            const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: { ...SUB_DETAIL, as_of: fiveMinutesAgo },
+            })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            // Bucketed by formatRelativeTime (minutes, not an exact value) — the point is that a
+            // real, non-empty relative-age label renders from `as_of`, not the precise minute
+            // boundary (real wall-clock time elapses between fixture construction and assertion).
+            expect(screen.getByText(/snapshot:\s*\d+m ago/i)).toBeInTheDocument()
+        })
+
+        it('degrades to a placeholder rather than crashing when as_of is absent (e.g. an older cached response)', () => {
+            // SUB_DETAIL (the base fixture used throughout this file) never sets `as_of` — this
+            // deliberately exercises that "absent" shape, matching an older cached response from
+            // before this field existed.
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: { ...SUB_DETAIL },
+            })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            // Must not crash, and must not silently render an empty/misleading age — falls back
+            // to the same em-dash placeholder convention formatDate already uses in this file.
+            expect(screen.getByText(/snapshot:\s*—/i)).toBeInTheDocument()
+            expect(screen.queryByText(/ago/i)).not.toBeInTheDocument()
+        })
+
+        // Codex adversarial review finding (recurrence of the round-9 Part 3 "Invalid Date"
+        // defect, this time on `as_of` rather than `manual_tier_ends_at`): unlike the "absent"
+        // case above, a MALFORMED-but-truthy `as_of` used to reach `formatRelativeTime` (the
+        // label) and `new Date(...).toLocaleString()` (the title) with no parse guard at all —
+        // both render the literal string "Invalid Date" for an unparseable input.
+        // `resolveServerSnapshotTime` already failed closed for `now`'s own liveness arithmetic,
+        // but that only protects the chip/badge — this label and title are a separate code path
+        // that had no equivalent guard until this fix.
+        it('never renders the literal string "Invalid Date" for a malformed (present but unparseable) as_of', () => {
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: { ...SUB_DETAIL, as_of: 'not-a-real-date' },
+            })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            // Degrades to the same em-dash placeholder as the "absent" case, in both the visible
+            // label and the title attribute — never the literal string "Invalid Date" in either.
+            const snapshotEl = screen.getByText(/snapshot:\s*—/i)
+            expect(snapshotEl).toBeInTheDocument()
+            expect(document.body.textContent ?? '').not.toMatch(/invalid date/i)
+            const titledAncestor = snapshotEl.closest('[title]')
+            expect(titledAncestor?.getAttribute('title') ?? '').not.toMatch(/invalid date/i)
         })
     })
 })

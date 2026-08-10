@@ -31,6 +31,16 @@ describe('AdminSidebar', () => {
     }
   })
 
+  it('should render an icon for every sidebar item', () => {
+    renderWithRouter(<AdminSidebar />)
+
+    // A nav item whose `icon` is missing from AdminSidebar's iconMap renders a bare label.
+    for (const item of ADMIN_SIDEBAR_ITEMS) {
+      const link = screen.getByRole('link', { name: item.label })
+      expect(link.querySelector('svg')).not.toBeNull()
+    }
+  })
+
   it('should highlight the active link', () => {
     renderWithRouter(<AdminSidebar />, ['/admin'])
 

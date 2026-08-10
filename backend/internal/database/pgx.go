@@ -46,6 +46,30 @@ func DefaultConfig(databaseURL string) Config {
 // NewPool creates a new pgx connection pool with the given configuration.
 // It returns an error if the connection cannot be established.
 func NewPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
+	poolConfig, err := buildPoolConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create the pool
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create connection pool: %w", err)
+	}
+
+	// Verify connection
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	return pool, nil
+}
+
+// buildPoolConfig parses cfg.DatabaseURL into a *pgxpool.Config and applies BoostedBudget's
+// connection-level defaults. Split out from NewPool so it can be unit-tested without a live
+// database (pgxpool.ParseConfig performs no network I/O).
+func buildPoolConfig(cfg Config) (*pgxpool.Config, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("database URL is required")
 	}
@@ -72,19 +96,26 @@ func NewPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 		poolConfig.HealthCheckPeriod = cfg.HealthCheckPeriod
 	}
 
-	// Create the pool
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create connection pool: %w", err)
+	// Pin every pooled connection's session TimeZone to UTC (Issue #1461).
+	//
+	// Postgres performs calendar-interval arithmetic (make_interval with months/years, as used by
+	// retention_expires_at = clock_timestamp() + make_interval(months => N) in
+	// repository.ProfileRepository and repository.AdminUserRepository) in the SESSION time zone,
+	// not UTC. Left unpinned, the session zone is whatever the connecting Postgres server/host
+	// defaults to — confirmed locally to be America/New_York, not UTC — so the same code computes
+	// a different absolute GDPR deletion deadline depending on deployment environment, and can
+	// shift by an hour across a DST boundary (adding 6 calendar months preserves wall-clock time,
+	// not the absolute instant, whenever the anchor and the result sit in different UTC offsets).
+	//
+	// Setting it via RuntimeParams (rather than an AfterConnect hook issuing `SET TIME ZONE`) costs
+	// nothing extra: RuntimeParams are sent as part of the connection's own startup packet, so this
+	// is free per-connection, not an additional round trip.
+	if poolConfig.ConnConfig.RuntimeParams == nil {
+		poolConfig.ConnConfig.RuntimeParams = map[string]string{}
 	}
+	poolConfig.ConnConfig.RuntimeParams["TimeZone"] = "UTC"
 
-	// Verify connection
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-
-	return pool, nil
+	return poolConfig, nil
 }
 
 // NewPoolFromURL creates a new pgx connection pool with default configuration.

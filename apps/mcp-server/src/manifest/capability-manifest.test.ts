@@ -293,7 +293,7 @@ describe('helper functions', () => {
 // ── Completeness: every known operationId is classified ───────────────────
 
 describe('completeness', () => {
-  it('covers all 193 known operationIds (no unknown ops in the spec)', async () => {
+  it('covers all 195 known operationIds (no unknown ops in the spec)', async () => {
     // We import the full list to ensure no ops are silently absent
     // +8 from Issue #138: getHoldings, getPortfolioSummary, getPortfolioHistory,
     //   getInvestmentTransactions, getPortfolioAllocationBreakdown, getTopMovers,
@@ -314,8 +314,12 @@ describe('completeness', () => {
     //   (excluded — privacy/consent decision, deliberate in-app action)
     // +1 from Issue #1413/#1414: remove-admin-user-tier-override (excluded — irreversible,
     //   billing-adjacent admin action)
+    // +1 from Issue #1503: listAdminPlaidOrphanedItems (excluded — blanket admin policy)
+    // +1 from Issue #1497 item 2: recordAdminPlaidOrphanedItemOperatorResolution (excluded —
+    //   blanket admin policy; an operator attestation is an authenticated-human act by definition
+    //   and has no meaning coming from an agent, which cannot have removed anything at Plaid)
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(193)
+    expect(ALL_OPERATION_IDS.length).toBe(195)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified
@@ -456,5 +460,16 @@ describe('issue #1300: savings progress summary analytics', () => {
     expect(entry?.excluded).toBe(false)
     expect(entry?.confirmationRequired).toBe(false)
     expect(entry?.idempotent).toBe(true)
+  })
+})
+
+// ── Issue #1503: admin Plaid orphaned-items listing ─────────────────────────
+
+describe('issue #1503: listAdminPlaidOrphanedItems', () => {
+  it('classifies listAdminPlaidOrphanedItems as excluded under the blanket admin policy', () => {
+    const entry = getCapability('listAdminPlaidOrphanedItems')
+    expect(entry).toBeDefined()
+    expect(entry?.excluded).toBe(true)
+    expect(entry?.excludedReason).toBe('Admin endpoints are excluded from MCP')
   })
 })

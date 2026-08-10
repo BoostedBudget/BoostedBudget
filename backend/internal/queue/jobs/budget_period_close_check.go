@@ -586,6 +586,38 @@ func BudgetPeriodCloseCheckUniqueOpts() *queue.UniqueOpts {
 			queue.JobStateRunning,
 			queue.JobStateRetryable,
 			queue.JobStatePending,
+			// Completed is REQUIRED because this job is registered with RunOnStart: true
+			// (Issue #1448). Without it, a run that COMPLETED minutes ago does not
+			// deduplicate the start-of-process catch-up insert, so every deploy or leader
+			// election enqueues a redundant duplicate. Matches the two jobs that already
+			// had RunOnStart: true before #1448 (RetentionCleanupCheckUniqueOpts,
+			// ManualTierOverrideExpiryCheckUniqueOpts). Found by the final branch-wide
+			// Codex review.
+			queue.JobStateCompleted,
 		},
 	}
+}
+
+// BudgetPeriodCloseCheckInsertOpts returns the *river.InsertOpts this job's periodic
+// registration in main.go must use — Queue: queue.QueueLow plus the uniqueness options from
+// BudgetPeriodCloseCheckUniqueOpts(), converted to river's UniqueOpts type.
+//
+// Issue #1448: BudgetPeriodCloseCheckUniqueOpts() existed but was never called by main.go's
+// periodic registration — main.go passed a bare &river.InsertOpts{Queue: queue.QueueLow}.
+// This job also has its own DB-level exactly-once marker (InsertMarker's ON CONFLICT guard,
+// see this file's package doc comment), so a duplicate RunOnStart insert was already
+// correctness-safe; wiring UniqueOpts here is defense in depth that avoids the wasted work
+// of a redundant full period-close scan, not a correctness fix on its own.
+func BudgetPeriodCloseCheckInsertOpts() *river.InsertOpts {
+	return riverInsertOptsFromUnique(queue.QueueLow, BudgetPeriodCloseCheckUniqueOpts())
+}
+
+// BudgetPeriodCloseCheckPeriodicOpts returns the *river.PeriodicJobOpts this job's periodic
+// registration in main.go must use. RunOnStart: true was already safe given this job's
+// DB-level exactly-once marker; BudgetPeriodCloseCheckInsertOpts() above additionally wires
+// queue-level dedup so a RunOnStart catch-up insert doesn't even attempt a redundant scan.
+// ID is set so River restores nextRunAt across restarts/leader elections instead of
+// recomputing now+interval every time (Issue #1448).
+func BudgetPeriodCloseCheckPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: BudgetPeriodCloseCheckArgs{}.Kind()}
 }

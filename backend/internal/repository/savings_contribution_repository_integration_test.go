@@ -29,6 +29,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
@@ -42,7 +43,9 @@ func integrationDB(t *testing.T) *pgxpool.Pool {
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set; skipping integration test")
 	}
-	pool, err := pgxpool.New(context.Background(), dsn)
+	// Issue #1461: route through database.NewPoolFromURL (not a bare pgxpool.New) so this pool
+	// pins session TimeZone=UTC exactly like the production pool does.
+	pool, err := database.NewPoolFromURL(context.Background(), dsn)
 	require.NoError(t, err, "failed to connect to test database")
 	t.Cleanup(func() { pool.Close() })
 	return pool
@@ -500,4 +503,36 @@ func TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesResyn
 		"re-sync must not create a duplicate row; tombstone remains the only record")
 	assert.Equal(t, "rejected", statusAfterResync,
 		"tombstone status must remain 'rejected' after re-sync (R3-7 sticky guarantee)")
+}
+
+// TestSessionDateCast_Integration_UsesUTCCalendarDay proves the Issue #1461 decision documented on
+// UpsertFromTransaction's own doc comment: CURRENT_DATE (used there and by
+// UpsertProposedFromTransaction for occurred_on) now resolves to the UTC calendar day, because
+// NewPool pins every pooled connection's session TimeZone to UTC.
+//
+// ::date truncates a timestamptz to a calendar day in the SESSION time zone — the exact same
+// session-dependence CURRENT_DATE has (Postgres defines CURRENT_DATE as the date part of the
+// current transaction's start time, evaluated in the session TimeZone). This test picks a literal
+// instant that falls on DIFFERENT calendar days in UTC vs. America/New_York (10:30pm EST on Jan 15
+// is already Jan 16 in UTC) and asserts integrationDB's pool casts it to the UTC day, not the
+// Eastern day.
+//
+// Falsified by removing RuntimeParams["TimeZone"] = "UTC" from database.buildPoolConfig
+// (internal/database/pgx.go) and confirming this test goes RED on this host (whose own Postgres
+// TimeZone defaults to America/New_York) — see Issue #1461's report for the verbatim failure
+// output.
+func TestSessionDateCast_Integration_UsesUTCCalendarDay(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	// 2026-01-15 22:30:00-05 (10:30pm EST) = 2026-01-16 03:30:00 UTC — already tomorrow in UTC.
+	instant := time.Date(2026, 1, 16, 3, 30, 0, 0, time.UTC)
+
+	var gotDate time.Time
+	require.NoError(t, pool.QueryRow(ctx, `SELECT $1::timestamptz::date`, instant).Scan(&gotDate))
+
+	wantUTCDay := time.Date(2026, 1, 16, 0, 0, 0, 0, time.UTC)
+	assert.True(t, wantUTCDay.Equal(gotDate.UTC()),
+		"::date (the same session-timezone-dependent cast CURRENT_DATE uses) must resolve to the "+
+			"UTC calendar day on integrationDB's pool — got %v, want %v", gotDate.UTC(), wantUTCDay)
 }

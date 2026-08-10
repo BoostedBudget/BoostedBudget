@@ -75,6 +75,37 @@ type AdminSubscriptionDetailOutput struct {
 		Features             domain.SubscriptionFeatures       `json:"features"`
 		ActiveOverridesCount int                               `json:"active_overrides_count"`
 		ResourceOverrides    []domain.UserSubscriptionOverride `json:"resource_overrides"`
+		// HouseholdActiveMemberCount is the number of active members in the household owned by
+		// this user (0 if they own no household — see
+		// AdminUserService.GetOwnedHouseholdActiveMemberCount's doc comment). Issue #1452: lets
+		// the override modal warn BEFORE an admin applies a downgrade that would leave the
+		// household over the target tier's seat limit, rather than only after (the existing
+		// post-apply warning appended to UpdateUserTier's response message). No omitempty — 0 is
+		// a real, meaningful answer ("not an owner" or "an empty household"), not an absence.
+		HouseholdActiveMemberCount int `json:"household_active_member_count"`
+		// AsOf is the server instant EffectiveTier/EffectiveStatus above were computed from
+		// (Issue #1462) — a single snapshot the client can anchor its own override-liveness
+		// arithmetic to (isOverrideActive/getOverrideStatus in SubscriptionOverrideModal.tsx)
+		// instead of the browser's own clock, avoiding client/server clock skew.
+		//
+		// Batch S2 Task 2 correction: the ONLY defensible claim here is that all expiry/liveness
+		// predicates in THIS response were evaluated against the same asOf parameter — a previous
+		// version of this comment overclaimed that the chip and the effective-status badge
+		// "cannot disagree with the server (or each other)". That is false on two counts this
+		// field does not fix:
+		//   1. as_of is NOT a historical/transactional snapshot of the whole response. EffectiveTier,
+		//      EffectiveStatus, ResourceOverrides, and ActiveOverridesCount above are each populated
+		//      by SEPARATE live queries/computations that merely share this one instant as a filter
+		//      parameter — they are not read inside a single transaction. An override created (or a
+		//      tier changed) AFTER asOf but before one of those later reads completes will still show
+		//      up, because none of these queries filter on created_at/updated_at <= asOf, only on
+		//      expiry.
+		//   2. asOf is NOT equivalent to a database NOW(): NOW() is Postgres's transaction-start
+		//      time; asOf is a Go-process wall-clock read (time.Now()) captured BEFORE any of this
+		//      handler's DB I/O runs. The two can and do disagree by however long that I/O takes —
+		//      this skew is intentional (asOf anchors the CLIENT's rendering, not the database's
+		//      internal transaction bookkeeping), not a bug to fix by trying to make them equal.
+		AsOf time.Time `json:"as_of"`
 	}
 }
 
@@ -160,7 +191,14 @@ func (h *AdminHandler) RemoveUserTierOverride(ctx context.Context, input *AdminR
 //
 // GET /api/v1/admin/users/{user_id}/subscription
 func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubscriptionDetailInput) (*AdminSubscriptionDetailOutput, error) {
-	detail, err := h.adminUserService.GetUserDetail(ctx, input.UserID)
+	// Issue #1462: captured before the rest of this handler's work so `as_of` reflects (at the
+	// latest) the instant EffectiveTier/EffectiveStatus below started being computed from.
+	asOf := time.Now()
+
+	// Pass asOf through so EffectiveStatus (enrichAdminUser, inside GetUserDetail) is derived from
+	// the identical instant reported below as `as_of` — not a second, independent time.Now() read
+	// (Codex review finding on Issue #1462/#1413).
+	detail, err := h.adminUserService.GetUserDetail(ctx, input.UserID, asOf)
 	if err != nil {
 		if errors.Is(err, services.ErrAdminUserNotFound) {
 			return nil, huma.Error404NotFound("user not found")
@@ -178,7 +216,24 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 
 	var effectiveSub *domain.EffectiveSubscription
 	if h.subService != nil {
-		effectiveSub, err = h.subService.GetEffectiveSubscription(ctx, userObj)
+		// Issue #1466: derive EffectiveTier from the SAME asOf instant already captured above for
+		// `as_of` and (via GetUserDetail) for EffectiveStatus — not a second, independent
+		// time.Now() read. Before this fix, GetEffectiveSubscription's no-arg form read its own
+		// fresh clock through domain.User.EffectiveTierWithActiveOverride(), so a request crossing
+		// an override's expiry boundary between asOf's capture and this call could return an
+		// effective_tier describing a later instant than as_of/effective_status.
+		//
+		// Batch S2 Task 1 closed a residual of this same bug class one layer down: when a
+		// household entitlement resolver is wired (main.go's production wiring, unconditional for
+		// every request, not only household members), GetEffectiveSubscriptionAt used to have its
+		// asOf-derived tier UNCONDITIONALLY OVERWRITTEN by
+		// HouseholdEntitlementResolver.ResolveEffectiveEntitlement(ctx, user), which had no instant
+		// parameter of its own and fell back to ITS OWN internal time.Now(). That is now threaded
+		// through via ResolveEffectiveEntitlementAt(ctx, user, asOf) — see that method's doc
+		// comment (household_entitlement_service.go) — so this call's `asOf` genuinely reaches
+		// every tier computation this response depends on, not just the tier-axis's own top-level
+		// override check.
+		effectiveSub, err = h.subService.GetEffectiveSubscriptionAt(ctx, userObj, asOf)
 		if err != nil {
 			return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to calculate effective limits: %w", err))
 		}
@@ -190,12 +245,17 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 		}
 	}
 
-	var overrides []domain.UserSubscriptionOverride
+	// Batch S2 Task 2: GetUserOverridesAt(ctx, userObj.ID, asOf) — not the no-arg GetUserOverrides
+	// — so this list filters against the exact SAME instant already captured above as `asOf` and
+	// used by GetEffectiveSubscriptionAt's own internal GetActiveOverrides call (which backs
+	// active_overrides_count/limits below). Before this fix, this was a second, independent
+	// NOW()-filtered query — theoretically able to disagree with active_overrides_count in the
+	// very same response if an override's expiry fell between the two live reads.
+	overrides := []domain.UserSubscriptionOverride{}
 	if h.subService != nil {
-		overrides, _ = h.subService.GetUserOverrides(ctx, userObj.ID)
-	}
-	if overrides == nil {
-		overrides = []domain.UserSubscriptionOverride{}
+		if o, _ := h.subService.GetUserOverridesAt(ctx, userObj.ID, asOf); o != nil {
+			overrides = o
+		}
 	}
 
 	resp := &AdminSubscriptionDetailOutput{}
@@ -215,6 +275,16 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 	resp.Body.Features = effectiveSub.Features
 	resp.Body.ActiveOverridesCount = effectiveSub.ActiveOverridesCount
 	resp.Body.ResourceOverrides = overrides
+
+	// Issue #1452: the pre-apply seat-reduction warning needs this count available in the
+	// SAME response the modal already loads — a real repository failure here (not "0, no
+	// household") should fail the request rather than silently rendering as "not an owner".
+	householdActiveMemberCount, err := h.adminUserService.GetOwnedHouseholdActiveMemberCount(ctx, input.UserID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to fetch household active member count: %w", err))
+	}
+	resp.Body.HouseholdActiveMemberCount = householdActiveMemberCount
+	resp.Body.AsOf = asOf
 
 	return resp, nil
 }

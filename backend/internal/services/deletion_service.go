@@ -4,14 +4,32 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
+	"syscall"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
+
+// ErrDeletionAuthorisationRevoked is returned by ExecuteDeletion's internal cleanup helpers when a
+// use-time recheck finds that the authorisation this run was claimed under no longer holds — in
+// practice, the user cancelled their own deletion request while the cleanup sequence was in flight.
+//
+// A SENTINEL RATHER THAN A BARE ERROR because the two dispositions are opposite: a Paddle or Plaid
+// FAILURE must abort loudly and be retried by the next run, whereas a revocation must abort QUIETLY
+// and never be retried — the user asked to keep their account. Without a distinguishable value the
+// caller has to either treat a cancellation as a Paddle outage (alarming, and it would re-attempt the
+// cleanup on every subsequent run against a user who is no longer eligible) or swallow real Paddle
+// failures. It is deliberately not exported beyond this package's own use; callers of ExecuteDeletion
+// see a clean nil, because a cancelled deletion is a completed decision, not an error.
+var ErrDeletionAuthorisationRevoked = errors.New("deletion authorisation revoked since the claim was taken")
 
 // DeletionService defines the interface for account deletion operations
 type DeletionService interface {
@@ -21,8 +39,18 @@ type DeletionService interface {
 	// CancelDeletion cancels a pending deletion using the cancellation token
 	CancelDeletion(ctx context.Context, token string) error
 
-	// ExecuteDeletion executes the full deletion process for a user
-	ExecuteDeletion(ctx context.Context, userID string) error
+	// ExecuteDeletion executes the full deletion process for a user under the authorisation
+	// `kind` names — repository.DeletionKindUserRequested for a user's own elapsed GDPR deletion
+	// request, repository.DeletionKindRetention for an expired retention clock on an account
+	// nobody asked to delete.
+	//
+	// Issue #1440, T0: the kind is a required, caller-declared parameter rather than something
+	// inferred from the user's row, because a caller can be arbitrarily stale — an
+	// account_deletion job sits in River until a worker picks it up, during which the user may
+	// cancel or re-request. Inferring the kind from current state would authorise exactly the
+	// cases the split exists to refuse. It is threaded straight through to
+	// repository.ProfileRepository.ClaimForDeletion; see that method for the predicates.
+	ExecuteDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) error
 
 	// SetPlaidCleanupService sets the Plaid cleanup service for removing Plaid items
 	// before user deletion. This setter allows wiring the service after DeletionService
@@ -117,9 +145,49 @@ const accountDeletionClaimLease = 15 * time.Minute
 // Paddle call, not the surrounding cascade/DB work.
 const paddleCancelSideEffectLease = 10 * time.Minute
 
-// AuditLogger defines the interface for audit logging
+// AuditLogger defines the interface for audit logging. repository.AuditLogRepository is the
+// production implementation and satisfies this structurally; see its doc comment for which
+// audit_logs column receives which value and why. Until Issue #1505 replaced it, the ONLY
+// production implementation was cmd/server/main.go's mockAuditLogger, which logged a line and
+// persisted nothing — so every call below produced no durable record at all.
+//
+// NO ACTOR PARAMETER, DELIBERATELY, FOR NOW. audit_logs distinguishes the ACTING party
+// (user_id) from the SUBJECT (resource_id), and this signature can only supply the latter. All
+// three remaining production call sites are self-service — a user acting on their own account
+// (RequestDeletion, CancelDeletion, RegisterUser) — so no caller has an actor to pass that is not
+// either the subject or nothing. The implementation therefore writes user_id NULL rather than
+// copying the subject into it, which would assert "this person performed this action" and be
+// flatly false for a system-initiated action. If an admin-initiated deletion path is ever added,
+// this interface MUST gain an explicit actor first: tracked in Issue #1506.
+//
+// ⚠ #1506 IS ALSO CONSTRAINED BY LOCKING, NOT ONLY BY HONESTY, AND THE CONSTRAINT IS NOT IN THIS
+// PACKAGE. Since Issue #1507 the `user.deleted` entry no longer goes through this interface at all:
+// it is written inside DeleteUserCascade's transaction via repository.LogInTx, whose doc comment
+// explains why a non-NULL actor on THAT path reintroduces a reproduced SQLSTATE 40P01 deadlock.
+// Read it before widening this signature.
+//
+// ERRORS ARE REPORTED, NEVER SWALLOWED BY THE IMPLEMENTATION — but the two deletion call sites
+// below deliberately do NOT abort on one, because both describe a state change that has already
+// committed. See the note at RequestDeletion's call for the reasoning, including why the
+// in-transaction `user.deleted` write makes the opposite choice.
 type AuditLogger interface {
 	Log(ctx context.Context, action, resourceType, resourceID string) error
+}
+
+// logAuditFailure surfaces an audit-write failure at ERROR level and returns. It exists so the
+// non-transactional audit call sites cannot drift apart on how they treat one, and so that "the
+// audit trail silently recorded nothing" — the exact defect Issue #1505 closed — can never again be
+// the quiet default. A nil error is the overwhelmingly common case and costs nothing.
+//
+// It is deliberately NOT used for `user.deleted` any more: since Issue #1507 that entry is written
+// inside DeleteUserCascade's transaction, where a failure genuinely can and does roll the erasure
+// back rather than needing to be tolerated.
+func logAuditFailure(ctx context.Context, err error, action, subjectUserID string) {
+	if err == nil {
+		return
+	}
+	slog.Default().ErrorContext(ctx, "audit log write failed — the GDPR audit trail is missing an entry",
+		"action", action, "resource_type", "user", "resource_id", subjectUserID, "error", err)
 }
 
 // PaddleDeletionCleaner is the narrowed Paddle interface used by DeletionService.
@@ -215,9 +283,29 @@ func (s *deletionService) RequestDeletion(ctx context.Context, userID, email str
 	// Email failure is not critical - user is still marked for deletion
 	_ = s.emailService.SendDeletionConfirmation(ctx, email, cancellationToken, scheduledAt)
 
-	// Create audit log
-	// Audit log failure is not critical - don't fail the request
-	_ = s.auditLogger.Log(ctx, "user.deletion_requested", "user", userID)
+	// Create audit log.
+	//
+	// AN AUDIT-WRITE FAILURE DOES NOT ABORT THE DELETION, AND IS NOT DISCARDED EITHER. Both halves
+	// are deliberate (Issue #1505):
+	//
+	//   - Not aborting: by the time this runs the state change (MarkForDeletion) has already
+	//     committed. Returning an error would report a failure for work that succeeded. There is
+	//     nothing to roll back and nothing to retry. A transient database blip must not block a
+	//     GDPR request.
+	//   - Not discarding: `_ =` was how the stub's permanent uselessness stayed invisible. A write
+	//     the database refused is now logged at ERROR with the subject and action, so a missing
+	//     trail entry is an alertable event rather than nothing at all.
+	//
+	// The alternative — make the audit write part of the same transaction as the state change — is
+	// the stronger design and IS now taken wherever it is available. Issue #1507 took it for
+	// `user.deleted`, which is written inside DeleteUserCascade's own transaction
+	// (repository.AuditLogRepository.LogInTx) and DOES abort the deletion on failure, because there
+	// the erasure has not committed yet and rolling back merely defers it to the next sweep. It is
+	// still NOT available here: MarkForDeletion runs in a transaction this service does not hold
+	// open (requestDeletionTransactional commits before returning), so this write has nothing left
+	// to join. Same for CancelDeletion's entry.
+	logAuditFailure(ctx, s.auditLogger.Log(ctx, "user.deletion_requested", "user", userID),
+		"user.deletion_requested", userID)
 
 	// Capture analytics event for deletion request
 	if s.analytics != nil {
@@ -257,8 +345,9 @@ func (s *deletionService) CancelDeletion(ctx context.Context, tokenString string
 		return fmt.Errorf("failed to cancel deletion: %w", err)
 	}
 
-	// Create audit log (non-critical, errors ignored)
-	_ = s.auditLogger.Log(ctx, "user.deletion_cancelled", "user", claims.UserID)
+	// Create audit log. Non-fatal but never silent — see RequestDeletion's call site.
+	logAuditFailure(ctx, s.auditLogger.Log(ctx, "user.deletion_cancelled", "user", claims.UserID),
+		"user.deletion_cancelled", claims.UserID)
 
 	// Capture analytics event for deletion cancellation
 	if s.analytics != nil {
@@ -268,8 +357,9 @@ func (s *deletionService) CancelDeletion(ctx context.Context, tokenString string
 	return nil
 }
 
-// ExecuteDeletion executes the full deletion process for a user
-func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) error {
+// ExecuteDeletion executes the full deletion process for a user. See the DeletionService interface
+// doc for why `kind` is a caller-declared parameter.
+func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) error {
 	// Get user details before deletion
 	user, err := s.profileRepo.GetUserByID(ctx, userID)
 	if err != nil {
@@ -300,9 +390,14 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// running. The real enforcement is ClaimForDeletion just below: a conditional UPDATE
 	// evaluated against committed state at the moment of the claim (Issue #1413 Critical
 	// finding C2, Codex review round 2).
-	// Deliberately HasActiveManualOverride (live-only), NOT HasAnyManualOverride — even though
-	// the authoritative claimForDeletionPredicate below uses the all-overrides rule. That
-	// asymmetry is intentional: this cheap check only short-circuits the case it can be certain
+	// Deliberately HasActiveManualOverride (live-only), NOT HasAnyManualOverride. This path can
+	// reach either authoritative claim predicate below — retentionDeletionClaimPredicate for a
+	// genuine auto-deletion, or userRequestedDeletionClaimPredicate for a stale user-requested
+	// job on a since-cancelled request (DeletionRequestedAt == nil at this point) — and only the
+	// former uses the all-overrides rule via noManualOverrideAtAllPredicate; the latter
+	// deliberately has no override check at all, for the same reason given above (a user's own
+	// request beats an admin comp). That asymmetry is intentional: this cheap check only
+	// short-circuits the case it can be certain
 	// about (a currently-live comp). A LAPSED comp is left to fall through to the authoritative
 	// claim, which refuses it. Both routes reach the same outcome — the user is not deleted —
 	// but routing the lapsed case through the claim keeps the DB predicate the single source of
@@ -378,41 +473,197 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// moment of the claim — e.g. an admin comp granted between the GetUserByID read above and
 	// this call. The two are complementary, not redundant (see the #1413 design doc's required
 	// call shape): the claim alone cannot know whether deletion is still authorised.
-	eligible, err := s.profileRepo.ClaimForDeletion(ctx, userID)
+	eligible, err := s.profileRepo.ClaimForDeletion(ctx, userID, kind)
 	if err != nil {
 		releaseClaim(err.Error())
 		return fmt.Errorf("failed to claim user for deletion: %w", err)
 	}
 	if !eligible {
-		// An admin granted or extended a comp between the GetUserByID read above and this
-		// check, and the user has no outstanding GDPR deletion request of their own to
-		// override it. Release immediately so a later run (once the comp lapses and is
-		// cleared) doesn't have to wait out the full lease. Legitimate outcome, not an error.
-		releaseClaim("precondition lost — comp granted or extended since last read")
-		slog.Default().Info("skipping auto-deletion — claim not granted (comped since last read)",
-			"user_id", userID)
+		// The authorisation this caller was issued under no longer holds. For a retention caller:
+		// an admin granted or extended a comp between the GetUserByID read above and this check.
+		// For a user-requested caller (Issue #1440, T0): the user cancelled the request this job
+		// was queued for, or re-requested with a fresh grace period that has not yet elapsed —
+		// which is exactly the case that used to slip through and hard-delete a user who had asked
+		// to keep their account. Release immediately so a later run doesn't have to wait out the
+		// full lease. Legitimate outcome, not an error.
+		releaseClaim("precondition lost — deletion no longer authorised under this claim kind")
+		slog.Default().Info("skipping deletion — claim not granted (authorisation no longer holds)",
+			"user_id", userID, "claim_kind", string(kind))
 		return nil
 	}
 
-	// Issue #1413 Critical finding C2: external cleanup failure now ABORTS the deletion
-	// instead of being swallowed. DeleteUserCascade (below) clears paddle_subscription_id and
-	// Plaid references, so proceeding to the cascade after a cleanup failure would destroy the
-	// local record of the very external resources that failed to clean up — orphaning them
-	// with nothing left to retry. Releasing the claim lets the NEXT run retry the whole
-	// sequence from scratch instead.
-	if s.paddleCleanupSvc != nil {
-		if err := s.cleanupPaddleResources(ctx, userID, user); err != nil {
+	// stillAuthorised re-asks, against committed state RIGHT NOW, the exact question
+	// ClaimForDeletion answered when this run started: is a hard delete of this user still
+	// authorised under `kind`, for the episode `user.DeletionRequestedAt` pins?
+	//
+	// WHY EVERY IRREVERSIBLE EXTERNAL CALL BELOW IS PRECEDED BY THIS. The claim above gives
+	// EXCLUSIVITY — it stops two flows doing this work at once. It says nothing about whether THIS
+	// flow's own authorisation still holds, and CancelDeletion (profile_repository.go) clears
+	// deletion_requested_at and deletion_scheduled_at without coordinating with the claim at all.
+	// Before this, a user who cancelled their deletion partway through the cleanup sequence still
+	// had their subscription cancelled, their Paddle customer archived and anonymised, and their
+	// bank connections severed — and only THEN did DeleteUserCascade's in-transaction guard
+	// correctly refuse to delete them, leaving an account stripped of everything, irreversibly, for
+	// someone who had explicitly asked to keep it.
+	//
+	// ⚠ THIS IS NOT ErrSideEffectClaimBusy AND DOES NOT DUPLICATE IT. That mechanism (#1413 H1)
+	// coordinates BETWEEN flows so two flows cannot both disconnect a user; this asks whether this
+	// flow may still act at all. Both are needed and neither implies the other.
+	//
+	// ⚠ IT DOES NOT CLOSE THE WINDOW, IT SHRINKS IT. A revocation landing between one of these
+	// checks and the call two lines later is not caught — no database mechanism can make that
+	// interval zero, and a worker already inside a Paddle call cannot be recalled. What changes is
+	// the size: from "the whole cleanup sequence, including one network round-trip per linked item"
+	// down to "one call". The same irreducible-TOCTOU argument cleanupItems makes for its own
+	// per-item recheck applies here verbatim.
+	stillAuthorised := func(c context.Context) (bool, error) {
+		return s.profileRepo.DeletionStillAuthorised(c, userID, kind, user.DeletionRequestedAt)
+	}
+	// abortIfUnauthorised returns a non-nil "handled" signal the caller returns directly. An
+	// undetermined answer (err != nil) FAILS CLOSED with an error, because not knowing whether the
+	// deletion is still authorised is not permission to perform an irreversible external call. A
+	// determined "no" is a legitimate outcome and returns nil, exactly like the !eligible branch
+	// above and the cascade's own (false, nil).
+	abortIfUnauthorised := func(stage string) (bool, error) {
+		authorised, err := stillAuthorised(ctx)
+		if err != nil {
 			releaseClaim(err.Error())
-			return fmt.Errorf("aborting deletion — Paddle cleanup failed: %w", err)
+			return true, fmt.Errorf("aborting deletion before %s — could not establish whether deletion is still authorised: %w", stage, err)
 		}
+		if !authorised {
+			releaseClaim("authorisation revoked since the claim — aborting before " + stage)
+			slog.Default().Info("aborting deletion — the authorisation this run was claimed under no longer holds",
+				"user_id", userID, "claim_kind", string(kind), "stage", stage)
+			return true, nil
+		}
+		return false, nil
+	}
+
+	// ⚠ ROUND 15, FINDING D2 — THE HOUSEHOLD-OWNER PRECONDITION, ASKED BEFORE THE FIRST IRREVERSIBLE
+	// EFFECT RATHER THAN AFTER THE LAST ONE.
+	//
+	// DeleteUserCascade already refuses to erase a household owner whose household still has another
+	// active member or another beneficiary's live entitlement — households.owner_user_id CASCADEs, so
+	// erasing them destroys a DIFFERENT real user's rows (Issue #1440). But that guard is evaluated
+	// inside the cascade's own transaction, which is the LAST thing this function does. By then every
+	// Plaid Item has been disconnected and the Paddle customer has been cancelled and archived — the
+	// act this file itself calls "THE ONE ACTION NOTHING CAN UNDO".
+	//
+	// ⚠ AND THIS CONDITION CANNOT SELF-HEAL. Its own guard comment says so: nothing in the system will
+	// transfer the ownership, remove the member, or reconcile the stale entitlement. So the retention
+	// path — which reaches ExecuteDeletion directly (retention_cleanup_check.go calls it in process)
+	// and therefore never passes through RequestDeletion's #1367 owner check — did the whole
+	// irreversible sequence, was refused, and then DID IT AGAIN THE NEXT DAY, indefinitely.
+	//
+	// ⚠ THIS IS A REORDER, NOT A NEW RULE, AND DELIBERATELY SO. It asks the same SQL predicate the
+	// cascade asks (householdOwnerBlocksDeletionClause, shared verbatim), and it is a pure local-state
+	// question needing no external call, so asking it here costs one round-trip and removes the entire
+	// class. It is placed BEFORE the first abortIfUnauthorised/Plaid leg for exactly that reason.
+	//
+	// ⚠ THE IN-CASCADE GUARD STAYS — defence in depth, and it is not redundant. This read runs outside
+	// the cascade's transaction and its FOR UPDATE lock: an invite accepted in the interval is caught
+	// only in there. This check shrinks the window in which the harm is irreversible; that guard is
+	// what makes the outcome correct.
+	//
+	// Returns a genuine error, matching the cascade guard's own choice and for its reason: a silent
+	// (false, nil) skip would let a GDPR deadline go unmet forever with no visible signal, and this is
+	// the one deletion stop that requires a human to actually resolve the household.
+	//
+	// ⚠ AND IT FIRES THE COUNTER, WHICH THE REORDER INITIALLY DID NOT (EE re-review). The comment
+	// here used to say the metric was "left to the cascade's guard so the counter keeps meaning
+	// ... once per occasion rather than twice" — an argument that was true of the ORDER it
+	// replaced and false the moment this check began returning before the cascade ran. The only
+	// Inc() lives inside DeleteUserCascade, which this branch never reaches, so the one dedicated
+	// alert for a non-self-healing GDPR block went permanently flat while the block itself got
+	// MORE common (the retention path now stops here every day instead of inside the cascade).
+	// It is still at most once per occasion: the cascade's Inc() now only fires for the race this
+	// read cannot see — an invite accepted between this statement and the cascade's FOR UPDATE —
+	// which is a different occasion, not this one counted twice.
+	householdBlocks, err := s.profileRepo.HouseholdOwnerBlocksDeletion(ctx, userID)
+	if err != nil {
+		// Fail closed: not knowing whether erasing this user would destroy someone else's data is not
+		// permission to start disconnecting banks and archiving Paddle customers.
+		releaseClaim(err.Error())
+		return fmt.Errorf("aborting deletion before any external cleanup — could not establish whether this user owns a household that blocks deletion: %w", err)
+	}
+	if householdBlocks {
+		observability.HouseholdOwnerDeletionBlockedTotal.Inc()
+		releaseClaim("household ownership blocks deletion — refusing before any irreversible external work")
+		slog.Default().Error("aborting deletion before any external cleanup — this user owns a household with another active member or another beneficiary's live entitlement, so erasing them would destroy a different user's data; this needs a human to transfer or disband the household",
+			"user_id", userID, "claim_kind", string(kind))
+		return fmt.Errorf("aborting deletion — %w", domain.ErrHouseholdHasActiveMembers)
+	}
+
+	// ⚠ ORDERING IS DELIBERATE AND WAS CHANGED: PLAID FIRST, PADDLE SECOND. It used to be the other
+	// way round. The two legs are not equally reversible — a Plaid disconnect costs the user a
+	// re-link through Plaid Link, whereas ArchiveAndAnonymizeCustomer destroys PII at Paddle and
+	// cannot be undone by anyone. Putting the least-reversible call LAST means the widest exposure
+	// window carries the cheapest possible loss, and it means an abort or failure in the Plaid leg
+	// (including the routine ErrSideEffectClaimBusy deferral) no longer leaves a still-subscribed
+	// user's subscription cancelled with the deletion abandoned — which is what the old order did on
+	// every Plaid failure, not merely on a revocation.
+	if handled, err := abortIfUnauthorised("Plaid cleanup"); handled {
+		return err
 	}
 
 	// Issue #668: Remove Plaid items BEFORE database deletion to stop billing. This is
 	// critical for cost control — Plaid charges monthly per Item. A failure here now also
 	// aborts (see the Paddle cleanup comment above for why) rather than proceeding to a
 	// cascade that would strand an un-removed, still-billing Plaid item with no local record.
-	if s.plaidCleanupSvc != nil {
-		if err := s.plaidCleanupSvc.RemoveAllUserItems(ctx, userID); err != nil {
+	//
+	// Issue #1494: the nil branch is REACHABLE and no longer silent. main.go constructs this service
+	// with nil for plaidCleanupSvc and calls SetPlaidCleanupService later only inside
+	// `if cfg.PlaidClientID != "" && cfg.PlaidSecret != ""` (verified at the two call sites), so a
+	// Plaid-less deployment runs with it nil for the process's whole life — which is legitimate and
+	// must keep working, so the check belongs here rather than as a startup assertion. What it must not
+	// do is skip silently: nothing in such a deployment can ever record a Plaid removal, so a user WITH
+	// items whose removal is unproven hits DeleteUserCascade's C2 guard and gets (false, nil) — an
+	// erasure that never completes, reported as "not deleted yet", with the actual cause (no Plaid
+	// wiring) three layers away and stated nowhere.
+	if s.plaidCleanupSvc == nil {
+		// Counts the guard's EXACT population (uncleanedLinkedItemPredicate — neither removal proved
+		// nor removal proved impossible), not "any linked item at all". A user whose items are all
+		// already accounted for would sail through C2, and refusing THEM would be a self-inflicted
+		// block on erasures that were fine — the failure mode this branch exists to expose, inverted.
+		uncleanedCount, countErr := s.profileRepo.CountUncleanedLinkedItems(ctx, userID)
+		if countErr != nil {
+			// Fail closed: not knowing whether Plaid work is owed is not permission to proceed to an
+			// irreversible erasure.
+			releaseClaim(countErr.Error())
+			return fmt.Errorf("aborting deletion — Plaid cleanup service not configured and the outstanding linked-item count could not be established: %w", countErr)
+		}
+		if uncleanedCount > 0 {
+			releaseClaim(fmt.Sprintf("Plaid cleanup service not configured but user has %d linked item(s) with unproven Plaid removal", uncleanedCount))
+			return fmt.Errorf("aborting deletion — Plaid cleanup service not configured but user has %d linked item(s) whose Plaid removal is unproven — refusing to delete", uncleanedCount)
+		}
+		// Zero outstanding items: there is no Plaid work to do, so a Plaid-less deployment erasing this
+		// user is correct and safe. Proceed to the cascade, whose C2 guard re-checks this inside its
+		// own transaction anyway (this count is diagnosis, not the authority — see its doc comment).
+		slog.Default().Info("Plaid cleanup service not configured; user has no linked items with unproven Plaid removal, so deletion proceeds",
+			"user_id", userID)
+	} else {
+		// stillAuthorised is the per-item eligibility callback, and passing it is the point: this call
+		// site passed a literal nil until now, so cleanupItems' recheck — a parameter that exists for
+		// exactly this and that DisconnectAllUserItemsIfEligible has always used — never fired for the
+		// deletion flow. On an account with 200 linked items that meant 200 sequential Plaid
+		// round-trips after a single authorisation read. Now a revocation landing partway through
+		// stops the loop at the next item (cleanupItems returns ErrCleanupAborted; see the abort
+		// branch below for how that is distinguished from a genuine Plaid failure).
+		if err := s.plaidCleanupSvc.RemoveAllUserItems(ctx, userID, stillAuthorised); err != nil {
+			// A revocation-triggered abort is not a Plaid failure and must not be reported as one. The
+			// recheck is asked once more to decide which of ErrCleanupAborted's two causes this was:
+			// authorisation genuinely gone (a legitimate, expected stop — release and return nil, and
+			// notably WITHOUT proceeding to the Paddle leg) versus a new linked item having appeared
+			// mid-pass (retryable; falls through to the error path below). An error from the recheck
+			// itself falls through too, which is the fail-closed direction.
+			if errors.Is(err, ErrCleanupAborted) {
+				if authorised, checkErr := stillAuthorised(ctx); checkErr == nil && !authorised {
+					releaseClaim("authorisation revoked mid Plaid cleanup — remaining items left connected")
+					slog.Default().Info("aborting deletion mid Plaid cleanup — the authorisation this run was claimed under no longer holds; the user keeps their account and any items not yet disconnected",
+						"user_id", userID, "claim_kind", string(kind))
+					return nil
+				}
+			}
 			// Issue #1413 H1: RemoveAllUserItems can return ErrSideEffectClaimBusy when another
 			// flow (past_due grace-cancel, the subscription-cancellation webhook, or another
 			// deletion attempt) currently holds ActionPlaidDisconnectUser for this user. This is a
@@ -423,8 +674,128 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 				slog.Default().Info("deletion Plaid disconnect deferred — side-effect claim held by another flow",
 					"user_id", userID)
 			}
+			// Issue #1494: ONE failure kind does not abort, and this is the only caller in the codebase
+			// that treats it that way. ErrPlaidRemovalUnrecoverable means every item that failed did so
+			// in a way no retry can fix, AND that verdict is durably recorded on each row (the sentinel
+			// is not returned otherwise — see its doc comment). Aborting here is what made #1494
+			// permanent: the next run fails identically, forever, and the user's GDPR erasure never
+			// completes.
+			//
+			// Proceeding is safe only because two INDEPENDENT things stand between this line and an
+			// erased Item: DeleteUserCascade's C2 guard re-reads each row and still blocks unless the
+			// verdict really is recorded there, and the same transaction copies every
+			// not-provably-removed row into plaid_orphaned_items before deleting anything. So a bug in
+			// this branch alone cannot lose an Item — it can only fail to unblock. Logged at Error, not
+			// Info: we are completing an erasure while a live Plaid Item may still be billing, which is
+			// an operator's problem the moment it happens, not a routine event.
+			if errors.Is(err, ErrPlaidRemovalUnrecoverable) {
+				// ⚠ ROUND 15, FINDING D1 — PROCEEDING IS ONLY CORRECT ONCE C2 CAN ACTUALLY BE PASSED, AND
+				// ON THE PASS THAT WRITES THE VERDICT IT PROVABLY CANNOT.
+				//
+				// The paragraph above is right that C2 makes proceeding SAFE. What it missed is that on
+				// this pass C2 is not merely a backstop, it is a CERTAINTY: uncleanedLinkedItemPredicate
+				// blocks while `plaid_removal_failed_at > now() - INTERVAL '7 days'`, and the verdict that
+				// produced this sentinel was written by this very pass. So the old code went on to cancel
+				// the subscription and archive-and-anonymise the Paddle customer — irreversibly — and then
+				// hit a refusal that was guaranteed before the first of those calls was made. Daily, for a
+				// week, each run now also emitting its own residue record with nothing to dedupe them.
+				//
+				// ⚠ THE 7-DAY WINDOW IS NOT THE BUG AND IS NOT TOUCHED. Its argument (see
+				// uncleanedLinkedItemPredicate) is sound: Plaid returns INVALID_ACCESS_TOKEN both for a
+				// genuinely dead token and for a token used against the wrong environment or client_id, so
+				// the terminal verdict is an INFERENCE. The window exists to convert it into an
+				// OBSERVATION, and the daily retries that happen during it are the mechanism — unblocking
+				// on first sight would let one misconfigured deploy erase over the whole estate. Shortening
+				// or conditioning the window would weaken exactly that. So the window keeps its full
+				// length, and what changes is that this flow stops spending irreversible external effects
+				// on a wait it is guaranteed to lose. The waiting was always the design; only the
+				// spending-while-waiting was not.
+				//
+				// #1494 SURVIVES INTACT. This is a deferral bounded by the same window C2 already imposes,
+				// not a return to the permanent abort #1494 fixed: once the verdict ages past seven days
+				// the count falls to zero, this branch proceeds exactly as before, and the erasure
+				// completes. The claim is released so the next daily sweep retries — and those retries are
+				// precisely what makes the window an observation.
+				//
+				// FAIL CLOSED on an undeterminable count, like every other unknown in this function.
+				deferred, deferErr := s.deferIfCascadeGuardWillRefuse(ctx, userID, kind, releaseClaim)
+				if deferred {
+					return deferErr
+				}
+				slog.Default().Error("proceeding with deletion despite Plaid item(s) that can never be removed — the obligation is recorded and will be preserved in plaid_orphaned_items; the Item(s) may still exist and still bill at Plaid",
+					"user_id", userID, "error", err)
+			} else {
+				releaseClaim(err.Error())
+				return fmt.Errorf("aborting deletion — Plaid cleanup failed: %w", err)
+			}
+		}
+	}
+
+	// Issue #1413 Critical finding C2: external cleanup failure now ABORTS the deletion
+	// instead of being swallowed. DeleteUserCascade (below) clears paddle_subscription_id and
+	// Plaid references, so proceeding to the cascade after a cleanup failure would destroy the
+	// local record of the very external resources that failed to clean up — orphaning them
+	// with nothing left to retry. Releasing the claim lets the NEXT run retry the whole
+	// sequence from scratch instead.
+	//
+	// THIS LEG NOW RUNS AFTER THE PLAID LEG, not before it — see the ordering note above the first
+	// abortIfUnauthorised call for why the least-reversible external work goes last.
+	//
+	// THERE IS DELIBERATELY NO abortIfUnauthorised CALL HERE. One was written and then removed as
+	// provably dead: cleanupPaddleResources gates each of its two irreversible calls individually,
+	// and those gates are strictly later and strictly finer than a check at this line would be. The
+	// redundancy was established by mutation, not by reading — deleting a check here killed no test,
+	// while deleting either inner gate kills exactly one. A check that cannot fail is not protection;
+	// it is a second place for the rule to drift.
+	//
+	// ⚠ ROUND 15, TIER A — WHAT USED TO BE HERE AND WHY IT WAS WRONG AT THE ROOT. This block held a
+	// single in-memory bool, `subscriptionCancelled`, set only when CancelSubscriptionImmediately
+	// SUCCEEDED, and a closure that early-returned unless it was true. That bool was a PROXY for "an
+	// irreversible external effect landed", and every path that lost the proxy lost the record:
+	//
+	//	A1  ArchiveAndAnonymizeCustomer set no flag and had no vocabulary, so the act this file itself
+	//	    calls "THE ONE ACTION NOTHING CAN UNDO" could never be recorded at all.
+	//	A2  A cancel that changed Paddle state but returned an error left the flag false.
+	//	A3  The flag lived only in memory: an ordinary error after a landed cancel recorded nothing,
+	//	    and process death or a panic took the fact with it.
+	//
+	// The fix is not five branches. Each irreversible external call now writes its OWN record, to the
+	// database, immediately BEFORE it is issued — see recordIssuedExternalEffect and its two call
+	// sites in cleanupPaddleResources. What survives here is only the ALARM and the one record that
+	// describes an OUTCOME rather than an effect (the cascade-failed kind below).
+	effects := paddleEffectsIssued{}
+	// reportSurvivingResidue is the operator ALARM, not the record — the record for each effect was
+	// already written when that effect was issued. It fires on the paths that end with the user still
+	// present after irreversible external work had already gone out, so the several ways the same
+	// harm happens cannot diverge in what an operator is told.
+	reportSurvivingResidue := func(reason string) {
+		if !effects.any() {
+			return
+		}
+		slog.Default().Error("account deletion stopped after irreversible external work had already been issued against this user's Paddle account — the user KEEPS their account and data; this needs a human",
+			"user_id", userID, "claim_kind", string(kind),
+			"subscription_cancel_issued", effects.subscriptionCancel,
+			"customer_archive_issued", effects.customerArchive, "reason", reason)
+	}
+	if s.paddleCleanupSvc != nil {
+		issued, err := s.cleanupPaddleResources(ctx, userID, kind, user, stillAuthorised)
+		effects = issued
+		if err != nil {
+			if errors.Is(err, ErrDeletionAuthorisationRevoked) {
+				releaseClaim("authorisation revoked mid Paddle cleanup")
+				slog.Default().Info("aborting deletion mid Paddle cleanup — the authorisation this run was claimed under no longer holds",
+					"user_id", userID, "claim_kind", string(kind))
+				reportSurvivingResidue("authorisation revoked between the subscription cancel and the customer archive")
+				return nil
+			}
+			// A Paddle FAILURE (as opposed to a revocation) still releases the claim so the next run
+			// retries the whole sequence. What CHANGED in round 15 (finding A2/A3): it no longer
+			// implies "nothing to report". Whatever calls were already issued are already on record,
+			// written before they went out, and a retry that completes removes them again — see
+			// recordIssuedExternalEffect.
 			releaseClaim(err.Error())
-			return fmt.Errorf("aborting deletion — Plaid cleanup failed: %w", err)
+			reportSurvivingResidue("Paddle cleanup failed after external work had already been issued: " + err.Error())
+			return fmt.Errorf("aborting deletion — Paddle cleanup failed: %w", err)
 		}
 	}
 
@@ -446,12 +817,96 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	deleted, err := s.profileRepo.DeleteUserCascade(ctx, userID, user.DeletionRequestedAt)
 	if err != nil {
 		releaseClaim(err.Error())
+		// Round 12 finding AB-1: the THIRD way a user survives a run whose Paddle cancel already
+		// landed, and until now the only one that recorded nothing at all. #1504 covered the gate
+		// decline and the cascade's (false, nil) refusal; this branch was left out on the grounds
+		// that an errored run still retries into success, so the user is not being LEFT in the state
+		// the record describes.
+		//
+		// #1507 broke that premise without removing it. Making the terminal audit write abort the
+		// cascade created a class of error — a revoked INSERT privilege on audit_logs, a new CHECK
+		// or RLS policy, a trigger — that no retry clears. Every sweep re-runs the whole sequence,
+		// re-cancels nothing (there is nothing left to cancel) and fails identically, while the user
+		// keeps their account with no subscription and severed bank links, and BOTH of #1504's
+		// metrics read zero. The harm the metrics were built for, occurring invisibly.
+		//
+		// ⚠ NOT "record on every cascade error" — that is what b76e1b8a's reasoning rules out and it
+		// is still right. cascadeErrorIsRecognisedTransient names the classes for which the retry
+		// premise genuinely holds and stays silent for those; everything else, including anything
+		// unrecognised, records. Its doc comment argues the default direction.
+		//
+		// ⚠ NOT REMEDIATION. Nothing here re-subscribes anyone (see RecordDeletionResidue's own doc
+		// comment); this makes an existing, already-occurring harm visible to a human.
+		//
+		// ⚠ ROUND 15, FINDING A4 — THE DECISION, AND HOW IT ENGAGES ROUND 14 RATHER THAN REVERSING IT
+		// SILENTLY. Round 14's argument for silence on a recognised-transient error was: a permanent
+		// operator artifact is wrong for an incident that resolves itself, BECAUSE THE RETRY
+		// RECONCILES. That premise was sound and is still sound — but nothing implemented it. It was
+		// an assumption about a future run, and it fails outright when no future run is authorised:
+		// if the user cancels their deletion (or resubscribes) before the retry, neither sweep will
+		// ever select them again and no work item exists anywhere.
+		//
+		// Round 15 makes the premise TRUE INSTEAD OF ASSUMED. Every irreversible external call now
+		// records itself as it is issued, and DeleteUserCascade DELETES this user's residue rows
+		// inside the same transaction that deletes the user — so the reconciliation round 14 was
+		// relying on is now a real, atomic step rather than a hope. That inverts the cost: recording
+		// on a transient failure is no longer a permanent artifact, it is a work item that the
+		// successful retry retracts by itself. So the answer to A4 is RECORD ON TRANSIENT ERRORS TOO
+		// — and it needs no branch here, because the landing records are already written.
+		//
+		// cascadeErrorIsRecognisedTransient is KEPT, doing the job it was actually designed for and
+		// only that job: distinguishing "the deletion is OVER" from "the deletion is STUCK on a fault
+		// a retry will not clear", which is a second, different task for the operator. That is what
+		// the extra ..._cascade_failed row says, over and above the landing records.
+		//
+		// ⚠ ROUND 15, TIER E ITEM 8 — THE ARCHIVE-ONLY RUN NOW GETS ITS OWN STUCK ROW.
+		//
+		// This used to read `if effects.subscriptionCancel && ...` alone, justified as: the constant
+		// NAMES the subscription, and an archive-only run "is still visible — its own landing record
+		// is on file and reportSurvivingResidue fires — it simply does not get the second row". That
+		// is right about the constant and wrong about the operator. The landing record says WHAT was
+		// lost; neither it nor the log says whether the deletion is OVER or STUCK, and that
+		// distinction is the entire reason a second kind exists. So an operator filtering for stuck
+		// deletions saw every ex-subscriber's and none of the archive-only ones — and the archive-only
+		// shape is not exotic: it is the deterministic retention-sweep case (an ex-subscriber whose
+		// subscription is already cancelled, so there is nothing to cancel and only the customer to
+		// archive).
+		//
+		// The remedy is a PARALLEL constant, not a widened one: recording
+		// `..._subscription_cancelled_cascade_failed` for a run in which no subscription was cancelled
+		// would put a false statement in an operator-facing action, which is what the original gate
+		// was correctly avoiding. Each irreversible effect that was issued gets the stuck row that
+		// names IT.
+		// ⚠ THESE TWO ARE STILL BEST-EFFORT, AND THAT IS NOT AN INCONSISTENCY WITH THE FAIL-CLOSED
+		// PRE-ISSUE WRITES. Fail-closed is meaningful only while the effect is still preventable;
+		// here the external work has ALREADY landed and the cascade has already failed, so there is
+		// nothing left to refuse. The error is discarded deliberately — recordIssuedExternalEffect
+		// has already logged it at Error, and there is no better escalation available.
+		if !cascadeErrorIsRecognisedTransient(err) {
+			if effects.subscriptionCancel {
+				_ = s.recordIssuedExternalEffect(ctx, userID, kind,
+					repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed,
+					"the cascade failed with a non-transient error after the subscription cancel had been issued: "+err.Error(), false)
+			}
+			if effects.customerArchive {
+				_ = s.recordIssuedExternalEffect(ctx, userID, kind,
+					repository.DeletionResiduePaddleCustomerArchivedCascadeFailed,
+					"the cascade failed with a non-transient error after the customer archive had been issued: "+err.Error(), false)
+			}
+		}
+		reportSurvivingResidue("the cascade failed after external work had already been issued: " + err.Error())
 		return fmt.Errorf("failed to cascade delete user data: %w", err)
 	}
 	if !deleted {
 		releaseClaim("cascade aborted — eligibility lost, or un-cleaned Plaid items remain, since the claim was taken")
 		slog.Default().Info("skipping deletion cascade — re-verification inside the cascade transaction found the user no longer eligible",
 			"user_id", userID)
+		// Issue #1504: the SECOND way a user survives a run whose Paddle cancel already landed. The
+		// harm is identical to the gate-decline case above — account kept, subscription gone — so the
+		// alarm must be identical too; covering only the gate would silently miss this half. The
+		// RECORD is not re-written here: since round 15 it was already written when the effect was
+		// issued, which is the only version of this that survives a process that never gets here.
+		reportSurvivingResidue("the cascade's own re-verification refused after external work had already been issued")
 		return nil
 	}
 
@@ -484,8 +939,37 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// The database column name is legacy and will be renamed in a future migration
 	_ = s.clerkService.DeleteUser(ctx, user.ClerkUserID)
 
-	// Create audit log (non-critical)
-	_ = s.auditLogger.Log(ctx, "user.deleted", "user", userID)
+	// NO `user.deleted` AUDIT WRITE HERE ANY MORE — Issue #1507. It used to be this line, issued
+	// after DeleteUserCascade had already committed, with its error routed to logAuditFailure. That
+	// made the single most important entry in the GDPR trail the one entry that could go missing
+	// while the erasure it describes was permanent and had nothing left to retry from.
+	//
+	// It is now DeleteUserCascade's own last statement before COMMIT (repository.LogInTx), so the
+	// record and the erasure land together or not at all. `deleted == true` above is therefore
+	// already proof that the entry was written. Do NOT re-add a call here: it would produce a second
+	// `user.deleted` row per deletion, which TestExecuteDeletion_Integration_RetentionCandidate_
+	// IsDeleted refutes — that is the test that runs THIS function against a real database and
+	// counts the rows. (Its repository-layer sibling,
+	// TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion, calls the cascade
+	// directly and so cannot see this layer at all.)
+	//
+	// ⚠ AND NOTE WHAT A FAILURE OF THAT WRITE NOW COSTS. Because it aborts the cascade, an audit
+	// INSERT that fails PERSISTENTLY (a revoked INSERT privilege on audit_logs, a new constraint or
+	// RLS policy) gates this user's erasure for as long as it lasts — after the Plaid disconnect and
+	// possibly the Paddle cancellation above have already run and cannot be undone. The trade is
+	// argued at the write site in profile_repository.go; the part that lands HERE is that such a run
+	// takes the error branch ABOVE. That branch used to record no Paddle-cancel residue at all, on
+	// the grounds that the run was still expected to complete — a premise this very failure mode
+	// breaks. It no longer does: the branch now records a
+	// DeletionResiduePaddleSubscriptionCancelledCascadeFailed residue whenever the error is not one
+	// cascadeErrorIsRecognisedTransient vouches for, which keeps b76e1b8a's transient case silent
+	// and stops this one from being invisible. Round 12, finding AB-1.
+	//
+	// The service's OTHER audit writes are unchanged and stay non-fatal: RequestDeletion's
+	// `user.deletion_requested` and CancelDeletion's `user.deletion_cancelled` both describe a state
+	// change that has ALREADY committed in a transaction this service does not hold, so there is
+	// nothing there to roll back and aborting would report failure for work that succeeded. Only
+	// this one entry was inside reach of a transaction, which is why only this one moved.
 
 	// Capture analytics event for account deletion
 	if s.analytics != nil {
@@ -596,6 +1080,40 @@ func (s *deletionService) SetHouseholdInviteRevoker(r HouseholdInviteRevoker) {
 	s.inviteRevoker = r
 }
 
+// deferIfCascadeGuardWillRefuse answers, before the Paddle leg spends anything irreversible, whether
+// DeleteUserCascade's C2 guard is ALREADY certain to refuse this user — round 15, finding D1. See the
+// ErrPlaidRemovalUnrecoverable call site for the full argument, including why the 7-day cooling-off
+// window it defers to is left at its full length rather than shortened.
+//
+// Returns (handled, err) in ExecuteDeletion's established shape: handled==true means the caller must
+// return err directly and do nothing else. A deferral is a legitimate, expected outcome and returns a
+// nil error, exactly like the authorisation-revoked and claim-busy stops; only an UNDETERMINABLE count
+// is an error, because not knowing whether the guard will refuse is not permission to start
+// irreversible external work.
+//
+// It reads the guard's own population through CountUncleanedLinkedItems, which shares
+// uncleanedLinkedItemPredicate with C2 verbatim, so this can only disagree with the guard if the rows
+// changed in between. That staleness is harmless in both directions and cannot produce an erasure the
+// guard would refuse — the guard still runs, unchanged, and is still the authority.
+func (s *deletionService) deferIfCascadeGuardWillRefuse(ctx context.Context, userID string, kind repository.DeletionClaimKind, releaseClaim func(reason string)) (bool, error) {
+	outstanding, err := s.profileRepo.CountUncleanedLinkedItems(ctx, userID)
+	if err != nil {
+		releaseClaim(err.Error())
+		return true, fmt.Errorf("aborting deletion before irreversible Paddle cleanup — Plaid removal is unrecoverable and the outstanding linked-item count could not be established: %w", err)
+	}
+	if outstanding == 0 {
+		return false, nil
+	}
+	releaseClaim(fmt.Sprintf("terminal Plaid removal verdict is still inside its cooling-off window — %d linked item(s) would make the cascade guard refuse", outstanding))
+	// Info, not Error: this is a bounded, self-resolving wait that needs no operator, and it is the
+	// alarm this finding was really about. Reporting it as "this needs a human" every day for a week —
+	// which is what the old flow did, after doing the irreversible work first — is how a real signal
+	// gets tuned out.
+	slog.Default().Info("deferring deletion before any Paddle cleanup — every remaining Plaid removal failed terminally, but that verdict is still inside its cooling-off window, so the cascade guard would refuse; no irreversible external work is spent on a run that cannot complete",
+		"user_id", userID, "claim_kind", string(kind), "outstanding_linked_items", outstanding)
+	return true, nil
+}
+
 // SetDB wires transaction capability for the household owner-guard. #1367 — Phase 3.
 func (s *deletionService) SetDB(db repository.DB) {
 	s.db = db
@@ -617,8 +1135,34 @@ func (s *deletionService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository
 // the resource that needs cleanup. Nothing would ever retry it. Returning the first failure lets
 // the caller Release the claim so the whole sequence retries on the next run, while the IDs are
 // still present in the database to retry against.
-func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID string, user *domain.User) error {
+//
+// ⚠ ROUND 15: THE RETURN VALUE IS NO LONGER THE RECORD, ONLY THE ALARM'S INPUT. It used to be
+// `subscriptionCancelled bool`, set once CancelSubscriptionImmediately had SUCCEEDED, and the caller
+// wrote the durable residue record off it at the END of ExecuteDeletion. That is finding A3's root:
+// a fact that exists only in a local variable does not survive the process, and it never described
+// the customer archive at all (A1). Each irreversible call now writes its own record BEFORE it goes
+// out (recordIssuedExternalEffect). What is returned here is which calls were issued, so the caller
+// can raise the right alarm and decide whether the extra ..._cascade_failed record applies. It is
+// reported alongside the error on the abort paths precisely because those are the paths where it
+// matters.
+func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID string, kind repository.DeletionClaimKind, user *domain.User, stillAuthorised func(ctx context.Context) (bool, error)) (issued paddleEffectsIssued, err error) {
 	anonymizedEmail := fmt.Sprintf("deleted_%s@deleted.local", userID)
+
+	// gate re-asks the authorisation question immediately before one specific irreversible call. It
+	// is called before EACH of the two below rather than once for the pair, because they are
+	// separately irreversible and the first is a network round-trip: a revocation landing during the
+	// subscription cancellation must still stop the customer anonymisation, which is the one action
+	// here that destroys data nobody can restore.
+	gate := func(stage string) error {
+		authorised, err := stillAuthorised(ctx)
+		if err != nil {
+			return fmt.Errorf("could not establish whether deletion is still authorised before %s: %w", stage, err)
+		}
+		if !authorised {
+			return fmt.Errorf("%w before %s", ErrDeletionAuthorisationRevoked, stage)
+		}
+		return nil
+	}
 
 	// Cancel active subscriptions
 	// #1413 PinnedRaw: deliberately reads the RAW user.SubscriptionStatus, not
@@ -631,6 +1175,9 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 	if user.PaddleSubscriptionID != nil {
 		status := domain.SubscriptionStatus(user.SubscriptionStatus)
 		if status.IsActiveSubscription() || status == domain.SubscriptionStatusPastDue {
+			if err := gate("cancelling the Paddle subscription"); err != nil {
+				return issued, err
+			}
 			// Issue #1413 H1: claim the OPERATION-keyed ActionPaddleCancelSubscription side-effect
 			// claim before calling Paddle, nested inside the ActionAccountDeletion flow claim
 			// already held by ExecuteDeletion. Without this, a concurrent past_due grace-cancel
@@ -641,6 +1188,22 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 			// "another flow is mid-operation: release the flow claim, let the next run retry"
 			// response (see claimSideEffectAndRun's doc comment, plaid_item_cleanup_service.go).
 			err := claimSideEffectAndRun(ctx, s.claimsRepo, repository.ActionPaddleCancelSubscription, userID, paddleCancelSideEffectLease, func() error {
+				// ⚠ THE RECORD GOES IN BEFORE THE CALL, AND IT IS INSIDE THIS CLOSURE ON PURPOSE.
+				// Before: because nothing written after a network call can describe a process that
+				// dies during it (A3), and because a call that returns an error may still have
+				// changed Paddle's state (A2) — "issued" is the only claim about it we can honestly
+				// make from this side. Inside: because claimSideEffectAndRun does NOT invoke this
+				// closure when another flow holds the side-effect claim, and that case is a known
+				// nothing-happened, not an ambiguity. Recording it would hand an operator a work
+				// item for a subscription that is demonstrably untouched.
+				// Fail-closed, and the ORDER matters: issued.subscriptionCancel is set only after
+				// the record commits, because a refusal here means the call is never made and
+				// there is nothing issued to report.
+				if recErr := s.recordIssuedExternalEffect(ctx, userID, kind, repository.DeletionResiduePaddleSubscriptionCancelled,
+					"about to cancel Paddle subscription "+*user.PaddleSubscriptionID, true); recErr != nil {
+					return recErr
+				}
+				issued.subscriptionCancel = true
 				return s.paddleCleanupSvc.CancelSubscriptionImmediately(ctx, *user.PaddleSubscriptionID)
 			})
 			if err != nil {
@@ -651,20 +1214,420 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 				if s.analytics != nil {
 					s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "cancel_subscription"})
 				}
-				return fmt.Errorf("cancel Paddle subscription %s: %w", *user.PaddleSubscriptionID, err)
+				return issued, fmt.Errorf("cancel Paddle subscription %s: %w", *user.PaddleSubscriptionID, err)
 			}
 		}
 	}
 
 	// Archive customer and anonymize email (GDPR PII erasure)
 	if user.PaddleCustomerID != nil {
+		// THE LAST CHECK BEFORE THE ONE ACTION NOTHING CAN UNDO. A cancelled subscription can be
+		// re-created; an anonymised Paddle customer cannot be recovered by us or by Paddle.
+		if err := gate("archiving and anonymising the Paddle customer"); err != nil {
+			return issued, err
+		}
+		// ⚠ FINDING A1, AT ITS ROOT. This call had no record of any kind: the old mechanism keyed
+		// everything off the SUBSCRIPTION cancel, so the act two lines above is described as
+		// unrecoverable could not be reported by any path. It is recorded here, before the call, on
+		// exactly the same terms as the cancel — an anonymised Paddle customer cannot be restored,
+		// so "issued" is again the strongest honest claim, and the strongest one worth making.
+		// Fail-closed on the one act the comment above calls unrecoverable: if the record
+		// cannot be written, the archive is not attempted at all.
+		if recErr := s.recordIssuedExternalEffect(ctx, userID, kind, repository.DeletionResiduePaddleCustomerArchived,
+			"about to archive and anonymise Paddle customer "+*user.PaddleCustomerID, true); recErr != nil {
+			return issued, recErr
+		}
+		issued.customerArchive = true
 		if err := s.paddleCleanupSvc.ArchiveAndAnonymizeCustomer(ctx, *user.PaddleCustomerID, anonymizedEmail); err != nil {
 			if s.analytics != nil {
 				s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "archive_customer"})
 			}
-			return fmt.Errorf("archive Paddle customer %s: %w", *user.PaddleCustomerID, err)
+			return issued, fmt.Errorf("archive Paddle customer %s: %w", *user.PaddleCustomerID, err)
 		}
 	}
 
+	return issued, nil
+}
+
+// paddleEffectsIssued names which of cleanupPaddleResources' two irreversible external calls this
+// run actually ISSUED. Issued, not "succeeded": a call whose response never came back may have
+// changed Paddle's state anyway (round 15 finding A2), and from this side of the network there is no
+// way to tell the two apart.
+type paddleEffectsIssued struct {
+	subscriptionCancel bool
+	customerArchive    bool
+}
+
+// any reports whether this run did anything to the user's Paddle account that it cannot take back.
+func (e paddleEffectsIssued) any() bool { return e.subscriptionCancel || e.customerArchive }
+
+// deletionResidueWriteTimeout bounds the residue write's own independent context. Matches the 5s the
+// claim Release calls in ExecuteDeletion use, for the same reason: this write runs on paths where
+// something has already gone wrong, and it must neither hang the flow nor inherit its deadline.
+const deletionResidueWriteTimeout = 5 * time.Second
+
+// recordIssuedExternalEffect writes the durable, queryable record that this deletion run has ISSUED
+// an irreversible external call against the user's Paddle account. Round 15, findings A1–A5.
+//
+// ⚠ IT IS WRITTEN WHEN THE EFFECT IS ISSUED, NOT WHEN THE RUN ENDS. That is the whole correction.
+// The previous mechanism inferred the record at the end of ExecuteDeletion from an in-memory bool,
+// which meant it could not describe a process that died mid-flight, a panic (the deferred handler
+// releases the claim and re-panics, persisting nothing), a call whose acknowledgement was lost, or —
+// because the bool only ever named the subscription — the customer archive at all.
+//
+// ⚠ WHY WRITING IT EAGERLY IS NOT NOISE. The record is not permanent. DeleteUserCascade removes this
+// user's residue rows inside the SAME transaction that removes the user, so a deletion that
+// COMPLETES leaves none behind and no observer ever sees an uncommitted intermediate. A record
+// therefore means exactly what it has always meant — irreversible external work was done and the
+// user is still here — and it now means it durably instead of hopefully.
+//
+// ⚠ THE CONTEXT IS DELIBERATELY NOT ctx (finding A5). Every Release in ExecuteDeletion already runs
+// on context.WithoutCancel plus a short timeout, for a reason that applies here with more force: the
+// shutdown or deadline that causes the failure has usually cancelled ctx as well, and a write issued
+// on a cancelled context does not fail loudly — it does nothing and returns an error that reads like
+// a database problem. That asymmetry existed only because this write was added later, next to the
+// Release calls, without inheriting the reasoning printed above them.
+//
+// ⚠ `preventable` NAMES WHICH SITUATION THE CALLER IS IN, and it decides both the failure message
+// and what the caller does with the returned error. true at the two PRE-ISSUE sites, where the
+// external call has not happened yet and can still be refused; false at the two POST-CASCADE sites,
+// where it has already landed and the record is only an operator work item. Passing it explicitly
+// rather than inferring it keeps the asymmetry visible at every call site — the one-message version
+// told operators an effect had been "refused" when it had in fact already landed.
+//
+// ⚠ IT IS FAIL-CLOSED WHERE IT CAN BE, AND IT USED NOT TO BE (EE re-review). A failure is logged at Error AND
+// returned, and both call sites abort WITHOUT issuing their external call. The earlier best-effort
+// shape carried an argument inherited from the old post-hoc mechanism — "the write cannot change the
+// outcome of the deletion around it" — which stopped being true the moment the record moved BEFORE
+// the call. When this write fails, the irreversible effect has not happened yet; proceeding anyway
+// reproduced the exact defect the mechanism exists to close, on the one call the code itself calls
+// unrecoverable. The trade is deliberate and asymmetric: a deletion deferred while audit_logs is
+// unwritable is retryable and has the 30-day GDPR grace period to retry in, whereas an anonymised
+// Paddle customer cannot be restored by us or by Paddle.
+//
+// ⚠ IT IS NOT REMEDIATION. Nothing here re-subscribes anyone or restores a Paddle customer; see
+// ProfileRepository.RecordDeletionResidue's doc comment for why that is deliberate.
+func (s *deletionService) recordIssuedExternalEffect(ctx context.Context, userID string, kind repository.DeletionClaimKind, effect repository.DeletionResidueEffect, reason string, preventable bool) error {
+	// Branched on `preventable` for the same reason the failure message below is: the single
+	// wording said "before issuing it" at the post-cascade sites too, where it contradicted the
+	// structured `reason` printed on the very same line.
+	msg := "recording an irreversible external effect that HAS ALREADY LANDED — this record is the operator's work item and is removed again by a deletion that completes"
+	if preventable {
+		msg = "recording an irreversible external effect before issuing it — this record is removed again by a deletion that completes"
+	}
+	slog.Default().Info(msg,
+		"user_id", userID, "claim_kind", string(kind), "residue_effect", string(effect), "reason", reason)
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deletionResidueWriteTimeout)
+	defer cancel()
+	if recErr := s.profileRepo.RecordDeletionResidue(rctx, userID, effect); recErr != nil {
+		// ⚠ THE MESSAGE HAS TO MATCH THE CALLER'S SITUATION, and it did not: the same line said
+		// "refusing to issue" at the post-cascade sites, where the Paddle call had ALREADY
+		// landed and nothing was being refused. An operator reading that during an incident
+		// would conclude the opposite of the truth. Found by the EE re-review.
+		if preventable {
+			slog.Default().Error("refusing to issue an irreversible external effect: its durable record could not be written — the user KEEPS their account and this run will be retried",
+				"user_id", userID, "residue_effect", string(effect), "error", recErr)
+		} else {
+			slog.Default().Error("an irreversible external effect HAS ALREADY LANDED and its stuck-state record could not be written — the effect itself is unaffected and the run's own error is the authority; this record was the operator's work item",
+				"user_id", userID, "residue_effect", string(effect), "error", recErr)
+		}
+		return fmt.Errorf("record irreversible external effect %s: %w", string(effect), recErr)
+	}
 	return nil
+}
+
+// transientCascadeSQLSTATEClasses are the SQLSTATE classes for which "this run failed but the next
+// one is still expected to complete" is KNOWN to be true, rather than merely hoped. Classified by
+// two-character class, not by individual code, because the classes are defined by cause and a new
+// member of one of them is transient for the same reason the existing members are:
+//
+//	08 — Connection Exception ................ the connection died; a new one will not be that one.
+//	                                           ⚠ SQLSTATE 08 only covers a connection that EXISTED and
+//	                                           broke. A connection that was never established carries
+//	                                           no SQLSTATE at all and is matched separately, as a
+//	                                           *pgconn.ConnectError, in the function below.
+//	40 — Transaction Rollback ................ deadlock_detected / serialization_failure; retry is
+//	                                           the DOCUMENTED response and this repo already relies
+//	                                           on it (see the 40P01 analysis in profile_repository.go)
+//	53 — Insufficient Resources .............. out of memory / connections / disk; relieves itself
+//	55 — Object Not In Prerequisite State .... lock_not_available and friends; a lock is held NOW
+//	57 — Operator Intervention ............... query_canceled, admin_shutdown; the operator did it
+//
+// Class 42 (insufficient_privilege, undefined_table), class 23 (constraint violations) and class P0
+// (a trigger's raise_exception) are deliberately ABSENT: those are exactly the three persistent modes
+// #1507's own commit message names as the cost of aborting the cascade on a failed audit write, and
+// they do not clear on retry. Nothing else is enumerated either way — see the default direction below.
+var transientCascadeSQLSTATEClasses = map[string]struct{}{
+	"08": {}, "40": {}, "53": {}, "55": {}, "57": {},
+}
+
+// cascadeErrorIsRecognisedTransient answers the one question ExecuteDeletion's cascade-error branch
+// needs: is this a failure we KNOW will be retried into success, so that recording a permanent
+// operator artifact would be wrong?
+//
+// ⚠ WHY IT IS "RECOGNISED transient" AND NOT "IS persistent", AND WHY THE DEFAULT RECORDS. b76e1b8a
+// argued — correctly, and the argument survives here intact — that recording residue on EVERY cascade
+// error would break the transient case: a deadlock resolves in milliseconds, the claim is released,
+// the next run completes the deletion, and an operator would have been handed a permanent artifact
+// for a non-incident. That argument establishes what must NOT record. It says nothing about the case
+// #1507 then created, where the cascade aborts on a database fault that no retry clears.
+//
+// So the predicate is an ALLOWLIST of known-transient classes and everything else records. The
+// asymmetry is deliberate and matches this function's three siblings in ExecuteDeletion — the
+// undetermined answer from abortIfUnauthorised, the failed CountUncleanedLinkedItems, the failed
+// stillAuthorised recheck — all of which fail CLOSED, on the same reasoning: "we do not know" is not
+// permission to stay silent about an irreversible external effect that has already landed. The two
+// error directions are not symmetric in cost. A spurious residue row is a false alarm an operator
+// closes in a minute; a missed one is a user who keeps their account, loses their subscription, and
+// is never told, with both of #1504's metrics reading zero. The allowlist is what keeps b76e1b8a's
+// case — which is the FREQUENT one — out of that default.
+//
+// A nil error is "transient" in the only sense that matters here: it is not a failure, so there is
+// nothing to record. The call site guards on err != nil anyway; this makes the function total.
+func cascadeErrorIsRecognisedTransient(err error) bool {
+	if err == nil {
+		return true
+	}
+	// ⚠ THE PERMANENT-SQLSTATE VETO RUNS BEFORE EVERY OTHER TRANSIENT LEG, AND THAT ORDERING IS THE
+	// WHOLE POINT. Round 14's CE Codex review found the cancellation/deadline check sitting ABOVE this
+	// walk, where `errors.Is` — which since Go 1.20 traverses `Unwrap() []error` as well — matched a
+	// per-host dial timeout in a joined multi-host chain and returned true before any SQLSTATE was
+	// examined. A permanent 28P01 later in the SAME chain therefore never got its veto, and the residue
+	// was dropped for a fault that repeats on every retry, after the Plaid removal and the Paddle
+	// cancel had already landed. That is the one direction this function's doc comment says must never
+	// happen. Reachable in the exact shape CC-2 was written for: pgconn gives each candidate host its
+	// own connect-timeout context and joins every host's error (pgx v5.9.2, pgconn.go:251 and :269), so
+	// a timeout and an authentication failure end up in one tree — as COUSINS beneath sibling per-dial
+	// wrappers, not as direct siblings, which is the correction the CE re-review made to this comment's
+	// first draft. The walk is indifferent to the difference; the claim about the shape was not.
+	//
+	// Hoisting it costs nothing the transient legs needed: a cancelled or deadline-expired cascade with
+	// no permanent SQLSTATE in its chain still falls through to the check below and still reads
+	// transient. A cancellation mid-statement that DOES carry a SQLSTATE carries 57014 query_canceled,
+	// which is class 57 and therefore allowlisted, so it does not trip this veto either.
+	if anyErrorInTree(err, pgErrorWithTransience(false)) {
+		return false
+	}
+	// Cancellation and deadline expiry are the non-SQLSTATE half: in practice the same shutdown or
+	// job deadline that killed the cascade killed the run, and the next run redoes the sequence.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// A CONNECTION ATTEMPT THAT NEVER REACHED POSTGRES CARRIES NO SQLSTATE, so the class-08
+	// ("connection exception") entry in the allowlist below cannot see it. DeleteUserCascade opens
+	// its transaction only AFTER the external cleanup, and a pool acquisition that cannot reach the
+	// server fails there as a *pgconn.ConnectError, which carries no SQLSTATE — so errors.As for a
+	// *pgconn.PgError missed it and the syntactic default recorded a PERMANENT operator artifact for
+	// a blip the very next run recovers from. Nothing ever clears such a row. Whoever put "08" in the
+	// allowlist meant connection failures to be transient; recognising ConnectError applies that same
+	// intent to the shape the failure actually arrives in. Round 13, Codex review of
+	// 127dc9c2..62014b4d.
+	//
+	// ⚠ ORDER IS LOAD-BEARING, AND THE FIRST ATTEMPT AT THIS GOT IT WRONG. The first version returned
+	// true for ANY ConnectError, ahead of the SQLSTATE check, on the argument that a permanent
+	// connection failure could not be recorded anyway because RecordDeletionResidue writes to that
+	// same Postgres. The round-13 Codex RE-REVIEW refuted both halves and it was right:
+	//
+	//   * pgconn wraps the server's STARTUP ErrorResponse inside a ConnectError (pgconn.go, the
+	//     connect path), so 28P01 invalid_password and 3D000 invalid_catalog_name — both permanent —
+	//     arrive as a ConnectError that DOES contain a *pgconn.PgError. Returning true for those
+	//     silently drops the human-facing Error log AND the residue for a harm that never self-heals.
+	//   * "same database, therefore unwritable" is not categorical: RecordDeletionResidue issues its
+	//     own pool Exec, and a pool Exec can be served by an ALREADY-ESTABLISHED connection that
+	//     predates the credential rotation which is failing new handshakes.
+	//
+	// So the SQLSTATE check runs FIRST and a ConnectError is only considered at all once no SQLSTATE
+	// was found. A ConnectError wrapping 57P03 cannot_connect_now still reads transient, correctly,
+	// via class 57.
+	//
+	// ⚠ THAT SETTLES THE ORDER OF THE TWO LEGS AND NOTHING MORE. Round 14 found this passage being
+	// read as if it closed the ordering question outright, while the SQLSTATE leg below was still
+	// picking whichever PgError a first-match traversal reached first. It is not the same question
+	// and it was not settled; see the block at that leg.
+	//
+	// ⚠ AND "NO SQLSTATE" IS NOT ITSELF EVIDENCE OF TRANSIENCE. The round-13 Codex THIRD pass caught
+	// the next layer: plenty of PERMANENT failures produce a ConnectError with no PgError at all —
+	// an expired or untrusted TLS certificate, a hostname mismatch, an unsupported SASL/channel-binding
+	// configuration, a protocol version the server will never speak, and NXDOMAIN. Verified by
+	// execution, not by reading: pgconn.Connect to a non-existent host yields a ConnectError carrying
+	// a *net.DNSError with IsNotFound=true and IsTemporary=false. Treating all of those as transient
+	// would silently drop the residue for a harm that never self-heals — the same defect as the
+	// version above, one level over. So the ConnectError leg is an ALLOWLIST too, in the same
+	// fail-closed shape as transientCascadeSQLSTATEClasses: see connectErrorIsRecognisedTransient.
+	//
+	// ⚠ WALKED, NOT errors.As'd — AND UNTIL ROUND 14 THIS LEG WAS THE INCONSISTENT ONE. It used to be
+	// `errors.As(err, &pgErr) && len(pgErr.Code) >= 2`, which binds the FIRST assignable node in the
+	// tree and never examines another. That is the same first-match unsoundness the round-13 FIFTH
+	// pass removed from connectErrorIsRecognisedTransient's net.Error check, left in place here — so
+	// the two legs disagreed about a question they both face, and the comment above (which settles
+	// only the order of the LEGS, not the order WITHIN one) read as if the whole question were
+	// closed. It was not. Round 14, finding CC-2.
+	//
+	// It bit in two ways, both requiring a tree with an `Unwrap() []error` node — pgconn's multi-host
+	// aggregation, which joins the errors of every attempted host:
+	//
+	//   * a transient SQLSTATE in slice position 0 masked a PERMANENT one later in the chain, and the
+	//     residue for a fault no retry clears was silently suppressed;
+	//   * a PgError with an EMPTY code in position 0 failed the `len >= 2` guard, dropping the whole
+	//     leg — so a usable SQLSTATE further along was never consulted at all.
+	//
+	// ⚠ THE QUANTIFIER IS DELIBERATELY NOT THE SIBLING LEG'S, AND THE DIFFERENCE IS THE POINT.
+	// connectErrorIsRecognisedTransient says "any transient node wins". This leg says "any
+	// NON-transient SQLSTATE loses". Both are the fail-CLOSED reading of their own evidence; they
+	// differ because the evidence differs. A socket errno describes one host's reachability and says
+	// nothing about the others, so a recoverable host redeems the chain. A server-issued SQLSTATE
+	// does not work that way: 28P01 invalid_password and 3D000 invalid_catalog_name are statements
+	// about the DEPLOYMENT, and a second host being briefly refused does not make the password right.
+	// Importing "any transient node wins" here would suppress the residue in precisely the 28P01 case
+	// the round-13 re-review restored it for. So the rule can only ever turn a former `true` into a
+	// `false` — at worst a spurious residue row an operator closes in a minute, never a missing one.
+	//
+	// A codeless PgError is evidence of nothing and votes neither way; the chain then falls through
+	// to the ConnectError leg exactly as it did before.
+	//
+	// A type assertion inside the walk, not errors.As: anyErrorInTree already provides the traversal
+	// errors.As was being used for, and the repository wraps every failure in fmt.Errorf, so no
+	// production caller ever sees a bare *pgconn.PgError at the root.
+	// ⚠ ONLY THE POSITIVE HALF OF THIS LEG IS HERE. Its negative half — the permanent-SQLSTATE veto —
+	// was hoisted above the cancellation check by round 14's CE review; the block up there explains
+	// why, and the two halves are still one rule read in two directions.
+	if anyErrorInTree(err, pgErrorWithTransience(true)) {
+		return true
+	}
+	// No SQLSTATE anywhere in the chain: transient only if this was a connection attempt that failed
+	// for a RECOGNISED transient reason. Everything else — including anything unrecognised — records,
+	// which is the default direction this function's doc comment argues for.
+	var connErr *pgconn.ConnectError
+	return errors.As(err, &connErr) && connectErrorIsRecognisedTransient(err)
+}
+
+// pgErrorWithTransience builds a predicate for anyErrorInTree that matches any *pgconn.PgError whose
+// SQLSTATE class's membership of transientCascadeSQLSTATEClasses equals `transient`.
+//
+// A PgError whose Code is shorter than two characters matches NEITHER polarity: it carries no class
+// and so is not evidence of transience or of permanence. That is what lets a codeless PgError sit in
+// a joined chain without vetoing a sibling that does carry a class, and it preserves the pre-round-14
+// behaviour for the single-error case (`wrapPgError("")` still falls through to the ConnectError leg
+// and records) — see TestCascadeErrorIsRecognisedTransient_UnknownErrorsAreNotTransient.
+func pgErrorWithTransience(transient bool) func(error) bool {
+	return func(e error) bool {
+		pgErr, ok := e.(*pgconn.PgError)
+		if !ok || len(pgErr.Code) < 2 {
+			return false
+		}
+		_, isTransient := transientCascadeSQLSTATEClasses[pgErr.Code[:2]]
+		return isTransient == transient
+	}
+}
+
+// transientConnectErrnos are the socket-level failures that mean "not right now" rather than
+// "not ever". Each one is a condition a restarting server, a failing-over replica or a brief network
+// partition produces and a retry a minute later clears.
+var transientConnectErrnos = []syscall.Errno{
+	syscall.ECONNREFUSED, // nothing listening yet — a server mid-restart
+	syscall.ECONNRESET,   // the peer tore the connection down
+	syscall.EHOSTUNREACH, // routing gap
+	syscall.ENETUNREACH,  // routing gap
+	syscall.ETIMEDOUT,    // SYN never answered
+	syscall.EPIPE,        // wrote to a socket the peer had already closed
+}
+
+// connectErrorIsRecognisedTransient decides whether a *pgconn.ConnectError that carries no SQLSTATE
+// is one a retry is EXPECTED to clear.
+//
+// ⚠ "EXPECTED", NOT "GUARANTEED", AND THE DIFFERENCE IS DELIBERATE. The round-13 Codex fourth pass
+// pointed out — correctly — that no socket-level signal can promise self-healing: ECONNREFUSED is a
+// restarting server AND a permanently wrong port; EHOSTUNREACH is a routing blip AND a static routing
+// mistake; a timeout is a slow network AND a firewall that will drop the packet forever. An earlier
+// draft of this comment claimed the predicate answers "we KNOW a retry clears", which no
+// implementation of it could honour. It does not. It answers "this is the shape a recoverable
+// connection failure takes", and it is a likelihood heuristic on a deliberately chosen error
+// direction: a wrong TRUE costs a suppressed residue, a wrong FALSE costs a spurious row an operator
+// closes in a minute. That asymmetry is why the set is kept small and why everything unrecognised
+// still records — but it is not certainty and is no longer written as if it were.
+//
+// ⚠ IT IS AN ALLOWLIST FOR THE SAME REASON transientCascadeSQLSTATEClasses IS. The set of permanent
+// ways a connection attempt can fail is open-ended and grows with pgconn, Go's TLS stack and the
+// deployment's network configuration — an expired certificate, an untrusted CA, a hostname mismatch,
+// an unsupported SASL mechanism, a protocol the server will never speak, a hostname that does not
+// exist. None of those carry a SQLSTATE and none of them clear on retry. Enumerating THOSE would be
+// fail-open by construction: the next one nobody thought of would be classified transient and would
+// silently suppress a residue. Enumerating the transient ones instead costs, at worst, a spurious
+// residue row an operator closes in a minute — the asymmetry the parent function's doc comment
+// argues at length.
+//
+// ⚠ ORDER: DNS IS CHECKED LAST, NOT FIRST. An earlier draft returned on the DNS branch immediately,
+// which the fourth pass showed to be wrong for pgx's MULTI-HOST configurations: pgconn joins the
+// errors from every attempted host into ONE ConnectError, so a chain can hold an NXDOMAIN from a
+// fallback host beside an ECONNREFUSED from the primary. Returning on the DNS answer classified that
+// whole (recoverable) case permanent. Scanning the recognised-transient causes first and consulting
+// DNS only when none of them are present gives NXDOMAIN-alone the permanent answer it deserves while
+// letting a mixed chain be read by its recoverable half. `(*net.DNSError).Timeout()` is IsTimeout, so
+// an IsNotFound error cannot sneak through the generic timeout check either.
+func connectErrorIsRecognisedTransient(err error) bool {
+	for _, errno := range transientConnectErrnos {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	// A GRACEFUL disconnect during the startup handshake: the server, proxy or load balancer accepted
+	// the TCP connection and then closed it while pgx was awaiting the startup response. pgproto3
+	// turns that into io.ErrUnexpectedEOF (or io.EOF) inside the ConnectError. It is neither an errno
+	// nor a net.Error timeout, so the checks above and below both miss it — and it is one of the most
+	// ordinary shapes a rolling restart or a failover produces, which made it the allowlist's worst
+	// omission: an everyday deploy would have written false permanent residue. Round 13, Codex fourth
+	// pass.
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return true
+	}
+	// A timeout at any layer that models net.Error: the attempt ran out of time rather than being
+	// refused an answer. A *net.DNSError is consulted on its own fields, because it is ALSO a
+	// net.Error whose Timeout() is merely IsTimeout, and NXDOMAIN must not read as a blip.
+	//
+	// ⚠ WALKED, NOT errors.As'd, AND THAT IS THE WHOLE POINT. errors.As stops at the FIRST match.
+	// pgconn joins the per-host errors of a multi-host configuration into one tree, so a chain can
+	// begin with an NXDOMAIN from a fallback host — itself a net.Error with Timeout() == false — and
+	// carry the primary host's genuine timeout further along. errors.As bound the NXDOMAIN and the
+	// timeout was never examined: an everyday timeout, classified permanent, false residue. Found by
+	// the round-13 Codex FIFTH pass, in the fix the fourth pass had asked for. Any node in the tree
+	// answering "transient" is enough; only a tree with no transient node anywhere records.
+	return anyErrorInTree(err, func(e error) bool {
+		if dnsErr, ok := e.(*net.DNSError); ok {
+			// IsNotFound is the name not existing — a rename or a bad config, not a blip.
+			return dnsErr.IsTemporary || dnsErr.IsTimeout
+		}
+		if netErr, ok := e.(net.Error); ok {
+			return netErr.Timeout()
+		}
+		return false
+	})
+}
+
+// anyErrorInTree reports whether pred holds for ANY error in err's tree, following both wrapping
+// shapes: `Unwrap() error` and, for errors.Join and pgconn's per-host aggregation, `Unwrap() []error`.
+//
+// It exists because errors.As and errors.Is answer different questions from the one asked here.
+// errors.Is walks the whole tree but only compares against one target value; errors.As walks the
+// whole tree but STOPS at the first assignable node, which is wrong when several nodes share an
+// interface and only a later one carries the answer — exactly the NXDOMAIN-then-timeout case above.
+func anyErrorInTree(err error, pred func(error) bool) bool {
+	for err != nil {
+		if pred(err) {
+			return true
+		}
+		switch u := err.(type) {
+		case interface{ Unwrap() error }:
+			err = u.Unwrap()
+		case interface{ Unwrap() []error }:
+			for _, branch := range u.Unwrap() {
+				if anyErrorInTree(branch, pred) {
+					return true
+				}
+			}
+			return false
+		default:
+			return false
+		}
+	}
+	return false
 }

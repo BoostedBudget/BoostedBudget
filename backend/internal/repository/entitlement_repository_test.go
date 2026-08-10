@@ -4,7 +4,9 @@ import (
 	"context"
 	"regexp"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/pashagolub/pgxmock/v4"
@@ -17,6 +19,100 @@ func setupEntitlementMockDB(t *testing.T) (pgxmock.PgxPoolIface, EntitlementRepo
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	return mock, NewEntitlementRepository(mock)
+}
+
+// ─── GetActiveEntitlement — pins the current-state (not asOf-consistent) semantics ──
+//
+// The query is `WHERE user_id = $1 AND effective_until IS NULL AND effective_from <= $2`.
+// Only effective_from is bound by asOf; effective_until IS NULL is evaluated at query
+// time. These tests pin that: a row already closed (non-NULL effective_until) does not
+// come back even though the caller's asOf predates the close, because the mocked query
+// simply returns no rows for it — reproducing what the real partial-unique-indexed table
+// would do. If the query is ever changed to also match closed epochs within
+// [effective_from, effective_until) (the change this task's brief says NOT to make),
+// TestEntitlementRepository_GetActiveEntitlement_QueryPinsCurrentStateOpenEpochSelection's
+// regexp.QuoteMeta match on the exact WHERE clause breaks, flagging the change.
+
+func TestEntitlementRepository_GetActiveEntitlement_Found(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupEntitlementMockDB(t)
+	defer mock.Close()
+
+	asOf := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	effectiveFrom := asOf.Add(-24 * time.Hour)
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "source", "tier", "status", "payer_user_id", "household_id",
+		"effective_from", "effective_until", "created_at", "updated_at",
+	}).AddRow(
+		"ent-1", "user-1", domain.EntitlementSourceHousehold, "premium", "active",
+		(*string)(nil), (*string)(nil), effectiveFrom, (*time.Time)(nil), effectiveFrom, effectiveFrom,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, user_id, source, tier, status, payer_user_id, household_id,
+		       effective_from, effective_until, created_at, updated_at
+		FROM subscription_entitlements
+		WHERE user_id = $1 AND effective_until IS NULL AND effective_from <= $2
+		LIMIT 1
+	`)).
+		WithArgs("user-1", asOf).
+		WillReturnRows(rows)
+
+	e, err := repo.GetActiveEntitlement(context.Background(), "user-1", asOf)
+	require.NoError(t, err)
+	assert.Equal(t, "ent-1", e.ID)
+	assert.Nil(t, e.EffectiveUntil)
+}
+
+func TestEntitlementRepository_GetActiveEntitlement_NotFound_Unit(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupEntitlementMockDB(t)
+	defer mock.Close()
+
+	asOf := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, user_id, source, tier, status, payer_user_id, household_id,
+		       effective_from, effective_until, created_at, updated_at
+		FROM subscription_entitlements
+		WHERE user_id = $1 AND effective_until IS NULL AND effective_from <= $2
+		LIMIT 1
+	`)).
+		WithArgs("user-1", asOf).
+		WillReturnError(pgx.ErrNoRows)
+
+	_, err := repo.GetActiveEntitlement(context.Background(), "user-1", asOf)
+	assert.ErrorIs(t, err, ErrEntitlementNotFound)
+}
+
+// TestEntitlementRepository_GetActiveEntitlement_QueryPinsCurrentStateOpenEpochSelection pins the
+// exact SQL text of the current-state selection via regexp.QuoteMeta on the WHERE clause — it
+// does NOT prove row-filtering behaviour (pgxmock cannot execute a real WHERE clause; this test's
+// mock is configured to return no rows unconditionally, identical to the _NotFound test above).
+// Its purpose is to fail loudly if someone "fixes" GetActiveEntitlement's WHERE clause to also
+// match closed epochs within [effective_from, effective_until) without also handling the
+// uniqueness implications (see the doc comment on GetActiveEntitlement and this task's brief) —
+// any change to that WHERE clause breaks this test's QuoteMeta match, forcing a deliberate update.
+func TestEntitlementRepository_GetActiveEntitlement_QueryPinsCurrentStateOpenEpochSelection(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupEntitlementMockDB(t)
+	defer mock.Close()
+
+	asOf := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	// The entitlement was live at asOf (effective_from before asOf, effective_until after
+	// asOf) but is closed as of query time, so effective_until IS NULL excludes it.
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, user_id, source, tier, status, payer_user_id, household_id,
+		       effective_from, effective_until, created_at, updated_at
+		FROM subscription_entitlements
+		WHERE user_id = $1 AND effective_until IS NULL AND effective_from <= $2
+		LIMIT 1
+	`)).
+		WithArgs("user-1", asOf).
+		WillReturnError(pgx.ErrNoRows)
+
+	_, err := repo.GetActiveEntitlement(context.Background(), "user-1", asOf)
+	assert.ErrorIs(t, err, ErrEntitlementNotFound,
+		"a row closed after asOf but before this query runs must not be returned — "+
+			"effective_until IS NULL is a current-state predicate, not bound by asOf")
 }
 
 func TestEntitlementRepository_CreateHouseholdEntitlement(t *testing.T) {

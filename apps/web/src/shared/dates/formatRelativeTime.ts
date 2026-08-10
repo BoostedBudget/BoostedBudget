@@ -1,9 +1,16 @@
 /**
- * Formats a date string as a relative time label (e.g., "2m ago", "3h ago").
+ * Formats a date (or date string) as a relative time label (e.g., "2m ago", "3h ago").
  * Falls back to toLocaleDateString() for dates older than 7 days.
+ *
+ * Accepts an already-parsed `Date` so callers that already have one (e.g. SnapshotAgeLabel,
+ * which parses `asOf` once via `parseServerDateTime` and reuses that same Date here and for its
+ * `title` attribute) don't need to re-parse the source string with a second, potentially
+ * disagreeing parser. Callers that only have the raw string (BoostCard, BoostTable,
+ * NotificationItem — all trusted backend fields, not the admin `as_of` guarded by
+ * `isParsableDate`) can keep passing it directly.
  */
-export function formatRelativeTime(dateStr: string): string {
-  const date = new Date(dateStr)
+export function formatRelativeTime(dateOrStr: Date | string): string {
+  const date = typeof dateOrStr === 'string' ? new Date(dateOrStr) : dateOrStr
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()
   const diffMins = Math.floor(diffMs / 60000)

@@ -2,8 +2,36 @@ version: '3.9'
 
 services:
   # PostgreSQL Database (Single region for MVP: us-east-1)
+  #
+  # Pinned to 17 to match CI and squawk's `--pg-version=17`. This was `postgres:15-alpine` while
+  # CI's migration and integration jobs both ran `postgres:17` — so local development validated
+  # migrations and SQL behaviour against a different major version than CI did.
+  #
+  # ⚠️ Deliberately does NOT claim to match production. An earlier version of this comment said
+  # "to match CI and production", which nothing in this repo substantiates: production and staging
+  # are Neon, `backend/fly.toml` declares only a `DATABASE_URL` secret with no server version, and
+  # **#607 ("Set up Neon Postgres database for production environment") is still OPEN with every box
+  # unchecked and a "Must for Prod" label.** `.squawk.toml`'s "matches Neon production" comment has
+  # the same problem and predates this change. Nobody has read a version off the production database;
+  # 17 here is chosen to match CI, and aligning with production is #607's job.
+  #
+  # ⚠️ UPGRADING AN EXISTING CHECKOUT DESTROYS YOUR LOCAL DEV DATABASE. A PostgreSQL 15 data
+  # directory cannot be read by a 17 server; the container will refuse to start with "database files
+  # are incompatible with server". Recreate the volume:
+  #
+  #     docker compose down -v && make dev && make migrate-up
+  #
+  # Local dev data is disposable (fixtures and the QA populator rebuild it), so this is the intended
+  # path rather than an in-place pg_upgrade.
+  #
+  # Note for scripts/test-migrations.sh: PG_DUMP defaults to the host's `pg_dump` on PATH, and
+  # pg_dump refuses to dump a server newer than itself — so an UNMODIFIED host client older than 17
+  # will fail against this 17 container. That default-invocation case is the only one this
+  # requires 17 for. Either install a >= 17 host client (brew install postgresql@17) or override
+  # PG_DUMP="$PWD/scripts/pg_dump-via-docker" to dump via this container's own binary instead
+  # (which CI's migration-tests step already does, so CI is not affected by the host client at all).
   postgres:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     container_name: boostedbudget-db
     environment:
       POSTGRES_DB: boostedbudget

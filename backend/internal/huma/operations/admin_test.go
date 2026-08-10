@@ -148,11 +148,6 @@ func (m *mockLinkedItemRepo) GetByUserAndInstitution(ctx context.Context, userID
 	return nil, repository.ErrLinkedItemNotFound
 }
 
-// Issue #668: Plaid Item Management for Cost Optimization - Cleanup tracking methods
-func (m *mockLinkedItemRepo) GetItemsForCleanup(ctx context.Context, errorDays, staleDays int) ([]domain.LinkedItem, error) {
-	return nil, nil
-}
-
 func (m *mockLinkedItemRepo) GetItemsPendingCleanup(ctx context.Context) ([]domain.LinkedItem, error) {
 	return nil, nil
 }
@@ -177,6 +172,17 @@ func (m *mockLinkedItemRepo) MarkAllUserItemsDisconnected(ctx context.Context, u
 // MarkItemsDisconnected (Issue #1413 H2) is not exercised by these admin-handler tests; stubbed
 // to satisfy the widened LinkedItemRepository interface.
 func (m *mockLinkedItemRepo) MarkItemsDisconnected(ctx context.Context, ids []string) error {
+	return nil
+}
+
+// MarkPlaidRemoved (Issue #1495) is not exercised by these admin-handler tests; stubbed to satisfy
+// the widened LinkedItemRepository interface.
+func (m *mockLinkedItemRepo) MarkPlaidRemoved(ctx context.Context, ids []string) error {
+	return nil
+}
+
+// MarkPlaidRemovalFailed — Issue #1494. Unused by these tests; present to satisfy the interface.
+func (m *mockLinkedItemRepo) MarkPlaidRemovalFailed(ctx context.Context, ids []string, errorCode string) error {
 	return nil
 }
 
@@ -309,6 +315,63 @@ func TestFireWebhook_PlaidAPIError(t *testing.T) {
 	assert.Nil(t, output)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Internal server error")
+}
+
+// TestFireWebhook_PlaidServiceNotConfigured pins 503 rather than a panic when Plaid is
+// unconfigured.
+//
+// Issue #1499: main.go used to wrap the ENTIRE admin route registration in
+// `if plaidService != nil`, so a deployment without Plaid credentials lost all 24 admin
+// endpoints — system health, user management, subscription admin, the dead-letter queue,
+// the orphaned-items view — none of which is Plaid-specific. The registration is now
+// unconditional, which makes this handler the only one that can be reached with a nil
+// plaidService, so it has to refuse the way every other under-configured admin handler in
+// this file does (GrantTrial, GetSystemHealth: 503) instead of dereferencing nil.
+func TestFireWebhook_PlaidServiceNotConfigured(t *testing.T) {
+	// GIVEN: a handler built with no Plaid service (Plaid credentials absent at startup)
+	mockRepo := &mockLinkedItemRepo{item: createTestLinkedItem()}
+	handler := NewAdminHandler(nil, mockRepo, nil, nil, nil, nil, nil, nil)
+
+	input := &FireWebhookInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ClerkUserID:        "clerk_user_123",
+		},
+	}
+	input.Body = FireWebhookRequestBody{
+		ItemID:      "plaid-item-123",
+		WebhookCode: "DEFAULT_UPDATE",
+	}
+
+	// WHEN: an admin fires a webhook anyway
+	output, err := handler.FireWebhook(context.Background(), input)
+
+	// THEN: refused cleanly with 503, not a nil dereference
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Plaid service not configured")
+}
+
+// TestAdminRouteRegistration_NoPlaidDependencies pins that the non-Plaid admin surface
+// mounts with nil Plaid dependencies (Issue #1499). It exercises the registration path
+// main.go now takes when Plaid is unconfigured: a 404 here would mean the endpoint is not
+// mounted at all, which is exactly the failure this batch removed. 401 is the correct
+// answer for an unauthenticated call to a route that DOES exist.
+func TestAdminRouteRegistration_NoPlaidDependencies(t *testing.T) {
+	_, api := humatest.New(t)
+	// nil plaidService AND nil linkedItemRepo — both are Plaid-only dependencies.
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	RegisterAdminRoutes(api, handler)
+
+	for _, path := range []string{
+		"/api/v1/admin/system/health",
+		"/api/v1/admin/users",
+		"/api/v1/admin/plaid/orphaned-items",
+	} {
+		resp := api.Get(path)
+		assert.NotEqual(t, http.StatusNotFound, resp.Code, "route %s must be mounted without Plaid", path)
+		assert.Equal(t, http.StatusUnauthorized, resp.Code, "unauthenticated call to %s", path)
+	}
 }
 
 // TestAdminRouteRegistration tests that routes are properly registered.
@@ -484,6 +547,42 @@ func TestGetSystemHealth_Success(t *testing.T) {
 	assert.Equal(t, int64(3), output.Body.SyncStatus.ActiveSyncs)
 	assert.Equal(t, int64(2), output.Body.DeadLetterQueue.Count)
 	assert.Len(t, output.Body.JobQueues, 1)
+}
+
+// TestGetSystemHealth_IncludesJobBacklogMetrics proves the three DB-derived backlog gauges
+// (Issue #1458) — already computed by SystemHealthService.GetSystemHealth — pass through this
+// handler unchanged, since GetSystemHealth returns *domain.SystemHealthResponse directly as the
+// response body with no field-by-field mapping to drift out of sync.
+func TestGetSystemHealth_IncludesJobBacklogMetrics(t *testing.T) {
+	mockHealth := &mockSystemHealthService{
+		healthResp: &domain.SystemHealthResponse{
+			Status: "healthy",
+			JobBacklog: domain.JobBacklogMetrics{
+				PlaidCleanupOutstandingUsers:                    3,
+				PlaidCleanupOldestOutstandingSeconds:            7200,
+				ManualTierOverrideOldestUnclearedExpiredSeconds: 3600,
+				Available: true,
+			},
+		},
+	}
+
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockHealth, nil, nil)
+
+	input := &GetSystemHealthInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+	}
+
+	output, err := handler.GetSystemHealth(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, int64(3), output.Body.JobBacklog.PlaidCleanupOutstandingUsers)
+	assert.Equal(t, int64(7200), output.Body.JobBacklog.PlaidCleanupOldestOutstandingSeconds)
+	assert.Equal(t, int64(3600), output.Body.JobBacklog.ManualTierOverrideOldestUnclearedExpiredSeconds)
+	assert.True(t, output.Body.JobBacklog.Available)
 }
 
 // TestGetSystemHealth_ServiceNotConfigured tests 503 when service is nil.

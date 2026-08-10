@@ -118,11 +118,22 @@ type PastDueProfileRepository interface {
 	ClearPlaidCleanupPendingIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error)
 }
 
-// PastDuePlaidCleanup defines the Plaid cleanup operation needed by PastDueService.
+// PastDuePlaidCleanup defines the Plaid cleanup operations needed by PastDueService.
 type PastDuePlaidCleanup interface {
-	// DisconnectAllUserItems calls Plaid /item/remove for all items
-	// then marks them as 'disconnected' (preserves transaction history).
-	DisconnectAllUserItems(ctx context.Context, userID string) error
+	// DisconnectAllUserItemsIfEligible calls Plaid /item/remove for all of the user's items then
+	// marks them as 'disconnected' (preserving transaction history), invoking recheck immediately
+	// before EVERY remaining item. The first (false, nil) stops the loop without attempting any
+	// further item and reports ErrCleanupAborted. See
+	// PlaidItemCleanupService.DisconnectAllUserItemsIfEligible for the full contract.
+	//
+	// THERE IS DELIBERATELY NO nil-RECHECK COUNTERPART ON THIS INTERFACE (Issue #1500). A
+	// DisconnectAllUserItems used to sit here, and processPlaidDisconnectWindow was its last caller
+	// in this service; the pair is gone rather than merely unused, because the failure mode being
+	// closed is SILENCE — while a recheck-free entry point exists, a future caller gets no per-item
+	// recheck by default and nothing complains. A disconnect is one Plaid call PER LINKED ITEM, so
+	// a single read taken before the loop leaves every item after the first exposed to the user
+	// paying their invoice mid-loop. Both callers in this service now re-ask reReadStillPastDue.
+	DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error
 }
 
 // PastDuePaddleClient defines the Paddle cancel operation needed by PastDueService.
@@ -376,9 +387,41 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// Step 1: Disconnect Plaid FIRST.
 	// If this fails, Release (so the next run can retry immediately) and return the error so the
 	// caller (cron job) retries. The user stays past_due — no partial cancellation.
+	//
+	// stillEligible is the PER-ITEM recheck, and passing it is the point (Codex pass-5 Medium 1).
+	// This call site passed DisconnectAllUserItems — whose recheck parameter is nil — until now, so
+	// the re-verification directly above covered the whole loop rather than each item in it: a
+	// disconnect is one Plaid /item/remove per linked item, so a user who paid their invoice after
+	// the first item was removed still had every remaining bank connection removed. This is the
+	// matched sibling of the same fix already made for RemoveAllUserItems (deletion_service.go) —
+	// the same cleanupItems parameter, one caller over.
+	//
+	// It wraps reReadStillPastDue rather than introducing a fourth notion of "still past due", so
+	// none of this flow's re-verifications can disagree about what the predicate means. The
+	// residual TOCTOU between the last recheck and the Plaid call it precedes is unchanged and
+	// still accepted — see the H2 note above.
 	if s.plaidCleanup != nil {
-		if err := s.plaidCleanup.DisconnectAllUserItems(ctx, user.ID); err != nil {
-			// Issue #1413 H1: DisconnectAllUserItems can return ErrSideEffectClaimBusy when
+		stillEligible := func(rctx context.Context) (bool, error) {
+			return s.reReadStillPastDue(rctx, user.ID, occurrence)
+		}
+		if err := s.plaidCleanup.DisconnectAllUserItemsIfEligible(ctx, user.ID, stillEligible); err != nil {
+			// A recovery-triggered abort is not a Plaid failure and must not be reported as one.
+			// ErrCleanupAborted has TWO causes (see its doc comment) and they demand opposite
+			// handling here, so the predicate is asked once more to say which: the user is no longer
+			// past due (a legitimate stop — release and return nil, WITHOUT cancelling their
+			// subscription, exactly as the Step-2 re-verify below would have) versus a new linked
+			// item having appeared mid-pass (genuinely incomplete work — falls through to the error
+			// path, so tomorrow's run retries). An error from the recheck itself falls through too,
+			// which is the fail-closed direction.
+			if errors.Is(err, ErrCleanupAborted) {
+				if stillPastDue, checkErr := stillEligible(ctx); checkErr == nil && !stillPastDue {
+					s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, "precondition lost mid Plaid disconnect — remaining items left connected")
+					s.logger.Info("past_due user recovered or was comped partway through the Plaid disconnect; the remaining items stay connected and their subscription is NOT being cancelled",
+						"user_id", user.ID)
+					return nil
+				}
+			}
+			// Issue #1413 H1: the disconnect can return ErrSideEffectClaimBusy when
 			// another flow (the subscription-cancellation webhook, the Plaid-disconnect window
 			// pass, or another grace-cancel attempt) currently holds ActionPlaidDisconnectUser for
 			// this user. Log it distinctly at Info — this is expected contention, not a Plaid
@@ -391,6 +434,37 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 			s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, err.Error())
 			return fmt.Errorf("failed to disconnect Plaid items for past_due user %s: %w", user.ID, err)
 		}
+	}
+
+	// RE-VERIFY AGAIN, BECAUSE STEP 1 WAS A NETWORK ROUND-TRIP. The re-check above is immediately
+	// before the Plaid call and is correct for that call, but Step 2 is a SECOND irreversible external
+	// call performed after Step 1 returns — and nothing used to re-verify in between. A user who paid
+	// their invoice while we were disconnecting their banks still had their subscription cancelled at
+	// Paddle, after which Step 3's CAS correctly refused to flip their local status: a paid-up customer
+	// with no subscription at Paddle and a local row saying nothing happened.
+	//
+	// This is the same defect shape as ExecuteDeletion's (a precondition checked at selection, work
+	// performed later, nothing re-checking in between) and it is fixed the same way — by asking again
+	// at the moment of use. It reuses reReadStillPastDue rather than introducing a second predicate, so
+	// the three re-verifications in this flow cannot disagree about what "still past due" means.
+	//
+	// Aborting HERE leaves the Plaid items disconnected. That is accepted for the reason the H2
+	// residual note above already gives: a disconnect is recoverable (the user relinks), the retention
+	// clock is not started (Step 3 never runs), and the alternative — cancelling a recovered customer's
+	// subscription — is worse. Ordering already puts the recoverable call first; see
+	// deletion_service.go's ordering note for the same argument made explicitly.
+	stillPastDue, err = s.reReadStillPastDue(ctx, user.ID, occurrence)
+	if err != nil {
+		// Fail closed: not knowing whether the user is still past due is not permission to cancel
+		// their subscription.
+		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, err.Error())
+		return fmt.Errorf("failed to re-verify user %s before cancelling their Paddle subscription: %w", user.ID, err)
+	}
+	if !stillPastDue {
+		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, "precondition lost during Plaid disconnect — not cancelling the subscription")
+		s.logger.Info("past_due user recovered or was comped during the Plaid disconnect; their subscription is NOT being cancelled and their status is left alone",
+			"user_id", user.ID)
+		return nil
 	}
 
 	// Step 2: Cancel Paddle subscription.
@@ -707,7 +781,40 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 	)
 
 	if s.plaidCleanup != nil {
-		if err := s.plaidCleanup.DisconnectAllUserItems(ctx, user.ID); err != nil {
+		// stillEligible is the PER-ITEM recheck (Issue #1500). This call site passed the nil-recheck
+		// entry point until now — a KNOWN outstanding instance of the same pattern the grace-cancel
+		// path above fixed first — so the two re-verifications above covered the whole loop rather
+		// than each item in it: a disconnect is one Plaid /item/remove per linked item, so a user who
+		// paid their invoice after the first item was removed still lost every remaining bank
+		// connection. Nothing irreversible follows in THIS flow (no Paddle cancellation, no retention
+		// clock), which is why the finding was rated Medium and did not block a merge; it is closed
+		// anyway because the nil-recheck entry point it depended on no longer exists at all.
+		//
+		// It wraps reReadStillPastDue — the same predicate this flow's other two checks use, and the
+		// same one processGraceExpiry re-asks — rather than introducing another notion of "still past
+		// due". The residual TOCTOU between the last recheck and the Plaid call it precedes is
+		// unchanged and still accepted; see the H2 note above.
+		stillEligible := func(rctx context.Context) (bool, error) {
+			return s.reReadStillPastDue(rctx, user.ID, occurrence)
+		}
+		if err := s.plaidCleanup.DisconnectAllUserItemsIfEligible(ctx, user.ID, stillEligible); err != nil {
+			// A recovery-triggered abort is not a Plaid failure and must not be reported as one.
+			// ErrCleanupAborted has TWO causes (see its doc comment) and they demand opposite
+			// handling, so the predicate is asked once more to say which: the user is no longer past
+			// due (a legitimate stop — release the claim and return nil, WITHOUT the downstream
+			// analytics event and "we disconnected your banks" notification, which would be false for
+			// a recovered user) versus a new linked item having appeared mid-pass (genuinely
+			// incomplete work — falls through to the error path, so tomorrow's run retries). An error
+			// from the recheck itself falls through too, which is the fail-closed direction. This is
+			// the same shape processGraceExpiry and ExecuteDeletion already use, not a new one.
+			if errors.Is(err, ErrCleanupAborted) {
+				if stillPastDue, checkErr := stillEligible(ctx); checkErr == nil && !stillPastDue {
+					s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPlaidDisconnectPastDue, token, "precondition lost mid Plaid disconnect — remaining items left connected")
+					s.logger.Info("past_due user recovered or was comped partway through the pre-emptive Plaid disconnect; the remaining items stay connected",
+						"user_id", user.ID)
+					return nil
+				}
+			}
 			// #1413 Codex review round 4: no longer tolerated with a bare log-and-continue — the
 			// work claim exists precisely so a failure here can be safely retried (Release makes
 			// it immediately reclaimable) instead of silently swallowed with no automatic retry.

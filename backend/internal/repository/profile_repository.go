@@ -12,12 +12,57 @@ import (
 	"github.com/jackc/pgx/v5"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 var (
 	ErrUserNotFound   = errors.New("user not found")
 	ErrDuplicateEmail = errors.New("email already exists")
+
+	// ErrRetentionClockPreconditionLost is returned by SetRetentionDates when the user row exists
+	// but the caller's authorising condition (RetentionClockGuard) no longer held at the moment of
+	// the write — someone else changed this user underneath the caller. Deliberately DISTINCT from
+	// ErrUserNotFound: the two mean different things and only one of them is an error. "Someone else
+	// changed this user" is a legitimate stop (the caller abandons the write and lets whatever flow
+	// now owns this user proceed); "no such user" is a genuine failure worth retrying/alerting on.
+	ErrRetentionClockPreconditionLost = errors.New("retention clock precondition lost: the user's authorising state changed concurrently")
+
+	// ErrRetentionClockGuardUnspecified is returned when a caller passes the zero-value
+	// RetentionClockGuard. The guard is REQUIRED and fails closed: an unspecified guard is rejected
+	// rather than silently defaulting to an unguarded write, because a default that silently skips
+	// the check is exactly how the original defect existed. A caller that genuinely needs no guard
+	// must say so explicitly with RetentionClockUnguarded.
+	ErrRetentionClockGuardUnspecified = errors.New("retention clock guard unspecified: pass RetentionClockRequiresStatus(...) or, explicitly, RetentionClockUnguarded")
 )
+
+// RetentionClockGuard is the caller-supplied authorising condition for a SetRetentionDates write:
+// the subscription_status the row must STILL carry, evaluated against committed state inside the
+// write's own statement, not in an earlier (and therefore non-atomic) read.
+//
+// It exists because SetRetentionDates's two production callers do NOT share one authorising
+// condition — the cancellation webhook may arm the clock only while the user is still 'cancelled',
+// while TrialService.ExpireTrial may arm it only for the user its own CAS
+// (ExpireTrialIfNoOverride) just moved to 'inactive'. Hardcoding either condition inside the
+// repository would be wrong for the other caller, so the condition is passed by the caller that
+// knows it — the same way CancelIfPastDueOccurrenceWithRetention takes its expected past_due
+// occurrence value rather than inventing one.
+//
+// The zero value is INVALID (ErrRetentionClockGuardUnspecified), so the unguarded write can only
+// be reached by naming it.
+type RetentionClockGuard string
+
+// RetentionClockUnguarded explicitly opts out of the write-time authorisation check. No production
+// caller uses it, and none should: every flow that arms this clock does so because of a state it
+// just observed, and that state is exactly what must still hold at write time. It exists for test
+// fixtures that arm the clock as SETUP for something else entirely (a deletion sweep, a repair
+// pass, a cascade) and legitimately have no authorising transition to name.
+const RetentionClockUnguarded RetentionClockGuard = "*unguarded*"
+
+// RetentionClockRequiresStatus builds a guard requiring the row to still carry the given
+// subscription_status when the retention-clock write executes.
+func RetentionClockRequiresStatus(status domain.SubscriptionStatus) RetentionClockGuard {
+	return RetentionClockGuard(status)
+}
 
 // ProfileRepository defines the interface for user profile data access
 type ProfileRepository interface {
@@ -82,25 +127,25 @@ type ProfileRepository interface {
 	// besides this one write.
 	//
 	// Issue #1413 round-10 correction: this used to claim "every writer of this column now shares one
-	// semantics." That was FALSE and is scoped accordingly. Every writer with a PRODUCTION CALLER
-	// clamps — SetRetentionDates (here), RepairRetentionClock, CancelIfPastDueOccurrenceWithRetention,
-	// and AdminUserRepository.RemoveUserTierOverride. The exception is
-	// CancelIfPastDueWithRetention (the non-occurrence predecessor superseded by round-4 finding H1),
-	// which still takes a Go-computed expiry. It has ZERO production callers — verified exhaustively:
-	// the narrower PastDueProfileRepository interface past_due_service.go actually consumes does not
-	// even declare it — so it is not live drift, but it IS a landmine: wire it up and the month-end
-	// over-retention bug returns. Deleting it is filed as a follow-up.
+	// semantics." That was FALSE while a landmine still existed: CancelIfPastDueWithRetention (the
+	// non-occurrence predecessor superseded by round-4 finding H1) took a Go-computed expiry and had
+	// ZERO production callers — the narrower PastDueProfileRepository interface past_due_service.go
+	// actually consumes did not even declare it — so it was not live drift, but wiring it up would
+	// have reintroduced the month-end over-retention bug. Issue #1442 deleted it, so the claim is
+	// unqualified and accurate again: every writer of this column — SetRetentionDates (here),
+	// RepairRetentionClock, CancelIfPastDueOccurrenceWithRetention, and
+	// AdminUserRepository.RemoveUserTierOverride — clamps.
 	//
 	// TWO POPULATIONS OF THIS COLUMN EXIST, and that is a deliberate decision, not an oversight.
 	// Rows written before commit 144b0e3a used Go's AddDate (month overflow normalized FORWARD); rows
 	// after clamp. So a pre-existing row can carry a GDPR deletion deadline up to ~3 days LATER than a
 	// new row with the same start date — only for clocks anchored on Mar 31, May 31, Aug 29/30/31,
 	// Oct 31 or Dec 31 (at the configured N=6). We deliberately did NOT backfill:
-	//   - every consumer (30d notice, 7d notice, GetUsersWithExpiredRetention, the occurrence CAS)
+	//   - every consumer (30d notice, 7d notice, GetUsersWithExpiredRetentionPage, the occurrence CAS)
 	//     reads the row's OWN stored value, so an untouched row is internally consistent end to end —
 	//     no notice is skipped and nobody is deleted early;
 	//   - retention_notice_30d_sent_at / _7d_sent_at are SET-ONCE flags that gate re-send, and
-	//     GetUsersWithExpiredRetention does not reference them at all, so shrinking a deadline after a
+	//     GetUsersWithExpiredRetentionPage does not reference them at all, so shrinking a deadline after a
 	//     notice had fired would delete an account on a SHORTER window than the email promised, with
 	//     no new notice;
 	//   - migrations 000119-000122 set this codebase's precedent for retroactively correcting a
@@ -110,7 +155,14 @@ type ProfileRepository interface {
 	//     action;
 	//   - the population self-resolves: each row proceeds notice -> notice -> delete on its own stored
 	//     deadline, or the user resubscribes and ClearRetentionDates nulls the field.
-	SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error
+	//
+	// Issue #1500 residual (Codex review, PR #1443 follow-up): the write is GUARDED. guard names the
+	// authorising condition the caller observed, and it is re-evaluated inside this statement against
+	// committed state — see RetentionClockGuard's own doc comment for why the condition is passed in
+	// rather than hardcoded here. Returns ErrRetentionClockPreconditionLost when the row exists but
+	// that condition no longer holds, ErrUserNotFound when there is no live row at all: two
+	// deliberately distinguishable outcomes, only one of which is an error (see those errors' docs).
+	SetRetentionDates(ctx context.Context, userID string, guard RetentionClockGuard, retentionMonths int) error
 
 	// ClearRetentionDates clears all retention tracking fields (called on resubscription).
 	ClearRetentionDates(ctx context.Context, userID string) error
@@ -128,10 +180,6 @@ type ProfileRepository interface {
 	// GetUsersNeedingRetention7dNotice returns users whose retention_expires_at is within 7 days
 	// and whose 7-day notice has not yet been sent.
 	GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error)
-
-	// GetUsersWithExpiredRetention returns users whose retention_expires_at has passed
-	// and who are not already deleted or pending deletion.
-	GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error)
 
 	// GetUsersWithExpiredManualTierOverride returns users whose manual_tier_override is set and
 	// whose manual_tier_ends_at has strictly passed (Issue #1413 Task 9 — backs the daily job
@@ -156,9 +204,6 @@ type ProfileRepository interface {
 	// CancelDeletion cancels a pending deletion request
 	CancelDeletion(ctx context.Context, userID string) error
 
-	// GetUsersScheduledForDeletion returns users whose deletion date has passed
-	GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error)
-
 	// DeleteUserCascade performs application-level cascade deletion of all user data, but ONLY
 	// after re-verifying, INSIDE the same transaction that performs the destructive statements,
 	// that deletion is STILL authorised at the instant of the act — not merely at the earlier
@@ -170,18 +215,29 @@ type ProfileRepository interface {
 	// for this user BEFORE calling ClaimForDeletion (nil for the retention-triggered path, which
 	// never sets it). Re-verifying this EXACT value (not merely whether it is nil) is required
 	// to catch the case Codex round-4 review flagged as the most serious residual in this task:
-	// reusing claimForDeletionPredicate alone is NOT sufficient, because that predicate treats
-	// "no manual_tier_override at all" as sufficient authorization REGARDLESS of
-	// deletion_requested_at — so an uncomped user who explicitly cancels their own deletion
-	// request (CancelDeletion) during the external-cleanup window would otherwise still pass it
-	// (cancelling sets deletion_requested_at to NULL, and "no override" was already true). Adding
+	// the authorisation predicate this method splices, deletionAuthorisationUnionPredicate, is
+	// satisfied when a claim of EITHER kind would be authorised — and its RETENTION branch
+	// (deletion_requested_at IS NULL plus no manual_tier_override at all) is satisfied by an
+	// uncomped user who has just cancelled their own deletion request during the external-cleanup
+	// window: cancelling sets deletion_requested_at to NULL, and "no override" was already true.
+	// So the predicate alone is NOT sufficient here. Adding
 	// `deletion_requested_at IS NOT DISTINCT FROM expectedDeletionRequestedAt` closes this: a
 	// cancellation (non-null -> null) is a mismatch, and so is a same-instant cancel-then-new-
 	// request (a new, later timestamp the original claim never verified) — both correctly abort,
 	// leaving the user to be picked up by whichever flow's own schedule next applies to them.
 	//
+	// Issue #1440, T0 — this paragraph's CONCLUSION is unchanged; only its stated reason was
+	// rewritten. It previously blamed `claimForDeletionPredicate` for treating "no
+	// manual_tier_override at all" as sufficient authorization REGARDLESS of deletion_requested_at.
+	// That constant no longer exists, and that rule is now false of BOTH of its replacements: the
+	// retention predicate requires deletion_requested_at IS NULL, and the user-requested predicate
+	// has no override clause at all. The exact-value check is still required, for the reason stated
+	// above.
+	//
 	// Also refuses to proceed while any of the user's linked_items rows still need Plaid-side
-	// cleanup (status <> 'disconnected') — Issue #1413 round-4 Critical finding C2: deleting the
+	// cleanup (uncleanedLinkedItemExistsClause — `plaid_removed_at IS NULL` since Issue #1495; it
+	// tested status until then, which trusted 'replaced' and so let this very outcome happen —
+	// see that const's own comment) — Issue #1413 round-4 Critical finding C2: deleting the
 	// local linked_items rows (Step 3 below) while any remain un-cleaned would orphan a live,
 	// still-billing Plaid access token with no local record it ever existed. See
 	// plaid_item_cleanup_service.go's cleanupItems for the companion fix (re-reading the item
@@ -196,6 +252,147 @@ type ProfileRepository interface {
 	// the next scheduled run re-evaluate from scratch — it must NOT treat this as an error.
 	DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error)
 
+	// RecordDeletionResidue writes the durable, queryable record that an account deletion performed
+	// an IRREVERSIBLE EXTERNAL EFFECT and then did not complete — so the user still exists, and
+	// something has been done to them that they did not ask for. Issue #1504.
+	//
+	// ⚠ ROUND 15 CHANGED WHEN THIS IS CALLED, AND THEREFORE WHAT A ROW MEANS WHILE A DELETION IS
+	// STILL RUNNING. The caller now writes one record per irreversible external call, immediately
+	// BEFORE issuing it, instead of inferring the whole thing from an in-memory flag once the run is
+	// over. An end-of-run inference cannot describe a call whose acknowledgement was lost, a panic,
+	// or a process that was killed mid-flight — and the flag it used only ever named the subscription
+	// cancel, so the customer archive could not be recorded at all.
+	//
+	// The row therefore asserts "this call was ISSUED and the user is still here", which is the
+	// strongest honest claim available from this side of a network boundary. It is not weaker in
+	// practice: what an operator does with it — check Paddle, then reconcile — is the same either way.
+	//
+	// ⚠ THE LIFECYCLE IS NOW WRITE-THEN-RETRACT, and the retraction is not optional. DeleteUserCascade
+	// DELETEs this user's rows in this namespace inside the same transaction that deletes the user
+	// (see its own comment at that statement). A deletion that COMPLETES therefore leaves none, which
+	// is what keeps the meaning above true and keeps both Prometheus gauges quiet on ordinary
+	// deletions. Any future caller of this method must either be inside a flow that completes that
+	// way, or own its own retraction.
+	//
+	// THE CASE IT EXISTS FOR is irreducible and cannot be engineered away: ExecuteDeletion gates
+	// every irreversible external call on a fresh authorisation read, but if the user revokes their
+	// deletion WHILE the Paddle subscription-cancel call is in flight, the cancel still lands. The
+	// gate passed a moment earlier and a network call cannot be recalled. The user keeps their
+	// account and every row of their data — with their subscription cancelled. Before this, the only
+	// trace was an Info log line: nobody was told and nothing was queryable.
+	//
+	// It records; it does NOT remediate. Re-subscribing someone automatically, from a flow that has
+	// just proven it does not know what state the world is in, is a worse failure than telling a
+	// human. An operator finds these with:
+	//
+	//	SELECT resource_id, created_at FROM audit_logs
+	//	 WHERE action LIKE 'user.deletion_residue.%' ORDER BY created_at DESC;
+	//
+	// WHY audit_logs AND NOT A NEW TABLE, and why keyed to the USER. plaid_orphaned_items is the
+	// precedent for the OPPOSITE case — a record that must outlive an ERASED subject, which is why
+	// it carries no user_id at all. This record is not that: its defining fact is that the deletion
+	// did NOT complete, so the users row is still there and the operator's entire task is to find
+	// that person. Keying it to the user is therefore the point, not a leak, and it means
+	// DeleteUserCascade's erasure redaction (`SET changes = NULL WHERE resource_id = $1 OR
+	// user_id = $1`) covers it if that user IS erased later — harmlessly, because by then the
+	// cancellation this record reports has become the intended outcome. audit_logs also already
+	// exists, is already erasure-aware, and needs no migration.
+	//
+	// ⚠ NOTHING IS WRITTEN TO `changes`. The effect is encoded in `action` — the column that is
+	// queryable and that redaction does not touch — and the subscription id an operator needs is
+	// still on the surviving users row, precisely because this record only exists when the user
+	// survived. A payload here would be PII that redaction would null out anyway, i.e. exactly the
+	// trap that disqualified audit_logs for plaid_orphaned_items.
+	//
+	// audit_logs.user_id is the ACTING party and is left NULL: this is a system action, matching the
+	// column's own documented convention (migration 000003).
+	RecordDeletionResidue(ctx context.Context, userID string, effect DeletionResidueEffect) error
+
+	// CountUncleanedLinkedItems counts the user's linked_items rows that DeleteUserCascade's C2
+	// guard would refuse to proceed past — those with neither a recorded Plaid removal nor a
+	// recorded unrecoverable removal failure. Shares the guard's own predicate
+	// (uncleanedLinkedItemPredicate) so the two can never disagree. Issue #1494.
+	//
+	// EXISTS FOR DIAGNOSIS, NOT FOR CONTROL FLOW AROUND THE GUARD. Its one caller is
+	// DeletionService.ExecuteDeletion's Plaid-less branch: when plaidCleanupSvc is nil (a legitimate
+	// deployment — main.go wires it only when Plaid credentials are configured), nothing can ever
+	// record a removal, so a user WITH such items can never be erased and the cascade would return
+	// (false, nil) with no statement of why, three layers from the real cause. The count turns that
+	// into a named error that says how many items and what is missing. A user with ZERO such items is
+	// unaffected and proceeds normally, which is why this counts the guard's exact population rather
+	// than "has any linked item at all": refusing on an already-cleaned item would block deletions the
+	// guard itself would have allowed.
+	//
+	// Do NOT use this as a pre-check to decide whether to call DeleteUserCascade: it runs outside the
+	// cascade's transaction and its FOR UPDATE lock, so its answer can be stale by the time the
+	// cascade runs. The guard inside the transaction is the authority; this is an explanation.
+	//
+	// ⚠ ROUND 15, D1 — THE SECOND CALLER, AND WHY IT DOES NOT VIOLATE THE PARAGRAPH ABOVE.
+	// ExecuteDeletion's ErrPlaidRemovalUnrecoverable branch now consults this count too, to decide
+	// whether to SKIP the irreversible Paddle work — NOT to decide whether to call the cascade. The
+	// cascade is still called and its C2 guard is still the authority. Staleness is therefore
+	// one-directional and harmless in both directions: a stale non-zero defers a run by one day (the
+	// sweep is daily and the next pass re-reads), and a stale zero merely reproduces the behaviour
+	// this branch had before the check existed. Neither can produce an erasure C2 would have refused,
+	// because C2 is untouched. See that call site for the full argument.
+	CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error)
+
+	// HouseholdOwnerBlocksDeletion reports whether erasing userID would destroy a DIFFERENT user's
+	// data through households.owner_user_id's CASCADE — the exact question DeleteUserCascade's own
+	// in-transaction household guard asks, asked EARLY. Issue #1440 follow-up, round 15 finding D2.
+	//
+	// WHY IT EXISTS SEPARATELY FROM THE CASCADE'S GUARD, AND WHY THAT GUARD STAYS. The cascade's
+	// guard is evaluated inside the deletion transaction, i.e. AFTER ExecuteDeletion has already
+	// disconnected every Plaid Item and cancelled and archived the user's Paddle customer. Its own
+	// doc comment records that this condition — unlike every other skip in that function — CANNOT
+	// SELF-HEAL: nothing in the system will transfer the ownership, remove the member, or reconcile
+	// the stale entitlement. So a retention-expired household owner had their banks disconnected and
+	// their Paddle customer irreversibly archived, was then refused, and the next daily sweep
+	// repeated the whole sequence — forever.
+	//
+	// This is a pure LOCAL-STATE precondition. It needs no external call and no lock, so it can be
+	// asked before the first irreversible effect, which removes the entire class rather than
+	// reporting it. It is a REORDER, not a new rule: the predicate is literally the same SQL const.
+	//
+	// ⚠ DEFENCE IN DEPTH — DO NOT REMOVE THE IN-CASCADE GUARD ON THE STRENGTH OF THIS ONE. This
+	// query runs outside the cascade's transaction and its FOR UPDATE lock, so an invite accepted
+	// between this call and the cascade is caught only by the guard inside it. This check shrinks the
+	// window in which the harm is IRREVERSIBLE; the in-transaction guard is what makes the outcome
+	// correct.
+	HouseholdOwnerBlocksDeletion(ctx context.Context, userID string) (bool, error)
+
+	// DeletionStillAuthorised reports whether a hard delete of userID is STILL authorised under
+	// `kind`, judged against committed state at the moment it is asked, for the deletion episode
+	// pinned by expectedDeletionRequestedAt.
+	//
+	// WHY THIS EXISTS SEPARATELY FROM ClaimForDeletion AND FROM DeleteUserCascade'S OWN GUARD.
+	// ExecuteDeletion wins the claim, then performs Paddle and Plaid cleanup — several external
+	// network calls, one per linked item on the Plaid side — and only afterwards reaches the
+	// cascade's in-transaction re-check. CancelDeletion can clear deletion_requested_at and
+	// deletion_scheduled_at anywhere inside that window without coordinating with the work claim
+	// (the claim gives EXCLUSIVITY between flows; it says nothing about whether this flow's own
+	// authorisation still holds). The cascade's guard then correctly refuses to delete — but by
+	// then the subscription is cancelled, the Paddle customer is archived and anonymised, and the
+	// bank connections are gone, for a user who explicitly asked to keep their account. This method
+	// is what lets each irreversible external call be preceded by a fresh answer instead of a stale
+	// snapshot.
+	//
+	// KIND-SPECIFIC, deliberately, where the cascade's guard uses the union of both kinds. The
+	// cascade is not told which kind authorised the run and compensates with the occurrence pin;
+	// ExecuteDeletion IS told, so asking the union here would re-open exactly the substitution
+	// #1440 T0 closed at claim time — the retention rule authorises any uncomped user with no
+	// outstanding request, which is precisely what a just-cancelled user looks like.
+	//
+	// READ-ONLY, and NOT a substitute for either write-side guard. It takes no lock, so its answer
+	// can be stale the instant it returns; the claim and the cascade's FOR UPDATE re-check remain
+	// the authorities. What it buys is that the WINDOW an irreversible external call is exposed to
+	// shrinks from "the whole cleanup sequence" to "one call".
+	//
+	// A false return is a legitimate, expected outcome — not an error. An ERROR means authorisation
+	// could not be established, which callers must treat as fail-closed: not knowing is not
+	// permission to proceed.
+	DeletionStillAuthorised(ctx context.Context, userID string, kind DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error)
+
 	// Dunning: past_due tracking methods (Issue #898)
 
 	// SetPastDueStartedAt sets the past_due_started_at timestamp for a user.
@@ -209,25 +406,6 @@ type ProfileRepository interface {
 	// Used by the dunning cron job to find candidates for grace-expiry processing (Issue #898).
 	GetUsersInPastDue(ctx context.Context) ([]domain.User, error)
 
-	// CancelIfPastDueWithRetention atomically flips subscription_status to 'cancelled' AND starts
-	// the retention clock (retention_started_at, retention_expires_at) in the SAME UPDATE, closing
-	// Issue #1413's H5 residual on the past-due grace-cancel path. The status flip and the
-	// retention-clock write used to be two separate calls (a CAS-guarded status flip, then a
-	// separate SetRetentionDates call), which left a window where the CAS could succeed but the
-	// retention write could be lost (a crash, a dead-lettered job) — and because GetUsersInPastDue
-	// only selects subscription_status = 'past_due', the daily dunning job can never re-select a
-	// user this already flipped to 'cancelled', so that user would be cancelled forever with no
-	// retention clock: never warned, never deleted. Combining both writes into one statement means
-	// either both land or neither does. Predicate: still 'past_due' AND carries no currently-active
-	// manual tier override — the claim provides exclusivity, this predicate still provides
-	// correctness. Issue #898: CAS guard against recovery race condition. Issue #1413 High finding
-	// H6 (Codex review round 3): predicate extended to also close the comp race — a prior
-	// read-only check of HasActiveManualOverride() cannot, by itself, protect the final status
-	// flip. Returns (true, nil) if the flip happened, (false, nil) if the user has already
-	// recovered (payment arrived between Plaid disconnect and this point) or an admin
-	// granted/extended a comp in that same window.
-	CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error)
-
 	// ExpireTrialIfNoOverride atomically flips subscription_status to 'inactive' only if the
 	// user is still 'trial' AND carries no currently-active manual tier override. Returns
 	// (true, nil) if the flip happened, (false, nil) if an admin granted/extended a comp between
@@ -238,50 +416,31 @@ type ProfileRepository interface {
 
 	// ClaimForDeletion atomically verifies, at the moment of the claim, that a user is still
 	// eligible for ExecuteDeletion's irreversible external cleanup (Paddle cancel, Plaid
-	// disconnect) and cascade delete: not already deleted, and either carrying no currently-
-	// active manual tier override OR having an outstanding GDPR deletion request of their own
-	// (deletion_requested_at IS NOT NULL — the ratified rule that a user's own deletion request
-	// beats an admin comp). Returns (true, nil) if the claim succeeded (safe to proceed with
-	// the destructive work), (false, nil) if an admin granted/extended a comp between the
-	// caller's earlier GetUserByID read and this call, with no outstanding GDPR request to
-	// override it — a legitimate skip, not an error; the daily retention job will simply not
-	// re-select this user while the comp is live. Issue #1413 Critical finding C2 (Codex review
-	// round 2): the destructive work must not run on a decision made off a stale snapshot.
+	// disconnect) and cascade delete, UNDER THE AUTHORISATION `kind` NAMES:
+	//
+	//   - DeletionKindUserRequested: not already deleted, deletion_requested_at still set, and
+	//     deletion_scheduled_at already elapsed. No override check — the ratified rule is that a
+	//     user's own deletion request beats an admin comp.
+	//   - DeletionKindRetention: not already deleted, no deletion request outstanding, and no
+	//     manual tier override at all (live or lapsed-but-uncleared).
+	//
+	// Returns (true, nil) if the claim succeeded (safe to proceed with the destructive work), and
+	// (false, nil) — a legitimate skip, NOT an error — whenever the authorisation no longer holds:
+	// an admin granted/extended a comp on a retention candidate, or (Issue #1440, T0) the user
+	// cancelled or re-scheduled the deletion request this caller was queued for. An unrecognised
+	// kind is a genuine error and never a claim: this fails closed.
+	//
+	// Callers MUST pass the kind that matches the query which selected the user, and must never
+	// derive it from the user's current row state — that state is precisely what a stale caller
+	// cannot trust. See the implementation's doc comment for the enumeration of production callers
+	// and their kinds.
 	//
 	// Ordering note for callers: this claim must run BEFORE any external cleanup, not folded
 	// into DeleteUserCascade's own final write — Plaid/Paddle IDs must still be readable when
 	// the external calls run, so the claim has to come first as its own step, or the external
 	// work would already be irreversibly done by the time a later guard could catch a comp
 	// granted in the race window.
-	ClaimForDeletion(ctx context.Context, userID string) (bool, error)
-
-	// IsRetentionNotice30dEligible re-verifies, at the moment a caller already holds an
-	// EXCLUSIVE work_claims claim on repository.ActionRetentionNotice30d, that a user is still
-	// eligible for the 30-day pre-deletion notice: still inside the notice window, the notice
-	// still unsent, subscription still inactive/cancelled with no outstanding GDPR deletion
-	// request, and carrying no manual_tier_override at all (live or lapsed) —
-	// noManualOverrideAtAllPredicate, the SAME rule GetUsersNeedingRetention30dNotice's own
-	// candidate query enforces, mirrored here field-for-field so the two can never drift apart.
-	// Returns (true, nil) when it is safe to send the notice email right now, (false, nil) when
-	// any one of those conditions has changed since the candidate query ran (a comp granted, the
-	// window closed, the notice already sent by a since-completed claim, a deletion request filed)
-	// — a legitimate skip, never an error. This method performs NO write.
-	//
-	// Issue #1413 Medium finding M9 (Codex review round 3): replaces the earlier
-	// ClaimRetentionNotice30dSent, which conflated two different concerns into one atomic UPDATE —
-	// EXCLUSIVITY (now work_claims's job, via Claim/Complete/Release) and CORRECTNESS (this
-	// read-only re-check). The old method stamped retention_notice_30d_sent_at BEFORE the email
-	// send was even attempted, so a failed send left the marker set and the next day's candidate
-	// query silently excluded the user forever — the user was never warned before deletion, the
-	// exact outcome the notice exists to prevent. The corrected sequence is: Claim (exclusivity) →
-	// IsRetentionNotice30dEligible (this method, correctness) → send the email → ONLY on success,
-	// SetRetentionNotice30dSent (the marker) → Complete. On send failure, Release — the marker
-	// stays NULL, so the next daily run retries.
-	IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error)
-
-	// IsRetentionNotice7dEligible is IsRetentionNotice30dEligible's 7-day sibling. See that
-	// method's doc for the full rationale.
-	IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error)
+	ClaimForDeletion(ctx context.Context, userID string, kind DeletionClaimKind) (bool, error)
 
 	// UpdateUserEmailTx updates a user's email, blind index, and resets email_verified=false
 	// within an existing transaction. Returns ErrDuplicateEmail if the email is already in use.
@@ -289,8 +448,8 @@ type ProfileRepository interface {
 
 	// GetUsersNeedingRetentionClockRepair returns users who are read-only-status
 	// (inactive/cancelled) but have NO retention clock started (retention_expires_at IS NULL) —
-	// Issue #1413 H5 residual, belt-and-braces repair path. CancelIfPastDueWithRetention closes
-	// the specific race on the past-due grace-cancel path going forward, but this query also
+	// Issue #1413 H5 residual, belt-and-braces repair path. CancelIfPastDueOccurrenceWithRetention
+	// closes the specific race on the past-due grace-cancel path going forward, but this query also
 	// catches: (a) any row already stuck in this state from BEFORE that fix existed, and (b) any
 	// other, currently-unknown path that might leave a user cancelled with no clock. Mirrors the
 	// other retention queries' predicates (subscription_status IN ('inactive', 'cancelled'),
@@ -365,6 +524,11 @@ type profileRepository struct {
 	db                    DB
 	enc                   *appcrypto.FieldEncryptor
 	overrideTierValidator func(tierName string) bool
+	// auditLog writes DeleteUserCascade's terminal `user.deleted` entry inside the cascade's own
+	// transaction (Issue #1507). Held as the interface rather than reaching for a package-level
+	// helper so the write goes through the one documented entry point — LogInTx — whose doc comment
+	// carries the #1506 warning a future implementer must not be able to miss.
+	auditLog AuditLogRepository
 }
 
 // SetOverrideTierValidator injects a function that reports whether a manual_tier_override value
@@ -402,8 +566,16 @@ func (r *profileRepository) SetOverrideTierValidator(validator func(tierName str
 // Precedent: NewMerchantRepository, NewMerchantOverrideRepository, NewSystemHealthRepository, and
 // NewDeadLetterJobRepository already return their unexported concrete pointer types in this same
 // package.
+// Compile-time proof that the concrete type satisfies the wide interface. This constructor has always
+// returned the concrete type, so it never had the compiler's implicit check; added alongside the
+// matching assertion in linked_item_repository.go (Issue #1469) so both repositories are covered.
+var _ ProfileRepository = (*profileRepository)(nil)
+
 func NewProfileRepository(db DB, enc *appcrypto.FieldEncryptor) *profileRepository {
-	return &profileRepository{db: db, enc: enc}
+	// auditLog is constructed unconditionally and from the same handle: DeleteUserCascade only ever
+	// calls LogInTx, which writes through the transaction it is given and never touches this
+	// receiver's db, so there is no configuration for a caller to get wrong or forget.
+	return &profileRepository{db: db, enc: enc, auditLog: NewAuditLogRepository(db)}
 }
 
 const userSelectQuery = `
@@ -897,7 +1069,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	// CI-observed clock-skew fix: through the fix below, `updated_at` AND the
 	// plaid_cleanup_pending_at COALESCE both used a single Go-computed `now := time.Now()` passed as
 	// a query parameter — the ONE writer of this column that did not use a Postgres-native clock,
-	// unlike every sibling writer (CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride,
+	// unlike every sibling writer (CancelIfPastDueOccurrenceWithRetention, ExpireTrialIfNoOverride,
 	// UpdateTrialStatus below, removeUserTierOverrideUpdate). That inconsistency is exactly what
 	// failed TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMarker in CI: the
 	// test fences a "before" bound via `SELECT NOW()` (correctly, per this file's own established
@@ -976,7 +1148,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	// a genuine transition) leaves plaid_cleanup_pending_at completely untouched — whatever it
 	// currently is (NULL after a completed repair, or still running) is exactly what the invariant
 	// says it should be, and only a real transition is licensed to change it.
-	// CancelIfPastDueWithRetention/CancelIfPastDueOccurrenceWithRetention/ExpireTrialIfNoOverride
+	// CancelIfPastDueOccurrenceWithRetention/ExpireTrialIfNoOverride
 	// need no equivalent guard: their own WHERE clauses already require the OLD status to be
 	// 'past_due'/'trial' (never already repair-eligible), so every successful write there is a
 	// transition into ineligibility by construction.
@@ -1127,21 +1299,107 @@ func (r *profileRepository) CancelDeletion(ctx context.Context, userID string) e
 	return nil
 }
 
-// GetUsersScheduledForDeletion returns users whose deletion date has passed
-func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
+// DeletionSweepCursor is a keyset-pagination position for GetUsersScheduledForDeletionPage,
+// captured from the last row of the previous page — (ScheduledAt, UserID), matching that page's
+// ORDER BY (deletion_scheduled_at, id) ASC. A nil cursor starts from the beginning.
+type DeletionSweepCursor struct {
+	ScheduledAt time.Time
+	UserID      string
+}
+
+// GetUsersScheduledForDeletionPage returns up to `limit` users whose deletion_scheduled_at has
+// passed, ordered by (deletion_scheduled_at, id) ASC for deterministic keyset pagination — Batch
+// S2 Task 4 (Issue #1440/#1448 follow-up; same defect class as #1469/ItemCleanupCheck).
+//
+// The unbounded GetUsersScheduledForDeletion this replaced (deleted in #1488, once #1482 removed
+// its last caller) had NO LIMIT and ordered by deletion_scheduled_at alone (no id tie-breaker, so
+// ties were not even deterministically ordered). That was harmless while this
+// query only fed a soft, reversible flow, but #1440 turned it into a REAL hard delete, and #1448
+// registered its caller with RunOnStart: true — so an unbounded result set is now unbounded
+// destructive work triggered on process start, with no deterministic order to reason about.
+//
+// A bare `LIMIT n` alone would trade one bug for a worse one: since this predicate does not care
+// WHY a user hasn't been deleted yet (only deletion_scheduled_at/is_deleted), a permanently- or
+// long-stuck oldest row (e.g. an admin comp continuously renewed after each scheduled deletion
+// date, or a linked_items cleanup that never finishes — see DeleteUserCascade's own guards) would
+// occupy a slot in the oldest-first page FOREVER, starving every user ranked past the page size
+// out of every single run. Keyset pagination fixes this: the caller (ScheduledDeletionCheckWorker)
+// loops pages within ONE run, advancing the cursor past whatever it just saw — including past a
+// stuck row — until a page comes back short (exhausted) OR the caller's total-processed safety
+// cap (maxUsersPerDeletionSweep, queue/jobs/scheduled_deletion_check.go) is reached. Hitting the
+// cap logs a WARN naming how many users were processed and stops that run early WITHOUT
+// scheduling anything new. Since Issue #1477 the next periodic run's pagination RESUMES from the
+// timestamp that capped run stopped at, rather than starting over from the oldest still-eligible
+// row — see the paragraph below and repository/sweep_cursor_repository.go. (Through #1477 it did
+// start over, and the users a run had already enqueued were cheaply re-skipped via
+// AccountDeletionUniqueOpts' dedup until they were actually deleted, at which point the row is
+// hard-deleted — DeleteUserCascade's `DELETE FROM users` below — and no longer matches this query
+// at all. That dedup is still what makes a re-visited row cheap; it is simply no longer the only
+// thing that lets a later run reach users past an earlier run's cap.)
+//
+// That rate-based framing describes only the SLOW case, and it was not the whole story. Until
+// Issue #1477 the failure mode above the cap was STRUCTURAL, not a matter of arrival rate: every
+// run restarted pagination from a nil cursor, so if the number of eligible rows NOT actually
+// completing deletion (stuck in AccountDeletionWorker, or otherwise never reaching the point where
+// DeleteUserCascade removes them from this query's result set) exceeded maxUsersPerDeletionSweep
+// (queue/jobs/scheduled_deletion_check.go), every future sweep spent its ENTIRE budget re-fetching
+// those same oldest stuck rows and NEVER reached anything ranked past the cap, for as long as they
+// kept failing. That was permanent starvation of every row past the cap, not eventual drainage.
+//
+// #1477 closed it: ScheduledDeletionCheckWorker now PERSISTS the timestamp a capped run stopped at
+// (the sweep_cursors table — repository/sweep_cursor_repository.go) and passes it back here as the
+// next run's `after`, so a permanently-failing head no longer occupies every run's budget. The
+// replacement guarantee is BOUNDED, not absolute — every candidate is reached within one full
+// cycle of runs rather than promptly, and rows that become eligible behind the current watermark
+// wait for the wrap. It is stated once, in full, in repository/sweep_cursor_repository.go's
+// header; do not restate it here as "no starvation".
+func (r *profileRepository) GetUsersScheduledForDeletionPage(ctx context.Context, after *DeletionSweepCursor, limit int) ([]*domain.User, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	if after == nil {
+		query := userSelectQuery + `
+			WHERE deletion_scheduled_at IS NOT NULL
+			  AND deletion_scheduled_at <= $1
+			  AND is_deleted = FALSE
+			ORDER BY deletion_scheduled_at ASC, id ASC
+			LIMIT $2
+		`
+		return r.queryUsers(ctx, query, time.Now(), limit)
+	}
 	query := userSelectQuery + `
 		WHERE deletion_scheduled_at IS NOT NULL
 		  AND deletion_scheduled_at <= $1
 		  AND is_deleted = FALSE
-		ORDER BY deletion_scheduled_at ASC
+		  AND (deletion_scheduled_at, id) > ($2, $3)
+		ORDER BY deletion_scheduled_at ASC, id ASC
+		LIMIT $4
 	`
-	return r.queryUsers(ctx, query, time.Now())
+	return r.queryUsers(ctx, query, time.Now(), after.ScheduledAt, after.UserID, limit)
 }
 
-// DeleteUserCascade performs application-level cascade deletion of all user data, guarded by a
-// re-verification of eligibility INSIDE this same transaction — see the interface doc comment
-// for the full Issue #1413 round-4 C1/C2 rationale. This implements the 10-step deletion process
-// to maintain audit trail.
+// DeleteUserCascade performs a REAL hard delete of the users row, guarded by a re-verification of
+// eligibility INSIDE this same transaction — see the interface doc comment for the full Issue
+// #1413 round-4 C1/C2 rationale, unchanged by this method's Issue #1440 rewrite.
+//
+// Issue #1440: this used to explicitly DELETE five tables (boosts, transactions, linked_items,
+// accounts, notifications) and then SOFT-delete the users row (SET is_deleted = TRUE). Because
+// the users row survived, NOT ONE of the schema's foreign keys into users ever fired — the five
+// explicit DELETEs merely duplicated five of the (as of this writing) 37 ON DELETE CASCADE
+// relationships into users in Go, by hand, and the other 32 user-scoped tables silently retained
+// personal data after every "completed" GDPR deletion. This is also how the bug that opened this
+// issue shipped in the first place: three of the original explicit DELETEs named tables
+// (recurring_patterns, user_preferences, user_sessions) that never existed in any migration —
+// aspirational leftovers from this method's very first draft (commit cffde2b7, written against a
+// pre-Clerk/pre-Paddle placeholder schema) — so the whole transaction aborted and every real
+// GDPR deletion failed silently. See TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned
+// for the regression test this shipped without: it seeds a row in every user-scoped table this
+// schema has and asserts every one is gone, instead of checking a hard-coded handful.
+//
+// The fix: stop duplicating the FK graph in Go. Redact audit-log PII (see the dedicated block
+// below), then issue one real `DELETE FROM users`, and let the schema's foreign keys do the
+// erasure — the single source of truth for which tables are user-scoped, incapable of silently
+// drifting out of sync with the Go code the way the five explicit DELETEs did.
 func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	// Start a transaction for atomicity
 	tx, err := r.db.Begin(ctx)
@@ -1150,6 +1408,46 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	}
 	defer tx.Rollback(ctx)
 
+	// Issue #1440 round-3 Finding 7 (Codex review, coordinator's #1440 follow-up brief): lock any
+	// household this user owns BEFORE locking the user row below, matching household_service.go's
+	// own codebase-wide invariant — AcceptInvite's own doc comment (step 4, "lockAndGetUser on the
+	// owner") states it explicitly: "No path locks a users row before a households row ... never a
+	// cycle." That invariant held until the round-2 household-owner guard (Issue #1440 Critical
+	// finding) was added to THIS method: it locks the USER row first (the eligibility recheck's
+	// `FOR UPDATE` just below), and only touches the household row implicitly, much later, when the
+	// final `DELETE FROM users` cascades into households via owner_user_id's CASCADE FK. Two
+	// transactions acquiring the SAME two rows in OPPOSITE orders is a textbook deadlock:
+	// AcceptInvite locks household then wants the owner's user row (step 1 then step 4); this method
+	// used to lock the user row then (via its cascading DELETE) want the household. Verified
+	// empirically (TestDeleteUserCascade_Integration_LockOrderMatchesAcceptInvite_
+	// NoDeadlockWithConcurrentAcceptInvite): the pre-fix order genuinely deadlocks — "ERROR: deadlock
+	// detected (SQLSTATE 40P01)" — against a transaction that reproduces AcceptInvite's exact lock
+	// sequence.
+	//
+	// households.owner_user_id is UNIQUE (migration 000106) — a user owns at most one household, so
+	// this is a single-row lookup, not a scan. A non-locking `SELECT ... FOR NO KEY UPDATE` on the
+	// household row (if one exists; zero rows is a normal, common no-op for a non-owner) reorders
+	// this method's OWN lock acquisition to household-then-user, matching AcceptInvite, closing the
+	// cycle at its root rather than at one specific interleaving of it.
+	//
+	// `FOR NO KEY UPDATE`, not `FOR UPDATE` — deliberately, to avoid reintroducing the OTHER deadlock
+	// class this codebase has already been bitten by once (StampMissingPlaidCleanupMarkers's ROUND 23
+	// correction, this file, ~line 2545): a `FOR UPDATE` lock on the household row would conflict with
+	// a concurrent `FOR KEY SHARE` request an unrelated INSERT referencing this household (e.g. a
+	// household_members or household_invites row) would need for its own FK check, which this method
+	// does not need to preclude — this transaction never updates a key column on the household row
+	// itself (it only ever gets removed via CASCADE from the DELETE below, which takes its own
+	// necessary lock at that time regardless of what mode was held earlier). `FOR NO KEY UPDATE` still
+	// conflicts with a concurrent `FOR UPDATE` request — which is exactly what AcceptInvite's/
+	// RemoveMember's/OffboardExcessMembers'/ForceDisband's own household-row locks all use — so this
+	// still correctly blocks any of THOSE from proceeding concurrently while this guard is being
+	// decided; it only stops conflicting with the narrower, unrelated FK-driven `FOR KEY SHARE` case.
+	var lockedHouseholdID *string
+	err = tx.QueryRow(ctx, `SELECT id FROM households WHERE owner_user_id = $1 FOR NO KEY UPDATE`, userID).Scan(&lockedHouseholdID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, fmt.Errorf("DeleteUserCascade: lock owned household: %w", err)
+	}
+
 	// Issue #1413 round-4 Critical finding C1: re-verify eligibility INSIDE this transaction,
 	// immediately before any destructive statement — closing the window between ClaimForDeletion
 	// (which the external cleanup above this call in ExecuteDeletion can separate from here by
@@ -1157,17 +1455,21 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// or comp-grant must either commit before this SELECT runs (and be seen by it) or block until
 	// this transaction ends (by which point the outcome here is already decided and committed).
 	//
-	// Reuses claimForDeletionPredicate UNCHANGED for the comp-vs-GDPR-request precedence rule —
-	// the SAME rule ClaimForDeletion already enforces, so a user's own outstanding GDPR deletion
-	// request still beats a live comp here exactly as it does there. See that predicate's own doc
-	// comment; it is deliberately not "fixed" or restated here.
+	// Uses deletionAuthorisationUnionPredicate — "a claim of EITHER kind would still be
+	// authorised" — which preserves the comp-vs-GDPR-request precedence rule exactly as
+	// ClaimForDeletion enforces it: a user's own outstanding GDPR deletion request still beats a
+	// live comp here. Issue #1440, T0: that constant is now COMPOSED from the two kind-specific
+	// predicates rather than being a hand-written third variant, so it cannot drift away from what
+	// ClaimForDeletion actually enforces. See its doc comment for why the union plus the
+	// exact-value check below is equivalent to the kind-specific rule in every reachable case, and
+	// therefore why this method does not need to be told the kind.
 	//
 	// ADDITIONALLY requires deletion_requested_at to be EXACTLY the value the caller observed
 	// before calling ClaimForDeletion (IS NOT DISTINCT FROM handles the NULL case) — this is the
-	// part claimForDeletionPredicate cannot provide by itself: that predicate treats "no
-	// manual_tier_override at all" as sufficient authorization REGARDLESS of
-	// deletion_requested_at, so an uncomped user who explicitly cancels their own deletion
-	// request between the claim and this point would otherwise still pass it (cancelling makes
+	// part no authorisation predicate can provide by itself: the retention branch of the union
+	// treats "no manual_tier_override at all" as sufficient authorization for a user with no
+	// outstanding request, so an uncomped user who explicitly cancels their own deletion request
+	// between the claim and this point would otherwise still pass it (cancelling makes
 	// deletion_requested_at NULL, and "no override" was already true) — this is the C1 finding's
 	// most serious case: an explicitly-cancelled deletion must not still happen.
 	var stillEligible bool
@@ -1176,7 +1478,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 			SELECT 1 FROM users
 			WHERE id = $1 AND is_deleted = FALSE
 			  AND deletion_requested_at IS NOT DISTINCT FROM $2
-	`+claimForDeletionPredicate+`
+	`+deletionAuthorisationUnionPredicate+`
 			FOR UPDATE
 		)
 	`, userID, expectedDeletionRequestedAt).Scan(&stillEligible)
@@ -1203,11 +1505,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// already as narrow as this branch makes it) — but this check must not make that window any
 	// WIDER by proceeding while a KNOWN un-cleaned item still exists.
 	var uncleanedItemsExist bool
-	err = tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM linked_items WHERE user_id = $1 AND status <> 'disconnected'
-		)
-	`, userID).Scan(&uncleanedItemsExist)
+	err = tx.QueryRow(ctx, `SELECT `+uncleanedLinkedItemExistsClause, userID).Scan(&uncleanedItemsExist)
 	if err != nil {
 		return false, fmt.Errorf("DeleteUserCascade: un-cleaned Plaid item check: %w", err)
 	}
@@ -1218,91 +1516,523 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return false, nil
 	}
 
-	now := time.Now()
-
-	// Step 1: Delete all boosts
-	_, err = tx.Exec(ctx, `DELETE FROM boosts WHERE user_id = $1`, userID)
+	// Issue #1440 Critical finding (Codex review): re-verify the household-owner guard INSIDE this
+	// same transaction, immediately before the destructive DELETE — the same principle finding
+	// C1/C2 above already established for eligibility and Plaid cleanup, now applied to household
+	// ownership. #1367's guard (domain.ErrHouseholdHasActiveMembers) lived ONLY in
+	// DeletionService.RequestDeletion — the user-INITIATED request path. ExecuteDeletion's other
+	// two callers (the retention-triggered deleteExpiredAccounts, and the legacy
+	// DeletionWorker/AccountDeletionWorker paths) call this method directly, with NO owner guard at
+	// all: a household owner whose retention clock expires while still owning an active household
+	// would reach the DELETE below unguarded. households.owner_user_id CASCADEs the household row
+	// away, taking every OTHER member's household_members row with it, and — via
+	// subscription_entitlements.payer_user_id CASCADE — every OTHER beneficiary's entitlement too.
+	// That is irreversible destruction of a DIFFERENT user's data, not just the deletion target's
+	// own.
+	//
+	// householdOwnerBlocksDeletionClause is deliberately BROADER than the #1367 rule
+	// (CountActiveMembers(householdID) > 1) alone: it also blocks on any subscription_entitlements
+	// row this household funds (household_id = h.id) for someone OTHER than the owner, regardless
+	// of that beneficiary's current household_members.status. RemoveMember
+	// (household_repository.go) only flips a member's status to 'removed' — its own doc comment
+	// says it "Never touches Plaid Items", and it likewise never touches subscription_entitlements
+	// — so a just-removed member's owner-funded entitlement can outlive their active membership row
+	// entirely. An active-member-count-only guard would miss that residual; this does not.
+	//
+	// Unlike the comp/deletion-request-cancelled guard above (a normal, expected (false, nil) skip
+	// that resolves itself on the next scheduled run), this condition CANNOT self-heal: nothing else
+	// in the system will transfer ownership, remove the member, or reconcile the stale entitlement.
+	// A silent (false, nil) skip here would let a GDPR deletion deadline go unmet forever with no
+	// visible signal. So this returns a genuine, non-nil error instead — every ExecuteDeletion
+	// caller already logs a non-nil error at Error level, and the two River-job callers additionally
+	// retry it (eventually surfacing in the dead-letter queue the System Health Dashboard already
+	// monitors). observability.HouseholdOwnerDeletionBlockedTotal gives an operator a dedicated,
+	// alertable signal distinct from ordinary transient failures — this situation requires a human
+	// to actually resolve the household, not just retry.
+	var householdOwnerBlocksDeletion bool
+	err = tx.QueryRow(ctx, `SELECT `+householdOwnerBlocksDeletionClause, userID).Scan(&householdOwnerBlocksDeletion)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("DeleteUserCascade: household owner guard check: %w", err)
+	}
+	if householdOwnerBlocksDeletion {
+		observability.HouseholdOwnerDeletionBlockedTotal.Inc()
+		return false, domain.ErrHouseholdHasActiveMembers
 	}
 
-	// Step 2: Delete all transactions
-	_, err = tx.Exec(ctx, `DELETE FROM transactions WHERE user_id = $1`, userID)
-	if err != nil {
-		return false, err
-	}
-
-	// Step 3: Delete all linked items (bank connections)
-	// NOTE: This does NOT call Plaid /item/remove - that's handled by DeletionService
-	// before calling this method to stop Plaid billing
-	_, err = tx.Exec(ctx, `DELETE FROM linked_items WHERE user_id = $1`, userID)
-	if err != nil {
-		return false, err
-	}
-
-	// Step 4: Delete all accounts
-	_, err = tx.Exec(ctx, `DELETE FROM accounts WHERE user_id = $1`, userID)
-	if err != nil {
-		return false, err
-	}
-
-	// Steps 5/6/8/9 (recurring_patterns, user_preferences, an audit_logs.metadata anonymization
-	// UPDATE, user_sessions) were removed here as an incidental fix while adding this task's
-	// C1/C2 real-DB integration coverage: none of recurring_patterns/user_preferences/
-	// user_sessions exist in this schema (no migration ever creates them — the first two appear
-	// to predate a later redesign, and user_sessions predates the Clerk-JWT auth model, which
-	// keeps no server-side session table), and audit_logs has never had a metadata column —
-	// migration 000053 converted its former JSONB `changes` column to encrypted TEXT, and no
-	// migration ever added `metadata`. Every one of these four statements unconditionally
-	// errored, meaning DeleteUserCascade — and therefore every real ExecuteDeletion call — has
-	// never been able to run to completion against this schema. This was invisible before
-	// because no real-database integration test previously exercised this method end-to-end
-	// (only pgxmock, which matches query text and cannot catch a table/column that doesn't
-	// exist). Out of scope for #1413's concurrency findings — properly redacting PII from the
-	// now-encrypted audit_logs.changes column is a separate design decision this fix does not
-	// make — but leaving these in place would have made this task's own required "ordinary
-	// eligible user still deletes" regression coverage impossible to satisfy honestly. Worth its
-	// own follow-up issue: audit-log PII redaction on deletion is a real GDPR gap, just not one
-	// this task can respond to by inventing a redaction scheme unilaterally.
-
-	// Step 7: Delete all notifications
-	_, err = tx.Exec(ctx, `DELETE FROM notifications WHERE user_id = $1`, userID)
-	if err != nil {
-		return false, err
-	}
-
-	// Step 10: Mark user as deleted — encrypt the tombstone values and clear blind indexes
-	deletedEmail := fmt.Sprintf("deleted_%s@deleted.local", userID)
-	deletedClerkUserID := fmt.Sprintf("deleted_%s", userID)
-
-	encryptedDeletedEmail, err := r.enc.EncryptString(deletedEmail)
-	if err != nil {
-		return false, fmt.Errorf("failed to encrypt deleted email: %w", err)
-	}
-
-	encryptedDeletedClerkUserID, err := r.enc.EncryptString(deletedClerkUserID)
-	if err != nil {
-		return false, fmt.Errorf("failed to encrypt deleted clerk_user_id: %w", err)
-	}
-
+	// Issue #1440 Finding 2 (Codex review): clear any DANGLING cross-user override BEFORE the hard
+	// delete below. transactions.custom_category_override_id -> custom_categories is ON DELETE
+	// RESTRICT (deliberately — see migration 000065: "prevents deleting a custom_category while it
+	// is the active override", a real, everyday product rule enforced by
+	// custom_category_repository.go, not something to weaken via a schema change just for this
+	// method). custom_categories.user_id -> users is CASCADE, so this user's own custom_categories
+	// rows are about to disappear as part of the DELETE below.
+	//
+	// The user's OWN transactions (also cascading away in the very same DELETE FROM users
+	// statement) never trip this RESTRICT — empirically verified: Postgres's RI check for RESTRICT
+	// evaluates once every row this single statement cascades away has actually been removed, not
+	// per-row as each cascade step runs, so an override pointing at a category that is ALSO being
+	// deleted in this same statement is never seen as "still referenced". The one case that DOES
+	// reach a real, reproducible failure: transactions.custom_category_override_id has NO trigger
+	// enforcing same-user ownership (unlike custom_categories.parent_id's own
+	// enforce_custom_category_two_levels trigger), so a DIFFERENT, non-deleted user's transaction
+	// can reference this user's custom_categories row as its override — that transaction is NOT
+	// part of this statement's cascade, so the RESTRICT fires for real and the whole deletion
+	// fails. Clearing it here, unconditionally, ahead of time, closes that residual regardless of
+	// which user owns the referencing transaction.
+	//
+	// category_override_kind must be cleared in the SAME statement, not just
+	// custom_category_override_id: valid_category_override_discriminator (migration 000065) forbids
+	// kind='custom' with a NULL override_id, so nulling only the FK column here would trade one
+	// constraint violation for another.
+	//
+	// Round-3 addition (Issue #1440 follow-up, Codex review, Finding 3, High): also reset
+	// effective_category_name to pfc_primary in this SAME statement. effective_category_name is an
+	// app-maintained column (migration 000073) — unlike effective_pfc_primary/effective_pfc_detailed
+	// (GENERATED ALWAYS AS, migration 000073:15-30), it does NOT recompute itself when
+	// category_override_kind/custom_category_override_id change, so clearing only those two columns
+	// left effective_category_name holding the DELETED user's custom category NAME on the surviving
+	// OTHER user's transaction — personal data (a name the deleted user chose and typed) surviving
+	// erasure, in a column this codebase treats as PII (docs/security/posthog-pii-masking.md;
+	// data-ph-mask is applied to it on the frontend). Migration 000073 places no CHECK constraint
+	// tying effective_category_name to category_override_kind, so setting it here is schema-safe.
+	// `effective_category_name = pfc_primary` mirrors custom_category_repository.go's
+	// DeleteWithReassignment — the ordinary, already-shipped code path for "a custom category was
+	// deleted out from under a transaction that used it as an override" (same-user case) — so a
+	// cross-user dangling override left by THIS method resolves to the exact same, already-expected
+	// value: the effective category reverts to the transaction's own underlying PFC primary, matching
+	// what effective_pfc_primary's generated-column CASE will independently compute for the same row
+	// now that category_override_kind is NULL (ELSE pfc_primary branch) — the two columns stay in
+	// agreement, not just individually non-PII.
 	_, err = tx.Exec(ctx, `
-		UPDATE users
-		SET is_deleted = TRUE,
-		    is_active = FALSE,
-		    email = $1,
-		    clerk_user_id = $2,
-		    paddle_customer_id = NULL,
-		    paddle_subscription_id = NULL,
-		    email_blind_idx = NULL,
-		    clerk_user_id_blind_idx = NULL,
-		    paddle_subscription_id_blind_idx = NULL,
-		    deletion_requested_at = NULL,
-		    deletion_scheduled_at = NULL,
-		    updated_at = $3
-		WHERE id = $4
-	`, encryptedDeletedEmail, encryptedDeletedClerkUserID, now, userID)
+		UPDATE transactions
+		SET custom_category_override_id = NULL, category_override_kind = NULL, effective_category_name = pfc_primary
+		WHERE custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1)
+	`, userID)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("DeleteUserCascade: clear dangling custom category overrides: %w", err)
+	}
+
+	// Issue #1440 round-3 Finding 4 (Codex review): null out four ON DELETE NO ACTION references
+	// (the default delete rule for a bare REFERENCES clause with no explicit ON DELETE) that can
+	// legally hold a CROSS-USER reference, none of it enforced by any trigger:
+	//
+	//   - accounts.replaced_by_id -> accounts(id)               (migration 000033:43-48)
+	//   - linked_items.replaced_by_id -> linked_items(id)       (migration 000032:35-40)
+	//   - accounts.user_account_id -> user_accounts(id)         (migration 000033:19-24)
+	//   - transactions.user_account_id -> user_accounts(id)     (migration 000034:16-21)
+	//
+	// This user's own accounts/linked_items/user_accounts rows are about to cascade away via their
+	// own user_id -> users CASCADE FKs (part of the DELETE FROM users below). NO ACTION's
+	// referential-integrity check has the SAME end-of-statement timing as RESTRICT (see the dangling
+	// custom-category-override clear above for the empirically-verified mechanism): a same-user
+	// reference is satisfied for free because both the referencing and referenced row cascade away
+	// together in the SAME statement, but a DIFFERENT user's surviving row that still points at one
+	// of this user's about-to-vanish rows makes the whole `DELETE FROM users` statement fail with a
+	// foreign key violation. Migration 000100 (:276-312) is direct evidence this is reachable in
+	// production, not a theoretical edge case: its own comments for accounts.user_account_id and
+	// transactions.user_account_id both say "ON DELETE NO ACTION — must re-point before deleting
+	// losers", and it re-points BOTH columns before removing a duplicate user_accounts row for
+	// exactly this reason.
+	//
+	// Nulling unconditionally (not scoped to "only when the referencing row belongs to someone
+	// else") is deliberate and harmless: all four columns are nullable (no NOT NULL constraint in
+	// any of the migrations above), and a same-user reference would cascade away in this same
+	// statement regardless of whether it is nulled first.
+	if _, err = tx.Exec(ctx, `
+		UPDATE accounts SET replaced_by_id = NULL
+		WHERE replaced_by_id IN (SELECT id FROM accounts WHERE user_id = $1)
+	`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: clear dangling accounts.replaced_by_id references: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE linked_items SET replaced_by_id = NULL
+		WHERE replaced_by_id IN (SELECT id FROM linked_items WHERE user_id = $1)
+	`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: clear dangling linked_items.replaced_by_id references: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE accounts SET user_account_id = NULL
+		WHERE user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $1)
+	`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: clear dangling accounts.user_account_id references: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE transactions SET user_account_id = NULL
+		WHERE user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $1)
+	`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: clear dangling transactions.user_account_id references: %w", err)
+	}
+
+	// Redact audit-log PII BEFORE the hard delete below. audit_logs.user_id (the ACTING admin —
+	// see admin_user_repository.go:390-393's doc comment: "audit_logs.user_id -> the ACTING
+	// ADMIN; resource_id -> the TARGET") already gets nulled for free by its own ON DELETE SET
+	// NULL FK once the DELETE below runs. But audit_logs.resource_id — the column that actually
+	// names the SUBJECT of an admin action, e.g. a tier-override target — is a bare UUID column
+	// with NO foreign key at all (migration 000003:17): it would otherwise keep pointing at this
+	// user's id, WITH its PII-bearing `changes` payload intact, forever. Redact the payload for
+	// BOTH columns here — resource_id is the one this actually matters for; user_id is belt-and-
+	// braces given the FK already handles it, and harmless to include if that FK is ever changed.
+	// Per the product decision: redact the payload, KEEP the row — this preserves the tamper-
+	// evident audit trail GDPR itself expects while removing the personal data it carries.
+	//
+	// Must run in THIS transaction, before the DELETE below (the SET NULL FK fires as part of
+	// that DELETE — after it, `user_id = $1` would no longer match anything, only `resource_id`
+	// still would). Deliberately a single flat UPDATE with no extra row-locking: it only touches
+	// audit_logs rows, so it cannot widen the users-row lock this transaction already holds from
+	// the eligibility recheck above (FOR UPDATE) — see StampMissingPlaidCleanupMarkers's ROUND 23
+	// doc comment (~line 2440) for the cross-user deadlock class (SQLSTATE 40P01, an audit-log
+	// INSERT's FK check requesting FOR KEY SHARE on a row already held FOR UPDATE elsewhere) that
+	// widening a lock window here would risk.
+	_, err = tx.Exec(ctx, `UPDATE audit_logs SET changes = NULL WHERE resource_id = $1 OR user_id = $1`, userID)
+	if err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: redact audit log PII: %w", err)
+	}
+
+	// ROUND 15, TIER A: RETRACT THIS USER'S DELETION-RESIDUE RECORDS. This is the other half of
+	// making the residue mechanism durable, and without it that mechanism would be unusable.
+	//
+	// Since round 15, DeletionService records each irreversible external Paddle call BEFORE it is
+	// issued rather than inferring it from an in-memory flag at the end of the run (see
+	// recordIssuedExternalEffect, deletion_service.go, for why an end-of-run inference cannot survive
+	// a lost acknowledgement, a panic, or process death). A residue record asserts one thing:
+	// "irreversible external work was done to a user WHO IS STILL HERE". The moment this transaction
+	// commits that assertion is false — the user is gone and the cancellation was the intended
+	// outcome — so the record must go with them.
+	//
+	// ⚠ IT MUST BE THIS TRANSACTION, NOT A BEST-EFFORT CALL AFTER IT. Both Prometheus gauges alert on
+	// `increase(deletion_residue_records[15m])`, so a window in which a completed deletion's rows are
+	// still visible is a false alarm on every ordinary deletion of a paying user — and a crash inside
+	// that window would leave a permanent one, for a user nobody can look up. Doing it here means no
+	// reader ever observes the intermediate state at all: the rows and the user disappear together or
+	// neither does.
+	//
+	// ⚠ DELETE, NOT REDACT. The redaction above deliberately KEEPS rows: they are the tamper-evident
+	// GDPR trail. A residue row is not part of that trail — it carries no `changes` payload by
+	// construction and describes no action taken against the user's data. It is an OPERATOR WORK ITEM,
+	// and this statement is the only thing that ever closes one. Note the ordering is immaterial to
+	// the redaction (residue rows have nothing to redact); it is placed here to sit with the other
+	// audit_logs statement rather than for any dependency.
+	//
+	// Matched by the same literal prefix the operator query, the gauges and migration 000138's partial
+	// index use — via deletionResidueActionPrefix, so it cannot drift away from what is written.
+	if _, err = tx.Exec(ctx,
+		`DELETE FROM audit_logs WHERE resource_id = $1 AND action LIKE $2`,
+		userID, deletionResidueActionPrefix+"%"); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: retract deletion-residue records: %w", err)
+	}
+
+	// Issue #1494: PRESERVE THE OBLIGATION BEFORE DESTROYING ITS ONLY RECORD.
+	//
+	// The DELETE below removes this user's linked_items rows (via user_id's ON DELETE CASCADE). Every
+	// marker those rows carry — plaid_removed_at, plaid_removal_failed_at, the Plaid Item id itself —
+	// goes with them. For a row that was PROVED removed that is correct and complete: Plaid billing
+	// has stopped and nothing is owed. For any row we could NOT prove removed, the Item may still
+	// exist and may still bill, and after this statement no part of this system would know it ever
+	// existed. That is the exact outcome the C2 guard above exists to prevent, and the guard alone
+	// cannot prevent it any more: since #1494 it deliberately stops blocking on a row marked
+	// plaid_removal_failed_at, so that a permanently-unremovable Item cannot block a GDPR erasure
+	// forever. THIS INSERT IS THE PRICE OF THAT ESCAPE. Without it the escape is a silent leak.
+	//
+	// ORDER AND ATOMICITY, both load-bearing. It runs BEFORE the delete and in the SAME transaction,
+	// so there is no interleaving in which the linked_items rows are gone and the record is not
+	// written: a failure here returns an error, the deferred rollback discards everything, and the
+	// user is still deletable on a later attempt. The reverse order (or a separate transaction, or a
+	// best-effort log-and-continue) would reintroduce the "irreversible step taken, durable record
+	// missing, nothing left to retry from" shape that four earlier fixes on this branch each closed.
+	// Pinned by TestDeleteUserCascade_Integration_OrphanRecordInsertFailure_AbortsTheWholeCascade.
+	//
+	// SCOPE: `plaid_removed_at IS NULL`, deliberately WIDER than the guard's own predicate. The guard
+	// waves through rows marked plaid_removal_failed_at; this copies those AND any row that is merely
+	// unresolved. In a cascade that actually proceeds the two sets coincide (the guard would have
+	// blocked otherwise), so the difference is only reachable if a future change loosens the guard
+	// further — in which case recording MORE than is strictly required is the safe direction, and the
+	// only one that cannot silently lose an Item.
+	//
+	// CIPHERTEXT IS COPIED VERBATIM. item_id / institution_id / institution_name are encrypted at
+	// rest by the application layer (linked_item_repository.go's encryptLinkedItemPIIFields), and a
+	// SQL statement has no access to the key. Copying the encrypted values is therefore both the only
+	// option here and the right one: the destination columns are named *_encrypted and readers decrypt
+	// through the same FieldEncryptor. The access token is copied on the same terms since Issue #1497
+	// (it was not, before — see the note on the INSERT below and migration 000135). See migration
+	// 000134 for why this table carries no user_id at all.
+	//
+	// Issue #1497: THE ACCESS TOKEN IS NOW COPIED TOO, WITH A DEADLINE. Migration 000134's prose said
+	// it deliberately was not, on the argument that this table's population is exactly the population
+	// whose token Plaid has already rejected. That argument is true of one leg and false of the table:
+	// the `plaid_removed_at IS NULL` scope above also copies 'replaced' re-link leftovers, whose
+	// /item/remove was NEVER ATTEMPTED, and for those a retry is the only automated path that has ever
+	// existed. See migration 000135 for the full reversal and the GDPR position it rests on.
+	//
+	// THE DEADLINE IS COMPUTED HERE, IN GO, from domain.OrphanedItemTokenRetention rather than as
+	// `NOW() + INTERVAL '30 days'` in the SQL, for two reasons: the constant is the single place the
+	// retention period is stated (and is pinned by a test), and a SQL interval literal would be a second
+	// copy of it that nothing could keep in step.
+	//
+	// NULLIF(access_token_encrypted, '') because linked_items.access_token_encrypted is NOT NULL and can
+	// legitimately hold '' (the NO_USABLE_ACCESS_TOKEN case, which is one of the two terminal verdicts
+	// that lands rows here). Storing '' would make the row look credential-bearing to every predicate
+	// that tests `IS NOT NULL` — including the retry selection, which would then present an empty token
+	// to Plaid on every run for thirty days. NULL is the honest encoding of "no credential".
+	//
+	// Ciphertext, verbatim, like the other four columns — access_token_encrypted is produced by
+	// FieldEncryptor in linked_item_repository.go and this statement has no key.
+	//
+	// ON CONFLICT DO NOTHING keys off plaid_orphaned_items_unique_linked_item, so this statement can
+	// never be the one that fails a retried cascade.
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO plaid_orphaned_items (
+			linked_item_id, plaid_item_id_encrypted, institution_id_encrypted,
+			institution_name_encrypted, linked_item_status, last_error_code, terminal_since,
+			access_token_encrypted, token_expires_at
+		)
+		SELECT id, item_id, institution_id, institution_name, status,
+		       plaid_removal_error_code, plaid_removal_failed_at,
+		       NULLIF(access_token_encrypted, ''), $2
+		FROM linked_items
+		WHERE user_id = $1 AND plaid_removed_at IS NULL
+		ON CONFLICT (linked_item_id) DO NOTHING
+	`, userID, time.Now().UTC().Add(domain.OrphanedItemTokenRetention)); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: preserve orphaned Plaid item records: %w", err)
+	}
+
+	// Hard-delete the user row. 37 foreign keys into users are ON DELETE CASCADE and 2 are ON
+	// DELETE SET NULL (audit_logs.user_id, household_invites.accepted_user_id) — every user-scoped
+	// table these cover is cleaned up by the schema itself rather than by an incomplete,
+	// hand-maintained list of DELETEs in Go.
+	//
+	// A handful of tables are user-scoped WITHOUT any FK to users at all (dead_letter_jobs,
+	// idempotency_keys, mcp_audit_log.actor_user_id) — handled by explicit statements above/below
+	// this comment, per-table, since the schema cannot enforce their cleanup automatically. See each
+	// statement's own doc comment for its disposition (erase vs. retain-and-reason).
+	//
+	// RESTRICT/NO ACTION note (Issue #1440 follow-up, Codex review "Finding 2"): a prior audit of
+	// this method claimed "ZERO FKs into users are RESTRICT/NO ACTION" and treated that as proof
+	// this DELETE cannot fail on referential integrity. That claim was about direct FKs INTO users —
+	// true — but did not account for the TRANSITIVE closure: custom_categories.parent_id (self-FK,
+	// RESTRICT) and transactions.custom_category_override_id -> custom_categories (RESTRICT) sit one
+	// hop further out. Empirically verified (see this file's companion tests): when every
+	// referencing AND referenced row is cascaded away together within this SAME DELETE FROM users
+	// statement, Postgres's RI check for both RESTRICT and NO ACTION is satisfied — it evaluates
+	// after all of this statement's own cascaded deletes complete, not per-row as each cascade step
+	// runs. The one residual that DOES reach a real, reproducible failure: a DIFFERENT (non-deleted)
+	// user's transaction referencing THIS user's custom_categories row as
+	// custom_category_override_id — schema-legal (no trigger enforces same-user on that column,
+	// unlike custom_categories.parent_id's own trigger), and not covered by this statement's own
+	// cascade since that other transaction is not being deleted. Cleared defensively just above (see
+	// that UPDATE's own doc comment) before this DELETE runs, rather than relying on FK delete-rule
+	// changes — converting either RESTRICT to CASCADE would change real, everyday single-category
+	// deletion behavior elsewhere in the app (custom_category_repository.go's reparent-then-delete
+	// flow, and the "can't delete a category still used as a transaction override" product rule),
+	// which is out of scope for a GDPR account-deletion fix.
+	//
+	// Cross-user CASCADE consequences (columns other than user_id: households.owner_user_id,
+	// household_invites.inviter_user_id, referrals.referrer_id/referred_id,
+	// subscription_entitlements.payer_user_id) were re-audited for this follow-up:
+	//   - households.owner_user_id: guarded INSIDE this same transaction just above
+	//     (householdOwnerBlocksDeletionClause), not merely upstream in
+	//     DeletionService.RequestDeletion. A prior version of this comment claimed
+	//     RequestDeletion's #1367 guard alone made this safe — that was wrong: RequestDeletion
+	//     never runs on the retention-triggered or legacy-worker ExecuteDeletion paths, both of
+	//     which call this method directly. See the guard block above for the full rationale.
+	//   - subscription_entitlements.payer_user_id: the composite FK
+	//     fk_subscription_entitlements_payer_is_owner (migration 000112) makes payer_user_id EQUAL
+	//     the household's owner_user_id by construction, so this column is covered by the SAME
+	//     guard above — including its broader-than-#1367 check for an entitlement whose beneficiary
+	//     (user_id) is no longer an active member (see the guard's own doc comment).
+	//   - household_invites.inviter_user_id / referrals.referrer_id/referred_id: unchanged from the
+	//     original audit — these only remove the relationship/invite row itself, never another
+	//     user's own `users` row or their independently-owned data, so no guard is needed for them.
+	ct, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
+	if err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: delete user: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		// Unreachable in practice — the eligibility recheck above already confirmed this row
+		// exists, under a FOR UPDATE lock held for the remainder of this transaction. Defensive,
+		// not an expected outcome.
+		return false, nil
+	}
+
+	// Issue #1440 Finding 3 (Codex review): erase the three tables that carry a user_id (or
+	// actor_user_id) column with NO foreign key to users at all — the schema's own CASCADE graph
+	// (the whole mechanism this method exists to rely on) cannot reach them. Per-table disposition:
+	//
+	//   - dead_letter_jobs: operational record of a failed River job. args/errors are jsonb and can
+	//     embed arbitrary PII from the original job payload or failure message. A dead-lettered job
+	//     for a user who no longer exists has no remaining operational value — nobody will "retry"
+	//     it — so this is erased outright, not redacted-and-kept like audit_logs (there is no other
+	//     user's audit interest riding on this row the way there is on an ADMIN's audit_logs.user_id
+	//     row about a DIFFERENT user).
+	//   - idempotency_keys: response_body (jsonb) caches a full API response for retry
+	//     deduplication. Already short-lived by design (expires_at defaults to now()+24h), but
+	//     erased here rather than left to that TTL — GDPR erasure should not depend on a cache
+	//     expiring on its own schedule.
+	//   - mcp_audit_log: actor_user_id directly identifies the deleted user. Unlike audit_logs (kept
+	//     + redacted, because an admin's audit_logs.user_id row documents an action against a
+	//     DIFFERENT user whose own security-audit interest must survive the admin's deletion),
+	//     mcp_audit_log.actor_user_id is always the deleted user's OWN MCP tool-call history — no
+	//     other user's audit trail depends on this specific row — so it is erased outright.
+	//
+	// budget_period_events.user_id is ALSO a bare TEXT column with no FK to users, but is
+	// deliberately NOT listed here: every row's budget_id is a NOT NULL, ON DELETE CASCADE FK to
+	// budgets(id), so it is already cleaned up transitively via that table's own CASCADE (see
+	// TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned's dedicated assertion).
+	//
+	// Round-3 reordering (Issue #1440 follow-up, Codex review, Finding 5, High): these three DELETEs
+	// used to run BEFORE `DELETE FROM users` above. None of these three tables has any FK to users,
+	// so the FOR UPDATE lock this transaction holds on the users row (the eligibility recheck, far
+	// above) never blocks a concurrent writer from inserting into any of them — an in-flight MCP
+	// audit call (mcp_audit.go's RecordAuditEntry, a separate autocommit statement resolving the
+	// actor's identity fresh, independent of this transaction entirely), an idempotency write (whose
+	// advisory lock is per (user_id, key) — idempotency_repository.go — and shares nothing with this
+	// transaction's user-row lock), or a River dead-letter insert (queue/river/dead_letter.go) can
+	// all land at any point during this transaction's lifetime, completely unblocked by anything held
+	// here. Running these deletes early left the ENTIRE remainder of this method (the household
+	// guard re-check, the cross-user override/reference clears above, and the DELETE FROM users
+	// cascade itself — the slowest step, cascading roughly 40 tables) as an open window during which
+	// such a write could land AFTER this delete already ran and AFTER commit — surviving undetected,
+	// silently, forever. Moving these three deletes to run immediately before COMMIT, once the user
+	// row (and everything FK-linked to it) is already gone, shrinks that window to essentially the
+	// time between these three statements and the COMMIT round trip — the best reduction achievable
+	// without inventing new locking infrastructure these unrelated tables were never designed to
+	// need. It does NOT eliminate the race: this transaction cannot take a lock on a table that has
+	// no relationship to users at all, so a write landing in the few remaining milliseconds before
+	// COMMIT is still possible in principle. Rather than leave that residual silent, a self-healing/
+	// observability backstop closes it the same way this codebase already closes every other
+	// residual it cannot fully lock out (see StampMissingPlaidCleanupMarkers/
+	// ClearCompletedPlaidCleanupMarkers's self-healing pattern, and monitorMalformedTierOverrides'
+	// observability pattern, both profile_repository.go/retention_cleanup_check.go): see
+	// GetOrphanedFKlessUserScopedRowCounts (below) and RetentionCleanupCheckWorker's
+	// monitorOrphanedFKlessRows, which reports (and, for idempotency_keys, is ALSO already backstopped
+	// by IdempotencyCleanupWorker's independent 24-hour TTL sweep — jobs/idempotency_cleanup.go — so
+	// that column self-heals within one day even if this fix were entirely absent) any row in these
+	// three tables whose user_id/actor_user_id no longer names a real user, on every scheduled pass,
+	// rather than leaving a residual GDPR-erasure gap silent and undiscoverable.
+	// ⚠ ROUND 12, FINDING AB-3 — THE ONE SHAPE THE BACKSTOP ABOVE DOES NOT SEE. RECORDED, NOT FIXED.
+	// The paragraph above is about a row INSERTED into one of these three tables after its DELETE has
+	// run; GetOrphanedFKlessUserScopedRowCounts finds those. A dead-letter REPLAY escapes both.
+	//
+	// DeadLetterService.Retry (services/dead_letter_service.go) claims its dead_letter_jobs row and
+	// inserts the replacement river_job in ONE transaction. If that transaction is open when this
+	// statement runs, this statement BLOCKS on the row lock the claim holds — while this transaction
+	// already holds the users row FOR UPDATE — and nothing bounds the wait: there is no
+	// statement_timeout and no lock_timeout set anywhere in this codebase (verified repo-wide; the only
+	// timeout mentioned anywhere is Postgres's own deadlock_timeout, in test commentary). It is NOT a
+	// deadlock cycle — the replay never asks for anything this transaction holds — so Postgres will not
+	// break it. It is a one-way wait lasting as long as the replay does.
+	//
+	// If the replay commits first, this DELETE then erases its dead_letter_jobs row and the erasure
+	// completes — but the river_job it inserted lives in a table this method does not touch at all (0
+	// occurrences of `river_job` in this file, against 17 `DELETE FROM` statements naming 5 tables) and
+	// stays runnable.
+	//
+	// ⚠ WHAT ACTUALLY SURVIVES, STATED PRECISELY BECAUSE THE FIRST DESCRIPTION OF THIS OVERSTATED IT.
+	// NOT resurrected PII. This codebase deliberately keeps PII out of job args and says so
+	// (queue/jobs/email_change_propagation.go: "Email is intentionally NOT stored here to avoid
+	// plaintext PII in the river_job table"), and no args type carries an email, name or address. What
+	// survives is an internal UUID referencing nothing, inside a job that will find no user and no-op.
+	// Real, small, and pre-existing — it is the WAIT and the orphaned runnable job that are new.
+	//
+	// WHY NOTHING IS DONE ABOUT IT HERE, having been assessed. The obvious guard — the replay declining
+	// to enqueue for a user whose deletion is in flight — does not close it: the failing interleaving is
+	// the one where the replay commits FIRST, so any check it makes against its own snapshot sees a user
+	// who is still there. The guard that WOULD close it is the replay taking a CONFLICTING lock on the
+	// users row (FOR SHARE / FOR KEY SHARE) before enqueueing, and that is not safe: the replay would
+	// hold the dead_letter_jobs row and want users, while this transaction holds users and wants that
+	// dead_letter_jobs row — a genuine lock cycle, i.e. trading an unbounded wait for exactly the
+	// SQLSTATE 40P01 class this file has spent several rounds engineering out. Sweeping river_job from
+	// this transaction is a design change on the most sensitive path in this codebase and is
+	// deliberately not made. The residual is therefore recorded rather than closed. The same note is
+	// written from the other side at DeadLetterService.Retry.
+	if _, err = tx.Exec(ctx, `DELETE FROM dead_letter_jobs WHERE user_id = $1`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: erase dead_letter_jobs: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM idempotency_keys WHERE user_id = $1`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: erase idempotency_keys: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM mcp_audit_log WHERE actor_user_id = $1`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: erase mcp_audit_log: %w", err)
+	}
+
+	// Issue #1507: THE TERMINAL AUDIT ENTRY, WRITTEN IN THE TRANSACTION IT DESCRIBES.
+	//
+	// This used to be ExecuteDeletion's own `s.auditLogger.Log(ctx, "user.deleted", ...)`, issued
+	// AFTER this transaction had committed and with its error routed to a log line. So the one
+	// entry that says "this person's data was erased" was the one entry that could be missing while
+	// the erasure it describes was permanent and unretriable — the exact inversion of what an audit
+	// trail is for, and the same "irreversible step taken, durable record missing" shape as the
+	// plaid_orphaned_items INSERT above. It is now the last statement before COMMIT: either both
+	// the erasure and its record land, or neither does.
+	//
+	// WHAT A FAILURE HERE DOES: IT ABORTS THE DELETION. Deliberate, and the harder of the two
+	// choices to defend, so the reasoning is stated rather than implied.
+	//
+	//   - DATABASE STATE is rolled back, so the erasure is deferred rather than denied. Unlike every
+	//     other audit write in this codebase, this one is inside a transaction that has not
+	//     committed, so there IS something to roll back. The deferred tx.Rollback restores the users
+	//     row and everything FK-linked to it, ExecuteDeletion's error path releases the work claim,
+	//     and the deletion is genuinely re-attempted: AccountDeletionWorker returns the error to
+	//     River (retry with backoff) and ScheduledDeletionCheckWorker/RetentionCleanupCheckWorker
+	//     re-select the user on their next sweep, since nothing about their eligibility changed.
+	//   - ⚠ BUT "NOTHING IS LOST" WOULD BE FALSE, AND THE HONEST VERSION MATTERS. By the time this
+	//     statement runs, ExecuteDeletion has ALREADY disconnected the user's Plaid items and may
+	//     already have cancelled their Paddle subscription — external, irreversible, and NOT undone
+	//     by this rollback. So a failure here leaves a user who exists but has been partially
+	//     externally erased, and a persistently-failing audit INSERT (an INSERT privilege revoked on
+	//     audit_logs while UPDATE/DELETE survive, a new CHECK or RLS policy, a trigger — audit-
+	//     specific modes that do NOT take the COMMIT with them, and exactly what
+	//     TestDeleteUserCascade_Integration_AuditWriteFailureAbortsTheWholeCascade injects) would
+	//     gate that user's erasure for as long as it lasts. That is a real cost of this choice and
+	//     it is not hypothetical.
+	//   - IT IS STILL THE RIGHT CHOICE, because the two failure directions are not symmetric. Abort
+	//     leaves a LOUD, RECOVERABLE state: every attempt returns an error, the user still exists and
+	//     is still a data subject with an intact record, and an operator who restores the write can
+	//     complete the erasure. "Proceed and log" leaves a SILENT, UNRECOVERABLE one: the person is
+	//     gone and nothing durable says it happened, with nothing left to retry from — which is
+	//     precisely the defect #1507 exists to close, and re-adopting it inside the transaction would
+	//     make this fix cosmetic. A blocked erasure is an operational incident someone can fix; an
+	//     unrecorded erasure is permanent.
+	//   - AND "PROCEED AND LOG" IS NOT ACTUALLY AVAILABLE HERE ANYWAY, which is worth stating because
+	//     it is the thing a future reader will assume it can reach for. A failed statement leaves
+	//     this transaction in the aborted state; every subsequent statement, including the COMMIT
+	//     below, then fails too. Verified by mutation: replacing this `return` with `err = nil` does
+	//     not produce "user erased, no audit row" — it produces a COMMIT that reports
+	//     "commit unexpectedly resulted in rollback", i.e. the same abort with a worse error
+	//     message. Making the failure genuinely survivable would take a SAVEPOINT around this
+	//     INSERT, which is deliberately NOT done: it would reconstruct the pre-#1507 defect inside
+	//     the transaction that was supposed to have closed it.
+	//   - ⚠ ONE CONSEQUENCE THAT IS PRE-EXISTING RATHER THAN NEW, but which this statement widens the
+	//     entrance to: an ERROR from this method (as opposed to a (false, nil) refusal) deliberately
+	//     records no Paddle-cancel residue — see ExecuteDeletion's own comment, "a run that is still
+	//     expected to complete records nothing". That rule was written for transient errors. Under a
+	//     PERSISTENT audit failure the run is not in fact expected to complete, and the residue goes
+	//     unrecorded. Recording residue for every cascade error would contradict the documented rule
+	//     for the transient case, so it is left alone here and noted instead.
+	//
+	// Pinned in both directions by
+	// TestDeleteUserCascade_Integration_AuditWriteFailureAbortsTheWholeCascade (state rolled back,
+	// not merely an error returned) and its mandatory sibling
+	// TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion. Note that the
+	// sibling calls THIS method directly, so it proves "the cascade writes exactly one row"; the
+	// separate claim that no SECOND row is written by the service layer is proved end-to-end by
+	// TestExecuteDeletion_Integration_RetentionCandidate_IsDeleted, which runs ExecuteDeletion.
+	//
+	// AFTER `DELETE FROM users`, NOT BEFORE, for two independent reasons: the entry records a
+	// completed erasure, and the redaction UPDATE far above (`SET changes = NULL WHERE
+	// resource_id = $1 ...`) runs earlier, so this row's NULL `changes` is NULL because nothing was
+	// written to it — not because it was redacted. It survives the DELETE because audit_logs.user_id
+	// is the only FK to users and it is written NULL, while resource_id has no FK at all.
+	//
+	// ⚠ LOCK ORDER IS UNPERTURBED, and that is a claim about this statement specifically. With
+	// user_id NULL the FK's constraint trigger short-circuits before it touches users at all (MATCH
+	// SIMPLE treats a NULL key as satisfied), so this INSERT takes a RowExclusiveLock on audit_logs
+	// and NO row lock on users, households, or anything else — it can neither extend nor reorder the locks
+	// this transaction already holds (households FOR NO KEY UPDATE, then users FOR UPDATE), so the
+	// AcceptInvite invariant documented at the household lock above still holds unchanged. That is
+	// true ONLY while the actor is NULL: see LogInTx's #1506 warning, which is where a future
+	// implementer adding an actor will trip over it.
+	if err = r.auditLog.LogInTx(ctx, tx, "user.deleted", "user", userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: record the terminal audit entry: %w", err)
 	}
 
 	// Commit the transaction
@@ -1313,59 +2043,459 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	return true, nil
 }
 
-// claimForDeletionPredicate expresses the ratified product rule that a user's own GDPR
-// deletion request beats an admin comp: the claim succeeds when EITHER the user has an
-// outstanding deletion request of their own, OR there is no manual tier override AT ALL (live or
-// already lapsed).
+// CountUncleanedLinkedItems implements ProfileRepository.CountUncleanedLinkedItems — see that
+// interface method's doc comment (Issue #1494) for why this exists and what it must not be used for.
 //
-// This reuses noManualOverrideAtAllPredicate unmodified, wrapped in "TRUE <fragment>" so its
-// leading "AND (...)" becomes a standalone boolean usable inside this OR — the same splicing
-// trick previously used (incorrectly, for this predicate) with noActiveManualOverridePredicate.
+// Shares uncleanedLinkedItemPredicate with the C2 guard verbatim rather than restating it. A COUNT is
+// used instead of the guard's EXISTS because the whole value of this call is the NUMBER it puts in an
+// operator-facing error message; the extra cost is a count over rows a single user_id equality has
+// already narrowed to at most a handful.
+func (r *profileRepository) CountUncleanedLinkedItems(ctx context.Context, userID string) (int, error) {
+	var count int
+	err := r.db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM linked_items WHERE user_id = $1 AND `+uncleanedLinkedItemPredicate,
+		userID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("CountUncleanedLinkedItems: %w", err)
+	}
+	return count, nil
+}
+
+// HouseholdOwnerBlocksDeletion implements ProfileRepository.HouseholdOwnerBlocksDeletion — see that
+// interface method's doc comment (round 15, D2) for why this exists and what it must not replace.
 //
-// Issue #1413 Critical finding C1 (third round of remediation — the first two rounds left this
-// on the live-only rule): this predicate MUST agree with the retention queries
-// (GetUsersWithExpiredRetention et al.), which already exclude ANY override, live or lapsed, via
-// noManualOverrideAtAllPredicate. Before this fix, claimForDeletionPredicate used
-// noActiveManualOverridePredicate ("still live right now") instead — the exact rule that's
-// correct for point-in-time transitions like CancelIfPastDueWithRetention, but wrong here: a comp that lapsed
-// moments before the independently-scheduled manual_tier_override_expiry_check job clears the
-// column would pass the live-only check and be hard-deleted, with no warning, in the ordering gap
-// between that job and the retention worker. That is the original data-loss bug this whole branch
-// (#1413) exists to fix — see noManualOverrideAtAllPredicate's doc comment for the full race, AND
-// for why this is honestly a delay only while manual_tier_override_expiry_check keeps running
-// successfully every day, not a guaranteed bound — that job's own failures are the thing to watch.
+// Shares householdOwnerBlocksDeletionClause with DeleteUserCascade's in-transaction guard VERBATIM,
+// for the same reason CountUncleanedLinkedItems shares uncleanedLinkedItemPredicate: a hand-written
+// second spelling of the same question is how #1444 (Site C) happened, and the copy that diverged was
+// the one nobody re-read. If this answers differently from the guard, the only permissible cause is
+// that the underlying rows changed in between.
+func (r *profileRepository) HouseholdOwnerBlocksDeletion(ctx context.Context, userID string) (bool, error) {
+	var blocks bool
+	if err := r.db.QueryRow(ctx, `SELECT `+householdOwnerBlocksDeletionClause, userID).Scan(&blocks); err != nil {
+		return false, fmt.Errorf("HouseholdOwnerBlocksDeletion: %w", err)
+	}
+	return blocks, nil
+}
+
+// DeletionResidueEffect names the irreversible external effect an account deletion had ALREADY
+// performed by the time it stopped without deleting the user (Issue #1504). It is a fixed, closed
+// vocabulary rather than a free-form string because it becomes part of audit_logs.action, which is
+// what an operator queries on: a typo'd or ad-hoc value would be a record nobody finds.
+type DeletionResidueEffect string
+
+// DeletionResiduePaddleSubscriptionCancelled is the IRREDUCIBLE effect this vocabulary was built
+// for: the Paddle subscription-cancel call was issued and the deletion then stopped (revocation
+// caught by the customer-archive gate, the cascade's own guard refusing, or any of the ways a run
+// simply ends), so the user keeps their account with their subscription cancelled.
+//
+// ⚠ ROUND 15 WIDENED IT FROM "LANDED" TO "ISSUED", deliberately. It used to be written only after
+// CancelSubscriptionImmediately had RETURNED SUCCESSFULLY, which silently excluded the case where
+// Paddle acted and the response was lost (finding A2) — the ambiguity is unresolvable from this side,
+// and reporting nothing resolved it in the one direction that costs a real user a real subscription.
+//
+// The Plaid leg has no counterpart here on purpose: a disconnect is RECOVERABLE — the user relinks —
+// and it is already reported to the user in-product. This constant is for the effect nobody can undo
+// without a human intervening.
+const DeletionResiduePaddleSubscriptionCancelled DeletionResidueEffect = "paddle_subscription_cancelled"
+
+// DeletionResiduePaddleSubscriptionCancelledCascadeFailed is the SAME harm as the constant above —
+// account kept, subscription irreversibly cancelled at Paddle — reached the third way: the cascade
+// returned an ERROR rather than declining, and the error is not one this codebase recognises as
+// transient (see cascadeErrorIsRecognisedTransient, deletion_service.go).
+//
+// WHY IT IS A SEPARATE KIND RATHER THAN THE SAME ONE. Both rows describe the same loss to the same
+// user, but they hand an operator two different jobs. A `paddle_subscription_cancelled` row means the
+// deletion is OVER (the user revoked it, or the cascade's guard refused): the account is stable and
+// the only task is to restore the subscription. A `..._cascade_failed` row means the deletion is
+// still STUCK and will re-run — the underlying database fault has to be fixed as well, and until it
+// is, every retry re-cancels nothing but re-writes this record. Collapsing the two would hide the
+// second task behind the first.
+//
+// It shares deletionResidueActionPrefix, so the operator query, the partial index (migration 000138)
+// and both Prometheus gauges pick it up with no change: the vocabulary widened, the namespace did not.
+const DeletionResiduePaddleSubscriptionCancelledCascadeFailed DeletionResidueEffect = "paddle_subscription_cancelled_cascade_failed"
+
+// DeletionResiduePaddleCustomerArchived is the effect the code that performs it calls "THE ONE
+// ACTION NOTHING CAN UNDO" (cleanupPaddleResources, deletion_service.go): the Paddle customer is
+// archived and its email overwritten with deleted_<id>@deleted.local. A cancelled subscription can
+// be re-created; an anonymised Paddle customer cannot be recovered by us or by Paddle.
+//
+// ⚠ ROUND 15, FINDING A1 — WHY IT DID NOT EXIST UNTIL NOW, AND WHY THAT WAS THE ROOT DEFECT. Both
+// constants above name the SUBSCRIPTION, and the service's whole recording mechanism keyed off a
+// single in-memory `subscriptionCancelled` bool set only by the cancel. The archive set no flag and
+// had no vocabulary, so an archive-WITHOUT-a-cancel could not be recorded by any path — and that is
+// not a corner: it is the deterministic shape of the retention sweep meeting an ex-subscriber
+// (subscription_status='cancelled', paddle_customer_id still set) whose Plaid removal failed
+// terminally. The archive lands, the cascade's C2 guard then refuses for seven days, and an Info log
+// was the entire trace of an unrecoverable act.
+//
+// It is a SEPARATE kind rather than a reuse of the subscription constants because it hands an
+// operator a different job: there is no subscription to restore, and there is nothing to restore at
+// Paddle at all. What they can do is reconcile — the local users row survived and still names the
+// customer id, so the person can be contacted and a fresh Paddle customer created if they resubscribe.
+//
+// Shares deletionResidueActionPrefix, so the operator query, migration 000138's partial index
+// (predicate `action LIKE 'user.deletion_residue.%'`) and both Prometheus gauges pick it up with NO
+// migration: the vocabulary widened, the namespace did not. Verified, not assumed — see
+// TestRecordDeletionResidue_Integration_CustomerArchived_IsCountedByTheExistingNamespace.
+const DeletionResiduePaddleCustomerArchived DeletionResidueEffect = "paddle_customer_archived"
+
+// DeletionResiduePaddleCustomerArchivedCascadeFailed is to DeletionResiduePaddleCustomerArchived
+// exactly what DeletionResiduePaddleSubscriptionCancelledCascadeFailed is to
+// DeletionResiduePaddleSubscriptionCancelled: the same loss, reached the way that means the deletion
+// is STILL STUCK rather than over — the cascade returned an error this codebase does not recognise as
+// transient (cascadeErrorIsRecognisedTransient, deletion_service.go).
+//
+// ⚠ ROUND 15, TIER E ITEM 8 — WHY IT WAS MISSING, AND WHY THE GAP WAS NOT COSMETIC. The "stuck" row
+// was gated on `effects.subscriptionCancel`, and the previous batch recorded that as deliberate: the
+// constant NAMES the subscription, so an archive-only run "simply does not get the second row". That
+// reasoning is correct about the constant and wrong about the operator. The two constants encode two
+// different JOBS — "the deletion is over, restore what was lost" versus "the deletion is stuck, fix
+// the database fault too, and until you do every retry rewrites this" — and an archive-only run that
+// fails non-transitively is stuck in precisely the same way. The landing record and
+// reportSurvivingResidue's Error log do report the loss, but neither distinguishes stuck from over,
+// which is the whole reason the second kind exists. An operator filtering for stuck deletions found
+// every ex-subscriber's and none of the archive-only ones.
+//
+// The fix is a parallel constant rather than widening the subscription one, because widening it
+// would put "the subscription was cancelled" in an operator-facing action for a run in which no
+// subscription was cancelled — the mislabelling the gate was, rightly, avoiding.
+//
+// Shares deletionResidueActionPrefix, so the operator query, migration 000138's partial index and
+// both Prometheus gauges pick it up with NO migration, for the same reason its three siblings do.
+const DeletionResiduePaddleCustomerArchivedCascadeFailed DeletionResidueEffect = "paddle_customer_archived_cascade_failed"
+
+// deletionResidueActionPrefix is the audit_logs.action namespace these records live in. Kept as one
+// constant so the operator query in RecordDeletionResidue's doc comment
+// (action LIKE 'user.deletion_residue.%') cannot drift away from what is actually written.
+const deletionResidueActionPrefix = "user.deletion_residue."
+
+// RecordDeletionResidue implements ProfileRepository.RecordDeletionResidue — see that interface
+// method's doc comment for why this is an audit_logs row keyed to the user, and why it carries no
+// `changes` payload (Issue #1504).
+func (r *profileRepository) RecordDeletionResidue(ctx context.Context, userID string, effect DeletionResidueEffect) error {
+	if effect == "" {
+		// Refuse rather than write 'user.deletion_residue.' — a record whose action says nothing is
+		// worse than none, because it still looks like the operator has been told something.
+		return fmt.Errorf("RecordDeletionResidue: an effect is required for user %s", userID)
+	}
+	_, err := r.db.Exec(ctx,
+		`INSERT INTO audit_logs (user_id, action, resource_type, resource_id) VALUES (NULL, $1, 'user', $2)`,
+		deletionResidueActionPrefix+string(effect), userID)
+	if err != nil {
+		return fmt.Errorf("RecordDeletionResidue: %w", err)
+	}
+	return nil
+}
+
+// DeletionClaimKind names WHICH of the two mutually exclusive authorisations a hard-deletion claim
+// is being made under. It is declared by the CALLER — never derived from the row's current state —
+// because the whole point of the split (Issue #1440, T0) is that a stale caller's authorisation
+// must be re-checked against the rule it was actually issued under, and current row state is
+// exactly the thing that may have changed underneath it.
+//
+// There are precisely two production authorisations, and they are distinguished by which query
+// selected the user (see ClaimForDeletion's doc comment for the enumeration of callers):
+//
+//   - DeletionKindUserRequested — the user asked to be deleted (DeletionService.RequestDeletion →
+//     MarkForDeletion → GetUsersScheduledForDeletionPage → ScheduledDeletionCheckWorker enqueues
+//     AccountDeletionArgs → AccountDeletionWorker → ExecuteDeletion).
+//   - DeletionKindRetention — nobody asked; the retention clock on a long-inactive account expired
+//     (GetUsersWithExpiredRetentionPage → RetentionCleanupCheckWorker.deleteExpiredAccounts →
+//     ExecuteDeletion, an in-process call, NOT a River job).
+type DeletionClaimKind string
+
+const (
+	// DeletionKindUserRequested is the authorisation carried by a user's own GDPR deletion
+	// request whose grace period has elapsed.
+	DeletionKindUserRequested DeletionClaimKind = "user_requested"
+	// DeletionKindRetention is the authorisation carried by an expired data-retention clock on an
+	// account nobody asked to delete.
+	DeletionKindRetention DeletionClaimKind = "retention"
+)
+
+// userRequestedDeletionClaimPredicate authorises a hard delete on the strength of the user's OWN
+// outstanding GDPR deletion request.
+//
+// The clause that actually closes Issue #1440's T0 defect is `deletion_scheduled_at <= NOW()`. It
+// does BOTH jobs, because CancelDeletion NULLs deletion_scheduled_at as well as
+// deletion_requested_at:
+//
+//   - Cancellation: the column is NULL, `NULL <= NOW()` is NULL, and a NULL in a WHERE clause is
+//     not true — so the claim is refused. Before the split, a cancelled user was authorised
+//     anyway, through the retention rule's "no manual tier override at all" clause, which is true
+//     of every ordinary uncomped user whether they cancelled or not. Cancelling therefore did not
+//     reliably stop the deletion — data loss that inverts GDPR intent. Proved by
+//     TestExecuteDeletion_Integration_EpisodeCancelled_StaleJobDoesNotDelete (internal/services)
+//     and TestClaimForDeletion_Integration_UserRequested_Cancelled_NotClaimed.
+//   - Cancel-then-re-request: the SECOND episode's window is still open, so a job queued for the
+//     first one no-ops instead of deleting immediately. deletion_requested_at cannot express this
+//     at all — MarkForDeletion overwrites it, so a stale job reads the NEW value and sees nothing
+//     wrong. Proved by TestExecuteDeletion_Integration_EpisodeReRequested_StaleJobDoesNotDeleteEarly
+//     and TestClaimForDeletion_Integration_UserRequested_ReRequestedNotYetDue_NotClaimed.
+//
+// The other two clauses are honestly NOT independently load-bearing today, and this comment says so
+// rather than implying otherwise — mutation-testing each clause separately is what established it:
+//
+//   - `deletion_requested_at IS NOT NULL` is DEFENCE IN DEPTH, not the cancellation guard. Removing
+//     it alone changes no current behaviour, because CancelDeletion clears both columns together.
+//     It exists so that a future writer which cleared only ONE of the two — the exact partial-state
+//     bug this codebase has already shipped twice in adjacent code — cannot turn into a wrongful
+//     hard delete. Pinned by
+//     TestClaimForDeletion_Integration_UserRequested_RequestClearedButScheduleRemains_NotClaimed,
+//     which constructs that (currently unreachable) partial state directly.
+//   - `deletion_scheduled_at IS NOT NULL` is strictly redundant with the comparison below it, for
+//     the NULL-is-not-true reason above. It is kept only because it states the intent in a form a
+//     reader does not have to reason about three-valued logic to verify.
+//
+// Deliberately NO manual-tier-override check: the ratified product rule is that a user's own GDPR
+// deletion request beats an admin comp, so a comped user who has explicitly asked to be deleted
+// must still be deleted. Adding an override check here would illegally strand them — a GDPR
+// compliance problem, not just a bug. Pinned by
+// TestClaimForDeletion_Integration_ActiveOverride_WithDeletionRequest_StillClaims.
+const userRequestedDeletionClaimPredicate = `
+	  AND deletion_requested_at IS NOT NULL
+	  AND deletion_scheduled_at IS NOT NULL
+	  AND deletion_scheduled_at <= NOW()
+`
+
+// retentionDeletionClaimPredicate authorises a hard delete on the strength of an expired retention
+// clock, for an account nobody asked to delete.
+//
+// It re-verifies EVERY condition that made the user a candidate in the first place, against
+// committed state at claim time: `deletion_requested_at IS NULL`, noManualOverrideAtAllPredicate,
+// and — since #1440 T0-retention — expiredRetentionClockPredicate, which is the very text
+// GetUsersWithExpiredRetentionPage selects on (spliced, not restated, so the two cannot drift).
+//
+// #1440 T0-retention (Codex, High) is what expiredRetentionClockPredicate closes here, and the
+// defect was reachable rather than theoretical. This predicate used to check only the deletion-request and override rules, and
+// both of those stay TRUE for a user who RESUBSCRIBES: the reactivation webhook path
+// (UpdateSubscriptionFromPaddle with an active status, then ClearRetentionDates — see
+// subscription_webhook.go) writes subscription_status = 'active' and NULLs retention_started_at,
+// retention_expires_at and both notice stamps, and touches neither deletion_requested_at nor
+// manual_tier_override. The retention sweep selects a PAGE of candidates and then processes it row
+// by row in process (GetUsersWithExpiredRetentionPage →
+// RetentionCleanupCheckWorker.deleteExpiredAccounts → ExecuteDeletion), so the window between
+// selection and any one row's claim is real and unbounded. A resubscription inside that window
+// therefore used to end with ExecuteDeletion cancelling the customer's brand-new subscription
+// (cleanupPaddleResources acts on the row's raw status, which is now 'active') and hard-deleting
+// them. This is the same structural flaw as Issue #1440's T0 — an authorisation not re-checked
+// against the rule it was issued under — in the sibling path T0 did not touch.
+//
+// NOW() rather than a caller-supplied instant, deliberately, matching
+// userRequestedDeletionClaimPredicate's `deletion_scheduled_at <= NOW()` and the candidate query's
+// own `retention_expires_at <= NOW()`. Three reasons, in order of weight: (1) this is a write-side
+// guard inside a conditional UPDATE, and the convention this repo settled on in #1466 is that
+// read-side response predicates take the threaded asOf while write guards keep the transaction
+// clock — the "a write that no longer reflects reality must not win" rule wants the DATABASE's
+// committed now, not a Go clock captured before the I/O; (2) ClaimForDeletion is not given an
+// instant and does not need one, so threading one would add a parameter and a second clock
+// convention to a predicate whose sibling already uses NOW(); (3) this same constant is spliced
+// into deletionAuthorisationUnionPredicate, whose consumer (DeleteUserCascade) binds its own
+// positional parameters — a bind param here would have to be threaded through two unrelated
+// statements' argument lists, which is exactly how a predicate acquires a drift hazard.
+//
+// noManualOverrideAtAllPredicate — "no override AT ALL, live or already lapsed" — not
+// noActiveManualOverridePredicate ("live right now"). Issue #1413 Critical finding C1: a comp
+// pauses the retention clock while live and is only re-armed by the independently scheduled
+// manual_tier_override_expiry_check job, so a comp that lapsed moments before that job clears the
+// column would pass a live-only check and be hard-deleted in the ordering gap between the two
+// jobs. That is honestly a delay, not a guaranteed bound: it holds only while
+// manual_tier_override_expiry_check keeps succeeding daily — that job's own failures are the thing
+// to watch. See noManualOverrideAtAllPredicate's own doc comment for the full race, and
 // TestClaimForDeletion_Integration_ExpiredOverride_NoDeletionRequest_NotClaimed /
-// TestClaimForDeletion_Integration_ClearedOverride_Claims are the real-DB proof this is a delay
-// while the expiry job is healthy, not a permanent exemption.
+// TestClaimForDeletion_Integration_ClearedOverride_Claims for the real-DB proof that it is a delay
+// and not a permanent exemption.
 //
-// Deliberately still a SEPARATE predicate from noActiveManualOverridePredicate, which stays
-// exactly as it was for its own callers (CancelIfPastDueWithRetention, ClaimPlaidDisconnectIfPastDue,
-// ExpireTrialIfNoOverride) — those are point-in-time transitions guarded against a comp granted
-// in a race window, not a cross-job-ordering hazard like this one.
-const claimForDeletionPredicate = `
+// `deletion_requested_at IS NULL` is a TIGHTENING relative to the pre-split predicate, which
+// treated an outstanding request as an additional reason to allow a retention claim. A user who
+// requests deletion between the retention candidate query and this claim is entitled to their full
+// grace period and their cancellation window; the retention path must not short-circuit either.
+// Such a user is picked up by the user-requested path once their own window elapses.
+const retentionDeletionClaimPredicate = `
+	  AND deletion_requested_at IS NULL
+	` + expiredRetentionClockPredicate + noManualOverrideAtAllPredicate
+
+// expiredRetentionClockPredicate is the "this account's retention clock has actually run out, and
+// the account is still unsubscribed" test — the pair of facts that makes a user a retention
+// hard-delete candidate at all.
+//
+// Shared verbatim by GetUsersWithExpiredRetentionPage (candidate selection) and
+// retentionDeletionClaimPredicate (the claim that authorises the irreversible act), in the manner
+// uncleanedLinkedItemPredicate is shared by its two consumers, so the two can never disagree.
+// Drift between exactly these two was #1440 T0-retention: the candidate query required both
+// conditions and the claim required neither, so a resubscription between them was not noticed.
+// Restating this text in either place instead of splicing it re-opens that defect.
+//
+// Which of the three conjuncts is load-bearing, established by removing each one separately rather
+// than assumed — the same honesty the userRequestedDeletionClaimPredicate comment above applies to
+// its own clauses:
+//
+//   - `retention_expires_at <= NOW()` and the status test are each independently load-bearing.
+//     Removing the first lets a RESTARTED retention window be deleted before it elapses
+//     (TestExecuteDeletion_Integration_RetentionExpiryInFuture_NotDeleted reddens alone); removing
+//     the second lets an ACTIVE, paying subscriber whose stale expired clock survived a
+//     best-effort ClearRetentionDates failure be deleted
+//     (TestExecuteDeletion_Integration_RetentionResubscribedClockClearFailed_NotDeleted reddens
+//     alone).
+//   - `retention_expires_at IS NOT NULL` is NOT independently load-bearing today, and removing it
+//     alone reddens nothing: `NULL <= NOW()` is NULL, a NULL in a WHERE clause is not true, so the
+//     comparison already refuses a cleared clock. It is kept because it states the intent in a form
+//     a reader does not have to reason about three-valued logic to verify, and because the candidate
+//     query it is shared with genuinely needs it for the same reason. Do not read its presence as
+//     the thing that protects a resubscribed user — the comparison is.
+//
+// NOT applied to GetUsersNeedingRetention30dNotice/7dNotice, which need a DIFFERENT clock test
+// (`retention_expires_at > NOW()` plus an interval window — the notice is sent BEFORE expiry, so
+// their bound is the opposite of this one) even though they share the status half. Nor to
+// GetUsersNeedingRetentionClockRepair, whose whole population is `retention_expires_at IS NULL`.
+// Sharing this constant with any of them would be a false generalisation.
+const expiredRetentionClockPredicate = `
+	  AND retention_expires_at IS NOT NULL
+	  AND retention_expires_at <= NOW()
+	  AND subscription_status IN ('inactive', 'cancelled')
+`
+
+// deletionAuthorisationUnionPredicate is satisfied when a claim of EITHER kind would be authorised.
+// It is composed from the two kind predicates above rather than restated, so it cannot drift away
+// from them.
+//
+// Its only consumer is DeleteUserCascade's in-transaction re-check, which — unlike ClaimForDeletion
+// — is not told which kind authorised the run. It does not need to be: it ALSO requires
+// deletion_requested_at IS NOT DISTINCT FROM the exact value the caller observed, which pins the
+// episode. Combined with the union above, that is equivalent to the kind-specific rule in every
+// reachable case:
+//
+//   - a user-requested run has a non-NULL expected value, so the exact-value check forces the
+//     union's first branch (the second requires NULL) and thus re-checks deletion_scheduled_at;
+//   - a retention run has a NULL expected value, so it forces the second branch and thus re-checks
+//     the override rule AND — since #1440 T0-retention — the retention clock and subscription status
+//     (expiredRetentionClockPredicate), which is what stops a resubscription landing in the
+//     external-cleanup window from being hard-deleted by the cascade after passing an earlier claim.
+//     That tightening reached this re-check for free, which is the entire point of composing this
+//     constant from the two kind predicates instead of restating them; verified by
+//     TestDeleteUserCascade_Integration_RetentionResubscribedAfterClaim_NotDeleted, which fails if
+//     the composition is replaced by a restatement that omits it.
+//
+// Nothing can change deletion_scheduled_at without also changing deletion_requested_at, so pinning
+// deletion_requested_at pins the whole episode, including its schedule.
+//
+// The full writer set is FOUR statements, not two — an earlier version of this comment said "the
+// only two writers … verified by grep over this file", which was an incomplete enumeration: grepping
+// for `deletion_scheduled_at =` finds UPDATEs and misses INSERT column lists. Enumerated properly
+// (every occurrence of either column name across non-test Go plus every migration):
+//
+//   - CreateUser (INSERT, this file) — writes both, adjacent bind params from the same domain.User.
+//   - CreateUserTx (INSERT, this file) — likewise.
+//   - MarkForDeletion (UPDATE, this file) — sets both.
+//   - CancelDeletion (UPDATE, this file) — NULLs both.
+//
+// The invariant survives the correction: all four write both columns in a single statement, so the
+// pair is never observable half-updated. The two INSERTs cannot produce a mid-episode row either —
+// they create the row, so there is no prior episode for a stale claim to be holding. No migration
+// writes either column (they only declare, index, or filter on them), and there is no column
+// DEFAULT or trigger on either.
+const deletionAuthorisationUnionPredicate = `
 	  AND (
-	    deletion_requested_at IS NOT NULL
-	    OR (TRUE` + noManualOverrideAtAllPredicate + `)
+	    (TRUE` + userRequestedDeletionClaimPredicate + `)
+	    OR (TRUE` + retentionDeletionClaimPredicate + `)
 	  )
 `
 
+// deletionClaimPredicateFor maps a DeletionClaimKind to its SQL predicate, failing CLOSED on an
+// unrecognised kind: an unknown authorisation must never be treated as permission to hard-delete a
+// user, and the zero value of DeletionClaimKind ("") deliberately falls into this branch so a
+// caller that forgets to set it gets an error rather than a deletion.
+func deletionClaimPredicateFor(kind DeletionClaimKind) (string, error) {
+	switch kind {
+	case DeletionKindUserRequested:
+		return userRequestedDeletionClaimPredicate, nil
+	case DeletionKindRetention:
+		return retentionDeletionClaimPredicate, nil
+	default:
+		return "", fmt.Errorf("unknown deletion claim kind %q", string(kind))
+	}
+}
+
 // ClaimForDeletion atomically verifies, at the moment of the claim, that a user is still
-// eligible for ExecuteDeletion's irreversible work. See the ProfileRepository interface doc for
-// the full rationale and ordering requirement (Issue #1413 Critical finding C2, Codex review
-// round 2). This is a self-assigning no-op write (updated_at only) purely to obtain an atomic,
-// row-level check via a single UPDATE ... WHERE statement, mirroring
-// ClaimPlaidDisconnectIfPastDue's shape — without adding a new "claimed" column.
-func (r *profileRepository) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+// eligible for ExecuteDeletion's irreversible work UNDER THE AUTHORISATION `kind` NAMES. See the
+// ProfileRepository interface doc for the full rationale and ordering requirement (Issue #1413
+// Critical finding C2, Codex review round 2). This is a self-assigning no-op write (updated_at
+// only) purely to obtain an atomic, row-level check via a single UPDATE ... WHERE statement,
+// mirroring ClaimPlaidDisconnectIfPastDue's shape — without adding a new "claimed" column.
+//
+// Issue #1440, T0 — why `kind` exists, and why it cannot be inferred here: this method used to
+// take only a userID and evaluate the UNION of both authorisations, which meant a caller acting on
+// a user-requested deletion could be authorised by the RETENTION rule instead. That is not a
+// theoretical mismatch: the retention rule allows any uncomped user, so a job queued for a
+// deletion request the user had since cancelled sailed straight through it. Inferring the kind from
+// the row's current state cannot fix that, because the cancelled row looks exactly like a retention
+// candidate — the authorisation has to come from the caller, which knows which query selected this
+// user.
+//
+// The two production callers, both reached via DeletionService.ExecuteDeletion:
+//
+//   - AccountDeletionWorker (queue/jobs/account_deletion.go), the only worker for the
+//     `account_deletion` River job kind, enqueued only by ScheduledDeletionCheckWorker
+//     (queue/jobs/scheduled_deletion_check.go) from GetUsersScheduledForDeletionPage
+//     → DeletionKindUserRequested.
+//   - RetentionCleanupCheckWorker.deleteExpiredAccounts (queue/jobs/retention_cleanup_check.go),
+//     an in-process call from GetUsersWithExpiredRetentionPage → DeletionKindRetention.
+//
+// There used to be a third caller, workers.DeletionWorker — a ticker-based worker that was never
+// wired into main.go. Issue #1482 deleted it; these two are now the complete caller set.
+func (r *profileRepository) ClaimForDeletion(ctx context.Context, userID string, kind DeletionClaimKind) (bool, error) {
+	predicate, err := deletionClaimPredicateFor(kind)
+	if err != nil {
+		return false, fmt.Errorf("ClaimForDeletion: %w", err)
+	}
 	ct, err := r.db.Exec(ctx, `
 		UPDATE users
 		SET updated_at = NOW()
 		WHERE id = $1 AND is_deleted = FALSE
-	`+claimForDeletionPredicate,
+	`+predicate,
 		userID)
 	if err != nil {
 		return false, fmt.Errorf("ClaimForDeletion: %w", err)
 	}
 	return ct.RowsAffected() > 0, nil
+}
+
+// DeletionStillAuthorised implements ProfileRepository.DeletionStillAuthorised — see that interface
+// method's doc comment for why a read-only, kind-specific recheck exists alongside ClaimForDeletion
+// and DeleteUserCascade's in-transaction guard.
+//
+// THE PREDICATE IS SPLICED, NOT RESTATED. It is the same deletionClaimPredicateFor(kind) text
+// ClaimForDeletion enforces, plus DeleteUserCascade's own occurrence pin
+// (`deletion_requested_at IS NOT DISTINCT FROM $2`). Restating either here would create a third
+// hand-written variant of an authorisation rule — which is how #1440 T0 happened: the candidate query
+// and the claim drifted apart, and a resubscription between them went unnoticed. A recheck that can
+// disagree with the claim it is rechecking is worse than no recheck, because it reads as protection.
+//
+// NO `FOR UPDATE`, and no transaction. This is a read taken between external API calls, not a write
+// guard; taking a row lock here would hold it across a Plaid or Paddle round-trip, which is exactly
+// what DeleteUserCascade's lock is careful not to do. The spliced predicate's NOW() calls therefore
+// read the statement's own clock, which is the fresh answer this method exists to provide.
+func (r *profileRepository) DeletionStillAuthorised(ctx context.Context, userID string, kind DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	predicate, err := deletionClaimPredicateFor(kind)
+	if err != nil {
+		// Fail closed on an unrecognised kind, for the same reason deletionClaimPredicateFor does: an
+		// unknown authorisation must never read as permission to proceed to an irreversible call.
+		return false, fmt.Errorf("DeletionStillAuthorised: %w", err)
+	}
+	var authorised bool
+	err = r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM users
+			WHERE id = $1 AND is_deleted = FALSE
+			  AND deletion_requested_at IS NOT DISTINCT FROM $2
+	`+predicate+`
+		)
+	`, userID, expectedDeletionRequestedAt).Scan(&authorised)
+	if err != nil {
+		return false, fmt.Errorf("DeletionStillAuthorised: %w", err)
+	}
+	return authorised, nil
 }
 
 // UpdateTrialStatus updates trial-related fields for a user
@@ -1569,22 +2699,88 @@ func (r *profileRepository) GetUsersWithActivePaddleSubscriptions(ctx context.Co
 // clock_timestamp() + make_interval(months => $1) — see this method's doc comment on the
 // ProfileRepository interface for why (Go's AddDate disagrees with Postgres's make_interval on
 // month-end dates). Called when a user's subscription is cancelled or trial expires (#930).
-func (r *profileRepository) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
-	ct, err := r.db.Exec(ctx, `
-		UPDATE users
-		SET retention_started_at = clock_timestamp(),
-		    retention_expires_at = clock_timestamp() + make_interval(months => $1::int),
-		    updated_at = clock_timestamp()
-		WHERE id = $2 AND is_deleted = FALSE`,
-		retentionMonths, userID,
-	)
-	if err != nil {
-		return err
+//
+// Issue #1500 residual (Codex review, PR #1443 follow-up): THIS WRITE IS ITS OWN GUARD. It used to
+// key on `id = $2 AND is_deleted = FALSE` alone, which left a read-then-write race its callers'
+// Go-side gates could narrow but never close: the cancellation webhook re-checks authorisation
+// immediately before calling this (cancellationCleanupStillAuthorised, subscription_webhook.go),
+// but an activation webhook committing between that read and this UPDATE still stamped six-month
+// cancellation retention/deletion dates onto a now-active, paying customer. No read-then-write gate
+// can close that — only the write itself can, by re-evaluating the authorising condition against
+// committed state as part of the same statement. Same shape, and for the same stated reason, as
+// CancelIfPastDueOccurrenceWithRetention: "this method's WHERE clause is its OWN correctness
+// mechanism".
+//
+// The condition comes from the caller (guard), because the two production callers do not share one
+// — see RetentionClockGuard's doc comment.
+//
+// The candidate CTE takes `FOR NO KEY UPDATE` before the status is compared, matching
+// CancelIfPastDueOccurrenceWithRetention/ExpireTrialIfNoOverride's own ROUND 23 shape: a locked
+// SELECT follows the row's update chain, so the status compared here is the row version that exists
+// once any concurrent writer's lock is RELEASED, not the pre-wait one this statement first scanned.
+// (Never `FOR UPDATE` — see StampMissingPlaidCleanupMarkers's Finding 1 correction for the
+// cross-user deadlock that mode would risk.)
+//
+// The two zero-rows-affected outcomes are reported distinguishably, in ONE round trip: `target`
+// (existence of a live row) and `updated` (the write actually applying) are returned side by side,
+// so "someone else changed this user" (ErrRetentionClockPreconditionLost — a legitimate stop) can
+// never be mistaken for "no such user" (ErrUserNotFound — a genuine failure). A follow-up existence
+// SELECT would have been a second, unsynchronised read of a row this very race is about.
+//
+// The Go-side gates that callers run BEFORE this call are not redundant and must not be removed:
+// they short-circuit work (the per-item Plaid disconnect loop) that no SQL predicate can stop. The
+// gate stops the work; this WHERE clause stops the write.
+//
+// Deliberately NOT part of the guard: the comp/manual-override conjunct the cancellation webhook's
+// own gate also checks. A comp does not change subscription_status, so it is a genuinely separate
+// question, and it is not one both callers share (the trial path checks it against its own CAS
+// instead). Scoping this predicate to the status keeps one meaning for one parameter; the override
+// question stays with the callers that ask it, plus the retention deletion claim's own re-check.
+func (r *profileRepository) SetRetentionDates(ctx context.Context, userID string, guard RetentionClockGuard, retentionMonths int) error {
+	if guard == "" {
+		return ErrRetentionClockGuardUnspecified
 	}
-	if ct.RowsAffected() == 0 {
+	// nil means "no status condition" — reached only via the explicitly-named RetentionClockUnguarded.
+	var expectedStatus *string
+	if guard != RetentionClockUnguarded {
+		s := string(guard)
+		expectedStatus = &s
+	}
+
+	var userExists, updated bool
+	err := r.db.QueryRow(ctx, `
+		WITH target AS (
+			SELECT id, subscription_status FROM users
+			WHERE id = $2 AND is_deleted = FALSE
+			FOR NO KEY UPDATE
+		),
+		candidate AS (
+			SELECT id FROM target
+			WHERE $3::text IS NULL OR subscription_status = $3::text
+		),
+		updated AS (
+			UPDATE users
+			SET retention_started_at = clock_timestamp(),
+			    retention_expires_at = clock_timestamp() + make_interval(months => $1::int),
+			    updated_at = clock_timestamp()
+			FROM candidate
+			WHERE users.id = candidate.id
+			RETURNING users.id
+		)
+		SELECT EXISTS (SELECT 1 FROM target), EXISTS (SELECT 1 FROM updated)
+	`,
+		retentionMonths, userID, expectedStatus,
+	).Scan(&userExists, &updated)
+	if err != nil {
+		return fmt.Errorf("SetRetentionDates: %w", err)
+	}
+	if updated {
+		return nil
+	}
+	if !userExists {
 		return ErrUserNotFound
 	}
-	return nil
+	return ErrRetentionClockPreconditionLost
 }
 
 // ClearRetentionDates clears all retention tracking fields on resubscription (#930). Issue #1413
@@ -1799,73 +2995,42 @@ func (r *profileRepository) SetRetentionNotice7dSent(ctx context.Context, userID
 	return nil
 }
 
-// IsRetentionNotice30dEligible re-verifies FULL 30-day notice eligibility for a single user,
-// mirroring GetUsersNeedingRetention30dNotice's WHERE clause field-for-field (Issue #1413 Medium
-// finding M9, Codex review round 3) so the candidate query and this per-user re-check can never
-// silently drift apart. Performs NO write — see the ProfileRepository interface doc for why the
-// claim / eligibility-check / send / stamp sequence is deliberately split this way.
-func (r *profileRepository) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
-	var eligible bool
-	err := r.db.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM users
-			WHERE id = $1
-			  AND is_deleted = FALSE
-			  AND retention_expires_at IS NOT NULL
-			  AND retention_expires_at - INTERVAL '30 days' <= NOW()
-			  AND retention_expires_at > NOW()
-			  AND retention_notice_30d_sent_at IS NULL
-			  AND subscription_status IN ('inactive', 'cancelled')
-			  AND deletion_requested_at IS NULL
-	`+noManualOverrideAtAllPredicate+`
-		)
-	`, userID).Scan(&eligible)
-	if err != nil {
-		return false, fmt.Errorf("IsRetentionNotice30dEligible: %w", err)
-	}
-	return eligible, nil
-}
-
-// IsRetentionNotice7dEligible is IsRetentionNotice30dEligible's 7-day sibling. See that method's
-// doc for the full rationale.
-func (r *profileRepository) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
-	var eligible bool
-	err := r.db.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM users
-			WHERE id = $1
-			  AND is_deleted = FALSE
-			  AND retention_expires_at IS NOT NULL
-			  AND retention_expires_at - INTERVAL '7 days' <= NOW()
-			  AND retention_expires_at > NOW()
-			  AND retention_notice_7d_sent_at IS NULL
-			  AND subscription_status IN ('inactive', 'cancelled')
-			  AND deletion_requested_at IS NULL
-	`+noManualOverrideAtAllPredicate+`
-		)
-	`, userID).Scan(&eligible)
-	if err != nil {
-		return false, fmt.Errorf("IsRetentionNotice7dEligible: %w", err)
-	}
-	return eligible, nil
-}
-
-// IsRetentionNotice30dEligibleForOccurrence is IsRetentionNotice30dEligible's occurrence-scoped
-// sibling (Issue #1413 round-4 finding M1). IsRetentionNotice30dEligible re-verifies
-// window/sent-state/status/override but NOT that the row's CURRENT retention_expires_at still
-// equals the value the caller claimed. retention_cleanup_check.go's processRetentionNotices
-// claims using the CANDIDATE's retention_expires_at (E1), but the row can have been RE-ARMED to a
-// DIFFERENT value (E2) by the time this re-check runs — resubscribe (ClearRetentionDates), then
-// cancel again, restarting the clock from a later point. With a short (e.g. one-month) retention
-// configuration, two workers can hold E1 and E2 and BOTH see the current clock as eligible (E2 is
-// ALSO genuinely in-window, unsent, uncomped right now) — the user gets a DUPLICATE notice.
-// Requiring `retention_expires_at = expectedRetentionExpiresAt` closes this: the check only
-// passes for the EXACT occurrence the caller claimed.
+// IsRetentionNotice30dEligibleForOccurrence re-verifies, at the moment a caller already holds an
+// EXCLUSIVE work_claims claim on repository.ActionRetentionNotice30d, that a user is still
+// eligible for the 30-day pre-deletion notice AND that the row's CURRENT retention_expires_at
+// still equals the exact occurrence the caller claimed (Issue #1413 round-4 finding M1). Its
+// predecessor, IsRetentionNotice30dEligible (deleted by Issue #1442 for having zero production
+// callers), re-verified window/sent-state/status/override but NOT the occurrence discriminator:
+// retention_cleanup_check.go's processRetentionNotices claims using the CANDIDATE's
+// retention_expires_at (E1), but the row can have been RE-ARMED to a DIFFERENT value (E2) by the
+// time this re-check runs — resubscribe (ClearRetentionDates), then cancel again, restarting the
+// clock from a later point. With a short (e.g. one-month) retention configuration, two workers
+// can hold E1 and E2 and BOTH see the current clock as eligible (E2 is ALSO genuinely in-window,
+// unsent, uncomped right now) — the user gets a DUPLICATE notice. Requiring
+// `retention_expires_at = expectedRetentionExpiresAt` closes this: the check only passes for the
+// EXACT occurrence the caller claimed.
+//
+// Returns (true, nil) when it is safe to send the notice email right now, (false, nil) when any
+// one of window/sent-state/status/override/occurrence has changed since the candidate query ran —
+// a legitimate skip, never an error. This method performs NO write — see the ProfileRepository
+// interface doc for why the claim / eligibility-check / send / stamp sequence is deliberately
+// split this way (Issue #1413 Medium finding M9, Codex review round 3).
 //
 // Consequence is milder than H1/H3 (this branch already accepts at-least-once for notices over
 // never-warn — see processRetentionNotices' doc comment), but the same discipline applies: the
 // eligibility check must validate the discriminator it claimed.
 func (r *profileRepository) IsRetentionNotice30dEligibleForOccurrence(ctx context.Context, userID string, expectedRetentionExpiresAt time.Time) (bool, error) {
+	// retention_expires_at - INTERVAL '30 days' below is calendar-day arithmetic on a timestamptz —
+	// the same session-time-zone hazard class as make_interval(months => N) above (Issue #1461):
+	// an interval's CALENDAR components (years/months/weeks/days) are evaluated in the SESSION time
+	// zone, preserving local wall-clock time across the subtraction rather than moving the absolute
+	// instant by an exact duration; its FIXED-DURATION components (hours/mins/secs) are exact and
+	// session-independent, so this is not equivalent to INTERVAL '720 hours' once a DST boundary
+	// sits between the two ends. This boundary is deterministic in production only because
+	// database.NewPool (pgx.go) pins every pooled connection's session TimeZone to UTC — a
+	// connection that reached this query from outside that pool would shift the 30-day pre-deletion
+	// notice window by the local DST offset. See
+	// TestRetentionNoticeBoundary_Integration_CrossesDSTBoundary.
 	var eligible bool
 	err := r.db.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -1890,6 +3055,10 @@ func (r *profileRepository) IsRetentionNotice30dEligibleForOccurrence(ctx contex
 // IsRetentionNotice7dEligibleForOccurrence is IsRetentionNotice30dEligibleForOccurrence's 7-day
 // sibling. See that method's doc for the full rationale.
 func (r *profileRepository) IsRetentionNotice7dEligibleForOccurrence(ctx context.Context, userID string, expectedRetentionExpiresAt time.Time) (bool, error) {
+	// retention_expires_at - INTERVAL '7 days' below is the same session-TZ-dependent calendar-day
+	// arithmetic as IsRetentionNotice30dEligibleForOccurrence's INTERVAL '30 days' above — see that
+	// method's comment for the full explanation and why the UTC pool pin (pgx.go) is what makes it
+	// safe today.
 	var eligible bool
 	err := r.db.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -1953,14 +3122,16 @@ const manualTierOverrideNonEmptyClause = `manual_tier_override IS NOT NULL AND m
 // TestNoActiveManualOverridePredicate_Integration_ExactExpiryBoundary kept exercising it purely
 // so the exact production string wouldn't silently drift from a hand-copied restatement. As of
 // the Issue #1413 Codex review round 3 fix (High findings H5/H6), it now has real production
-// callers too — CancelIfPastDueWithRetention and ExpireTrialIfNoOverride splice this constant into a
-// conditional UPDATE's WHERE clause, per the claim-then-act pattern (a third former caller,
-// ClaimPlaidDisconnectIfPastDue, was deleted in round 4 — see past_due_service.go's H6a fix,
-// which replaced its self-assigning-update "claim" with a real work_claims claim): this is the
-// one place the "still live right now" rule (as opposed to
-// noManualOverrideAtAllPredicate's "not even a lapsed one") is actually the correct rule to
-// enforce, because these are point-in-time transitions guarded against a comp granted in a race
-// window, not the retention-notice/hard-delete queries' cross-job-ordering hazard.
+// callers too — CancelIfPastDueOccurrenceWithRetention and ExpireTrialIfNoOverride splice this
+// constant into a conditional UPDATE's WHERE clause, per the claim-then-act pattern (a third former
+// caller, ClaimPlaidDisconnectIfPastDue, was deleted in round 4 — see past_due_service.go's H6a
+// fix, which replaced its self-assigning-update "claim" with a real work_claims claim; a fourth,
+// CancelIfPastDueWithRetention — the non-occurrence predecessor of CancelIfPastDueOccurrenceWithRetention
+// above — was deleted by Issue #1442 for having zero production callers): this is the one place the
+// "still live right now" rule (as opposed to noManualOverrideAtAllPredicate's "not even a lapsed
+// one") is actually the correct rule to enforce, because these are point-in-time transitions
+// guarded against a comp granted in a race window, not the retention-notice/hard-delete queries'
+// cross-job-ordering hazard.
 //
 // Issue #1413 Finding 4 (Low, Codex review, PR #1443 second follow-up round): the non-empty-override
 // half of this predicate (`manual_tier_override IS NOT NULL AND manual_tier_override <> ''`) used to
@@ -2023,6 +3194,12 @@ const noManualOverrideAtAllPredicate = `
 
 // GetUsersNeedingRetention30dNotice returns users whose retention_expires_at is within 30 days
 // and who have not yet received a 30-day pre-deletion warning (#930).
+//
+// retention_expires_at - INTERVAL '30 days' in the WHERE clause below is the same
+// session-TZ-dependent calendar-day arithmetic as
+// IsRetentionNotice30dEligibleForOccurrence's identical expression (see that method's comment for
+// the full explanation) — deterministic only because database.NewPool (pgx.go) pins the session
+// TimeZone to UTC.
 func (r *profileRepository) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) {
 	query := userSelectQuery + `
 		WHERE retention_expires_at IS NOT NULL
@@ -2047,6 +3224,10 @@ func (r *profileRepository) GetUsersNeedingRetention30dNotice(ctx context.Contex
 
 // GetUsersNeedingRetention7dNotice returns users whose retention_expires_at is within 7 days
 // and who have not yet received a 7-day pre-deletion warning (#930).
+//
+// retention_expires_at - INTERVAL '7 days' below is the same session-TZ-dependent calendar-day
+// arithmetic as GetUsersNeedingRetention30dNotice's INTERVAL '30 days' above — see
+// IsRetentionNotice30dEligibleForOccurrence's comment for the full explanation.
 func (r *profileRepository) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
 	query := userSelectQuery + `
 		WHERE retention_expires_at IS NOT NULL
@@ -2069,19 +3250,99 @@ func (r *profileRepository) GetUsersNeedingRetention7dNotice(ctx context.Context
 	return users, nil
 }
 
-// GetUsersWithExpiredRetention returns users whose retention_expires_at has passed
-// and who are not already deleted or pending deletion (#930).
-func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
-	query := userSelectQuery + `
-		WHERE retention_expires_at IS NOT NULL
-		  AND retention_expires_at <= NOW()
-		  AND subscription_status IN ('inactive', 'cancelled')
-		  AND is_deleted = FALSE
+// RetentionSweepCursor is a keyset-pagination position for GetUsersWithExpiredRetentionPage,
+// captured from the last row of the previous page — (ExpiresAt, UserID), matching that page's
+// ORDER BY (retention_expires_at, id) ASC. A nil cursor starts from the beginning.
+//
+// Deliberately a SIBLING of DeletionSweepCursor rather than a reuse of it. The two are structurally
+// identical (a timestamp plus a user id) but name DIFFERENT columns: DeletionSweepCursor.ScheduledAt
+// is deletion_scheduled_at, RetentionSweepCursor.ExpiresAt is retention_expires_at. Sharing one type
+// would make it a compile-time-legal mistake to feed a cursor harvested from one sweep into the
+// other sweep's query — which would silently skip or repeat rows in a HARD-DELETE path — and would
+// force one of the two field names to lie about which column it holds. The duplication is four
+// lines; the type confusion it prevents is a data-loss bug.
+const retentionSweepDefaultPageSize = 500
+
+type RetentionSweepCursor struct {
+	ExpiresAt time.Time
+	UserID    string
+}
+
+// GetUsersWithExpiredRetentionPage returns up to `limit` users whose retention_expires_at has
+// passed, ordered by (retention_expires_at, id) ASC for deterministic keyset pagination — Issue
+// #1478. Mirrors GetUsersScheduledForDeletionPage above; the WHERE clause is the unbounded
+// GetUsersWithExpiredRetention's, unchanged, plus the keyset predicate. (That unbounded method was
+// deleted in #1488 once this one had taken over its last caller.)
+//
+// Why this existed: GetUsersWithExpiredRetention had no LIMIT, and its single caller,
+// RetentionCleanupCheckWorker.deleteExpiredAccounts (queue/jobs/retention_cleanup_check.go),
+// consumed the whole slice and called DeletionService.ExecuteDeletion(..., DeletionKindRetention)
+// once per row — a REAL hard delete (DeleteUserCascade's `DELETE FROM users`), in-process, with no
+// intervening queue. RetentionCleanupCheckPeriodicOpts sets RunOnStart: true, so the first run
+// after every deploy performed however many hard deletions the table happened to hold. That is the
+// same defect class #1440/#1448 opened for the scheduled-deletion sweep, on a job whose per-row
+// action is strictly less recoverable.
+//
+// Why keyset pagination and not a bare LIMIT: this predicate does not care WHY a user has not been
+// deleted yet, only that retention_expires_at has passed and no override/deletion-request/soft-delete
+// excludes them. A row whose ExecuteDeletion keeps failing (a claim it cannot acquire, a
+// DeleteUserCascade guard it cannot satisfy) stays eligible, so under a bare `LIMIT n` the same
+// oldest n rows would occupy every page of every run and nothing ranked past them would ever be
+// looked at. The keyset cursor lets the caller step PAST whatever it just saw — including past a
+// stuck row — within ONE run.
+//
+// The guarantee this buys, stated bounded by the cap (do NOT restate it as "no starvation" — that
+// claim shipped on maxUsersPerDeletionSweep and is only true below the cap): within a single sweep,
+// the caller advances across pages until the repository returns a short page (exhausted) or the
+// caller's total-processed cap (maxUsersPerRetentionSweep, queue/jobs/retention_cleanup_check.go)
+// is reached. Across sweeps, since Issue #1477, the caller PERSISTS the timestamp a capped sweep
+// stopped at (the sweep_cursors table — repository/sweep_cursor_repository.go) and passes it back
+// here as the next sweep's `after`. So:
+//   - Below the cap the within-run guarantee above is unchanged: each sweep steps past stuck rows
+//     and later rows are reached in the same run.
+//   - At or above the cap, a set of stuck oldest rows no longer consumes every later sweep's whole
+//     budget. Before #1477 it did, and nothing ranked past the cap was EVER reached for as long as
+//     they kept failing — permanent starvation, independent of arrival rate.
+//   - The replacement guarantee is BOUNDED, not absolute (every candidate is reached within one
+//     full cycle of sweeps, which says nothing about the per-row action succeeding, nor about
+//     wall-clock latency, nor about rows that become eligible behind the current watermark). It is
+//     stated once, in full, in repository/sweep_cursor_repository.go's header. Do not restate it
+//     here as "no starvation".
+//
+// Successful rows do not have this problem: ExecuteDeletion ends in DeleteUserCascade's
+// `DELETE FROM users`, after which the row does not match this query at all.
+func (r *profileRepository) GetUsersWithExpiredRetentionPage(ctx context.Context, after *RetentionSweepCursor, limit int) ([]*domain.User, error) {
+	if limit <= 0 {
+		limit = retentionSweepDefaultPageSize
+	}
+
+	// The retention/status half is SPLICED from expiredRetentionClockPredicate rather than written
+	// out here, so retentionDeletionClaimPredicate — which re-verifies it at claim time — cannot
+	// drift away from what this query actually selected (#1440 T0-retention). See that constant.
+	const predicate = `
+		WHERE is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
-	` + noManualOverrideAtAllPredicate + `
-		ORDER BY retention_expires_at ASC
-	`
-	users, err := r.queryUsers(ctx, query)
+	` + expiredRetentionClockPredicate
+
+	var query string
+	var args []interface{}
+	if after == nil {
+		query = userSelectQuery + predicate + noManualOverrideAtAllPredicate + `
+			ORDER BY retention_expires_at ASC, id ASC
+			LIMIT $1
+		`
+		args = []interface{}{limit}
+	} else {
+		query = userSelectQuery + predicate + `
+			  AND (retention_expires_at, id) > ($1, $2)
+		` + noManualOverrideAtAllPredicate + `
+			ORDER BY retention_expires_at ASC, id ASC
+			LIMIT $3
+		`
+		args = []interface{}{after.ExpiresAt, after.UserID, limit}
+	}
+
+	users, err := r.queryUsers(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2092,7 +3353,7 @@ func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([
 }
 
 // GetUsersNeedingRetentionClockRepair implements the Issue #1413 H5 residual repair path — see
-// the interface doc comment for the full rationale. Mirrors GetUsersWithExpiredRetention's
+// the interface doc comment for the full rationale. Mirrors GetUsersWithExpiredRetentionPage's
 // predicate shape except retention_expires_at IS NULL instead of IS NOT NULL/expired.
 func (r *profileRepository) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
 	query := userSelectQuery + `
@@ -2197,16 +3458,20 @@ const liveLinkedItemExistsClause = `EXISTS (
 //     ineligibility episode began at this instant, cleanup outstanding" — a durable,
 //     override-independent fact (see domain.User.PlaidCleanupPendingAt's doc comment) — and is
 //     NULL whenever nothing is pending (see ExpireTrialIfNoOverride/
-//     CancelIfPastDueWithRetention/CancelIfPastDueOccurrenceWithRetention/UpdateSubscriptionFromPaddle/
+//     CancelIfPastDueOccurrenceWithRetention/UpdateSubscriptionFromPaddle/
 //     UpdateTrialStatus for where it's set/cleared). A NULL marker is explicitly excluded — this pass must never
 //     invent work from a derived signal.
 //   - an EXISTS check for at least one linked item that is still "live" — not 'disconnected' or
 //     'replaced', the same definition LinkedItemRepository.GetActiveItemsByUserID uses, EXCEPT a
 //     NULL status is explicitly treated as live too (round-7 fix): a bare `status NOT IN (...)`
-//     evaluates to SQL's UNKNOWN (not TRUE) for a NULL status, silently excluding that row — since
-//     linked_items.status is nullable (migration 000013) and defaults to 'active' only for rows
-//     inserted after that default was added, a live item with a NULL status would otherwise never
-//     be repaired, precisely the leak this pass exists to prevent.
+//     evaluates to SQL's UNKNOWN (not TRUE) for a NULL status, silently excluding that row — when
+//     linked_items.status was still nullable (migration 000013 added a DEFAULT 'active' but no NOT
+//     NULL constraint) a live item with a NULL status would otherwise never be repaired, precisely
+//     the leak this pass exists to prevent. Migration 000126 (Issue #1444) has since made the
+//     column NOT NULL, so no new NULL can arise; the arm is kept as defence in depth — it costs
+//     nothing, and it keeps this clause identical to its three siblings
+//     (liveLinkedItemExistsClause, anyLinkedItemExistsClause, uncleanedLinkedItemExistsClause),
+//     whose divergence is what caused the round-7 leak in the first place.
 //
 // Issue #1413 round-12 Fix 2: uses noActiveManualOverridePredicate ("live right now"), NOT
 // noManualOverrideAtAllPredicate ("not even a lapsed one") — deliberately the OPPOSITE choice from
@@ -2561,11 +3826,11 @@ func (r *profileRepository) StampMissingPlaidCleanupMarkers(ctx context.Context)
 	// with `FOR KEY SHARE` — so with this fix, step 5 above never blocks: the removal's audit insert on
 	// B proceeds immediately even while this statement still holds B, breaking the cycle at its root
 	// rather than papering over one specific interleaving of it. Every CTE added for Issue #1413
-	// Finding 2 (the five sibling COALESCE(plaid_cleanup_pending_at, ...) writers restructured in this
+	// Finding 2 (the four sibling COALESCE(plaid_cleanup_pending_at, ...) writers restructured in this
 	// same round — UpdateSubscriptionFromPaddle, UpdateTrialStatus,
-	// CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride) uses `FOR NO KEY UPDATE` for
-	// this identical reason: any of those five rows could equally be an audit actor, so `FOR UPDATE`
-	// there would reproduce this exact cycle five more times over.
+	// CancelIfPastDueOccurrenceWithRetention, ExpireTrialIfNoOverride) uses `FOR NO KEY UPDATE` for
+	// this identical reason: any of those four rows could equally be an audit actor, so `FOR UPDATE`
+	// there would reproduce this exact cycle four more times over.
 	//
 	// Verified via a real database (internal/repository/profile_repository_plaid_disconnect_repair_integration_test.go,
 	// TestStampMissingPlaidCleanupMarkers_Integration_DeadlockCycleWithConcurrentAuditActor and its
@@ -2636,6 +3901,180 @@ func (r *profileRepository) StampMissingPlaidCleanupMarkers(ctx context.Context)
 const anyLinkedItemExistsClause = `EXISTS (
 	SELECT 1 FROM linked_items
 	WHERE linked_items.user_id = users.id
+)`
+
+// uncleanedLinkedItemExistsClause is DeleteUserCascade's guard predicate for "this user still has
+// a linked_items row that needs Plaid-side cleanup" — Issue #1444 (Site C): the prior spelling
+// (`status <> 'disconnected'`) was a fourth, independently-worded copy of this same "is this item
+// live" question, and it was wrong in two ways. First, NULL-unsafe: SQL's three-valued logic makes
+// `NULL <> 'disconnected'` evaluate to UNKNOWN, not TRUE, so a genuinely NULL-status row (schema-
+// legal — linked_items.status has no NOT NULL constraint) was silently excluded from the EXISTS
+// check, letting DeleteUserCascade proceed past its own guard and hard-delete the only local
+// pointer to what may still be a live, billing Plaid access token. Second, it diverged from the
+// rest of this file's "live" definition by treating 'replaced' items as still-uncleaned, when
+// isLiveLinkedItemStatus/liveLinkedItemExistsClause already establish that a 'replaced' item (Issue
+// #171 re-link) no longer needs Plaid-side cleanup. This clause reuses that SAME "live" status list
+// — NOT 'disconnected' or 'replaced', NULL treated as active — parameterized on $1 (a plain
+// user_id) rather than correlated against `users.id` like liveLinkedItemExistsClause/
+// anyLinkedItemExistsClause, because DeleteUserCascade's guard query is not already joined to
+// `users`.
+// Issue #1495 — THE STATUS TEST IS GONE, replaced by plaid_removed_at IS NULL, and this is a
+// deliberate TIGHTENING, not a rewording. The paragraph above is preserved because its NULL-safety
+// history is still the reason this const exists at all, but its second half was WRONG: it asserted
+// that 'replaced' items "no longer need Plaid-side cleanup". They do. The re-link path
+// (services/account_service.go, "re-link detected, soft-deleting old linked item") sets the OLD
+// item's status to 'replaced' WITHOUT ever calling Plaid /item/remove, so a 'replaced' Item is
+// still live and still billing — and because 'replaced' was the one status this guard TRUSTED, a
+// GDPR erasure could complete over exactly such an Item, hard-deleting the only local pointer to
+// it. That is verbatim the outcome this guard's call-site comment says it exists to prevent,
+// reached through the guard itself. Two independent reviewers rated it Critical.
+//
+// It now FAILS CLOSED on the one fact that actually answers the question: block while
+// plaid_removed_at IS NULL, regardless of status. Only a recorded, successful Plaid removal
+// (LinkedItemRepository.MarkPlaidRemoved, or migration 000132's explicitly-assumed backfill of
+// pre-existing 'disconnected' rows) lets the cascade past this point.
+//
+// NULL-SAFETY, and why the sibling `status IS NULL OR` arm is not merely dropped but MOOT here:
+// `plaid_removed_at IS NULL` is an IS NULL test, which is two-valued — it returns TRUE or FALSE,
+// never UNKNOWN — so the three-valued-logic hole that made `status <> 'disconnected'` silently
+// exclude NULL-status rows cannot arise. The sibling predicates that still READ status
+// (liveLinkedItemExistsClause here, cleanupCandidateSelectQuery in linked_item_repository.go) keep
+// their NULL-safe spelling for the original reason; this one has nothing left to make NULL-safe.
+// Do NOT "restore symmetry" by re-adding a status arm: any status arm here is an OR-ed escape from
+// a guard whose entire job is to have none.
+//
+// WIDENED POPULATION, disclosed. Items whose Plaid removal can never succeed now block their
+// user's erasure, and this change ADDS 'replaced' rows to that population. Accepted: fail-closed is
+// the correct direction for an irreversible hard delete, production has zero users today, and
+// issue #1494 tracks the operator escape hatch (alerting plus an audited manual override).
+//
+// Issue #1494 — THE PERMANENT-BLOCK ESCAPE, and it is the narrowest one available. The paragraph
+// above described the accepted cost: an item whose /item/remove can NEVER succeed (a token that is
+// invalid or absent, not a Plaid outage) blocks its user's GDPR erasure FOREVER. That cost is no
+// longer accepted, and the way out is NOT a wider notion of "removed" — nothing here now believes an
+// unremovable Item is gone. It is a SECOND, separately-recorded fact: plaid_removal_failed_at (see
+// LinkedItemRepository.MarkPlaidRemovalFailed and services.terminalPlaidRemovalFailure). A row carrying
+// it stops blocking — but only once it has carried it for 7 days, and only because the cascade has a
+// durable place to put the obligation instead. Both conditions live in uncleanedLinkedItemPredicate
+// below; read its comment before touching either, since the window is what stops one misconfigured
+// deployment from erasing over every Item it holds.
+//
+// ⚠ THIS PREDICATE IS ONLY SAFE IN THE PRESENCE OF THE plaid_orphaned_items WRITE. DeleteUserCascade
+// copies every row matching `plaid_removed_at IS NULL` into plaid_orphaned_items, in the SAME
+// transaction, BEFORE any delete (see the call site). Remove or reorder that INSERT and this
+// predicate becomes a silent leak: erasure completing over a live, billing Plaid Item with no record
+// anywhere — the precise outcome the #1495 tightening above exists to prevent, reached from the
+// other side. The two changes are one change; pinned by
+// TestDeleteUserCascade_Integration_OrphanRecordInsertFailure_AbortsTheWholeCascade.
+//
+// Note what is deliberately NOT here: no status arm (see the NULL-safety paragraph above), and no
+// reading of plaid_removal_failed_at by any predicate that SELECTS cleanup work. A terminally-marked
+// row keeps being re-attempted by the sweep and the backstop for as long as it exists — this clause
+// grants permission to PROCEED, never permission to STOP TRYING. See migration 000133.
+const uncleanedLinkedItemExistsClause = `EXISTS (
+	SELECT 1 FROM linked_items WHERE user_id = $1 AND ` + uncleanedLinkedItemPredicate + `
+)`
+
+// uncleanedLinkedItemPredicate is the row-level test shared by uncleanedLinkedItemExistsClause (the
+// C2 guard) and CountUncleanedLinkedItems (DeletionService's diagnosis for a Plaid-less deployment,
+// Issue #1494). Extracted so the two can never drift: the guard decides whether the cascade may
+// proceed, and the count explains to an operator why it would not. A hand-written second copy of
+// this predicate would be the fifth independently-worded spelling of a "is this item outstanding"
+// question in this file — #1444 (Site C) was caused by exactly that, and the wording that diverged
+// was the one nobody re-read.
+//
+// Reads as: we have neither proved this Item's Plaid removal succeeded, nor OBSERVED for long enough
+// that we can never achieve it. Only in that state is there still recoverable work owed, and only then
+// must an irreversible erasure wait.
+//
+// THE COOLING-OFF WINDOW IS THE POINT OF THE SECOND CLAUSE, and it exists because the terminal verdict
+// is an inference, not a fact Plaid stated. Plaid returns INVALID_ACCESS_TOKEN both for a token that is
+// genuinely dead AND when a token is used against the wrong Plaid environment or client_id — a property
+// of the DEPLOYMENT's configuration, curable by an ops fix, and identical in kind to INVALID_API_KEYS,
+// which services.terminalPlaidRemovalFailure deliberately refuses to treat as terminal. Unblocking on
+// first sight would therefore let ONE misconfigured deploy mark every Item in the estate hopeless and
+// then erase over all of them — irreversibly, since the erasure destroys the token.
+//
+// Requiring the verdict to be 7 days old converts the inference into an OBSERVATION. Nothing stops
+// retrying during that week (no work-selecting predicate reads plaid_removal_failed_at — see migration
+// 000133), so the cleanup sweep, the stranded-cleanup backstop and the deletion flow each keep making
+// real /item/remove calls daily. A config problem is fixed inside the window and the row converges on
+// plaid_removed_at with no orphan record at all; a genuinely dead credential answers identically every
+// day for a week and only then passes. That is also what makes migration 000133's self-healing claim
+// true rather than aspirational: for a user being deleted, the erasure would otherwise consume the
+// verdict on the same pass that produced it, leaving the retries no time to occur.
+//
+// 7 days is a judgement, and here is its basis: a Plaid environment/credential misconfiguration is an
+// operations incident measured in hours to days, while a dead token persists indefinitely; and the
+// deletion this delays has already waited out a 30-day grace period, so a further week on a pathological
+// row is a far smaller harm than erasing over a recoverable, still-billing Item. The window is written
+// as an INTERVAL literal rather than a parameter because both readers of this predicate are guards, not
+// tunables — changing it should be a code change with this argument re-read.
+//
+// The comparison is between two timestamptz values, so it is an absolute-instant comparison and immune
+// to the session-time-zone hazard .claude/skills/db-migration-guide documents for migrations.
+const uncleanedLinkedItemPredicate = `(
+	plaid_removed_at IS NULL
+	AND (plaid_removal_failed_at IS NULL OR plaid_removal_failed_at > now() - INTERVAL '7 days')
+)`
+
+// householdOwnerBlocksDeletionClause is DeleteUserCascade's guard predicate for "deleting this
+// user would destroy another real user's data via households.owner_user_id's CASCADE" — Issue
+// #1440 Critical finding (Codex review). See the guard's call site (above, in DeleteUserCascade)
+// for the full rationale; this const only holds the SQL.
+//
+// Two independent conditions, OR'd together:
+//  1. The #1367 rule: at least one ACTIVE, NON-OWNER household_members row.
+//  2. Broader than #1367: any CURRENTLY EFFECTIVE subscription_entitlements row this household
+//     funds (household_id = h.id) for someone OTHER than the owner (se.user_id <> h.owner_user_id),
+//     regardless of that beneficiary's current household_members.status — closing the residual
+//     where RemoveMember flipped a member to 'removed' without also touching their
+//     owner-funded entitlement.
+//
+// Round-3 correction (Issue #1440 follow-up, Codex review, coordinator's own brief — Finding 1 and
+// Finding 6, both High):
+//
+//   - Finding 1: condition 2 used to have NO filter on effective_until/effective_from — matching
+//     ANY subscription_entitlements row ever written for this household, live or long since closed.
+//     But member removal (household_service.go's removeMemberTx) only EXPIRES the departing
+//     member's entitlement — entRepo.ExpireActiveEntitlement sets effective_until = now() and
+//     entitlement_repository.go deliberately RETAINS the historical row (see
+//     ExpireActiveEntitlement/ExpireActiveHouseholdEntitlement's own doc comments — both a
+//     bookkeeping UPDATE, never a DELETE). So a household with only its owner currently active,
+//     plus a FORMER member's now-closed entitlement, hit ErrHouseholdHasActiveMembers FOREVER —
+//     the ordinary, everyday shape of "a member left at some point," not a contrived edge case —
+//     and that owner could never complete a GDPR deletion. Fixed by requiring
+//     `se.effective_until IS NULL AND se.effective_from <= now()`, the EXACT predicate
+//     entitlement_repository.go's own GetActiveEntitlement already uses to distinguish a live
+//     entitlement from historical residue — this guard must agree with that definition, not invent
+//     its own.
+//   - Finding 6: condition 1 used to be `COUNT(*) > 1` (the owner's own active row plus at least
+//     one other) — silently DEPENDING on an invariant the schema does not enforce: that
+//     household_members always contains an 'active' row for the owner. There are ZERO
+//     constraints tying household_members.user_id to households.owner_user_id (migration
+//     000107:12-15 documents this as a service-layer invariant only; :94-102 enforces uniqueness,
+//     not existence). A schema-valid household with one active NON-OWNER member, NO active owner
+//     row at all, and no entitlement passed `COUNT(*) > 1` (count exactly 1) — silently permitting
+//     the owner's deletion, and households.owner_user_id's CASCADE (migration 000106:54-62)
+//     destroyed that OTHER real user's household_members row. Fixed by counting active members
+//     `WHERE hm.user_id <> h.owner_user_id` directly — the guard no longer depends on the owner's
+//     own membership row existing at all.
+//
+// Correlates against households.owner_user_id = $1 directly (not via a household_members join for
+// the owner's own row) since households.owner_user_id IS the user_id being deleted — mirrors
+// uncleanedLinkedItemExistsClause's own $1-parameterized style, for the same reason (this guard
+// query is not already joined to `users`).
+const householdOwnerBlocksDeletionClause = `EXISTS (
+	SELECT 1 FROM households h
+	WHERE h.owner_user_id = $1
+	  AND (
+	    (SELECT COUNT(*) FROM household_members hm WHERE hm.household_id = h.id AND hm.status = 'active' AND hm.user_id <> h.owner_user_id) > 0
+	    OR EXISTS (
+	      SELECT 1 FROM subscription_entitlements se
+	      WHERE se.household_id = h.id AND se.user_id <> h.owner_user_id
+	        AND se.effective_until IS NULL AND se.effective_from <= now()
+	    )
+	  )
 )`
 
 // ClearCompletedPlaidCleanupMarkers is StampMissingPlaidCleanupMarkers's symmetric counterpart —
@@ -2771,6 +4210,104 @@ func (r *profileRepository) ClearCompletedPlaidCleanupMarkers(ctx context.Contex
 	return int(ct.RowsAffected()), nil
 }
 
+// ClearMarkersOnEligibleStatus is the THIRD self-healing backstop — Issue #1455 — closing the
+// plaid_cleanup_pending_at invariant's OTHER branch. domain.User.PlaidCleanupPendingAt's doc
+// comment states the invariant in two halves:
+//
+//  1. status NOT ineligible (not inactive/cancelled) ⇒ marker must be NULL.
+//  2. status ineligible ⇒ marker non-NULL exactly while an episode is open and cleanup has not
+//     completed.
+//
+// StampMissingPlaidCleanupMarkers and ClearCompletedPlaidCleanupMarkers above both self-heal half
+// 2 — but BOTH are gated on plaidDisconnectRepairEligibleStatusPredicate, so neither one EVER
+// inspects a row whose status is not inactive/cancelled. Half 1 therefore had NO runtime backstop
+// at all until this method: if a row ever ended up with a non-ineligible status AND a non-NULL
+// marker, nothing in this codebase would ever repair it.
+//
+// Why this matters — the concrete failure this closes, restated from the issue: PR #1443 deleted
+// the only writer that could produce this state (ProfileRepository.UpdateSubscriptionStatus, which
+// wrote subscription_status without touching the marker and had zero production callers), which
+// removes the IMMEDIATE trap but not the durable recurrence guard — nothing stops some FUTURE
+// status-only writer from recreating the identical gap, and the invariant sweep enumerates known
+// writers by hand, so a new one is invisible to it by default. If that ever happens: a stale marker
+// survives on an active row at timestamp T; months later the user cancels;
+// removeUserTierOverrideUpdate's should_mark_plaid_cleanup_pending CASE only overwrites the marker
+// when a LIVE linked item exists at that exact moment — a cancellation with no comp in play at all
+// takes an entirely different write path (UpdateSubscriptionFromPaddle et al.), and NONE of those
+// COALESCE the marker (round 18 removed the one COALESCE that used to exist) but they also don't
+// unconditionally overwrite an already-non-NULL value the way the comp-removal CASE does — so a
+// pre-existing stale T can survive a raw cancellation-status write untouched, and the repair pass
+// then sees a marker already older than the 72-hour grace window and disconnects the user's bank
+// connections IMMEDIATELY, with ZERO grace. The grace window exists precisely so a lapsed user can
+// recover; this path silently skips it.
+//
+// SHAPE: flat UPDATE, NOT StampMissingPlaidCleanupMarkers's `FOR NO KEY UPDATE` CTE dance — and this
+// is a deliberate correction of the issue's own suggested implementation, not an oversight. Read
+// StampMissingPlaidCleanupMarkers's doc comment in full: that CTE exists ONLY because that statement
+// writes the VOLATILE clock_timestamp() into its SET list, and Postgres evaluates a volatile
+// target-list expression against the pre-lock-wait row version — so the lock has to be acquired as
+// its own explicit step (`FOR NO KEY UPDATE`) before the value is computed, or a concurrently-locked
+// row gets a backdated timestamp. This method, like ClearCompletedPlaidCleanupMarkers right above
+// it, writes only a CONSTANT (NULL) — there is no volatile expression for a lock-wait to backdate,
+// so the CTE's entire reason for existing does not apply here. Adding one anyway would not be extra
+// safety; it would needlessly re-open the exact lock-mode hazard that CTE's own doc comment spends
+// several paragraphs warning about (a `FOR UPDATE`/`FOR NO KEY UPDATE` scan can conflict with a
+// concurrent `FOR KEY SHARE` audit-log FK check and deadlock — SQLSTATE 40P01 — see
+// StampMissingPlaidCleanupMarkers's ROUND 23 correction for the full reproduced cycle). A flat
+// `UPDATE ... WHERE ...`, exactly ClearCompletedPlaidCleanupMarkers's shape, is both simpler and
+// strictly safer here.
+//
+// JUDGEMENT CALL — does this exclude a currently-comped user? NO, deliberately, mirroring
+// ClearCompletedPlaidCleanupMarkers's asymmetry with Stamp rather than Stamp's own exclusion.
+// Reasoning: Stamp excludes an actively-comped user because STAMPING only ever arms a marker for a
+// population the repair CANDIDATE query (GetUsersNeedingPlaidDisconnectRepair) would itself
+// eventually act on, and that candidate query already excludes a live comp via
+// noActiveManualOverridePredicate — deferring to "re-arm the ordinary way once the comp is removed"
+// is correct there because the column starts from NULL either way, so nothing is lost by waiting.
+// This method has the OPPOSITE obligation: like Clear, it corrects a FACT that is already true
+// regardless of anything else — "this row's raw status is not ineligible" — and
+// domain.User.PlaidCleanupPendingAt's own doc comment is explicit that manual_tier_override is NOT
+// a term in this invariant at all ("the marker records only the durable fact ... a function of raw
+// subscription_status and of whether live linked items exist, and of nothing else"). Branch 1 does
+// not say "status not ineligible, unless comped" — it says "status not ineligible ⇒ NULL", full
+// stop. Excluding a comped user here would leave exactly the corrupted state this method exists to
+// close sitting untouched for as long as the comp stays active, for no compensating benefit (there
+// is no future candidate-query action being deferred to, the way there is for Stamp) — so exclusion
+// would be strictly worse with nothing gained. See
+// TestClearMarkersOnEligibleStatus_Integration_ClearsRegardlessOfActiveOverride.
+//
+// Deliberately does NOT filter on deletion_requested_at, unlike its two siblings — this predicate
+// is exactly the three clauses Issue #1455 specifies (status, marker non-NULL, is_deleted = FALSE):
+// a user mid-GDPR-deletion-request can still have any subscription_status, and this invariant is
+// defined purely in terms of raw subscription_status (see the doc comment above) — it has no
+// dependency on the separate deletion pipeline, so gating on it here would be an unrequested,
+// unmotivated restriction rather than genuine defense-in-depth.
+//
+// Reuses plaidDisconnectRepairEligibleStatusPredicate (negated) — the SAME shared Go constant every
+// other status-eligibility check in this file already uses — rather than hand-writing a fifth
+// spelling of "which statuses are eligible".
+//
+// Same CAUTION as its two siblings: a global-scan WRITE with no user-id parameter in its WHERE
+// clause. Every integration test fixture for this method must own its row end-to-end (unique,
+// t.Cleanup'd), never rely on a shared test-setup helper.
+//
+// Deliberately NOT part of the exported ProfileRepository interface, for the same reason as its two
+// siblings: needed only by RetentionCleanupCheckWorker's own narrow RetentionProfileRepository
+// consumer interface (retention_cleanup_check.go).
+func (r *profileRepository) ClearMarkersOnEligibleStatus(ctx context.Context) (int, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET plaid_cleanup_pending_at = NULL, updated_at = NOW()
+		WHERE NOT (`+plaidDisconnectRepairEligibleStatusPredicate+`)
+		  AND plaid_cleanup_pending_at IS NOT NULL
+		  AND is_deleted = FALSE
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("ClearMarkersOnEligibleStatus: %w", err)
+	}
+	return int(ct.RowsAffected()), nil
+}
+
 // expiredManualTierOverridePredicate selects users with a manual tier override that has
 // strictly passed (Issue #1413 Task 9 — the daily job that expires lapsed admin comps,
 // performing the exact same clear-override/re-arm-retention/audit transition
@@ -2838,6 +4375,107 @@ func (r *profileRepository) GetUsersWithExpiredManualTierOverride(ctx context.Co
 		return []*domain.User{}, nil
 	}
 	return users, nil
+}
+
+// malformedTierOverrideWhereClause is GetUsersWithMalformedTierOverride's candidate scope: every
+// row carrying a non-empty manual_tier_override, ordered for a stable, reproducible scan. Validity
+// (does the value name a currently-configured tier) is NOT checked in SQL at all — see that
+// method's own doc comment for why.
+const malformedTierOverrideWhereClause = ` WHERE manual_tier_override IS NOT NULL AND manual_tier_override <> '' AND is_deleted = FALSE ORDER BY id`
+
+// GetUsersWithMalformedTierOverride is Issue #1453's monitoring query: it returns every user whose
+// manual_tier_override is non-empty but does NOT name a currently-configured tier — the population
+// migration 000127's one-time backfill cleared, and the population any FUTURE writer that bypasses
+// admin_user_service.go's write-time validation (SetOverrideTierValidator / tierConfig.GetTier)
+// could still reintroduce.
+//
+// Deliberately reuses r.overrideTierValidator — the SAME injected validator
+// GetEffectiveSubscriptionStatusByUserID already uses on the read-access path (see
+// SetOverrideTierValidator's doc comment) — rather than hand-copying config/subscription_tiers.yaml's
+// tier list into a SQL literal. This is the reason Issue #1453 rejected a CHECK constraint (schema
+// duplicating application config, drifting the next time a tier is added/renamed) but accepted a
+// migration backfill (a one-time point-in-time cleanup that never runs again, so staleness
+// afterward is a non-issue): an ONGOING monitoring query has the identical staleness problem a
+// perpetual CHECK constraint would have if it hand-copied the tier list, so it must not do that
+// either. Reusing the validator means "configured" can never drift from what every other
+// enforcement seam in this codebase already treats as valid.
+//
+// Returns (nil, nil) — not an empty slice — when no validator has been wired
+// (SetOverrideTierValidator never called). This is a monitoring aid, not an enforcement path, and
+// "unknown whether any rows are malformed" is a materially different claim from "zero malformed
+// rows found" — silently reporting the latter when the real answer is the former would hide a
+// misconfigured caller behind a false-negative "all clear" the first time someone checks this query.
+func (r *profileRepository) GetUsersWithMalformedTierOverride(ctx context.Context) ([]*domain.User, error) {
+	if r.overrideTierValidator == nil {
+		return nil, nil
+	}
+	candidates, err := r.queryUsers(ctx, userSelectQuery+malformedTierOverrideWhereClause)
+	if err != nil {
+		return nil, err
+	}
+	malformed := make([]*domain.User, 0, len(candidates))
+	for _, u := range candidates {
+		if u.ManualTierOverride != nil && !r.overrideTierValidator(*u.ManualTierOverride) {
+			malformed = append(malformed, u)
+		}
+	}
+	return malformed, nil
+}
+
+// OrphanedFKlessUserScopedRowCounts is GetOrphanedFKlessUserScopedRowCounts's result — the current
+// count, per table, of rows whose user_id/actor_user_id no longer names any real user.
+type OrphanedFKlessUserScopedRowCounts struct {
+	DeadLetterJobs  int64
+	IdempotencyKeys int64
+	MCPAuditLog     int64
+}
+
+// GetOrphanedFKlessUserScopedRowCounts is Issue #1440 round-3 Finding 5's self-healing/
+// observability backstop (Codex review, coordinator's #1440 follow-up brief): reports, per table,
+// how many rows in the three user-scoped tables with NO foreign key to users at all
+// (dead_letter_jobs, idempotency_keys, mcp_audit_log — see DeleteUserCascade's own doc comment for
+// why the schema cannot enforce their cleanup automatically) currently reference a
+// user_id/actor_user_id that no longer exists in `users`.
+//
+// This state can ONLY arise from a concurrent writer's insert landing in the narrow window between
+// DeleteUserCascade's own explicit erasure of these three tables and its transaction's commit (see
+// that method's own "round-3 reordering" doc comment for the full race — none of these tables has
+// any FK to users, so the FOR UPDATE lock DeleteUserCascade holds on the users row never blocks a
+// concurrent insert into any of them). Reordering DeleteUserCascade's own erasure to run
+// immediately before commit shrinks that window to (in practice) milliseconds, but cannot close it
+// entirely — this method exists so that residual is OBSERVABLE (RetentionCleanupCheckWorker's
+// monitorOrphanedFKlessRows reports it every scheduled pass) rather than silent and undiscoverable,
+// mirroring monitorMalformedTierOverrides' own observability-not-repair pattern for a different
+// residual this codebase already accepted it cannot fully prevent at write time.
+//
+// idempotency_keys is additionally (and independently) self-healing regardless of this method:
+// IdempotencyCleanupWorker (jobs/idempotency_cleanup.go) sweeps every row past its 24-hour
+// expires_at TTL daily, so an orphaned row in that table self-resolves within one day even without
+// this backstop. dead_letter_jobs and mcp_audit_log have no equivalent TTL sweep, so an orphaned row
+// in either persists until an operator acts on what this method surfaces.
+//
+// A single round-trip UNION-free query (one for each table, scalar-subquery style) — this is a
+// monitoring check run once per scheduled pass, not a hot path, so the three independent COUNT
+// scans are an acceptable trade for a single, simple query shape. dead_letter_jobs.user_id is
+// VARCHAR (not UUID — see migration 000030:179), so it is compared against users.id cast to text;
+// idempotency_keys.user_id and mcp_audit_log.actor_user_id are both UUID NOT NULL and compare
+// directly.
+func (r *profileRepository) GetOrphanedFKlessUserScopedRowCounts(ctx context.Context) (OrphanedFKlessUserScopedRowCounts, error) {
+	var counts OrphanedFKlessUserScopedRowCounts
+	err := r.db.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM dead_letter_jobs d
+			 WHERE d.user_id IS NOT NULL
+			   AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id::text = d.user_id)),
+			(SELECT COUNT(*) FROM idempotency_keys i
+			 WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = i.user_id)),
+			(SELECT COUNT(*) FROM mcp_audit_log m
+			 WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = m.actor_user_id))
+	`).Scan(&counts.DeadLetterJobs, &counts.IdempotencyKeys, &counts.MCPAuditLog)
+	if err != nil {
+		return OrphanedFKlessUserScopedRowCounts{}, fmt.Errorf("GetOrphanedFKlessUserScopedRowCounts: %w", err)
+	}
+	return counts, nil
 }
 
 // SetPastDueStartedAt sets the past_due_started_at timestamp for a user.
@@ -3001,82 +4639,26 @@ func (r *profileRepository) GetUsersInPastDue(ctx context.Context) ([]domain.Use
 	return users, nil
 }
 
-// CancelIfPastDueWithRetention atomically flips subscription_status to 'cancelled', starting the
-// retention clock in the same statement — see the interface doc comment for the full Issue #1413
-// H5 residual rationale. Predicate: still 'past_due' and carries no currently-active manual tier
-// override (noActiveManualOverridePredicate). Issue #898: CAS guard against recovery race
-// condition. Issue #1413 High finding H6 (Codex review round 3): predicate extended with
-// noActiveManualOverridePredicate — a prior read-only HasActiveManualOverride() check in the
-// caller cannot, by itself, protect this write, since the two are not atomic.
-func (r *profileRepository) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
-	// Issue #1413 round-10: plaid_cleanup_pending_at starts atomically with this SAME CAS write —
-	// see GetUsersNeedingPlaidDisconnectRepair's doc comment. COALESCE guards against a retried
-	// call re-pushing an already-running marker forward.
-	//
-	// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this marker COALESCE
-	// for the same risk class every writer of this column shares; a bare substitution would not
-	// actually fix anything for a single, non-CTE UPDATE like this one (verified empirically; see
-	// StampMissingPlaidCleanupMarkers's own doc comment for the full reasoning), and the real fix
-	// (restructuring into a locked CTE) was scoped out as a documented follow-up at the time.
-	//
-	// ROUND 23 (Issue #1413 Finding 2, High, Codex review, PR #1443 follow-up) is that follow-up.
-	// This is one of the THREE genuine CAS writers restructured this round (the other two being
-	// CancelIfPastDueOccurrenceWithRetention and ExpireTrialIfNoOverride, below) — its WHERE clause
-	// is this method's own correctness mechanism (past_due_service.go's processGraceExpiry relies on
-	// the returned bool to detect a lost race against a concurrent recovery/comp), so the CAS
-	// predicate moves into the locked CTE's SELECT UNCHANGED — same two conditions
-	// (`subscription_status = 'past_due'` and noActiveManualOverridePredicate), nothing added,
-	// nothing removed. `FOR NO KEY UPDATE`, never `FOR UPDATE` — see StampMissingPlaidCleanupMarkers's
-	// Finding 1 correction: this row can equally be a concurrent audit-log actor, and `FOR UPDATE`
-	// would risk the identical cross-user deadlock there. The CTE selects only `id`; the COALESCE
-	// reads plaid_cleanup_pending_at via the plain, unaliased `users` target-table reference in the
-	// outer UPDATE — verified directly against a real database that this reflects the value as of
-	// the moment the CTE's lock is actually acquired (post-wait), never a value frozen at this
-	// statement's own pre-wait scan, exactly like StampMissingPlaidCleanupMarkers's own
-	// clock_timestamp() does for the same reason.
-	//
-	// RowsAffected() semantics are unchanged: the join with the CTE produces zero rows in EXACTLY the
-	// circumstances the bare UPDATE's WHERE clause used to produce zero rows for (id not found,
-	// status no longer 'past_due', or a currently-active override) — never more, never fewer — so
-	// past_due_service.go's `flipped` check still means exactly what it meant before this restructure.
-	ct, err := r.db.Exec(ctx, `
-		WITH candidate AS (
-			SELECT id FROM users
-			WHERE id = $1 AND subscription_status = 'past_due'
-		`+noActiveManualOverridePredicate+`
-			FOR NO KEY UPDATE
-		)
-		UPDATE users
-		SET subscription_status = 'cancelled',
-		    retention_started_at = $2,
-		    retention_expires_at = $3,
-		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, clock_timestamp()),
-		    updated_at = NOW()
-		FROM candidate
-		WHERE users.id = candidate.id
-	`,
-		userID, retentionStarted, retentionExpires)
-	if err != nil {
-		return false, fmt.Errorf("CancelIfPastDueWithRetention: %w", err)
-	}
-	return ct.RowsAffected() > 0, nil
-}
-
-// CancelIfPastDueOccurrenceWithRetention is CancelIfPastDueWithRetention's occurrence-scoped
-// sibling (Issue #1413 round-4 finding H1). CancelIfPastDueWithRetention's predicate — still
-// 'past_due' and no currently-active manual override — is necessary but not sufficient once a
-// worker can be racing a NEWER past_due cycle for the SAME user: a batch snapshot captures cycle
-// A's past_due_started_at, the user recovers, then re-enters past_due as cycle B (a genuinely NEW
-// past_due_started_at) — cycle B is ALSO 'past_due' with no override, so the old predicate would
-// happily flip it even though the worker only ever verified cycle A's grace period, not cycle B's
-// (round-4 finding H1). Adding `AND past_due_started_at = expectedPastDueStartedAt` closes this:
+// CancelIfPastDueOccurrenceWithRetention atomically flips subscription_status to 'cancelled' AND
+// starts the retention clock (retention_started_at, retention_expires_at) in the same UPDATE,
+// occurrence-scoped (Issue #1413 round-4 finding H1). Its predecessor, CancelIfPastDueWithRetention
+// (deleted by Issue #1442 for having zero production callers), CASed only on still-'past_due' and
+// no currently-active manual override (noActiveManualOverridePredicate) — necessary but not
+// sufficient once a worker can be racing a NEWER past_due cycle for the SAME user: a batch snapshot
+// captures cycle A's past_due_started_at, the user recovers, then re-enters past_due as cycle B (a
+// genuinely NEW past_due_started_at) — cycle B is ALSO 'past_due' with no override, so that
+// predicate would happily flip it even though the worker only ever verified cycle A's grace
+// period, not cycle B's. Adding `AND past_due_started_at = expectedPastDueStartedAt` closes this:
 // the CAS now only succeeds for the EXACT cycle the caller claimed and re-verified.
 //
 // Returns (true, nil) when the flip happened, (false, nil) whenever the predicate misses for ANY
-// reason — recovered, comped, or (this fix) a different cycle now occupies the row. All three are
-// the same "someone else's business, not an error" outcome for this caller: past_due_service.go's
+// reason — recovered, comped, or a different cycle now occupies the row. All three are the same
+// "someone else's business, not an error" outcome for this caller: past_due_service.go's
 // processGraceExpiry Releases (never Completes) its claim and lets a future run handle whatever
-// cycle is actually current.
+// cycle is actually current. Issue #898: CAS guard against recovery race condition. Issue #1413
+// High finding H6 (Codex review round 3): predicate extended with noActiveManualOverridePredicate —
+// a prior read-only HasActiveManualOverride() check in the caller cannot, by itself, protect this
+// write, since the two are not atomic.
 //
 // retention_expires_at is computed entirely in Postgres, clock_timestamp() + make_interval(months
 // => $3) — Task NA2 (Issue #1413 follow-up on PR #1443): this method used to accept a Go-computed
@@ -3084,11 +4666,11 @@ func (r *profileRepository) CancelIfPastDueWithRetention(ctx context.Context, us
 // which disagrees with Postgres's make_interval whenever the anchor's day-of-month does not exist
 // N months later (Go normalizes the overflow FORWARD; Postgres clamps to the target month's last
 // day instead) — the wrong direction for a GDPR deletion deadline. Matches SetRetentionDates and
-// AdminUserRepository.RemoveUserTierOverride's SQL exactly, so every writer of this column **that has
-// a production caller** shares one semantics — see SetRetentionDates' interface doc comment for the
-// one exception (CancelIfPastDueWithRetention, dead code) and for why the pre-144b0e3a row population
-// was deliberately not backfilled. (Round 10 corrected this sentence: it read "every writer… now
-// shares one semantics," which was false while that dead sibling exists.)
+// AdminUserRepository.RemoveUserTierOverride's SQL exactly, so every writer of this column shares
+// one semantics — see SetRetentionDates' interface doc comment for why the pre-144b0e3a row
+// population was deliberately not backfilled. (Round 10 narrowed this claim to writers with a
+// production caller while a dead sibling, CancelIfPastDueWithRetention, still existed on the old
+// Go-computed semantics; Issue #1442 deleted that sibling, so the unqualified claim holds again.)
 //
 // Round-10 note on the clock pairing, so it is not mistaken for an oversight: retention_started_at is
 // supplied by the caller while retention_expires_at is computed here from clock_timestamp() at write
@@ -3116,20 +4698,19 @@ func (r *profileRepository) CancelIfPastDueOccurrenceWithRetention(ctx context.C
 	// call re-pushing an already-running marker forward.
 	//
 	// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this marker COALESCE
-	// too, for the same reason as CancelIfPastDueWithRetention's own sibling note just above (this
-	// file): a bare substitution would not actually fix anything here, and the real fix was scoped
-	// into the same follow-up at the time.
+	// too, for the same reason UpdateSubscriptionFromPaddle's own doc comment (this file) explains
+	// in full: a bare substitution would not actually fix anything here, and the real fix was
+	// scoped into the same follow-up at the time.
 	//
 	// ROUND 23 (Issue #1413 Finding 2, High, Codex review, PR #1443 follow-up) is that follow-up.
-	// This method's WHERE clause is its OWN correctness mechanism, more precisely than its
-	// non-occurrence-scoped sibling above: `past_due_started_at = $4` is exactly the extra guard this
-	// method exists to add (see this method's own H1 doc comment above) against a worker racing a
-	// NEWER past_due cycle for the same user, so it moves into the CTE's SELECT alongside the other
-	// two conditions, UNCHANGED and in full — `subscription_status = 'past_due'`,
-	// `past_due_started_at = $4`, and noActiveManualOverridePredicate, nothing added, nothing removed.
-	// Same `FOR NO KEY UPDATE` lock mode and same verified-fresh target-table COALESCE read as
-	// CancelIfPastDueWithRetention's own ROUND 23 fix just above — see that method's doc comment for
-	// the full mechanism.
+	// This method's WHERE clause is its OWN correctness mechanism: `past_due_started_at = $4` is
+	// exactly the extra guard this method exists to add (see this method's own H1 doc comment above)
+	// against a worker racing a NEWER past_due cycle for the same user, so it moves into the CTE's
+	// SELECT alongside the other two conditions, UNCHANGED and in full —
+	// `subscription_status = 'past_due'`, `past_due_started_at = $4`, and
+	// noActiveManualOverridePredicate, nothing added, nothing removed. Same `FOR NO KEY UPDATE` lock
+	// mode and same verified-fresh target-table COALESCE read as UpdateSubscriptionFromPaddle's own
+	// ROUND 23 fix — see that method's doc comment for the full mechanism.
 	//
 	// RowsAffected() semantics are unchanged: past_due_service.go's processGraceExpiry reads the
 	// returned bool to decide between Completing (flipped) and Releasing (not flipped) its claim —
@@ -3163,7 +4744,7 @@ func (r *profileRepository) CancelIfPastDueOccurrenceWithRetention(ctx context.C
 // still 'trial' and carries no currently-active manual tier override. Returns (true, nil) if the
 // flip happened, (false, nil) if an admin granted/extended a comp between the caller's earlier
 // HasActiveManualOverride() read and this call, or the user's status has otherwise already moved
-// on. Issue #1413 High finding H5, Codex review round 3: follows CancelIfPastDueWithRetention's
+// on. Issue #1413 High finding H5, Codex review round 3: follows CancelIfPastDueOccurrenceWithRetention's
 // shape — the predicate that authorises the transition lives in the UPDATE's WHERE clause,
 // evaluated against committed state at the moment of the write, not in an earlier, non-atomic
 // read-then-check.
@@ -3186,11 +4767,11 @@ func (r *profileRepository) ExpireTrialIfNoOverride(ctx context.Context, userID 
 	// SELECT unchanged, nothing added, nothing removed. Same `FOR NO KEY UPDATE` lock mode (never
 	// `FOR UPDATE` — see StampMissingPlaidCleanupMarkers's Finding 1 correction for the cross-user
 	// deadlock that mode would risk) and same verified-fresh target-table COALESCE read as
-	// CancelIfPastDueWithRetention's own ROUND 23 fix — see that method's doc comment for the full
-	// mechanism.
+	// CancelIfPastDueOccurrenceWithRetention's own ROUND 23 fix — see that method's doc comment for
+	// the full mechanism.
 	//
 	// RowsAffected() semantics are unchanged: this method's own callers use the returned bool exactly
-	// as CancelIfPastDueWithRetention's callers do — the join with the CTE still produces zero rows
+	// as CancelIfPastDueOccurrenceWithRetention's callers do — the join with the CTE still produces zero rows
 	// in EXACTLY the circumstances (id not found, status no longer 'trial', or a currently-active
 	// override — i.e. an admin granted/extended a comp between the caller's HasActiveManualOverride()
 	// read and this call) the bare UPDATE's WHERE clause used to.

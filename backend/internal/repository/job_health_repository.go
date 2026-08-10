@@ -71,6 +71,58 @@ type JobHealthRepository interface {
 	// TestJobHealthRepository_Integration_MarkedUserWithLiveItemAndLiveComp_StillCounted
 	// (job_health_repository_plaid_cleanup_integration_test.go).
 	GetOutstandingPlaidCleanupStats(ctx context.Context) (count int, oldestAge time.Duration, err error)
+
+	// GetDeletionResidueStats returns how many post-gate external-effect residue records exist, and
+	// how long ago the NEWEST one was written — (0, 0) when there are none. Issue #1504.
+	//
+	// WHAT ONE RECORD MEANS, because nothing else about this method makes sense without it: a GDPR
+	// deletion ISSUED an irreversible external call against the user's Paddle account — a
+	// subscription cancel, or the customer archive-and-anonymise that nobody can undo — and the run
+	// then ended with the user still here. The user keeps their account and every byte of their data,
+	// and has had something done to them that they did not ask for. See
+	// ProfileRepository.RecordDeletionResidue, which writes these rows, and
+	// DeletionService.recordIssuedExternalEffect, which calls it from each irreversible call site
+	// BEFORE the call goes out.
+	//
+	// ⚠ THE COUNT CAN GO DOWN, since round 15. DeleteUserCascade retracts a user's records inside the
+	// transaction that deletes them, so a run that later completes closes its own work items. This
+	// method is therefore a count of OPEN residue, not an all-time total; see the gauge's own comment
+	// in observability/metrics.go for what that means for the alert rule.
+	//
+	// Reads audit_logs through deletionResidueActionPrefix — the SAME Go constant the writer builds
+	// its action from, never a second hand-typed literal. That constant exists precisely so the
+	// operator query cannot drift away from what is written, and a gauge that drifted here would
+	// report zero forever while records accumulated: the exact "state changed, nobody can tell"
+	// failure this record was created to end.
+	//
+	// ⚠ THE AGE IS THE NEWEST RECORD'S, NOT THE OLDEST'S — the deliberate inversion of
+	// GetOutstandingPlaidCleanupStats above, and the reason is structural rather than stylistic.
+	// That gauge measures a backlog whose rows get CLEARED, so its oldest entry is the chronic-failure
+	// signal. Nothing clears a residue record: there is no resolution column, nothing prunes
+	// audit_logs, and the harm is not reversible by any automated process. MIN(created_at) here would
+	// therefore climb monotonically with wall-clock time forever after the first occurrence and tell
+	// an operator nothing at all. MAX(created_at) answers the question that has an action attached:
+	// "has this happened again recently?"
+	//
+	// ⚠ AND THE AGE IS ONLY MEANINGFUL ALONGSIDE THE COUNT. Zero is returned both when there are no
+	// records and when one was written this instant; count is the disambiguator, and every consumer
+	// must read it first. This is a real difference from the two backlog gauges above, where a zero
+	// age is unambiguous good news.
+	//
+	// ⚠ DELIBERATELY NOT REMEDIATION, AND DELIBERATELY NOT A WINDOW. This method reports; it never
+	// re-subscribes anybody (Issue #1504 is explicit that automatic re-subscription is a worse failure
+	// than telling a human). And the count is all-time rather than windowed: a residue record nobody
+	// acted on must not become invisible by ageing out. The consequence is honest and intended — once
+	// this has ever happened, the count stays non-zero, because no record anywhere proves the affected
+	// user was made whole. Claiming otherwise would be the claim-versus-proof conflation this branch
+	// spent ten rounds removing.
+	//
+	// Bounded by idx_audit_logs_deletion_residue (migration 000138), whose predicate is the same
+	// literal LIKE clause this query uses. audit_logs is append-only and unbounded, and
+	// idx_audit_logs_action cannot serve a LIKE prefix under this database's collation — see that
+	// migration for the measurement, and
+	// TestJobHealthRepository_Integration_DeletionResidue_IsServedByThePartialIndex for the guard.
+	GetDeletionResidueStats(ctx context.Context) (count int, newestAge time.Duration, err error)
 }
 
 type jobHealthRepository struct {
@@ -138,6 +190,43 @@ func (r *jobHealthRepository) GetOutstandingPlaidCleanupStats(ctx context.Contex
 		// the `plaid_cleanup_pending_at IS NOT NULL` clause means every row this aggregate
 		// considers already has a real timestamp in the past, so NOW() - MIN(...) should never go
 		// negative, but never let a clock-skew edge case report a negative "age".
+		ageSeconds = 0
+	}
+	return int(count), time.Duration(ageSeconds * float64(time.Second)), nil
+}
+
+// deletionResidueStatsQuery is GetDeletionResidueStats' SQL, hoisted to a package-level constant for
+// two reasons beyond readability.
+//
+// First, the LIKE pattern is INLINED from deletionResidueActionPrefix rather than bound as $1, and that
+// is load-bearing, not a shortcut: Postgres decides whether a partial index applies by proving the
+// query's predicate implies the index's, and a bind parameter has no value at plan time, so
+// parameterising this silently reverts the query to a sequential scan of an append-only table. There is
+// no injection surface — the prefix is a compile-time Go constant with no caller input in it.
+//
+// Second, hoisting it lets a plain unit test read the SQL and assert both of those properties without a
+// database, so the drift guard cannot be skipped along with the integration suite. See
+// TestJobHealthRepository_DeletionResidueStatsQuery_UsesTheWriterSharedPrefix.
+const deletionResidueStatsQuery = `
+	SELECT COUNT(*), COALESCE(EXTRACT(EPOCH FROM (NOW() - MAX(created_at))), 0)
+	FROM audit_logs
+	WHERE action LIKE '` + deletionResidueActionPrefix + `%'
+`
+
+// GetDeletionResidueStats implements the interface doc comment above — see it for what a residue record
+// means, why the age is the NEWEST record's rather than the oldest's, and why the count is all-time
+// rather than windowed. One round trip for both numbers, matching the two gauges above.
+func (r *jobHealthRepository) GetDeletionResidueStats(ctx context.Context) (int, time.Duration, error) {
+	var count int64
+	var ageSeconds float64
+	if err := r.db.QueryRow(ctx, deletionResidueStatsQuery).Scan(&count, &ageSeconds); err != nil {
+		return 0, 0, fmt.Errorf("failed to query deletion-residue stats: %w", err)
+	}
+	if ageSeconds < 0 {
+		// Defensive only, mirroring the two clamps above: every row this aggregate considers was
+		// INSERTed with a DEFAULT NOW() already in the past, so NOW() - MAX(...) should never go
+		// negative — but a clock-skew edge case must not be allowed to report a negative "age", which a
+		// consumer would render as a nonsense duration on an operator dashboard.
 		ageSeconds = 0
 	}
 	return int(count), time.Duration(ageSeconds * float64(time.Second)), nil

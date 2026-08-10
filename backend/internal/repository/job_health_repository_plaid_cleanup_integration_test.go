@@ -208,19 +208,46 @@ func TestJobHealthRepository_Integration_MarkedUserWithLiveItemAndLiveComp_Still
 // ` with the bare `linked_items.status NOT IN ('disconnected', 'replaced')` form makes this test
 // fail — SQL's three-valued logic evaluates `NULL NOT IN (...)` as UNKNOWN, not TRUE, so the
 // EXISTS subquery no longer matches this row and the marked user silently vanishes from the count.
+// Since migration 000126 (Issue #1444), linked_items.status is NOT NULL — a genuinely NULL status
+// can no longer be constructed against the real schema at all. This test therefore runs its own
+// transaction that transactionally DROPs the NOT NULL constraint first (rolled back, never
+// committed — the real schema is never permanently altered) so the scenario this test exists to
+// guard can still be exercised. It cannot reuse createPlaidCleanupTestUser (which creates its user
+// via a separate, committed transaction against pool directly, invisible to this test's own
+// transaction) — the user, item, and marker must all be written inside the SAME transaction as the
+// DROP NOT NULL and the query under test, or the query (constructed against a *different*
+// connection) would never see the uncommitted NULL-status row.
 func TestJobHealthRepository_Integration_MarkedUserWithNullStatusLiveItem_Counted(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
-	repo := NewJobHealthRepository(pool)
+	baselineRepo := NewJobHealthRepository(pool)
 	ctx := context.Background()
 
-	skipIfPlaidCleanupBaselineNonZero(t, repo, ctx)
+	skipIfPlaidCleanupBaselineNonZero(t, baselineRepo, ctx)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	_, err = tx.Exec(ctx, "ALTER TABLE linked_items ALTER COLUMN status DROP NOT NULL")
+	require.NoError(t, err)
+
+	profileRepo := NewProfileRepository(tx, enc)
+	repo := NewJobHealthRepository(tx)
 
 	suffix := fmt.Sprintf("jh_plaid_nullstatus_%d", time.Now().UnixNano())
-	user := createPlaidCleanupTestUser(t, pool, enc, suffix, "cancelled")
+	user := &domain.User{
+		ClerkUserID:        "clerk_" + suffix,
+		Email:              suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	require.NoError(t, profileRepo.CreateUserTx(ctx, tx, user))
 
-	seedLinkedItemNullStatus(t, pool, user.ID, "item-"+suffix)
-	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-5*24*time.Hour))
+	seedLinkedItemNullStatus(t, tx, user.ID, "item-"+suffix)
+	setPlaidCleanupPendingAt(t, tx, user.ID, time.Now().Add(-5*24*time.Hour))
 
 	count, age, err := repo.GetOutstandingPlaidCleanupStats(ctx)
 	require.NoError(t, err)

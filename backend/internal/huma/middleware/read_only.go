@@ -71,13 +71,36 @@ func readOnlyPathSuffixAllowed(path string) bool {
 // the deletion-cancel token route (/api/v1/user/delete/cancel/{token}), and /api/v1/admin/ covers
 // all admin sub-routes. Subscription routes are NOT listed here to prevent word-boundary bypass;
 // they are in readOnlyExactAllowedPaths above.
+// #1432: the webhook entries here are defence-in-depth, not the thing that actually protects
+// Paddle/Plaid webhook delivery today. Both /webhooks/paddle and /webhooks/plaid are registered
+// with NO Security annotation (validated instead by Paddle HMAC / Plaid JWT respectively), so
+// NewReadOnlyMiddleware already short-circuits them as public routes before this whitelist is ever
+// consulted (see the `len(ctx.Operation().Security) == 0` check below). Correcting these entries
+// to the real paths — rather than deleting them, since they were previously dead strings that
+// could never match ANY route (/api/v1/paddle/webhook and /api/v1/plaid/webhook do not exist) —
+// is the honest choice: if a future change ever added a Security annotation to a webhook route,
+// a corrected whitelist would still protect it, while a deleted one would not.
+// TestReadOnlyPrefixAllowedPaths_CorrespondToRegisteredRoutes (read_only_route_coverage_test.go)
+// asserts every entry here matches an actually-registered route, so this cannot silently drift
+// into dead strings again.
 var readOnlyPrefixAllowedPaths = []string{
 	"/api/v1/user/delete",
 	"/api/v1/user/profile",
 	"/api/v1/user/privacy",
-	"/api/v1/paddle/webhook",
-	"/api/v1/plaid/webhook",
+	"/webhooks/paddle",
+	"/webhooks/plaid",
 	"/api/v1/admin/",
+}
+
+// ReadOnlyPrefixAllowedPathsForTesting exposes readOnlyPrefixAllowedPaths to
+// read_only_route_coverage_test.go (external middleware_test package). That test also needs
+// operations.RegisterAllRoutesForSpec to build the real route table, and operations imports this
+// middleware package (for admin RBAC checks) — so the coverage test cannot live in an internal
+// `package middleware` test file without an import cycle. Hand-copying this slice into the
+// external test instead would defeat the point: the two copies could drift apart exactly like the
+// dead #1432 strings did. This accessor keeps the test reading the real, live slice.
+func ReadOnlyPrefixAllowedPathsForTesting() []string {
+	return readOnlyPrefixAllowedPaths
 }
 
 // NewReadOnlyMiddleware creates a Huma middleware that enforces read-only access for

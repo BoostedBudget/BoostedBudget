@@ -1,0 +1,44 @@
+-- Issue #1495: give "Plaid /item/remove succeeded for this item" a durable slot of its own.
+--
+-- WHY A NEW COLUMN AND NOT A STATUS VALUE. linked_items.status is a SINGLE slot, and the re-link
+-- fact already owns it. The re-link path (internal/services/account_service.go, "re-link detected,
+-- soft-deleting old linked item") sets the OLD item's status to 'replaced' WITHOUT ever calling
+-- Plaid /item/remove, so a 'replaced' item is still live and still billing at Plaid — while
+-- LinkedItemRepository.MarkItemsDisconnected deliberately REFUSES to overwrite 'replaced'
+-- (its WHERE carries `status NOT IN ('disconnected','replaced')`, pinned by
+-- TestLinkedItemRepository_MarkItemsDisconnected_AlreadyReplacedIsNotReverted) because overwriting
+-- it would destroy the replaced_at/replaced_by_id re-link chain. The consequence, documented in
+-- GetItemsPendingCleanup's own doc comment before this migration existed, is that there was NOWHERE
+-- to record "Plaid is done" for a 'replaced' row. DeleteUserCascade's C2 guard therefore had to
+-- treat 'replaced' as already-clean and let a GDPR erasure complete over a live, billing Plaid
+-- Item with no local record it ever existed — the exact outcome C2 exists to prevent. This column
+-- is the second slot that lets both facts coexist.
+--
+-- LOCK COST: metadata-only, no table rewrite. `ADD COLUMN <nullable> <type>` with NO DEFAULT has
+-- never rewritten the table (any PostgreSQL version); the PG 11 improvement was for non-volatile
+-- DEFAULTs, which this deliberately does not use. It takes ACCESS EXCLUSIVE for a catalog write
+-- only, held for the instant of the ALTER. Asserted from the PostgreSQL semantics, NOT from a green
+-- Squawk run: this repo's .squawk.toml sets assume_in_transaction = true and excludes rules
+-- (require-concurrent-index-creation, changing-column-type), and — per
+-- .claude/skills/db-migration-guide — Squawk lints statements in isolation and cannot see
+-- transaction-level or lock-duration hazards at all. A green lint here is not the evidence; the
+-- absence of a DEFAULT is.
+--
+-- NO BACKFILL IN THIS FILE, deliberately: golang-migrate wraps each migration in one transaction,
+-- so an ALTER sharing a transaction with an UPDATE holds the ALTER's ACCESS EXCLUSIVE lock for the
+-- whole backfill. 000132 does the backfill in its own transaction. (Same convention as the
+-- 000124/000125/000126 split.)
+--
+-- NO INDEX: the three predicates re-pointed onto this column all have a selective leading term
+-- already — DeleteUserCascade's guard is an EXISTS on user_id, GetItemsPendingCleanup filters
+-- cleanup_scheduled_at IS NOT NULL first, and the cleanup sweep filters cleanup_scheduled_at IS
+-- NULL plus its reason predicate. `plaid_removed_at IS NULL` is a cheap filter on rows those terms
+-- already narrowed, not a scan driver.
+--
+-- Idempotent: ADD COLUMN IF NOT EXISTS. Writing it this way also preserves the operator escape
+-- hatch documented in db-migration-guide — the same ALTER can be run ahead of time in its own short
+-- transaction during a low-traffic window, after which this statement is a no-op.
+ALTER TABLE linked_items ADD COLUMN IF NOT EXISTS plaid_removed_at TIMESTAMPTZ;
+
+COMMENT ON COLUMN linked_items.plaid_removed_at IS
+    'When Plaid /item/remove is known to have succeeded for this item (including Plaid answering ITEM_NOT_FOUND, which means the Item is already gone and billing has already stopped). NULL means Plaid-side removal has NOT been recorded and is still owed. This is the ONLY authority for "is the Plaid side done?" — status is not, because a re-link sets status = ''replaced'' without calling Plaid at all. Written by LinkedItemRepository.MarkPlaidRemoved; read by DeleteUserCascade''s C2 guard, GetItemsPendingCleanup, and the cleanup sweep. Values written by migration 000132 are ASSUMED, not measured — see that migration.';

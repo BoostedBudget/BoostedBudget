@@ -22,20 +22,28 @@ type mockAdminUserService struct {
 	mock.Mock
 }
 
-func (m *mockAdminUserService) ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int) (*domain.AdminUserListResponse, error) {
-	args := m.Called(ctx, filters, page, pageSize)
+func (m *mockAdminUserService) ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int, now time.Time) (*domain.AdminUserListResponse, error) {
+	args := m.Called(ctx, filters, page, pageSize, now)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.AdminUserListResponse), args.Error(1)
 }
 
-func (m *mockAdminUserService) GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error) {
-	args := m.Called(ctx, userID)
+func (m *mockAdminUserService) GetUserDetail(ctx context.Context, userID string, now time.Time) (*domain.AdminUserDetail, error) {
+	args := m.Called(ctx, userID, now)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.AdminUserDetail), args.Error(1)
+}
+
+// GetOwnedHouseholdActiveMemberCount satisfies services.AdminUserService for tests in this file
+// that don't exercise the subscription-detail endpoint (Issue #1452 — see
+// admin_subscriptions_test.go for coverage).
+func (m *mockAdminUserService) GetOwnedHouseholdActiveMemberCount(ctx context.Context, userID string) (int, error) {
+	args := m.Called(ctx, userID)
+	return args.Int(0), args.Error(1)
 }
 
 // UpdateUserTier satisfies services.AdminUserService for tests in this file that don't
@@ -108,7 +116,7 @@ func TestListUsers_Success(t *testing.T) {
 		HasMore:    false,
 	}
 
-	mockService.On("ListUsers", ctx, domain.AdminUserFilters{}, 1, 20).Return(expectedResponse, nil)
+	mockService.On("ListUsers", ctx, domain.AdminUserFilters{}, 1, 20, mock.Anything).Return(expectedResponse, nil)
 
 	input := &ListUsersInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -160,7 +168,7 @@ func TestListUsers_WithSearch(t *testing.T) {
 	}
 
 	expectedFilters := domain.AdminUserFilters{Search: "test@"}
-	mockService.On("ListUsers", ctx, expectedFilters, 1, 20).Return(expectedResponse, nil)
+	mockService.On("ListUsers", ctx, expectedFilters, 1, 20, mock.Anything).Return(expectedResponse, nil)
 
 	input := &ListUsersInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -201,7 +209,7 @@ func TestListUsers_WithTierFilter(t *testing.T) {
 	}
 
 	expectedFilters := domain.AdminUserFilters{Tier: "premium"}
-	mockService.On("ListUsers", ctx, expectedFilters, 1, 20).Return(expectedResponse, nil)
+	mockService.On("ListUsers", ctx, expectedFilters, 1, 20, mock.Anything).Return(expectedResponse, nil)
 
 	input := &ListUsersInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -231,7 +239,7 @@ func TestListUsers_ServiceError(t *testing.T) {
 
 	ctx := context.Background()
 
-	mockService.On("ListUsers", ctx, domain.AdminUserFilters{}, 1, 20).Return(nil, errors.New("database error"))
+	mockService.On("ListUsers", ctx, domain.AdminUserFilters{}, 1, 20, mock.Anything).Return(nil, errors.New("database error"))
 
 	input := &ListUsersInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -304,7 +312,7 @@ func TestGetUserDetail_Success(t *testing.T) {
 		BudgetsCount:      4,
 	}
 
-	mockService.On("GetUserDetail", ctx, userID).Return(expectedDetail, nil)
+	mockService.On("GetUserDetail", ctx, userID, mock.Anything).Return(expectedDetail, nil)
 
 	input := &GetUserDetailInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -325,6 +333,46 @@ func TestGetUserDetail_Success(t *testing.T) {
 	mockService.AssertExpectations(t)
 }
 
+// TestGetUserDetail_IncludesAsOf proves the response carries an `as_of` timestamp (Issue #1462
+// follow-up G2) — the server instant EffectiveStatus (on the embedded AdminUserListItem) was
+// computed from, which UserDetailModal.tsx anchors its own isOverrideActive/getOverrideStatus
+// calls to instead of the browser's clock. Mirrors TestGetUserSubscription_IncludesAsOf in
+// admin_subscriptions_test.go.
+func TestGetUserDetail_IncludesAsOf(t *testing.T) {
+	mockService := new(mockAdminUserService)
+	cfg := &config.Config{Environment: "qa"}
+	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	expectedDetail := &domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID: userID,
+		},
+	}
+	mockService.On("GetUserDetail", ctx, userID, mock.Anything).Return(expectedDetail, nil)
+
+	input := &GetUserDetailInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+		UserID: userID,
+	}
+
+	before := time.Now()
+	output, err := handler.GetUserDetail(ctx, input)
+	after := time.Now()
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.False(t, output.Body.AsOf.IsZero(), "as_of must always be populated")
+	assert.False(t, output.Body.AsOf.Before(before.Add(-time.Second)), "as_of must be captured at request time, not a fixed/zero value")
+	assert.False(t, output.Body.AsOf.After(after.Add(time.Second)), "as_of must be captured at request time, not a fixed/zero value")
+	mockService.AssertExpectations(t)
+}
+
 // TestGetUserDetail_NotFound tests 404 when user not found
 func TestGetUserDetail_NotFound(t *testing.T) {
 	mockService := new(mockAdminUserService)
@@ -334,7 +382,7 @@ func TestGetUserDetail_NotFound(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	mockService.On("GetUserDetail", ctx, userID).Return(nil, services.ErrAdminUserNotFound)
+	mockService.On("GetUserDetail", ctx, userID, mock.Anything).Return(nil, services.ErrAdminUserNotFound)
 
 	input := &GetUserDetailInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -361,7 +409,7 @@ func TestGetUserDetail_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	mockService.On("GetUserDetail", ctx, userID).Return(nil, errors.New("database error"))
+	mockService.On("GetUserDetail", ctx, userID, mock.Anything).Return(nil, errors.New("database error"))
 
 	input := &GetUserDetailInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -434,6 +482,47 @@ func TestListUsers_SearchTooShort_Returns400(t *testing.T) {
 	}
 }
 
+// TestListUsers_IncludesAsOf proves the response carries an `as_of` timestamp (Issue #1462
+// follow-up G2) — a single server instant for the whole page that UsersPage.tsx anchors its
+// per-row isOverrideActive/getOverrideStatus calls to, instead of the browser's clock. Mirrors
+// TestGetUserSubscription_IncludesAsOf in admin_subscriptions_test.go.
+func TestListUsers_IncludesAsOf(t *testing.T) {
+	mockService := new(mockAdminUserService)
+	cfg := &config.Config{Environment: "qa"}
+	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+
+	ctx := context.Background()
+	expectedResponse := &domain.AdminUserListResponse{
+		Users:      []domain.AdminUserListItem{},
+		TotalCount: 0,
+		Page:       1,
+		PageSize:   20,
+	}
+	mockService.On("ListUsers", ctx, domain.AdminUserFilters{}, 1, 20, mock.Anything).Return(expectedResponse, nil)
+
+	input := &ListUsersInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+		PagePaginationInput: inputs.PagePaginationInput{
+			Page:     1,
+			PageSize: 20,
+		},
+	}
+
+	before := time.Now()
+	output, err := handler.ListUsers(ctx, input)
+	after := time.Now()
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.False(t, output.Body.AsOf.IsZero(), "as_of must always be populated")
+	assert.False(t, output.Body.AsOf.Before(before.Add(-time.Second)), "as_of must be captured at request time, not a fixed/zero value")
+	assert.False(t, output.Body.AsOf.After(after.Add(time.Second)), "as_of must be captured at request time, not a fixed/zero value")
+	mockService.AssertExpectations(t)
+}
+
 // TestListUsers_SearchExactlyThreeChars_Succeeds verifies that exactly 3 characters passes.
 func TestListUsers_SearchExactlyThreeChars_Succeeds(t *testing.T) {
 	mockService := new(mockAdminUserService)
@@ -441,7 +530,7 @@ func TestListUsers_SearchExactlyThreeChars_Succeeds(t *testing.T) {
 	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
 	ctx := context.Background()
 
-	mockService.On("ListUsers", ctx, domain.AdminUserFilters{Search: "abc"}, 1, 20).
+	mockService.On("ListUsers", ctx, domain.AdminUserFilters{Search: "abc"}, 1, 20, mock.Anything).
 		Return(&domain.AdminUserListResponse{Users: []domain.AdminUserListItem{}, TotalCount: 0, Page: 1, PageSize: 20, TotalPages: 0}, nil)
 
 	input := &ListUsersInput{

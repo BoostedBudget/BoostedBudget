@@ -49,6 +49,45 @@ func TestBypass_ProductionEnvironment_Returns404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.Code)
 }
 
+// TestBypass_UnrecognisedEnvironment_Returns404 is the RED for finding B2-1's fail-open
+// handler shape (#1432, batch ED). The guard used to be `h.environment == "production"`, so
+// EVERY value that is not that exact lowercase string fell through to minting a five-minute
+// Clerk sign-in token — including "Production", " production ", a typo, and the empty string.
+// The gate is now an allowlist (domain.IsQAAuthBypassEnvironment): only qa and staging pass.
+//
+// Each case asserts 404 specifically, not merely "not 200": a 401 would mean the request died
+// on the shared-secret comparison instead of the environment gate, and would make this test
+// pass for the wrong reason. postBypass sends the VALID secret precisely so the secret check
+// cannot be what produces the failure.
+func TestBypass_UnrecognisedEnvironment_Returns404(t *testing.T) {
+	for _, env := range []string{"Production", " production ", "prod", "", "development", "stagng"} {
+		t.Run("environment="+env, func(t *testing.T) {
+			mock := &mockQAAuthBypassService{result: &services.QAAuthBypassResult{URL: "http://x", Email: "qa@test", Tier: "premium"}}
+			api := newTestBypassAPI(t, mock, env)
+
+			resp := postBypass(api, validSecret, "admin")
+
+			assert.Equal(t, http.StatusNotFound, resp.Code,
+				"environment %q is not a recognised QA-bypass environment and must 404, not mint an admin sign-in token", env)
+		})
+	}
+}
+
+// TestBypass_RecognisedEnvironmentCaseInsensitive_StillWorks is the mandatory sibling: the
+// hardening must not break QA/staging's legitimate use (the qa-login skill).
+func TestBypass_RecognisedEnvironmentCaseInsensitive_StillWorks(t *testing.T) {
+	for _, env := range []string{"qa", "staging", "  QA  ", "Staging"} {
+		t.Run("environment="+env, func(t *testing.T) {
+			expected := &services.QAAuthBypassResult{URL: "https://clerk.example.com/x", Email: "qa-admin@boostedbudget.com", Tier: "premium"}
+			api := newTestBypassAPI(t, &mockQAAuthBypassService{result: expected}, env)
+
+			resp := postBypass(api, validSecret, "admin")
+
+			require.Equal(t, http.StatusOK, resp.Code)
+		})
+	}
+}
+
 func TestBypass_InvalidSecret_Returns401(t *testing.T) {
 	mock := &mockQAAuthBypassService{result: &services.QAAuthBypassResult{URL: "http://x", Email: "qa@test", Tier: "premium"}}
 	api := newTestBypassAPI(t, mock, "qa")

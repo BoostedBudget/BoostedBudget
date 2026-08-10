@@ -433,7 +433,9 @@ jobs:
           # Security
           ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY_QA || '12345678901234567890123456789012' }}
 
-          # QA Auth Bypass (Issue #821)
+          # QA Auth Bypass (Issue #821). QA_AUTH_BYPASS_ENABLED is the explicit opt-in added
+          # by #1432 (B2-1): ENVIRONMENT=qa alone no longer registers the route.
+          QA_AUTH_BYPASS_ENABLED=true
           QA_BYPASS_SECRET=${{ secrets.QA_BYPASS_SECRET }}
           QA_ADMIN_CLERK_USER_ID=${{ secrets.QA_ADMIN_CLERK_USER_ID }}
           QA_PREMIUM_CLERK_USER_ID=${{ secrets.QA_PREMIUM_CLERK_USER_ID }}

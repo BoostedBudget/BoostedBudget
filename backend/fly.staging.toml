@@ -19,6 +19,23 @@ kill_timeout = 30
   # Plaid configuration (sandbox for staging)
   PLAID_ENV = "sandbox"
 
+  # Paddle configuration (sandbox API + sandbox tier catalog). Explicit rather than relying on
+  # config.go's PaddleEnvironment default of "sandbox": that default only governs which Paddle
+  # API mode the client uses. tier_config.go's getConfigPath() reads this SAME env var
+  # independently and, until this line existed, treated it being unset as "no environment
+  # specified — use config/subscription_tiers.yaml (the default/template catalogue)", NOT
+  # "sandbox". Same unset variable, two different effective meanings on this exact deploy
+  # target. Setting it explicitly collapses that to one meaning everywhere it's read.
+  PADDLE_ENVIRONMENT = "sandbox"
+
+  # Issue #1432 (B2-1): explicit opt-in for the QA auth-bypass route
+  # (POST /api/v1/qa/auth/bypass), which is UNAUTHENTICATED and mints five-minute Clerk
+  # admin sign-in tokens. ENVIRONMENT = "staging" alone no longer registers it; the gate in
+  # backend/internal/config/qa_auth_bypass_gate.go also refuses whenever a production-only
+  # signal is present (a Clerk sk_live_ key, or PADDLE_ENVIRONMENT = "production" above).
+  # This line MUST NOT be copied into backend/fly.toml.
+  QA_AUTH_BYPASS_ENABLED = "true"
+
   # NOTE: Sensitive values set via `fly secrets set`:
   # - DATABASE_URL (Neon staging - pooled connection)
   # - MIGRATION_DATABASE_URL (Neon staging - direct connection for migrations)

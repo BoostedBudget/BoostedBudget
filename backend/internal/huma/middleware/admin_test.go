@@ -232,12 +232,22 @@ func TestAdminMiddleware_QAEnvironment_NoAdminRole_Returns403(t *testing.T) {
 	mockAdminService.AssertExpectations(t)
 }
 
-// TestAdminMiddleware_ProductionEnvironment_Returns404 tests that admin endpoints return 404 in production
-func TestAdminMiddleware_ProductionEnvironment_Returns404(t *testing.T) {
-	// GIVEN: Production environment and admin user
+// --- Issue #1499: admin endpoints are authorized by role in EVERY environment ---
+//
+// These five tests replace the pair that used to pin "production and development return
+// 404 before any authorization runs". The environment gate is gone, so the role gate below
+// is now the WHOLE gate in production — which is why the 403/401/500 cases are asserted
+// alongside the 200 case rather than after it. Without them, the 200 test would pass just
+// as happily against a middleware that authorized nothing at all.
+
+// TestAdminMiddleware_ProductionEnvironment_AdminRole_Allows tests that a real admin reaches
+// admin endpoints in production (Issue #1499: the whole point of removing the environment gate).
+func TestAdminMiddleware_ProductionEnvironment_AdminRole_Allows(t *testing.T) {
+	// GIVEN: Production environment and user with admin role via Clerk privateMetadata
 	cfg := &config.Config{Environment: "production"}
 	mockAdminService := new(MockAdminService)
-	// Admin service should NOT be called because environment check fails first
+	mockAdminService.On("IsHardcodedAdmin", "user@example.com").Return(false)
+	mockAdminService.On("HasRole", mock.Anything, "user_admin", domain.RoleAdmin).Return(true, nil)
 
 	server, _ := setupAdminTestAPI(t, cfg, mockAdminService)
 
@@ -245,27 +255,134 @@ func TestAdminMiddleware_ProductionEnvironment_Returns404(t *testing.T) {
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/admin/test", nil)
 	require.NoError(t, err)
 	req.Header.Set("X-Test-Clerk-User-ID", "user_admin")
-	req.Header.Set("X-Test-Email", "admin@example.com")
+	req.Header.Set("X-Test-Email", "user@example.com")
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	// THEN: Should return 404 (security through obscurity)
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	mockAdminService.AssertNotCalled(t, "HasRole")
-	mockAdminService.AssertNotCalled(t, "IsHardcodedAdmin")
+	// THEN: Should allow access — no 404, and the role check actually ran
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	mockAdminService.AssertExpectations(t)
 }
 
-// TestAdminMiddleware_DevelopmentEnvironment_Returns404 tests that admin endpoints return 404 in development
-func TestAdminMiddleware_DevelopmentEnvironment_Returns404(t *testing.T) {
-	// GIVEN: Development environment
-	cfg := &config.Config{Environment: "development"}
+// TestAdminMiddleware_ProductionEnvironment_HardcodedEmail_Allows pins the hardcoded admin
+// list as a production authorization path. Before Issue #1499 it was unreachable in
+// production because the environment gate returned 404 first; it is now load-bearing, and
+// its contents (config/admin_emails.yaml, shipped in the image) are a production ACL.
+func TestAdminMiddleware_ProductionEnvironment_HardcodedEmail_Allows(t *testing.T) {
+	// GIVEN: Production environment and a user on the hardcoded admin list
+	cfg := &config.Config{Environment: "production"}
+	mockAdminService := new(MockAdminService)
+	mockAdminService.On("IsHardcodedAdmin", "owner@company.com").Return(true)
+
+	server, _ := setupAdminTestAPI(t, cfg, mockAdminService)
+
+	// WHEN: Hardcoded admin requests admin endpoint in production
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/admin/test", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-Test-Clerk-User-ID", "user_owner")
+	req.Header.Set("X-Test-Email", "owner@company.com")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// THEN: Should allow access without consulting Clerk privateMetadata
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	mockAdminService.AssertNotCalled(t, "HasRole")
+}
+
+// TestAdminMiddleware_ProductionEnvironment_NoAdminRole_Returns403 is the sibling that stops
+// the 200 test above from passing for the wrong reason: an authenticated NON-admin must still
+// be refused in production.
+func TestAdminMiddleware_ProductionEnvironment_NoAdminRole_Returns403(t *testing.T) {
+	// GIVEN: Production environment and an authenticated user WITHOUT the admin role
+	cfg := &config.Config{Environment: "production"}
+	mockAdminService := new(MockAdminService)
+	mockAdminService.On("IsHardcodedAdmin", "regular@example.com").Return(false)
+	mockAdminService.On("HasRole", mock.Anything, "user_regular", domain.RoleAdmin).Return(false, nil)
+
+	server, _ := setupAdminTestAPI(t, cfg, mockAdminService)
+
+	// WHEN: Non-admin user requests admin endpoint in production
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/admin/test", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-Test-Clerk-User-ID", "user_regular")
+	req.Header.Set("X-Test-Email", "regular@example.com")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// THEN: Should return 403 Forbidden (not 200, and not 404 either)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	mockAdminService.AssertExpectations(t)
+}
+
+// TestAdminMiddleware_ProductionEnvironment_Unauthenticated_Returns401 is the second sibling:
+// an anonymous caller must be refused in production, and must not be mistaken for an admin.
+func TestAdminMiddleware_ProductionEnvironment_Unauthenticated_Returns401(t *testing.T) {
+	// GIVEN: Production environment and no Clerk user ID in context
+	cfg := &config.Config{Environment: "production"}
 	mockAdminService := new(MockAdminService)
 
 	server, _ := setupAdminTestAPI(t, cfg, mockAdminService)
 
-	// WHEN: User requests admin endpoint in development
+	// WHEN: Unauthenticated caller requests admin endpoint in production
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/admin/test", nil)
+	require.NoError(t, err)
+	// Deliberately not setting X-Test-Clerk-User-ID
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// THEN: Should return 401 Unauthorized before any role lookup happens
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	mockAdminService.AssertNotCalled(t, "HasRole")
+	mockAdminService.AssertNotCalled(t, "IsHardcodedAdmin")
+}
+
+// TestAdminMiddleware_ProductionEnvironment_AdminServiceError_Returns500 pins fail-CLOSED:
+// when the role lookup itself fails in production the request must be refused, never admitted.
+func TestAdminMiddleware_ProductionEnvironment_AdminServiceError_Returns500(t *testing.T) {
+	// GIVEN: Production environment and a role lookup that errors
+	cfg := &config.Config{Environment: "production"}
+	mockAdminService := new(MockAdminService)
+	mockAdminService.On("IsHardcodedAdmin", "user@example.com").Return(false)
+	mockAdminService.On("HasRole", mock.Anything, "user_error", domain.RoleAdmin).Return(false, services.ErrClerkAPIError)
+
+	server, _ := setupAdminTestAPI(t, cfg, mockAdminService)
+
+	// WHEN: The admin service errors while verifying the role
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/admin/test", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-Test-Clerk-User-ID", "user_error")
+	req.Header.Set("X-Test-Email", "user@example.com")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// THEN: Should return 500 — refused, not admitted
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	mockAdminService.AssertExpectations(t)
+}
+
+// TestAdminMiddleware_DevelopmentEnvironment_AdminRole_Allows replaces the old
+// "development returns 404" test: development is authorized the same way as every other
+// environment now, by role alone.
+func TestAdminMiddleware_DevelopmentEnvironment_AdminRole_Allows(t *testing.T) {
+	// GIVEN: Development environment and user with admin role
+	cfg := &config.Config{Environment: "development"}
+	mockAdminService := new(MockAdminService)
+	mockAdminService.On("IsHardcodedAdmin", "admin@example.com").Return(false)
+	mockAdminService.On("HasRole", mock.Anything, "user_admin", domain.RoleAdmin).Return(true, nil)
+
+	server, _ := setupAdminTestAPI(t, cfg, mockAdminService)
+
+	// WHEN: Admin user requests admin endpoint in development
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/admin/test", nil)
 	require.NoError(t, err)
 	req.Header.Set("X-Test-Clerk-User-ID", "user_admin")
@@ -275,8 +392,9 @@ func TestAdminMiddleware_DevelopmentEnvironment_Returns404(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	// THEN: Should return 404
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	// THEN: Should allow access
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	mockAdminService.AssertExpectations(t)
 }
 
 // TestAdminMiddleware_StagingEnvironment_AdminRole_Allows tests that admin users can access admin endpoints in staging

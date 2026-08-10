@@ -36,7 +36,7 @@ type fakeEntitlementRepoForOwnerOverrideTest struct {
 	ent *domain.SubscriptionEntitlement
 }
 
-func (f *fakeEntitlementRepoForOwnerOverrideTest) GetActiveEntitlement(ctx context.Context, userID string) (*domain.SubscriptionEntitlement, error) {
+func (f *fakeEntitlementRepoForOwnerOverrideTest) GetActiveEntitlement(ctx context.Context, userID string, asOf time.Time) (*domain.SubscriptionEntitlement, error) {
 	return f.ent, nil
 }
 

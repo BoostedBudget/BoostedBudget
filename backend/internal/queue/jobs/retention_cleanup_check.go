@@ -110,6 +110,55 @@ func plaidCleanupMarkerClearBackoff(attempt int) time.Duration {
 	return plaidCleanupMarkerClearRetryDelay * time.Duration(1<<uint(attempt-1)) //nolint:gosec // attempt is always small and non-negative (loop-bounded)
 }
 
+// expiredRetentionPageSize bounds each GetUsersWithExpiredRetentionPage query (Issue #1478).
+// deleteExpiredAccounts loops pages of this size within a single run, so this bounds only how many
+// rows one query call materialises — NOT how many users one run hard-deletes. That total is bounded
+// separately by maxUsersPerRetentionSweep below. 500 matches scheduledDeletionCheckPageSize; there
+// is no reason for the two sweeps' page sizes to differ, since a page's cost is a row fetch either
+// way.
+const expiredRetentionPageSize = 500
+
+// maxUsersPerRetentionSweep bounds the TOTAL number of users deleteExpiredAccounts hard-deletes
+// across every page fetched within ONE Work() run.
+//
+// 1,000 — deliberately 50x SMALLER than maxUsersPerDeletionSweep (50,000), which bounds the sibling
+// scheduled-deletion sweep. The two numbers are not comparable, because the per-row action is not
+// comparable: ScheduledDeletionCheckWorker's loop body is a single River enqueue (cheap, and the
+// actual deletion happens later in AccountDeletionWorker, still gated by ExecuteDeletion's claim),
+// whereas this loop body IS the deletion — a synchronous ExecuteDeletion per row, which acquires a
+// work claim, disconnects Plaid, and runs DeleteUserCascade's `DELETE FROM users` against ~37
+// cascading foreign keys. Nothing between this loop and irreversible data loss.
+//
+// Derivation of 1,000:
+//   - Upper side: 1,000 is a ceiling **per sweep invocation**, and deliberately not described as a
+//     per-day one. River's ByPeriod (RetentionCleanupCheckUniqueOpts, 23h) rounds insert times into
+//     FIXED buckets rather than enforcing a rolling window — this file already documents that
+//     semantics for the Completed-state fix (see RetentionCleanupCheckUniqueOpts's doc comment, which
+//     talks about "the current ByPeriod bucket"). Two sweeps landing either side of a bucket boundary
+//     can therefore execute close together, so the real short-window worst case is ~2,000 hard
+//     deletions in well under 24 hours, not 1,000 per day. An earlier version of this comment claimed
+//     a per-day ceiling, which the same file's own bucket semantics contradict.
+//     Even at that doubled worst case the bound holds for its purpose: for a paid-only product with
+//     no free tier whose candidates are accounts inactive/cancelled for a full retention period
+//     (6 months by default, cfg.RetentionPeriodMonths), 1,000 expiring per sweep is already far above
+//     any plausible steady-state volume, so the cap does not throttle correct operation.
+//   - Lower side: it has to be small enough that a WRONG candidate predicate — the failure mode
+//     that actually produced this branch's only CRITICAL finding, a cancelled user being
+//     hard-deleted — destroys a bounded number of accounts on the RunOnStart tick after a deploy
+//     rather than the whole table, leaving a day and a WARN log for a human to intervene.
+//   - At expiredRetentionPageSize=500 that is 2 page round-trips, so the cap is reached by page
+//     boundary arithmetic, not by an awkward mid-page truncation in the common case.
+//
+// Hitting the cap does NOT reschedule or retry anything: it stops THIS run's deletion step early and
+// logs a WARN naming how many users were processed. The periodic registration re-runs the job on its
+// own cadence, and since Issue #1477 that run RESUMES from the timestamp this run stopped at
+// (sweep_cursors — repository/sweep_cursor_repository.go) rather than restarting from a nil cursor.
+// That is what removes the pre-#1477 failure this comment used to describe, in which a set of stuck
+// oldest rows larger than this cap consumed every later sweep's whole budget and nothing past the
+// cap was EVER reached. The replacement guarantee is bounded, not absolute — it is stated once, with
+// its bound, in repository/sweep_cursor_repository.go's header. Do not restate it as "no starvation".
+const maxUsersPerRetentionSweep = 1000
+
 // RetentionCleanupCheckArgs contains the arguments for the retention cleanup check job.
 // This job runs daily to:
 //  1. Send 30-day pre-deletion warning emails
@@ -129,8 +178,18 @@ type RetentionProfileRepository interface {
 	GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error)
 	// GetUsersNeedingRetention7dNotice returns users whose retention expires within 7 days and 7d notice not sent.
 	GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error)
-	// GetUsersWithExpiredRetention returns users whose retention_expires_at has passed and are not deleted/pending.
-	GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error)
+	// GetUsersWithExpiredRetentionPage returns up to `limit` users whose retention_expires_at has
+	// passed and who are not deleted/pending, ordered deterministically for keyset pagination
+	// (Issue #1478). after == nil starts from the beginning; pass the cursor derived from the last
+	// row of the previous page to continue.
+	//
+	// This replaces the unbounded GetUsersWithExpiredRetention(ctx) on this interface. It is
+	// declared HERE and on the concrete repository only — deliberately NOT on the wide
+	// repository.ProfileRepository interface, which several test files' mocks implement. See
+	// repository.profileRepository.GetUsersWithExpiredRetentionPage's doc comment for why a bare
+	// LIMIT is not sufficient and for the precise, cap-bounded statement of what the keyset cursor
+	// does and does not guarantee.
+	GetUsersWithExpiredRetentionPage(ctx context.Context, after *repository.RetentionSweepCursor, limit int) ([]*domain.User, error)
 
 	// GetUsersNeedingRetentionClockRepair returns users who are read-only-status
 	// (inactive/cancelled) but have NO retention clock started (retention_expires_at IS NULL) —
@@ -189,6 +248,23 @@ type RetentionProfileRepository interface {
 	// Deliberately NOT part of the broad canonical ProfileRepository interface, for the same reason as
 	// StampMissingPlaidCleanupMarkers.
 	ClearCompletedPlaidCleanupMarkers(ctx context.Context) (int, error)
+
+	// ClearMarkersOnEligibleStatus is Issue #1455's THIRD self-healing backstop — closing the
+	// plaid_cleanup_pending_at invariant's OTHER branch. Stamp/Clear above both self-heal "status
+	// ineligible ⇒ marker reflects outstanding cleanup", but BOTH are gated on
+	// plaidDisconnectRepairEligibleStatusPredicate, so neither ever inspects a row whose status is
+	// NOT inactive/cancelled — leaving "status NOT ineligible ⇒ marker must be NULL" with no runtime
+	// backstop at all. See its full doc comment on profileRepository (profile_repository.go) for the
+	// complete rationale, including why this is a flat UPDATE (not Stamp's `FOR NO KEY UPDATE` CTE —
+	// this writes only a constant, exactly like Clear) and the judgement call on NOT excluding a
+	// currently-comped user (mirroring Clear's asymmetry with Stamp, not Stamp's own exclusion).
+	// Called by repairPlaidDisconnects (below) immediately after ClearCompletedPlaidCleanupMarkers,
+	// at the very start of every pass. Returns the number of rows cleared (for logging only) and a
+	// non-nil error only on a genuine database failure, treated as non-fatal like its two siblings.
+	//
+	// Deliberately NOT part of the broad canonical ProfileRepository interface, for the same reason as
+	// its two siblings.
+	ClearMarkersOnEligibleStatus(ctx context.Context) (int, error)
 
 	// GetUsersNeedingPlaidDisconnectRepair returns users who are read-only-status
 	// (inactive/cancelled), whose plaid_cleanup_pending_at marker (Issue #1413 round-10) is older
@@ -255,12 +331,40 @@ type RetentionProfileRepository interface {
 	SetRetentionNotice30dSent(ctx context.Context, userID string) error
 	// SetRetentionNotice7dSent is SetRetentionNotice30dSent's 7-day sibling.
 	SetRetentionNotice7dSent(ctx context.Context, userID string) error
+
+	// GetUsersWithMalformedTierOverride is Issue #1453's monitoring query: returns every user whose
+	// manual_tier_override is non-empty but does not name a currently-configured tier. Migration
+	// 000127 backfilled the known population to NULL as a one-time cleanup; this monitoring pass
+	// (monitorMalformedTierOverrides below) catches a FUTURE writer reintroducing the class — one
+	// that bypasses admin_user_service.go's write-time validation entirely (a legacy row, a direct
+	// SQL write, or a write made while tierConfig was nil). See its full doc comment on
+	// profileRepository (profile_repository.go) for why it reuses the SAME injected
+	// overrideTierValidator every other validation seam already uses, rather than a hand-copied SQL
+	// tier list, and why it returns (nil, nil) rather than an empty slice when no validator has been
+	// wired.
+	GetUsersWithMalformedTierOverride(ctx context.Context) ([]*domain.User, error)
+
+	// GetOrphanedFKlessUserScopedRowCounts is Issue #1440 round-3 Finding 5's monitoring query
+	// (Codex review, coordinator's #1440 follow-up brief): reports, per table, how many rows in
+	// dead_letter_jobs/idempotency_keys/mcp_audit_log — the three user-scoped tables with NO foreign
+	// key to users at all — currently reference a user_id/actor_user_id that no longer names any
+	// real user. See its full doc comment on profileRepository (profile_repository.go) for the
+	// complete rationale: this state can only arise from a concurrent writer racing
+	// DeleteUserCascade's own erasure of these tables in the narrow window before that transaction
+	// commits, a residual DeleteUserCascade's own row lock cannot close because none of these three
+	// tables has any FK to users at all.
+	//
+	// Deliberately NOT part of the broad canonical ProfileRepository interface, for the same reason
+	// as its siblings above.
+	GetOrphanedFKlessUserScopedRowCounts(ctx context.Context) (repository.OrphanedFKlessUserScopedRowCounts, error)
 }
 
 // RetentionDeletionService defines the deletion methods needed for retention cleanup.
 type RetentionDeletionService interface {
-	// ExecuteDeletion executes the full deletion process for a user.
-	ExecuteDeletion(ctx context.Context, userID string) error
+	// ExecuteDeletion executes the full deletion process for a user under the caller-declared
+	// authorisation kind. This worker always passes repository.DeletionKindRetention — see
+	// deleteExpiredAccounts.
+	ExecuteDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) error
 }
 
 // RetentionEmailService defines the email methods needed for retention notices.
@@ -329,6 +433,31 @@ type RetentionCleanupCheckWorker struct {
 	claimsRepo      repository.WorkClaimsRepository
 	retentionMonths int
 	logger          *slog.Logger
+	// expiredRetentionPageSize / maxUsersPerRetentionSweep bound deleteExpiredAccounts (Issue
+	// #1478). See the two constants of the same names for the rationale and the derivation.
+	expiredRetentionPageSize  int
+	maxUsersPerRetentionSweep int
+	// plaidOrphanedItemRepo backs the orphaned-Plaid-Item alerting pass, Step 0e (Issue #1497 item
+	// 4). Optional/nil-safe, and the nil case SKIPS rather than publishing zeroes.
+	plaidOrphanedItemRepo OrphanedPlaidItemLister
+	// sweepCursors persists where a capped deleteExpiredAccounts run stopped so the NEXT run
+	// resumes there instead of restarting from the oldest expired row (Issue #1477).
+	// Optional/nil-safe: a nil store reproduces the pre-#1477 behaviour exactly. See
+	// sweep_resume.go and repository/sweep_cursor_repository.go.
+	sweepCursors sweepCursorStore
+}
+
+// OrphanedPlaidItemLister is the ONE verb monitorOrphanedPlaidItems needs from
+// repository.PlaidOrphanedItemRepository. Issue #1497 item 4.
+//
+// ⚠ NARROW ON PURPOSE, for the reason services.orphanRetryRepo excludes PurgeExpiredTokens: this is
+// an observability pass and must be structurally incapable of writing. Handing it MarkResolved or
+// PurgeExpiredTokens would make "a monitoring step destroyed a retained credential" a bug that is
+// merely absent rather than one that cannot compile. List is also the read that FILTERS NOTHING —
+// resolved and purged rows both appear — which is exactly what a derivation over all three
+// AdminStates requires.
+type OrphanedPlaidItemLister interface {
+	List(ctx context.Context, limit, offset int) ([]domain.PlaidOrphanedItem, int, error)
 }
 
 // RetentionCleanupCheckWorkerDeps contains the dependencies for RetentionCleanupCheckWorker.
@@ -338,6 +467,22 @@ type RetentionCleanupCheckWorkerDeps struct {
 	EmailService    RetentionEmailService
 	RetentionMonths int
 	Logger          *slog.Logger
+	// ExpiredRetentionPageSize overrides expiredRetentionPageSize (Issue #1478). Zero/unset uses
+	// the production default. Exists so tests can exercise the multi-page keyset-cursor loop
+	// without seeding hundreds of fixture users — production should never set this.
+	ExpiredRetentionPageSize int
+	// MaxUsersPerRetentionSweep overrides maxUsersPerRetentionSweep (Issue #1478). Zero/unset uses
+	// the production default. Exists so tests can exercise the total-processed safety cap without
+	// seeding thousands of fixture users — production should never set this.
+	MaxUsersPerRetentionSweep int
+	// PlaidOrphanedItemRepo backs the orphaned-Plaid-Item alerting pass, Step 0e (Issue #1497 item
+	// 4). Optional/nil-safe: an unwired repo SKIPS the pass and publishes nothing, rather than
+	// publishing zeroes that would read as a clean bill of health — see monitorOrphanedPlaidItems.
+	PlaidOrphanedItemRepo OrphanedPlaidItemLister
+	// SweepCursors persists deleteExpiredAccounts's cross-run resume position (Issue #1477).
+	// Optional and nil-safe: unwired, every run restarts from the oldest expired row, which is
+	// exactly the pre-#1477 starvation-prone behaviour — production MUST wire it (main.go).
+	SweepCursors repository.SweepCursorRepository
 }
 
 // NewRetentionCleanupCheckWorker creates a new retention cleanup check worker.
@@ -346,17 +491,23 @@ func NewRetentionCleanupCheckWorker(deps RetentionCleanupCheckWorkerDeps) *Reten
 	if logger == nil {
 		logger = slog.Default()
 	}
-	retentionMonths := deps.RetentionMonths
-	if retentionMonths <= 0 {
-		retentionMonths = 6 // Default: 6-month retention period
+	w := &RetentionCleanupCheckWorker{
+		profileRepo:               deps.ProfileRepo,
+		deletionService:           deps.DeletionService,
+		emailService:              deps.EmailService,
+		retentionMonths:           intOrDefault(deps.RetentionMonths, 6), // Default: 6-month retention period
+		logger:                    logger,
+		expiredRetentionPageSize:  intOrDefault(deps.ExpiredRetentionPageSize, expiredRetentionPageSize),
+		maxUsersPerRetentionSweep: intOrDefault(deps.MaxUsersPerRetentionSweep, maxUsersPerRetentionSweep),
+		plaidOrphanedItemRepo:     deps.PlaidOrphanedItemRepo,
 	}
-	return &RetentionCleanupCheckWorker{
-		profileRepo:     deps.ProfileRepo,
-		deletionService: deps.DeletionService,
-		emailService:    deps.EmailService,
-		retentionMonths: retentionMonths,
-		logger:          logger,
+	// Guarded rather than assigned directly, for the reason given in
+	// NewScheduledDeletionCheckWorker: "unwired means nil, and nil means do not persist" stays true
+	// by inspection.
+	if deps.SweepCursors != nil {
+		w.sweepCursors = deps.SweepCursors
 	}
+	return w
 }
 
 // SetWorkClaimsRepo wires the durable work-claims mechanism send30dNotices/send7dNotices require
@@ -470,6 +621,46 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 		w.logger.Error("failed to repair Plaid disconnects",
 			"job_id", job.ID,
 			"error", repairErr,
+		)
+		// Don't fail job — continue with other steps
+	}
+
+	// Step 0c: Issue #1453 monitoring pass — report the current count of users whose
+	// manual_tier_override does not name a configured tier. See monitorMalformedTierOverrides's own
+	// doc comment for the full rationale. Non-fatal for the same reason every other step here is:
+	// this is an observability check, not a repair, and must never block GDPR notices or expired-
+	// account deletion.
+	if monitorErr := w.monitorMalformedTierOverrides(ctx, job.ID); monitorErr != nil {
+		w.logger.Error("failed to check for malformed manual_tier_override rows",
+			"job_id", job.ID,
+			"error", monitorErr,
+		)
+		// Don't fail job — continue with other steps
+	}
+
+	// Step 0d: Issue #1440 round-3 Finding 5 monitoring pass — report the current count, per table,
+	// of rows in dead_letter_jobs/idempotency_keys/mcp_audit_log whose user_id/actor_user_id no
+	// longer names any real user. See monitorOrphanedFKlessRows's own doc comment for the full
+	// rationale. Non-fatal for the same reason every other step here is: this is an observability
+	// check, not a repair, and must never block GDPR notices or expired-account deletion.
+	if monitorErr := w.monitorOrphanedFKlessRows(ctx, job.ID); monitorErr != nil {
+		w.logger.Error("failed to check for orphaned FK-less user-scoped rows",
+			"job_id", job.ID,
+			"error", monitorErr,
+		)
+		// Don't fail job — continue with other steps
+	}
+
+	// Step 0e: Issue #1497 item 4 monitoring pass — publish how many plaid_orphaned_items rows are
+	// in each admin state, and the worst UNRESOLVED retry_attempt_count. See
+	// monitorOrphanedPlaidItems's own doc comment for why this pass lives here rather than in the
+	// retry sweep (the manual-intervention population is invisible to that sweep by construction).
+	// Non-fatal for the same reason Steps 0c/0d are: this is an observability check that makes no
+	// write, and must never block GDPR notices or expired-account deletion.
+	if monitorErr := w.monitorOrphanedPlaidItems(ctx, job.ID); monitorErr != nil {
+		w.logger.Error("failed to check the orphaned-Plaid-Item queue",
+			"job_id", job.ID,
+			"error", monitorErr,
 		)
 		// Don't fail job — continue with other steps
 	}
@@ -919,6 +1110,24 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 			"job_id", jobID, "cleared_count", clearedCount)
 	}
 
+	// Issue #1455: the THIRD backstop, closing the invariant's OTHER branch (status NOT ineligible
+	// ⇒ marker must be NULL) — see ClearMarkersOnEligibleStatus's own doc comment
+	// (profile_repository.go) for the full rationale, including the comped-user judgement call.
+	// Runs immediately after the Clear half above, at the very start of every pass, unconditionally
+	// — same non-fatal, Error-plus-counter treatment as its two siblings: this backstop is the ONLY
+	// thing that ever repairs a non-ineligible-status row whose marker was wrongly left set, and a
+	// persistently failing instance of it is a silent grace-window bypass (a later cancellation's
+	// write could inherit the stale marker and skip the 72-hour grace period entirely), not a routine
+	// event.
+	if branch1ClearedCount, branch1Err := w.profileRepo.ClearMarkersOnEligibleStatus(ctx); branch1Err != nil {
+		observability.PlaidCleanupBackstopFailuresTotal.Inc()
+		w.logger.Error("plaid_cleanup_pending_at branch-1 backstop FAILED — a marker left set on a non-ineligible-status row stays stale indefinitely, and a later status transition could inherit a marker already past the 72-hour grace window, disconnecting the user's banks with zero notice; see ClearMarkersOnEligibleStatus's doc comment",
+			"job_id", jobID, "error", branch1Err)
+	} else if branch1ClearedCount > 0 {
+		w.logger.Info("plaid_cleanup_pending_at branch-1 backstop cleared markers on non-ineligible-status rows",
+			"job_id", jobID, "cleared_count", branch1ClearedCount)
+	}
+
 	// A CI finding on this branch's head (fixed alongside Issue #1413 Finding 1, not from the Codex
 	// review itself): through round-10 Fix 1, a nil w.plaidCleanup failed this function AND the whole
 	// job (errPlaidCleanupNotConfigured) — deliberately, to make a missing Plaid dependency loud
@@ -1220,6 +1429,211 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 	return nil
 }
 
+// monitorMalformedTierOverrides is Issue #1453's monitoring pass: reports the current count of
+// users whose manual_tier_override does not name a currently-configured tier
+// (config/subscription_tiers.yaml).
+//
+// Why this exists at all: users.manual_tier_override is an unconstrained VARCHAR(50) with no CHECK
+// constraint — Issue #1453 deliberately did NOT add one, because the tier set lives in
+// config/subscription_tiers.yaml, not the database, and inlining it into schema would duplicate
+// application config and drift the next time a tier is added or renamed. Migration 000127
+// backfilled every row that was ALREADY malformed at the time it ran to NULL, and
+// admin_user_service.go's UpdateUserTier validates every NEW write against tierConfig — but neither
+// of those closes the class permanently the way a CHECK constraint would have: a legacy migration, a
+// direct SQL write, or a write made while tierConfig was nil can all still reintroduce a malformed
+// value, invisibly, with no write-time gate to catch it. This pass is the compensating control:
+// unlike a one-time backfill, it runs on every scheduled pass, so a reintroduced malformed value is
+// visible (MalformedManualTierOverrideCount gauge, plus an Error log line naming the affected user
+// IDs) within one repair-pass interval, not left to be discovered whenever someone happens to query
+// for it by hand.
+//
+// Deliberately non-fatal and does not fail the job, matching every other step in this function:
+// this is an observability check, never a repair (it makes no write), so a failure here must not
+// block the 30-day/7-day GDPR pre-deletion notices or deleteExpiredAccounts for every user.
+//
+// Deliberately a GAUGE (MalformedManualTierOverrideCount), not a counter: this reports how many
+// rows are malformed RIGHT NOW, each pass — it is not a cumulative count of every malformed row ever
+// observed across every pass, which would only ever grow and would misrepresent a single persistent
+// malformed row as "many failures" the longer it goes unnoticed.
+func (w *RetentionCleanupCheckWorker) monitorMalformedTierOverrides(ctx context.Context, jobID int64) error {
+	malformed, err := w.profileRepo.GetUsersWithMalformedTierOverride(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to query for malformed manual_tier_override rows: %w", err)
+	}
+	if malformed == nil {
+		// No validator wired (SetOverrideTierValidator never called on the injected repository) —
+		// "unknown", not "zero found". Skip reporting entirely rather than publish a gauge value of
+		// 0 that would misrepresent an unconfigured check as a clean bill of health. See
+		// GetUsersWithMalformedTierOverride's own doc comment (profile_repository.go) for why this
+		// distinction is load-bearing, not pedantic.
+		w.logger.Warn("skipping malformed manual_tier_override check — no override tier validator configured on the injected repository",
+			"job_id", jobID)
+		return nil
+	}
+
+	observability.MalformedManualTierOverrideCount.Set(float64(len(malformed)))
+	if len(malformed) == 0 {
+		return nil
+	}
+
+	userIDs := make([]string, len(malformed))
+	for i, u := range malformed {
+		userIDs[i] = u.ID
+	}
+	w.logger.Error("found users with a manual_tier_override that does not name a configured tier — this should be impossible after migration 000127; some writer bypassed write-time validation",
+		"job_id", jobID, "count", len(malformed), "user_ids", userIDs)
+	return nil
+}
+
+// monitorOrphanedFKlessRows is Issue #1440 round-3 Finding 5's monitoring pass (Codex review,
+// coordinator's #1440 follow-up brief): reports the current count, per table, of rows in
+// dead_letter_jobs/idempotency_keys/mcp_audit_log — the three user-scoped tables with NO foreign
+// key to users at all — whose user_id/actor_user_id no longer names any real user.
+//
+// Why this exists at all: DeleteUserCascade's own explicit erasure of these three tables runs
+// inside its transaction, immediately before commit (see that method's own "round-3 reordering" doc
+// comment, profile_repository.go), but none of them has any FK to users, so the FOR UPDATE lock
+// that transaction holds on the users row never blocks a concurrent writer (an in-flight MCP audit
+// call, an idempotency write, a River dead-letter insert) from landing in the narrow remaining
+// window before commit. That residual cannot be closed by locking — this transaction cannot take a
+// lock on a table that has no relationship to users at all — so this pass makes it OBSERVABLE
+// instead, on every scheduled run, the same way monitorMalformedTierOverrides above already does for
+// a different, structurally similar residual this codebase accepted it cannot fully prevent at
+// write time.
+//
+// Deliberately non-fatal and does not fail the job, matching every other step in this function:
+// this is an observability check, never a repair (it makes no write), so a failure here must not
+// block the 30-day/7-day GDPR pre-deletion notices or deleteExpiredAccounts for every user.
+//
+// Deliberately GAUGES (OrphanedFKlessUserScopedRowsCount, labeled by table), not counters — mirrors
+// MalformedManualTierOverrideCount's own reasoning: this reports how many rows are orphaned RIGHT
+// NOW, each pass, not a cumulative total of every orphan ever observed across every pass.
+//
+// idempotency_keys is expected to read 0 within 24h of any transient non-zero reading regardless —
+// IdempotencyCleanupWorker (jobs/idempotency_cleanup.go) sweeps every row past its own TTL daily,
+// independent of this pass entirely — but dead_letter_jobs and mcp_audit_log have no such backstop,
+// so a sustained non-zero reading for either requires an operator to act on what this pass surfaces.
+func (w *RetentionCleanupCheckWorker) monitorOrphanedFKlessRows(ctx context.Context, jobID int64) error {
+	counts, err := w.profileRepo.GetOrphanedFKlessUserScopedRowCounts(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to query for orphaned FK-less user-scoped rows: %w", err)
+	}
+
+	observability.OrphanedFKlessUserScopedRowsCount.WithLabelValues("dead_letter_jobs").Set(float64(counts.DeadLetterJobs))
+	observability.OrphanedFKlessUserScopedRowsCount.WithLabelValues("idempotency_keys").Set(float64(counts.IdempotencyKeys))
+	observability.OrphanedFKlessUserScopedRowsCount.WithLabelValues("mcp_audit_log").Set(float64(counts.MCPAuditLog))
+
+	if counts.DeadLetterJobs == 0 && counts.IdempotencyKeys == 0 && counts.MCPAuditLog == 0 {
+		return nil
+	}
+
+	w.logger.Warn("found rows in FK-less user-scoped tables whose user_id/actor_user_id no longer names any real user — residue of a concurrent write racing DeleteUserCascade's own erasure of these tables",
+		"job_id", jobID,
+		"dead_letter_jobs_orphaned", counts.DeadLetterJobs,
+		"idempotency_keys_orphaned", counts.IdempotencyKeys,
+		"mcp_audit_log_orphaned", counts.MCPAuditLog,
+	)
+	return nil
+}
+
+// monitorOrphanedPlaidItems is Issue #1497 item 4's monitoring pass — THE ITEM #1497'S OWN TITLE
+// NAMES ("alerting on repeated re-attempts"), which two earlier passes over that ticket both missed.
+//
+// WHAT WAS MISSING. plaid_orphaned_items.retry_attempt_count is incremented by
+// plaidOrphanedItemRepository.RecordRetryFailure on every failed automated removal, and until this
+// pass it was read by NO METRIC ANYWHERE: jobs/plaid_orphan_retry.go emits only the generic
+// JobsCompleted / JobDuration every River worker emits, both of which report a HEALTHY sweep for a
+// run in which every single Item failed. So an erased user's Plaid Item could be re-attempted daily
+// for a month, or sit needing a human indefinitely, with nothing anywhere reporting either fact.
+//
+// ⚠ WHY THIS PASS LIVES HERE AND NOT IN THE RETRY SWEEP, which is where the ticket's own wording
+// points. It is forced, not chosen: the manual-intervention population is INVISIBLE to that sweep by
+// construction. GetRetryablePage selects only rows holding a live, unexpired credential, which is
+// exactly the COMPLEMENT of "nothing automated will finish this" — a gauge published from the sweep
+// could never read anything but zero for the number that matters most. The whole-table read this
+// needs is repository.List, and this worker is already where this codebase publishes DB-derived
+// monitoring gauges (Step 0c monitorMalformedTierOverrides, Step 0d monitorOrphanedFKlessRows). Its
+// cadence also matches the retry sweep's own daily cadence, so a gauge over attempt counts is
+// refreshed exactly as often as those counts can change. This pass touches neither sweep, neither
+// deadline, and makes no write.
+//
+// ⚠ THE DERIVATION IS SHARED, NOT DUPLICATED. domain.SummarisePlaidOrphanedItems is the same
+// function SystemHealthService.getPlaidOrphanedItemMetrics calls for /admin/health's JSON. Two
+// derivations of one state is how a dashboard and an alert come to disagree — and see that function
+// for why the state cannot be a SQL COUNT at all (one of AdminState's checks depends on whether
+// THIS PROCESS can decrypt the ciphertext, which no predicate over the table can see).
+//
+// ⚠ NOTHING IS PUBLISHED ON A FAILED OR TRUNCATED READ. Setting the gauges to 0 in either case would
+// tell an alert "no erased user's Plaid Item needs a human", which is a claim nothing checked — the
+// Prometheus-side twin of domain.PlaidOrphanedItemMetrics.Available, and the same "unknown != zero"
+// rule Step 0c already applies to its own unconfigured case. The gauges keep their last reading, so
+// staleness/absent() plus the Error log are what report the breakage. See
+// observability.PlaidOrphanedItemsByAdminState for the intended alert rules, which live in prose
+// because this repo has no alert-rule file to put them in.
+//
+// Deliberately GAUGES, not counters, and deliberately reset to 0 on a clean table: an operator who
+// actually removes every outstanding Item must see the alert CLEAR. A counter, or a gauge only ever
+// written when non-zero, would latch forever — this branch's signature defect (a mark that outlives
+// the work) in alerting form.
+func (w *RetentionCleanupCheckWorker) monitorOrphanedPlaidItems(ctx context.Context, jobID int64) error {
+	if w.plaidOrphanedItemRepo == nil {
+		// Unwired, not clean. Publishing zeroes here would be a green reading produced by the absence
+		// of a check — exactly what Step 0c refuses for its own unconfigured case.
+		w.logger.Warn("skipping the orphaned-Plaid-Item monitoring pass — no plaid_orphaned_items repository is wired, so the state and re-attempt gauges are left unpublished rather than reported as zero",
+			"job_id", jobID)
+		return nil
+	}
+
+	items, total, err := w.plaidOrphanedItemRepo.List(ctx, domain.PlaidOrphanedItemHealthScanCap, 0)
+	if err != nil {
+		return fmt.Errorf("failed to read plaid_orphaned_items for the state/re-attempt gauges: %w", err)
+	}
+	// Bounded by the SAME cap check the /admin/health derivation uses (see
+	// domain.SummarisePlaidOrphanedItemsBounded). Past the cap nothing is published at all: a count
+	// over the first 500 of N rows would UNDERSTATE the manual-intervention population, which is the
+	// one direction this gauge must never err in.
+	summary, err := domain.SummarisePlaidOrphanedItemsBounded(items, total, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+
+	observability.PlaidOrphanedItemsByAdminState.
+		WithLabelValues(string(domain.OrphanedItemAutoRetrying)).Set(float64(summary.AutoRetrying))
+	observability.PlaidOrphanedItemsByAdminState.
+		WithLabelValues(string(domain.OrphanedItemManualInterventionRequired)).Set(float64(summary.ManualInterventionRequired))
+	observability.PlaidOrphanedItemsByAdminState.
+		WithLabelValues(string(domain.OrphanedItemResolved)).Set(float64(summary.Resolved))
+	// ⚠ EVERY domain.OrphanedItemAdminState MUST BE SET HERE, and the compiler will not say so — this
+	// enumeration is by hand, and a GaugeVec label that is never Set simply does not exist in the
+	// scrape. A state omitted here therefore does not fail loudly: its rows vanish, and these gauges
+	// silently stop summing to the population. operator_attested (Issue #1497 item 2) is the fourth.
+	observability.PlaidOrphanedItemsByAdminState.
+		WithLabelValues(string(domain.OrphanedItemOperatorAttested)).Set(float64(summary.OperatorAttested))
+	// .WithLabelValues() with no labels: an observability.UnmeasuredGauge, absent from the scrape
+	// until this line runs, so a process that has not yet completed a pass reports nothing rather than
+	// a fabricated 0. See its declaration for why this gauge in particular needed it.
+	observability.PlaidOrphanedItemMaxRetryAttempts.WithLabelValues().Set(float64(summary.MaxUnresolvedRetryAttemptCount))
+
+	if summary.ManualInterventionRequired == 0 {
+		return nil
+	}
+
+	// Logged as well as gauged, because a gauge nobody has wired an alert to is still invisible —
+	// and this repo has no alert-rule file yet (see observability.PlaidOrphanedItemsByAdminState).
+	// plaid_item_id is deliberately NOT logged: it is the identifier an operator needs, and the admin
+	// view at /api/v1/admin/plaid-orphaned-items is the authenticated surface that carries it. A log
+	// line is not that surface.
+	w.logger.Warn("Plaid Items stranded by a GDPR erasure need MANUAL removal in Plaid's dashboard — nothing automated will finish these, and each one may still be billing",
+		"job_id", jobID,
+		"manual_intervention_required", summary.ManualInterventionRequired,
+		"auto_retrying", summary.AutoRetrying,
+		"resolved", summary.Resolved,
+		"operator_attested", summary.OperatorAttested,
+		"max_unresolved_retry_attempts", summary.MaxUnresolvedRetryAttemptCount,
+	)
+	return nil
+}
+
 // clearPlaidCleanupMarkerWithRetry retries ClearPlaidCleanupPendingIfMatches up to
 // plaidCleanupMarkerClearMaxAttempts times with exponential backoff (plaidCleanupMarkerClearBackoff)
 // between attempts — see plaidCleanupMarkerClearMaxAttempts/plaidCleanupMarkerClearRetryDelay's doc
@@ -1276,25 +1690,119 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 		return nil
 	}
 
-	users, err := w.profileRepo.GetUsersWithExpiredRetention(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to fetch users with expired retention: %w", err)
+	// Issue #1477: resume where the last CAPPED run stopped, instead of restarting from the oldest
+	// expired row every time. See sweep_resume.go and repository/sweep_cursor_repository.go for the
+	// design, the two reset rules, and the starvation guarantee stated with its bound.
+	resume := newSweepResume(ctx, w.sweepCursors, repository.SweepCursorExpiredRetention, w.logger, jobID)
+	cursor := retentionCursorFrom(resume.start)
+	var reached repository.SweepPosition
+	cappedStop := false
+
+	var totalUsers, deletedCount, errorCount int
+
+	for {
+		users, err := w.profileRepo.GetUsersWithExpiredRetentionPage(ctx, cursor, w.expiredRetentionPageSize)
+		if err != nil {
+			return fmt.Errorf("failed to fetch users with expired retention: %w", err)
+		}
+
+		if len(users) == 0 {
+			// An empty page at a RESUMED position means the persisted cursor is past the end, not
+			// that there is no work: clear it and re-query from the beginning within this same run.
+			if resume.WrapNow(ctx, totalUsers) {
+				cursor = nil
+				continue
+			}
+			break
+		}
+
+		// fetchedCount is the page length AS RETURNED by the repository, before the cap truncation
+		// below — the only reliable signal for whether the repository itself is exhausted
+		// (fetchedCount < pageSize means it had nothing left to give, regardless of the cap).
+		fetchedCount := len(users)
+
+		// maxUsersPerRetentionSweep: truncate the page now if it would push totalUsers to or past
+		// the cap, so the loop below never hard-deletes more than the cap allows — "at most
+		// maxUsersPerRetentionSweep deletions", not "cap-or-more".
+		if remaining := w.maxUsersPerRetentionSweep - totalUsers; fetchedCount >= remaining {
+			// remaining <= 0 is unreachable given the break at the bottom of this loop, but
+			// users[:remaining] would panic on a negative length, so it is guarded explicitly.
+			if remaining <= 0 {
+				break
+			}
+			users = users[:remaining]
+		}
+
+		totalUsers += len(users)
+		w.logger.Info("found users with expired retention", "job_id", jobID, "user_count", len(users))
+
+		lastUser := users[len(users)-1]
+		w.deleteExpiredAccountPage(ctx, jobID, users, &deletedCount, &errorCount)
+
+		// The cursor advances past every row this page yielded AFTER the cap truncation above — i.e.
+		// past the last row actually processed, not necessarily the last row the repository returned.
+		// Those are the same row except on a page the cap truncated, and on that page the loop always
+		// breaks below, so the difference is never observable. What matters is that it advances past
+		// rows the loop SKIPPED (manual override) or FAILED to delete: that is the whole point of a
+		// keyset cursor here — a row that is eligible by the query's predicate but cannot actually be
+		// deleted must not occupy the oldest slot of every subsequent page within this run.
+		lastExpiresAt := derefRetentionExpiresAt(lastUser)
+		cursor = &repository.RetentionSweepCursor{
+			ExpiresAt: lastExpiresAt,
+			UserID:    lastUser.ID,
+		}
+		// reached records only the TIMESTAMP half of that position — never lastUser.ID. That is the
+		// whole reason sweep_cursors can outlive the GDPR erasure this loop body performs: see
+		// repository/sweep_cursor_repository.go's header.
+		reached = repository.SweepPosition{TS1: &lastExpiresAt}
+
+		// exhausted is computed from fetchedCount (pre-truncation) so it reflects what the
+		// REPOSITORY said, even on a page that also happens to trip the cap.
+		exhausted := fetchedCount < w.expiredRetentionPageSize
+
+		// Cap hit: stop THIS run's deletion step — but only WARN when the repository had not
+		// already told us it was exhausted. A genuinely short final page that happens to land
+		// exactly on the cap has no remainder to defer, and warning about one would be a false
+		// alarm (the same boundary case pinned for the scheduled-deletion sweep).
+		if totalUsers >= w.maxUsersPerRetentionSweep && !exhausted {
+			w.logger.Warn("expired-retention deletion sweep hit its total-processed safety cap; deferring remainder to the next periodic run",
+				"job_id", jobID, "processed", totalUsers, "cap", w.maxUsersPerRetentionSweep)
+			cappedStop = true
+			break
+		}
+
+		if exhausted {
+			break
+		}
 	}
 
-	if len(users) == 0 {
+	// Persist the remainder position (cap hit) or clear it (end of set reached) — Issue #1477.
+	resume.Finish(ctx, cappedStop, reached)
+
+	if totalUsers == 0 {
 		w.logger.Info("no users with expired retention", "job_id", jobID)
 		return nil
 	}
 
-	w.logger.Info("found users with expired retention", "job_id", jobID, "user_count", len(users))
+	w.logger.Info("retention deletions processed",
+		"job_id", jobID, "deleted", deletedCount, "errors", errorCount)
+	if errorCount > 0 {
+		return fmt.Errorf("retention deletion: %d of %d deletions failed (see logs for details)", errorCount, totalUsers)
+	}
+	return nil
+}
 
-	var deletedCount, errorCount int
+// deleteExpiredAccountPage runs the per-user hard-delete step for one page of expired-retention
+// candidates. Split out of deleteExpiredAccounts (Issue #1478) purely so the pagination/cap
+// bookkeeping and the per-user deletion logic stay separately readable; the body is unchanged.
+func (w *RetentionCleanupCheckWorker) deleteExpiredAccountPage(ctx context.Context, jobID int64, users []*domain.User, deletedCount, errorCount *int) {
 	for _, user := range users {
 		// #1413 Critical finding C1 (third round of remediation): belt-and-braces hard-delete
 		// guard — a user with ANY manual tier override, live or lapsed-but-uncleared, must never
 		// be auto-deleted. This MUST use HasAnyManualOverride (not HasActiveManualOverride) to
 		// agree with the retention queries (noManualOverrideAtAllPredicate) and with
-		// claimForDeletionPredicate, which ExecuteDeletion's own claim now enforces — using the
+		// retentionDeletionClaimPredicate — the retention-kind claim predicate ExecuteDeletion's
+		// own claim enforces for the DeletionKindRetention call below — using the
 		// live-only check here was exactly the bug this fix closes: a comp that lapsed moments
 		// before the independently-scheduled expiry job clears the column would pass this guard
 		// and reach ExecuteDeletion. The real enforcement is still ExecuteDeletion's claim; this
@@ -1306,23 +1814,46 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 			continue
 		}
 
-		if deleteErr := w.deletionService.ExecuteDeletion(ctx, user.ID); deleteErr != nil {
+		// repository.DeletionKindRetention, never DeletionKindUserRequested: these candidates come
+		// from GetUsersWithExpiredRetention, which selects on retention_expires_at and explicitly
+		// filters deletion_requested_at IS NULL — nobody asked for these deletions. The retention
+		// claim predicate re-verifies exactly that, plus the no-override-at-all rule this
+		// belt-and-braces guard above mirrors. Passing the user-requested kind here would refuse
+		// every legitimate retention deletion (no request exists to satisfy it) AND, worse, would
+		// be authorised for any user who happened to have an elapsed request — bypassing the
+		// deliberate separation of the two authorisations.
+		if deleteErr := w.deletionService.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention); deleteErr != nil {
 			w.logger.Error("failed to execute retention deletion",
 				"job_id", jobID, "user_id", user.ID, "error", deleteErr)
-			errorCount++
+			*errorCount++
 			continue
 		}
 
 		w.logger.Info("retention deletion executed", "job_id", jobID, "user_id", user.ID)
-		deletedCount++
+		*deletedCount++
 	}
+}
 
-	w.logger.Info("retention deletions processed",
-		"job_id", jobID, "deleted", deletedCount, "errors", errorCount)
-	if errorCount > 0 {
-		return fmt.Errorf("retention deletion: %d of %d deletions failed (see logs for details)", errorCount, len(users))
+// derefRetentionExpiresAt safely reads user.RetentionExpiresAt for cursor advancement.
+// GetUsersWithExpiredRetentionPage's WHERE clause guarantees every returned row has a non-nil
+// RetentionExpiresAt, but this stays defensive rather than assuming that invariant holds forever
+// (e.g. under a future test double that does not enforce it).
+//
+// What the zero-time fallback actually costs, stated fully: it never makes the sweep MISS a row (the
+// cursor's ExpiresAt component only becomes more permissive), but it does stop the cursor ADVANCING —
+// with a zero ExpiresAt, the tuple's first element decides every (retention_expires_at, id) > ($1, $2)
+// comparison, so the query keeps returning the head page and this run spends its whole
+// maxUsersPerRetentionSweep budget re-reading the same rows. That is bare-LIMIT starvation, which is
+// the exact failure #1478 exists to remove, so the fallback is a safety net against a panic, NOT a
+// tolerable steady state. TestRetentionCleanupCheckWorker_DeleteExpiredAccounts_PagesPastFirstBatch
+// and _StopsAtTotalProcessedCap both assert the ExpiresAt component of the cursor this function
+// feeds, precisely so a regression here cannot pass silently. Mirrors derefDeletionScheduledAt
+// (scheduled_deletion_check.go), which has the same caveat.
+func derefRetentionExpiresAt(user *domain.User) time.Time {
+	if user.RetentionExpiresAt == nil {
+		return time.Time{}
 	}
-	return nil
+	return *user.RetentionExpiresAt
 }
 
 // RetentionCleanupCheckUniqueOpts returns the recommended uniqueness options.
@@ -1409,17 +1940,24 @@ func RetentionCleanupCheckInsertOpts() *river.InsertOpts {
 // state: "anytime a process quits or a new leader is elected, the whole process starts over
 // without regard for the state of the last scheduler." Concretely (river v0.38.0
 // internal/maintenance/periodic_job_enqueuer.go:409-414), nextRunAt is restored from persisted
-// state only when PeriodicJobOpts.ID is set — this job (like all 14 in main.go) leaves ID
-// unset — so nextRunAt is always recomputed as ScheduleFunc(now), i.e. now+24h. :424-426 skips
-// the catch-up insert entirely when RunOnStart is false. Since this repo deploys several times
-// a day, every deploy or leader election pushes the target time forward another 24h before it
-// is ever reached: RunOnStart: false let this daily job be enqueued zero times, ever.
+// state only when PeriodicJobOpts.ID is set — at the time this comment was first written,
+// this job (like all 14 in main.go) left ID unset, so nextRunAt was always recomputed as
+// ScheduleFunc(now), i.e. now+24h. Issue #1448 fixed that for all 14 (see
+// RetentionCleanupCheckPeriodicOpts below). :424-426 skips the catch-up insert entirely when
+// RunOnStart is false. Since this repo deploys several times a day, every deploy or leader
+// election used to push the target time forward another 24h before it was ever reached:
+// RunOnStart: false let this daily job be enqueued zero times, ever.
 //
 // RunOnStart: true is only safe here because RetentionCleanupCheckUniqueOpts()'s ByPeriod/
 // ByState dedup — carried into the InsertOpts this job's periodic registration in main.go
 // builds — prevents a start-of-process catch-up run from double-firing alongside an
 // already-scheduled run. The two are only safe together: do not flip this to true for a job
 // whose InsertOpts lacks an equivalent UniqueOpts.
+//
+// Issue #1448: ID is now set (Kind()'s own "retention_cleanup_check" string) so River
+// restores nextRunAt across restarts/leader elections instead of recomputing now+interval
+// every time — this function's own doc history previously said this job "leaves ID unset"
+// like all 14 in main.go; that is no longer true for this job, or for the other 13.
 func RetentionCleanupCheckPeriodicOpts() *river.PeriodicJobOpts {
-	return &river.PeriodicJobOpts{RunOnStart: true}
+	return &river.PeriodicJobOpts{RunOnStart: true, ID: RetentionCleanupCheckArgs{}.Kind()}
 }
