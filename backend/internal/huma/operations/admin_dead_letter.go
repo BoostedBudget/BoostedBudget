@@ -319,10 +319,6 @@ func (h *AdminHandler) BulkDeleteDLQJobs(ctx context.Context, input *BulkDeleteD
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
-	if matching == 0 {
-		// Nothing to delete, and no count for the caller to confirm.
-		return &BulkDeleteDLQJobsOutput{Body: &domain.DeadLetterBulkDeleteResponse{Deleted: 0}}, nil
-	}
 	// A SUPPLIED confirmation is honoured wherever it appears, not only above the ceiling.
 	// The EE re-review found the equality gated on `matching > ceiling`, so a caller who sent
 	// expected_count=1 against filters matching 100 rows had all 100 deleted — while
@@ -333,6 +329,13 @@ func (h *AdminHandler) BulkDeleteDLQJobs(ctx context.Context, input *BulkDeleteD
 		return nil, huma.Error409Conflict(fmt.Sprintf(
 			"these filters match %d dead letter jobs, not the %d confirmed; resend with expected_count=%d to confirm",
 			matching, *req.ExpectedCount, matching))
+	}
+	// AFTER the equality, not before it (second re-review Low): a zero-match early success sat
+	// ahead of the check, so expected_count=1 against zero rows answered 200/deleted=0 and a
+	// caller who believed a row existed was told the delete had succeeded.
+	if matching == 0 {
+		// Nothing to delete, and — the confirmation having already agreed — nothing to confirm.
+		return &BulkDeleteDLQJobsOutput{Body: &domain.DeadLetterBulkDeleteResponse{Deleted: 0}}, nil
 	}
 	if matching > MaxUnconfirmedDLQBulkDelete && req.ExpectedCount == nil {
 		return nil, huma.Error409Conflict(fmt.Sprintf(
