@@ -393,13 +393,42 @@ func (r *DeadLetterJobRepository) AddNotes(ctx context.Context, id int64, notes 
 	return err
 }
 
+
+// replayResolvedPredicate is the single definition of "this DLQ row's replay actually happened",
+// shared by GetStats and GetOldestJobAge so the success count and the age alarm can never disagree
+// about it — round 15, Tier E item 6.
+//
+// ⚠ `retried_at IS NOT NULL` ALONE IS NOT THAT QUESTION, and reading it as if it were is the defect.
+// The pre-#1508 two-commit path could commit the claim (retried_at set) with the id write never
+// landing, leaving the row at the retry_job_id = 0 placeholder — a state BeginRetryTx's own comment
+// describes as undecidable: the column cannot say whether a live River job sits behind it. Those
+// rows are historical and no new one can be created (AtomicMarkRetriedInTx and MarkRetriedInTx now
+// commit together or not at all), but the ones that exist were being read in the two most flattering
+// ways simultaneously:
+//
+//   - GetStats counted them under `retried`, i.e. as SUCCESSES. A row whose replay demonstrably did
+//     not complete was inflating the number an operator reads as "how many of these we recovered".
+//   - GetOldestJobAge's `WHERE retried_at IS NULL` filtered them OUT of the age alarm. So the one
+//     signal that says "something has been sitting in the dead letter queue too long" was blind to
+//     precisely the rows that are stuck with nobody looking at them.
+//
+// Both now use this predicate instead: a stranded row is not a success and it is not resolved, so it
+// counts as neither, and the age alarm sees it.
+//
+// ⚠ NO REAPER, AND THAT IS DELIBERATE. #1508 is explicit that these rows cannot be released
+// automatically without risking a double-enqueue of a job that may still be running. This change
+// makes them VISIBLE; deciding what to do with each one stays a human's job, which is what a dead
+// letter queue is for. The age alarm is clearable by an operator resolving or deleting the row —
+// it is not an alarm with no action behind it.
+const replayResolvedPredicate = `(retried_at IS NOT NULL AND retry_job_id IS NOT NULL AND retry_job_id <> 0)`
+
 // GetStats returns statistics about dead letter jobs.
 func (r *DeadLetterJobRepository) GetStats(ctx context.Context) (*DeadLetterStats, error) {
 	query := `
 		SELECT
 			COUNT(*) as total,
 			COUNT(*) FILTER (WHERE notified = FALSE AND user_id IS NOT NULL) as unnotified,
-			COUNT(*) FILTER (WHERE retried_at IS NOT NULL) as retried,
+			COUNT(*) FILTER (WHERE ` + replayResolvedPredicate + `) as retried,
 			COUNT(*) FILTER (WHERE failed_at > NOW() - INTERVAL '24 hours') as last_24h
 		FROM dead_letter_jobs`
 
@@ -442,13 +471,16 @@ func (r *DeadLetterJobRepository) GetStatsByKind(ctx context.Context) (map[strin
 	return stats, rows.Err()
 }
 
-// GetOldestJobAge returns the age in hours of the oldest unretried dead letter job.
-// Returns 0 if no unretried jobs exist.
+// GetOldestJobAge returns the age in hours of the oldest UNRESOLVED dead letter job.
+// Returns 0 if none exist.
+//
+// "Unresolved" is replayResolvedPredicate's complement, not `retried_at IS NULL` — see that const
+// for why the two differ and which rows fell through the gap (round 15, Tier E item 6).
 func (r *DeadLetterJobRepository) GetOldestJobAge(ctx context.Context) (int64, error) {
 	query := `
 		SELECT COALESCE(EXTRACT(epoch FROM (NOW() - MIN(failed_at)))::BIGINT / 3600, 0)
 		FROM dead_letter_jobs
-		WHERE retried_at IS NULL
+		WHERE NOT ` + replayResolvedPredicate + `
 	`
 
 	var ageHours int64

@@ -22,7 +22,10 @@ import {
     mockUseRemoveAdminUserTierOverride,
 } from '@/test/mocks/admin-subscriptions-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { getListAdminUsersQueryKey } from '@boostedbudget/api-client/endpoints/admin/admin'
+import {
+    getListAdminUsersQueryKey,
+    getGetAdminUserDetailQueryKey,
+} from '@boostedbudget/api-client/endpoints/admin/admin'
 import { useAdminSubscriptionDetail, useUpdateUserTier, useRemoveUserTierOverride } from './useAdminSubscription'
 import { ReactNode } from 'react'
 
@@ -106,6 +109,37 @@ describe('useUpdateUserTier', () => {
             queryKey: getListAdminUsersQueryKey(),
         })
     })
+
+    // Round 15, Tier E item 3. React Query invalidation is a PREFIX match over the key ARRAY, and
+    // these two keys share no prefix: ['/api/v1/admin/users'] vs ['/api/v1/admin/users/user-xyz'] —
+    // one element each, different elements. So invalidating the list did NOT refetch the user
+    // detail, and UserDetailModal — the modal the override is applied from — kept showing the
+    // pre-override tier, under a SnapshotAgeLabel reading seconds because `as_of` came from that
+    // same stale response.
+    //
+    // ⚠ The assertion is on the exact key, not on a call count: a test that only counted
+    // invalidations would already have passed against the two that were there.
+    it('invalidates the user DETAIL query key on success — the list key does not cover it', () => {
+        mockUseUpdateAdminUserTier.mockReturnValue({ mutate: () => { }, isPending: false })
+        const { wrapper, qc } = createWrapperWithClient()
+        const invalidateSpy = spyOn(qc, 'invalidateQueries')
+
+        renderHook(() => useUpdateUserTier('user-xyz'), { wrapper })
+
+        const options = mockUseUpdateAdminUserTier.mock.calls.at(-1)?.[0] as MutationOptionsArg | undefined
+        options?.mutation?.onSuccess?.()
+
+        expect(invalidateSpy).toHaveBeenCalledWith({
+            queryKey: getGetAdminUserDetailQueryKey('user-xyz'),
+        })
+    })
+
+    // ⚠ SIBLING: the two keys really are distinct, which is the whole premise. If a future
+    // regeneration ever made the detail key a prefix-extension of the list key, the assertion above
+    // would start passing for the wrong reason and this would fail instead.
+    it('the user detail key is not reachable by a prefix match on the list key', () => {
+        expect(getGetAdminUserDetailQueryKey('user-xyz')[0]).not.toBe(getListAdminUsersQueryKey()[0])
+    })
 })
 
 describe('useRemoveUserTierOverride', () => {
@@ -154,6 +188,24 @@ describe('useRemoveUserTierOverride', () => {
 
         expect(invalidateSpy).toHaveBeenCalledWith({
             queryKey: getListAdminUsersQueryKey(),
+        })
+    })
+
+    // Round 15, Tier E item 3 — stated for REMOVE as well as APPLY. Removing a comp is the same
+    // stale-tier symptom in the opposite direction, and a fix scoped to the apply mutation only
+    // would leave it live.
+    it('invalidates the user DETAIL query key on success — the list key does not cover it', () => {
+        mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: () => { }, isPending: false })
+        const { wrapper, qc } = createWrapperWithClient()
+        const invalidateSpy = spyOn(qc, 'invalidateQueries')
+
+        renderHook(() => useRemoveUserTierOverride('user-xyz'), { wrapper })
+
+        const options = mockUseRemoveAdminUserTierOverride.mock.calls.at(-1)?.[0] as MutationOptionsArg | undefined
+        options?.mutation?.onSuccess?.()
+
+        expect(invalidateSpy).toHaveBeenCalledWith({
+            queryKey: getGetAdminUserDetailQueryKey('user-xyz'),
         })
     })
 })

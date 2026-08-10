@@ -6,6 +6,8 @@
  */
 
 import { useState, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { RefreshCw, AlertCircle, Webhook } from 'lucide-react'
@@ -13,7 +15,10 @@ import {
   useListAdminPaddleWebhooks,
   useGetAdminPaddleWebhookStats,
   useReplayAdminPaddleWebhook,
+  getListAdminPaddleWebhooksQueryKey,
+  getGetAdminPaddleWebhookStatsQueryKey,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
+import { mutationFailureMessage } from '../lib/mutationFailureMessage'
 import { SummaryCard } from '@/features/admin'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -69,7 +74,34 @@ export function WebhooksPage() {
     { query: { refetchInterval: autoRefresh ? 30000 : false } }
   )
 
+  const queryClient = useQueryClient()
   const replayMutation = useReplayAdminPaddleWebhook()
+
+  // Issue #1496, round 15 (Tier E item 2). This mutation was invoked as `.mutate({ id })` with NO
+  // options object at all — no onSuccess, no onError, no invalidation. It is the identical defect
+  // #1496 already fixed six times over on the DLQ mutations, left live on the two Paddle replays,
+  // and the fix here is a copy of that one rather than a redesign.
+  //
+  // The symptom is the worse half of #1496 twice over: a rejected replay looked exactly like a
+  // successful one, AND a SUCCESSFUL replay changed processed/attempts/processing_error on the row
+  // and the processed/failed counts in the summary cards with nothing refetching either — so the
+  // operator waited out the 30s poll, or, with auto-refresh off, saw the stale row indefinitely and
+  // clicked Replay again.
+  const handleReplay = (webhookId: string, eventType: string) => {
+    replayMutation.mutate({ id: webhookId }, {
+      onSuccess: () => {
+        trackEvent(ANALYTICS_EVENTS.ADMIN_WEBHOOK_REPLAY, { event_type: eventType })
+        // The Paddle event id is a per-customer identifier and must not go into a toast any more
+        // than into an aria-label; the event TYPE is the non-PII operational fact.
+        toast.success(`${eventType} webhook replayed`)
+        void queryClient.invalidateQueries({ queryKey: getListAdminPaddleWebhooksQueryKey() })
+        void queryClient.invalidateQueries({ queryKey: getGetAdminPaddleWebhookStatsQueryKey() })
+      },
+      onError: (err) => {
+        toast.error(`Failed to replay ${eventType} webhook: ${mutationFailureMessage(err)}`)
+      },
+    })
+  }
 
   const events = data?.Events ?? []
   const total = data?.Total ?? 0
@@ -324,7 +356,7 @@ export function WebhooksPage() {
               <button
                 type="button"
                 className="inline-flex items-center px-2.5 py-1.5 border border-border rounded-md bg-background text-foreground text-[0.8125rem] font-medium cursor-pointer font-[inherit] transition-colors hover:bg-primary hover:border-primary hover:text-primary-foreground disabled:opacity-45 disabled:cursor-not-allowed"
-                onClick={() => replayMutation.mutate({ id: event.id ?? '' })}
+                onClick={() => handleReplay(event.id ?? '', event.event_type ?? '')}
                 disabled={replayMutation.isPending}
                 // Structural label, NOT a mask: data-ph-mask covers text nodes only —
                 // PostHog session replay records DOM attributes verbatim
