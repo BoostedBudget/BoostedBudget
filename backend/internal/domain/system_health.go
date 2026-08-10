@@ -35,9 +35,11 @@ type SystemHealthResponse struct {
 	// full read via domain.SummarisePlaidOrphanedItems; see that function for why one of
 	// AdminState's four checks makes a SQL COUNT impossible.
 	PlaidOrphanedItems PlaidOrphanedItemMetrics `json:"plaid_orphaned_items"`
-	// DeletionResidue is the count of GDPR deletions that were revoked AFTER already cancelling the
-	// user's Paddle subscription (Issue #1504) — users who kept their account and all their data and
-	// have no subscription. Derived by a single indexed COUNT over the audit_logs rows
+	// DeletionResidue is the count of OPEN records that a GDPR deletion issued an irreversible
+	// external Paddle call — a subscription cancel, or the customer archive-and-anonymise nobody can
+	// undo — against a user who then survived the run (Issue #1504; widened in round 15, which also
+	// made a completed deletion retract its own records). Derived by a single indexed COUNT over the
+	// audit_logs rows
 	// repository.ProfileRepository.RecordDeletionResidue writes; see
 	// repository.JobHealthRepository.GetDeletionResidueStats.
 	DeletionResidue DeletionResidueMetrics `json:"deletion_residue"`

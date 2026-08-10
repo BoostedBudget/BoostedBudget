@@ -161,10 +161,13 @@ var (
 	})
 
 	// DeletionResidueRecords and DeletionResidueNewestSeconds are Issue #1504's alerting half. One
-	// residue record means a GDPR deletion was revoked AFTER the user's Paddle subscription-cancel call
-	// had already landed: the user keeps their account and all their data and has NO subscription.
-	// Nothing automated can restore it — re-subscribing somebody automatically would be a worse failure
-	// than telling a human, which is why this is a metric and not a repair job.
+	// residue record means a GDPR deletion ISSUED an irreversible external call against the user's
+	// Paddle account — the subscription cancel, or (since round 15's finding A1) the customer
+	// archive-and-anonymise, which is the one act this codebase describes as unrecoverable — and the
+	// run then ended with the user still here: they keep their account and all their data, and
+	// something was done to them that they did not ask for. Nothing automated can restore it —
+	// re-subscribing somebody automatically would be a worse failure than telling a human, which is
+	// why this is a metric and not a repair job.
 	//
 	// Both are refreshed together from repository.JobHealthRepository.GetDeletionResidueStats (see
 	// cmd/server/main.go's startJobHealthMetricsCollector, for the same import-cycle reason the two
@@ -206,12 +209,21 @@ var (
 	//	absent(deletion_residue_records)
 	//	  for: 1h
 	//
-	// ⚠ NO `for:` ON THE FIRST RULE, deliberately. increase() over a monotonic gauge is a transient:
-	// it returns to 0 once the step leaves the window, so a `for:` longer than the window would
+	// ⚠ NO `for:` ON THE FIRST RULE, deliberately. increase() over this gauge is a transient: it
+	// returns to 0 once the step leaves the window, so a `for:` longer than the window would
 	// guarantee the alert never fires at all.
+	//
+	// ⚠ ROUND 15: THIS GAUGE IS NO LONGER MONOTONIC, AND THAT IS A FEATURE. Residue records are now
+	// written when each irreversible external call is ISSUED and retracted by DeleteUserCascade
+	// inside the transaction that deletes the user, so a run that failed and was later retried
+	// successfully makes the count go DOWN — the work item was resolved. No reader ever observes an
+	// in-flight ordinary deletion's rows, because the write and the retraction are separated by a
+	// commit boundary, not by a scrape interval. Practical consequence for anyone writing the rule:
+	// `increase()` still catches every new incident, and a drop means "an operator's work item went
+	// away by itself", which is the outcome the mechanism wants and not a signal to alert on.
 	DeletionResidueRecords = UnmeasuredGauge(prometheus.GaugeOpts{
 		Name: "deletion_residue_records",
-		Help: "All-time number of GDPR deletions revoked AFTER the user's Paddle subscription had already been cancelled (audit_logs action prefix user.deletion_residue.). Every one is a user who kept their account and lost their subscription. Monotonic — alert on increase(), not on > 0. Absent until the collector has actually read the database (never a startup zero, which increase() would misread as new incidents), so alert on absence too.",
+		Help: "Number of OPEN records that a GDPR deletion issued an irreversible external Paddle call — a subscription cancel or a customer archive-and-anonymise — against a user who then survived the run (audit_logs action prefix user.deletion_residue.). Every one is a user who kept their account and had something done to their Paddle account that they did not ask for. NOT monotonic: a later run that completes the deletion retracts its own records. Alert on increase(), not on > 0. Absent until the collector has actually read the database (never a startup zero, which increase() would misread as new incidents), so alert on absence too.",
 	})
 	DeletionResidueNewestSeconds = UnmeasuredGauge(prometheus.GaugeOpts{
 		Name: "deletion_residue_newest_seconds",

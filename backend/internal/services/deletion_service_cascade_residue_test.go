@@ -99,13 +99,31 @@ func TestExecuteDeletion_CascadeFailsWithConstraintOrTrigger_RecordsTheResidue(t
 	}
 }
 
-// SIBLING ONE, MANDATORY — this is the assertion that stops the fix from becoming
-// "record on every cascade error", which is exactly what b76e1b8a's reasoning rules out. A deadlock
-// (40P01) or a serialization failure (40001) is the transient case the existing rule was written
-// for: the claim is released, the next run retries the whole sequence, and the deletion is still
-// expected to complete. Recording there would put a permanent artifact in front of an operator for
-// an incident that resolves itself seconds later.
-func TestExecuteDeletion_CascadeFailsTransientlyAfterPaddleCancel_RecordsNoResidue(t *testing.T) {
+// SIBLING ONE, MANDATORY — this is the assertion that stops the ..._cascade_failed kind from
+// becoming "raised on every cascade error", which is exactly what b76e1b8a's reasoning rules out. A
+// deadlock (40P01) or a serialization failure (40001) is the transient case the existing rule was
+// written for: the claim is released, the next run retries the whole sequence, and the deletion is
+// still expected to complete, so telling an operator "and the database is broken" would be false.
+//
+// ⚠ ROUND 15, FINDING A4 — WHAT THIS TEST USED TO ASSERT AND WHY IT CHANGED. It used to assert that
+// NOTHING at all was recorded on a transient cascade error. Round 14's argument for that silence was
+// sound under its own premise — a permanent artifact is wrong for an incident that resolves itself,
+// BECAUSE THE RETRY RECONCILES — but nothing implemented the premise, and it fails outright when no
+// retry is ever authorised: if the user cancels their deletion, or resubscribes, before the next
+// sweep, neither sweep selects them again and no operator work item exists anywhere. The user is left
+// with no subscription and no trace but a log line.
+//
+// Round 15 makes the premise true rather than assumed: the landing records are written when each
+// irreversible call is issued, and DeleteUserCascade deletes them inside the transaction that
+// deletes the user — so a successful retry retracts them itself. The decision is therefore RECORD ON
+// TRANSIENT ERRORS TOO, and round 14's classifier is kept doing the job it was actually designed
+// for: separating "the deletion is over" from "the deletion is STUCK", which is the extra
+// ..._cascade_failed row and nothing else.
+//
+// ⚠ THE ASSERTION IS MEMBERSHIP, NOT A COUNT. It names the effect that must be present and the one
+// that must be absent, so a change that broadened or narrowed recording cannot satisfy it by moving
+// both together.
+func TestExecuteDeletion_CascadeFailsTransientlyAfterPaddleCancel_StillHasTheLandingRecord(t *testing.T) {
 	for name, code := range map[string]string{
 		"deadlock_detected":     "40P01",
 		"serialization_failure": "40001",
@@ -119,27 +137,45 @@ func TestExecuteDeletion_CascadeFailsTransientlyAfterPaddleCancel_RecordsNoResid
 			h := cascadeErrorHarness(t, ctx, wrapPgError(code))
 
 			require.Error(t, h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested))
-			assert.Contains(t, *h.callOrder, "PaddleCancel", "the cancel really did land — this is the case that would otherwise record")
-			h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything, mock.Anything)
+			assert.Contains(t, *h.callOrder, "PaddleCancel", "the cancel really did land — this is the case the record is about")
+			h.repo.AssertCalled(t, "RecordDeletionResidue", mock.Anything, h.userID,
+				repository.DeletionResiduePaddleSubscriptionCancelled)
+			h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything,
+				repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed)
 		})
 	}
 }
 
 // A cancelled or timed-out context is transient in the same sense and is not a PgError at all, so it
 // exercises the non-SQLSTATE half of the classifier. This is the shutdown case: the same deadline
-// that killed the cascade also killed the job, and the next run will re-do the whole sequence.
-func TestExecuteDeletion_CascadeFailsOnContextCancellation_RecordsNoResidue(t *testing.T) {
+// that killed the cascade also killed the job, and the next run will re-do the whole sequence — but
+// the landing records are on file either way, and this is the case that proves it, since the context
+// they would naively have been written on is the dead one (finding A5).
+func TestExecuteDeletion_CascadeFailsOnContextCancellation_StillHasTheLandingRecord(t *testing.T) {
 	ctx := context.Background()
 	h := cascadeErrorHarness(t, ctx, fmt.Errorf("DeleteUserCascade: begin: %w", context.DeadlineExceeded))
 
 	require.Error(t, h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested))
-	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything, mock.Anything)
+	h.repo.AssertCalled(t, "RecordDeletionResidue", mock.Anything, h.userID,
+		repository.DeletionResiduePaddleSubscriptionCancelled)
+	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything,
+		repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed)
 }
 
-// SIBLING TWO, MANDATORY — the record must follow the EFFECT, not the failure. A cascade error on a
-// user whose subscription was never cancelled (raw status "cancelled", so cleanupPaddleResources
-// skips the cancel entirely) records nothing: nothing irreversible happened to them.
-func TestExecuteDeletion_CascadeFailsWithNoSubscriptionCancelled_RecordsNoResidue(t *testing.T) {
+// SIBLING TWO, MANDATORY — the record must follow the EFFECT, not the failure.
+//
+// ⚠ THIS TEST PASSED WITH A FALSE JUSTIFICATION, AND THAT IS ROUND 15's FINDING A1. It used to
+// assert that a cascade error on a user whose SUBSCRIPTION was never cancelled recorded nothing, on
+// the stated grounds that "nothing irreversible happened to them". Read the harness: raw status
+// "cancelled" skips the cancel, and then ArchiveAndAnonymizeCustomer still runs — the act
+// cleanupPaddleResources itself labels "THE ONE ACTION NOTHING CAN UNDO". Something irreversible
+// happened to them; the mechanism simply had no vocabulary for it, so the test was pinning the
+// defect as if it were the requirement.
+//
+// ⚠ IT IS NOT THE SIBLING OF TestExecuteDeletion_NoSubscriptionCancelled_RecordsNoResidueOnRevocation,
+// though the two look near-identical. That one aborts at the archive GATE — the archive never
+// happens — so its "records nothing" is correct and it is left exactly as it was.
+func TestExecuteDeletion_CascadeFailsWithNoSubscriptionCancelled_RecordsTheArchiveResidue(t *testing.T) {
 	ctx := context.Background()
 	h := newRevocationHarnessWithStatus(t, context.Background(), "cancelled")
 
@@ -152,13 +188,22 @@ func TestExecuteDeletion_CascadeFailsWithNoSubscriptionCancelled_RecordsNoResidu
 
 	require.Error(t, h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested))
 	h.paddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
-	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything, mock.Anything)
+	h.repo.AssertCalled(t, "RecordDeletionResidue", mock.Anything, h.userID,
+		repository.DeletionResiduePaddleCustomerArchived)
+	// No subscription was cancelled, so neither subscription kind may be claimed — the record still
+	// follows the effect, which is what the original test was reaching for and got wrong.
+	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything,
+		repository.DeletionResiduePaddleSubscriptionCancelled)
+	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything,
+		repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed)
 }
 
 // SIBLING THREE, MANDATORY — the ordinary success path. Its counterpart for the revocation half is
 // TestExecuteDeletion_OrdinarySuccess_RecordsNoResidue; this one is stated separately because the new
 // branch is on the ERROR return of the same call and a classifier that recorded on `err == nil` would
-// pass that test and fail this one.
+// pass that test and fail this one. The "leaves no row at all" half is
+// TestExecuteDeletion_Integration_OrdinarySuccess_LeavesNoResidueRow, on a real Postgres — see that
+// test for why a mock cannot express it.
 func TestExecuteDeletion_OrdinarySuccess_RecordsNoCascadeFailedResidue(t *testing.T) {
 	ctx := context.Background()
 	h := newRevocationHarness(t, ctx)
@@ -166,7 +211,8 @@ func TestExecuteDeletion_OrdinarySuccess_RecordsNoCascadeFailedResidue(t *testin
 	require.NoError(t, h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested))
 
 	assert.Contains(t, *h.callOrder, "DeleteUserCascade")
-	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything, mock.Anything)
+	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything,
+		repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed)
 }
 
 // A residue write that itself fails must not change the outcome the caller sees — the cascade error

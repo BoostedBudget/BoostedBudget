@@ -60,9 +60,18 @@ func TestExecuteDeletion_RevokedWhilePaddleCancelInFlight_RecordsTheResidue(t *t
 		repository.DeletionResiduePaddleSubscriptionCancelled)
 }
 
-// SIBLING ASSERTION, mandatory: an ordinary successful deletion must produce NO such record.
-// Without this, the test above passes on a version that records unconditionally — which would tell
-// an operator nothing at all, since every deletion would raise the same flag.
+// SIBLING ASSERTION, mandatory: an ordinary successful deletion must leave NO such record. Without
+// it, the test above passes on a version that records unconditionally — which would tell an operator
+// nothing at all, since every deletion would raise the same flag.
+//
+// ⚠ ROUND 15 MOVED WHERE THIS CAN HONESTLY BE ASSERTED, AND THAT IS THE POINT OF THE CHANGE. Each
+// irreversible external call now writes its record as it is ISSUED, so a successful deletion does
+// call RecordDeletionResidue — and then DeleteUserCascade deletes those rows inside the same
+// transaction that deletes the user, so nothing is left behind. A mock repository cannot show you a
+// row that was written and then removed, so the "leaves no record" half now lives where it can
+// actually be observed: TestExecuteDeletion_Integration_OrdinarySuccess_LeavesNoResidueRow, on a
+// real Postgres. What is still assertable here — and still worth pinning — is that a run which
+// COMPLETES never raises the ..._cascade_failed kind, which is the one that says "and this is stuck".
 func TestExecuteDeletion_OrdinarySuccess_RecordsNoResidue(t *testing.T) {
 	ctx := context.Background()
 	h := newRevocationHarness(t, ctx)
@@ -70,7 +79,8 @@ func TestExecuteDeletion_OrdinarySuccess_RecordsNoResidue(t *testing.T) {
 	require.NoError(t, h.svc.ExecuteDeletion(ctx, h.userID, repository.DeletionKindUserRequested))
 
 	assert.Contains(t, *h.callOrder, "DeleteUserCascade", "this run really did complete")
-	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything, mock.Anything)
+	h.repo.AssertNotCalled(t, "RecordDeletionResidue", mock.Anything, mock.Anything,
+		repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed)
 }
 
 // SECOND SIBLING: an abort BEFORE the subscription cancel lands must also record nothing. This is

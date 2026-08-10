@@ -659,51 +659,53 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// while deleting either inner gate kills exactly one. A check that cannot fail is not protection;
 	// it is a second place for the rule to drift.
 	//
-	// Issue #1504: subscriptionCancelled is the one fact this leg reports back, and it exists because
-	// a Paddle subscription-cancel that has LANDED cannot be recalled by any later gate. Every path
-	// below that ends with the user still existing (a gate declining after the cancel, and the
-	// cascade's own guard refusing) records the residue, so the two ways the same harm happens cannot
-	// diverge — see recordPaddleCancelResidue.
-	subscriptionCancelled := false
-	// recordPaddleCancelResidue makes a post-gate external effect visible to an operator when the
-	// deletion it belonged to did not complete. It is deliberately NOT remediation: nothing here
-	// re-creates the subscription (see ProfileRepository.RecordDeletionResidue's doc comment). A
-	// failed write cannot change the outcome of a deletion that is already over, so it is logged at
-	// Error rather than propagated — but it is never swallowed silently, which was the whole finding.
+	// ⚠ ROUND 15, TIER A — WHAT USED TO BE HERE AND WHY IT WAS WRONG AT THE ROOT. This block held a
+	// single in-memory bool, `subscriptionCancelled`, set only when CancelSubscriptionImmediately
+	// SUCCEEDED, and a closure that early-returned unless it was true. That bool was a PROXY for "an
+	// irreversible external effect landed", and every path that lost the proxy lost the record:
 	//
-	// The `effect` parameter exists because there are now TWO kinds of this one harm and an operator
-	// has a different job for each — see repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed.
-	recordPaddleCancelResidue := func(effect repository.DeletionResidueEffect, reason string) {
-		if !subscriptionCancelled {
+	//	A1  ArchiveAndAnonymizeCustomer set no flag and had no vocabulary, so the act this file itself
+	//	    calls "THE ONE ACTION NOTHING CAN UNDO" could never be recorded at all.
+	//	A2  A cancel that changed Paddle state but returned an error left the flag false.
+	//	A3  The flag lived only in memory: an ordinary error after a landed cancel recorded nothing,
+	//	    and process death or a panic took the fact with it.
+	//
+	// The fix is not five branches. Each irreversible external call now writes its OWN record, to the
+	// database, immediately BEFORE it is issued — see recordIssuedExternalEffect and its two call
+	// sites in cleanupPaddleResources. What survives here is only the ALARM and the one record that
+	// describes an OUTCOME rather than an effect (the cascade-failed kind below).
+	effects := paddleEffectsIssued{}
+	// reportSurvivingResidue is the operator ALARM, not the record — the record for each effect was
+	// already written when that effect was issued. It fires on the paths that end with the user still
+	// present after irreversible external work had already gone out, so the several ways the same
+	// harm happens cannot diverge in what an operator is told.
+	reportSurvivingResidue := func(reason string) {
+		if !effects.any() {
 			return
 		}
-		slog.Default().Error("account deletion stopped after the user's Paddle subscription had already been cancelled — the user KEEPS their account and data but has NO subscription; this needs a human",
-			"user_id", userID, "claim_kind", string(kind), "residue_effect", string(effect), "reason", reason)
-		if recErr := s.profileRepo.RecordDeletionResidue(ctx, userID, effect); recErr != nil {
-			slog.Default().Error("failed to record the post-gate external-effect residue — this user's cancelled subscription is now visible ONLY in logs",
-				"user_id", userID, "error", recErr)
-		}
+		slog.Default().Error("account deletion stopped after irreversible external work had already been issued against this user's Paddle account — the user KEEPS their account and data; this needs a human",
+			"user_id", userID, "claim_kind", string(kind),
+			"subscription_cancel_issued", effects.subscriptionCancel,
+			"customer_archive_issued", effects.customerArchive, "reason", reason)
 	}
 	if s.paddleCleanupSvc != nil {
-		cancelled, err := s.cleanupPaddleResources(ctx, userID, user, stillAuthorised)
-		subscriptionCancelled = cancelled
+		issued, err := s.cleanupPaddleResources(ctx, userID, kind, user, stillAuthorised)
+		effects = issued
 		if err != nil {
 			if errors.Is(err, ErrDeletionAuthorisationRevoked) {
 				releaseClaim("authorisation revoked mid Paddle cleanup")
 				slog.Default().Info("aborting deletion mid Paddle cleanup — the authorisation this run was claimed under no longer holds",
 					"user_id", userID, "claim_kind", string(kind))
-				// Only fires when the revocation was caught by the SECOND gate, after the cancel had
-				// already landed; a revocation caught by the first gate cancels nothing and so leaves
-				// nothing to report.
-				recordPaddleCancelResidue(repository.DeletionResiduePaddleSubscriptionCancelled,
-					"authorisation revoked between the subscription cancel and the customer archive")
+				reportSurvivingResidue("authorisation revoked between the subscription cancel and the customer archive")
 				return nil
 			}
-			// A Paddle FAILURE (as opposed to a revocation) deliberately records nothing: the claim is
-			// released and the next run retries the whole sequence, so the deletion is still expected
-			// to complete and the user is not being left in the state this record describes. Only a
-			// run that ends with the user surviving qualifies.
+			// A Paddle FAILURE (as opposed to a revocation) still releases the claim so the next run
+			// retries the whole sequence. What CHANGED in round 15 (finding A2/A3): it no longer
+			// implies "nothing to report". Whatever calls were already issued are already on record,
+			// written before they went out, and a retry that completes removes them again — see
+			// recordIssuedExternalEffect.
 			releaseClaim(err.Error())
+			reportSurvivingResidue("Paddle cleanup failed after external work had already been issued: " + err.Error())
 			return fmt.Errorf("aborting deletion — Paddle cleanup failed: %w", err)
 		}
 	}
@@ -746,10 +748,37 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 		//
 		// ⚠ NOT REMEDIATION. Nothing here re-subscribes anyone (see RecordDeletionResidue's own doc
 		// comment); this makes an existing, already-occurring harm visible to a human.
-		if !cascadeErrorIsRecognisedTransient(err) {
-			recordPaddleCancelResidue(repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed,
-				"the cascade failed with a non-transient error after the subscription had been cancelled: "+err.Error())
+		//
+		// ⚠ ROUND 15, FINDING A4 — THE DECISION, AND HOW IT ENGAGES ROUND 14 RATHER THAN REVERSING IT
+		// SILENTLY. Round 14's argument for silence on a recognised-transient error was: a permanent
+		// operator artifact is wrong for an incident that resolves itself, BECAUSE THE RETRY
+		// RECONCILES. That premise was sound and is still sound — but nothing implemented it. It was
+		// an assumption about a future run, and it fails outright when no future run is authorised:
+		// if the user cancels their deletion (or resubscribes) before the retry, neither sweep will
+		// ever select them again and no work item exists anywhere.
+		//
+		// Round 15 makes the premise TRUE INSTEAD OF ASSUMED. Every irreversible external call now
+		// records itself as it is issued, and DeleteUserCascade DELETES this user's residue rows
+		// inside the same transaction that deletes the user — so the reconciliation round 14 was
+		// relying on is now a real, atomic step rather than a hope. That inverts the cost: recording
+		// on a transient failure is no longer a permanent artifact, it is a work item that the
+		// successful retry retracts by itself. So the answer to A4 is RECORD ON TRANSIENT ERRORS TOO
+		// — and it needs no branch here, because the landing records are already written.
+		//
+		// cascadeErrorIsRecognisedTransient is KEPT, doing the job it was actually designed for and
+		// only that job: distinguishing "the deletion is OVER" from "the deletion is STUCK on a fault
+		// a retry will not clear", which is a second, different task for the operator. That is what
+		// the extra ..._cascade_failed row says, over and above the landing records.
+		//
+		// It is gated on the subscription cancel having been issued because that is what its name
+		// claims. An archive-only run that fails this way is still visible — its own landing record is
+		// on file and reportSurvivingResidue below fires — it simply does not get the second row.
+		if effects.subscriptionCancel && !cascadeErrorIsRecognisedTransient(err) {
+			s.recordIssuedExternalEffect(ctx, userID, kind,
+				repository.DeletionResiduePaddleSubscriptionCancelledCascadeFailed,
+				"the cascade failed with a non-transient error after the subscription cancel had been issued: "+err.Error())
 		}
+		reportSurvivingResidue("the cascade failed after external work had already been issued: " + err.Error())
 		return fmt.Errorf("failed to cascade delete user data: %w", err)
 	}
 	if !deleted {
@@ -758,9 +787,10 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 			"user_id", userID)
 		// Issue #1504: the SECOND way a user survives a run whose Paddle cancel already landed. The
 		// harm is identical to the gate-decline case above — account kept, subscription gone — so the
-		// record must be identical too; covering only the gate would silently miss this half.
-		recordPaddleCancelResidue(repository.DeletionResiduePaddleSubscriptionCancelled,
-			"the cascade's own re-verification refused after the subscription had been cancelled")
+		// alarm must be identical too; covering only the gate would silently miss this half. The
+		// RECORD is not re-written here: since round 15 it was already written when the effect was
+		// issued, which is the only version of this that survives a process that never gets here.
+		reportSurvivingResidue("the cascade's own re-verification refused after external work had already been issued")
 		return nil
 	}
 
@@ -956,12 +986,16 @@ func (s *deletionService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository
 // the caller Release the claim so the whole sequence retries on the next run, while the IDs are
 // still present in the database to retry against.
 //
-// Returns subscriptionCancelled = true once CancelSubscriptionImmediately has SUCCEEDED, and that
-// return value is load-bearing rather than informational (Issue #1504): it is the only thing that
-// distinguishes an abort which cost the user nothing from one that left them with no subscription,
-// and the caller records the residue on exactly that distinction. It is reported alongside the error
-// on the abort paths precisely because those are the paths where it matters.
-func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID string, user *domain.User, stillAuthorised func(ctx context.Context) (bool, error)) (subscriptionCancelled bool, err error) {
+// ⚠ ROUND 15: THE RETURN VALUE IS NO LONGER THE RECORD, ONLY THE ALARM'S INPUT. It used to be
+// `subscriptionCancelled bool`, set once CancelSubscriptionImmediately had SUCCEEDED, and the caller
+// wrote the durable residue record off it at the END of ExecuteDeletion. That is finding A3's root:
+// a fact that exists only in a local variable does not survive the process, and it never described
+// the customer archive at all (A1). Each irreversible call now writes its own record BEFORE it goes
+// out (recordIssuedExternalEffect). What is returned here is which calls were issued, so the caller
+// can raise the right alarm and decide whether the extra ..._cascade_failed record applies. It is
+// reported alongside the error on the abort paths precisely because those are the paths where it
+// matters.
+func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID string, kind repository.DeletionClaimKind, user *domain.User, stillAuthorised func(ctx context.Context) (bool, error)) (issued paddleEffectsIssued, err error) {
 	anonymizedEmail := fmt.Sprintf("deleted_%s@deleted.local", userID)
 
 	// gate re-asks the authorisation question immediately before one specific irreversible call. It
@@ -992,7 +1026,7 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 		status := domain.SubscriptionStatus(user.SubscriptionStatus)
 		if status.IsActiveSubscription() || status == domain.SubscriptionStatusPastDue {
 			if err := gate("cancelling the Paddle subscription"); err != nil {
-				return false, err
+				return issued, err
 			}
 			// Issue #1413 H1: claim the OPERATION-keyed ActionPaddleCancelSubscription side-effect
 			// claim before calling Paddle, nested inside the ActionAccountDeletion flow claim
@@ -1004,6 +1038,17 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 			// "another flow is mid-operation: release the flow claim, let the next run retry"
 			// response (see claimSideEffectAndRun's doc comment, plaid_item_cleanup_service.go).
 			err := claimSideEffectAndRun(ctx, s.claimsRepo, repository.ActionPaddleCancelSubscription, userID, paddleCancelSideEffectLease, func() error {
+				// ⚠ THE RECORD GOES IN BEFORE THE CALL, AND IT IS INSIDE THIS CLOSURE ON PURPOSE.
+				// Before: because nothing written after a network call can describe a process that
+				// dies during it (A3), and because a call that returns an error may still have
+				// changed Paddle's state (A2) — "issued" is the only claim about it we can honestly
+				// make from this side. Inside: because claimSideEffectAndRun does NOT invoke this
+				// closure when another flow holds the side-effect claim, and that case is a known
+				// nothing-happened, not an ambiguity. Recording it would hand an operator a work
+				// item for a subscription that is demonstrably untouched.
+				issued.subscriptionCancel = true
+				s.recordIssuedExternalEffect(ctx, userID, kind, repository.DeletionResiduePaddleSubscriptionCancelled,
+					"about to cancel Paddle subscription "+*user.PaddleSubscriptionID)
 				return s.paddleCleanupSvc.CancelSubscriptionImmediately(ctx, *user.PaddleSubscriptionID)
 			})
 			if err != nil {
@@ -1014,11 +1059,8 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 				if s.analytics != nil {
 					s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "cancel_subscription"})
 				}
-				return false, fmt.Errorf("cancel Paddle subscription %s: %w", *user.PaddleSubscriptionID, err)
+				return issued, fmt.Errorf("cancel Paddle subscription %s: %w", *user.PaddleSubscriptionID, err)
 			}
-			// From here on the cancellation has LANDED at Paddle. Nothing below can undo it, which is
-			// what every `return subscriptionCancelled, ...` after this line is carrying to the caller.
-			subscriptionCancelled = true
 		}
 	}
 
@@ -1027,17 +1069,82 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 		// THE LAST CHECK BEFORE THE ONE ACTION NOTHING CAN UNDO. A cancelled subscription can be
 		// re-created; an anonymised Paddle customer cannot be recovered by us or by Paddle.
 		if err := gate("archiving and anonymising the Paddle customer"); err != nil {
-			return subscriptionCancelled, err
+			return issued, err
 		}
+		// ⚠ FINDING A1, AT ITS ROOT. This call had no record of any kind: the old mechanism keyed
+		// everything off the SUBSCRIPTION cancel, so the act two lines above is described as
+		// unrecoverable could not be reported by any path. It is recorded here, before the call, on
+		// exactly the same terms as the cancel — an anonymised Paddle customer cannot be restored,
+		// so "issued" is again the strongest honest claim, and the strongest one worth making.
+		issued.customerArchive = true
+		s.recordIssuedExternalEffect(ctx, userID, kind, repository.DeletionResiduePaddleCustomerArchived,
+			"about to archive and anonymise Paddle customer "+*user.PaddleCustomerID)
 		if err := s.paddleCleanupSvc.ArchiveAndAnonymizeCustomer(ctx, *user.PaddleCustomerID, anonymizedEmail); err != nil {
 			if s.analytics != nil {
 				s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "archive_customer"})
 			}
-			return subscriptionCancelled, fmt.Errorf("archive Paddle customer %s: %w", *user.PaddleCustomerID, err)
+			return issued, fmt.Errorf("archive Paddle customer %s: %w", *user.PaddleCustomerID, err)
 		}
 	}
 
-	return subscriptionCancelled, nil
+	return issued, nil
+}
+
+// paddleEffectsIssued names which of cleanupPaddleResources' two irreversible external calls this
+// run actually ISSUED. Issued, not "succeeded": a call whose response never came back may have
+// changed Paddle's state anyway (round 15 finding A2), and from this side of the network there is no
+// way to tell the two apart.
+type paddleEffectsIssued struct {
+	subscriptionCancel bool
+	customerArchive    bool
+}
+
+// any reports whether this run did anything to the user's Paddle account that it cannot take back.
+func (e paddleEffectsIssued) any() bool { return e.subscriptionCancel || e.customerArchive }
+
+// deletionResidueWriteTimeout bounds the residue write's own independent context. Matches the 5s the
+// claim Release calls in ExecuteDeletion use, for the same reason: this write runs on paths where
+// something has already gone wrong, and it must neither hang the flow nor inherit its deadline.
+const deletionResidueWriteTimeout = 5 * time.Second
+
+// recordIssuedExternalEffect writes the durable, queryable record that this deletion run has ISSUED
+// an irreversible external call against the user's Paddle account. Round 15, findings A1–A5.
+//
+// ⚠ IT IS WRITTEN WHEN THE EFFECT IS ISSUED, NOT WHEN THE RUN ENDS. That is the whole correction.
+// The previous mechanism inferred the record at the end of ExecuteDeletion from an in-memory bool,
+// which meant it could not describe a process that died mid-flight, a panic (the deferred handler
+// releases the claim and re-panics, persisting nothing), a call whose acknowledgement was lost, or —
+// because the bool only ever named the subscription — the customer archive at all.
+//
+// ⚠ WHY WRITING IT EAGERLY IS NOT NOISE. The record is not permanent. DeleteUserCascade removes this
+// user's residue rows inside the SAME transaction that removes the user, so a deletion that
+// COMPLETES leaves none behind and no observer ever sees an uncommitted intermediate. A record
+// therefore means exactly what it has always meant — irreversible external work was done and the
+// user is still here — and it now means it durably instead of hopefully.
+//
+// ⚠ THE CONTEXT IS DELIBERATELY NOT ctx (finding A5). Every Release in ExecuteDeletion already runs
+// on context.WithoutCancel plus a short timeout, for a reason that applies here with more force: the
+// shutdown or deadline that causes the failure has usually cancelled ctx as well, and a write issued
+// on a cancelled context does not fail loudly — it does nothing and returns an error that reads like
+// a database problem. That asymmetry existed only because this write was added later, next to the
+// Release calls, without inheriting the reasoning printed above them.
+//
+// ⚠ IT REMAINS BEST-EFFORT. A failure is logged at Error and not propagated: the write cannot change
+// the outcome of the deletion around it, and making it blocking would let an audit_logs hiccup stop
+// a GDPR erasure. The residual is honest and stated — if this write fails, the effect is once again
+// visible only in logs.
+//
+// ⚠ IT IS NOT REMEDIATION. Nothing here re-subscribes anyone or restores a Paddle customer; see
+// ProfileRepository.RecordDeletionResidue's doc comment for why that is deliberate.
+func (s *deletionService) recordIssuedExternalEffect(ctx context.Context, userID string, kind repository.DeletionClaimKind, effect repository.DeletionResidueEffect, reason string) {
+	slog.Default().Info("recording an irreversible external effect before issuing it — this record is removed again by a deletion that completes",
+		"user_id", userID, "claim_kind", string(kind), "residue_effect", string(effect), "reason", reason)
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deletionResidueWriteTimeout)
+	defer cancel()
+	if recErr := s.profileRepo.RecordDeletionResidue(rctx, userID, effect); recErr != nil {
+		slog.Default().Error("failed to record an irreversible external effect — if this deletion does not complete, the effect will be visible ONLY in logs",
+			"user_id", userID, "residue_effect", string(effect), "error", recErr)
+	}
 }
 
 // transientCascadeSQLSTATEClasses are the SQLSTATE classes for which "this run failed but the next
