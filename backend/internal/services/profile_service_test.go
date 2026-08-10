@@ -108,6 +108,14 @@ func (m *MockProfileRepository) CountUncleanedLinkedItems(ctx context.Context, u
 	return 0, nil
 }
 
+// HouseholdOwnerBlocksDeletion — round 15, finding D2. Only DeletionService's pre-cleanup
+// precondition calls this; these tests never reach it, so it is a plain stub for the same reason as
+// the one above. It returns FALSE (nothing blocks) so a test that ever DID reach it would exercise
+// the proceed path rather than an unexplained abort.
+func (m *MockProfileRepository) HouseholdOwnerBlocksDeletion(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
 // Issue #679, #680: Trial expiration - methods for trial management
 func (m *MockProfileRepository) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
 	args := m.Called(ctx)

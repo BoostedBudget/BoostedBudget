@@ -476,6 +476,14 @@ func (m *MockUserRepository) CountUncleanedLinkedItems(ctx context.Context, user
 	return 0, nil
 }
 
+// HouseholdOwnerBlocksDeletion — round 15, finding D2. Only DeletionService's pre-cleanup
+// precondition calls this; these tests never reach it, so it is a plain stub for the same reason as
+// the one above. It returns FALSE (nothing blocks) so a test that ever DID reach it would exercise
+// the proceed path rather than an unexplained abort.
+func (m *MockUserRepository) HouseholdOwnerBlocksDeletion(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
 // DeletionStillAuthorised — ExecuteDeletion's use-time authorisation recheck. Only that flow calls
 // it; these tests never reach it, so it is a plain stub for the same reason as the one above. It
 // returns TRUE (still authorised) so that a test which ever DID reach it would exercise the
