@@ -557,13 +557,15 @@ func TestVerifyWebhook_Int64MinTimestamp_RejectedWithoutPanic(t *testing.T) {
 	})
 }
 
-// TestVerifyWebhook_EpochBound_JustInsideAndOutside pins the new sane-epoch-range check itself:
-// values just inside the allowed window must verify, values just outside must be rejected as
-// ErrTimestampOutOfTolerance. This exercises checkTimestampTolerance's new pre-check directly
-// rather than relying on the plain ±tolerance boundary (already covered by
-// TestVerifyWebhook_TimestampTolerance_Boundaries) so it stays meaningful if the epoch bound and
-// the tolerance window ever diverge.
-func TestVerifyWebhook_EpochBound_JustInsideAndOutside(t *testing.T) {
+// TestVerifyWebhook_EpochBound_ExtremeFuture is a regression test for the saturate-then-negate
+// overflow (issue #1514, G2, fix-round-2): a `ts=` far enough in the future used to make
+// now.Sub(eventTime) saturate to math.MinInt64, and negating that overflowed right back to
+// itself, so the old code WRONGLY ACCEPTED an arbitrarily far-future timestamp. Both cases here
+// are millions of seconds outside the ±tolerance window too, so — as
+// TestVerifyWebhook_EpochBound_AtBoundary below demonstrates directly — they would also have
+// been rejected by the ordinary delta check alone even without the epoch guard. This test earns
+// its place as the overflow regression, not as boundary coverage of the new guard itself.
+func TestVerifyWebhook_EpochBound_ExtremeFuture(t *testing.T) {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	tolerance := 5 * time.Second
 	svc := newServiceWithClock(t, tolerance, fixedClock(now))
@@ -598,6 +600,76 @@ func TestVerifyWebhook_EpochBound_JustInsideAndOutside(t *testing.T) {
 			assert.False(t, valid)
 			assert.ErrorIs(t, err, ErrTimestampOutOfTolerance)
 		})
+	})
+}
+
+// TestVerifyWebhook_EpochBound_AtBoundary exercises the sane-epoch pre-check's OWN boundary —
+// maxSaneUnixTimestamp/minSaneUnixTimestamp themselves — rather than values so far out that the
+// ordinary ±tolerance delta check would reject them on its own (that gap is what let a
+// non-boundary-testing version of this test pass even before the epoch guard existed). Both
+// checkTimestampTolerance error paths wrap ErrTimestampOutOfTolerance, so `errors.Is` alone can't
+// tell them apart; the epoch guard's message contains "sane epoch range" and the ordinary
+// tolerance rejection's contains "from server clock" (see checkTimestampTolerance) — asserting on
+// that text is what proves WHICH check fired.
+func TestVerifyWebhook_EpochBound_AtBoundary(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	tolerance := 5 * time.Second
+	svc := newServiceWithClock(t, tolerance, fixedClock(now))
+
+	// Mirror the production constants as literals (not imports of the private consts) so this
+	// test also catches silent drift in either value, matching the existing convention above.
+	const minSaneUnixTimestamp = 946684800
+	const epochBoundSlackSeconds = 86400
+	maxSaneUnixTimestamp := now.Unix() + int64(tolerance.Seconds()) + epochBoundSlackSeconds
+
+	t.Run("upper bound: exactly at max passes the epoch guard, rejected by ordinary tolerance", func(t *testing.T) {
+		ts := fmt.Sprintf("%d", maxSaneUnixTimestamp)
+		body := `{"event_id":"evt_epoch_max_at"}`
+		signature := calculateTestSignature(svc.webhookSecret, ts, body)
+
+		valid, err := svc.VerifyWebhook(signature, body)
+		require.Error(t, err)
+		assert.False(t, valid)
+		assert.ErrorIs(t, err, ErrTimestampOutOfTolerance)
+		assert.Contains(t, err.Error(), "from server clock", "expected the ordinary tolerance rejection, not the epoch guard")
+		assert.NotContains(t, err.Error(), "sane epoch range")
+	})
+
+	t.Run("upper bound: max+1 is rejected by the epoch guard itself", func(t *testing.T) {
+		ts := fmt.Sprintf("%d", maxSaneUnixTimestamp+1)
+		body := `{"event_id":"evt_epoch_max_over"}`
+		signature := calculateTestSignature(svc.webhookSecret, ts, body)
+
+		valid, err := svc.VerifyWebhook(signature, body)
+		require.Error(t, err)
+		assert.False(t, valid)
+		assert.ErrorIs(t, err, ErrTimestampOutOfTolerance)
+		assert.Contains(t, err.Error(), "sane epoch range", "expected the epoch guard specifically to reject this")
+	})
+
+	t.Run("lower bound: exactly at min passes the epoch guard, rejected by ordinary tolerance", func(t *testing.T) {
+		ts := fmt.Sprintf("%d", int64(minSaneUnixTimestamp))
+		body := `{"event_id":"evt_epoch_min_at"}`
+		signature := calculateTestSignature(svc.webhookSecret, ts, body)
+
+		valid, err := svc.VerifyWebhook(signature, body)
+		require.Error(t, err)
+		assert.False(t, valid)
+		assert.ErrorIs(t, err, ErrTimestampOutOfTolerance)
+		assert.Contains(t, err.Error(), "from server clock", "expected the ordinary tolerance rejection, not the epoch guard")
+		assert.NotContains(t, err.Error(), "sane epoch range")
+	})
+
+	t.Run("lower bound: min-1 is rejected by the epoch guard itself", func(t *testing.T) {
+		ts := fmt.Sprintf("%d", int64(minSaneUnixTimestamp-1))
+		body := `{"event_id":"evt_epoch_min_under"}`
+		signature := calculateTestSignature(svc.webhookSecret, ts, body)
+
+		valid, err := svc.VerifyWebhook(signature, body)
+		require.Error(t, err)
+		assert.False(t, valid)
+		assert.ErrorIs(t, err, ErrTimestampOutOfTolerance)
+		assert.Contains(t, err.Error(), "sane epoch range", "expected the epoch guard specifically to reject this")
 	})
 }
 

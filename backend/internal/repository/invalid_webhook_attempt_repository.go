@@ -42,17 +42,29 @@ const invalidWebhookAttemptCap = 10000
 //
 // Bound, PRECISELY stated (Codex review round 3 — the round-2 doc comment overstated this as an
 // unconditional "NEVER exceeds cap+interval-1", which is wrong on two axes; G3 below adds a THIRD
-// axis the round-3 comment itself overstated — read point 3 before treating this as complete):
+// axis the round-3 comment itself overstated — read point 3 before treating this as complete;
+// round 4 corrects point 1 itself, which quietly assumed at most one in-flight Record call for
+// this provider — false under the very flood this table exists to survive):
 //
-//  1. Single-process, instantaneous vs. completed-call-boundary: the trim-triggering call's own
-//     INSERT commits (as its own, separate, unlocked Exec) BEFORE that same call's trim runs. So
-//     for the brief window between that INSERT committing and that call's own trim committing, a
-//     concurrent reader on another connection (e.g. a plain `SELECT COUNT(*)`) can observe up to
-//     invalidWebhookAttemptCap + invalidWebhookAttemptTrimInterval rows — not interval-1. Once
-//     that one call finishes (trim included) and at every OTHER point where no Record call for
-//     this provider is currently in flight, the bound is the tighter
-//     invalidWebhookAttemptCap + invalidWebhookAttemptTrimInterval - 1 — because the (interval-1)
-//     calls since the last trim have each landed a row with nothing yet to trim them.
+//  1. No fixed instantaneous ceiling under concurrency — self-correcting instead: each Record call's
+//     INSERT is its own separate, unlocked, autocommitting Exec, and only the (interval-th, or
+//     forced-first) call additionally runs the locked trim — so with MULTIPLE concurrent rejected
+//     webhooks in flight for the same provider (the realistic flood shape), any number of those
+//     INSERTs can commit before the next trim commits. A concurrent reader (e.g. a plain `SELECT
+//     COUNT(*)`) can therefore transiently observe a count that exceeds
+//     invalidWebhookAttemptCap + invalidWebhookAttemptTrimInterval — there is no fixed
+//     concurrency-independent formula for "how far above," because that overshoot scales with
+//     how many concurrent inserts land in the window before the next trim, not with the interval
+//     constant. What DOES hold, regardless of concurrency: whichever call's trim eventually
+//     commits drains the WHOLE provider's row count back down to invalidWebhookAttemptCap (trim
+//     is not scoped to "this call's own rows" — see trim()), so the count cannot drift upward
+//     indefinitely; it is bounded by how long the current overshoot window lasts, not by
+//     cumulative attack volume. Only in the degenerate case of at most one in-flight Record call
+//     for this provider at a time (no concurrent rejections) does this collapse to the tighter,
+//     deterministic invalidWebhookAttemptCap + invalidWebhookAttemptTrimInterval - 1 — which is
+//     why TestInvalidWebhookAttemptCap_AmortisedTrim_HardCeiling_Integration below deliberately
+//     drives the code with sequential, not concurrent, calls: that is the only regime in which an
+//     exact row count is deterministic to assert against.
 //
 //  2. Multi-instance: insertCounters is IN-PROCESS state (a struct field, not backed by the DB or
 //     shared across processes) — deliberately: making it shared/DB-backed would reintroduce the

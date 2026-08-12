@@ -607,10 +607,13 @@ jobs:
       url: https://boostedbudget.com
     env:
       UNIQUE_WORKSPACE: workspace-deploy-frontend-${{ github.run_id }}
-      # #1514 (G6 fix-round-1): `secrets` is not a valid context in a step-level `if:`
-      # (actionlint: context "secrets" is not allowed there). Mirror it into job-level
-      # `env:` so the gate steps below can read `env.SENTRY_AUTH_TOKEN` instead.
-      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      # #1514 (G6 fix-round-2): `secrets` is not a valid context in a step-level `if:`
+      # (actionlint: context "secrets" is not allowed there). `secrets` IS available in
+      # job-level `env:`, so compute a non-secret boolean gate here instead of mirroring
+      # the token itself — the actual token is injected only into the one step that
+      # needs it (Upload source maps to Sentry), not the whole job (install/build steps
+      # never see it).
+      HAS_SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
 
     steps:
       - name: Clean workspace
@@ -651,7 +654,7 @@ jobs:
       # plus `if: always()` on the delete step), so a missing/invalid SENTRY_AUTH_TOKEN or
       # a Sentry API failure can never cause maps to ship.
       - name: Install sentry-cli
-        if: env.SENTRY_AUTH_TOKEN != ''
+        if: env.HAS_SENTRY_AUTH_TOKEN == 'true'
         continue-on-error: true
         env:
           # Pin + verify, per the golang-migrate pattern in test.yml (#1514 F13).
@@ -671,11 +674,13 @@ jobs:
           "$HOME/bin/sentry-cli" --version
 
       - name: Upload source maps to Sentry
-        if: env.SENTRY_AUTH_TOKEN != ''
+        if: env.HAS_SENTRY_AUTH_TOKEN == 'true'
         continue-on-error: true
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         env:
-          # SENTRY_AUTH_TOKEN is inherited from the job-level env: above.
+          # Token is injected only here, not at job scope, so it's never present in the
+          # environment of the install/build steps (which don't need it).
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
         run: |
