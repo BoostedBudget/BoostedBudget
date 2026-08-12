@@ -197,7 +197,7 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 				"event_type", payload.EventType,
 				"error", err,
 			)
-			return nil, huma.Error500InternalServerError("failed to persist webhook")
+			return nil, huma.Error500InternalServerError("failed to store webhook")
 		}
 
 		h.logger.Info("Paddle webhook stored",
@@ -234,7 +234,7 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 			"event_id", payload.EventID,
 			"event_type", payload.EventType,
 		)
-		return nil, huma.Error500InternalServerError("failed to persist webhook")
+		return nil, huma.Error500InternalServerError("webhook repository not configured")
 	}
 
 	return &PaddleWebhookOutput{

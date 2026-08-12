@@ -226,7 +226,9 @@ const epochBoundSlackSeconds int64 = 86400
 // range BEFORE any Duration arithmetic runs, so no Duration saturation/overflow is ever allowed
 // to decide the outcome — the bound is checked in int64-seconds space, not nanoseconds, and
 // s.tolerance is capped at config.PaddleWebhookTimestampToleranceMaxSeconds (300s) elsewhere, so
-// nowUnix+tolerance+slack cannot itself overflow int64.
+// nowUnix+tolerance+slack cannot itself overflow int64. This assumes s.now() itself returns a
+// sane wall-clock value; a host clock badly corrupted enough to report, say, the year 5000 is
+// outside this fix's threat model and is not guarded against here.
 //
 // Operational note (issue #1514 fix-round-1 item 2): if this server's clock drifts persistently
 // out of sync with Paddle's, EVERY genuine webhook delivery starts failing this check, not just

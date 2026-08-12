@@ -208,7 +208,6 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		response.DeletionResidue = residueMetrics
 	}
 
-	// Calculate overall status
 	rejectedWebhookMetrics, err := s.getRejectedWebhookAttemptMetrics(ctx)
 	if err != nil {
 		slog.Error("could not read the rejected-webhook-attempt stats for /admin/health; reported as unavailable rather than as zero — a forged-webhook flood must never render as a confident '0 attacks'",
@@ -218,6 +217,7 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		response.RejectedWebhookAttempts24h = rejectedWebhookMetrics
 	}
 
+	// Calculate overall status
 	response.Status = s.calculateOverallStatus(response)
 
 	return response, nil
