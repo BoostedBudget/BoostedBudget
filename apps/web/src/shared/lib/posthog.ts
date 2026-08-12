@@ -1,20 +1,5 @@
 import posthog, { type PostHogConfig } from 'posthog-js'
-
-const PII_PROPERTY_DENYLIST = new Set([
-  'merchant',
-  'merchant_name',
-  'nickname',
-  'institution',
-  'institution_name',
-  'description',
-  'account_name',
-  'balance',
-  'amount',
-  'current_balance',
-  'target_amount',
-  'current_amount',
-  'total_saved',
-])
+import { PII_PROPERTY_DENYLIST } from './piiScrubbing'
 
 export function posthogConfig(): Partial<PostHogConfig> {
   return {

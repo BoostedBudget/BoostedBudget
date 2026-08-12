@@ -27,6 +27,7 @@ import { NotFoundPage } from './features/not-found/NotFoundPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useTheme } from './shared/theme'
 import { posthog } from './shared/lib/posthog'
+import { devLog } from './shared/lib/devLog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
 import { PageSkeleton } from './shared/components/PageSkeleton'
 
@@ -225,7 +226,8 @@ function App() {
       window.Paddle.Initialize({
         token: paddleToken,
         eventCallback: (event) => {
-          console.log('Paddle event:', event)
+          // Paddle events carry customer email/billing metadata — dev-only.
+          devLog('Paddle event:', event)
 
           // Dispatch custom events for checkout lifecycle
           if (event.name === 'checkout.completed') {
