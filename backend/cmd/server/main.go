@@ -1680,6 +1680,12 @@ func main() {
 			// happened, whether or not this deployment can talk to Plaid, and a deployment without
 			// Plaid credentials is precisely the one where nothing automated will ever clear them.
 			plaidOrphanedItemRepo,
+			// Issue #1514 requirement #5: backs the "Rejected webhook attempts (24h)" tile —
+			// the operator-visibility signal restored after Phase 1 removed invalid-signature
+			// webhooks from paddle_webhook_events/webhook_events. Narrowed at the interface
+			// (services.InvalidWebhookAttemptStatsReader) to GetStats24h alone, same discipline
+			// as plaidOrphanedItemRepo above.
+			invalidWebhookAttemptRepo,
 		)
 
 		// Issue #633: Dead letter queue admin service.

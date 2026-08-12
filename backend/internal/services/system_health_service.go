@@ -64,6 +64,10 @@ type systemHealthService struct {
 	// Optional/nil-safe: an unwired repo reports "unavailable", never a confident zero — see
 	// domain.PlaidOrphanedItemMetrics.Available.
 	plaidOrphanRepo PlaidOrphanedItemLister
+	// invalidWebhookAttemptRepo backs SystemHealthResponse.RejectedWebhookAttempts24h (Issue
+	// #1514 requirement #5). Optional/nil-safe: an unwired repo reports "unavailable", never a
+	// confident zero — same convention as plaidOrphanRepo above.
+	invalidWebhookAttemptRepo InvalidWebhookAttemptStatsReader
 }
 
 // PlaidOrphanedItemLister is the ONE verb the health derivation needs from
@@ -78,6 +82,14 @@ type PlaidOrphanedItemLister interface {
 	List(ctx context.Context, limit, offset int) ([]domain.PlaidOrphanedItem, int, error)
 }
 
+// InvalidWebhookAttemptStatsReader narrows repository.InvalidWebhookAttemptRepository to its read
+// method alone, for the same reason PlaidOrphanedItemLister above narrows to List: a read-only
+// health surface must not gain the ability to insert or trim invalid-attempt rows just because it
+// needs to read a count. Issue #1514 requirement #5.
+type InvalidWebhookAttemptStatsReader interface {
+	GetStats24h(ctx context.Context) (byProvider map[string]int64, mostRecentAt *time.Time, err error)
+}
+
 // NewSystemHealthService creates a new system health service
 func NewSystemHealthService(
 	healthRepo SystemHealthRepository,
@@ -86,14 +98,16 @@ func NewSystemHealthService(
 	plaidEnv string,
 	jobHealthRepo repository.JobHealthRepository,
 	plaidOrphanRepo PlaidOrphanedItemLister,
+	invalidWebhookAttemptRepo InvalidWebhookAttemptStatsReader,
 ) SystemHealthService {
 	return &systemHealthService{
-		healthRepo:      healthRepo,
-		deadLetterRepo:  deadLetterRepo,
-		pool:            pool,
-		plaidEnv:        plaidEnv,
-		jobHealthRepo:   jobHealthRepo,
-		plaidOrphanRepo: plaidOrphanRepo,
+		healthRepo:                healthRepo,
+		deadLetterRepo:            deadLetterRepo,
+		pool:                      pool,
+		plaidEnv:                  plaidEnv,
+		jobHealthRepo:             jobHealthRepo,
+		plaidOrphanRepo:           plaidOrphanRepo,
+		invalidWebhookAttemptRepo: invalidWebhookAttemptRepo,
 	}
 }
 
@@ -195,6 +209,15 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 	}
 
 	// Calculate overall status
+	rejectedWebhookMetrics, err := s.getRejectedWebhookAttemptMetrics(ctx)
+	if err != nil {
+		slog.Error("could not read the rejected-webhook-attempt stats for /admin/health; reported as unavailable rather than as zero — a forged-webhook flood must never render as a confident '0 attacks'",
+			"error", err)
+		response.RejectedWebhookAttempts24h = domain.RejectedWebhookAttemptMetrics{}
+	} else {
+		response.RejectedWebhookAttempts24h = rejectedWebhookMetrics
+	}
+
 	response.Status = s.calculateOverallStatus(response)
 
 	return response, nil
@@ -459,6 +482,33 @@ func (s *systemHealthService) getDeletionResidueMetrics(ctx context.Context) (do
 		NewestRecordSeconds: int64(newestAge.Seconds()),
 		// The query succeeded — this is a VERIFIED count, possibly a real (and very welcome) zero.
 		Available: true,
+	}, nil
+}
+
+// getRejectedWebhookAttemptMetrics derives domain.RejectedWebhookAttemptMetrics from
+// InvalidWebhookAttemptStatsReader.GetStats24h — Issue #1514 requirement #5. Total24h is summed
+// in Go from the per-provider map GetStats24h returns rather than asking the repository for a
+// second, separately-aggregated total: one query, one result set, both numbers derived from it.
+func (s *systemHealthService) getRejectedWebhookAttemptMetrics(ctx context.Context) (domain.RejectedWebhookAttemptMetrics, error) {
+	if s.invalidWebhookAttemptRepo == nil {
+		return domain.RejectedWebhookAttemptMetrics{}, nil
+	}
+
+	byProvider, mostRecentAt, err := s.invalidWebhookAttemptRepo.GetStats24h(ctx)
+	if err != nil {
+		return domain.RejectedWebhookAttemptMetrics{}, fmt.Errorf("read rejected-webhook-attempt stats: %w", err)
+	}
+
+	var total int64
+	for _, count := range byProvider {
+		total += count
+	}
+
+	return domain.RejectedWebhookAttemptMetrics{
+		Total24h:     total,
+		ByProvider:   byProvider,
+		MostRecentAt: mostRecentAt,
+		Available:    true,
 	}, nil
 }
 

@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_invalid_webhook_attempts_created_at_provider;

@@ -138,6 +138,28 @@ type InvalidWebhookAttemptRepository interface {
 	// never the body itself). Trimming that provider's rows back toward invalidWebhookAttemptCap
 	// happens periodically, not on every call — see invalidWebhookAttemptTrimInterval.
 	Record(ctx context.Context, provider string, bodyLength int, bodySHA256 string) error
+
+	// GetStats24h reads back the ONLY surviving audit signal for rejected (unsigned or
+	// invalid-signature) webhook deliveries over the trailing 24 hours: a count per provider, and
+	// the most recent attempt's timestamp across all providers (nil if there were none).
+	//
+	// Issue #1514, requirement #5 (Phase 2 gap fix). Phase 1 satisfied the parenthetical of
+	// "replace the invalid-attempt audit signal the admin UI relies on (bounded metadata + a
+	// counter)" by writing Record above, but never added a way to READ it back — this repository
+	// was write-only until this method existed, and /admin/webhooks (which reads
+	// paddle_webhook_events, a table these rows are never written to) could no longer show a
+	// forged-webhook flood at all. This is the read half that closes that gap.
+	//
+	// ⚠ NOT THE SAME THING AS domain.PaddleStatusMetrics.FailedWebhooks24h. That field counts
+	// paddle_webhook_events rows with processing_error IS NOT NULL — i.e. webhooks that PASSED
+	// signature verification and then failed while being processed. This method counts webhooks
+	// that were REJECTED before ever being written to that full webhook table, because their
+	// signature did not verify (or was absent) — they are still persisted, into this bounded,
+	// metadata-only table instead. A forgery flood and a downstream processing bug are unrelated
+	// failure modes; wiring both to the same dashboard number would hide whichever one isn't
+	// currently spiking. See domain.RejectedWebhookAttemptMetrics for the read side of this
+	// distinction.
+	GetStats24h(ctx context.Context) (byProvider map[string]int64, mostRecentAt *time.Time, err error)
 }
 
 type invalidWebhookAttemptRepository struct {
@@ -346,4 +368,67 @@ func (r *invalidWebhookAttemptRepository) trim(ctx context.Context, provider str
 	}
 
 	return nil
+}
+
+// statsByProviderSinceQuery is GetStats24h's SQL: one round trip, GROUP BY provider, with
+// created_at filtered to the trailing 24h window computed by Postgres itself (`NOW() - INTERVAL
+// '24 hours'`, matching SystemHealthRepository.GetPaddleWebhookStats24h's sibling query) rather
+// than a cutoff computed in Go and bound as a parameter — Codex adversarial review caught that an
+// app-clock cutoff can drift from the DB clock that actually wrote created_at (via its DEFAULT
+// CURRENT_TIMESTAMP, see migration 000146), silently widening or narrowing the window on clock
+// skew. Computing it in SQL keeps both sides of the comparison on the same clock.
+//
+// Deliberately NOT filtered on provider (this repository has no per-provider scoping need for
+// reads, unlike Record's per-provider cap/trim) — index
+// idx_invalid_webhook_attempts_created_at_provider (migration 000148) leads with created_at for
+// exactly this shape: one bounded range scan from now back to the cutoff, with provider carried
+// in the same index entry so no heap access is needed.
+//
+// Returns one row per provider that has ANY attempt since the cutoff — a provider with zero
+// attempts in the window is simply absent from the result set, not a zero row; GetStats24h fills
+// in the zero for any provider callers care about.
+const statsByProviderSinceQuery = `
+	SELECT provider, COUNT(*), MAX(created_at)
+	FROM invalid_webhook_attempts
+	WHERE created_at >= NOW() - INTERVAL '24 hours'
+	GROUP BY provider
+`
+
+// GetStats24h implements the interface doc comment above. Single query; the per-provider counts
+// and the overall most-recent timestamp are both derived from the one result set in Go rather
+// than with a second round trip.
+//
+// ⚠ Total24h (the sum callers derive from this method's byProvider map) is bounded by however
+// many rows Record's periodic trim has left standing for each provider — see
+// invalidWebhookAttemptCap. Under a sustained flood that outpaces the trim schedule, the reported
+// count can plateau at the cap well below the TRUE number of rejected attempts in the window; it
+// is "how many rejected attempts are currently on record", not a lifetime/uncapped counter. The
+// Prometheus counter recordInvalidWebhookAttempt increments (webhook_security.go) is the uncapped
+// total, for whoever needs that instead.
+func (r *invalidWebhookAttemptRepository) GetStats24h(ctx context.Context) (map[string]int64, *time.Time, error) {
+	rows, err := r.db.Query(ctx, statsByProviderSinceQuery)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to query invalid webhook attempt stats: %w", err)
+	}
+	defer rows.Close()
+
+	byProvider := make(map[string]int64)
+	var mostRecentAt *time.Time
+	for rows.Next() {
+		var provider string
+		var count int64
+		var maxCreatedAt time.Time
+		if err := rows.Scan(&provider, &count, &maxCreatedAt); err != nil {
+			return nil, nil, fmt.Errorf("failed to scan invalid webhook attempt stats row: %w", err)
+		}
+		byProvider[provider] = count
+		if mostRecentAt == nil || maxCreatedAt.After(*mostRecentAt) {
+			mostRecentAt = &maxCreatedAt
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("failed to iterate invalid webhook attempt stats rows: %w", err)
+	}
+
+	return byProvider, mostRecentAt, nil
 }
