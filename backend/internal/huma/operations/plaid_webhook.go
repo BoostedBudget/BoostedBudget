@@ -132,12 +132,15 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 	// plaidService is configured, and the fallback main.go:2025-2043 when it isn't) unconditionally
 	// construct `repository.NewWebhookRepository(db, fieldEncryptor)` and pass it as WebhookRepo —
 	// neither branch is reachable unless db != nil, and NewWebhookRepository never returns nil.
-	// There is no route registration path in main.go that wires a handler with a nil repo. The
-	// guard exists purely so unit tests (see plaid_webhook_test.go) and any future caller that
-	// constructs the handler directly stay nil-safe rather than panicking — see
-	// TestHandlePlaidWebhook_NilRepo_AcksWithoutPersisting_DocumentedUnreachable, which pins the
-	// current (silent-ack) behaviour for that unreachable-in-prod configuration so a future change
-	// to it is a deliberate choice, not a surprise.
+	// There is no route registration path in main.go that wires a handler with a nil repo.
+	//
+	// Issue #1514 item 4: the guard still exists so unit tests (see plaid_webhook_test.go) and any
+	// future caller that constructs the handler directly stay nil-safe rather than panicking, but it
+	// no longer acks a verified webhook it never persisted. That was fail-open: a nil repo would
+	// silently drop the webhook and return 200, and Plaid never retries a 2xx. This is
+	// belt-and-braces against a wiring regression, not a claim that the nil-repo state occurs in
+	// production — see TestHandlePlaidWebhook_NilRepo_VerifiedWebhook_FailsClosed, which asserts the
+	// handler fails closed (non-2xx) if that invariant is ever broken.
 	//
 	// Store webhook in database for audit trail
 	if h.webhookRepo != nil {
@@ -193,6 +196,14 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 				)
 			}
 		}
+	} else {
+		// Issue #1514 item 4: this is a signature-VERIFIED webhook we cannot persist because no
+		// repository is wired. Returning "ok" here would silently lose it forever, since Plaid
+		// never retries a 2xx response. Fail closed so Plaid retries.
+		h.logger.Error("Verified Plaid webhook received with no webhook repository configured — failing closed so Plaid retries",
+			"webhook_type", payload.WebhookType,
+		)
+		return nil, huma.Error500InternalServerError("failed to persist webhook")
 	}
 
 	// Handle different webhook types

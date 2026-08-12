@@ -71,15 +71,17 @@ func (m *mockWebhookRepository) Update(ctx context.Context, event *domain.Webhoo
 	return nil
 }
 
-// TestHandlePlaidWebhook_NilRepo_AcksWithoutPersisting_DocumentedUnreachable pins the current
-// behaviour of the `h.webhookRepo != nil` guard in HandlePlaidWebhook (Issue #1514 item 3): with a
-// nil WebhookRepo, a verified webhook is acked 200 without ever being persisted. This configuration
-// is unreachable in the wired deployment — see the doc comment above the guard in plaid_webhook.go
-// referencing backend/cmd/server/main.go:2001-2043, where both registration branches always
-// construct and inject a non-nil repository before the route is ever registered. This test exists
-// so that IF that wiring invariant is ever broken, the resulting behaviour change here is a
-// deliberate, reviewed choice rather than a silent regression.
-func TestHandlePlaidWebhook_NilRepo_AcksWithoutPersisting_DocumentedUnreachable(t *testing.T) {
+// TestHandlePlaidWebhook_NilRepo_VerifiedWebhook_FailsClosed asserts the fail-closed behaviour of
+// the `h.webhookRepo != nil` guard in HandlePlaidWebhook (Issue #1514 item 4): with a nil
+// WebhookRepo, a signature-VERIFIED webhook must be rejected with a non-2xx, never acked 200,
+// because acking without persisting would silently lose the webhook forever (Plaid never retries a
+// 2xx). This configuration is unreachable in the wired deployment — see the doc comment above the
+// guard in plaid_webhook.go referencing backend/cmd/server/main.go:2001-2043, where both
+// registration branches always construct and inject a non-nil repository before the route is ever
+// registered. This test is belt-and-braces against a wiring regression, not a claim that the
+// nil-repo state occurs in production: IF that wiring invariant is ever broken, the handler must
+// fail closed rather than silently drop the webhook.
+func TestHandlePlaidWebhook_NilRepo_VerifiedWebhook_FailsClosed(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: true}
 
 	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
@@ -101,9 +103,8 @@ func TestHandlePlaidWebhook_NilRepo_AcksWithoutPersisting_DocumentedUnreachable(
 
 	output, err := handler.HandlePlaidWebhook(context.Background(), input)
 
-	require.NoError(t, err)
-	require.NotNil(t, output)
-	assert.Equal(t, "ok", output.Body.Status)
+	require.Error(t, err, "a verified webhook that cannot be persisted must fail closed, not ack 2xx")
+	assert.Nil(t, output)
 }
 
 // TestHandlePlaidWebhook_TransactionsUpdate tests handling of TRANSACTIONS webhook.
