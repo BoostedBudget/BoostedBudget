@@ -104,6 +104,30 @@ var (
 		Help: "Number of webhook deliveries rejected for missing or invalid signature, by provider/site.",
 	}, []string{"provider"})
 
+	// PaddleWebhookRejectionsTotal counts PaddleWebhookService.VerifyWebhook rejections by
+	// reason (issue #1514 fix-round-1 item 2). InvalidWebhookAttemptsTotal above records the
+	// SAME rejections but generically (label "paddle", no reason breakdown) at the handler
+	// layer — that counter alone cannot tell a genuine forged signature apart from a stale/
+	// future timestamp (checkTimestampTolerance) or a malformed header (parseSignature/
+	// parseTimestamp), so a slow-onset host clock-skew incident — every delivery's ts= now
+	// legitimately outside the tolerance window — would look identical to an attack, and
+	// nobody would know to check the clock instead of waiting for an attacker to give up.
+	//
+	// Expected label values:
+	//   invalid_format             - parseSignature/parseTimestamp rejected the header shape
+	//                                or a non-numeric/negative/overflow ts=
+	//   timestamp_out_of_tolerance - a well-formed ts= outside the configured tolerance window
+	//                                (checkTimestampTolerance) — sustained non-zero here, with
+	//                                signature_mismatch flat, is the clock-skew signal: real
+	//                                Paddle deliveries being dropped, not forged ones
+	//   signature_mismatch         - a well-formed, in-window ts= but no h1 candidate matched
+	//                                the calculated HMAC — the "somebody sent a bad signature"
+	//                                case
+	PaddleWebhookRejectionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "paddle_webhook_rejections_total",
+		Help: "Total PaddleWebhookService.VerifyWebhook rejections by reason (invalid_format, timestamp_out_of_tolerance, signature_mismatch). A sustained rate of timestamp_out_of_tolerance with signature_mismatch flat suggests host clock skew silently dropping genuine Paddle deliveries, not an attack.",
+	}, []string{"reason"})
+
 	// RateLimitIdentitySentinelFallbackTotal counts requests that reached the
 	// rate limiter with GateStatusPassed (i.e. CloudflareOnly already verified
 	// the immediate peer and the origin secret) but presented a missing,

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 var (
@@ -34,6 +35,14 @@ var (
 	// — either too old (a captured/replayed signature) or unreasonably far in the future
 	// (issue #1514, F3).
 	ErrTimestampOutOfTolerance = errors.New("webhook timestamp outside tolerance window")
+)
+
+// Reason labels for observability.PaddleWebhookRejectionsTotal — see that metric's doc comment
+// for what each one means operationally.
+const (
+	paddleWebhookRejectionReasonInvalidFormat           = "invalid_format"
+	paddleWebhookRejectionReasonTimestampOutOfTolerance = "timestamp_out_of_tolerance"
+	paddleWebhookRejectionReasonSignatureMismatch       = "signature_mismatch"
 )
 
 // defaultPaddleWebhookTimestampToleranceSeconds is used when the caller-supplied config value
@@ -84,8 +93,13 @@ func NewPaddleWebhookService(cfg *config.Config, logger *slog.Logger) (PaddleWeb
 		return nil, fmt.Errorf("%w: PADDLE_WEBHOOK_SECRET is required", ErrWebhookSecretNotConfigured)
 	}
 
+	// Defense-in-depth: config.Load() already bounds this to
+	// (0, config.PaddleWebhookTimestampToleranceMaxSeconds] and logs a warning on an
+	// out-of-range value, but a literal-constructed config.Config (tests, or any future caller
+	// that skips Load()) bypasses that validation entirely — clamp here too so an unbounded
+	// value can never silently disable the replay window (issue #1514 fix-round-1 item 1).
 	toleranceSeconds := cfg.PaddleWebhookTimestampToleranceSeconds
-	if toleranceSeconds <= 0 {
+	if toleranceSeconds <= 0 || toleranceSeconds > config.PaddleWebhookTimestampToleranceMaxSeconds {
 		toleranceSeconds = defaultPaddleWebhookTimestampToleranceSeconds
 	}
 
@@ -123,6 +137,7 @@ func (s *paddleWebhookService) VerifyWebhook(signature, body string) (bool, erro
 	// Parse signature header
 	timestamp, hashes, err := parseSignature(signature)
 	if err != nil {
+		observability.PaddleWebhookRejectionsTotal.WithLabelValues(paddleWebhookRejectionReasonInvalidFormat).Inc()
 		s.logger.Warn("Invalid Paddle signature format",
 			"error", err,
 		)
@@ -131,6 +146,7 @@ func (s *paddleWebhookService) VerifyWebhook(signature, body string) (bool, erro
 
 	tsUnix, err := parseTimestamp(timestamp)
 	if err != nil {
+		observability.PaddleWebhookRejectionsTotal.WithLabelValues(paddleWebhookRejectionReasonInvalidFormat).Inc()
 		s.logger.Warn("Invalid Paddle signature timestamp",
 			"error", err,
 		)
@@ -138,6 +154,7 @@ func (s *paddleWebhookService) VerifyWebhook(signature, body string) (bool, erro
 	}
 
 	if err := s.checkTimestampTolerance(tsUnix); err != nil {
+		observability.PaddleWebhookRejectionsTotal.WithLabelValues(paddleWebhookRejectionReasonTimestampOutOfTolerance).Inc()
 		s.logger.Warn("Paddle webhook signature rejected: timestamp outside tolerance window",
 			"timestamp", tsUnix,
 			"tolerance_seconds", int(s.tolerance.Seconds()),
@@ -165,6 +182,7 @@ func (s *paddleWebhookService) VerifyWebhook(signature, body string) (bool, erro
 	}
 
 	if !valid {
+		observability.PaddleWebhookRejectionsTotal.WithLabelValues(paddleWebhookRejectionReasonSignatureMismatch).Inc()
 		// Issue #1514, F2: deliberately do NOT log calculatedHash or any candidate hash here —
 		// see the doc comment above.
 		s.logger.Warn("Paddle webhook signature verification failed",
@@ -185,6 +203,17 @@ func (s *paddleWebhookService) VerifyWebhook(signature, body string) (bool, erro
 // and — unlike backend/internal/services/webhook_service.go's Plaid JWT check, which only
 // bounds time.Since(issuedAt) and so accepts arbitrarily future-dated tokens — an unbounded
 // future timestamp is just as dangerous here and must be rejected too.
+//
+// Operational note (issue #1514 fix-round-1 item 2): if this server's clock drifts persistently
+// out of sync with Paddle's, EVERY genuine webhook delivery starts failing this check, not just
+// a forged one — and observability.PaddleWebhookRejectionsTotal's
+// "timestamp_out_of_tolerance" label, sustained and non-zero while "signature_mismatch" stays
+// flat, is the intended signal to page on for exactly that scenario. What happens next at
+// Paddle's end if every retry of a given event also lands outside the tolerance window (does
+// Paddle keep retrying, back off, or eventually give up and mark the event un-deliverable?) is
+// NOT established with confidence anywhere in this codebase — there is no vendored Paddle SDK
+// or captured retry-exhaustion traffic to check it against, so treat any specific retry-count or
+// give-up-time claim about Paddle's behavior as unverified rather than settled fact.
 func (s *paddleWebhookService) checkTimestampTolerance(tsUnix int64) error {
 	eventTime := time.Unix(tsUnix, 0)
 	now := s.now()
