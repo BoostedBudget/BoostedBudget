@@ -114,10 +114,20 @@ const DENYLIST_MAX_WORDS = Math.max(
  * True if `key` should be redacted: either the whole lowercased key matches
  * a denylist entry, or some contiguous run of its tokens — joined with `_`,
  * from length 1 up to the longest denylist entry's word count — does.
+ *
+ * Pure-digit tokens (e.g. the `1` in `account1Name`) are dropped before the
+ * windows are built. Without this, a digit sitting between two words breaks
+ * contiguity and a compound entry like `account_name` can never match
+ * `account1Name` even though `accountName` matches it directly — the digit
+ * would silently make the field un-redactable. The denylist has no digit-only
+ * entries, so dropping digit tokens can only ever surface additional matches
+ * (e.g. `account1Name`, `public1Token`), never suppress one that already
+ * matched: every entry that matched via the un-filtered tokens still matches
+ * once the (non-matching) digit tokens are removed from between them.
  */
 function isPiiKey(key: string): boolean {
   if (PII_PROPERTY_DENYLIST.has(key.toLowerCase())) return true
-  const tokens = tokenize(key)
+  const tokens = tokenize(key).filter(token => !/^\d+$/.test(token))
   const maxWindow = Math.min(DENYLIST_MAX_WORDS, tokens.length)
   for (let windowSize = 1; windowSize <= maxWindow; windowSize++) {
     for (let start = 0; start + windowSize <= tokens.length; start++) {
