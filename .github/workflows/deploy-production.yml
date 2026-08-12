@@ -429,7 +429,7 @@ jobs:
           docker system prune -f --filter "until=24h"
 
       - name: Setup Fly.io CLI
-        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master@2026-04-08 (no release newer than 1.5/2024-02; see #1514)
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
 
       - name: Configure Docker
         run: |
@@ -512,7 +512,7 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
 
       - name: Setup Fly.io CLI
-        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master@2026-04-08 (no release newer than 1.5/2024-02; see #1514)
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
 
       - name: Select image and preflight check
         id: image-select
