@@ -170,7 +170,7 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 				"webhook_type", payload.WebhookType,
 				"error", err,
 			)
-			return nil, huma.Error500InternalServerError("failed to persist webhook")
+			return nil, huma.Error500InternalServerError("failed to store webhook")
 		}
 
 		if h.jobQueue != nil {
@@ -203,7 +203,7 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 		h.logger.Error("Verified Plaid webhook received with no webhook repository configured — failing closed so Plaid retries",
 			"webhook_type", payload.WebhookType,
 		)
-		return nil, huma.Error500InternalServerError("failed to persist webhook")
+		return nil, huma.Error500InternalServerError("webhook repository not configured")
 	}
 
 	// Handle different webhook types
