@@ -67,10 +67,9 @@ func TestAutoSyncAfterLinking_E2E_Flow(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	// Verify River tables exist. river_client was replaced here by river_notification:
-	// River dropped river_client in its main-line migration 007, which migration 000145
-	// mirrors, and the same migration adds river_notification — so the expected count of 3
-	// below still holds.
+	// Verify River tables exist. river_client was swapped for river_notification when
+	// migration 000145 mirrored River's main-line migration 007, so the count of 3 still
+	// holds — see river_health_test.go for the details.
 	var tableCount int
 	err := db.QueryRow(ctx, `
 		SELECT COUNT(*) FROM information_schema.tables
