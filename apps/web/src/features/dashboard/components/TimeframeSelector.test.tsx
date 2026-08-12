@@ -13,9 +13,15 @@ import { TimeframeSelector } from './TimeframeSelector'
 // (Radix prevents re-selection in single mode). Removing this mock breaks the
 // 'This Month' test because the component initializes with that preset selected.
 // To clean this up, the test should click a different preset first, then 'This Month'.
+//
+// Keep the container's role/aria-label in sync with src/test/mocks/toggle-group.tsx.
+// bun's mock.module is process-global, so this inline mock overrides the shared one for
+// every test file that runs after this one in the same process (the pollution #1323 exists
+// to prevent). When it omitted role and aria-label, PortfolioTimeRange's accessible-name
+// assertion could not hold.
 mock.module('@/components/ui/toggle-group', () => ({
-  ToggleGroup: ({ children, onValueChange }: { children: React.ReactNode; onValueChange: (v: string) => void }) => (
-    <div data-testid="toggle-group" onClick={(e) => {
+  ToggleGroup: ({ children, onValueChange, type, 'aria-label': ariaLabel }: { children: React.ReactNode; onValueChange: (v: string) => void; type?: 'single' | 'multiple'; 'aria-label'?: string }) => (
+    <div role={type === 'multiple' ? 'toolbar' : 'radiogroup'} aria-label={ariaLabel} data-testid="toggle-group" onClick={(e) => {
       const btn = (e.target as HTMLElement).closest('[data-value]')
       if (btn) onValueChange(btn.getAttribute('data-value') ?? '')
     }}>

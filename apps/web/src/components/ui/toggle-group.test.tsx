@@ -25,7 +25,7 @@ describe('ToggleGroup', () => {
     // that), but until @radix-ui/react-toggle-group 1.1.19 the container was role="group",
     // which is invalid ARIA — radio children require a radiogroup owner. This test asserted
     // the invalid markup; it now pins the corrected role so a regression back to "group"
-    // fails here. A multi-select (type="multiple") group is still role="group".
+    // fails here. A multi-select (type="multiple") group is role="toolbar", not "group".
     it('should render type="single" with role="radiogroup" and radio items', () => {
       render(
         <ToggleGroup type="single">
