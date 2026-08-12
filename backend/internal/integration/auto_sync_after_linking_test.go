@@ -67,14 +67,20 @@ func TestAutoSyncAfterLinking_E2E_Flow(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	// Verify River tables exist
+	// Verify River tables exist. river_client was swapped for river_notification when
+	// migration 000145 mirrored River's main-line migration 007, so the count of 3 still
+	// holds — see river_health_test.go for the details.
+	// table_schema = 'public' matters: without it the count spans every schema, so a
+	// duplicate river_job in some other schema could carry the total to 3 while a required
+	// public table was missing. Equality, not GreaterOrEqual, for the same reason.
 	var tableCount int
 	err := db.QueryRow(ctx, `
 		SELECT COUNT(*) FROM information_schema.tables
-		WHERE table_name IN ('river_job', 'river_client', 'river_queue')
+		WHERE table_schema = 'public'
+		  AND table_name IN ('river_job', 'river_notification', 'river_queue')
 	`).Scan(&tableCount)
 	require.NoError(t, err, "Failed to query River tables")
-	assert.GreaterOrEqual(t, tableCount, 3, "River tables should exist")
+	assert.Equal(t, 3, tableCount, "all three River tables should exist in the public schema")
 
 	// Create a test user in the database
 	user := &domain.User{

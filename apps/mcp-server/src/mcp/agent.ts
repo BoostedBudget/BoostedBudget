@@ -121,9 +121,14 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     const audit = createAuditClient(env)
 
     // ── search tool ──────────────────────────────────────────────────────────
-    // Zod 3.25 changed type inference for z.objectOutputType<T> in registerTool's generic
-    // constraint, causing TS2589 (type instantiation excessively deep). Cast to any to bypass
-    // deep inference; explicit input types on callbacks preserve runtime correctness.
+    // @modelcontextprotocol/sdk types registerTool's inputSchema against Zod 3 (its AnySchema
+    // is a Zod 3 ZodType, with _parse/_getType internals), while this Worker builds schemas with
+    // Zod 4. Passing a Zod 4 schema therefore fails to typecheck (TS2322) even though it works at
+    // runtime — the SDK declares `zod: ^3.25 || ^4.0` and resolves Zod 4 itself. Cast to any to
+    // bridge the two type worlds; the explicit input types on the callbacks below are what
+    // actually preserve type safety at the call boundary.
+    // Was previously cast for a different reason (TS2589, deep instantiation under Zod 3.25);
+    // verified on the Zod 4 bump that removing the casts still fails, now with TS2322.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(this.server as any).registerTool(
       'search',
@@ -139,8 +144,8 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           limit: z.number().int().min(1).max(50).optional().describe('Max results to return (default: 20)'),
         },
       },
-      // Explicit type annotation avoids TS2589 (type instantiation excessively deep)
-      // triggered by Zod 3.25's changed inference for nested schemas in registerTool.
+      // Explicit type annotation: the `as any` cast above erases the inferred input type,
+      // so this is what keeps the handler's argument checked.
       async (input: { query?: string; class?: 'read' | 'write'; tag?: string; limit?: number }) => {
         const p = this.props as McpAgentProps
         posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'search' })
@@ -167,9 +172,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           calls: z.array(
             z.object({
               operationId: z.string().describe('The operationId from search() results'),
-              params: z.record(z.unknown()).optional().describe('Query parameters'),
-              body: z.record(z.unknown()).optional().describe('Request body for write operations'),
-              pathParams: z.record(z.string()).optional().describe('Path parameters (e.g. { id: "abc" })'),
+              params: z.record(z.string(), z.unknown()).optional().describe('Query parameters'),
+              body: z.record(z.string(), z.unknown()).optional().describe('Request body for write operations'),
+              pathParams: z.record(z.string(), z.string()).optional().describe('Path parameters (e.g. { id: "abc" })'),
             }),
           ).max(25, 'Maximum 25 calls per execute() invocation').describe('Ordered list of API calls to execute (max 25)'),
           confirmationToken: z.string().optional().describe('Confirmation token for write operations'),
@@ -228,9 +233,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           description: z.string().optional().describe('Optional description'),
           calls: z.array(z.object({
             operationId: z.string(),
-            params: z.record(z.unknown()).optional(),
-            body: z.record(z.unknown()).optional(),
-            pathParams: z.record(z.string()).optional(),
+            params: z.record(z.string(), z.unknown()).optional(),
+            body: z.record(z.string(), z.unknown()).optional(),
+            pathParams: z.record(z.string(), z.string()).optional(),
           })).describe('Ordered read-only API calls'),
           confirmationToken: z.string().optional(),
         },

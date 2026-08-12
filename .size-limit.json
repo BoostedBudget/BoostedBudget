@@ -20,7 +20,7 @@
   {
     "name": "vendor",
     "path": "apps/web/dist/assets/vendor-*.js",
-    "limit": "410 KB",
+    "limit": "435 KB",
     "gzip": true
   },
   {

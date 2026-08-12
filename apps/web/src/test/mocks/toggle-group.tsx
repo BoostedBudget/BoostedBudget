@@ -18,12 +18,26 @@ mock.module('@/components/ui/toggle-group', () => ({
   ToggleGroup: ({
     children,
     onValueChange,
+    type,
+    'aria-label': ariaLabel,
   }: {
     children: React.ReactNode
     onValueChange?: (v: string) => void
+    type?: 'single' | 'multiple'
+    'aria-label'?: string
   }) => (
     <div
-      role="group"
+      // Mirror real Radix's roles: "radiogroup" for type="single", "toolbar" for
+      // type="multiple" (verified against @radix-ui/react-toggle-group 1.1.19's dist).
+      // 1.1.19 corrected the single-select container from role="group", which was invalid
+      // ARIA over its role="radio" children. This mock previously hardcoded "group" for
+      // both, so any role-based query would have asserted against markup production no
+      // longer emits.
+      role={type === 'multiple' ? 'toolbar' : 'radiogroup'}
+      // aria-label must be forwarded: without it a "does this group have an accessible
+      // name?" test can only assert the container exists, which passes even if production
+      // drops the label entirely.
+      aria-label={ariaLabel}
       data-testid="toggle-group"
       onClick={(e: React.MouseEvent<HTMLDivElement>) => {
         const btn = (e.target as HTMLElement).closest('[data-value]') as HTMLElement | null
