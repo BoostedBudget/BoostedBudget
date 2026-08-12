@@ -18,11 +18,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
+	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
 )
 
@@ -71,20 +75,48 @@ func TestInternalMetricsAPI_DoesNotExposePublicRoutes(t *testing.T) {
 }
 
 // TestPublicRouteRegistration_MetricsNotServed_HealthUnchanged mirrors the PUBLIC
-// listener's actual route registration for /health (operations.RegisterHealthRoutes with
-// the same handler constructors main() uses) while deliberately NOT registering
-// /metrics — that omission is the fix main.go now performs. This is a fresh Echo+Huma
-// pair, not newInternalMetricsAPI's, specifically so this test does not silently pass
-// just because it reuses the same constructor as the code under test.
+// listener's actual route-registration path: humaecho.NewV4 + humaconfig.NewAPIConfig
+// (the exact call main.go makes for humaAPI, cmd/server/main.go ~:175) followed by
+// operations.RegisterHealthRoutes with the same handler constructors main() uses, while
+// deliberately NOT registering /metrics — that omission is the fix main.go now performs.
+//
+// The prior version of this test built its "public-shaped" listener via
+// newInternalMetricsAPI, which is the INTERNAL listener's constructor — it deliberately
+// blanks OpenAPIPath/DocsPath/SchemasPath (see internal_metrics.go), the opposite of the
+// real public config. That made the test pass unconditionally: it never exercised
+// anything resembling the production public API shape, so it would have passed even
+// against a pre-fix main() that publicly exposed /metrics, as long as this test simply
+// didn't call RegisterMetricsRoutes itself. Using the real humaconfig.NewAPIConfig here
+// closes that gap for everything reachable from that config (verified below via /docs and
+// /openapi.json actually resolving) — though whether main() itself calls
+// RegisterMetricsRoutes on humaAPI is, and can only be, verified by
+// TestInternalMetricsListener_IsWiredIntoMain's source-text check below, since main() is
+// not unit-testable (dials a real database, loads live config, etc.).
 func TestPublicRouteRegistration_MetricsNotServed_HealthUnchanged(t *testing.T) {
-	e, api := newInternalMetricsAPI(testCfg()) // vanilla Echo+Huma pair; nothing metrics-specific used below
+	cfg := testCfg()
+	e := echo.New()
+	api := humaecho.NewV4(e, humaconfig.NewAPIConfig(cfg.Version, cfg.Environment))
+
 	healthHandler := operations.NewHealthHandler(
 		createDBCheck(),
 		createRedisCheck(),
 		createClerkCheck(),
-		"test",
+		cfg.Version,
 	)
 	operations.RegisterHealthRoutes(api, healthHandler)
+
+	// Sanity check that this is genuinely the public API's config and not a stand-in: on
+	// the internal listener's config, /docs and /openapi.json are both blanked out (404).
+	// If a future edit accidentally swapped in newInternalMetricsAPI here again, this
+	// would fail loudly instead of the test silently reverting to being self-fulfilling.
+	for _, path := range []string{"/docs", "/openapi.json"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		if rec.Code == http.StatusNotFound {
+			t.Fatalf("GET %s on the public-shaped listener = 404, want a real route — this test must build the listener with humaconfig.NewAPIConfig (the real public config), not a config that blanks out docs/openapi, or this test proves nothing", path)
+		}
+	}
 
 	// /metrics must NOT be served on the public-shaped listener.
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
@@ -256,8 +288,22 @@ func TestInternalMetricsListener_IsWiredIntoMain(t *testing.T) {
 	if !strings.Contains(src, "bindInternalMetricsListener(resolvedInternalMetricsPort)") {
 		t.Error("main.go must call bindInternalMetricsListener with the VALIDATED port (resolvedInternalMetricsPort), not the raw, unvalidated internalMetricsPort() value")
 	}
-	if !strings.Contains(src, "os.Exit(1)") || !strings.Contains(src, "Failed to bind internal metrics listener") {
-		t.Error("main.go must treat a bind failure for the internal metrics listener as fatal (os.Exit(1)), not a silent no-op")
+	// Previously this checked strings.Contains(src, "os.Exit(1)") and
+	// strings.Contains(src, "Failed to bind internal metrics listener") independently —
+	// both strings merely had to exist SOMEWHERE in main.go, which main.go's OTHER fatal
+	// paths (config load, tier config, region config) already satisfy for "os.Exit(1)" on
+	// their own. That check would pass even if the bind-failure branch never called
+	// os.Exit(1) at all. This regex instead requires the log call and os.Exit(1) to be the
+	// next two statements after each other — i.e. in the same `if err != nil { ... }`
+	// branch as main.go actually has it (cmd/server/main.go ~:200) — not merely present
+	// independently anywhere in the file.
+	bindFailureIsFatal := regexp.MustCompile(
+		`appLogger\.Error\(\s*"Failed to bind internal metrics listener"\s*,\s*"error"\s*,\s*err\s*\)\s*\n\s*os\.Exit\(1\)`,
+	)
+	if !bindFailureIsFatal.MatchString(src) {
+		t.Error("main.go must treat a bind failure for the internal metrics listener as fatal: the " +
+			`appLogger.Error("Failed to bind internal metrics listener", ...) call and os.Exit(1) must be ` +
+			"adjacent statements in the same branch, not merely both present somewhere in the file")
 	}
 	if !strings.Contains(src, "operations.RegisterMetricsRoutes(internalHumaAPI, humaMetricsHandler)") {
 		t.Error("main.go must register /metrics on internalHumaAPI (the internal-only listener), not the public humaAPI")
