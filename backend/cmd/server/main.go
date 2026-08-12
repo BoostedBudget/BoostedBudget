@@ -335,6 +335,10 @@ func main() {
 	var subscriptionWebhookWorker *jobs.SubscriptionWebhookWorker
 	var paddleWebhookRepo repository.PaddleWebhookRepository
 	var paddleTransactionRepo repository.PaddleTransactionRepository // Issues #747 #748
+	// Issue #1514: bounded audit signal for rejected (unsigned/invalid-signature) webhook
+	// deliveries. Requires only a DB connection (no encryption — see repository doc comment on
+	// why raw payload is never stored), so it's constructed alongside paddleWebhookRepo below.
+	var invalidWebhookAttemptRepo repository.InvalidWebhookAttemptRepository
 
 	// Declare encryption service and field encryptor at outer scope so they are accessible
 	// in both the authenticated block and later public webhook handlers.
@@ -406,6 +410,7 @@ func main() {
 		transactionRepo := repository.NewTransactionRepository(db, fieldEncryptor)
 		webhookRepo := repository.NewWebhookRepository(db, fieldEncryptor)
 		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db, fieldEncryptor)                         // Issue #45, #46: Paddle webhooks
+		invalidWebhookAttemptRepo = repository.NewInvalidWebhookAttemptRepository(db)                         // Issue #1514: bounded invalid-attempt audit
 		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db, fieldEncryptor)                 // Issues #747 #748: Paddle transaction audit log
 		identityRepo := repository.NewUserIdentityRepository(db, fieldEncryptor)                              // Maps Clerk IDs to user UUIDs
 		notificationRepo := repository.NewNotificationRepository(db, fieldEncryptor)                          // Issue #257: Notification storage
@@ -1974,10 +1979,11 @@ func main() {
 		// Register Huma plaid webhook route (Issue #559: Huma migration)
 		// Issue #573: Pass jobQueue for async webhook processing
 		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(operations.PlaidWebhookHandlerDeps{
-			WebhookService: webhookService,
-			WebhookRepo:    webhookRepoForHandler,
-			JobQueue:       jobQueue,
-			Logger:         appLogger,
+			WebhookService:     webhookService,
+			WebhookRepo:        webhookRepoForHandler,
+			InvalidAttemptRepo: repository.NewInvalidWebhookAttemptRepository(db), // Issue #1514
+			JobQueue:           jobQueue,
+			Logger:             appLogger,
 		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
 
@@ -1991,9 +1997,10 @@ func main() {
 		// Fallback: Basic webhook handler without signature verification
 		// Used when Plaid credentials are not configured (e.g., local development)
 		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(operations.PlaidWebhookHandlerDeps{
-			WebhookRepo: repository.NewWebhookRepository(db, fieldEncryptor),
-			JobQueue:    jobQueue,
-			Logger:      appLogger,
+			WebhookRepo:        repository.NewWebhookRepository(db, fieldEncryptor),
+			InvalidAttemptRepo: repository.NewInvalidWebhookAttemptRepository(db), // Issue #1514
+			JobQueue:           jobQueue,
+			Logger:             appLogger,
 		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
 		appLogger.Info("Huma Plaid webhook route registered at POST /webhooks/plaid (verification disabled)")
@@ -2008,10 +2015,11 @@ func main() {
 	if db != nil && paddleWebhookService != nil {
 		// Register Huma paddle webhook route
 		humaPaddleWebhookHandler := operations.NewPaddleWebhookHandler(operations.PaddleWebhookHandlerDeps{
-			WebhookService: paddleWebhookService,
-			WebhookRepo:    paddleWebhookRepo,
-			JobQueue:       jobQueue,
-			Logger:         appLogger,
+			WebhookService:     paddleWebhookService,
+			WebhookRepo:        paddleWebhookRepo,
+			InvalidAttemptRepo: invalidWebhookAttemptRepo, // Issue #1514
+			JobQueue:           jobQueue,
+			Logger:             appLogger,
 		})
 		operations.RegisterPaddleWebhookRoutes(humaAPI, humaPaddleWebhookHandler)
 
@@ -2025,9 +2033,10 @@ func main() {
 		// Fallback: Basic webhook handler without signature verification
 		// Used when Paddle credentials are not configured (e.g., local development)
 		humaPaddleWebhookHandler := operations.NewPaddleWebhookHandler(operations.PaddleWebhookHandlerDeps{
-			WebhookRepo: paddleWebhookRepo,
-			JobQueue:    jobQueue,
-			Logger:      appLogger,
+			WebhookRepo:        paddleWebhookRepo,
+			InvalidAttemptRepo: invalidWebhookAttemptRepo, // Issue #1514
+			JobQueue:           jobQueue,
+			Logger:             appLogger,
 		})
 		operations.RegisterPaddleWebhookRoutes(humaAPI, humaPaddleWebhookHandler)
 		appLogger.Info("Huma Paddle webhook route registered at POST /webhooks/paddle (verification disabled)")

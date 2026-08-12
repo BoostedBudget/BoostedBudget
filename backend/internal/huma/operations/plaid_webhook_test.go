@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -134,9 +136,11 @@ func TestHandlePlaidWebhook_ItemError(t *testing.T) {
 	assert.Contains(t, output.Body.Message, "Login required")
 }
 
-// TestHandlePlaidWebhook_InvalidJSON tests handling of invalid JSON payload.
+// TestHandlePlaidWebhook_InvalidJSON tests handling of invalid JSON payload — with a VALID
+// signature, since Issue #1514 checks the signature first and this test targets the JSON-parsing
+// branch specifically.
 func TestHandlePlaidWebhook_InvalidJSON(t *testing.T) {
-	mockService := &mockWebhookService{}
+	mockService := &mockWebhookService{verifyResult: true}
 	mockRepo := &mockWebhookRepository{}
 
 	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
@@ -145,7 +149,7 @@ func TestHandlePlaidWebhook_InvalidJSON(t *testing.T) {
 	})
 
 	input := &PlaidWebhookInput{
-		PlaidVerification: "",
+		PlaidVerification: "valid-jwt-signature",
 		RawBody:           []byte("not valid json"),
 	}
 
@@ -157,9 +161,10 @@ func TestHandlePlaidWebhook_InvalidJSON(t *testing.T) {
 	assert.Contains(t, output.Body.Message, "Invalid JSON")
 }
 
-// TestHandlePlaidWebhook_MissingFields tests handling of missing required fields.
+// TestHandlePlaidWebhook_MissingFields tests handling of missing required fields — with a VALID
+// signature, so this exercises the field-validation branch rather than the signature check.
 func TestHandlePlaidWebhook_MissingFields(t *testing.T) {
-	mockService := &mockWebhookService{}
+	mockService := &mockWebhookService{verifyResult: true}
 	mockRepo := &mockWebhookRepository{}
 
 	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
@@ -174,7 +179,7 @@ func TestHandlePlaidWebhook_MissingFields(t *testing.T) {
 	rawBody, _ := json.Marshal(payload)
 
 	input := &PlaidWebhookInput{
-		PlaidVerification: "",
+		PlaidVerification: "valid-jwt-signature",
 		RawBody:           rawBody,
 	}
 
@@ -185,8 +190,9 @@ func TestHandlePlaidWebhook_MissingFields(t *testing.T) {
 	assert.Contains(t, err.Error(), "Missing required fields")
 }
 
-// TestHandlePlaidWebhook_InvalidSignature tests handling when signature is invalid.
-func TestHandlePlaidWebhook_InvalidSignature(t *testing.T) {
+// TestHandlePlaidWebhook_InvalidSignature_RejectedBeforePersistence tests that a cryptographically
+// invalid signature is rejected outright — never persisted, never enqueued (Issue #1514).
+func TestHandlePlaidWebhook_InvalidSignature_RejectedBeforePersistence(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: false}
 	mockRepo := &mockWebhookRepository{}
 
@@ -209,17 +215,14 @@ func TestHandlePlaidWebhook_InvalidSignature(t *testing.T) {
 
 	output, err := handler.HandlePlaidWebhook(context.Background(), input)
 
-	require.NoError(t, err) // Should still process (audit trail)
-	require.NotNil(t, output)
-	assert.Equal(t, "ok", output.Body.Status)
-
-	// Webhook should still be stored with signatureValid = false
-	assert.Len(t, mockRepo.events, 1)
-	assert.False(t, mockRepo.events[0].SignatureValid)
+	require.Error(t, err, "invalid signature must be rejected with a non-2xx response")
+	assert.Nil(t, output)
+	assert.Empty(t, mockRepo.events, "invalid-signature webhook must not be persisted to the full webhook table")
 }
 
-// TestHandlePlaidWebhook_NoService tests handling when no webhook service is configured.
-func TestHandlePlaidWebhook_NoService(t *testing.T) {
+// TestHandlePlaidWebhook_NoService_Rejected tests that a missing webhook service is treated as
+// "cannot verify" and fails closed — Issue #1514.
+func TestHandlePlaidWebhook_NoService_Rejected(t *testing.T) {
 	mockRepo := &mockWebhookRepository{}
 
 	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
@@ -240,9 +243,9 @@ func TestHandlePlaidWebhook_NoService(t *testing.T) {
 
 	output, err := handler.HandlePlaidWebhook(context.Background(), input)
 
-	require.NoError(t, err)
-	require.NotNil(t, output)
-	assert.Equal(t, "ok", output.Body.Status)
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Empty(t, mockRepo.events)
 }
 
 // TestPlaidWebhookRouteRegistration tests that routes are properly registered.
@@ -257,14 +260,15 @@ func TestPlaidWebhookRouteRegistration(t *testing.T) {
 	})
 	RegisterPlaidWebhookRoutes(api, handler)
 
-	// Test POST /webhooks/plaid with valid payload
+	// Test POST /webhooks/plaid with valid payload and a Plaid-Verification header (Issue #1514:
+	// the request is rejected outright without one).
 	payload := map[string]interface{}{
 		"webhook_type": "TRANSACTIONS",
 		"webhook_code": "DEFAULT_UPDATE",
 		"item_id":      "item-123",
 	}
 
-	resp := api.Post("/webhooks/plaid", "application/json", payload)
+	resp := api.Post("/webhooks/plaid", "Plaid-Verification: valid-jwt-signature", payload)
 	assert.Equal(t, http.StatusOK, resp.Code)
 
 	// Verify the response contains expected status
@@ -303,9 +307,10 @@ func TestHandlePlaidWebhook_ValidSignatureStoresInDB(t *testing.T) {
 	assert.True(t, mockRepo.events[0].SignatureValid)
 }
 
-// TestHandlePlaidWebhook_DatabaseErrorReturns200 tests graceful degradation
-// when database storage fails - should still return 200 OK.
-func TestHandlePlaidWebhook_DatabaseErrorReturns200(t *testing.T) {
+// TestHandlePlaidWebhook_ValidWebhookPersistenceFails_ReturnsNon2xx verifies Issue #1514 item 5:
+// a signature-valid webhook we fail to persist must return a non-2xx response so Plaid retries,
+// instead of silently losing it forever.
+func TestHandlePlaidWebhook_ValidWebhookPersistenceFails_ReturnsNon2xx(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: true}
 	mockRepo := &mockWebhookRepository{createErr: errors.New("database connection failed")}
 
@@ -328,14 +333,13 @@ func TestHandlePlaidWebhook_DatabaseErrorReturns200(t *testing.T) {
 
 	output, err := handler.HandlePlaidWebhook(context.Background(), input)
 
-	require.NoError(t, err) // Should NOT fail
-	require.NotNil(t, output)
-	assert.Equal(t, "ok", output.Body.Status) // Should return OK despite DB error
+	require.Error(t, err, "a persistence failure for a VALID webhook must return a non-2xx response so Plaid retries")
+	assert.Nil(t, output)
 }
 
-// TestHandlePlaidWebhook_MissingSignatureStoresWithFalse tests that missing
-// signature header still stores webhook but with signatureValid=false.
-func TestHandlePlaidWebhook_MissingSignatureStoresWithFalse(t *testing.T) {
+// TestHandlePlaidWebhook_MissingSignature_RejectedBeforePersistence tests that a missing
+// Plaid-Verification header is rejected outright — never persisted, never enqueued (Issue #1514).
+func TestHandlePlaidWebhook_MissingSignature_RejectedBeforePersistence(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: true}
 	mockRepo := &mockWebhookRepository{}
 
@@ -358,15 +362,79 @@ func TestHandlePlaidWebhook_MissingSignatureStoresWithFalse(t *testing.T) {
 
 	output, err := handler.HandlePlaidWebhook(context.Background(), input)
 
-	require.NoError(t, err)
-	require.NotNil(t, output)
-	assert.Len(t, mockRepo.events, 1)
-	assert.False(t, mockRepo.events[0].SignatureValid) // Should be false
+	require.Error(t, err, "missing signature must be rejected with a non-2xx response")
+	assert.Nil(t, output)
+	assert.Empty(t, mockRepo.events)
 }
 
-// TestHandlePlaidWebhook_InvalidSignatureDoesNotEnqueue tests that an invalid
-// Plaid signature causes the webhook to be stored (for audit) but NOT enqueued
-// for processing. This matches the Paddle webhook pattern.
+// TestHandlePlaidWebhook_InvalidAttempt_RecordsBoundedAuditMetadata verifies that rejecting an
+// invalid/unsigned Plaid webhook still records bounded metadata (Issue #1514 item 2).
+func TestHandlePlaidWebhook_InvalidAttempt_RecordsBoundedAuditMetadata(t *testing.T) {
+	mockService := &mockWebhookService{verifyResult: false}
+	invalidRepo := &mockInvalidWebhookAttemptRepository{}
+
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService:     mockService,
+		InvalidAttemptRepo: invalidRepo,
+	})
+
+	payload := PlaidWebhookPayload{
+		WebhookType: "TRANSACTIONS",
+		WebhookCode: "DEFAULT_UPDATE",
+		ItemID:      "item-attacker",
+	}
+	rawBody, _ := json.Marshal(payload)
+
+	input := &PlaidWebhookInput{
+		PlaidVerification: "invalid-signature",
+		RawBody:           rawBody,
+	}
+
+	_, err := handler.HandlePlaidWebhook(context.Background(), input)
+	require.Error(t, err)
+
+	require.Len(t, invalidRepo.calls, 1)
+	assert.Equal(t, "plaid", invalidRepo.calls[0].provider)
+	assert.Equal(t, len(rawBody), invalidRepo.calls[0].bodyLength)
+}
+
+// TestHandlePlaidWebhook_VerifierUnavailable_TreatedAsRetryable_NotForgery verifies Issue #1514:
+// a verifier-unavailable outcome (e.g. Plaid's JWK fetch failed) is retryable, not evidence of a
+// forged request — it must return a non-2xx (so Plaid retries) WITHOUT recording an invalid
+// attempt (that signal is reserved for genuinely rejected/forged requests).
+func TestHandlePlaidWebhook_VerifierUnavailable_TreatedAsRetryable_NotForgery(t *testing.T) {
+	mockService := &mockWebhookService{
+		verifyErr: fmt.Errorf("%w: plaid api down", services.ErrWebhookVerifierUnavailable),
+	}
+	invalidRepo := &mockInvalidWebhookAttemptRepository{}
+
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService:     mockService,
+		InvalidAttemptRepo: invalidRepo,
+	})
+
+	payload := PlaidWebhookPayload{
+		WebhookType: "TRANSACTIONS",
+		WebhookCode: "DEFAULT_UPDATE",
+		ItemID:      "item-retry",
+	}
+	rawBody, _ := json.Marshal(payload)
+
+	input := &PlaidWebhookInput{
+		PlaidVerification: "some-signature",
+		RawBody:           rawBody,
+	}
+
+	output, err := handler.HandlePlaidWebhook(context.Background(), input)
+
+	require.Error(t, err, "verifier-unavailable must return a non-2xx response so Plaid retries")
+	assert.Nil(t, output)
+	assert.Empty(t, invalidRepo.calls, "verifier-unavailable must NOT be recorded as an invalid attempt")
+}
+
+// TestHandlePlaidWebhook_InvalidSignatureDoesNotEnqueue tests that an invalid Plaid signature is
+// rejected outright — no persistence, no enqueue (Issue #1514; supersedes the pre-fix "stored but
+// not enqueued" audit-trail behavior).
 func TestHandlePlaidWebhook_InvalidSignatureDoesNotEnqueue(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: false}
 	mockRepo := &mockWebhookRepository{}
@@ -390,12 +458,11 @@ func TestHandlePlaidWebhook_InvalidSignatureDoesNotEnqueue(t *testing.T) {
 		RawBody:           rawBody,
 	})
 
-	require.NoError(t, err)
-	assert.Equal(t, "ok", output.Body.Status, "should always return 200 to prevent retry storms")
+	require.Error(t, err, "invalid signature must be rejected with a non-2xx response")
+	assert.Nil(t, output)
 
-	// Stored for audit trail
-	assert.Len(t, mockRepo.events, 1, "webhook must be stored even with invalid signature")
-	assert.False(t, mockRepo.events[0].SignatureValid)
+	// NEVER persisted (Issue #1514 — closes the idempotency-poisoning vector)
+	assert.Empty(t, mockRepo.events, "invalid-signature webhook must not be persisted")
 
 	// NOT enqueued for processing
 	assert.Equal(t, 0, mockQueue.enqueueCount, "must NOT enqueue processing for unverified webhook")
@@ -460,10 +527,9 @@ func TestHandlePlaidWebhook_MissingSignatureDoesNotEnqueue(t *testing.T) {
 		RawBody:           rawBody,
 	})
 
-	require.NoError(t, err)
-	assert.Equal(t, "ok", output.Body.Status)
+	require.Error(t, err, "missing signature must be rejected with a non-2xx response")
+	assert.Nil(t, output)
 
-	assert.Len(t, mockRepo.events, 1)
-	assert.False(t, mockRepo.events[0].SignatureValid)
+	assert.Empty(t, mockRepo.events, "unsigned webhook must not be persisted")
 	assert.Equal(t, 0, mockQueue.enqueueCount, "must NOT enqueue when signature is missing")
 }

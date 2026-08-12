@@ -57,6 +57,12 @@ const (
 	// Job events
 	EventDeadLetterCreated = "dead_letter_created"
 
+	// Issue #1514: pre-launch security hardening — a webhook worker or admin replay path
+	// refused to act on a signature_valid=false row (defense-in-depth; the row should never
+	// have reached this layer, since HandlePaddleWebhook/HandlePlaidWebhook no longer persist
+	// unsigned/invalid deliveries at all).
+	EventInvalidSignatureWebhookRejected = "invalid_signature_webhook_rejected"
+
 	// Transaction review and recategorization events (Issue #1210)
 	EventTransactionRecategorized      = "transaction_recategorized"
 	EventTransactionReviewStateChanged = "transaction_review_state_changed"
