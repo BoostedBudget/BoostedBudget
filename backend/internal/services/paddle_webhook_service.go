@@ -198,11 +198,35 @@ func (s *paddleWebhookService) VerifyWebhook(signature, body string) (bool, erro
 	return true, nil
 }
 
+// minSaneUnixTimestamp is 2000-01-01T00:00:00Z in Unix seconds. checkTimestampTolerance uses it
+// as a floor on `ts=` well below any value this service should ever legitimately see (Paddle
+// didn't exist yet), so it costs nothing in false rejections while giving the overflow guard
+// below a fixed, human-auditable lower edge.
+const minSaneUnixTimestamp int64 = 946684800
+
+// epochBoundSlackSeconds pads the upper sane-epoch bound past s.now()+s.tolerance so the
+// pre-check below never fights with the exact ±tolerance comparison that follows it — it only
+// exists to keep `eventTime` inside a range where `time.Time` arithmetic (Sub, After, Before)
+// cannot overflow, not to do the real tolerance decision itself.
+const epochBoundSlackSeconds int64 = 86400
+
 // checkTimestampTolerance rejects tsUnix if it is farther than s.tolerance from s.now() in
 // EITHER direction. Symmetric by design (issue #1514, F3): a too-old timestamp is a replay risk,
 // and — unlike backend/internal/services/webhook_service.go's Plaid JWT check, which only
 // bounds time.Since(issuedAt) and so accepts arbitrarily future-dated tokens — an unbounded
 // future timestamp is just as dangerous here and must be rejected too.
+//
+// Bug fixed here (issue #1514, G2, fix-round-2): for a `ts=` far enough in the future,
+// `now.Sub(eventTime)` is unrepresentable as an int64 nanosecond count and time.Duration
+// SATURATES to its minimum value instead of overflowing to a large positive one. The old code
+// then did `if delta < 0 { delta = -delta }` to get an absolute value — but negating
+// math.MinInt64 overflows right back to itself (there is no positive int64 equal to its
+// magnitude), so `delta` stayed negative, `delta > s.tolerance` was false, and an arbitrarily
+// far-future timestamp was WRONGLY ACCEPTED. The fix below rejects tsUnix against a sane epoch
+// range BEFORE any Duration arithmetic runs, so no Duration saturation/overflow is ever allowed
+// to decide the outcome — the bound is checked in int64-seconds space, not nanoseconds, and
+// s.tolerance is capped at config.PaddleWebhookTimestampToleranceMaxSeconds (300s) elsewhere, so
+// nowUnix+tolerance+slack cannot itself overflow int64.
 //
 // Operational note (issue #1514 fix-round-1 item 2): if this server's clock drifts persistently
 // out of sync with Paddle's, EVERY genuine webhook delivery starts failing this check, not just
@@ -215,9 +239,19 @@ func (s *paddleWebhookService) VerifyWebhook(signature, body string) (bool, erro
 // or captured retry-exhaustion traffic to check it against, so treat any specific retry-count or
 // give-up-time claim about Paddle's behavior as unverified rather than settled fact.
 func (s *paddleWebhookService) checkTimestampTolerance(tsUnix int64) error {
-	eventTime := time.Unix(tsUnix, 0)
 	now := s.now()
 
+	// Bound tsUnix to a sane epoch range in int64-seconds space FIRST, before constructing
+	// eventTime or doing any time.Duration arithmetic on it. This is what stops the
+	// saturate-then-negate overflow described above: once tsUnix is known to be within
+	// roughly [2000-01-01, now+tolerance+slack], `now.Sub(eventTime)` can no longer saturate.
+	maxSaneUnixTimestamp := now.Unix() + int64(s.tolerance.Seconds()) + epochBoundSlackSeconds
+	if tsUnix < minSaneUnixTimestamp || tsUnix > maxSaneUnixTimestamp {
+		return fmt.Errorf("%w: timestamp %d is outside the sane epoch range [%d, %d]",
+			ErrTimestampOutOfTolerance, tsUnix, minSaneUnixTimestamp, maxSaneUnixTimestamp)
+	}
+
+	eventTime := time.Unix(tsUnix, 0)
 	delta := now.Sub(eventTime)
 	if delta < 0 {
 		delta = -delta
