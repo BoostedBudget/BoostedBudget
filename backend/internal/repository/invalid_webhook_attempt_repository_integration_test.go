@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -225,4 +226,116 @@ func TestInvalidWebhookAttemptCap_AmortisedTrim_HardCeiling_Integration(t *testi
 		"SELECT COUNT(*) FROM invalid_webhook_attempts WHERE provider = 'plaid'").Scan(&countAfterSettle))
 	require.Equal(t, testCap, countAfterSettle,
 		"once a trim actually fires, the row count must settle back down to EXACTLY the tight cap")
+}
+
+// TestInvalidWebhookAttemptCap_RestartHole_Integration is Issue #1514 G3: the amortised trim
+// interval counter (insertCounters) is IN-PROCESS state that resets to zero on every restart. Fly
+// restarts machines on every deploy/scale/host-migration, so an attacker (or ordinary traffic)
+// sending fewer than the trim interval's worth of invalid attempts per process lifetime never
+// reaches the modulo boundary that triggers a trim — rows accumulate across restarts with nothing
+// ever reclaiming them.
+//
+// This simulates that by constructing a FRESH repository instance per "process" (each one via
+// NewInvalidWebhookAttemptRepository, exactly like production main.go does on every boot) and
+// issuing fewer than trimInterval calls through each before "restarting" (constructing the next
+// one). Against the pre-fix code, NO trim ever fires (perRestart < trimInterval, and the counter
+// never survives to the next instance), so the row count grows linearly with the number of
+// restarts — unbounded. Against the fix, the very first Record call on each fresh instance forces
+// an eager trim (see invalidWebhookAttemptRepository.startupTrimEnabled), so the count converges
+// to a small, restart-count-independent ceiling instead.
+func TestInvalidWebhookAttemptCap_RestartHole_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx, "DELETE FROM invalid_webhook_attempts")
+	require.NoError(t, err)
+
+	const testCap = 5
+	const trimInterval = 50 // matches the production default; never reached within one "process"
+	const perRestart = 3    // deliberately << trimInterval
+	const numRestarts = 20
+
+	for restart := 0; restart < numRestarts; restart++ {
+		// A fresh instance per "process" — mirrors main.go calling
+		// NewInvalidWebhookAttemptRepository(db, ...) once per boot. trimInterval/cap are
+		// production-shaped (large interval, small cap only so this test doesn't need 10,000
+		// rows to observe the count-based trim) but startupTrimEnabled comes from the real
+		// constructor, not a hand-set override.
+		repo := NewInvalidWebhookAttemptRepository(pool, 30).(*invalidWebhookAttemptRepository)
+		repo.trimInterval = trimInterval
+		repo.cap = testCap
+
+		for i := 0; i < perRestart; i++ {
+			require.NoError(t, repo.Record(ctx, "plaid", 1, fmt.Sprintf("restart-%d-call-%d", restart, i)))
+		}
+	}
+
+	var finalCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM invalid_webhook_attempts WHERE provider = 'plaid'").Scan(&finalCount))
+
+	// Bounded, restart-count-independent ceiling: each fresh instance's first call forces a trim
+	// down to (at most) testCap, then the remaining (perRestart-1) calls in that same instance
+	// land without a trim (they never reach trimInterval). The pre-fix code has no such ceiling —
+	// with numRestarts=20 and perRestart=3, it would land 60 rows, growing linearly with
+	// numRestarts.
+	const expectedCeiling = testCap + (perRestart - 1)
+	require.LessOrEqual(t, finalCount, expectedCeiling,
+		"a startup trim on the first call of every fresh instance must stop rows from growing "+
+			"without bound across restarts that individually never reach the trim interval")
+	// Non-vacuity: without the fix, no trim would EVER fire (perRestart < trimInterval and the
+	// counter never survives a restart), so finalCount would equal numRestarts*perRestart exactly
+	// (60). Asserting strictly less than that proves this test actually exercises the fix rather
+	// than passing regardless of whether it's present.
+	require.Less(t, finalCount, numRestarts*perRestart,
+		"sanity: without the startup trim, count would equal numRestarts*perRestart exactly — "+
+			"this assertion must fail if that's what's happening")
+}
+
+// TestInvalidWebhookAttemptCap_AgeRetention_Integration is Issue #1514 G3, requirement 2: bound
+// growth by time as well as count. A row-count cap alone assumes trims eventually fire; an
+// age-based retention window is a second, orthogonal bound that reclaims rows purely on elapsed
+// time, independent of how many Record calls (if any) ever happen again for that provider.
+//
+// Inserts rows with explicit created_at timestamps (not real sleeps) straddling the retention
+// window, then calls trim() directly (bypassing Record/the interval counter entirely) to isolate
+// the age-based deletion from the count-based one — cap is set far above the fixture row count so
+// the ranked cap-DELETE cannot be what removes the old row.
+func TestInvalidWebhookAttemptCap_AgeRetention_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx, "DELETE FROM invalid_webhook_attempts")
+	require.NoError(t, err)
+
+	const retentionDays = 30
+	const testCap = 1000 // far above the fixture count; isolates the age-based delete
+	repo := &invalidWebhookAttemptRepository{db: pool, trimInterval: 1, cap: testCap, retentionDays: retentionDays}
+
+	now := time.Now().UTC()
+	insertAt := func(sha string, createdAt time.Time) {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO invalid_webhook_attempts (provider, body_length, body_sha256, created_at) VALUES ($1, $2, $3, $4)`,
+			"plaid", 1, sha, createdAt)
+		require.NoError(t, err)
+	}
+
+	insertAt("outside-window", now.Add(-(retentionDays+1)*24*time.Hour)) // older than the window
+	insertAt("inside-window", now.Add(-(retentionDays-1)*24*time.Hour))  // within the window
+
+	require.NoError(t, repo.trim(ctx, "plaid"))
+
+	var remaining []string
+	rows, err := pool.Query(ctx, "SELECT body_sha256 FROM invalid_webhook_attempts WHERE provider = 'plaid'")
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var sha string
+		require.NoError(t, rows.Scan(&sha))
+		remaining = append(remaining, sha)
+	}
+	require.NoError(t, rows.Err())
+
+	require.ElementsMatch(t, []string{"inside-window"}, remaining,
+		"trim must delete rows older than the retention window and keep rows inside it")
 }

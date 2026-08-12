@@ -18,6 +18,12 @@ import (
 // which is indistinguishable in practice from having no replay window at all on a payments path.
 const PaddleWebhookTimestampToleranceMaxSeconds = 300
 
+// InvalidWebhookAttemptRetentionMaxDays is the upper bound accepted for
+// INVALID_WEBHOOK_ATTEMPT_RETENTION_DAYS (Issue #1514 G3). 365 days is a generous sanity ceiling
+// against an operator typo (e.g. entering a number of hours or minutes by mistake) blowing the
+// retention window out to years for what is meant to be a short-lived operational audit signal.
+const InvalidWebhookAttemptRetentionMaxDays = 365
+
 // Config holds application configuration
 type Config struct {
 	// Server
@@ -121,6 +127,17 @@ type Config struct {
 	// DLQ Configuration (#633: Dead Letter Queue admin UI + cleanup)
 	DLQRetentionDays int // env: DLQ_RETENTION_DAYS, default: 30
 
+	// InvalidWebhookAttemptRetentionDays bounds how long a rejected (unsigned/invalid-signature)
+	// webhook audit row (see repository.InvalidWebhookAttemptRepository) survives before the
+	// periodic trim step deletes it on an age basis — a second, orthogonal bound to the row-count
+	// cap that reclaims rows purely on elapsed time (Issue #1514 G3: the count-based cap alone
+	// assumes trims eventually fire, which restarts can defeat; age-based retention doesn't
+	// depend on call volume or restart timing at all). Default 30 days mirrors this project's
+	// existing DeletionGracePeriodDays convention rather than inventing an unrelated number.
+	// Validated at load time via getEnvAsBoundedPositiveInt; an out-of-range value (<=0 or >
+	// InvalidWebhookAttemptRetentionMaxDays) falls back to the default and logs a warning.
+	InvalidWebhookAttemptRetentionDays int // env: INVALID_WEBHOOK_ATTEMPT_RETENTION_DAYS, default: 30
+
 	// Frontend URL (for cancellation links)
 	FrontendURL string
 
@@ -219,6 +236,10 @@ func Load() (*Config, error) {
 
 		// DLQ Configuration (#633)
 		DLQRetentionDays: getEnvAsInt("DLQ_RETENTION_DAYS", 30),
+
+		InvalidWebhookAttemptRetentionDays: getEnvAsBoundedPositiveInt(
+			"INVALID_WEBHOOK_ATTEMPT_RETENTION_DAYS", 30, InvalidWebhookAttemptRetentionMaxDays,
+		),
 
 		// Frontend URL
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
