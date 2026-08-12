@@ -17,15 +17,14 @@
  * that motivated adding it. Two words are deliberately NOT bare entries:
  *
  * - `account`: would redact `accountCount`/`accountId`-style metadata that
- *   carries no PII itself. (`account_name`/`account_mask`/`account_id`
- *   below stay as exact multi-word entries — they still catch the literal
- *   snake_case key, just not `accountName` etc. via token matching.)
+ *   carries no PII itself.
  * - `name`: would redact `typeName`/`fieldName`-style generic fields.
  *   `institutionName`/`merchantName` are still caught via the `institution`/
- *   `merchant` tokens, so a bare `name` entry isn't needed for the PII
- *   cases we know about; the tradeoff is `accountName` isn't caught by
- *   token matching either (only its literal snake_case form is, via
- *   `account_name`) — a known, accepted gap rather than an over-scrub.
+ *   `merchant` tokens, so a bare `name` entry isn't needed for those; and
+ *   `accountName` is caught not via a bare token but via the *adjacent-pair*
+ *   check in `isPiiKey` below, which matches `account_name` as a two-token
+ *   window — so `accountCount`/`typeName` stay safe while `accountName`
+ *   doesn't silently slip through as an asymmetric gap.
  *
  * `description` was removed as a bare entry for the same reason: it would
  * redact `descriptionLength`-style metadata. This does drop token-level
@@ -34,6 +33,18 @@
  * forwards one into analytics properties, and UI display of description
  * content is already covered by `data-ph-mask` (session replay), which is
  * the actual defense for that field's *content*.
+ *
+ * ⚠ Do NOT delete `account_name` / `institution_name` / `merchant_name` /
+ * `current_balance` / `target_amount` / `current_amount` / `account_mask` /
+ * `account_id` / `customer_email` as "redundant" because their component
+ * words (`institution`, `merchant`, `balance`, `amount`, `email`) already
+ * cover them via Sentry's token matching below. They are NOT redundant:
+ * **PostHog's** `before_send` (see `posthog.ts`) deletes properties by
+ * *exact literal key* match against this same Set and never tokenizes —
+ * `balance` alone cannot match a literal `current_balance` property there.
+ * Deleting the compound entry would silently reopen PostHog leakage of that
+ * exact field while Sentry's coverage stayed intact, which is the opposite
+ * of an obvious regression.
  */
 export const PII_PROPERTY_DENYLIST = new Set([
   'merchant',
@@ -64,24 +75,58 @@ export const PII_PROPERTY_DENYLIST = new Set([
   'set-cookie',
 ])
 
-/** Splits a key on camelCase boundaries and `_`/`-`, lowercased. */
-function tokenize(key: string): string[] {
+/**
+ * Splits a key into lowercase word tokens on camelCase/PascalCase
+ * boundaries, acronym boundaries, digit runs, and `_`/`-`. Exported for
+ * direct unit testing — bugs here are exactly as dangerous as the exact-
+ * match bug this replaced, since a token that's silently swallowed or never
+ * split off is a token that can never match the denylist.
+ *
+ * Passes run in this order (each one only inserts `_`; nothing is removed):
+ * 1. Acronym→word boundary: `HTTPStatus` → `HTTP_Status`, `userIDBalance` →
+ *    `userID_Balance` (the trailing word of an uppercase run is peeled off
+ *    before the next pass handles the run's own lower→upper boundary).
+ * 2. lower/digit→upper boundary: `userID_Balance` → `user_ID_Balance`.
+ * 3. letter→digit boundary: `balance2` → `balance_2`.
+ * 4. digit→letter boundary: `2Name` → `2_Name`.
+ */
+export function tokenize(key: string): string[] {
   return key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/([A-Za-z])([0-9])/g, '$1_$2')
+    .replace(/([0-9])([A-Za-z])/g, '$1_$2')
     .split(/[_-]/)
     .filter(Boolean)
     .map(token => token.toLowerCase())
 }
 
+// The longest denylist entry (`link_session_id`) has 3 underscore-separated
+// words; adjacent-token windows up to that width are checked so multi-word
+// entries like `account_name` still match a camelCase `accountName` even
+// though `account` and `name` are each individually excluded as bare tokens
+// (see the denylist comment above for why).
+const DENYLIST_MAX_WORDS = Math.max(
+  ...Array.from(PII_PROPERTY_DENYLIST, entry => entry.split(/[_-]/).length)
+)
+
 /**
  * True if `key` should be redacted: either the whole lowercased key matches
- * a denylist entry (covers multi-word snake_case entries like
- * `account_name`, which are never reachable via single-token matching), or
- * any individual camelCase/snake_case/kebab-case token of the key does.
+ * a denylist entry, or some contiguous run of its tokens — joined with `_`,
+ * from length 1 up to the longest denylist entry's word count — does.
  */
 function isPiiKey(key: string): boolean {
   if (PII_PROPERTY_DENYLIST.has(key.toLowerCase())) return true
-  return tokenize(key).some(token => PII_PROPERTY_DENYLIST.has(token))
+  const tokens = tokenize(key)
+  const maxWindow = Math.min(DENYLIST_MAX_WORDS, tokens.length)
+  for (let windowSize = 1; windowSize <= maxWindow; windowSize++) {
+    for (let start = 0; start + windowSize <= tokens.length; start++) {
+      if (PII_PROPERTY_DENYLIST.has(tokens.slice(start, start + windowSize).join('_'))) {
+        return true
+      }
+    }
+  }
+  return false
 }
 
 const REDACTED = '[Redacted]'
