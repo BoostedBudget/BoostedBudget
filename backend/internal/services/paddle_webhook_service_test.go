@@ -502,6 +502,105 @@ func TestVerifyWebhook_TimestampTolerance_Boundaries(t *testing.T) {
 	}
 }
 
+// TestVerifyWebhook_ExtremeFutureTimestamp_Rejected is the exploit-first regression test for a
+// `time.Duration` overflow bug: checkTimestampTolerance used to compute
+// `now.Sub(eventTime)` for the delta, but for a `ts=` far enough in the future that the true
+// gap is unrepresentable as an int64 nanosecond count, `Sub` SATURATES to
+// time.Duration's minimum value (a large negative number) instead of a large positive one. The
+// old code then negated that to get an "absolute value" — but negating math.MinInt64 overflows
+// back to itself, so `delta` stayed negative, `delta > tolerance` was false, and the timestamp
+// was WRONGLY ACCEPTED. Every case here must be rejected as ErrTimestampOutOfTolerance, without
+// panicking, and without going anywhere near hmac.Equal.
+func TestVerifyWebhook_ExtremeFutureTimestamp_Rejected(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	svc := newServiceWithClock(t, 5*time.Second, fixedClock(now))
+	body := `{"event_id":"evt_extreme_future"}`
+
+	testCases := []struct {
+		name string
+		ts   int64
+	}{
+		{"int64 max", 9223372036854775807},
+		{"1<<62", 1 << 62},
+		{"1<<40", 1 << 40},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := fmt.Sprintf("%d", tc.ts)
+			signature := calculateTestSignature(svc.webhookSecret, ts, body)
+
+			assert.NotPanics(t, func() {
+				valid, err := svc.VerifyWebhook(signature, body)
+				require.Error(t, err, "extreme future ts=%d must be rejected, not silently accepted", tc.ts)
+				assert.False(t, valid)
+				assert.ErrorIs(t, err, ErrTimestampOutOfTolerance)
+			})
+		})
+	}
+}
+
+// TestVerifyWebhook_Int64MinTimestamp_RejectedWithoutPanic pins the int64-min edge from the same
+// bug report: this value is already caught earlier by parseTimestamp's `v < 0` check (it never
+// reaches checkTimestampTolerance), but the requirement is "rejected without panic" regardless of
+// which layer catches it, so pin it here too.
+func TestVerifyWebhook_Int64MinTimestamp_RejectedWithoutPanic(t *testing.T) {
+	svc := newServiceWithClock(t, 5*time.Second, time.Now)
+	body := `{"event_id":"evt_int64_min"}`
+	ts := "-9223372036854775808"
+	signature := calculateTestSignature(svc.webhookSecret, ts, body)
+
+	assert.NotPanics(t, func() {
+		valid, err := svc.VerifyWebhook(signature, body)
+		require.Error(t, err)
+		assert.False(t, valid)
+	})
+}
+
+// TestVerifyWebhook_EpochBound_JustInsideAndOutside pins the new sane-epoch-range check itself:
+// values just inside the allowed window must verify, values just outside must be rejected as
+// ErrTimestampOutOfTolerance. This exercises checkTimestampTolerance's new pre-check directly
+// rather than relying on the plain ±tolerance boundary (already covered by
+// TestVerifyWebhook_TimestampTolerance_Boundaries) so it stays meaningful if the epoch bound and
+// the tolerance window ever diverge.
+func TestVerifyWebhook_EpochBound_JustInsideAndOutside(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	tolerance := 5 * time.Second
+	svc := newServiceWithClock(t, tolerance, fixedClock(now))
+
+	// minSaneUnixTimestamp mirrors the production constant (2000-01-01T00:00:00Z). Kept as a
+	// literal here, not an import of the private constant, so this test also verifies the
+	// constant's value hasn't silently drifted.
+	const minSaneUnixTimestamp = 946684800
+
+	t.Run("just inside lower bound", func(t *testing.T) {
+		// This is millions of seconds outside the ±5s tolerance window, so it must still be
+		// rejected — but via ErrTimestampOutOfTolerance from the ordinary delta check, not a
+		// panic or a false accept, proving the epoch pre-check didn't swallow it silently.
+		ts := fmt.Sprintf("%d", int64(minSaneUnixTimestamp))
+		body := `{"event_id":"evt_epoch_inside"}`
+		signature := calculateTestSignature(svc.webhookSecret, ts, body)
+
+		valid, err := svc.VerifyWebhook(signature, body)
+		require.Error(t, err)
+		assert.False(t, valid)
+		assert.ErrorIs(t, err, ErrTimestampOutOfTolerance)
+	})
+
+	t.Run("just outside lower bound", func(t *testing.T) {
+		ts := fmt.Sprintf("%d", int64(minSaneUnixTimestamp-1))
+		body := `{"event_id":"evt_epoch_outside"}`
+		signature := calculateTestSignature(svc.webhookSecret, ts, body)
+
+		assert.NotPanics(t, func() {
+			valid, err := svc.VerifyWebhook(signature, body)
+			require.Error(t, err)
+			assert.False(t, valid)
+			assert.ErrorIs(t, err, ErrTimestampOutOfTolerance)
+		})
+	})
+}
+
 // TestVerifyWebhook_MalformedTimestamp_RejectedWithoutPanic covers non-numeric, negative, and
 // integer-overflow ts= values — all must be rejected as ErrInvalidSignatureFormat, and none must
 // panic.
