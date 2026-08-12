@@ -24,11 +24,15 @@ func TestRiver_TablesExist(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 
 	ctx := context.Background()
+	// river_client / river_client_queue are deliberately absent: River dropped them in its
+	// main-line migration 007 and migration 000145 mirrors that. TestRiver_DroppedClientTables
+	// asserts they are gone; river_notification, added by the same migration, is covered by
+	// TestRiver_NotificationOutbox.
 	requiredTables := []string{
 		"river_job",
-		"river_client",
 		"river_queue",
 		"river_leader",
+		"river_notification",
 	}
 
 	for _, tableName := range requiredTables {
@@ -144,10 +148,17 @@ func TestRiver_QueueConfiguration(t *testing.T) {
 	t.Logf("Default queue entries: %d", queueCount)
 }
 
-// TestRiver_ClientRegistration verifies the river_client table is queryable after
-// migrations. Full client-registration behavior (count > 0) requires a running backend
-// server and is covered by E2E tests, not this schema-level integration check.
-func TestRiver_ClientRegistration(t *testing.T) {
+// TestRiver_NotificationOutbox verifies the river_notification table is queryable after
+// migrations.
+//
+// This replaces TestRiver_ClientRegistration, which asserted river_client was queryable.
+// River dropped river_client and river_client_queue in its main-line migration 007 (they
+// were unused; their dbsqlc query files are deleted in riverdriver/riverpgxv5 v0.43.0),
+// and migration 000145 mirrors that drop. The same migration adds river_notification, so
+// that is now the table this schema-level check tracks. Client registration was never
+// actually asserted here — the old test only checked the table existed, and count > 0
+// requires a running backend server, which remains E2E-scoped.
+func TestRiver_NotificationOutbox(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -159,15 +170,40 @@ func TestRiver_ClientRegistration(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 
 	ctx := context.Background()
-	var clientCount int
-	err := db.QueryRow(ctx, `SELECT COUNT(*) FROM river_client`).Scan(&clientCount)
+	var notificationCount int
+	err := db.QueryRow(ctx, `SELECT COUNT(*) FROM river_notification`).Scan(&notificationCount)
 
 	// COUNT(*) always returns exactly one row — a non-nil err means the table is missing
-	// or the connection is dead, both of which are genuine failures (not "no clients yet").
-	require.NoError(t, err, "river_client table should be queryable after migrations")
+	// or the connection is dead, both of which are genuine failures (not "no rows yet").
+	require.NoError(t, err, "river_notification table should be queryable after migrations")
 
-	// clientCount is 0 in CI (no backend server running); registration is E2E-scoped.
-	t.Logf("River clients registered: %d", clientCount)
+	t.Logf("River notification outbox rows: %d", notificationCount)
+}
+
+// TestRiver_DroppedClientTables pins the other half of migration 000145: the tables River
+// removed in its migration 007 must actually be gone. Without this, a migration that
+// silently failed to drop them would leave the schema ahead of the driver with nothing
+// noticing — the failure mode that the old river_client assertion would have masked.
+func TestRiver_DroppedClientTables(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	db := setupTestDBIfAvailable(t)
+	if db == nil {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+	t.Cleanup(func() { db.Close() })
+
+	ctx := context.Background()
+	for _, table := range []string{"river_client", "river_client_queue"} {
+		var exists bool
+		err := db.QueryRow(ctx,
+			`SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists)
+		require.NoError(t, err, "to_regclass lookup for %s should succeed", table)
+		require.False(t, exists,
+			"%s should have been dropped by migration 000145 (River main-line migration 007)", table)
+	}
 }
 
 // TestRiver_PlaidSyncJobSchema documents the expected job args schema.

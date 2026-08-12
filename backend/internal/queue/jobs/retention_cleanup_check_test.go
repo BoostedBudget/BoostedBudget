@@ -2610,7 +2610,7 @@ func TestRetentionCleanupCheckUniqueOpts(t *testing.T) {
 	assert.Contains(t, opts.ByState, queue.JobStateRunning)
 
 	// Issue #1413 Task W (Codex review): ByState previously omitted `Completed`, which River's
-	// own default (rivertype.UniqueOptsByStateDefault(), river@v0.38.0) includes. Per
+	// own default (rivertype.UniqueOptsByStateDefault(), river@v0.43.0) includes. Per
 	// UniqueOpts.ByState's doc comment (insert_opts.go): a completed job of the same kind, "not
 	// yet cleaned out by the system," still blocks a duplicate unique insert — WITHOUT Completed
 	// in this list, an already-successfully-completed run within the current 23h ByPeriod bucket
@@ -2717,7 +2717,7 @@ func TestRetentionCleanupCheckInsertOpts_CarriesUniqueOpts(t *testing.T) {
 // River's periodic scheduler keeps only in-memory state (river.NewPeriodicJob's own doc
 // comment): every process restart or leader election recomputes nextRunAt as ScheduleFunc(now)
 // unless PeriodicJobOpts.ID is set (it isn't, here or anywhere in main.go), and skips the
-// catch-up insert entirely when RunOnStart is false (river@v0.38.0
+// catch-up insert entirely when RunOnStart is false (river@v0.43.0
 // internal/maintenance/periodic_job_enqueuer.go:409-426). This repo deploys several times a
 // day, so RunOnStart: false let this daily job — the only place that runs retention-clock
 // repair, the 30-day/7-day GDPR pre-deletion notices, deleteExpiredAccounts, and the

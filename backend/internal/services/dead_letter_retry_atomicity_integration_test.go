@@ -17,7 +17,7 @@ package services
 // WHY REAL POSTGRES. Every assertion here is about what SURVIVES a rollback — of a
 // dead_letter_jobs UPDATE and of a river_job INSERT made through the same transaction. pgxmock
 // validates call shape and never evaluates a transaction boundary, so it cannot see any of this.
-// River's own guarantee (v0.38.0 client.go InsertTx: "Because of snapshot visibility guarantees
+// River's own guarantee (v0.43.0 client.go InsertTx: "Because of snapshot visibility guarantees
 // across transactions, the job will not be worked until the transaction has committed, and if the
 // transaction rolls back, so too is the inserted job") is likewise a property of the database, not
 // of a mock.

@@ -217,7 +217,7 @@ func (s *deadLetterService) GetRawArgs(ctx context.Context, id int64) (json.RawM
 //
 // River's insert is safe to make through the caller's transaction: it inserts into river_job on
 // that connection and sends its "new job" notification in the same transaction, so no producer can
-// see or work the job before COMMIT, and a rollback removes it (river v0.38.0, client.go InsertTx:
+// see or work the job before COMMIT, and a rollback removes it (river v0.43.0, client.go InsertTx:
 // "Because of snapshot visibility guarantees across transactions, the job will not be worked until
 // the transaction has committed, and if the transaction rolls back, so too is the inserted job").
 func (s *deadLetterService) Retry(ctx context.Context, id int64) (*domain.DeadLetterRetryResponse, error) {

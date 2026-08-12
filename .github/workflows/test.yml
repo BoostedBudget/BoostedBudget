@@ -179,7 +179,7 @@ jobs:
         run: bunx playwright install webkit
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
@@ -415,7 +415,7 @@ jobs:
           clean: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
@@ -499,7 +499,7 @@ jobs:
           bun-version: latest
 
       - name: Setup Node.js (for npx orval)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -677,7 +677,7 @@ jobs:
           clean: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
 
@@ -775,7 +775,7 @@ jobs:
           clean: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
@@ -981,7 +981,7 @@ jobs:
           clean: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
@@ -1609,7 +1609,7 @@ jobs:
       # =========================================================================
       - name: Setup Go
         if: matrix.component == 'backend'
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: ${{ env.UNIQUE_WORKSPACE }}/backend/go.mod
           cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/backend/go.sum
