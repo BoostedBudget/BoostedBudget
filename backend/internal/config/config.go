@@ -37,6 +37,11 @@ type Config struct {
 	// Rate limiting
 	RateLimitIP   int // per-IP requests per minute
 	RateLimitAuth int // per-IP requests per minute for sensitive endpoints
+	// RateLimitMaxEntries caps the number of distinct identities each rate-limit
+	// store tracks (see middleware.RateLimitConfig.MaxEntries). Validated
+	// positive at load time; a zero/invalid RATE_LIMIT_MAX_ENTRIES falls back to
+	// the default rather than producing an uncapped store.
+	RateLimitMaxEntries int
 
 	// Database
 	DatabaseURL      string
@@ -135,8 +140,9 @@ func Load() (*Config, error) {
 		MaxBodySize:  getEnv("MAX_BODY_SIZE", "1M"),
 
 		// Rate limiting
-		RateLimitIP:   getEnvAsInt("RATE_LIMIT_IP", 100),
-		RateLimitAuth: getEnvAsInt("RATE_LIMIT_AUTH", 10),
+		RateLimitIP:         getEnvAsInt("RATE_LIMIT_IP", 100),
+		RateLimitAuth:       getEnvAsInt("RATE_LIMIT_AUTH", 10),
+		RateLimitMaxEntries: getEnvAsPositiveInt("RATE_LIMIT_MAX_ENTRIES", 20000),
 
 		// Database
 		DatabaseURL:      getEnv("DATABASE_URL", ""),
@@ -320,6 +326,18 @@ func getEnvAsInt(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
+}
+
+// getEnvAsPositiveInt is like getEnvAsInt but rejects zero/negative values,
+// falling back to defaultValue instead. Used for config knobs (like
+// RateLimitMaxEntries) where a zero or negative value would silently disable a
+// safety cap rather than express "unset".
+func getEnvAsPositiveInt(key string, defaultValue int) int {
+	v := getEnvAsInt(key, defaultValue)
+	if v <= 0 {
+		return defaultValue
+	}
+	return v
 }
 
 // getEnvAsDuration retrieves an environment variable as a time.Duration or returns a default value.

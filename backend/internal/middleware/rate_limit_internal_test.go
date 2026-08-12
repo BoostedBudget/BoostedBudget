@@ -61,3 +61,48 @@ func TestIPLimiterStore_EvictsStalestFirst(t *testing.T) {
 		t.Error("3.3.3.3 is the newly inserted entry and should be present")
 	}
 }
+
+// TestIPLimiterStore_LRUOrderMaintainedAcrossInterleavedAccess proves the
+// intrusive LRU list (container/list) genuinely tracks recency across
+// interleaved accesses, not just in the simple two-touch case covered by
+// TestIPLimiterStore_EvictsStalestFirst. It re-touches an older entry after
+// newer ones were inserted, then forces four more evictions and checks the
+// eviction order matches true LRU order throughout, not insertion order.
+func TestIPLimiterStore_LRUOrderMaintainedAcrossInterleavedAccess(t *testing.T) {
+	store := newIPLimiterStore(100, time.Minute, 3)
+
+	store.get("a") // order (front->back): a
+	store.get("b") // order: b, a
+	store.get("c") // order: c, b, a  (store now at capacity 3)
+
+	// Re-touch "a" -- the oldest entry -- making "b" the new stalest.
+	store.get("a") // order: a, c, b
+
+	// Insert "d": store is full, so the stalest ("b") must be evicted first,
+	// even though "b" was inserted more recently than "a".
+	store.get("d") // order: d, a, c
+
+	assertHas := func(key string, want bool) {
+		store.mu.Lock()
+		_, has := store.entries[key]
+		store.mu.Unlock()
+		if has != want {
+			t.Errorf("entries[%q] presence = %v, want %v", key, has, want)
+		}
+	}
+	assertHas("b", false) // evicted: was stalest despite being inserted after "a"
+	assertHas("a", true)  // survived: re-touched right before "d" was inserted
+	assertHas("c", true)
+	assertHas("d", true)
+
+	// Insert "e": store is full again (order front->back: d, a, c). "c" hasn't
+	// been touched since its original insertion (before "a" was re-touched),
+	// so it's now the stalest -- despite being inserted after "b", which was
+	// evicted first in the previous step. LRU order, not insertion order.
+	store.get("e") // order: e, d, a
+
+	assertHas("c", false)
+	assertHas("a", true)
+	assertHas("d", true)
+	assertHas("e", true)
+}

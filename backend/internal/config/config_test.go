@@ -46,6 +46,42 @@ func TestLoad_ServerTimeoutsConfigurable(t *testing.T) {
 	assert.Equal(t, "2M", cfg.MaxBodySize)
 }
 
+func TestLoad_RateLimitMaxEntriesDefault(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RATE_LIMIT_MAX_ENTRIES", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 20000, cfg.RateLimitMaxEntries, "RateLimitMaxEntries should default to 20000")
+}
+
+func TestLoad_RateLimitMaxEntriesConfigurable(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RATE_LIMIT_MAX_ENTRIES", "5000")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 5000, cfg.RateLimitMaxEntries)
+}
+
+func TestLoad_RateLimitMaxEntriesInvalidValueFallsBackToDefault(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+
+	for _, invalid := range []string{"0", "-1", "not-a-number"} {
+		t.Run(invalid, func(t *testing.T) {
+			t.Setenv("RATE_LIMIT_MAX_ENTRIES", invalid)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+
+			assert.Equal(t, 20000, cfg.RateLimitMaxEntries,
+				"a zero/negative/invalid RATE_LIMIT_MAX_ENTRIES must fall back to the default, never produce an uncapped store")
+		})
+	}
+}
+
 func TestLoad_ProductionValidation_RequiresEncryptionKey(t *testing.T) {
 	t.Setenv("ENVIRONMENT", "production")
 	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost/db")

@@ -156,6 +156,7 @@ func main() {
 		IPLimit:           cfg.RateLimitIP,
 		AuthEndpointLimit: cfg.RateLimitAuth,
 		WindowDuration:    time.Minute,
+		MaxEntries:        cfg.RateLimitMaxEntries,
 	}))
 	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                            // 5. Panic recovery (formats RFC 9457 response)
 	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                               // 6. Sentry panic reporting

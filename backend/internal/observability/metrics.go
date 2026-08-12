@@ -104,6 +104,21 @@ var (
 		Help: "Number of webhook deliveries rejected for missing or invalid signature, by provider/site.",
 	}, []string{"provider"})
 
+	// RateLimitIdentitySentinelFallbackTotal counts requests that reached the
+	// rate limiter with GateStatusPassed (i.e. CloudflareOnly already verified
+	// the immediate peer and the origin secret) but presented a missing,
+	// duplicated, or malformed Cf-Connecting-Ip header. Issue #1514: rather than
+	// trust an unverifiable value as identity, these requests are keyed to a
+	// single fixed sentinel bucket instead — this metric is the corresponding
+	// observability signal, since that bucket is deliberately coarse (shared,
+	// globally throttled) and should be near-zero in practice. If it starts
+	// climbing, Cloudflare has stopped sending Cf-Connecting-Ip as expected and
+	// needs investigation.
+	RateLimitIdentitySentinelFallbackTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "rate_limit_identity_sentinel_fallback_total",
+		Help: "Number of Cloudflare-gated requests that fell back to the shared rate-limit sentinel bucket due to a missing/duplicated/malformed Cf-Connecting-Ip header.",
+	})
+
 	// DeadLetterQueueSize tracks the current size of the dead letter queue
 	DeadLetterQueueSize = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "dead_letter_queue_size",
