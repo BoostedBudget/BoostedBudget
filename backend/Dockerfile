@@ -1,7 +1,10 @@
 # Multi-stage production Dockerfile for Backend
 # Stage 1: Builder
+# #1514: digest-pinned to golang:1.26.5-alpine (multi-arch manifest list digest, resolved
+# from Docker Hub on 2026-08-12). If GO_VERSION is bumped, this digest must be re-resolved
+# for the new tag or the pin will silently pull mismatched content.
 ARG GO_VERSION=1.26.5
-FROM golang:${GO_VERSION}-alpine AS builder
+FROM golang:${GO_VERSION}-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 
 # Install build dependencies
 RUN echo "Installing build dependencies..." && \
@@ -37,10 +40,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 # Build golang-migrate from source with Go 1.25.7 (for security)
 # This ensures migrate binary has no CVEs, unlike pre-compiled releases
+# #1514: pinned to v4.19.1 (latest release as of 2026-08-12) instead of floating @latest,
+# so the version baked into the production image is reproducible and reviewable.
 RUN CGO_ENABLED=0 GOOS=linux go install \
     -tags 'postgres' \
     -ldflags="-w -s" \
-    github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+    github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
 
 # Stage 2: Runtime (Debian Bookworm Slim - Minimal but stable)
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241

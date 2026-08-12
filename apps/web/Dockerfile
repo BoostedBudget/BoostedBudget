@@ -1,7 +1,9 @@
 # Multi-stage production Dockerfile for Frontend (Turborepo monorepo)
 # Stage 1: Builder - Use Node.js Alpine (QEMU compatible, no AVX required)
 # Note: Bun crashes under QEMU x86 emulation due to AVX instruction requirements
-FROM node:22-alpine AS builder
+# #1514: digest-pinned to node:22-alpine (multi-arch manifest list digest, resolved from
+# Docker Hub on 2026-08-12). Re-resolve this digest if the node major/tag is bumped.
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS builder
 
 WORKDIR /build
 
