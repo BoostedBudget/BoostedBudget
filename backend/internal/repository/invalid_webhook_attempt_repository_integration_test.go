@@ -151,12 +151,28 @@ func TestInvalidWebhookAttemptCap_ConcurrentInserts_Integration(t *testing.T) {
 }
 
 // TestInvalidWebhookAttemptCap_AmortisedTrim_HardCeiling_Integration is Issue #1514 Codex review
-// round 2, Important 2: proves the EXPLICIT hard ceiling that amortised trimming (trimInterval>1)
-// guarantees. Between two trims, at most trimInterval-1 rows can accumulate for a provider beyond
-// whatever the previous trim brought it down to (<= cap) — because the in-process counter that
-// schedules trims is a strictly increasing, atomically-incremented sequence, so the Nth call (in
-// increment order) is always the one that trims, never later. The row count for a provider can
-// therefore transiently exceed cap, but must NEVER exceed cap + trimInterval - 1.
+// round 2/3, Important 2: proves the EXPLICIT hard ceiling that amortised trimming (trimInterval>1)
+// guarantees, and — round 3 — proves it non-vacuously (a real transient overshoot actually
+// happened, not just "the count never exceeded a bound it also never approached").
+//
+// Deliberately SEQUENTIAL, not concurrent (round 3 fix): under concurrency, which goroutine's
+// INSERT vs. which goroutine's trim-DELETE actually lands on the DB first is a genuine race — a
+// later-committing trim can retroactively also clean up rows from calls with a HIGHER counter
+// value than the one that triggered it, so the exact final count depends on wall-clock scheduling,
+// not just call-counter order (ConcurrentInserts_Integration above already covers that race, at
+// the tight interval=1 bound). Sequential calls remove the race: each call (insert, and its trim
+// if any) fully completes before the next call starts, so the resulting count is EXACT and
+// reproducible, not merely bounded-with-high-probability.
+//
+// Trace for 25 = 2*trimInterval + 5 sequential calls (trimInterval=10, cap=5):
+//
+//	calls  1- 9: insert only (no call is a multiple of 10 yet)      -> count 1..9
+//	call     10: insert (count 10) THEN trims down to cap           -> count 5
+//	calls 11-19: insert only                                        -> count 6..14
+//	call     20: insert (count 15) THEN trims down to cap           -> count 5
+//	calls 21-25: insert only (5 = totalCalls - 2*trimInterval)      -> count 6..10
+//
+// Expected final count: exactly cap + 5 = 10.
 func TestInvalidWebhookAttemptCap_AmortisedTrim_HardCeiling_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -166,44 +182,40 @@ func TestInvalidWebhookAttemptCap_AmortisedTrim_HardCeiling_Integration(t *testi
 
 	const testCap = 5
 	const trimInterval = 10
-	const hardCeiling = testCap + trimInterval - 1
+	// This test reads the count only at a completed-call boundary (no Record call for this
+	// provider is in flight when we query) — that is the tighter cap+interval-1 bound from the
+	// invalidWebhookAttemptTrimInterval doc comment, NOT the looser instantaneous cap+interval
+	// bound (which can only be observed mid-call, by a concurrent reader on another connection).
+	const hardCeilingAtCompletedCallBoundary = testCap + trimInterval - 1
 
 	repo := &invalidWebhookAttemptRepository{db: pool, trimInterval: trimInterval, cap: testCap}
 
-	// 15*17=255, deliberately NOT a multiple of trimInterval (10) — so the flood does not
-	// coincidentally end exactly on a trim boundary, and countAfterFlood below actually observes
-	// a transient in-between state rather than trivially landing back at the tight cap already.
-	const goroutines = 15
-	const perGoroutine = 17
+	const totalCalls = 2*trimInterval + 5
+	const expectedFinalCount = testCap + 5 // see trace in the doc comment above
 
-	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func(g int) {
-			defer wg.Done()
-			for i := 0; i < perGoroutine; i++ {
-				_ = repo.Record(ctx, "plaid", 1, fmt.Sprintf("ceiling-%d-%d", g, i))
-			}
-		}(g)
+	for i := 0; i < totalCalls; i++ {
+		require.NoError(t, repo.Record(ctx, "plaid", 1, fmt.Sprintf("ceiling-%d", i)))
 	}
-	wg.Wait()
 
 	var countAfterFlood int
 	require.NoError(t, pool.QueryRow(ctx,
 		"SELECT COUNT(*) FROM invalid_webhook_attempts WHERE provider = 'plaid'").Scan(&countAfterFlood))
-	require.LessOrEqual(t, countAfterFlood, hardCeiling,
-		"amortised trimming must never let the row count exceed cap+trimInterval-1, even transiently between trims")
 
-	// The in-process counter is exactly goroutines*perGoroutine at this point (every call
-	// increments it exactly once, whether or not that call trimmed) — issue exactly enough more
-	// calls to LAND ON the next multiple of trimInterval, so the very LAST call in this loop is
-	// guaranteed to be the one that trims (not just "a trim occurs somewhere in this range").
-	totalSoFar := goroutines * perGoroutine
-	remainder := totalSoFar % trimInterval
-	callsToNextMultiple := trimInterval - remainder
-	if remainder == 0 {
-		callsToNextMultiple = trimInterval
-	}
+	require.Equal(t, expectedFinalCount, countAfterFlood,
+		"sequential calls make the resulting count fully deterministic -- see the trace in this test's doc comment")
+	// Round 3 fix: the missing non-vacuity check. Without this, the test would still pass even if
+	// amortisation were silently disabled (e.g. trimInterval forced to 1, which never overshoots)
+	// — LessOrEqual alone can't distinguish "never overshot" from "correctly bounded overshoot".
+	require.Greater(t, countAfterFlood, testCap,
+		"must prove a REAL transient overshoot occurred, not just that count stayed under a bound it never approached")
+	require.LessOrEqual(t, countAfterFlood, hardCeilingAtCompletedCallBoundary,
+		"amortised trimming must never let the row count exceed cap+trimInterval-1 at a completed-call boundary")
+
+	// One more partial cycle: issue exactly enough more sequential calls to land ON the next
+	// multiple of trimInterval (25 -> next multiple is 30, so 5 more), so the very LAST call is
+	// guaranteed to be the one that trims — proving the count doesn't just stay bounded, it
+	// actually settles back to the EXACT tight cap once a trim fires.
+	callsToNextMultiple := trimInterval - (totalCalls % trimInterval)
 	for i := 0; i < callsToNextMultiple; i++ {
 		require.NoError(t, repo.Record(ctx, "plaid", 1, fmt.Sprintf("settle-%d", i)))
 	}
@@ -211,6 +223,6 @@ func TestInvalidWebhookAttemptCap_AmortisedTrim_HardCeiling_Integration(t *testi
 	var countAfterSettle int
 	require.NoError(t, pool.QueryRow(ctx,
 		"SELECT COUNT(*) FROM invalid_webhook_attempts WHERE provider = 'plaid'").Scan(&countAfterSettle))
-	require.LessOrEqual(t, countAfterSettle, testCap,
-		"once a trim actually fires, the row count must settle back down to the tight cap")
+	require.Equal(t, testCap, countAfterSettle,
+		"once a trim actually fires, the row count must settle back down to EXACTLY the tight cap")
 }
