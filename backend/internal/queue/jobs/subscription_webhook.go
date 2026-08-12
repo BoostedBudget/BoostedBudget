@@ -572,6 +572,28 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 		return nil
 	}
 
+	// Issue #1514: defense-in-depth. HandlePaddleWebhook no longer persists unsigned/invalid
+	// deliveries at all, and ReplayPaddleWebhook refuses to re-enqueue a signature_valid=false
+	// row — so this worker should never actually see one. It refuses to dispatch anyway, in case
+	// something upstream (a bug, a future write path, a pre-fix row) got a bad row into the queue.
+	if !webhook.SignatureValid {
+		observability.InvalidWebhookAttemptsTotal.WithLabelValues("paddle_worker_guard").Inc()
+		w.logger.Error("refusing to process Paddle webhook with invalid signature",
+			"webhook_id", args.WebhookID,
+			"event_id", args.EventID,
+			"event_type", args.EventType,
+		)
+		if w.analytics != nil {
+			w.analytics.Capture("", phclient.EventInvalidSignatureWebhookRejected, map[string]interface{}{
+				"webhook_id": args.WebhookID,
+				"event_id":   args.EventID,
+				"event_type": args.EventType,
+			})
+		}
+		_ = w.paddleWebhookRepo.MarkFailed(ctx, args.WebhookID, "rejected: signature_valid=false")
+		return fmt.Errorf("refusing to process webhook %s: signature_valid=false", args.WebhookID)
+	}
+
 	var processErr error
 	switch webhook.EventType {
 	case "subscription.created":
