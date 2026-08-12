@@ -18,12 +18,21 @@ mock.module('@/components/ui/toggle-group', () => ({
   ToggleGroup: ({
     children,
     onValueChange,
+    type,
   }: {
     children: React.ReactNode
     onValueChange?: (v: string) => void
+    type?: 'single' | 'multiple'
   }) => (
     <div
-      role="group"
+      // Mirror real Radix: type="single" is a radiogroup, type="multiple" is a group.
+      // @radix-ui/react-toggle-group 1.1.19 corrected the single-select container from
+      // role="group" (invalid ARIA over role="radio" children) to role="radiogroup". This
+      // mock hardcoded "group" for both, so it would have kept reporting the pre-1.1.19 DOM
+      // to any role-based query. No consumer test queries this role today — they go through
+      // data-testid / text — but leaving the mock stale would let a future role query silently
+      // assert against markup that production no longer emits.
+      role={type === 'multiple' ? 'group' : 'radiogroup'}
       data-testid="toggle-group"
       onClick={(e: React.MouseEvent<HTMLDivElement>) => {
         const btn = (e.target as HTMLElement).closest('[data-value]') as HTMLElement | null
