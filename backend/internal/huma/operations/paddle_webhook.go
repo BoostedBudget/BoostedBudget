@@ -109,6 +109,19 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 		return nil, huma.Error400BadRequest("Missing required fields: event_id or event_type")
 	}
 
+	// Issue #1514 item 3: this guard is defensive/structural, not a reachable production state.
+	// In the wired deployment (backend/cmd/server/main.go) HandlePaddleWebhook is only ever
+	// registered with a non-nil WebhookRepo: the branch that supplies a non-nil WebhookService
+	// (main.go:2048-2064) is nested inside the same `db != nil && cfg.ClerkSecretKey != ""` block
+	// that unconditionally assigns paddleWebhookRepo (main.go:365,441), so WebhookService != nil
+	// implies WebhookRepo != nil there; and the fallback, unverified branch (main.go:2065-2079)
+	// checks `paddleWebhookRepo != nil` explicitly before registering. There is no route
+	// registration path in main.go that wires a verified/unverified handler with a nil repo. The
+	// guard exists purely so unit tests (see setupTestHandler) and any future caller that
+	// constructs the handler directly stay nil-safe rather than panicking — see
+	// TestHandlePaddleWebhook_NilRepo_AcksWithoutPersisting_DocumentedUnreachable, which pins the
+	// current (silent-ack) behaviour for that unreachable-in-prod configuration so a future
+	// change to it is a deliberate choice, not a surprise.
 	if h.webhookRepo != nil {
 		webhookEvent := &domain.PaddleWebhookEvent{
 			EventID:            payload.EventID,
@@ -122,6 +135,25 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 
 		existing, err := h.webhookRepo.GetByEventID(ctx, payload.EventID)
 		if err == nil && existing != nil {
+			if !existing.SignatureValid {
+				// Issue #1514 item 1 (defence-in-depth): the stored row for this event_id was
+				// itself recorded with signature_valid=false. Going forward that should be rare
+				// — the fail-closed check above never persists an invalid webhook, and migration
+				// 000147 purged legacy invalid rows — but ingestion is the one layer in this
+				// system that didn't check SignatureValid on the duplicate path (the admin replay
+				// guard in admin_paddle_webhooks.go and the Paddle worker in
+				// queue/jobs/subscription_webhook.go both already do). Never treat a poisoned row
+				// as a legitimate duplicate of THIS now-verified webhook: doing so would silently
+				// drop a genuine billing event and return 200, after which Paddle never retries.
+				// Return non-2xx instead so Paddle retries delivery until the poisoned row is
+				// resolved (deleted or repaired) out-of-band.
+				h.logger.Error("Refusing to treat signature_valid=false stored row as a duplicate of a verified webhook — returning error so Paddle retries",
+					"event_id", payload.EventID,
+					"event_type", payload.EventType,
+				)
+				return nil, huma.Error500InternalServerError("stored webhook record failed prior signature verification; refusing to suppress a verified event with the same event_id")
+			}
+
 			h.logger.Info("Duplicate Paddle webhook received",
 				"event_id", payload.EventID,
 				"event_type", payload.EventType,
@@ -135,6 +167,25 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 		}
 
 		if err := h.webhookRepo.Create(ctx, webhookEvent); err != nil {
+			if errors.Is(err, repository.ErrPaddleWebhookDuplicate) {
+				// Issue #1514 item 2: check-then-insert is racy — two concurrent deliveries of
+				// the same valid event can both pass GetByEventID above before either commits,
+				// so the loser's Create() hits the unique constraint on event_id. Nothing was
+				// lost: the winner already persisted the row (and already enqueued processing).
+				// Treat this exactly like the "already received" branch above rather than
+				// reporting a fabricated persistence outage that makes Paddle retry a webhook
+				// that was, in fact, already handled.
+				h.logger.Info("Concurrent duplicate Paddle webhook detected on insert — treating as idempotent success",
+					"event_id", payload.EventID,
+					"event_type", payload.EventType,
+				)
+				return &PaddleWebhookOutput{
+					Body: PaddleWebhookResponseBody{
+						Status:  "ok",
+						Message: "Webhook already received",
+					},
+				}, nil
+			}
 			// Issue #1514: this is a VALID, verified webhook we failed to persist — returning
 			// "ok" here would silently lose a real billing event forever, since Paddle never
 			// retries a 2xx response. Return non-2xx so Paddle retries delivery.

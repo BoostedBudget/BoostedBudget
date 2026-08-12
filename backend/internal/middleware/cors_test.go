@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetCORSConfig(t *testing.T) {
@@ -70,7 +71,7 @@ func TestGetCORSConfig(t *testing.T) {
 
 func TestValidateCORSConfig_ProductionBlocksWildcard(t *testing.T) {
 	err := ValidateCORSConfig("*", "production")
-	assert.Error(t, err, "wildcard origins must be rejected in production")
+	require.Error(t, err, "wildcard origins must be rejected in production")
 	assert.Contains(t, err.Error(), "production")
 }
 
@@ -86,7 +87,7 @@ func TestValidateCORSConfig_ProductionBlocksEmpty(t *testing.T) {
 // a wildcard reaches production. Staging must now fail closed exactly like production.
 func TestValidateCORSConfig_StagingBlocksWildcard(t *testing.T) {
 	err := ValidateCORSConfig("*", "staging")
-	assert.Error(t, err, "wildcard origins must be rejected in staging")
+	require.Error(t, err, "wildcard origins must be rejected in staging")
 	assert.Contains(t, err.Error(), "staging")
 }
 
@@ -94,7 +95,7 @@ func TestValidateCORSConfig_StagingBlocksWildcard(t *testing.T) {
 // empty CORS_ALLOWED_ORIGINS is treated identically to "*" (see isWildcard in cors.go).
 func TestValidateCORSConfig_StagingBlocksEmpty(t *testing.T) {
 	err := ValidateCORSConfig("", "staging")
-	assert.Error(t, err, "empty origins must be rejected in staging")
+	require.Error(t, err, "empty origins must be rejected in staging")
 	assert.Contains(t, err.Error(), "staging")
 }
 

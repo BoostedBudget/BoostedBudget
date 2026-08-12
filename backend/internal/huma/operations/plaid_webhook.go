@@ -126,6 +126,19 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 		return nil, huma.Error400BadRequest("Missing required fields")
 	}
 
+	// Issue #1514 item 3: this guard is defensive/structural, not a reachable production state.
+	// In the wired deployment (backend/cmd/server/main.go) HandlePlaidWebhook is only ever
+	// registered with a non-nil WebhookRepo: both registration branches (main.go:2001-2024 when
+	// plaidService is configured, and the fallback main.go:2025-2043 when it isn't) unconditionally
+	// construct `repository.NewWebhookRepository(db, fieldEncryptor)` and pass it as WebhookRepo —
+	// neither branch is reachable unless db != nil, and NewWebhookRepository never returns nil.
+	// There is no route registration path in main.go that wires a handler with a nil repo. The
+	// guard exists purely so unit tests (see plaid_webhook_test.go) and any future caller that
+	// constructs the handler directly stay nil-safe rather than panicking — see
+	// TestHandlePlaidWebhook_NilRepo_AcksWithoutPersisting_DocumentedUnreachable, which pins the
+	// current (silent-ack) behaviour for that unreachable-in-prod configuration so a future change
+	// to it is a deliberate choice, not a surprise.
+	//
 	// Store webhook in database for audit trail
 	if h.webhookRepo != nil {
 		webhookEvent := &domain.WebhookEvent{
