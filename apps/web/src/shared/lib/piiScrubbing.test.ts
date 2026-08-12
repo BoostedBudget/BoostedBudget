@@ -1,5 +1,32 @@
 import { describe, expect, test } from 'bun:test';
-import { redactPii, stripQueryString } from './piiScrubbing';
+import { redactPii, stripQueryString, tokenize } from './piiScrubbing';
+
+describe('tokenize', () => {
+  // Table-driven so a failure names exactly which key shape broke, and the
+  // tokenizer is tested directly rather than only observed through
+  // redactPii's redact/no-redact outcome, which would hide which stage
+  // (splitting vs. denylist lookup) actually failed.
+  const cases: Array<[string, string[]]> = [
+    ['balance2', ['balance', '2']],
+    ['email2', ['email', '2']],
+    ['userIDBalance', ['user', 'id', 'balance']],
+    ['accountIDName', ['account', 'id', 'name']],
+    ['HTTPStatus', ['http', 'status']],
+    ['account1Name', ['account', '1', 'name']],
+    ['ID', ['id']],
+    ['a', ['a']],
+    ['', []],
+    ['snake_case_key', ['snake', 'case', 'key']],
+    ['kebab-case-key', ['kebab', 'case', 'key']],
+    ['Balance', ['balance']],
+  ];
+
+  for (const [input, expected] of cases) {
+    test(`tokenizes ${JSON.stringify(input)} as ${JSON.stringify(expected)}`, () => {
+      expect(tokenize(input)).toEqual(expected);
+    });
+  }
+});
 
 describe('stripQueryString', () => {
   test('strips everything from ? onward', () => {
@@ -113,6 +140,31 @@ describe('redactPii', () => {
     expect(result.descriptionLength).toBe(12);
     expect(result.requestId).toBe('req-1');
     expect(result.step).toBe('checkout');
+  });
+
+  test('redacts accountName via the account_name two-token window, without over-scrubbing accountCount or typeName', () => {
+    // Neither `account` nor `name` is a bare denylist token (they'd redact
+    // accountCount/typeName), but accountName is still PII (an account
+    // nickname) — closed via the adjacent-token-window check in isPiiKey
+    // matching the existing `account_name` compound entry.
+    const input = { accountName: 'My Checking', accountCount: 3, typeName: 'checking' };
+
+    const result = redactPii(input) as typeof input;
+
+    expect(result.accountName).toBe('[Redacted]');
+    expect(result.accountCount).toBe(3);
+    expect(result.typeName).toBe('checking');
+  });
+
+  test('redacts realistic fail-open key shapes: digit-suffixed and acronym-adjacent PII fields', () => {
+    const input = { balance2: 100, institutionName2: 'Chase', userIDBalance: 200, accountIDName: 'Checking' };
+
+    const result = redactPii(input) as typeof input;
+
+    expect(result.balance2).toBe('[Redacted]');
+    expect(result.institutionName2).toBe('[Redacted]');
+    expect(result.userIDBalance).toBe('[Redacted]');
+    expect(result.accountIDName).toBe('[Redacted]');
   });
 
   test('scrubs a real-shaped Axios-like error with config/response and a self-reference, without throwing or hanging', () => {
