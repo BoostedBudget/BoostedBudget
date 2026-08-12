@@ -20,13 +20,20 @@ describe('ToggleGroup', () => {
       expect(screen.getByText('Option B')).toBeInTheDocument()
     })
 
-    it('should render with role="group"', () => {
+    // type="single" renders a radiogroup, not a plain group. Radix has always given the
+    // items role="radio" (the dashboard and transaction-filtering E2E specs both rely on
+    // that), but until @radix-ui/react-toggle-group 1.1.19 the container was role="group",
+    // which is invalid ARIA — radio children require a radiogroup owner. This test asserted
+    // the invalid markup; it now pins the corrected role so a regression back to "group"
+    // fails here. A multi-select (type="multiple") group is still role="group".
+    it('should render type="single" with role="radiogroup" and radio items', () => {
       render(
         <ToggleGroup type="single">
           <ToggleGroupItem value="a">A</ToggleGroupItem>
         </ToggleGroup>
       )
-      expect(screen.getByRole('group')).toBeInTheDocument()
+      expect(screen.getByRole('radiogroup')).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: 'A' })).toBeInTheDocument()
     })
 
     it('should apply default container classes', () => {
