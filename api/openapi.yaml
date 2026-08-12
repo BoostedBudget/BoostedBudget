@@ -14585,31 +14585,6 @@ paths:
       summary: Health check
       tags:
         - Health
-  /metrics:
-    get:
-      description: Returns Prometheus metrics in text format for monitoring.
-      operationId: getMetrics
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                contentEncoding: base64
-                type: string
-          description: OK
-          headers:
-            Content-Type:
-              schema:
-                type: string
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      summary: Get Prometheus metrics
-      tags:
-        - Monitoring
   /webhooks/paddle:
     post:
       description: Public endpoint for Paddle to send subscription and payment event notifications. Verifies HMAC-SHA256 signature, stores in database, and enqueues async processing job.
