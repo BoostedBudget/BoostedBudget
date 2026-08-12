@@ -167,7 +167,9 @@ func main() {
 
 	// Initialize Huma API wrapping Echo for OpenAPI generation
 	// Huma provides automatic OpenAPI 3.1 spec generation from Go code
-	humaAPI := humaecho.New(e, humaconfig.NewAPIConfig(cfg.Version, cfg.Environment))
+	// NewV4, not New: huma v2.39.0 repointed humaecho.New at Echo v5. NewV4 is the same
+	// adapter for Echo v4, which this app still runs on.
+	humaAPI := humaecho.NewV4(e, humaconfig.NewAPIConfig(cfg.Version, cfg.Environment))
 	appLogger.Info("Huma API initialized - OpenAPI at /openapi.json, Docs at /docs")
 
 	// Health check handler (no auth required) - Huma operation

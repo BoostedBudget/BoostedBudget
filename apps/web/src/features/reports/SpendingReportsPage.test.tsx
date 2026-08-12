@@ -38,7 +38,9 @@ describe('SpendingReportsPage', () => {
 
   it('renders date range picker', () => {
     renderPage()
-    expect(screen.getByRole('group')).toBeDefined()
+    // radiogroup, not group: DateRangePicker renders <ToggleGroup type="single">.
+    // See src/test/mocks/toggle-group.tsx for why the role changed.
+    expect(screen.getByRole('radiogroup')).toBeDefined()
   })
 
   it('renders category breakdown section', () => {
