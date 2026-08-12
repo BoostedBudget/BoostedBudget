@@ -61,6 +61,33 @@ export $(echo "$PORTS_OUTPUT" | grep -E "^E2E_")
 echo ""
 echo "📍 Using ports: Frontend=$E2E_FRONTEND_PORT Backend=$E2E_BACKEND_PORT Postgres=$E2E_POSTGRES_PORT Prod=$E2E_PROD_PORT"
 echo ""
+
+# Pre-flight port check — find-available-ports.js only proves a port was free at scan
+# time; a process can grab it in the gap before Playwright's webServer binds (e.g. an
+# orphaned `vite preview --strictPort` from a killed local run whose grandchild survived
+# under PPID 1). --strictPort refuses to fall back, so a squatted port makes Playwright
+# wait out the full webServer timeout (120-180s) with no indication *why* — it just looks
+# like a slow build. Fail fast here instead, naming the port and the PID holding it.
+check_port_free() {
+  local port="$1"
+  local label="$2"
+  local pid
+  pid=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -1)
+  if [ -n "$pid" ]; then
+    echo ""
+    echo "❌ Port $port ($label) is already in use by PID $pid:"
+    ps -p "$pid" -o pid,ppid,etime,command 2>/dev/null || true
+    echo ""
+    echo "   find-available-ports.js reported this port as free, but something has since"
+    echo "   bound it — likely an orphaned process from a previous run. Kill PID $pid (or"
+    echo "   its parent, if that PID is a short-lived child) and re-run."
+    exit 1
+  fi
+}
+
+check_port_free "$E2E_FRONTEND_PORT" "frontend"
+check_port_free "$E2E_BACKEND_PORT" "backend"
+check_port_free "$E2E_PROD_PORT" "prod"
 echo "Building backend binary..."
 (cd "$BACKEND_DIR" && go build -o bin/server ./cmd/server)
 echo "   Backend built successfully"
