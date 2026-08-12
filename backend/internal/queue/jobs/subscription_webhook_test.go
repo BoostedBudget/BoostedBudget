@@ -689,6 +689,34 @@ func TestWorker_WebhookNotFound_CancelsJob(t *testing.T) {
 	mockWebhookRepo.AssertExpectations(t)
 }
 
+// TestWorker_InvalidSignature_RefusesToDispatch verifies Issue #1514 item 4: the worker
+// independently refuses to process a webhook row whose signature was never valid, even if
+// something upstream enqueued it. No subscription mutation must occur.
+func TestWorker_InvalidSignature_RefusesToDispatch(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_created.json")
+	webhook.SignatureValid = false
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.created",
+	}
+	job := createRiverJob(args)
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err, "worker must refuse to dispatch a signature_valid=false row")
+	mockProfileRepo.AssertNotCalled(t, "UpdatePaddleCustomerID")
+	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
 // TestWorker_AlreadyProcessed_Idempotent tests idempotency
 func TestWorker_AlreadyProcessed_Idempotent(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)

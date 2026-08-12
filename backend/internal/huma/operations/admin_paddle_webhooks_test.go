@@ -383,6 +383,30 @@ func TestReplayPaddleWebhook_NilRepo_Returns503(t *testing.T) {
 	assert.Nil(t, out)
 }
 
+// TestReplayPaddleWebhook_InvalidSignature_Rejected verifies Issue #1514 item 3: replaying a
+// webhook whose signature was never valid must be refused, and nothing must be enqueued.
+func TestReplayPaddleWebhook_InvalidSignature_Rejected(t *testing.T) {
+	mockWebhookRepo := new(MockPaddleWebhookRepository)
+	mockJobQueue := new(MockAdminJobQueue)
+	cfg := &config.Config{Environment: "qa"}
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
+		WithPaddleWebhookRepo(mockWebhookRepo).
+		WithJobQueue(mockJobQueue)
+
+	evt := newTestWebhookEvent("wh-invalid-1")
+	evt.SignatureValid = false
+	mockWebhookRepo.On("GetByID", mock.Anything, "wh-invalid-1").Return(evt, nil)
+
+	input := &ReplayPaddleWebhookInput{ID: "wh-invalid-1"}
+	out, err := handler.ReplayPaddleWebhook(context.Background(), input)
+
+	require.Error(t, err)
+	assert.Nil(t, out)
+
+	mockWebhookRepo.AssertNotCalled(t, "ResetProcessingStatus", mock.Anything, mock.Anything)
+	mockJobQueue.AssertNotCalled(t, "Enqueue", mock.Anything, mock.Anything)
+}
+
 func TestReplayPaddleWebhook_NilQueue_StillSucceeds(t *testing.T) {
 	mockWebhookRepo := new(MockPaddleWebhookRepository)
 	cfg := &config.Config{Environment: "qa"}
