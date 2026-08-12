@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,6 +32,12 @@ type invalidAttemptCall struct {
 func (m *mockInvalidWebhookAttemptRepository) Record(ctx context.Context, provider string, bodyLength int, bodySHA256 string) error {
 	m.calls = append(m.calls, invalidAttemptCall{provider: provider, bodyLength: bodyLength, bodySHA256: bodySHA256})
 	return m.err
+}
+
+// GetStats24h is unused by these handler-level tests (they only exercise Record via
+// recordInvalidWebhookAttempt) but is required to satisfy repository.InvalidWebhookAttemptRepository.
+func (m *mockInvalidWebhookAttemptRepository) GetStats24h(ctx context.Context) (map[string]int64, *time.Time, error) {
+	return nil, nil, nil
 }
 
 func testLogger() *slog.Logger {

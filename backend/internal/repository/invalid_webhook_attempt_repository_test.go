@@ -224,3 +224,73 @@ func TestInvalidWebhookAttemptRecord_StartupForcesTrimOnFirstCallOnly(t *testing
 	require.NoError(t, repo.Record(ctx, "plaid", 1, "second"))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestInvalidWebhookAttemptGetStats24h_MultipleProviders_ReturnsPerProviderCountsAndOverallMostRecent
+// is Issue #1514 requirement #5: the repository read method that restores operator visibility.
+// Proves the per-provider counts come back distinctly (not summed) and MostRecentAt reflects the
+// single latest row ACROSS providers, not either provider's own latest in isolation.
+func TestInvalidWebhookAttemptGetStats24h_MultipleProviders_ReturnsPerProviderCountsAndOverallMostRecent(t *testing.T) {
+	mock, repo := setupInvalidWebhookAttemptMockDB(t, 10)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	paddleLatest := time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC)
+	plaidLatest := time.Date(2026, 8, 12, 9, 0, 0, 0, time.UTC) // earlier than paddle's
+
+	rows := pgxmock.NewRows([]string{"provider", "count", "max_created_at"}).
+		AddRow("paddle", int64(7), paddleLatest).
+		AddRow("plaid", int64(3), plaidLatest)
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT provider, COUNT(*), MAX(created_at)")).
+		WillReturnRows(rows)
+
+	byProvider, mostRecentAt, err := repo.GetStats24h(ctx)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	require.Equal(t, map[string]int64{"paddle": 7, "plaid": 3}, byProvider,
+		"per-provider counts must stay distinct, not be summed into a single number")
+	require.NotNil(t, mostRecentAt)
+	require.True(t, mostRecentAt.Equal(paddleLatest),
+		"MostRecentAt must be the latest timestamp ACROSS providers (paddle's), not plaid's own latest or the first row scanned")
+}
+
+// TestInvalidWebhookAttemptGetStats24h_NoAttempts_ReturnsEmptyMapAndNilMostRecent proves the zero
+// state is unambiguous: no rows in the trailing window means an empty map and a nil timestamp, not
+// a struct that could be confused with "the query failed".
+func TestInvalidWebhookAttemptGetStats24h_NoAttempts_ReturnsEmptyMapAndNilMostRecent(t *testing.T) {
+	mock, repo := setupInvalidWebhookAttemptMockDB(t, 10)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	rows := pgxmock.NewRows([]string{"provider", "count", "max_created_at"})
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT provider, COUNT(*), MAX(created_at)")).
+		WillReturnRows(rows)
+
+	byProvider, mostRecentAt, err := repo.GetStats24h(ctx)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+	require.Empty(t, byProvider)
+	require.Nil(t, mostRecentAt)
+}
+
+// TestInvalidWebhookAttemptGetStats24h_QueryFails_ReturnsError proves a query failure surfaces as
+// an error rather than a silently-empty result — the caller (services.systemHealthService) relies
+// on this to distinguish "zero attacks" from "we don't know" (domain.RejectedWebhookAttemptMetrics.Available).
+func TestInvalidWebhookAttemptGetStats24h_QueryFails_ReturnsError(t *testing.T) {
+	mock, repo := setupInvalidWebhookAttemptMockDB(t, 10)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT provider, COUNT(*), MAX(created_at)")).
+		WillReturnError(errInvalidWebhookAttemptDB)
+
+	byProvider, mostRecentAt, err := repo.GetStats24h(ctx)
+	require.Error(t, err)
+	require.Nil(t, byProvider)
+	require.Nil(t, mostRecentAt)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

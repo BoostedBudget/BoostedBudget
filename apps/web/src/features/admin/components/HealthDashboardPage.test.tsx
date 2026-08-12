@@ -98,6 +98,15 @@ const mockHealthData = {
     newest_record_seconds: 0,
     available: true,
   },
+  // Issue #1514 requirement #5: rejected (unsigned/invalid-signature) webhook attempts.
+  // `available: true` with zero counts is a VERIFIED quiet 24 hours, not an unknown — the
+  // failed-read and absent-section cases are exercised separately below.
+  rejected_webhook_attempts_24h: {
+    total_24h: 0,
+    by_provider: {},
+    most_recent_at: null,
+    available: true,
+  },
 }
 
 const renderWithQueryClient = (component: React.ReactElement) => {
@@ -761,6 +770,163 @@ describe('HealthDashboardPage', () => {
 
       expect(residueCardValue(RECORDS_CARD)).toBe('Unavailable')
       expect(residueCardValue(RECENT_CARD)).toBe('Unavailable')
+    })
+  })
+
+  // Issue #1514, requirement #5: the operator-visibility signal restored after Phase 1 stopped
+  // persisting rejected (unsigned/invalid-signature) webhooks anywhere /admin/webhooks can read.
+  describe('Rejected Webhook Attempts section (Issue #1514 requirement #5)', () => {
+    function rejectedCardValue(title: string): string {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card.querySelector('[data-slot="stat-value"]')?.textContent ?? ''
+    }
+
+    const TOTAL_CARD = 'Rejected Attempts (24h)'
+    const RECENT_CARD = 'Most Recent Attempt'
+
+    // THE RED TEST: a forged-webhook flood is visible to an operator, broken down by provider.
+    it('surfaces a seeded flood total, per-provider breakdown, and the most recent attempt', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          rejected_webhook_attempts_24h: {
+            total_24h: 45,
+            by_provider: { paddle: 40, plaid: 5 },
+            most_recent_at: '2026-08-12T11:50:00Z',
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Rejected Webhook Attempts/i)).toBeInTheDocument()
+      })
+
+      // 45, not 40 or 5 alone — the total must be the sum, and each provider its own card.
+      expect(rejectedCardValue(TOTAL_CARD)).toBe('45')
+      expect(rejectedCardValue('Paddle Attempts (24h)')).toBe('40')
+      expect(rejectedCardValue('Plaid Attempts (24h)')).toBe('5')
+      expect(rejectedCardValue(RECENT_CARD)).not.toBe('None')
+    })
+
+    // THE MANDATORY SIBLING: without it, the total card could render a hardcoded constant and the
+    // test above would still pass. A genuinely quiet 24 hours must read as a verified zero.
+    it('reports a verified zero and "None" for the most recent attempt when nothing was rejected', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData, // rejected_webhook_attempts_24h: total 0, empty map, available true
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(TOTAL_CARD)).toBeInTheDocument()
+      })
+
+      expect(rejectedCardValue(TOTAL_CARD)).toBe('0')
+      expect(rejectedCardValue(RECENT_CARD)).toBe('None')
+      // No per-provider cards render when the map is empty.
+      expect(screen.queryByText(/Paddle Attempts \(24h\)/i)).not.toBeInTheDocument()
+    })
+
+    // ⚠ THE FAIL-CLOSED PATH — the exact operational hazard requirement #5 exists to close. A
+    // green "0" produced by a failed query would tell an operator "no attacks", during a flood.
+    it('renders "Unavailable", not a green zero, when the query failed', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          rejected_webhook_attempts_24h: {
+            total_24h: 0,
+            by_provider: {},
+            most_recent_at: null,
+            available: false,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(TOTAL_CARD)).toBeInTheDocument()
+      })
+
+      expect(rejectedCardValue(TOTAL_CARD)).toBe('Unavailable')
+      expect(rejectedCardValue(RECENT_CARD)).toBe('Unavailable')
+
+      const card = screen.getByText(TOTAL_CARD).closest('[data-slot="card"]')
+      expect(card?.className ?? '').not.toMatch(/success/i)
+    })
+
+    // A rolling deploy or an older cached response can omit `rejected_webhook_attempts_24h`
+    // entirely; an unguarded read must not throw and blank the whole dashboard.
+    it('degrades to "Unavailable" (not a crash) when `rejected_webhook_attempts_24h` is entirely absent', async () => {
+      const withoutRejected: Record<string, unknown> = { ...mockHealthData }
+      delete withoutRejected.rejected_webhook_attempts_24h
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: withoutRejected,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/System Health/i)).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(screen.getByText(TOTAL_CARD)).toBeInTheDocument()
+      })
+
+      expect(rejectedCardValue(TOTAL_CARD)).toBe('Unavailable')
+      expect(rejectedCardValue(RECENT_CARD)).toBe('Unavailable')
+    })
+
+    // Pins the distinction the brief calls out as the most likely future regression: this section
+    // must never move in lockstep with paddle_status.failed_webhooks_24h.
+    it('is independent of the Paddle Status "Failed Webhooks (24h)" card', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          paddle_status: {
+            ...mockHealthData.paddle_status,
+            failed_webhooks_24h: 2,
+          },
+          rejected_webhook_attempts_24h: {
+            total_24h: 99,
+            by_provider: { paddle: 99 },
+            most_recent_at: '2026-08-12T11:50:00Z',
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(TOTAL_CARD)).toBeInTheDocument()
+      })
+
+      expect(rejectedCardValue(TOTAL_CARD)).toBe('99')
+      // The Paddle Status section's own card keeps its own, unrelated number.
+      const failedWebhooksCard = screen.getByText('Failed Webhooks (24h)').closest('[data-slot="card"]')
+      expect(failedWebhooksCard?.querySelector('[data-slot="stat-value"]')?.textContent).toBe('2')
     })
   })
 

@@ -159,6 +159,45 @@ describe('WebhooksPage', () => {
     render(<WebhooksPage />, { wrapper: createWrapper() })
 
     expect(screen.getByText(/no webhook events found/i)).toBeInTheDocument()
+
+    // Issue #1514, requirement #5: "No webhook events found" must no longer be readable as "no
+    // attacks" — this page only ever shows deliveries that PASSED signature verification, so the
+    // empty state must say rejected attempts are tracked separately and point at where.
+    expect(
+      screen.getByText(/passed signature verification/i)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/rejected\/invalid-signature attempts are recorded separately/i)
+    ).toBeInTheDocument()
+    const healthLink = screen.getByRole('link', { name: /view rejected attempts on system health/i })
+    expect(healthLink).toBeInTheDocument()
+    expect(healthLink).toHaveAttribute('href', '/admin/health')
+  })
+
+  it('does not show the "recorded separately" hint or health link when the empty state is caused by filters', () => {
+    mockUseListAdminPaddleWebhooks.mockReturnValue({
+      data: { Events: [], Total: 0, Page: 1, PageSize: 20, TotalPages: 0, HasMore: false },
+      isLoading: false,
+      error: null,
+    })
+    mockUseGetAdminPaddleWebhookStats.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    })
+    mockUseReplayAdminPaddleWebhook.mockReturnValue({
+      mutate: () => {},
+      isPending: false,
+    })
+
+    render(<WebhooksPage />, { wrapper: createWrapper() })
+
+    // Activate a filter so the empty state renders the "matches your filters" variant instead.
+    fireEvent.change(screen.getByLabelText(/filter by event type/i), { target: { value: 'subscription.created' } })
+
+    expect(screen.getByText(/no webhook events match your filters/i)).toBeInTheDocument()
+    expect(screen.queryByText(/rejected\/invalid-signature attempts are recorded separately/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /view rejected attempts on system health/i })).not.toBeInTheDocument()
   })
 
   it('renders list of webhook events', () => {

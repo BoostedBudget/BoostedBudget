@@ -5262,6 +5262,30 @@ components:
         - message
         - suggestion
       type: object
+    RejectedWebhookAttemptMetrics:
+      additionalProperties: false
+      properties:
+        available:
+          type: boolean
+        by_provider:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        most_recent_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        total_24h:
+          format: int64
+          type: integer
+      required:
+        - total_24h
+        - by_provider
+        - most_recent_at
+        - available
+      type: object
     ReorderAccountsOutputBody:
       additionalProperties: false
       properties:
@@ -6088,6 +6112,8 @@ components:
           $ref: "#/components/schemas/PaddleStatusMetrics"
         plaid_orphaned_items:
           $ref: "#/components/schemas/PlaidOrphanedItemMetrics"
+        rejected_webhook_attempts_24h:
+          $ref: "#/components/schemas/RejectedWebhookAttemptMetrics"
         services:
           $ref: "#/components/schemas/ServiceHealthStatuses"
         status:
@@ -6108,6 +6134,7 @@ components:
         - job_backlog
         - plaid_orphaned_items
         - deletion_residue
+        - rejected_webhook_attempts_24h
       type: object
     TagSource:
       additionalProperties: false

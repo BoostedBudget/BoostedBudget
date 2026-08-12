@@ -43,6 +43,68 @@ type SystemHealthResponse struct {
 	// repository.ProfileRepository.RecordDeletionResidue writes; see
 	// repository.JobHealthRepository.GetDeletionResidueStats.
 	DeletionResidue DeletionResidueMetrics `json:"deletion_residue"`
+	// RejectedWebhookAttempts24h is the operator-visibility signal Issue #1514 requirement #5
+	// restores. See RejectedWebhookAttemptMetrics for what it counts and, critically, what it does
+	// NOT count.
+	RejectedWebhookAttempts24h RejectedWebhookAttemptMetrics `json:"rejected_webhook_attempts_24h"`
+}
+
+// RejectedWebhookAttemptMetrics is the read side of repository.InvalidWebhookAttemptRepository —
+// the audit signal for webhook deliveries REJECTED before ever being written to the full webhook
+// tables, because their signature did not verify (or was absent). Issue #1514, requirement #5
+// (Phase 2 gap fix).
+//
+// BACKGROUND. Phase 1 stopped persisting unsigned/invalid-signature Paddle and Plaid webhooks
+// into paddle_webhook_events / webhook_events (see migration 000146/000147) and recorded bounded
+// metadata into invalid_webhook_attempts instead — they ARE still persisted, just into that
+// separate, capped, metadata-only table rather than the full tables an attacker could use to
+// poison idempotency. As a side effect, that removed the ONLY place an operator could see a
+// forged-webhook attempt on /admin/webhooks — that page reads paddle_webhook_events, which by
+// construction can never again contain one of these rows. During a live forgery flood
+// /admin/webhooks renders "No webhook events found", which reads as "no attacks are happening"
+// when it actually means "we stopped recording rejections where you're looking." This struct is
+// what makes that silence visible again, on /admin/health instead.
+//
+// ⚠ THIS IS NOT domain.PaddleStatusMetrics.FailedWebhooks24h, AND THE TWO MUST NEVER BE WIRED TO
+// THE SAME SOURCE. FailedWebhooks24h counts paddle_webhook_events rows with
+// processing_error IS NOT NULL — webhooks that PASSED signature verification and then failed
+// during processing (a bug in this app, or a transient dependency failure). This struct counts
+// webhooks that FAILED signature verification and were never written to that full-fidelity table
+// at all — someone (an attacker, or a misconfigured sender) sending a request that never proved
+// it came from Paddle or Plaid. A processing bug and a forgery attempt are unrelated failure
+// modes with unrelated causes and unrelated responses; if a future change ever makes these two
+// numbers move together, that is the regression this comment exists to name in advance.
+type RejectedWebhookAttemptMetrics struct {
+	// Total24h is the sum of ByProvider's values — the number of rejected attempts, per provider,
+	// CURRENTLY ON RECORD in the trailing 24 hours.
+	//
+	// ⚠ NOT A LIFETIME/UNCAPPED COUNTER (Codex adversarial review finding). Each provider's rows in
+	// invalid_webhook_attempts are periodically trimmed back toward
+	// repository.invalidWebhookAttemptCap (see that constant's doc comment) as a defense against
+	// unbounded storage growth under attack. Under a sustained flood that outpaces the trim
+	// schedule, this number can plateau at the cap well below the true number of rejected
+	// attempts that occurred in the window — it answers "how many rejected attempts are currently
+	// on record", not "how many happened". The Prometheus counter
+	// recordInvalidWebhookAttempt increments (webhook_security.go) is the uncapped lifetime total
+	// for whoever needs that instead.
+	Total24h int64 `json:"total_24h"`
+	// ByProvider is Total24h broken down by provider (e.g. "paddle", "plaid"). A provider with no
+	// rejected attempts in the window is simply absent from this map, not present with a 0 —
+	// callers that want an explicit per-provider zero should read Total24h == 0 as "nothing from
+	// anyone" rather than probing this map for absence.
+	ByProvider map[string]int64 `json:"by_provider"`
+	// MostRecentAt is when the single most recent rejected attempt (across all providers)
+	// happened, or nil if there were none in the trailing 24h window (which, unlike
+	// DeletionResidueMetrics.NewestRecordSeconds, is unambiguous here: nil always means "none",
+	// never "just now" — there is no zero-value collision to disambiguate).
+	MostRecentAt *time.Time `json:"most_recent_at"`
+	// Available distinguishes "queried invalid_webhook_attempts successfully and found a real
+	// (possibly zero) count" from "the query failed, or the repository is unwired, so there is no
+	// number to report" — same fail-closed convention as JobBacklogMetrics.Available,
+	// PlaidOrphanedItemMetrics.Available, and DeletionResidueMetrics.Available above. Defaults to
+	// the Go zero value (false): any path that forgets to explicitly claim success reads as
+	// "unknown", never as a falsely-confident "0 attacks" during an actual flood.
+	Available bool `json:"available"`
 }
 
 // DeletionResidueMetrics is the post-gate external-effect residue as /admin/health reports it, and as

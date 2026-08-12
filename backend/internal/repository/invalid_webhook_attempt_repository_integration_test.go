@@ -339,3 +339,81 @@ func TestInvalidWebhookAttemptCap_AgeRetention_Integration(t *testing.T) {
 	require.ElementsMatch(t, []string{"inside-window"}, remaining,
 		"trim must delete rows older than the retention window and keep rows inside it")
 }
+
+// TestInvalidWebhookAttemptGetStats24h_Integration is Issue #1514 requirement #5 — the repository
+// read method that restores operator visibility into rejected webhook attempts. pgxmock cannot
+// catch a bad GROUP BY/aggregate (project memory: "pgxmock never catches type/aggregate errors"),
+// so this exercises the real query against live Postgres: distinct per-provider counts, a
+// window boundary that correctly excludes rows just outside 24h, and an overall MostRecentAt that
+// reflects the single latest row across BOTH providers rather than either provider's own latest.
+func TestInvalidWebhookAttemptGetStats24h_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx, "DELETE FROM invalid_webhook_attempts")
+	require.NoError(t, err)
+
+	repo := &invalidWebhookAttemptRepository{db: pool}
+
+	now := time.Now().UTC()
+	insertAt := func(provider, sha string, createdAt time.Time) {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO invalid_webhook_attempts (provider, body_length, body_sha256, created_at) VALUES ($1, $2, $3, $4)`,
+			provider, 1, sha, createdAt)
+		require.NoError(t, err)
+	}
+
+	// Inside the 24h window.
+	insertAt("paddle", "paddle-1", now.Add(-1*time.Hour))
+	insertAt("paddle", "paddle-2", now.Add(-2*time.Hour))
+	insertAt("paddle", "paddle-3-latest-overall", now.Add(-10*time.Minute))
+	insertAt("plaid", "plaid-1", now.Add(-23*time.Hour))
+
+	// Outside the window — must not be counted, and must not win MostRecentAt even though it is
+	// a real row for a provider that also has an in-window row.
+	insertAt("paddle", "paddle-too-old", now.Add(-25*time.Hour))
+	insertAt("plaid", "plaid-too-old", now.Add(-48*time.Hour))
+	// A THIRD provider with ONLY an out-of-window row — this is the one that actually isolates
+	// "no in-window rows means entirely absent from the map, not present with 0". Codex
+	// adversarial review caught that using "plaid" for this (which also has an in-window row
+	// above) doesn't prove anything: plaid would appear in the map regardless, for an unrelated
+	// reason. A provider with zero in-window rows of its own is the only fixture that pins it.
+	insertAt("stripe-not-a-real-provider", "stripe-too-old", now.Add(-48*time.Hour))
+
+	byProvider, mostRecentAt, err := repo.GetStats24h(ctx)
+	require.NoError(t, err)
+
+	require.Equal(t, int64(3), byProvider["paddle"], "must count only in-window paddle rows")
+	require.Equal(t, int64(1), byProvider["plaid"], "must count only in-window plaid rows")
+	_, stripePresent := byProvider["stripe-not-a-real-provider"]
+	require.False(t, stripePresent,
+		"a provider with NO in-window rows of its own must be entirely absent from the map, not present with 0")
+	require.Len(t, byProvider, 2, "only providers with at least one in-window row appear")
+
+	require.NotNil(t, mostRecentAt)
+	require.WithinDuration(t, now.Add(-10*time.Minute), *mostRecentAt, 2*time.Second,
+		"MostRecentAt must be the latest row across ALL providers (paddle's 10-minutes-ago row), not plaid's own latest or the oldest row")
+}
+
+// TestInvalidWebhookAttemptGetStats24h_NoRowsInWindow_Integration proves the true-empty case
+// against live Postgres: a table with rows, none of them inside the window, must report an empty
+// map and a nil MostRecentAt — not a zero-valued map entry, and not an error.
+func TestInvalidWebhookAttemptGetStats24h_NoRowsInWindow_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx, "DELETE FROM invalid_webhook_attempts")
+	require.NoError(t, err)
+
+	repo := &invalidWebhookAttemptRepository{db: pool}
+
+	_, err = pool.Exec(ctx,
+		`INSERT INTO invalid_webhook_attempts (provider, body_length, body_sha256, created_at) VALUES ($1, $2, $3, $4)`,
+		"paddle", 1, "ancient", time.Now().UTC().Add(-72*time.Hour))
+	require.NoError(t, err)
+
+	byProvider, mostRecentAt, err := repo.GetStats24h(ctx)
+	require.NoError(t, err)
+	require.Empty(t, byProvider)
+	require.Nil(t, mostRecentAt)
+}
