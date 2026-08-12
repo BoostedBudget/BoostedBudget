@@ -335,6 +335,13 @@ describe('PII coverage — Accounts page', () => {
     ]
     await waitForSentinels(sentinels)
 
+    // Scan while still in the default cards view (AccountCard), BEFORE switching to table.
+    // Issue #1514 (G5): the table-view scan below never exercised AccountCard at all, so it
+    // never caught the account nickname/institution name leaking through AccountCard's
+    // aria-label — an attribute, which data-ph-mask cannot cover (PostHog records attributes
+    // verbatim). This assertion closes that blind spot structurally.
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+
     // AccountsPage defaults to cards view; switch to table to expose filter buttons.
     await user.click(screen.getByRole('button', { name: /^table$/i }))
     await waitFor(

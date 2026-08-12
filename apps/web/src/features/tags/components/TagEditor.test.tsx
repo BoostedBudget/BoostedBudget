@@ -12,6 +12,7 @@ import {
   mockUseCreateTag,
   mockCreateTagMutateAsync,
 } from '@/test/mocks/tags-api'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 // Mock tags data
 function createMockTags(): UserTag[] {
@@ -104,6 +105,42 @@ describe('TagEditor', () => {
 
       expect(screen.getByLabelText('Remove Essential')).toBeInTheDocument()
       expect(screen.getByLabelText('Remove Business')).toBeInTheDocument()
+    })
+  })
+
+  describe('PII: tag names never appear in unmaskable DOM attributes (issue #1514, G5)', () => {
+    // A regex-based accessible-name assertion (getByLabelText('Remove Essential')) passes
+    // whether the name comes from an aria-label attribute or from aria-labelledby pointing
+    // at masked text — it can't tell the two apart. This test asserts on the actual DOM
+    // attribute values, which is what PostHog session replay records verbatim, so it fails
+    // against the pre-fix `aria-label={`Remove ${tagName}`}` implementation.
+    it('does not leak the tag name via any attribute on the remove button or dropdown option', async () => {
+      const { container } = render(
+        <TagEditor
+          selectedTags={['Essential']}
+          availableTags={createMockTags()}
+          onChange={mockOnChange}
+        />
+      )
+
+      const removeButton = screen.getByLabelText('Remove Essential')
+      for (const attr of Array.from(removeButton.attributes)) {
+        expect(attr.value).not.toContain('Essential')
+      }
+
+      fireEvent.click(screen.getByText('+ Add tag'))
+      const discretionaryOption = await screen.findByText('Discretionary')
+      const optionEl = discretionaryOption.closest('[role="option"]') as HTMLElement
+      expect(optionEl).toBeTruthy()
+      for (const attr of Array.from(optionEl.attributes)) {
+        expect(attr.value).not.toContain('Discretionary')
+      }
+
+      const sentinels: PIISentinel[] = [
+        { value: 'Essential', fieldDescription: 'tag.name (selected)' },
+        { value: 'Discretionary', fieldDescription: 'tag.name (dropdown option)' },
+      ]
+      expect(scanForUnmaskedPII(container, sentinels)).toEqual([])
     })
   })
 

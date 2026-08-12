@@ -5,6 +5,7 @@ import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { CustomCategoryListItem } from './CustomCategoryListItem'
 import type { CustomCategory } from '../types'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 function cat(p: Partial<CustomCategory> & { id: string; name: string }): CustomCategory {
   return { user_id: 'u1', usage_count: 0, created_at: '', updated_at: '', ...p }
@@ -61,6 +62,30 @@ describe('CustomCategoryListItem', () => {
     )
     fireEvent.keyDown(screen.getByRole('button', { name: /delete coffee/i }), { key: 'Delete' })
     expect(onKeyDown).not.toHaveBeenCalled()
+  })
+
+  describe('PII: category name never appears in an unmaskable DOM attribute (issue #1514, G5)', () => {
+    // getByRole({ name: /edit coffee/i }) passes whether "Coffee" comes from a raw
+    // aria-label attribute or from aria-labelledby pointing at masked text — it can't tell
+    // the two apart. This asserts on the actual attribute values (what PostHog session
+    // replay records verbatim), so it fails against the pre-fix
+    // `aria-label={`Edit ${category.name}`}` implementation.
+    it('does not leak the category name via any attribute on the Edit/Delete buttons', () => {
+      const { container } = render(
+        <CustomCategoryListItem category={cat({ id: 'c1', name: 'Coffee' })} onEdit={() => {}} onDelete={() => {}} />
+      )
+
+      const editButton = screen.getByRole('button', { name: /edit coffee/i })
+      const deleteButton = screen.getByRole('button', { name: /delete coffee/i })
+      for (const btn of [editButton, deleteButton]) {
+        for (const attr of Array.from(btn.attributes)) {
+          expect(attr.value).not.toContain('Coffee')
+        }
+      }
+
+      const sentinels: PIISentinel[] = [{ value: 'Coffee', fieldDescription: 'category.name' }]
+      expect(scanForUnmaskedPII(container, sentinels)).toEqual([])
+    })
   })
 
   it('indents the child variant', () => {

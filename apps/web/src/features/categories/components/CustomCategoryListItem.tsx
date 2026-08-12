@@ -63,17 +63,23 @@ export function CustomCategoryListItem({
       <button
         type="button"
         onClick={() => onEdit(category)}
-        aria-label={`Edit ${category.name}`}
+        // PII: aria-label is recorded verbatim by session replay; data-ph-mask only covers
+        // text content, not attributes. aria-labelledby stores only the element id in the
+        // attribute; the accessible name ("Edit {name}") is computed at read time from the
+        // sr-only span below, so the name never appears as attribute text.
+        aria-labelledby={`category-edit-label-${category.id}`}
         className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
       >
+        <span id={`category-edit-label-${category.id}`} className="sr-only" data-ph-mask>{`Edit ${category.name}`}</span>
         <Pencil className="h-4 w-4" aria-hidden />
       </button>
       <button
         type="button"
         onClick={() => onDelete(category)}
-        aria-label={`Delete ${category.name}`}
+        aria-labelledby={`category-delete-label-${category.id}`}
         className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
       >
+        <span id={`category-delete-label-${category.id}`} className="sr-only" data-ph-mask>{`Delete ${category.name}`}</span>
         <Trash2 className="h-4 w-4" aria-hidden />
       </button>
     </div>

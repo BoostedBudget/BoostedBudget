@@ -67,8 +67,15 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
         <Link
           to={`/accounts/${account.id}`}
           className="flex-1 block hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-lg"
-          aria-label={`View ${displayName} account details`}
+          // PII: aria-label is recorded verbatim by session replay; data-ph-mask only covers
+          // text content, not attributes. aria-labelledby stores only the element id in the
+          // attribute; the accessible name is computed at read time from the sr-only span
+          // below, so account data never appears as attribute text.
+          aria-labelledby={`account-link-label-${account.id}`}
         >
+          <span id={`account-link-label-${account.id}`} className="sr-only" data-ph-mask>
+            {`View ${typeLabel} account${mask ? ` ending in ${mask}` : ''} details`}
+          </span>
           <AccountSummaryHeader
             institutionName={institution_name ?? ''}
             mask={mask}
