@@ -88,7 +88,7 @@ func (s *stubDLQRepo) DeleteOlderThan(_ context.Context, _ time.Time, _ bool) (i
 
 // riverUniqueKeyInputs captures the PER-INSERT inputs river derives a job's unique_key from.
 //
-// dbunique.buildUniqueKeyString (river v0.38.0, internal/dbunique/db_unique.go:58-126) concatenates,
+// dbunique.buildUniqueKeyString (river v0.43.0, internal/dbunique/db_unique.go:58-126) concatenates,
 // in order:
 //
 //	"&kind="   + params.Kind

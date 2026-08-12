@@ -306,7 +306,7 @@ func (w *ManualTierOverrideExpiryCheckWorker) syncClerkMetadata(ctx context.Cont
 // Only one check job should run at a time to prevent duplicate expiry processing.
 //
 // Issue #1413 Task W (Codex review): ByState now matches River's own default
-// (rivertype.UniqueOptsByStateDefault(), river@v0.38.0) exactly: Available, Completed, Pending,
+// (rivertype.UniqueOptsByStateDefault(), river@v0.43.0) exactly: Available, Completed, Pending,
 // Retryable, Running, Scheduled. It previously omitted Completed, which — per
 // river.UniqueOpts.ByState's doc comment (insert_opts.go) — meant a job that had ALREADY
 // completed within the current ByPeriod bucket did not block a duplicate insert. Combined with
@@ -368,7 +368,7 @@ func ManualTierOverrideExpiryCheckInsertOpts() *river.InsertOpts {
 // ScheduleFunc(now) (now+24h) unless PeriodicJobOpts.ID is set — at the time this comment
 // was first written, this job (like all 14 in main.go) left ID unset; Issue #1448 fixed
 // that for all 14, this job included (see ManualTierOverrideExpiryCheckPeriodicOpts below).
-// With RunOnStart false, the catch-up insert is skipped (river@v0.38.0
+// With RunOnStart false, the catch-up insert is skipped (river@v0.43.0
 // internal/maintenance/periodic_job_enqueuer.go:424-426), so on a repo that deploys several
 // times a day this daily job could be enqueued zero times, ever.
 //
