@@ -20,18 +20,22 @@ jobs:
     steps:
       - name: Determine retention days
         id: retention
+        env:
+          RETENTION_DAYS_INPUT: ${{ github.event.inputs.retention_days }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
             echo "days=1" >> $GITHUB_OUTPUT
           else
-            echo "days=${{ github.event.inputs.retention_days }}" >> $GITHUB_OUTPUT
+            echo "days=${RETENTION_DAYS_INPUT}" >> $GITHUB_OUTPUT
           fi
 
       - name: Delete old artifacts
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          RETENTION_DAYS: ${{ steps.retention.outputs.days }}
         with:
           script: |
-            const retentionDays = parseInt('${{ steps.retention.outputs.days }}');
+            const retentionDays = parseInt(process.env.RETENTION_DAYS, 10);
             const cutoffDate = new Date();
             cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
 
