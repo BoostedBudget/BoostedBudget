@@ -39,10 +39,11 @@ describe('PortfolioTimeRange', () => {
   it('has accessible group label for screen readers', () => {
     const onPresetChange = mock(() => {})
     render(<PortfolioTimeRange activePreset="1Y" onPresetChange={onPresetChange} />)
-    // aria-label="Portfolio time range" is set on ToggleGroup (PortfolioTimeRange.tsx:26).
-    // Happy-dom's Radix ToggleGroup doesn't expose accessible name via queryByRole('group', { name: ... }),
-    // so we assert the group container is present instead.
-    const group = screen.queryByTestId('toggle-group') ?? screen.queryByRole('group')
-    expect(group).not.toBeNull()
+    // Assert the accessible NAME, not just that a container exists. This previously
+    // fell back to queryByTestId, which passes even if aria-label is deleted from
+    // PortfolioTimeRange.tsx — the test could not fail for the reason it claims to check.
+    // The shared ToggleGroup mock now forwards aria-label, so the role+name query works.
+    // radiogroup, not group: this is <ToggleGroup type="single"> (see toggle-group mock).
+    expect(screen.getByRole('radiogroup', { name: 'Portfolio time range' })).toBeDefined()
   })
 })

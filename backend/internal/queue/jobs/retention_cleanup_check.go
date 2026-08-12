@@ -1860,7 +1860,7 @@ func derefRetentionExpiresAt(user *domain.User) time.Time {
 // Only one check job should run at a time to prevent duplicate deletion processing.
 //
 // Issue #1413 Task W (Codex review): ByState now matches River's own default
-// (rivertype.UniqueOptsByStateDefault(), river@v0.38.0) exactly: Available, Completed, Pending,
+// (rivertype.UniqueOptsByStateDefault(), river@v0.43.0) exactly: Available, Completed, Pending,
 // Retryable, Running, Scheduled. It previously omitted Completed, which — per
 // river.UniqueOpts.ByState's doc comment (insert_opts.go) — meant a job that had ALREADY
 // completed within the current ByPeriod bucket did not block a duplicate insert. Combined with
@@ -1938,7 +1938,7 @@ func RetentionCleanupCheckInsertOpts() *river.InsertOpts {
 // AND the Plaid-disconnect repair pass — and none of it has a manual or admin trigger.
 // river.NewPeriodicJob's own doc comment says the periodic scheduler keeps only in-memory
 // state: "anytime a process quits or a new leader is elected, the whole process starts over
-// without regard for the state of the last scheduler." Concretely (river v0.38.0
+// without regard for the state of the last scheduler." Concretely (river v0.43.0
 // internal/maintenance/periodic_job_enqueuer.go:409-414), nextRunAt is restored from persisted
 // state only when PeriodicJobOpts.ID is set — at the time this comment was first written,
 // this job (like all 14 in main.go) left ID unset, so nextRunAt was always recomputed as

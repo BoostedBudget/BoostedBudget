@@ -33,6 +33,7 @@ excluded_paths = [
   "*.down.sql",
   "*000030_add_river_queue*.sql",
   "*000047_drop_sync_audit*.sql",  # Intentional schema cleanup — drops dead sync audit table/columns
+  "*000145_river_migration_007*.sql",  # Mirrors River's own main-line migration 007; the DROP TABLEs are the point
 ]
 
 # Rules to exclude from linting

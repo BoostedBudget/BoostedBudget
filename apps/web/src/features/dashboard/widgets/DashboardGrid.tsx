@@ -98,6 +98,14 @@ export function DashboardGrid({
         gridContainerRef.current
       );
 
+      // gridstack v13 changed GridStack.init()'s return type from GridStack to
+      // GridStack | null (it returns null when the element can't be resolved). We pass a
+      // ref that was already null-checked above, so this should not happen — but bail out
+      // rather than non-null-asserting, so a failed init leaves the handlers unwired
+      // instead of throwing on .on(). Every other effect below already guards on
+      // gridRef.current, so a null here degrades to "no grid" rather than a crash.
+      if (!gridRef.current) return;
+
       /**
        * Issue #476, #478: Helper function to process GridStack items and update layout
        *
