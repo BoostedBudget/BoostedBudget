@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
 	"sync"
 	"time"
 
@@ -50,10 +51,30 @@ type jwkCache interface {
 	Delete(kid string)
 }
 
+// ErrWebhookVerifierUnavailable indicates the webhook signature could not be verified because the
+// verifier itself failed (e.g. fetching or parsing Plaid's JWK) — NOT because the signature was
+// cryptographically wrong. Issue #1514: this must be treated as retryable (ask the caller to try
+// again later), never as evidence of a forged request. Callers should check for this with
+// errors.Is before treating a VerifyWebhook failure as a rejected/invalid signature.
+var ErrWebhookVerifierUnavailable = errors.New("plaid webhook verifier temporarily unavailable")
+
+// jwkFetcherFunc abstracts the Plaid API call used to fetch a JWK by kid. This is a seam so tests
+// can simulate a verifier outage (network/API failure) or a malformed key response without a live
+// Plaid client or network access — see webhookService.getJWKPublicKey.
+//
+// Issue #1514 (Codex round-1 finding): the returned bool reports whether a non-nil error is
+// retryable (a genuine verifier outage) as opposed to a deterministic rejection. The kid comes
+// from the JWT header, which is attacker-controlled and unverified at this point — a bogus kid
+// makes Plaid's API return a definite "no such key" (4xx), which is NOT a verifier outage and
+// must not be classified as ErrWebhookVerifierUnavailable, or a forged request would be
+// misclassified as retryable and skip the invalid-attempt audit signal entirely.
+type jwkFetcherFunc func(ctx context.Context, kid string) (jwk map[string]interface{}, retryable bool, err error)
+
 // webhookService implements WebhookService
 type webhookService struct {
 	plaidClient *plaid.APIClient
 	jwkCache    jwkCache
+	fetchJWK    jwkFetcherFunc
 }
 
 // NewWebhookService creates a new WebhookService instance with JWK caching
@@ -61,6 +82,36 @@ func NewWebhookService(plaidClient *plaid.APIClient) WebhookService {
 	return &webhookService{
 		plaidClient: plaidClient,
 		jwkCache:    newSyncMapJWKCache(),
+		fetchJWK:    newPlaidJWKFetcher(plaidClient),
+	}
+}
+
+// newPlaidJWKFetcher returns a jwkFetcherFunc backed by the real Plaid API.
+func newPlaidJWKFetcher(plaidClient *plaid.APIClient) jwkFetcherFunc {
+	return func(ctx context.Context, kid string) (map[string]interface{}, bool, error) {
+		request := plaid.NewWebhookVerificationKeyGetRequest(kid)
+		resp, httpResp, err := plaidClient.PlaidApi.WebhookVerificationKeyGet(ctx).
+			WebhookVerificationKeyGetRequest(*request).Execute()
+		if err != nil {
+			// Issue #1514: only classify as retryable when there's no evidence Plaid actually
+			// rejected the request outright — a missing response (network/timeout failure) or a
+			// 5xx means the verifier itself is unhealthy. A 4xx (e.g. "no such verification key")
+			// is Plaid deterministically telling us the attacker-controlled kid is bogus — that's
+			// the request being invalid, not the verifier being unavailable.
+			retryable := httpResp == nil || httpResp.StatusCode >= http.StatusInternalServerError
+			return nil, retryable, fmt.Errorf("failed to fetch JWK from Plaid: %w", err)
+		}
+
+		jwk := resp.GetKey()
+		return map[string]interface{}{
+			"kty": jwk.GetKty(),
+			"crv": jwk.GetCrv(),
+			"x":   jwk.GetX(),
+			"y":   jwk.GetY(),
+			"kid": jwk.GetKid(),
+			"use": jwk.GetUse(),
+			"alg": jwk.GetAlg(),
+		}, false, nil
 	}
 }
 
@@ -153,36 +204,33 @@ func (s *webhookService) VerifyWebhook(ctx context.Context, rawBody []byte, sign
 	return true, nil
 }
 
-// getJWKPublicKey fetches JWK from Plaid API with caching
+// getJWKPublicKey fetches JWK from Plaid API with caching.
+//
+// Issue #1514: only a genuine verifier outage (fetch marked retryable, or an unparsable key
+// Plaid itself returned) is wrapped in ErrWebhookVerifierUnavailable. A deterministic fetch
+// rejection (e.g. the attacker-controlled kid names no real key) is NOT wrapped — it surfaces as
+// an ordinary error, which VerifyWebhook's caller correctly treats as "cryptographically
+// invalid," preserving the invalid-attempt audit signal for genuinely forged requests.
 func (s *webhookService) getJWKPublicKey(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
 	// Check cache first
 	if cachedKey, found := s.jwkCache.Get(kid); found {
 		return cachedKey, nil
 	}
 
-	// Cache miss - fetch from Plaid API
-	request := plaid.NewWebhookVerificationKeyGetRequest(kid)
-	resp, _, err := s.plaidClient.PlaidApi.WebhookVerificationKeyGet(ctx).
-		WebhookVerificationKeyGetRequest(*request).Execute()
+	// Cache miss - fetch from Plaid API (or the test seam)
+	jwkMap, retryable, err := s.fetchJWK(ctx, kid)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch JWK from Plaid: %w", err)
-	}
-
-	// Parse JWK to ECDSA public key
-	jwk := resp.GetKey()
-	jwkMap := map[string]interface{}{
-		"kty": jwk.GetKty(),
-		"crv": jwk.GetCrv(),
-		"x":   jwk.GetX(),
-		"y":   jwk.GetY(),
-		"kid": jwk.GetKid(),
-		"use": jwk.GetUse(),
-		"alg": jwk.GetAlg(),
+		if retryable {
+			return nil, fmt.Errorf("%w: %v", ErrWebhookVerifierUnavailable, err)
+		}
+		return nil, err
 	}
 
 	publicKey, err := parseJWKToPublicKey(jwkMap)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse JWK: %w", err)
+		// Plaid returned a 200 we couldn't use — that's a verifier/schema problem, not evidence
+		// the request is forged.
+		return nil, fmt.Errorf("%w: failed to parse JWK: %v", ErrWebhookVerifierUnavailable, err)
 	}
 
 	// Cache for future use
