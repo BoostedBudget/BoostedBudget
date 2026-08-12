@@ -13,9 +13,15 @@ import { redactPii, stripQueryString } from './piiScrubbing'
  *   to redact arbitrary, unstructured log arguments.
  * - `beforeSend` covers everything `beforeBreadcrumb` cannot: exceptions
  *   captured directly via `Sentry.captureException` (see `useApiError.ts`,
- *   `ErrorBoundary.tsx`), and any Axios error `config`/`response` data an
- *   error handler attaches to `extra`/`contexts`. It also strips query
- *   strings from request URLs, which can carry account/session identifiers.
+ *   `ErrorBoundary.tsx`, `FeatureErrorBoundary.tsx`), and any Axios error
+ *   `config`/`response` data an error handler attaches to `extra`/`contexts`.
+ *   It also strips query strings from request URLs, which can carry
+ *   account/session identifiers, and redacts `event.exception` itself —
+ *   covering stack-frame `vars` (local variables some SDKs attach per
+ *   frame) by property name, the same as `extra`/`contexts`. The exception
+ *   `value` (message string) is never content-scanned, only passed through
+ *   the same by-key redaction as everything else, so a plain error message
+ *   is preserved unless it happens to sit under a denylisted key.
  */
 export function sentryScrubbingOptions(): {
   beforeBreadcrumb: (breadcrumb: Breadcrumb) => Breadcrumb | null
@@ -32,6 +38,9 @@ export function sentryScrubbingOptions(): {
     beforeSend(event) {
       if (event.request?.url) {
         event.request = { ...event.request, url: stripQueryString(event.request.url) }
+      }
+      if (event.exception) {
+        event.exception = redactPii(event.exception)
       }
       if (event.extra) {
         event.extra = redactPii(event.extra)
