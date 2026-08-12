@@ -19,6 +19,17 @@ describe('tokenize', () => {
     ['snake_case_key', ['snake', 'case', 'key']],
     ['kebab-case-key', ['kebab', 'case', 'key']],
     ['Balance', ['balance']],
+    // Digit -> lowercase-letter boundary (pass 4). Pass 2 already handles
+    // digit -> UPPERCASE (see `account1Name` above), so this is the only
+    // case in the table that actually exercises pass 4: deleting it collapses
+    // to ['account', '2name'] instead of splitting off the trailing word.
+    ['account2name', ['account', '2', 'name']],
+    // Non-ASCII letter immediately before a camelCase boundary. Regression
+    // for a fail-open bug where ASCII-only character classes let `é` block
+    // the lower/digit->upper pass from firing, gluing the whole key into one
+    // token and defeating denylist matching entirely.
+    ['caféBalance', ['café', 'balance']],
+    ['naïveAccountName', ['naïve', 'account', 'name']],
   ];
 
   for (const [input, expected] of cases) {
@@ -154,6 +165,19 @@ describe('redactPii', () => {
     expect(result.accountName).toBe('[Redacted]');
     expect(result.accountCount).toBe(3);
     expect(result.typeName).toBe('checking');
+  });
+
+  test('redacts a PII key with a non-ASCII letter immediately before a camelCase boundary', () => {
+    // Regression: ASCII-only character classes in tokenize() let `é` sitting
+    // directly before the `B` boundary block the split entirely, gluing the
+    // key into one token (`cafébalance`) that never matches the `balance`
+    // denylist entry — a fail-open of the same class the tokenizer fix
+    // originally closed.
+    const input = { caféBalance: 100 };
+
+    const result = redactPii(input) as typeof input;
+
+    expect(result.caféBalance).toBe('[Redacted]');
   });
 
   test('redacts realistic fail-open key shapes: digit-suffixed and acronym-adjacent PII fields', () => {
