@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -182,10 +184,27 @@ func main() {
 	)
 	operations.RegisterHealthRoutes(humaAPI, healthHandler)
 
-	// Metrics endpoint (Prometheus format) - Huma operation
+	// Metrics endpoint (Prometheus format) — internal-only listener, NOT the public Huma
+	// API (humaAPI/e) above. Issue #1514: /metrics exposes River queue depth, Plaid error
+	// rates, dead-letter state, and GDPR-deletion internals, and was reachable from the
+	// public internet unauthenticated. See internal_metrics.go for the full rationale and
+	// the listener construction. Binding happens synchronously so a failure to bind is a
+	// startup error (os.Exit(1) below), not a silent no-op.
+	internalMetricsListener, err := bindInternalMetricsListener(internalMetricsPort())
+	if err != nil {
+		appLogger.Error("Failed to bind internal metrics listener", "error", err)
+		os.Exit(1)
+	}
+	internalMetricsEcho, internalHumaAPI := newInternalMetricsAPI(cfg)
+	internalMetricsEcho.Listener = internalMetricsListener
 	humaMetricsHandler := operations.NewMetricsHandler()
-	operations.RegisterMetricsRoutes(humaAPI, humaMetricsHandler)
-	appLogger.Info("Huma metrics route registered")
+	operations.RegisterMetricsRoutes(internalHumaAPI, humaMetricsHandler)
+	go func() {
+		if err := internalMetricsEcho.Start(""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			appLogger.Error("Internal metrics listener stopped", "error", err)
+		}
+	}()
+	appLogger.Info("Internal metrics listener started", "address", internalMetricsListener.Addr().String())
 
 	// Load tier configuration (used by both public and authenticated endpoints)
 	tierConfig, err := config.LoadTierConfig()
@@ -2147,9 +2166,15 @@ func main() {
 		workerCancel()
 	}
 
-	// Shutdown HTTP server
+	// Shutdown HTTP server(s)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// Issue #1514: shut down the internal metrics listener alongside the public one so
+	// neither leaks a bound port or an unclosed goroutine on exit.
+	if err := internalMetricsEcho.Shutdown(ctx); err != nil {
+		appLogger.Error("Internal metrics listener forced to shutdown", "error", err)
+	}
 
 	if err := e.Shutdown(ctx); err != nil {
 		appLogger.Error("Server forced to shutdown", "error", err)
