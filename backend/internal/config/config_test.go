@@ -82,6 +82,43 @@ func TestLoad_RateLimitMaxEntriesInvalidValueFallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestLoad_PaddleWebhookTimestampToleranceSecondsDefault(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 5, cfg.PaddleWebhookTimestampToleranceSeconds,
+		"PaddleWebhookTimestampToleranceSeconds should default to 5 (Paddle's documented SDK default)")
+}
+
+func TestLoad_PaddleWebhookTimestampToleranceSecondsConfigurable(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", "30")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 30, cfg.PaddleWebhookTimestampToleranceSeconds)
+}
+
+func TestLoad_PaddleWebhookTimestampToleranceSecondsInvalidValueFallsBackToDefault(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+
+	for _, invalid := range []string{"0", "-1", "not-a-number"} {
+		t.Run(invalid, func(t *testing.T) {
+			t.Setenv("PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", invalid)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+
+			assert.Equal(t, 5, cfg.PaddleWebhookTimestampToleranceSeconds,
+				"a zero/negative/invalid PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS must fall back to the default, never disable the replay window")
+		})
+	}
+}
+
 func TestLoad_ProductionValidation_RequiresEncryptionKey(t *testing.T) {
 	t.Setenv("ENVIRONMENT", "production")
 	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost/db")
