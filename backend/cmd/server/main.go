@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
 	sentryecho "github.com/getsentry/sentry-go/echo"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -192,26 +193,39 @@ func main() {
 	// startup error (os.Exit(1) below), not a silent no-op. resolveInternalMetricsPort
 	// also fails loudly here — rather than downstream as a silently-dead public API — if
 	// INTERNAL_METRICS_PORT collides with cfg.Port or is not a valid TCP port.
-	resolvedInternalMetricsPort, err := resolveInternalMetricsPort(internalMetricsPort(), cfg.Port)
-	if err != nil {
-		appLogger.Error("Invalid internal metrics port configuration", "error", err)
-		os.Exit(1)
-	}
-	internalMetricsListener, err := bindInternalMetricsListener(resolvedInternalMetricsPort)
-	if err != nil {
-		appLogger.Error("Failed to bind internal metrics listener", "error", err)
-		os.Exit(1)
-	}
-	internalMetricsEcho, internalHumaAPI := newInternalMetricsAPI(cfg)
-	internalMetricsEcho.Listener = internalMetricsListener
-	humaMetricsHandler := operations.NewMetricsHandler()
-	operations.RegisterMetricsRoutes(internalHumaAPI, humaMetricsHandler)
-	go func() {
-		if err := internalMetricsEcho.Start(""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			appLogger.Error("Internal metrics listener stopped", "error", err)
+	//
+	// Gated on cfg.EnableMetrics (ENABLE_METRICS, default true — see config.go) so the flag
+	// actually controls something: previously it was read and never consulted. Fly's
+	// [metrics] scrape config in fly.toml/fly.staging.toml points at this listener's port
+	// (9091) in every environment that deploys this binary, so ENABLE_METRICS=false will
+	// produce failing Fly scrapes wherever it's set — that is the intended, documented
+	// tradeoff of an operator explicitly disabling metrics, not a bug.
+	var internalMetricsEcho *echo.Echo
+	if cfg.EnableMetrics {
+		resolvedInternalMetricsPort, err := resolveInternalMetricsPort(internalMetricsPort(), cfg.Port)
+		if err != nil {
+			appLogger.Error("Invalid internal metrics port configuration", "error", err)
+			os.Exit(1)
 		}
-	}()
-	appLogger.Info("Internal metrics listener started", "address", internalMetricsListener.Addr().String())
+		internalMetricsListener, err := bindInternalMetricsListener(resolvedInternalMetricsPort)
+		if err != nil {
+			appLogger.Error("Failed to bind internal metrics listener", "error", err)
+			os.Exit(1)
+		}
+		var internalHumaAPI huma.API
+		internalMetricsEcho, internalHumaAPI = newInternalMetricsAPI(cfg)
+		internalMetricsEcho.Listener = internalMetricsListener
+		humaMetricsHandler := operations.NewMetricsHandler()
+		operations.RegisterMetricsRoutes(internalHumaAPI, humaMetricsHandler)
+		go func() {
+			if err := internalMetricsEcho.Start(""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				appLogger.Error("Internal metrics listener stopped", "error", err)
+			}
+		}()
+		appLogger.Info("Internal metrics listener started", "address", internalMetricsListener.Addr().String())
+	} else {
+		appLogger.Info("Internal metrics listener disabled via ENABLE_METRICS=false — any Fly [metrics] scrape config still pointed at this instance will fail")
+	}
 
 	// Load tier configuration (used by both public and authenticated endpoints)
 	tierConfig, err := config.LoadTierConfig()
@@ -2184,9 +2198,12 @@ func main() {
 	defer cancel()
 
 	// Issue #1514: shut down the internal metrics listener alongside the public one so
-	// neither leaks a bound port or an unclosed goroutine on exit.
-	if err := internalMetricsEcho.Shutdown(ctx); err != nil {
-		appLogger.Error("Internal metrics listener forced to shutdown", "error", err)
+	// neither leaks a bound port or an unclosed goroutine on exit. internalMetricsEcho is
+	// nil when ENABLE_METRICS=false (listener was never started above).
+	if internalMetricsEcho != nil {
+		if err := internalMetricsEcho.Shutdown(ctx); err != nil {
+			appLogger.Error("Internal metrics listener forced to shutdown", "error", err)
+		}
 	}
 
 	if err := e.Shutdown(ctx); err != nil {
