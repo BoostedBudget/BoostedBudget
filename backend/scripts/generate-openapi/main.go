@@ -22,7 +22,9 @@ func main() {
 	e.HidePort = true
 
 	// Initialize Huma API with production-like config
-	api := humaecho.New(e, humaconfig.NewAPIConfig("1.0.0", "production"))
+	// NewV4, not New: huma v2.39.0 repointed humaecho.New at Echo v5. NewV4 is the same
+	// adapter for Echo v4, which this app still runs on.
+	api := humaecho.NewV4(e, humaconfig.NewAPIConfig("1.0.0", "production"))
 
 	// Register all routes (with dummy handlers, for spec generation only)
 	operations.RegisterAllRoutesForSpec(api)
