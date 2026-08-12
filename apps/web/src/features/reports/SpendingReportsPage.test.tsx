@@ -38,11 +38,8 @@ describe('SpendingReportsPage', () => {
 
   it('renders date range picker', () => {
     renderPage()
-    // radiogroup, not group: DateRangePicker renders <ToggleGroup type="single">, and
-    // @radix-ui/react-toggle-group 1.1.19 corrected the single-select container role from
-    // "group" to "radiogroup" (radio children require a radiogroup owner). This assertion
-    // previously passed only because the shared ToggleGroup mock hardcoded role="group";
-    // the mock now mirrors real Radix, so this queries what production actually renders.
+    // radiogroup, not group: DateRangePicker renders <ToggleGroup type="single">.
+    // See src/test/mocks/toggle-group.tsx for why the role changed.
     expect(screen.getByRole('radiogroup')).toBeDefined()
   })
 
