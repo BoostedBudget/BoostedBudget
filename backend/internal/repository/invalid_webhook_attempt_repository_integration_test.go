@@ -20,7 +20,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 )
 
@@ -107,40 +106,15 @@ func TestInvalidWebhookAttemptCap_PerProviderIsolation_Integration(t *testing.T)
 	require.NoError(t, repo.Record(ctx, "plaid", 5, "final"))
 }
 
-// recordWithCap mirrors invalidWebhookAttemptRepository.Record but with a caller-supplied cap, so
-// the concurrency test below can exercise the real lock+insert+trim critical section (unmodified
-// production SQL and lock key) without needing >invalidWebhookAttemptCap concurrent inserts to
-// prove anything.
-func recordWithCap(ctx context.Context, pool rowQuerier2, provider string, digest string, cap int) error {
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if _, err := tx.Exec(ctx, invalidWebhookAttemptLockKeyQuery, provider); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, insertInvalidWebhookAttemptQuery, provider, 1, digest); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, trimInvalidWebhookAttemptsQuery, cap, provider); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
-// rowQuerier2 is satisfied by *pgxpool.Pool — named distinctly from this package's other
-// integration helper interfaces to avoid any accidental shadowing.
-type rowQuerier2 interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
-
 // TestInvalidWebhookAttemptCap_ConcurrentInserts_Integration is Issue #1514 Codex adversarial
-// review finding (Medium): concurrent Record calls must not be able to push the per-provider row
-// count past the cap. The pg_advisory_xact_lock inside Record serializes the insert+trim critical
-// section; this test proves the cap holds under real concurrent load against live Postgres,
-// which pgxmock (sequential, single mocked connection) cannot exercise.
+// review finding (Medium, round 1) — kept intact and UNMODIFIED in its security assertion per
+// the round-2 review ruling: concurrent Record calls must not be able to push the per-provider
+// row count past the cap. This exercises the REAL invalidWebhookAttemptRepository.Record method
+// (not a hand-rolled copy) configured with trimInterval=1 — i.e. every call trims, the tight
+// case that is mathematically identical to the pre-amortisation behavior this test was written
+// to prove. The pg_advisory_xact_lock inside trim() serializes the insert+trim critical section;
+// this test proves the cap holds under real concurrent load against live Postgres, which pgxmock
+// (sequential, single mocked connection) cannot exercise.
 func TestInvalidWebhookAttemptCap_ConcurrentInserts_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -152,13 +126,15 @@ func TestInvalidWebhookAttemptCap_ConcurrentInserts_Integration(t *testing.T) {
 	const goroutines = 20
 	const perGoroutine = 5
 
+	repo := &invalidWebhookAttemptRepository{db: pool, trimInterval: 1, cap: testCap}
+
 	var wg sync.WaitGroup
 	for g := 0; g < goroutines; g++ {
 		wg.Add(1)
 		go func(g int) {
 			defer wg.Done()
 			for i := 0; i < perGoroutine; i++ {
-				_ = recordWithCap(ctx, pool, "paddle", fmt.Sprintf("concurrent-%d-%d", g, i), testCap)
+				_ = repo.Record(ctx, "paddle", 1, fmt.Sprintf("concurrent-%d-%d", g, i))
 			}
 		}(g)
 	}
@@ -171,6 +147,70 @@ func TestInvalidWebhookAttemptCap_ConcurrentInserts_Integration(t *testing.T) {
 		"concurrent Record calls must never push the per-provider row count past the cap")
 
 	// The real Record() path (real cap, real lock key) must also still work after the flood.
-	repo := NewInvalidWebhookAttemptRepository(pool)
 	require.NoError(t, repo.Record(ctx, "paddle", 1, "post-flood"))
+}
+
+// TestInvalidWebhookAttemptCap_AmortisedTrim_HardCeiling_Integration is Issue #1514 Codex review
+// round 2, Important 2: proves the EXPLICIT hard ceiling that amortised trimming (trimInterval>1)
+// guarantees. Between two trims, at most trimInterval-1 rows can accumulate for a provider beyond
+// whatever the previous trim brought it down to (<= cap) — because the in-process counter that
+// schedules trims is a strictly increasing, atomically-incremented sequence, so the Nth call (in
+// increment order) is always the one that trims, never later. The row count for a provider can
+// therefore transiently exceed cap, but must NEVER exceed cap + trimInterval - 1.
+func TestInvalidWebhookAttemptCap_AmortisedTrim_HardCeiling_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx, "DELETE FROM invalid_webhook_attempts")
+	require.NoError(t, err)
+
+	const testCap = 5
+	const trimInterval = 10
+	const hardCeiling = testCap + trimInterval - 1
+
+	repo := &invalidWebhookAttemptRepository{db: pool, trimInterval: trimInterval, cap: testCap}
+
+	// 15*17=255, deliberately NOT a multiple of trimInterval (10) — so the flood does not
+	// coincidentally end exactly on a trim boundary, and countAfterFlood below actually observes
+	// a transient in-between state rather than trivially landing back at the tight cap already.
+	const goroutines = 15
+	const perGoroutine = 17
+
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < perGoroutine; i++ {
+				_ = repo.Record(ctx, "plaid", 1, fmt.Sprintf("ceiling-%d-%d", g, i))
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	var countAfterFlood int
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM invalid_webhook_attempts WHERE provider = 'plaid'").Scan(&countAfterFlood))
+	require.LessOrEqual(t, countAfterFlood, hardCeiling,
+		"amortised trimming must never let the row count exceed cap+trimInterval-1, even transiently between trims")
+
+	// The in-process counter is exactly goroutines*perGoroutine at this point (every call
+	// increments it exactly once, whether or not that call trimmed) — issue exactly enough more
+	// calls to LAND ON the next multiple of trimInterval, so the very LAST call in this loop is
+	// guaranteed to be the one that trims (not just "a trim occurs somewhere in this range").
+	totalSoFar := goroutines * perGoroutine
+	remainder := totalSoFar % trimInterval
+	callsToNextMultiple := trimInterval - remainder
+	if remainder == 0 {
+		callsToNextMultiple = trimInterval
+	}
+	for i := 0; i < callsToNextMultiple; i++ {
+		require.NoError(t, repo.Record(ctx, "plaid", 1, fmt.Sprintf("settle-%d", i)))
+	}
+
+	var countAfterSettle int
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM invalid_webhook_attempts WHERE provider = 'plaid'").Scan(&countAfterSettle))
+	require.LessOrEqual(t, countAfterSettle, testCap,
+		"once a trim actually fires, the row count must settle back down to the tight cap")
 }
