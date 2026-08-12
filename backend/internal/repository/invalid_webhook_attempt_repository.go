@@ -8,15 +8,14 @@ import (
 )
 
 // invalidWebhookAttemptCap bounds invalid_webhook_attempts to at most this many rows PER
-// PROVIDER (not a single shared budget across providers).
+// PROVIDER (not a single shared budget across providers), subject to the transient-overshoot and
+// multi-instance caveats documented on invalidWebhookAttemptTrimInterval below — read that
+// comment before treating this as an unconditional guarantee.
 //
 // Issue #1514: unsigned/invalid-signature webhook deliveries are recorded here (bounded metadata
 // only — never the raw payload, never an attacker-chosen identifier) instead of the full
 // paddle_webhook_events / webhook_events tables. Fixed-size rows are still unbounded in count, so
-// Record periodically trims a provider's rows back to this cap (see invalidWebhookAttemptTrimInterval)
-// — an attacker sending unlimited invalid attempts can never grow this table past
-// invalidWebhookAttemptCap + invalidWebhookAttemptTrimInterval - 1 rows for their provider (the
-// explicit hard ceiling; see trim scheduling doc below).
+// Record periodically trims a provider's rows back to this cap (see invalidWebhookAttemptTrimInterval).
 //
 // Per-provider (Codex adversarial review finding, Medium): a flood against one provider (e.g.
 // Paddle) must not be able to trim away another provider's (Plaid) unrelated audit history — the
@@ -40,19 +39,47 @@ const invalidWebhookAttemptCap = 10000
 // counter (invalidWebhookAttemptRepository.insertCounters) — so (interval-1)/interval of all
 // rejections pay nothing beyond the insert.
 //
-// Explicit hard ceiling (required by the round-2 review ruling): the counter is a strictly
-// increasing, atomically-incremented sequence per provider, so trims fire at exactly every
-// Nth call in insertion order — never less often. Between two trims, at most
-// invalidWebhookAttemptTrimInterval-1 rows can accumulate beyond the cap the previous trim
-// enforced. The row count for a provider can therefore transiently exceed
-// invalidWebhookAttemptCap, but NEVER exceeds:
+// Bound, PRECISELY stated (Codex review round 3 — the round-2 doc comment overstated this as an
+// unconditional "NEVER exceeds cap+interval-1", which is wrong on two axes):
 //
-//	invalidWebhookAttemptCap + invalidWebhookAttemptTrimInterval - 1
+//  1. Single-process, instantaneous vs. completed-call-boundary: the trim-triggering call's own
+//     INSERT commits (as its own, separate, unlocked Exec) BEFORE that same call's trim runs. So
+//     for the brief window between that INSERT committing and that call's own trim committing, a
+//     concurrent reader on another connection (e.g. a plain `SELECT COUNT(*)`) can observe up to
+//     invalidWebhookAttemptCap + invalidWebhookAttemptTrimInterval rows — not interval-1. Once
+//     that one call finishes (trim included) and at every OTHER point where no Record call for
+//     this provider is currently in flight, the bound is the tighter
+//     invalidWebhookAttemptCap + invalidWebhookAttemptTrimInterval - 1 — because the (interval-1)
+//     calls since the last trim have each landed a row with nothing yet to trim them.
 //
-// This is proven by TestInvalidWebhookAttemptCap_ConcurrentInserts_Integration, which still
-// asserts the tighter (interval=1, i.e. every-call-trims) bound unmodified, plus
-// TestInvalidWebhookAttemptCap_AmortisedTrim_HardCeiling_Integration, which asserts the looser
-// (interval>1) bound explicitly.
+//  2. Multi-instance: insertCounters is IN-PROCESS state (a struct field, not backed by the DB or
+//     shared across processes) — deliberately: making it shared/DB-backed would reintroduce the
+//     exact per-request DB cost this design removes. This repo's `fly.toml` runs with
+//     `auto_start_machines = true` and no explicit machine cap (see fly.toml:44-50), so N
+//     concurrently-running instances is a live configuration, not a hypothetical — and each
+//     instance's counter starts at zero, independently, including across rolling deploys. With N
+//     instances all serving rejections for the SAME provider, each instance's own local schedule
+//     can be arbitrarily out of phase with every other instance's, so the worst case across the
+//     whole fleet is roughly:
+//
+//     invalidWebhookAttemptCap + N × (invalidWebhookAttemptTrimInterval - 1)
+//
+//     This is NOT a global guarantee the in-process counter can make on its own — it's the
+//     accepted, explicitly-sized residual (a few hundred extra rows on a 10,000-row cap at
+//     realistic fleet sizes) of choosing a cheap per-process heuristic over a DB-backed or shared
+//     one. It stays small and self-correcting because ANY single instance's trim, whenever it
+//     fires, drains the WHOLE provider's row count (not just that instance's own inserts) back
+//     down to invalidWebhookAttemptCap — so the fleet-wide count cannot drift upward indefinitely;
+//     it is bounded by whichever instance is "most out of phase" at any moment, not by cumulative
+//     attack volume.
+//
+// TestInvalidWebhookAttemptCap_ConcurrentInserts_Integration still asserts the tight,
+// interval=1 (every-call-trims) bound unmodified, driving this same Record()/trim() code.
+// TestInvalidWebhookAttemptCap_AmortisedTrim_HardCeiling_Integration asserts the single-process,
+// completed-call-boundary bound from point 1 above (cap+interval-1) — using sequential (not
+// concurrent) calls specifically so the exact resulting count is deterministic, not merely
+// probable — and additionally asserts the count DID exceed the tight cap, so the test cannot pass
+// vacuously if amortisation were silently disabled.
 const invalidWebhookAttemptTrimInterval = 50
 
 // InvalidWebhookAttemptRepository records bounded metadata about rejected (unsigned or
