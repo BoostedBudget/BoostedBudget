@@ -4,7 +4,7 @@ package main
 // (1) a real dedup guarantee (queue-level UniqueOpts, or — for BudgetPeriodCloseCheck — its
 // own documented DB-level exactly-once marker), (2) RunOnStart: true, and (3) a non-empty,
 // stable PeriodicJobOpts.ID so River restores nextRunAt across restarts/leader elections
-// instead of recomputing now+interval every time (river@v0.38.0
+// instead of recomputing now+interval every time (river@v0.43.0
 // internal/maintenance/periodic_job_enqueuer.go:409-426).
 //
 // Enforcing this against a real *river.PeriodicJob is not possible from this package: its
@@ -244,13 +244,13 @@ func TestBuildPeriodicJobSpecs_PurgeRunsHourlyAndItsDedupDoesNotSuppressThat(t *
 	}
 	if insertOpts.UniqueOpts.ByPeriod < time.Second {
 		t.Errorf("purge UniqueOpts.ByPeriod = %v: River rejects anything below one second at insert "+
-			"time (river@v0.38.0 insert_opts.go:256), so this would fail in production, not here",
+			"time (river@v0.43.0 insert_opts.go:256), so this would fail in production, not here",
 			insertOpts.UniqueOpts.ByPeriod)
 	}
 
 	// ⚠ WHAT THIS TEST DOES NOT PROVE, recorded so nobody mistakes it for a proof of exact hourly
 	// execution: the dedup bucket is Truncate(ByPeriod) of an UNALIGNED wall-clock instant, computed
-	// BEFORE ScheduledAt is assigned (river@v0.38.0 client.go:1750 vs :1759-1767, and
+	// BEFORE ScheduledAt is assigned (river@v0.43.0 client.go:1778 vs :1787-1795, and
 	// internal/dbunique/db_unique.go:117). Two runs one interval apart normally land in adjacent
 	// buckets, but a run enqueued marginally early can collide with the previous bucket and be
 	// suppressed. That — along with downtime, leader election and worker starvation — is why the

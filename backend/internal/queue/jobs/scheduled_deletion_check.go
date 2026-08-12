@@ -402,7 +402,7 @@ func ScheduledDeletionCheckInsertOpts() *river.InsertOpts {
 // registration in main.go must use. RunOnStart: true is only safe because
 // ScheduledDeletionCheckInsertOpts() above always carries ScheduledDeletionCheckUniqueOpts()'s
 // dedup. ID is set so River restores nextRunAt across restarts/leader elections instead of
-// recomputing now+interval every time (river@v0.38.0
+// recomputing now+interval every time (river@v0.43.0
 // internal/maintenance/periodic_job_enqueuer.go:409-414) — Issue #1448.
 func ScheduledDeletionCheckPeriodicOpts() *river.PeriodicJobOpts {
 	return &river.PeriodicJobOpts{RunOnStart: true, ID: ScheduledDeletionCheckArgs{}.Kind()}
