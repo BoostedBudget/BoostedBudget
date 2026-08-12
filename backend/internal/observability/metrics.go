@@ -87,6 +87,23 @@ var (
 		Buckets: prometheus.DefBuckets,
 	}, []string{"kind"})
 
+	// InvalidWebhookAttemptsTotal counts webhook deliveries rejected for missing or
+	// cryptographically invalid signatures, by provider/site. Issue #1514: this is the audit
+	// signal that survives now that invalid attempts are no longer persisted into the full
+	// paddle_webhook_events / webhook_events tables (only bounded metadata is recorded — see
+	// repository.InvalidWebhookAttemptRepository).
+	//
+	// Expected label values:
+	//   paddle              - HandlePaddleWebhook rejected an unsigned/invalid delivery
+	//   plaid               - HandlePlaidWebhook rejected an unsigned/invalid delivery
+	//   paddle_worker_guard - SubscriptionWebhookWorker refused to dispatch a signature_valid=false
+	//                         row it was handed (defense-in-depth; should be near-zero in practice)
+	//   paddle_replay_guard - ReplayPaddleWebhook refused to replay a signature_valid=false row
+	InvalidWebhookAttemptsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "invalid_webhook_attempts_total",
+		Help: "Number of webhook deliveries rejected for missing or invalid signature, by provider/site.",
+	}, []string{"provider"})
+
 	// DeadLetterQueueSize tracks the current size of the dead letter queue
 	DeadLetterQueueSize = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "dead_letter_queue_size",
