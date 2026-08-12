@@ -33,13 +33,13 @@ func TestInvalidWebhookAttemptRecord_InsertsAndTrims(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("pg_advisory_xact_lock")).
-		WithArgs(invalidWebhookAttemptLockKey).
+		WithArgs("paddle").
 		WillReturnResult(pgxmock.NewResult("SELECT", 0))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO invalid_webhook_attempts")).
 		WithArgs("paddle", 42, "deadbeef").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM invalid_webhook_attempts")).
-		WithArgs(invalidWebhookAttemptCap).
+		WithArgs(invalidWebhookAttemptCap, "paddle").
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectCommit()
 
@@ -58,7 +58,7 @@ func TestInvalidWebhookAttemptRecord_InsertFails_RollsBack(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("pg_advisory_xact_lock")).
-		WithArgs(invalidWebhookAttemptLockKey).
+		WithArgs("plaid").
 		WillReturnResult(pgxmock.NewResult("SELECT", 0))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO invalid_webhook_attempts")).
 		WithArgs("plaid", 10, "abc123").
@@ -79,13 +79,13 @@ func TestInvalidWebhookAttemptRecord_TrimFails_RollsBack(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("pg_advisory_xact_lock")).
-		WithArgs(invalidWebhookAttemptLockKey).
+		WithArgs("paddle").
 		WillReturnResult(pgxmock.NewResult("SELECT", 0))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO invalid_webhook_attempts")).
 		WithArgs("paddle", 5, "cafebabe").
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM invalid_webhook_attempts")).
-		WithArgs(invalidWebhookAttemptCap).
+		WithArgs(invalidWebhookAttemptCap, "paddle").
 		WillReturnError(errInvalidWebhookAttemptDB)
 	mock.ExpectRollback()
 

@@ -43,7 +43,7 @@ func TestInvalidWebhookAttemptCap_Integration(t *testing.T) {
 	for i := 0; i < testCap*3; i++ {
 		_, err := pool.Exec(ctx, insertInvalidWebhookAttemptQuery, "paddle", 10+i, fmt.Sprintf("digest-%d", i))
 		require.NoError(t, err)
-		_, err = pool.Exec(ctx, trimInvalidWebhookAttemptsQuery, testCap)
+		_, err = pool.Exec(ctx, trimInvalidWebhookAttemptsQuery, testCap, "paddle")
 		require.NoError(t, err)
 	}
 
@@ -76,7 +76,7 @@ func TestInvalidWebhookAttemptCap_PerProviderIsolation_Integration(t *testing.T)
 	for i := 0; i < testCap; i++ {
 		_, err := pool.Exec(ctx, insertInvalidWebhookAttemptQuery, "plaid", 1, fmt.Sprintf("plaid-%d", i))
 		require.NoError(t, err)
-		_, err = pool.Exec(ctx, trimInvalidWebhookAttemptsQuery, testCap)
+		_, err = pool.Exec(ctx, trimInvalidWebhookAttemptsQuery, testCap, "plaid")
 		require.NoError(t, err)
 	}
 
@@ -89,7 +89,7 @@ func TestInvalidWebhookAttemptCap_PerProviderIsolation_Integration(t *testing.T)
 	for i := 0; i < testCap*10; i++ {
 		_, err := pool.Exec(ctx, insertInvalidWebhookAttemptQuery, "paddle", 1, fmt.Sprintf("paddle-%d", i))
 		require.NoError(t, err)
-		_, err = pool.Exec(ctx, trimInvalidWebhookAttemptsQuery, testCap)
+		_, err = pool.Exec(ctx, trimInvalidWebhookAttemptsQuery, testCap, "paddle")
 		require.NoError(t, err)
 	}
 
@@ -118,13 +118,13 @@ func recordWithCap(ctx context.Context, pool rowQuerier2, provider string, diges
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", invalidWebhookAttemptLockKey); err != nil {
+	if _, err := tx.Exec(ctx, invalidWebhookAttemptLockKeyQuery, provider); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, insertInvalidWebhookAttemptQuery, provider, 1, digest); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, trimInvalidWebhookAttemptsQuery, cap); err != nil {
+	if _, err := tx.Exec(ctx, trimInvalidWebhookAttemptsQuery, cap, provider); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

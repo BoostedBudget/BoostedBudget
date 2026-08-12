@@ -20,24 +20,14 @@ import (
 // trim query below partitions by provider rather than capping the table as a single shared pool.
 const invalidWebhookAttemptCap = 10000
 
-// invalidWebhookAttemptLockKey is a fixed pg_advisory_xact_lock key serializing every Record
-// call. Issue #1514 (Codex adversarial review finding, Medium): without this, two concurrent
-// transactions can each insert-then-trim using a row count/order that doesn't yet reflect the
-// other's insert, letting the row count exceed invalidWebhookAttemptCap under load. The lock is
-// released automatically when the surrounding transaction commits or rolls back (same pattern as
-// idempotency_repository.go's per-key advisory lock). A single global key is fine here — unlike
-// that per-key case, this lock only ever guards this one table's insert+trim critical section, so
-// there is nothing to differentiate by argument.
-const invalidWebhookAttemptLockKey = 151400 // arbitrary, unique to this feature (#1514, table 00)
-
 // InvalidWebhookAttemptRepository records bounded metadata about rejected (unsigned or
 // invalid-signature) webhook deliveries. This is the audit signal that survives now that invalid
 // attempts are no longer persisted into the full webhook tables (see paddle_webhook.go,
 // plaid_webhook.go).
 type InvalidWebhookAttemptRepository interface {
 	// Record inserts one invalid-attempt row (provider, body length, SHA-256 digest of the body —
-	// never the body itself) and trims the table back to invalidWebhookAttemptCap rows, in the
-	// same transaction.
+	// never the body itself) and trims that provider's rows back to invalidWebhookAttemptCap, in
+	// the same transaction.
 	Record(ctx context.Context, provider string, bodyLength int, bodySHA256 string) error
 }
 
@@ -56,28 +46,50 @@ const insertInvalidWebhookAttemptQuery = `
 `
 
 // trimInvalidWebhookAttemptsQuery deletes every row beyond the invalidWebhookAttemptCap most
-// recent rows PER PROVIDER (by created_at, tie-broken by id for determinism when timestamps
-// collide) — partitioning by provider so a flood on one provider cannot evict another provider's
-// unrelated audit history.
+// recent rows for ONE provider ($2) — by created_at, tie-broken by id for determinism when
+// timestamps collide.
+//
+// Issue #1514 (Codex review round 1, Important 2): this used to rank EVERY row in the table via
+// PARTITION BY provider, i.e. a full-table scan on every single insert — non-trivial synchronized
+// DB work triggered directly by unauthenticated attacker input, self-inflicting a throughput
+// bottleneck under exactly the flood the cap exists to survive. Scoping the ranking to
+// `WHERE provider = $2` up front makes each call's cost O(rows for this one provider), which is
+// itself bounded by invalidWebhookAttemptCap (this same query enforces that bound) — so the cost
+// per request is a small constant, independent of total attack volume or the other provider's
+// row count. Mathematically equivalent to the old PARTITION BY provider ranking restricted to one
+// partition, just without scanning the rest of the table to get there.
 const trimInvalidWebhookAttemptsQuery = `
 	DELETE FROM invalid_webhook_attempts
-	WHERE id IN (
+	WHERE provider = $2 AND id IN (
 		SELECT id FROM (
 			SELECT id, ROW_NUMBER() OVER (
-				PARTITION BY provider
 				ORDER BY created_at DESC, id DESC
 			) AS rn
 			FROM invalid_webhook_attempts
+			WHERE provider = $2
 		) ranked
 		WHERE ranked.rn > $1
 	)
 `
 
-// Record inserts a bounded invalid-attempt row and trims the table back to the per-provider cap,
-// both inside one transaction so the cap can never be exceeded even under concurrent inserts. A
-// pg_advisory_xact_lock serializes concurrent Record calls (across all providers) for the
-// duration of the transaction, so no two callers ever compute the trim's row ranking against a
-// row count/order that doesn't yet reflect each other's insert.
+// invalidWebhookAttemptLockKeyQuery derives a PER-PROVIDER pg_advisory_xact_lock key from the
+// provider string, matching idempotency_repository.go's existing md5-hash-to-bigint convention
+// for a namespaced lock. Issue #1514 (Codex review round 1, Important 2): the original
+// implementation used a single lock key shared across ALL providers, so a Paddle attack flood
+// fully serialized against legitimate Plaid rejections (and vice versa) — an unrelated provider's
+// request-handling cost was held hostage by the one under attack. A lock keyed by provider still
+// serializes concurrent Record calls for the SAME provider (needed so the trim above never ranks
+// against a row count that doesn't yet reflect a concurrent sibling insert — see the concurrency
+// integration test), while leaving Paddle and Plaid rejections free to proceed independently.
+const invalidWebhookAttemptLockKeyQuery = `SELECT pg_advisory_xact_lock(('x'||substr(md5('invalid_webhook_attempt:'||$1),1,16))::bit(64)::bigint)`
+
+// Record inserts a bounded invalid-attempt row and trims that provider's rows back to the cap,
+// both inside one transaction so the cap can never be exceeded even under concurrent inserts for
+// the same provider. The trim is scoped to this call's own provider (see
+// trimInvalidWebhookAttemptsQuery), and the advisory lock is keyed per-provider (see
+// invalidWebhookAttemptLockKeyQuery) — bounding both the DB work and the lock contention this
+// unauthenticated-input-triggered call can impose to O(this one provider's capped row count),
+// regardless of overall attack volume or the other provider's traffic.
 func (r *invalidWebhookAttemptRepository) Record(ctx context.Context, provider string, bodyLength int, bodySHA256 string) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -87,7 +99,7 @@ func (r *invalidWebhookAttemptRepository) Record(ctx context.Context, provider s
 		_ = tx.Rollback(ctx)
 	}()
 
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", invalidWebhookAttemptLockKey); err != nil {
+	if _, err := tx.Exec(ctx, invalidWebhookAttemptLockKeyQuery, provider); err != nil {
 		return fmt.Errorf("failed to acquire invalid webhook attempt lock: %w", err)
 	}
 
@@ -95,7 +107,7 @@ func (r *invalidWebhookAttemptRepository) Record(ctx context.Context, provider s
 		return fmt.Errorf("failed to insert invalid webhook attempt: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, trimInvalidWebhookAttemptsQuery, invalidWebhookAttemptCap); err != nil {
+	if _, err := tx.Exec(ctx, trimInvalidWebhookAttemptsQuery, invalidWebhookAttemptCap, provider); err != nil {
 		return fmt.Errorf("failed to trim invalid webhook attempts: %w", err)
 	}
 
