@@ -102,8 +102,19 @@ const invalidWebhookAttemptCap = 10000
 //     With (a) and (b), the residual guarantee is: any given process either never inserts a row
 //     for a provider (nothing to bound), or its first insert for that provider forces a trim
 //     within that same call — so points 1 and 2's bounds hold from that first call onward for the
-//     remainder of that instance's life, and (b) additionally guarantees no row survives past the
-//     retention window regardless of how any instance's insert/restart pattern behaves.
+//     remainder of that instance's life.
+//
+//     Residual case (b) does NOT eliminate — read as a disclosure, not a hedge: trim()'s age-DELETE
+//     only ever runs from inside Record, which only ever runs in response to an incoming rejected
+//     webhook. A QUIESCENT provider — one that stops receiving invalid attempts entirely, with or
+//     without a restart — has no future Record call to trigger the age-based sweep, so its
+//     already-written rows persist past the retention window indefinitely, until (if ever) that
+//     provider is rejected again. This is the same class of gap G3 exists to fix (a trim that
+//     depends on a future call happening), just on the age axis instead of the count axis, and this
+//     codebase does not currently have a call-independent (e.g. cron/periodic-job) sweep to close
+//     it. TestInvalidWebhookAttemptCap_AgeRetention_Integration proves the age-DELETE logic is
+//     correct when it does run; it does not and cannot prove the sweep runs on a wall-clock
+//     schedule independent of traffic, because it isn't one.
 //
 // TestInvalidWebhookAttemptCap_ConcurrentInserts_Integration still asserts the tight,
 // interval=1 (every-call-trims) bound unmodified, driving this same Record()/trim() code.
