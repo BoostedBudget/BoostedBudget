@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -115,6 +116,53 @@ func TestLoad_PaddleWebhookTimestampToleranceSecondsInvalidValueFallsBackToDefau
 
 			assert.Equal(t, 5, cfg.PaddleWebhookTimestampToleranceSeconds,
 				"a zero/negative/invalid PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS must fall back to the default, never disable the replay window")
+		})
+	}
+}
+
+// TestLoad_PaddleWebhookTimestampToleranceSecondsAboveMaxFallsBackToDefault is issue #1514
+// fix-round-1 item 1's regression test: an operator typo like 999999999 must NOT be accepted as
+// "validly configured" — it would silently and completely disable the replay window on a
+// payments path. It must fall back to the default, exactly like the zero/negative case.
+func TestLoad_PaddleWebhookTimestampToleranceSecondsAboveMaxFallsBackToDefault(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+
+	for _, tooLarge := range []string{"301", "999999999"} {
+		t.Run(tooLarge, func(t *testing.T) {
+			t.Setenv("PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", tooLarge)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+
+			assert.Equal(t, 5, cfg.PaddleWebhookTimestampToleranceSeconds,
+				"a PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS above the max must fall back to the default, never accept a value that effectively disables the replay window")
+		})
+	}
+}
+
+// TestLoad_PaddleWebhookTimestampToleranceSecondsBoundaries checks the inclusive edges: 1 (just
+// above zero) and PaddleWebhookTimestampToleranceMaxSeconds (the max itself) must both be
+// ACCEPTED, since the validation is "reject <=0 or >max", not a stricter open interval.
+func TestLoad_PaddleWebhookTimestampToleranceSecondsBoundaries(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+
+	testCases := []struct {
+		name string
+		env  string
+		want int
+	}{
+		{"lower boundary (1)", "1", 1},
+		{"upper boundary (max)", fmt.Sprintf("%d", PaddleWebhookTimestampToleranceMaxSeconds), PaddleWebhookTimestampToleranceMaxSeconds},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", tc.env)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.want, cfg.PaddleWebhookTimestampToleranceSeconds)
 		})
 	}
 }

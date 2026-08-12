@@ -3,10 +3,20 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"time"
 )
+
+// PaddleWebhookTimestampToleranceMaxSeconds is the upper bound accepted for
+// PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS (issue #1514 fix-round-1 item 1). Chosen as "a few
+// minutes" per the reviewer's guidance, well above Paddle's documented 5-second SDK default (so
+// legitimate deployment/retry jitter has generous headroom) but far short of the hours/days an
+// operator typo (e.g. mistaking the field for a TTL and entering "999999999") would otherwise
+// produce — a value that large would leave the signature's ts= check accepting almost anything,
+// which is indistinguishable in practice from having no replay window at all on a payments path.
+const PaddleWebhookTimestampToleranceMaxSeconds = 300
 
 // Config holds application configuration
 type Config struct {
@@ -85,8 +95,12 @@ type Config struct {
 	// replay/clock-skew risk (issue #1514, F3). Paddle's documented SDK default tolerance is 5
 	// seconds — we mirror that as our default, but treat it as the vendor's stated behavior
 	// rather than something this codebase has independently verified against live traffic.
-	// Validated positive at load time; a zero/negative value falls back to the default rather
-	// than disabling the replay window entirely.
+	// Validated at load time to be in (0, PaddleWebhookTimestampToleranceMaxSeconds]; a value
+	// outside that range (zero/negative, OR an operator typo like 999999999) falls back to the
+	// default and logs a warning, rather than either disabling the replay window entirely or
+	// silently accepting a value that would do so in practice (issue #1514 fix-round-1 item 1:
+	// an unbounded-above tunable "looks configured" while completely defeating the control it
+	// exists to enforce).
 	PaddleWebhookTimestampToleranceSeconds int
 
 	// Encryption
@@ -181,10 +195,12 @@ func Load() (*Config, error) {
 		PlaidRedirectURI: getEnv("PLAID_REDIRECT_URI", ""),
 
 		// Paddle
-		PaddleAPIKey:                           getEnv("PADDLE_API_KEY", ""),
-		PaddleWebhookSecret:                    getEnv("PADDLE_WEBHOOK_SECRET", ""),
-		PaddleEnvironment:                      getEnv("PADDLE_ENVIRONMENT", "sandbox"),
-		PaddleWebhookTimestampToleranceSeconds: getEnvAsPositiveInt("PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", 5),
+		PaddleAPIKey:        getEnv("PADDLE_API_KEY", ""),
+		PaddleWebhookSecret: getEnv("PADDLE_WEBHOOK_SECRET", ""),
+		PaddleEnvironment:   getEnv("PADDLE_ENVIRONMENT", "sandbox"),
+		PaddleWebhookTimestampToleranceSeconds: getEnvAsBoundedPositiveInt(
+			"PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", 5, PaddleWebhookTimestampToleranceMaxSeconds,
+		),
 
 		// Encryption
 		EncryptionKey: getEnv("ENCRYPTION_KEY", ""),
@@ -345,6 +361,29 @@ func getEnvAsInt(key string, defaultValue int) int {
 func getEnvAsPositiveInt(key string, defaultValue int) int {
 	v := getEnvAsInt(key, defaultValue)
 	if v <= 0 {
+		return defaultValue
+	}
+	return v
+}
+
+// getEnvAsBoundedPositiveInt is like getEnvAsPositiveInt but also rejects values above max,
+// falling back to defaultValue (and logging a warning) in EITHER out-of-range direction. Added
+// additively for issue #1514 fix-round-1 item 1 — it does NOT replace or get wired into
+// getEnvAsPositiveInt or its existing callers (e.g. RateLimitMaxEntries), which are owned by
+// other in-flight work on this branch and are left untouched.
+//
+// defaultValue is expected to itself be in (0, max] — getEnvAsInt already falls back to
+// defaultValue for an unset or non-numeric env var, so that path never logs a spurious warning
+// here; only an explicitly out-of-range NUMERIC value (<=0 or >max) does.
+func getEnvAsBoundedPositiveInt(key string, defaultValue, max int) int {
+	v := getEnvAsInt(key, defaultValue)
+	if v <= 0 || v > max {
+		slog.Default().Warn("config value out of range, falling back to default",
+			"key", key,
+			"value", v,
+			"default", defaultValue,
+			"max", max,
+		)
 		return defaultValue
 	}
 	return v

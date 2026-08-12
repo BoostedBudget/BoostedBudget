@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -579,4 +581,77 @@ func TestVerifyWebhook_RotationHeader_NoMatchingH1_Rejected(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, valid)
 	assert.ErrorIs(t, err, ErrSignatureVerificationFailed)
+}
+
+// --- Fix-round-1 item 2: PaddleWebhookRejectionsTotal distinguishes rejection reasons ---------
+
+// TestVerifyWebhook_RejectionMetric_InvalidFormat is the exploit-first regression test for a
+// malformed-header rejection incrementing observability.PaddleWebhookRejectionsTotal with
+// reason="invalid_format", and NOT incrementing the other two reason labels.
+func TestVerifyWebhook_RejectionMetric_InvalidFormat(t *testing.T) {
+	svc := newServiceWithClock(t, 5*time.Second, time.Now)
+
+	before := testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("invalid_format"))
+	beforeTolerance := testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("timestamp_out_of_tolerance"))
+	beforeMismatch := testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("signature_mismatch"))
+
+	valid, err := svc.VerifyWebhook("not-a-valid-signature-header", `{"event_id":"evt_metric_format"}`)
+	require.Error(t, err)
+	assert.False(t, valid)
+	assert.ErrorIs(t, err, ErrInvalidSignatureFormat)
+
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("invalid_format")))
+	assert.Equal(t, beforeTolerance, testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("timestamp_out_of_tolerance")))
+	assert.Equal(t, beforeMismatch, testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("signature_mismatch")))
+}
+
+// TestVerifyWebhook_RejectionMetric_TimestampOutOfTolerance is the exploit-first regression test
+// for a stale-but-cryptographically-correct signature incrementing
+// PaddleWebhookRejectionsTotal{reason="timestamp_out_of_tolerance"} — this is the clock-skew
+// incident signal (fix-round-1 item 2): a real Paddle delivery being dropped for clock reasons
+// must be distinguishable from a forged signature in metrics, not just in logs.
+func TestVerifyWebhook_RejectionMetric_TimestampOutOfTolerance(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	svc := newServiceWithClock(t, 5*time.Second, fixedClock(now))
+
+	before := testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("timestamp_out_of_tolerance"))
+	beforeFormat := testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("invalid_format"))
+	beforeMismatch := testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("signature_mismatch"))
+
+	body := `{"event_id":"evt_metric_tolerance"}`
+	staleTS := fmt.Sprintf("%d", now.Add(-1*time.Hour).Unix())
+	signature := calculateTestSignature(svc.webhookSecret, staleTS, body)
+
+	valid, err := svc.VerifyWebhook(signature, body)
+	require.Error(t, err)
+	assert.False(t, valid)
+	assert.ErrorIs(t, err, ErrTimestampOutOfTolerance)
+
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("timestamp_out_of_tolerance")))
+	assert.Equal(t, beforeFormat, testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("invalid_format")))
+	assert.Equal(t, beforeMismatch, testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("signature_mismatch")))
+}
+
+// TestVerifyWebhook_RejectionMetric_SignatureMismatch is the exploit-first regression test for a
+// well-formed, in-window signature with a wrong HMAC incrementing
+// PaddleWebhookRejectionsTotal{reason="signature_mismatch"}.
+func TestVerifyWebhook_RejectionMetric_SignatureMismatch(t *testing.T) {
+	svc := newServiceWithClock(t, 5*time.Second, time.Now)
+
+	before := testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("signature_mismatch"))
+	beforeFormat := testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("invalid_format"))
+	beforeTolerance := testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("timestamp_out_of_tolerance"))
+
+	timestamp := currentTestTimestamp()
+	body := `{"event_id":"evt_metric_mismatch"}`
+	signature := fmt.Sprintf("ts=%s;h1=%s", timestamp, "0000000000000000000000000000000000000000000000000000000000000000")
+
+	valid, err := svc.VerifyWebhook(signature, body)
+	require.Error(t, err)
+	assert.False(t, valid)
+	assert.ErrorIs(t, err, ErrSignatureVerificationFailed)
+
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("signature_mismatch")))
+	assert.Equal(t, beforeFormat, testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("invalid_format")))
+	assert.Equal(t, beforeTolerance, testutil.ToFloat64(observability.PaddleWebhookRejectionsTotal.WithLabelValues("timestamp_out_of_tolerance")))
 }
