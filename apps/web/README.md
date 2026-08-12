@@ -65,7 +65,7 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 | `mcp` | 13 kB | 8.29 kB | 4.71 kB |
 | `custom-category-manager` | 7 kB | 3.43 kB | 3.57 kB |
 | `category-editor` | 4 kB | 1.67 kB | 2.33 kB |
-| `planning` | 2 kB | 0.72 kB | 1.27 kB |
+| `planning` | 2 kB | 0.72 kB | 1.28 kB |
 | `insights` | 2 kB | 0.79 kB | 1.21 kB |
 | `investments` | 6 kB | 5.77 kB | 0.23 kB |
 
