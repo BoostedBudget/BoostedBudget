@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -16,18 +17,20 @@ import (
 
 // PlaidWebhookHandler handles Plaid webhook HTTP requests.
 type PlaidWebhookHandler struct {
-	webhookService services.WebhookService
-	webhookRepo    repository.WebhookRepository
-	jobQueue       queue.JobQueue
-	logger         *slog.Logger
+	webhookService     services.WebhookService
+	webhookRepo        repository.WebhookRepository
+	invalidAttemptRepo repository.InvalidWebhookAttemptRepository
+	jobQueue           queue.JobQueue
+	logger             *slog.Logger
 }
 
 // PlaidWebhookHandlerDeps contains dependencies for PlaidWebhookHandler.
 type PlaidWebhookHandlerDeps struct {
-	WebhookService services.WebhookService
-	WebhookRepo    repository.WebhookRepository
-	JobQueue       queue.JobQueue
-	Logger         *slog.Logger
+	WebhookService     services.WebhookService
+	WebhookRepo        repository.WebhookRepository
+	InvalidAttemptRepo repository.InvalidWebhookAttemptRepository
+	JobQueue           queue.JobQueue
+	Logger             *slog.Logger
 }
 
 // NewPlaidWebhookHandler creates a new PlaidWebhookHandler instance.
@@ -37,10 +40,11 @@ func NewPlaidWebhookHandler(deps PlaidWebhookHandlerDeps) *PlaidWebhookHandler {
 		logger = slog.Default()
 	}
 	return &PlaidWebhookHandler{
-		webhookService: deps.WebhookService,
-		webhookRepo:    deps.WebhookRepo,
-		jobQueue:       deps.JobQueue,
-		logger:         logger,
+		webhookService:     deps.WebhookService,
+		webhookRepo:        deps.WebhookRepo,
+		invalidAttemptRepo: deps.InvalidAttemptRepo,
+		jobQueue:           deps.JobQueue,
+		logger:             logger,
 	}
 }
 
@@ -85,17 +89,24 @@ type PlaidWebhookResponseBody struct {
 //   - ITEM: Connection status changes (LOGIN_REQUIRED, ERROR, etc.)
 //
 // Security: Verifies JWT signatures using ES256 (ECDSA P-256)
+//
+// Issue #1514: fails closed BEFORE persistence. A missing or cryptographically invalid signature
+// is rejected with a non-2xx response and is NEVER written to webhook_events — only the event's
+// provider, body length, and a SHA-256 digest are recorded via recordInvalidWebhookAttempt
+// (bounded metadata, no raw payload). A verifier-unavailable outcome (e.g. the Plaid JWK fetch
+// itself failed) is distinguished from a cryptographically invalid signature: it is treated as
+// retryable — not as evidence of a forged request — and returns 503 without recording an invalid
+// attempt, so Plaid retries once the verifier is healthy again.
 func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *PlaidWebhookInput) (*PlaidWebhookOutput, error) {
-	// Verify signature if service is available
-	signatureValid := false
-	if h.webhookService != nil && input.PlaidVerification != "" {
-		valid, err := h.webhookService.VerifyWebhook(ctx, input.RawBody, input.PlaidVerification)
-		if err != nil {
-			// Log verification failure but DON'T fail the webhook
-			// This ensures audit trail even for invalid signatures
-		} else if valid {
-			signatureValid = true
-		}
+	signatureValid, verifyErr := h.verifySignature(ctx, input)
+	if errors.Is(verifyErr, services.ErrWebhookVerifierUnavailable) {
+		h.logger.Warn("Plaid webhook verifier temporarily unavailable; asking Plaid to retry", "error", verifyErr)
+		return nil, huma.Error503ServiceUnavailable("webhook verifier temporarily unavailable, please retry")
+	}
+	if !signatureValid {
+		h.logger.Warn("Rejecting Plaid webhook: missing or invalid signature", "error", verifyErr)
+		recordInvalidWebhookAttempt(ctx, h.invalidAttemptRepo, "plaid", input.RawBody, h.logger)
+		return nil, huma.Error401Unauthorized("invalid or missing webhook signature")
 	}
 
 	// Parse webhook payload from raw body
@@ -124,7 +135,7 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 			NewTransactions: ptrIfNotZero(payload.NewTransactions),
 			Payload:         json.RawMessage(input.RawBody),
 			Signature:       ptrIfNotEmpty(input.PlaidVerification),
-			SignatureValid:  signatureValid,
+			SignatureValid:  true,
 			Processed:       false,
 		}
 
@@ -135,15 +146,18 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 			}
 		}
 
-		// Store webhook for audit trail (always, even for unverified signatures)
 		if err := h.webhookRepo.Create(ctx, webhookEvent); err != nil {
-			h.logger.Error("failed to store webhook",
+			// Issue #1514: this is a VALID, verified webhook we failed to persist — returning
+			// "ok" here would silently lose it forever, since Plaid never retries a 2xx
+			// response. Return non-2xx so Plaid retries delivery.
+			h.logger.Error("Failed to store valid Plaid webhook — returning error so Plaid retries",
 				"webhook_type", payload.WebhookType,
 				"error", err,
 			)
-			// Don't fail - return OK to prevent Plaid retry storms
-		} else if signatureValid && h.jobQueue != nil {
-			// Only enqueue processing for verified webhooks (matches Paddle webhook pattern)
+			return nil, huma.Error500InternalServerError("failed to persist webhook")
+		}
+
+		if h.jobQueue != nil {
 			jobArgs := jobs.WebhookProcessingArgs{
 				WebhookID:   webhookEvent.ID,
 				WebhookType: payload.WebhookType,
@@ -165,11 +179,6 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 					"item_id", payload.ItemID,
 				)
 			}
-		} else if !signatureValid {
-			h.logger.Warn("webhook stored but not enqueued — invalid or missing signature",
-				"webhook_id", webhookEvent.ID,
-				"webhook_type", payload.WebhookType,
-			)
 		}
 	}
 
@@ -200,6 +209,31 @@ func (h *PlaidWebhookHandler) HandlePlaidWebhook(ctx context.Context, input *Pla
 			Message: message,
 		},
 	}, nil
+}
+
+// verifySignature reports whether input carries a cryptographically valid Plaid-Verification JWT.
+//
+// Distinguishes two failure classes (Issue #1514):
+//   - services.ErrWebhookVerifierUnavailable: the verifier itself failed (e.g. the JWK fetch from
+//     Plaid's API errored, or returned an unparsable key) — retryable, not evidence of forgery.
+//   - any other error, or a missing header, or an unconfigured service: the signature is either
+//     absent or cryptographically invalid — reject.
+func (h *PlaidWebhookHandler) verifySignature(ctx context.Context, input *PlaidWebhookInput) (bool, error) {
+	if input.PlaidVerification == "" {
+		return false, errors.New("missing Plaid-Verification header")
+	}
+	if h.webhookService == nil {
+		return false, errors.New("plaid webhook service not configured")
+	}
+
+	valid, err := h.webhookService.VerifyWebhook(ctx, input.RawBody, input.PlaidVerification)
+	if err != nil {
+		return false, err
+	}
+	if !valid {
+		return false, errors.New("signature verification failed")
+	}
+	return true, nil
 }
 
 // handleTransactionsWebhook processes TRANSACTIONS webhook events.

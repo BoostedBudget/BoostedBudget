@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -15,18 +16,20 @@ import (
 
 // PaddleWebhookHandler handles Paddle webhook HTTP requests.
 type PaddleWebhookHandler struct {
-	webhookService services.PaddleWebhookService
-	webhookRepo    repository.PaddleWebhookRepository
-	jobQueue       queue.JobQueue
-	logger         *slog.Logger
+	webhookService     services.PaddleWebhookService
+	webhookRepo        repository.PaddleWebhookRepository
+	invalidAttemptRepo repository.InvalidWebhookAttemptRepository
+	jobQueue           queue.JobQueue
+	logger             *slog.Logger
 }
 
 // PaddleWebhookHandlerDeps contains dependencies for PaddleWebhookHandler.
 type PaddleWebhookHandlerDeps struct {
-	WebhookService services.PaddleWebhookService
-	WebhookRepo    repository.PaddleWebhookRepository
-	JobQueue       queue.JobQueue
-	Logger         *slog.Logger
+	WebhookService     services.PaddleWebhookService
+	WebhookRepo        repository.PaddleWebhookRepository
+	InvalidAttemptRepo repository.InvalidWebhookAttemptRepository
+	JobQueue           queue.JobQueue
+	Logger             *slog.Logger
 }
 
 // NewPaddleWebhookHandler creates a new PaddleWebhookHandler instance.
@@ -36,10 +39,11 @@ func NewPaddleWebhookHandler(deps PaddleWebhookHandlerDeps) *PaddleWebhookHandle
 		logger = slog.Default()
 	}
 	return &PaddleWebhookHandler{
-		webhookService: deps.WebhookService,
-		webhookRepo:    deps.WebhookRepo,
-		jobQueue:       deps.JobQueue,
-		logger:         logger,
+		webhookService:     deps.WebhookService,
+		webhookRepo:        deps.WebhookRepo,
+		invalidAttemptRepo: deps.InvalidAttemptRepo,
+		jobQueue:           deps.JobQueue,
+		logger:             logger,
 	}
 }
 
@@ -71,15 +75,19 @@ type PaddleWebhookResponseBody struct {
 // HandlePaddleWebhook handles POST /webhooks/paddle requests.
 // Receives and processes webhook notifications from Paddle.
 // Verifies HMAC-SHA256 signature, stores in database, and enqueues async processing.
+//
+// Issue #1514: fails closed BEFORE persistence. A missing or cryptographically invalid signature
+// is rejected with a non-2xx response and is NEVER written to paddle_webhook_events — only the
+// event's provider, body length, and a SHA-256 digest are recorded via recordInvalidWebhookAttempt
+// (bounded metadata, no raw payload, no attacker-chosen event_id in a UNIQUE column). This closes
+// the idempotency-poisoning vector: since an invalid attempt never reaches the table, an attacker
+// can no longer plant a row under a future legitimate event_id to suppress that real webhook.
 func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *PaddleWebhookInput) (*PaddleWebhookOutput, error) {
-	signatureValid := false
-	if h.webhookService != nil && input.PaddleSignature != "" {
-		valid, err := h.webhookService.VerifyWebhook(input.PaddleSignature, string(input.RawBody))
-		if err != nil {
-			h.logger.Warn("Paddle webhook signature verification error", "error", err)
-		} else if valid {
-			signatureValid = true
-		}
+	signatureValid, verifyErr := h.verifySignature(input)
+	if !signatureValid {
+		h.logger.Warn("Rejecting Paddle webhook: missing or invalid signature", "error", verifyErr)
+		recordInvalidWebhookAttempt(ctx, h.invalidAttemptRepo, "paddle", input.RawBody, h.logger)
+		return nil, huma.Error401Unauthorized("invalid or missing webhook signature")
 	}
 
 	var payload PaddleWebhookPayload
@@ -107,7 +115,7 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 			EventType:          payload.EventType,
 			Payload:            json.RawMessage(input.RawBody),
 			Signature:          ptrIfNotEmpty(input.PaddleSignature),
-			SignatureValid:     signatureValid,
+			SignatureValid:     true,
 			Processed:          false,
 			ProcessingAttempts: 0,
 		}
@@ -127,40 +135,39 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 		}
 
 		if err := h.webhookRepo.Create(ctx, webhookEvent); err != nil {
-			h.logger.Error("Failed to store Paddle webhook",
+			// Issue #1514: this is a VALID, verified webhook we failed to persist — returning
+			// "ok" here would silently lose a real billing event forever, since Paddle never
+			// retries a 2xx response. Return non-2xx so Paddle retries delivery.
+			h.logger.Error("Failed to store valid Paddle webhook — returning error so Paddle retries",
 				"event_id", payload.EventID,
 				"event_type", payload.EventType,
 				"error", err,
 			)
-		} else {
-			h.logger.Info("Paddle webhook stored",
-				"event_id", payload.EventID,
-				"event_type", payload.EventType,
-				"signature_valid", signatureValid,
-			)
+			return nil, huma.Error500InternalServerError("failed to persist webhook")
+		}
 
-			if signatureValid && h.jobQueue != nil {
-				jobArgs := jobs.SubscriptionWebhookArgs{
-					WebhookID: webhookEvent.ID,
-					EventID:   payload.EventID,
-					EventType: payload.EventType,
-				}
+		h.logger.Info("Paddle webhook stored",
+			"event_id", payload.EventID,
+			"event_type", payload.EventType,
+		)
 
-				_, err := h.jobQueue.Enqueue(ctx, jobArgs)
-				if err != nil {
-					h.logger.Error("Failed to enqueue webhook processing job",
-						"webhook_id", webhookEvent.ID,
-						"event_id", payload.EventID,
-						"error", err,
-					)
-				} else {
-					h.logger.Info("Webhook processing job enqueued",
-						"webhook_id", webhookEvent.ID,
-						"event_id", payload.EventID,
-					)
-				}
-			} else if !signatureValid {
-				h.logger.Warn("Webhook NOT enqueued due to invalid signature",
+		if h.jobQueue != nil {
+			jobArgs := jobs.SubscriptionWebhookArgs{
+				WebhookID: webhookEvent.ID,
+				EventID:   payload.EventID,
+				EventType: payload.EventType,
+			}
+
+			_, err := h.jobQueue.Enqueue(ctx, jobArgs)
+			if err != nil {
+				h.logger.Error("Failed to enqueue webhook processing job",
+					"webhook_id", webhookEvent.ID,
+					"event_id", payload.EventID,
+					"error", err,
+				)
+			} else {
+				h.logger.Info("Webhook processing job enqueued",
+					"webhook_id", webhookEvent.ID,
 					"event_id", payload.EventID,
 				)
 			}
@@ -173,6 +180,29 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 			Message: "Webhook received",
 		},
 	}, nil
+}
+
+// verifySignature reports whether input carries a cryptographically valid Paddle-Signature.
+// Every non-valid outcome (missing header, unconfigured service, malformed signature, HMAC
+// mismatch) returns a descriptive error for logging — Paddle's HMAC scheme has no notion of a
+// "verifier unavailable" state (no external call is involved), so every failure here means
+// reject, unlike the Plaid path's verifier-unavailable/invalid distinction.
+func (h *PaddleWebhookHandler) verifySignature(input *PaddleWebhookInput) (bool, error) {
+	if input.PaddleSignature == "" {
+		return false, errors.New("missing Paddle-Signature header")
+	}
+	if h.webhookService == nil {
+		return false, errors.New("paddle webhook service not configured")
+	}
+
+	valid, err := h.webhookService.VerifyWebhook(input.PaddleSignature, string(input.RawBody))
+	if err != nil {
+		return false, err
+	}
+	if !valid {
+		return false, errors.New("signature verification failed")
+	}
+	return true, nil
 }
 
 // RegisterPaddleWebhookRoutes registers Paddle webhook routes with the Huma API.
