@@ -169,27 +169,73 @@ describe('sentry scrubbing options', () => {
       expect(extra.requestId).toBe('req-42');
     });
 
-    test('does not over-scrub near-miss property names that merely resemble denylisted keys', () => {
-      // These keys are deliberately *not* on PII_PROPERTY_DENYLIST (exact
-      // snake_case matches only) — a naive substring/fuzzy matcher would
-      // wrongly redact them, destroying legitimate diagnostic signal.
+    test('redacts camelCase and PascalCase near-misses of denylisted PII tokens', () => {
+      // Property names are split on camelCase boundaries (and _/-) into tokens;
+      // any token that matches a denylisted word must be redacted. These are
+      // real shapes found in apps/web/src (currentBalance 43x, institutionName
+      // 38x, availableBalance 14x, merchantName 3x) — genuine PII, not benign
+      // near-misses. `accountBalance`/`userEmail` were previously (wrongly)
+      // asserted here as *surviving* redaction; that was the bug this test now
+      // guards against.
       const event = {
         exception: { values: [{ type: 'Error', value: 'boom' }] },
         extra: {
-          accountBalance: 500, // camelCase near-miss of 'balance'
-          userEmail: 'jane@example.com', // near-miss of 'email'
-          merchantId: 'm_123', // near-miss of 'merchant'/'merchant_name'
-          descriptionLength: 12, // near-miss of 'description'
+          currentBalance: 100,
+          institutionName: 'Chase',
+          availableBalance: 200,
+          merchantName: 'Starbucks',
+          accountBalance: 500,
+          userEmail: 'jane@example.com',
         },
       };
 
       const result = beforeSend(event as Parameters<typeof beforeSend>[0], {});
 
       const extra = result?.extra as Record<string, unknown>;
-      expect(extra.accountBalance).toBe(500);
-      expect(extra.userEmail).toBe('jane@example.com');
-      expect(extra.merchantId).toBe('m_123');
+      expect(extra.currentBalance).toBe('[Redacted]');
+      expect(extra.institutionName).toBe('[Redacted]');
+      expect(extra.availableBalance).toBe('[Redacted]');
+      expect(extra.merchantName).toBe('[Redacted]');
+      expect(extra.accountBalance).toBe('[Redacted]');
+      expect(extra.userEmail).toBe('[Redacted]');
+    });
+
+    test('does not over-scrub benign compounds that merely share a token with a denylisted word', () => {
+      // `account` and `description` are deliberately NOT bare tokens on
+      // PII_PROPERTY_DENYLIST (see piiScrubbing.ts) precisely because
+      // token-split matching would otherwise redact these — a count and a
+      // length are not PII values, even though they share a word with
+      // `accountBalance`/`institutionName`-style PII fields.
+      const event = {
+        exception: { values: [{ type: 'Error', value: 'boom' }] },
+        extra: {
+          accountCount: 3,
+          descriptionLength: 12,
+          requestId: 'req-42',
+          step: 'checkout',
+        },
+      };
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {});
+
+      const extra = result?.extra as Record<string, unknown>;
+      expect(extra.accountCount).toBe(3);
       expect(extra.descriptionLength).toBe(12);
+      expect(extra.requestId).toBe('req-42');
+      expect(extra.step).toBe('checkout');
+    });
+
+    test('redacts snake_case denylisted keys reached via token matching', () => {
+      const event = {
+        exception: { values: [{ type: 'Error', value: 'boom' }] },
+        extra: { current_balance: 100, institution_name: 'Chase' },
+      };
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {});
+
+      const extra = result?.extra as Record<string, unknown>;
+      expect(extra.current_balance).toBe('[Redacted]');
+      expect(extra.institution_name).toBe('[Redacted]');
     });
 
     test('scrubs event.exception stack-frame vars by property name', () => {

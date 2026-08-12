@@ -75,6 +75,46 @@ describe('redactPii', () => {
     expect(items[0]).toBe('[Circular]');
   });
 
+  test('redacts camelCase near-misses of denylisted PII tokens', () => {
+    const input = {
+      currentBalance: 100,
+      institutionName: 'Chase',
+      availableBalance: 200,
+      merchantName: 'Starbucks',
+      accountBalance: 500,
+      userEmail: 'jane@example.com',
+    };
+
+    const result = redactPii(input) as typeof input;
+
+    expect(result.currentBalance).toBe('[Redacted]');
+    expect(result.institutionName).toBe('[Redacted]');
+    expect(result.availableBalance).toBe('[Redacted]');
+    expect(result.merchantName).toBe('[Redacted]');
+    expect(result.accountBalance).toBe('[Redacted]');
+    expect(result.userEmail).toBe('[Redacted]');
+  });
+
+  test('redacts snake_case denylisted keys via token matching', () => {
+    const input = { current_balance: 100, institution_name: 'Chase' };
+
+    const result = redactPii(input) as typeof input;
+
+    expect(result.current_balance).toBe('[Redacted]');
+    expect(result.institution_name).toBe('[Redacted]');
+  });
+
+  test('does not over-scrub benign compounds sharing a token with a denylisted word', () => {
+    const input = { accountCount: 3, descriptionLength: 12, requestId: 'req-1', step: 'checkout' };
+
+    const result = redactPii(input) as typeof input;
+
+    expect(result.accountCount).toBe(3);
+    expect(result.descriptionLength).toBe(12);
+    expect(result.requestId).toBe('req-1');
+    expect(result.step).toBe('checkout');
+  });
+
   test('scrubs a real-shaped Axios-like error with config/response and a self-reference, without throwing or hanging', () => {
     // Axios attaches `error.request`/`error.config` back onto the response,
     // and some environments attach the originating error back onto its own
