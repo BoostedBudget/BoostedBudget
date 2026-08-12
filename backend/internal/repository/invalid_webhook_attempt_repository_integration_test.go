@@ -396,6 +396,55 @@ func TestInvalidWebhookAttemptCap_AgeRetention_Integration(t *testing.T) {
 		"trim must delete rows older than the retention window and keep rows inside it")
 }
 
+// TestInvalidWebhookAttemptCap_AgeRetentionViaRecord_Integration is Issue #1514 C1: the sibling
+// above (TestInvalidWebhookAttemptCap_AgeRetention_Integration) proves the age-DELETE's SQL is
+// correct by calling the private trim() method directly, but a real deployment never calls trim()
+// directly — it only ever reaches the age-DELETE through Record(), in response to an incoming
+// rejected webhook. This test drives that actual runtime path: seed a stale row with an explicit
+// old created_at, then call the real, exported Record() (via the real constructor, so
+// startupTrimEnabled is true) and confirm the forced first-call trim reaches the age-based DELETE
+// and reclaims it — not just the count-based one.
+func TestInvalidWebhookAttemptCap_AgeRetentionViaRecord_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx, "DELETE FROM invalid_webhook_attempts")
+	require.NoError(t, err)
+
+	const retentionDays = 30
+	now := time.Now().UTC()
+
+	// Seed a stale row directly (bypassing Record, which always writes created_at =
+	// CURRENT_TIMESTAMP) — this is the only way to get a row old enough to fall outside the
+	// retention window without waiting real days.
+	_, err = pool.Exec(ctx,
+		`INSERT INTO invalid_webhook_attempts (provider, body_length, body_sha256, created_at) VALUES ($1, $2, $3, $4)`,
+		"plaid", 1, "stale-before-record", now.Add(-(retentionDays+1)*24*time.Hour))
+	require.NoError(t, err)
+
+	// Real constructor => startupTrimEnabled is true, so this provider's FIRST Record call forces
+	// a trim (count-based AND age-based) regardless of the interval counter — exactly the path a
+	// real deployment takes when a rejected webhook arrives, never a direct trim() call.
+	repo := NewInvalidWebhookAttemptRepository(pool, retentionDays)
+	require.NoError(t, repo.Record(ctx, "plaid", 10, "fresh-via-record"))
+
+	var remaining []string
+	rows, err := pool.Query(ctx, "SELECT body_sha256 FROM invalid_webhook_attempts WHERE provider = 'plaid'")
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var sha string
+		require.NoError(t, rows.Scan(&sha))
+		remaining = append(remaining, sha)
+	}
+	require.NoError(t, rows.Err())
+
+	require.ElementsMatch(t, []string{"fresh-via-record"}, remaining,
+		"Record's forced startup trim must reach the age-based DELETE and remove the pre-existing "+
+			"stale row, proving the age sweep fires via the real runtime path (Record), not only "+
+			"via a direct trim() call")
+}
+
 // TestInvalidWebhookAttemptGetStats24h_Integration is Issue #1514 requirement #5 — the repository
 // read method that restores operator visibility into rejected webhook attempts. pgxmock cannot
 // catch a bad GROUP BY/aggregate (project memory: "pgxmock never catches type/aggregate errors"),
