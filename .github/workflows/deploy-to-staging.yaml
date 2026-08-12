@@ -546,6 +546,10 @@ jobs:
       url: https://staging.boostedbudget.com
     env:
       UNIQUE_WORKSPACE: workspace-deploy-frontend-${{ github.run_id }}
+      # #1514 (G6 fix-round-1): `secrets` is not a valid context in a step-level `if:`
+      # (actionlint: context "secrets" is not allowed there). Mirror it into job-level
+      # `env:` so the gate steps below can read `env.SENTRY_AUTH_TOKEN` instead.
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
     steps:
       - name: Clean workspace
@@ -585,7 +589,7 @@ jobs:
       # `if: always()` on the delete step), so a missing/invalid SENTRY_AUTH_TOKEN or a
       # Sentry API failure can never cause maps to ship.
       - name: Install sentry-cli
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        if: env.SENTRY_AUTH_TOKEN != ''
         continue-on-error: true
         env:
           # Pin + verify, per the golang-migrate pattern in test.yml (#1514 F13).
@@ -594,6 +598,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME/bin"
+          # Assumes this job runs on the [self-hosted, macOS, mac-mini] Apple Silicon
+          # runner (see runs-on: above). If that runner pool ever changes architecture
+          # or OS, this asset name must change too, or the curl below will 404 —
+          # a loud, understandable failure (caught by continue-on-error, not silent).
           curl -sSfL -o "$HOME/bin/sentry-cli" "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Darwin-arm64"
           echo "${SENTRY_CLI_SHA256}  $HOME/bin/sentry-cli" | shasum -a 256 -c -
           chmod +x "$HOME/bin/sentry-cli"
@@ -601,11 +609,11 @@ jobs:
           "$HOME/bin/sentry-cli" --version
 
       - name: Upload source maps to Sentry
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        if: env.SENTRY_AUTH_TOKEN != ''
         continue-on-error: true
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          # SENTRY_AUTH_TOKEN is inherited from the job-level env: above.
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
         run: |
