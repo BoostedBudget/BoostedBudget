@@ -1,5 +1,5 @@
 -- Issue #1514 (Codex adversarial review finding, High): closes the residual half of the
--- idempotency-poisoning vector. HandlePaddleWebhook/HandlePlaidWebhook, as of migration 000145,
+-- idempotency-poisoning vector. HandlePaddleWebhook/HandlePlaidWebhook, as of migration 000146,
 -- never persist an unsigned/invalid-signature delivery into paddle_webhook_events/webhook_events
 -- again — but paddle_webhook_events.event_id is UNIQUE NOT NULL, and any row already sitting in
 -- these tables with signature_valid = false from BEFORE this fix shipped still occupies its
