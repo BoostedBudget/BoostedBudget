@@ -79,14 +79,57 @@ func TestValidateCORSConfig_ProductionBlocksEmpty(t *testing.T) {
 	assert.Error(t, err, "empty origins must be rejected in production")
 }
 
-func TestValidateCORSConfig_StagingAllowsWildcardWithoutError(t *testing.T) {
+// TestValidateCORSConfig_StagingBlocksWildcard is the RED test for issue #1514 (F10): staging
+// used to only warn on a wildcard CORS_ALLOWED_ORIGINS, the same permissive treatment as
+// development. That is an inconsistent guardrail — see cors.go's corsPermissiveEnvironments
+// allowlist — and a bad value copy-pasted from a warned-but-running staging box is exactly how
+// a wildcard reaches production. Staging must now fail closed exactly like production.
+func TestValidateCORSConfig_StagingBlocksWildcard(t *testing.T) {
 	err := ValidateCORSConfig("*", "staging")
-	assert.NoError(t, err, "wildcard in staging should return nil (just log warning)")
+	assert.Error(t, err, "wildcard origins must be rejected in staging")
+	assert.Contains(t, err.Error(), "staging")
+}
+
+// TestValidateCORSConfig_StagingBlocksEmpty covers the other half of the wildcard check: an
+// empty CORS_ALLOWED_ORIGINS is treated identically to "*" (see isWildcard in cors.go).
+func TestValidateCORSConfig_StagingBlocksEmpty(t *testing.T) {
+	err := ValidateCORSConfig("", "staging")
+	assert.Error(t, err, "empty origins must be rejected in staging")
+	assert.Contains(t, err.Error(), "staging")
+}
+
+// TestValidateCORSConfig_StagingAllowsExplicitOrigins pins that the staging fix only closes
+// the wildcard/empty gap — a real, explicit origin list still passes staging validation.
+func TestValidateCORSConfig_StagingAllowsExplicitOrigins(t *testing.T) {
+	err := ValidateCORSConfig("https://staging.boostedbudget.com", "staging")
+	assert.NoError(t, err, "an explicit staging origin must not be rejected")
 }
 
 func TestValidateCORSConfig_DevelopmentAllowsWildcard(t *testing.T) {
 	err := ValidateCORSConfig("*", "development")
 	assert.NoError(t, err, "wildcard in development is fine")
+}
+
+// TestValidateCORSConfig_QAAllowsWildcard pins that the deployed QA environment (ENVIRONMENT=qa
+// in docker-compose.qa.yml, .github/workflows/deploy-qa.yml, and the Playwright E2E backend in
+// apps/web/playwright.config.ts) keeps its permissive local/test CORS — this fix must not touch
+// QA, only staging and unrecognised environment names.
+func TestValidateCORSConfig_QAAllowsWildcard(t *testing.T) {
+	err := ValidateCORSConfig("*", "qa")
+	assert.NoError(t, err, "wildcard in qa is fine — QA/E2E rely on permissive CORS")
+}
+
+// TestValidateCORSConfig_UnrecognisedEnvironmentBlocksWildcard: an unset/misspelled/unknown
+// ENVIRONMENT value must fail SAFE (no wildcard CORS) rather than silently falling through to
+// the permissive branch, matching the allowlist pattern in
+// backend/internal/config/qa_auth_bypass_gate.go and domain.IsNonProductionEnvironment. Before
+// this fix, ValidateCORSConfig's switch only special-cased "production" and "staging"; any other
+// string — including a typo like "stagng" or an empty environment argument — fell through and
+// returned nil regardless of the wildcard, which is the same fail-open shape this issue exists
+// to close.
+func TestValidateCORSConfig_UnrecognisedEnvironmentBlocksWildcard(t *testing.T) {
+	err := ValidateCORSConfig("*", "stagng")
+	assert.Error(t, err, "an unrecognised environment must fail closed on wildcard CORS")
 }
 
 func TestValidateCORSConfig_ValidURLsPass(t *testing.T) {
