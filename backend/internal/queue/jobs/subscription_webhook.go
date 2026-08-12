@@ -576,9 +576,16 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 	// deliveries at all, and ReplayPaddleWebhook refuses to re-enqueue a signature_valid=false
 	// row — so this worker should never actually see one. It refuses to dispatch anyway, in case
 	// something upstream (a bug, a future write path, a pre-fix row) got a bad row into the queue.
+	//
+	// This will NEVER succeed on retry — the signature can't become valid — so it follows this
+	// worker's own established permanent-failure convention (see the Processed check above, and
+	// TestWorker_WebhookNotFound_CancelsJob: "return nil to cancel the job"). Returning an error
+	// here instead would burn River's default retry/backoff budget on a row that can never
+	// process, delaying its arrival at the dead-letter queue for no benefit — the security
+	// property (never dispatched) already holds on every attempt.
 	if !webhook.SignatureValid {
 		observability.InvalidWebhookAttemptsTotal.WithLabelValues("paddle_worker_guard").Inc()
-		w.logger.Error("refusing to process Paddle webhook with invalid signature",
+		w.logger.Error("refusing to process Paddle webhook with invalid signature; cancelling job",
 			"webhook_id", args.WebhookID,
 			"event_id", args.EventID,
 			"event_type", args.EventType,
@@ -591,7 +598,7 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 			})
 		}
 		_ = w.paddleWebhookRepo.MarkFailed(ctx, args.WebhookID, "rejected: signature_valid=false")
-		return fmt.Errorf("refusing to process webhook %s: signature_valid=false", args.WebhookID)
+		return nil
 	}
 
 	var processErr error

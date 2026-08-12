@@ -692,6 +692,11 @@ func TestWorker_WebhookNotFound_CancelsJob(t *testing.T) {
 // TestWorker_InvalidSignature_RefusesToDispatch verifies Issue #1514 item 4: the worker
 // independently refuses to process a webhook row whose signature was never valid, even if
 // something upstream enqueued it. No subscription mutation must occur.
+//
+// Round-1 review fix: returns nil (cancel the job), matching this worker's own established
+// permanent-failure convention (see TestWorker_WebhookNotFound_CancelsJob) — the signature can
+// never become valid on retry, so returning an error here would only burn River's retry/backoff
+// budget before the job reaches the dead-letter queue, with no security benefit.
 func TestWorker_InvalidSignature_RefusesToDispatch(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
@@ -711,7 +716,7 @@ func TestWorker_InvalidSignature_RefusesToDispatch(t *testing.T) {
 
 	err := worker.Work(ctx, job)
 
-	require.Error(t, err, "worker must refuse to dispatch a signature_valid=false row")
+	require.NoError(t, err, "must cancel (not retry) a signature_valid=false row — it can never become valid")
 	mockProfileRepo.AssertNotCalled(t, "UpdatePaddleCustomerID")
 	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
 	mockWebhookRepo.AssertExpectations(t)

@@ -2003,8 +2003,12 @@ func main() {
 			Logger:             appLogger,
 		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
-		appLogger.Info("Huma Plaid webhook route registered at POST /webhooks/plaid (verification disabled)")
-		appLogger.Warn("Webhook signature verification disabled (Plaid credentials not configured)")
+		appLogger.Info("Huma Plaid webhook route registered at POST /webhooks/plaid (no verifier configured)")
+		// Issue #1514: no webhookService means HandlePlaidWebhook's verifySignature always fails
+		// closed — every delivery to this route now gets rejected with 401, it is NOT processed
+		// audit-trail-style as before this fix. Log that plainly so local/QA debugging doesn't
+		// mistake "every webhook 401s" for a bug.
+		appLogger.Warn("Plaid webhook signature verifier not configured — ALL incoming webhooks will be rejected (401), not processed (Plaid credentials not configured)")
 	} else {
 		appLogger.Warn("Webhook endpoint disabled (requires DATABASE_URL)")
 	}
@@ -2039,8 +2043,11 @@ func main() {
 			Logger:             appLogger,
 		})
 		operations.RegisterPaddleWebhookRoutes(humaAPI, humaPaddleWebhookHandler)
-		appLogger.Info("Huma Paddle webhook route registered at POST /webhooks/paddle (verification disabled)")
-		appLogger.Warn("Paddle webhook signature verification disabled (webhook secret not configured)")
+		appLogger.Info("Huma Paddle webhook route registered at POST /webhooks/paddle (no verifier configured)")
+		// Issue #1514: no webhookService means HandlePaddleWebhook's verifySignature always fails
+		// closed — every delivery to this route now gets rejected with 401, it is NOT processed
+		// audit-trail-style as before this fix.
+		appLogger.Warn("Paddle webhook signature verifier not configured — ALL incoming webhooks will be rejected (401), not processed (webhook secret not configured)")
 	} else {
 		appLogger.Warn("Paddle webhook endpoint disabled (requires DATABASE_URL)")
 	}
