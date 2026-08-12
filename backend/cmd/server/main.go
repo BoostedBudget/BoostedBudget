@@ -439,7 +439,7 @@ func main() {
 		transactionRepo := repository.NewTransactionRepository(db, fieldEncryptor)
 		webhookRepo := repository.NewWebhookRepository(db, fieldEncryptor)
 		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db, fieldEncryptor)                         // Issue #45, #46: Paddle webhooks
-		invalidWebhookAttemptRepo = repository.NewInvalidWebhookAttemptRepository(db)                         // Issue #1514: bounded invalid-attempt audit
+		invalidWebhookAttemptRepo = repository.NewInvalidWebhookAttemptRepository(db, cfg.InvalidWebhookAttemptRetentionDays) // Issue #1514: bounded invalid-attempt audit
 		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db, fieldEncryptor)                 // Issues #747 #748: Paddle transaction audit log
 		identityRepo := repository.NewUserIdentityRepository(db, fieldEncryptor)                              // Maps Clerk IDs to user UUIDs
 		notificationRepo := repository.NewNotificationRepository(db, fieldEncryptor)                          // Issue #257: Notification storage
@@ -2010,7 +2010,7 @@ func main() {
 		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(operations.PlaidWebhookHandlerDeps{
 			WebhookService:     webhookService,
 			WebhookRepo:        webhookRepoForHandler,
-			InvalidAttemptRepo: repository.NewInvalidWebhookAttemptRepository(db), // Issue #1514
+			InvalidAttemptRepo: repository.NewInvalidWebhookAttemptRepository(db, cfg.InvalidWebhookAttemptRetentionDays), // Issue #1514
 			JobQueue:           jobQueue,
 			Logger:             appLogger,
 		})
@@ -2027,7 +2027,7 @@ func main() {
 		// Used when Plaid credentials are not configured (e.g., local development)
 		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(operations.PlaidWebhookHandlerDeps{
 			WebhookRepo:        repository.NewWebhookRepository(db, fieldEncryptor),
-			InvalidAttemptRepo: repository.NewInvalidWebhookAttemptRepository(db), // Issue #1514
+			InvalidAttemptRepo: repository.NewInvalidWebhookAttemptRepository(db, cfg.InvalidWebhookAttemptRetentionDays), // Issue #1514
 			JobQueue:           jobQueue,
 			Logger:             appLogger,
 		})

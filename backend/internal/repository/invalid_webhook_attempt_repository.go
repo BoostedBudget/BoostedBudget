@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // invalidWebhookAttemptCap bounds invalid_webhook_attempts to at most this many rows PER
@@ -40,7 +41,8 @@ const invalidWebhookAttemptCap = 10000
 // rejections pay nothing beyond the insert.
 //
 // Bound, PRECISELY stated (Codex review round 3 — the round-2 doc comment overstated this as an
-// unconditional "NEVER exceeds cap+interval-1", which is wrong on two axes):
+// unconditional "NEVER exceeds cap+interval-1", which is wrong on two axes; G3 below adds a THIRD
+// axis the round-3 comment itself overstated — read point 3 before treating this as complete):
 //
 //  1. Single-process, instantaneous vs. completed-call-boundary: the trim-triggering call's own
 //     INSERT commits (as its own, separate, unlocked Exec) BEFORE that same call's trim runs. So
@@ -73,6 +75,36 @@ const invalidWebhookAttemptCap = 10000
 //     it is bounded by whichever instance is "most out of phase" at any moment, not by cumulative
 //     attack volume.
 //
+//  3. Restarts (Issue #1514 G3 — this is the correction to what round 3 got wrong): point 2 says
+//     "each instance's counter starts at zero... including across rolling deploys" but never
+//     followed that to its conclusion — an instance that restarts before its own counter ever
+//     reaches invalidWebhookAttemptTrimInterval never trims AT ALL during its lifetime, and Fly
+//     restarts machines on every deploy, scale event, and host migration. Nothing about points 1-2
+//     assumes trims eventually fire; under sustained restart pressure (an attacker sending fewer
+//     than invalidWebhookAttemptTrimInterval invalid attempts per process lifetime, or ordinary
+//     traffic doing the same), they might not, and the "self-correcting" claim above silently
+//     assumed they would. Two changes close this:
+//
+//     (a) NewInvalidWebhookAttemptRepository's returned instance forces an eager trim on the
+//     FIRST Record call for each provider (see startupTrimEnabled below), regardless of the
+//     interval counter — so no instance can complete its entire lifetime without trimming at
+//     least once. This does NOT touch the steady-state per-request cost: it fires exactly once
+//     per (instance, provider) pair, not per request, and structs built directly (bypassing the
+//     constructor — every existing unit/integration test that exercises the interval-amortised
+//     schedule in isolation) default to false and are completely unaffected.
+//
+//     (b) trim() additionally deletes rows older than the configured retention window (see
+//     retentionDays / effectiveRetentionWindow), independent of row count entirely. Even in the
+//     pathological case where a provider's rows are spread across many short-lived instances that
+//     each land only a handful of rows, age-based retention reclaims them on a purely time-based
+//     schedule — it does not depend on any instance ever reaching the count-based trim at all.
+//
+//     With (a) and (b), the residual guarantee is: any given process either never inserts a row
+//     for a provider (nothing to bound), or its first insert for that provider forces a trim
+//     within that same call — so points 1 and 2's bounds hold from that first call onward for the
+//     remainder of that instance's life, and (b) additionally guarantees no row survives past the
+//     retention window regardless of how any instance's insert/restart pattern behaves.
+//
 // TestInvalidWebhookAttemptCap_ConcurrentInserts_Integration still asserts the tight,
 // interval=1 (every-call-trims) bound unmodified, driving this same Record()/trim() code.
 // TestInvalidWebhookAttemptCap_AmortisedTrim_HardCeiling_Integration asserts the single-process,
@@ -80,7 +112,22 @@ const invalidWebhookAttemptCap = 10000
 // concurrent) calls specifically so the exact resulting count is deterministic, not merely
 // probable — and additionally asserts the count DID exceed the tight cap, so the test cannot pass
 // vacuously if amortisation were silently disabled.
+// TestInvalidWebhookAttemptCap_RestartHole_Integration asserts point 3(a) — that rows do not grow
+// without bound across many restarts that individually never reach the interval boundary.
+// TestInvalidWebhookAttemptCap_AgeRetention_Integration asserts point 3(b) in isolation.
 const invalidWebhookAttemptTrimInterval = 50
+
+// invalidWebhookAttemptRetentionDefaultDays is the fallback age-based retention window (Issue
+// #1514 G3, point 3(b) above) used by any repository not constructed with an explicit override —
+// i.e. the production default when NewInvalidWebhookAttemptRepository's caller passes 0 or a
+// negative value. 30 days mirrors this project's existing GDPR deletion-grace convention
+// (config.Config.DeletionGracePeriodDays) rather than inventing a new, unrelated number: rejected
+// webhook attempts are a short-lived operational audit signal, not something with an independent
+// retention requirement, so reusing an existing, already-justified window keeps the number of
+// retention policies in this codebase from growing needlessly. Configurable via
+// INVALID_WEBHOOK_ATTEMPT_RETENTION_DAYS (config.Config.InvalidWebhookAttemptRetentionDays),
+// bounded by config.InvalidWebhookAttemptRetentionMaxDays.
+const invalidWebhookAttemptRetentionDefaultDays = 30
 
 // InvalidWebhookAttemptRepository records bounded metadata about rejected (unsigned or
 // invalid-signature) webhook deliveries. This is the audit signal that survives now that invalid
@@ -103,20 +150,42 @@ type invalidWebhookAttemptRepository struct {
 	// integration tests exercise the real Record()/trim() path against a small, fast-to-reach
 	// bound instead of the production 10,000-row cap.
 	cap int
+	// retentionDays overrides invalidWebhookAttemptRetentionDefaultDays when non-zero (Issue #1514
+	// G3). Age-based retention is orthogonal to the count-based cap above: it deletes rows purely
+	// on elapsed time, so it still reclaims rows even for a provider whose instance never reaches
+	// the count-based trim interval at all.
+	retentionDays int
 	// insertCounters tracks, per provider, how many successful inserts this repository instance
 	// has performed — the in-process heuristic that decides when to pay for the lock+trim step.
 	// Deliberately NOT the source of truth for row count (the DB is); losing this counter (e.g. on
 	// process restart) only delays the next trim, it can never cause an insert to be lost or the
 	// cap check itself to be wrong once a trim does run.
 	insertCounters sync.Map // map[string]*atomic.Int64
+	// startupTrimEnabled marks this instance as one whose very first Record call for any given
+	// provider should force an eager trim regardless of the interval counter (Issue #1514 G3,
+	// point 3(a) on invalidWebhookAttemptTrimInterval's doc comment — closes the restart hole).
+	//
+	// Deliberately a plain bool, not atomic: it is written exactly once, by
+	// NewInvalidWebhookAttemptRepository, before the returned instance is ever handed to a caller
+	// or a second goroutine — so there is no concurrent-write race to guard against, only
+	// concurrent reads of an already-settled value. Zero value (false) is deliberate: only the
+	// production constructor sets it true. Every existing unit/integration test that builds this
+	// struct directly (bypassing the constructor) to exercise the interval-amortised trim schedule
+	// in isolation gets false and is completely unaffected by this change.
+	startupTrimEnabled bool
 }
 
 // NewInvalidWebhookAttemptRepository creates a new InvalidWebhookAttemptRepository instance.
-func NewInvalidWebhookAttemptRepository(db DB) InvalidWebhookAttemptRepository {
+// retentionDays configures the age-based retention window (Issue #1514 G3); pass 0 to use
+// invalidWebhookAttemptRetentionDefaultDays (production callers should pass
+// config.Config.InvalidWebhookAttemptRetentionDays).
+func NewInvalidWebhookAttemptRepository(db DB, retentionDays int) InvalidWebhookAttemptRepository {
 	return &invalidWebhookAttemptRepository{
-		db:           db,
-		trimInterval: invalidWebhookAttemptTrimInterval,
-		cap:          invalidWebhookAttemptCap,
+		db:                 db,
+		trimInterval:       invalidWebhookAttemptTrimInterval,
+		cap:                invalidWebhookAttemptCap,
+		retentionDays:      retentionDays,
+		startupTrimEnabled: true,
 	}
 }
 
@@ -137,6 +206,17 @@ func (r *invalidWebhookAttemptRepository) effectiveCap() int {
 		return invalidWebhookAttemptCap
 	}
 	return r.cap
+}
+
+// effectiveRetentionWindow returns the configured age-based retention window, falling back to
+// invalidWebhookAttemptRetentionDefaultDays for any repository not built via the constructor with
+// an explicit override (e.g. a zero-value struct, or one built directly by a test).
+func (r *invalidWebhookAttemptRepository) effectiveRetentionWindow() time.Duration {
+	days := r.retentionDays
+	if days <= 0 {
+		days = invalidWebhookAttemptRetentionDefaultDays
+	}
+	return time.Duration(days) * 24 * time.Hour
 }
 
 // nextInsertCount atomically increments and returns this provider's insert counter.
@@ -188,30 +268,53 @@ const trimInvalidWebhookAttemptsQuery = `
 // integration test), while leaving Paddle and Plaid rejections free to proceed independently.
 const invalidWebhookAttemptLockKeyQuery = `SELECT pg_advisory_xact_lock(('x'||substr(md5('invalid_webhook_attempt:'||$1),1,16))::bit(64)::bigint)`
 
+// trimInvalidWebhookAttemptsByAgeQuery deletes rows for ONE provider ($1) older than the supplied
+// cutoff timestamp ($2). Issue #1514 G3: this is the age-based half of the retention bound — it
+// runs unconditionally inside trim() (same advisory-lock transaction as the count-based DELETE
+// above), so it inherits trim()'s existing amortised/startup-only call schedule and never adds
+// per-request cost. The cutoff is computed once in Go (time.Now().Add(-window)) rather than as a
+// SQL `NOW() - INTERVAL` expression so integration tests can assert exact keep/delete behavior
+// against explicit, non-relative created_at fixture values.
+const trimInvalidWebhookAttemptsByAgeQuery = `
+	DELETE FROM invalid_webhook_attempts
+	WHERE provider = $1 AND created_at < $2
+`
+
 // Record inserts a bounded invalid-attempt row. The insert itself is a single, unlocked,
 // autocommitting Exec — NO transaction, NO advisory lock — because this call is triggered
 // directly by unauthenticated attacker input, and that steady-state cost must stay cheap
 // regardless of attack volume (Issue #1514, Codex review round 2, Important 2).
 //
-// The (comparatively expensive) trim — advisory lock + bounded DELETE — runs only once every
-// effectiveTrimInterval() calls for this provider, per nextInsertCount's atomic counter. See the
+// The (comparatively expensive) trim — advisory lock + bounded DELETE, count-based and age-based
+// — runs only once every effectiveTrimInterval() calls for this provider (per nextInsertCount's
+// atomic counter), OR once, unconditionally, on the first call for this provider through an
+// instance built via NewInvalidWebhookAttemptRepository (Issue #1514 G3 — closes the restart hole
+// where an instance's counter never reaches the interval boundary). See the
 // invalidWebhookAttemptTrimInterval doc comment for the exact hard ceiling this guarantees.
 func (r *invalidWebhookAttemptRepository) Record(ctx context.Context, provider string, bodyLength int, bodySHA256 string) error {
 	if _, err := r.db.Exec(ctx, insertInvalidWebhookAttemptQuery, provider, bodyLength, bodySHA256); err != nil {
 		return fmt.Errorf("failed to insert invalid webhook attempt: %w", err)
 	}
 
-	if r.nextInsertCount(provider)%r.effectiveTrimInterval() != 0 {
+	count := r.nextInsertCount(provider)
+	// count == 1 is this provider's first-ever insert through THIS instance. When
+	// startupTrimEnabled (set only by the production constructor), force a trim here regardless
+	// of the interval counter — Issue #1514 G3: without this, an instance that restarts before
+	// its counter reaches effectiveTrimInterval() never trims at all during its lifetime. This
+	// adds cost to exactly one call per (instance, provider) pair, never per request.
+	isForcedStartupTrim := r.startupTrimEnabled && count == 1
+	if !isForcedStartupTrim && count%r.effectiveTrimInterval() != 0 {
 		return nil
 	}
 
 	return r.trim(ctx, provider)
 }
 
-// trim runs the advisory-lock+DELETE step that enforces invalidWebhookAttemptCap for one
-// provider. Both statements run inside one transaction so the cap can never be exceeded even
-// under concurrent trims for the same provider (see invalidWebhookAttemptLockKeyQuery). Called
-// only periodically by Record — see invalidWebhookAttemptTrimInterval.
+// trim runs the advisory-lock+DELETE step that enforces invalidWebhookAttemptCap AND the
+// age-based retention window (Issue #1514 G3) for one provider. All statements run inside one
+// transaction so neither bound can be violated even under concurrent trims for the same provider
+// (see invalidWebhookAttemptLockKeyQuery). Called only periodically by Record (amortised interval)
+// or once at startup per (instance, provider) — see invalidWebhookAttemptTrimInterval.
 func (r *invalidWebhookAttemptRepository) trim(ctx context.Context, provider string) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -227,6 +330,15 @@ func (r *invalidWebhookAttemptRepository) trim(ctx context.Context, provider str
 
 	if _, err := tx.Exec(ctx, trimInvalidWebhookAttemptsQuery, r.effectiveCap(), provider); err != nil {
 		return fmt.Errorf("failed to trim invalid webhook attempts: %w", err)
+	}
+
+	// Age-based retention (Issue #1514 G3, point 3(b)): independent of the count-based cap above
+	// — bounds growth on elapsed time alone, so a provider whose instance never reaches the
+	// count-based trim interval still has its old rows reclaimed whenever a trim DOES run (the
+	// startup-forced trim above guarantees at least one per instance).
+	cutoff := time.Now().UTC().Add(-r.effectiveRetentionWindow())
+	if _, err := tx.Exec(ctx, trimInvalidWebhookAttemptsByAgeQuery, provider, cutoff); err != nil {
+		return fmt.Errorf("failed to trim invalid webhook attempts by age: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {

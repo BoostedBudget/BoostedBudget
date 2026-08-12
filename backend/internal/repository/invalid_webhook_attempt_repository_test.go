@@ -5,6 +5,7 @@ import (
 	"errors"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/require"
@@ -83,7 +84,8 @@ func TestInvalidWebhookAttemptRecord_IntervalReached_LocksAndTrims(t *testing.T)
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO invalid_webhook_attempts")).
 		WithArgs("paddle", 1, "d2").WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-	// Call 3 (the interval): insert, then lock+trim in their own transaction.
+	// Call 3 (the interval): insert, then lock+trim (count-based, then age-based) in their own
+	// transaction.
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO invalid_webhook_attempts")).
 		WithArgs("paddle", 1, "d3").WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectBegin()
@@ -92,6 +94,12 @@ func TestInvalidWebhookAttemptRecord_IntervalReached_LocksAndTrims(t *testing.T)
 		WillReturnResult(pgxmock.NewResult("SELECT", 0))
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM invalid_webhook_attempts")).
 		WithArgs(invalidWebhookAttemptCap, "paddle").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	// Issue #1514 G3: trim() now also runs an age-based DELETE (independent of the count-based
+	// one above) in the same transaction. The cutoff timestamp is computed from time.Now(), so
+	// only the provider arg is asserted exactly.
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM invalid_webhook_attempts")).
+		WithArgs("paddle", pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectCommit()
 
@@ -152,7 +160,67 @@ func TestNewInvalidWebhookAttemptRepository_DefaultsTrimInterval(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 
-	repo := NewInvalidWebhookAttemptRepository(mock).(*invalidWebhookAttemptRepository)
+	repo := NewInvalidWebhookAttemptRepository(mock, 0).(*invalidWebhookAttemptRepository)
 	require.Equal(t, invalidWebhookAttemptTrimInterval, repo.trimInterval)
 	require.Equal(t, int64(invalidWebhookAttemptTrimInterval), repo.effectiveTrimInterval())
+	// Issue #1514 G3: 0 (no explicit override) falls back to the production retention default,
+	// and the production constructor always enables the once-per-(instance,provider) startup
+	// trim that closes the restart hole.
+	require.Equal(t, invalidWebhookAttemptRetentionDefaultDays*24*time.Hour, repo.effectiveRetentionWindow())
+	require.True(t, repo.startupTrimEnabled)
+}
+
+// TestNewInvalidWebhookAttemptRepository_RetentionOverride verifies a non-zero retentionDays
+// argument is honored rather than always falling back to the default (Issue #1514 G3).
+func TestNewInvalidWebhookAttemptRepository_RetentionOverride(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewInvalidWebhookAttemptRepository(mock, 7).(*invalidWebhookAttemptRepository)
+	require.Equal(t, 7*24*time.Hour, repo.effectiveRetentionWindow())
+}
+
+// TestInvalidWebhookAttemptRecord_StartupForcesTrimOnFirstCallOnly verifies the exact scope of
+// the Issue #1514 G3 fix at the unit level: startupTrimEnabled forces a trim on the FIRST Record
+// call for a provider (even though the interval is far from reached), but NOT on the second call
+// for that same provider — proving this is a once-per-(instance,provider) cost, not a permanent
+// escalation of the steady-state path.
+func TestInvalidWebhookAttemptRecord_StartupForcesTrimOnFirstCallOnly(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewInvalidWebhookAttemptRepository(mock, 30).(*invalidWebhookAttemptRepository)
+	repo.trimInterval = 50 // production-shaped: far from reached by either of the two calls below
+
+	ctx := context.Background()
+
+	// Call 1: insert, then a FORCED trim (lock + both DELETEs) even though count=1 is nowhere
+	// near the interval boundary.
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO invalid_webhook_attempts")).
+		WithArgs("plaid", 1, "first").
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("pg_advisory_xact_lock")).
+		WithArgs("plaid").
+		WillReturnResult(pgxmock.NewResult("SELECT", 0))
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM invalid_webhook_attempts")).
+		WithArgs(invalidWebhookAttemptCap, "plaid").
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM invalid_webhook_attempts")).
+		WithArgs("plaid", pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectCommit()
+
+	// Call 2: plain insert only — no lock, no trim. If startupTrimEnabled leaked into forcing a
+	// trim on every call instead of just the first, pgxmock's unexpected-call check would fail
+	// this test.
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO invalid_webhook_attempts")).
+		WithArgs("plaid", 1, "second").
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	require.NoError(t, repo.Record(ctx, "plaid", 1, "first"))
+	require.NoError(t, repo.Record(ctx, "plaid", 1, "second"))
+	require.NoError(t, mock.ExpectationsWereMet())
 }
