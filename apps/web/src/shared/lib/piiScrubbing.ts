@@ -92,10 +92,10 @@ export const PII_PROPERTY_DENYLIST = new Set([
  */
 export function tokenize(key: string): string[] {
   return key
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
-    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
-    .replace(/([A-Za-z])([0-9])/g, '$1_$2')
-    .replace(/([0-9])([A-Za-z])/g, '$1_$2')
+    .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, '$1_$2')
+    .replace(/([\p{Ll}\p{Nd}])(\p{Lu})/gu, '$1_$2')
+    .replace(/(\p{L})(\p{Nd})/gu, '$1_$2')
+    .replace(/(\p{Nd})(\p{L})/gu, '$1_$2')
     .split(/[_-]/)
     .filter(Boolean)
     .map(token => token.toLowerCase())
