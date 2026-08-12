@@ -67,11 +67,14 @@ func TestAutoSyncAfterLinking_E2E_Flow(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	// Verify River tables exist
+	// Verify River tables exist. river_client was replaced here by river_notification:
+	// River dropped river_client in its main-line migration 007, which migration 000145
+	// mirrors, and the same migration adds river_notification — so the expected count of 3
+	// below still holds.
 	var tableCount int
 	err := db.QueryRow(ctx, `
 		SELECT COUNT(*) FROM information_schema.tables
-		WHERE table_name IN ('river_job', 'river_client', 'river_queue')
+		WHERE table_name IN ('river_job', 'river_notification', 'river_queue')
 	`).Scan(&tableCount)
 	require.NoError(t, err, "Failed to query River tables")
 	assert.GreaterOrEqual(t, tableCount, 3, "River tables should exist")
