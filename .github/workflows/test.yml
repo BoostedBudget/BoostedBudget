@@ -203,10 +203,19 @@ jobs:
         run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
 
       - name: Install golang-migrate
+        env:
+          # #1514: pin to a specific release and verify the published checksum before
+          # executing the binary — the previous `releases/latest` URL was mutable and
+          # unverified.
+          MIGRATE_VERSION: v4.19.1
+          MIGRATE_SHA256: a8cc8657afd1c2c93c78e8b77fd2275d150c29ebc1fff0e8fe0be68751503468
         run: |
           # Install golang-migrate to user bin (no sudo needed on self-hosted runners)
           mkdir -p $HOME/bin
-          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz | tar -xz
+          curl -sSfL -o migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.darwin-arm64.tar.gz"
+          echo "${MIGRATE_SHA256}  migrate.tar.gz" | shasum -a 256 -c -
+          tar -xz -f migrate.tar.gz migrate
+          rm -f migrate.tar.gz
           mv migrate $HOME/bin/
           echo "$HOME/bin" >> $GITHUB_PATH
           $HOME/bin/migrate --version
@@ -1100,12 +1109,20 @@ jobs:
           echo "DATABASE_URL is set (port $POSTGRES_PORT)"
 
       - name: Install golang-migrate (job-local)
+        env:
+          # #1514: pin to a specific release and verify the published checksum before
+          # executing the binary — the previous `releases/latest` URL was mutable and
+          # unverified.
+          MIGRATE_VERSION: v4.19.1
+          MIGRATE_SHA256: a8cc8657afd1c2c93c78e8b77fd2275d150c29ebc1fff0e8fe0be68751503468
         run: |
           # Install into a job-local dir under RUNNER_TEMP to avoid write-racing
           # the migration-tests job which also installs migrate into $HOME/bin.
           mkdir -p "$RUNNER_TEMP/bin-integ"
-          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz \
-            | tar -xz -C "$RUNNER_TEMP/bin-integ" migrate
+          curl -sSfL -o "$RUNNER_TEMP/migrate.tar.gz" "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.darwin-arm64.tar.gz"
+          (cd "$RUNNER_TEMP" && echo "${MIGRATE_SHA256}  migrate.tar.gz" | shasum -a 256 -c -)
+          tar -xz -f "$RUNNER_TEMP/migrate.tar.gz" -C "$RUNNER_TEMP/bin-integ" migrate
+          rm -f "$RUNNER_TEMP/migrate.tar.gz"
           echo "$RUNNER_TEMP/bin-integ" >> $GITHUB_PATH
           "$RUNNER_TEMP/bin-integ/migrate" --version
 
@@ -1505,9 +1522,18 @@ jobs:
           done
 
       - name: Install migration tools
+        env:
+          # #1514: pin to a specific release and verify the published checksum before
+          # executing the binary — the previous `releases/latest` URL was mutable and
+          # unverified.
+          MIGRATE_VERSION: v4.19.1
+          MIGRATE_SHA256: a8cc8657afd1c2c93c78e8b77fd2275d150c29ebc1fff0e8fe0be68751503468
         run: |
           mkdir -p $HOME/bin
-          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz | tar -xz
+          curl -sSfL -o migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.darwin-arm64.tar.gz"
+          echo "${MIGRATE_SHA256}  migrate.tar.gz" | shasum -a 256 -c -
+          tar -xz -f migrate.tar.gz migrate
+          rm -f migrate.tar.gz
           mv migrate $HOME/bin/
           echo "$HOME/bin" >> $GITHUB_PATH
           npm install -g squawk-cli
