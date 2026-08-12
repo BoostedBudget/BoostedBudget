@@ -5,9 +5,12 @@
 -- bounded, non-identifying metadata here: provider, body length, and a SHA-256 digest of the
 -- body — never the raw payload and never an attacker-chosen identifier in a unique column.
 --
--- Row count is capped at application level (see repository.invalidWebhookAttemptCap): every
--- insert is followed, in the same transaction, by a trim back to the cap so this table can
--- never grow unboundedly even under sustained attack.
+-- Row count is capped at application level (see repository.invalidWebhookAttemptCap). Most
+-- inserts are a single unlocked statement with no trim; periodically (every
+-- invalidWebhookAttemptTrimInterval-th call per provider, or that provider's first call after
+-- process startup) the insert is followed by a separate, lock-guarded trim transaction back to
+-- the cap, so this table cannot grow unboundedly even under sustained attack — see
+-- repository.invalidWebhookAttemptRepository.Record for the amortised schedule.
 CREATE TABLE IF NOT EXISTS invalid_webhook_attempts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 

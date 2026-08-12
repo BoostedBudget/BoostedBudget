@@ -128,13 +128,19 @@ type Config struct {
 	DLQRetentionDays int // env: DLQ_RETENTION_DAYS, default: 30
 
 	// InvalidWebhookAttemptRetentionDays bounds how long a rejected (unsigned/invalid-signature)
-	// webhook audit row (see repository.InvalidWebhookAttemptRepository) survives before the
-	// periodic trim step deletes it on an age basis — a second, orthogonal bound to the row-count
-	// cap that reclaims rows purely on elapsed time (Issue #1514 G3: the count-based cap alone
-	// assumes trims eventually fire, which restarts can defeat; age-based retention doesn't
-	// depend on call volume or restart timing at all). Default 30 days mirrors this project's
-	// existing DeletionGracePeriodDays convention rather than inventing an unrelated number.
-	// Validated at load time via getEnvAsBoundedPositiveInt; an out-of-range value (<=0 or >
+	// webhook audit row (see repository.InvalidWebhookAttemptRepository) is eligible to be deleted
+	// on an age basis — a bound orthogonal to the row-count cap in what it deletes on (elapsed
+	// time, not row count), but NOT wall-clock-scheduled: the age-based DELETE runs only inside
+	// trim(), and trim() only ever runs from Record(), which only ever runs in response to an
+	// incoming rejected webhook (every invalidWebhookAttemptTrimInterval-th call per provider, or
+	// that provider's first call after process startup). So reclamation is traffic-triggered, not
+	// independent of call volume or restart timing: a provider that goes quiet — stops receiving
+	// invalid attempts, with or without a restart — has no future Record call to trigger the
+	// sweep, and its already-written rows persist past this window until (if ever) that provider
+	// is rejected again. See invalidWebhookAttemptTrimInterval's doc comment for the full
+	// mechanism. Default 30 days mirrors this project's existing DeletionGracePeriodDays
+	// convention rather than inventing an unrelated number. Validated at load time via
+	// getEnvAsBoundedPositiveInt; an out-of-range value (<=0 or >
 	// InvalidWebhookAttemptRetentionMaxDays) falls back to the default and logs a warning.
 	InvalidWebhookAttemptRetentionDays int // env: INVALID_WEBHOOK_ATTEMPT_RETENTION_DAYS, default: 30
 
