@@ -79,6 +79,15 @@ type Config struct {
 	PaddleAPIKey        string
 	PaddleWebhookSecret string
 	PaddleEnvironment   string
+	// PaddleWebhookTimestampToleranceSeconds bounds how far a Paddle webhook's `ts=` signature
+	// component may drift from this server's clock (in EITHER direction — too old or
+	// unreasonably future-dated) before PaddleWebhookService.VerifyWebhook rejects it as a
+	// replay/clock-skew risk (issue #1514, F3). Paddle's documented SDK default tolerance is 5
+	// seconds — we mirror that as our default, but treat it as the vendor's stated behavior
+	// rather than something this codebase has independently verified against live traffic.
+	// Validated positive at load time; a zero/negative value falls back to the default rather
+	// than disabling the replay window entirely.
+	PaddleWebhookTimestampToleranceSeconds int
 
 	// Encryption
 	EncryptionKey string
@@ -172,9 +181,10 @@ func Load() (*Config, error) {
 		PlaidRedirectURI: getEnv("PLAID_REDIRECT_URI", ""),
 
 		// Paddle
-		PaddleAPIKey:        getEnv("PADDLE_API_KEY", ""),
-		PaddleWebhookSecret: getEnv("PADDLE_WEBHOOK_SECRET", ""),
-		PaddleEnvironment:   getEnv("PADDLE_ENVIRONMENT", "sandbox"),
+		PaddleAPIKey:                           getEnv("PADDLE_API_KEY", ""),
+		PaddleWebhookSecret:                    getEnv("PADDLE_WEBHOOK_SECRET", ""),
+		PaddleEnvironment:                      getEnv("PADDLE_ENVIRONMENT", "sandbox"),
+		PaddleWebhookTimestampToleranceSeconds: getEnvAsPositiveInt("PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", 5),
 
 		// Encryption
 		EncryptionKey: getEnv("ENCRYPTION_KEY", ""),
