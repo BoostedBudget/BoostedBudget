@@ -168,5 +168,68 @@ describe('sentry scrubbing options', () => {
       expect(extra.accountCount).toBe(3);
       expect(extra.requestId).toBe('req-42');
     });
+
+    test('does not over-scrub near-miss property names that merely resemble denylisted keys', () => {
+      // These keys are deliberately *not* on PII_PROPERTY_DENYLIST (exact
+      // snake_case matches only) — a naive substring/fuzzy matcher would
+      // wrongly redact them, destroying legitimate diagnostic signal.
+      const event = {
+        exception: { values: [{ type: 'Error', value: 'boom' }] },
+        extra: {
+          accountBalance: 500, // camelCase near-miss of 'balance'
+          userEmail: 'jane@example.com', // near-miss of 'email'
+          merchantId: 'm_123', // near-miss of 'merchant'/'merchant_name'
+          descriptionLength: 12, // near-miss of 'description'
+        },
+      };
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {});
+
+      const extra = result?.extra as Record<string, unknown>;
+      expect(extra.accountBalance).toBe(500);
+      expect(extra.userEmail).toBe('jane@example.com');
+      expect(extra.merchantId).toBe('m_123');
+      expect(extra.descriptionLength).toBe(12);
+    });
+
+    test('scrubs event.exception stack-frame vars by property name', () => {
+      const event = {
+        exception: {
+          values: [
+            {
+              type: 'AxiosError',
+              value: 'Request failed with status code 500',
+              stacktrace: {
+                frames: [
+                  {
+                    filename: 'app.js',
+                    function: 'submitCheckout',
+                    vars: {
+                      email: 'jane.doe@example.com',
+                      account_name: 'Checking',
+                      step: 'checkout',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      };
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {});
+
+      const values = result?.exception?.values as Array<Record<string, unknown>>;
+      const frame = values[0].stacktrace.frames[0];
+      // The exception message itself is passed through unchanged — it is
+      // never content-scanned, only redacted by property name like
+      // everything else (see sentry.ts for the documented rationale).
+      expect(values[0].value).toBe('Request failed with status code 500');
+      expect(frame.vars.email).toBe('[Redacted]');
+      expect(frame.vars.account_name).toBe('[Redacted]');
+      expect(frame.vars.step).toBe('checkout');
+      expect(frame.filename).toBe('app.js');
+      expect(frame.function).toBe('submitCheckout');
+    });
   });
 });
