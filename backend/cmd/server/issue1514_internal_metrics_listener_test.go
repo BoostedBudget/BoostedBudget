@@ -192,7 +192,7 @@ func TestResolveInternalMetricsPort_RejectsInvalidValues(t *testing.T) {
 		{"too large", "65536"},
 		{"way too large", "999999"},
 		{"float", "9091.5"},
-		{"leading plus is fine per strconv.Atoi but check trailing garbage", "9091abc"},
+		{"trailing garbage after valid digits", "9091abc"},
 	}
 
 	for _, c := range cases {
@@ -200,6 +200,34 @@ func TestResolveInternalMetricsPort_RejectsInvalidValues(t *testing.T) {
 			_, err := resolveInternalMetricsPort(c.raw, "8080")
 			if err == nil {
 				t.Errorf("resolveInternalMetricsPort(%q, \"8080\") returned nil error, want a validation error", c.raw)
+			}
+		})
+	}
+}
+
+// TestResolveInternalMetricsPort_AcceptsAtoiQuirks proves the genuine "leading plus" / "leading
+// zero" cases that the mislabeled case above used to claim to test: strconv.Atoi happily parses
+// "+9091" and "09091" as 9091, and resolveInternalMetricsPort has no additional strictness on top
+// of Atoi, so both are accepted (and normalized to "9091") rather than rejected. Harmless either
+// way since a real INTERNAL_METRICS_PORT env var is never written with a leading "+" or "0", but
+// pinning it here means a future tightening of the parser is a deliberate choice, not a surprise.
+func TestResolveInternalMetricsPort_AcceptsAtoiQuirks(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"leading plus", "+9091"},
+		{"leading zero", "09091"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := resolveInternalMetricsPort(c.raw, "8080")
+			if err != nil {
+				t.Fatalf("resolveInternalMetricsPort(%q, \"8080\") returned error %v, want nil", c.raw, err)
+			}
+			if got != "9091" {
+				t.Errorf("resolveInternalMetricsPort(%q, \"8080\") = %q, want %q", c.raw, got, "9091")
 			}
 		})
 	}

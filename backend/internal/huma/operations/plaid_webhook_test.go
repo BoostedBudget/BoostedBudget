@@ -71,6 +71,41 @@ func (m *mockWebhookRepository) Update(ctx context.Context, event *domain.Webhoo
 	return nil
 }
 
+// TestHandlePlaidWebhook_NilRepo_AcksWithoutPersisting_DocumentedUnreachable pins the current
+// behaviour of the `h.webhookRepo != nil` guard in HandlePlaidWebhook (Issue #1514 item 3): with a
+// nil WebhookRepo, a verified webhook is acked 200 without ever being persisted. This configuration
+// is unreachable in the wired deployment — see the doc comment above the guard in plaid_webhook.go
+// referencing backend/cmd/server/main.go:2001-2043, where both registration branches always
+// construct and inject a non-nil repository before the route is ever registered. This test exists
+// so that IF that wiring invariant is ever broken, the resulting behaviour change here is a
+// deliberate, reviewed choice rather than a silent regression.
+func TestHandlePlaidWebhook_NilRepo_AcksWithoutPersisting_DocumentedUnreachable(t *testing.T) {
+	mockService := &mockWebhookService{verifyResult: true}
+
+	handler := NewPlaidWebhookHandler(PlaidWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    nil,
+	})
+
+	payload := PlaidWebhookPayload{
+		WebhookType: "TRANSACTIONS",
+		WebhookCode: "DEFAULT_UPDATE",
+		ItemID:      "item-123",
+	}
+	rawBody, _ := json.Marshal(payload)
+
+	input := &PlaidWebhookInput{
+		PlaidVerification: "valid-jwt-signature",
+		RawBody:           rawBody,
+	}
+
+	output, err := handler.HandlePlaidWebhook(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "ok", output.Body.Status)
+}
+
 // TestHandlePlaidWebhook_TransactionsUpdate tests handling of TRANSACTIONS webhook.
 func TestHandlePlaidWebhook_TransactionsUpdate(t *testing.T) {
 	mockService := &mockWebhookService{verifyResult: true}
