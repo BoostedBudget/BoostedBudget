@@ -116,12 +116,15 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 	// that unconditionally assigns paddleWebhookRepo (main.go:365,441), so WebhookService != nil
 	// implies WebhookRepo != nil there; and the fallback, unverified branch (main.go:2065-2079)
 	// checks `paddleWebhookRepo != nil` explicitly before registering. There is no route
-	// registration path in main.go that wires a verified/unverified handler with a nil repo. The
-	// guard exists purely so unit tests (see setupTestHandler) and any future caller that
-	// constructs the handler directly stay nil-safe rather than panicking — see
-	// TestHandlePaddleWebhook_NilRepo_AcksWithoutPersisting_DocumentedUnreachable, which pins the
-	// current (silent-ack) behaviour for that unreachable-in-prod configuration so a future
-	// change to it is a deliberate choice, not a surprise.
+	// registration path in main.go that wires a verified/unverified handler with a nil repo.
+	//
+	// Issue #1514 item 4: the guard still exists so unit tests (see setupTestHandler) and any
+	// future caller that constructs the handler directly stay nil-safe rather than panicking, but
+	// it no longer acks a verified webhook it never persisted. That was fail-open: a nil repo would
+	// silently drop a real billing event and return 200, and Paddle never retries a 2xx. This is
+	// belt-and-braces against a wiring regression, not a claim that the nil-repo state occurs in
+	// production — see TestHandlePaddleWebhook_NilRepo_VerifiedWebhook_FailsClosed, which asserts
+	// the handler fails closed (non-2xx) if that invariant is ever broken.
 	if h.webhookRepo != nil {
 		webhookEvent := &domain.PaddleWebhookEvent{
 			EventID:            payload.EventID,
@@ -223,6 +226,15 @@ func (h *PaddleWebhookHandler) HandlePaddleWebhook(ctx context.Context, input *P
 				)
 			}
 		}
+	} else {
+		// Issue #1514 item 4: this is a signature-VERIFIED webhook we cannot persist because no
+		// repository is wired. Returning "ok" here would silently lose a real billing event
+		// forever, since Paddle never retries a 2xx response. Fail closed so Paddle retries.
+		h.logger.Error("Verified Paddle webhook received with no webhook repository configured — failing closed so Paddle retries",
+			"event_id", payload.EventID,
+			"event_type", payload.EventType,
+		)
+		return nil, huma.Error500InternalServerError("failed to persist webhook")
 	}
 
 	return &PaddleWebhookOutput{

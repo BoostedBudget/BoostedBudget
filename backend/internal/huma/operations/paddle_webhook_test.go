@@ -320,16 +320,18 @@ func TestHandlePaddleWebhook_IdempotencyPoisoningClosed(t *testing.T) {
 	assert.Len(t, mockQueue.enqueuedJobs, 1, "legitimate webhook must be enqueued for processing")
 }
 
-// TestHandlePaddleWebhook_NilRepo_AcksWithoutPersisting_DocumentedUnreachable pins the current
-// behaviour of the `h.webhookRepo != nil` guard in HandlePaddleWebhook (Issue #1514 item 3): with a
-// nil WebhookRepo, a verified webhook is acked 200 without ever being persisted. This configuration
-// is unreachable in the wired deployment — see the doc comment above the guard in paddle_webhook.go
-// referencing backend/cmd/server/main.go:2048-2079, where every route registration branch either
-// requires (main.go:2065) or transitively guarantees (main.go:2048, via the outer Clerk-gated block
-// that assigns paddleWebhookRepo before paddleWebhookService can be set) a non-nil repository. This
-// test exists so that IF that wiring invariant is ever broken, the resulting behaviour change here
-// is a deliberate, reviewed choice rather than a silent regression.
-func TestHandlePaddleWebhook_NilRepo_AcksWithoutPersisting_DocumentedUnreachable(t *testing.T) {
+// TestHandlePaddleWebhook_NilRepo_VerifiedWebhook_FailsClosed asserts the fail-closed behaviour of
+// the `h.webhookRepo != nil` guard in HandlePaddleWebhook (Issue #1514 item 4): with a nil
+// WebhookRepo, a signature-VERIFIED webhook must be rejected with a non-2xx, never acked 200,
+// because acking without persisting would silently lose a real billing event forever (Paddle never
+// retries a 2xx). This configuration is unreachable in the wired deployment — see the doc comment
+// above the guard in paddle_webhook.go referencing backend/cmd/server/main.go:2048-2079, where every
+// route registration branch either requires (main.go:2065) or transitively guarantees (main.go:2048,
+// via the outer Clerk-gated block that assigns paddleWebhookRepo before paddleWebhookService can be
+// set) a non-nil repository. This test is belt-and-braces against a wiring regression, not a claim
+// that the nil-repo state occurs in production: IF that wiring invariant is ever broken, the handler
+// must fail closed rather than silently drop the webhook.
+func TestHandlePaddleWebhook_NilRepo_VerifiedWebhook_FailsClosed(t *testing.T) {
 	mockService := &mockPaddleWebhookService{verifyResult: true}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
@@ -353,9 +355,8 @@ func TestHandlePaddleWebhook_NilRepo_AcksWithoutPersisting_DocumentedUnreachable
 
 	output, err := handler.HandlePaddleWebhook(context.Background(), input)
 
-	require.NoError(t, err)
-	require.NotNil(t, output)
-	assert.Equal(t, "ok", output.Body.Status)
+	require.Error(t, err, "a verified webhook that cannot be persisted must fail closed, not ack 2xx")
+	assert.Nil(t, output)
 }
 
 // TestHandlePaddleWebhook_PoisonedInvalidDuplicate_DoesNotSuppressValidWebhook is the RED test for
