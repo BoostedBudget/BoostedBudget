@@ -411,7 +411,6 @@ jobs:
           PLAID_SECRET_QA: ${{ secrets.PLAID_SECRET_QA }}
           PLAID_REDIRECT_URI_QA: ${{ secrets.PLAID_REDIRECT_URI_QA }}
           PLAID_WEBHOOK_URL_QA: ${{ secrets.PLAID_WEBHOOK_URL_QA }}
-          STRIPE_SECRET_KEY_TEST: ${{ secrets.STRIPE_SECRET_KEY_TEST }}
           ENCRYPTION_KEY_QA: ${{ secrets.ENCRYPTION_KEY_QA }}
           QA_BYPASS_SECRET: ${{ secrets.QA_BYPASS_SECRET }}
           QA_ADMIN_CLERK_USER_ID: ${{ secrets.QA_ADMIN_CLERK_USER_ID }}
@@ -428,7 +427,6 @@ jobs:
             PLAID_SECRET_QA
             PLAID_REDIRECT_URI_QA
             PLAID_WEBHOOK_URL_QA
-            STRIPE_SECRET_KEY_TEST
             ENCRYPTION_KEY_QA
             QA_BYPASS_SECRET
             QA_ADMIN_CLERK_USER_ID
@@ -504,9 +502,6 @@ jobs:
           PLAID_COUNTRY_CODES=US,CA,GB
           PLAID_REDIRECT_URI=${{ secrets.PLAID_REDIRECT_URI_QA }}
           PLAID_WEBHOOK_URL=${{ secrets.PLAID_WEBHOOK_URL_QA }}
-
-          # Stripe (Test Mode)
-          STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY_TEST }}
 
           # Security
           ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY_QA }}
