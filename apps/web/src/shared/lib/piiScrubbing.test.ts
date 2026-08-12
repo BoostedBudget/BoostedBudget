@@ -143,7 +143,14 @@ describe('redactPii', () => {
   });
 
   test('does not over-scrub benign compounds sharing a token with a denylisted word', () => {
-    const input = { accountCount: 3, descriptionLength: 12, requestId: 'req-1', step: 'checkout' };
+    const input = {
+      accountCount: 3,
+      descriptionLength: 12,
+      requestId: 'req-1',
+      step: 'checkout',
+      typeName: 'checking',
+      fieldName: 'note',
+    };
 
     const result = redactPii(input) as typeof input;
 
@@ -151,6 +158,8 @@ describe('redactPii', () => {
     expect(result.descriptionLength).toBe(12);
     expect(result.requestId).toBe('req-1');
     expect(result.step).toBe('checkout');
+    expect(result.typeName).toBe('checking');
+    expect(result.fieldName).toBe('note');
   });
 
   test('redacts accountName via the account_name two-token window, without over-scrubbing accountCount or typeName', () => {
@@ -165,6 +174,22 @@ describe('redactPii', () => {
     expect(result.accountName).toBe('[Redacted]');
     expect(result.accountCount).toBe(3);
     expect(result.typeName).toBe('checking');
+  });
+
+  test('redacts account_name-style compounds even when a digit token sits between the words', () => {
+    // `account`/`name` are individually excluded as bare denylist tokens (see
+    // the denylist comment), so `account_name` only matches via the
+    // adjacent-token window in isPiiKey. A digit token between the words
+    // (`account1Name`, `account2name`) used to break that contiguity and
+    // silently defeat the match, even though the digit-free `accountName`
+    // matched. isPiiKey now drops pure-digit tokens before building windows.
+    const input = { account1Name: 'My Checking', account2name: 'My Savings', accountName: 'My Loan' };
+
+    const result = redactPii(input) as typeof input;
+
+    expect(result.account1Name).toBe('[Redacted]');
+    expect(result.account2name).toBe('[Redacted]');
+    expect(result.accountName).toBe('[Redacted]');
   });
 
   test('redacts a PII key with a non-ASCII letter immediately before a camelCase boundary', () => {
