@@ -396,6 +396,56 @@ jobs:
           path: ${{ env.UNIQUE_WORKSPACE }}
           ref: ${{ needs.build-images.outputs.ref }}
 
+      # #1514: fail loudly if a required QA secret is missing/renamed/typo'd, instead of
+      # letting the .env.qa heredoc silently substitute a weak, repo-committed default
+      # (e.g. the old ENCRYPTION_KEY fallback, a real usable AES-256 key checked into git).
+      - name: Validate required QA secrets are set
+        env:
+          QA_SSL_CERT: ${{ secrets.QA_SSL_CERT }}
+          QA_SSL_KEY: ${{ secrets.QA_SSL_KEY }}
+          CORS_ALLOWED_ORIGINS_QA: ${{ secrets.CORS_ALLOWED_ORIGINS_QA }}
+          POSTGRES_PASSWORD_QA: ${{ secrets.POSTGRES_PASSWORD_QA }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          PLAID_CLIENT_ID_QA: ${{ secrets.PLAID_CLIENT_ID_QA }}
+          PLAID_SECRET_QA: ${{ secrets.PLAID_SECRET_QA }}
+          PLAID_REDIRECT_URI_QA: ${{ secrets.PLAID_REDIRECT_URI_QA }}
+          PLAID_WEBHOOK_URL_QA: ${{ secrets.PLAID_WEBHOOK_URL_QA }}
+          STRIPE_SECRET_KEY_TEST: ${{ secrets.STRIPE_SECRET_KEY_TEST }}
+          ENCRYPTION_KEY_QA: ${{ secrets.ENCRYPTION_KEY_QA }}
+          QA_BYPASS_SECRET: ${{ secrets.QA_BYPASS_SECRET }}
+          QA_ADMIN_CLERK_USER_ID: ${{ secrets.QA_ADMIN_CLERK_USER_ID }}
+          QA_PREMIUM_CLERK_USER_ID: ${{ secrets.QA_PREMIUM_CLERK_USER_ID }}
+        run: |
+          required_secrets=(
+            QA_SSL_CERT
+            QA_SSL_KEY
+            CORS_ALLOWED_ORIGINS_QA
+            POSTGRES_PASSWORD_QA
+            CLERK_SECRET_KEY
+            CLERK_PUBLISHABLE_KEY
+            PLAID_CLIENT_ID_QA
+            PLAID_SECRET_QA
+            PLAID_REDIRECT_URI_QA
+            PLAID_WEBHOOK_URL_QA
+            STRIPE_SECRET_KEY_TEST
+            ENCRYPTION_KEY_QA
+            QA_BYPASS_SECRET
+            QA_ADMIN_CLERK_USER_ID
+            QA_PREMIUM_CLERK_USER_ID
+          )
+          missing=()
+          for name in "${required_secrets[@]}"; do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required QA secret(s): ${missing[*]}. Set them in the 'qa' GitHub Environment before deploying."
+            exit 1
+          fi
+          echo "✓ All required QA secrets are set (${#required_secrets[@]} checked)"
+
       - name: Restore SSL certificates from secrets
         run: |
           mkdir -p ${{ env.UNIQUE_WORKSPACE }}/apps/web
@@ -420,7 +470,7 @@ jobs:
           PRIMARY_REGION=iad
 
           # CORS Configuration
-          CORS_ALLOWED_ORIGINS=${{ secrets.CORS_ALLOWED_ORIGINS_QA || 'https://qa.example.ts.net:3443,https://localhost:3443' }}
+          CORS_ALLOWED_ORIGINS=${{ secrets.CORS_ALLOWED_ORIGINS_QA }}
 
           # Docker Image Configuration (pull from GHCR)
           PULL_FROM_GHCR=true
@@ -433,8 +483,8 @@ jobs:
 
           # Database (QA)
           POSTGRES_USER=qauser
-          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD_QA || 'qapass' }}
-          DATABASE_URL=postgresql://qauser:${{ secrets.POSTGRES_PASSWORD_QA || 'qapass' }}@localhost:5433/boostedbudget_qa?sslmode=disable
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD_QA }}
+          DATABASE_URL=postgresql://qauser:${{ secrets.POSTGRES_PASSWORD_QA }}@localhost:5433/boostedbudget_qa?sslmode=disable
 
           # Redis (QA)
           REDIS_URL=redis://localhost:6380/0
@@ -448,18 +498,18 @@ jobs:
 
           # Plaid (Sandbox)
           PLAID_ENV=sandbox
-          PLAID_CLIENT_ID=${{ secrets.PLAID_CLIENT_ID_QA || 'changeme' }}
-          PLAID_SECRET=${{ secrets.PLAID_SECRET_QA || 'changeme' }}
+          PLAID_CLIENT_ID=${{ secrets.PLAID_CLIENT_ID_QA }}
+          PLAID_SECRET=${{ secrets.PLAID_SECRET_QA }}
           PLAID_PRODUCTS=auth,transactions,balance
           PLAID_COUNTRY_CODES=US,CA,GB
-          PLAID_REDIRECT_URI=${{ secrets.PLAID_REDIRECT_URI_QA || 'https://localhost:3443/oauth-callback' }}
-          PLAID_WEBHOOK_URL=${{ secrets.PLAID_WEBHOOK_URL_QA || 'http://localhost:8080/webhooks/plaid' }}
+          PLAID_REDIRECT_URI=${{ secrets.PLAID_REDIRECT_URI_QA }}
+          PLAID_WEBHOOK_URL=${{ secrets.PLAID_WEBHOOK_URL_QA }}
 
           # Stripe (Test Mode)
-          STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY_TEST || 'sk_test_changeme' }}
+          STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY_TEST }}
 
           # Security
-          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY_QA || '12345678901234567890123456789012' }}
+          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY_QA }}
 
           # QA Auth Bypass (Issue #821). QA_AUTH_BYPASS_ENABLED is the explicit opt-in added
           # by #1432 (B2-1): ENVIRONMENT=qa alone no longer registers the route.
