@@ -3,9 +3,37 @@
  * details, balances) or third-party auth/session secrets, and must never be
  * sent to third-party analytics/observability tools.
  *
- * Shared by PostHog's `before_send` (see `posthog.ts`) and Sentry's
- * `beforeSend`/`beforeBreadcrumb` (see `sentry.ts`) so the two integrations
- * stay in sync — extend this single list rather than adding a second one.
+ * Shared by PostHog's `before_send` (see `posthog.ts`), which deletes
+ * properties by exact key match, and Sentry's `redactPii` below, which also
+ * matches by *token*: a key is split on camelCase boundaries and `_`/`-`
+ * (e.g. `accountBalance` / `account_balance` → `['account', 'balance']`),
+ * lowercased, and redacted if any token — or the whole lowercased key, for
+ * multi-word snake_case entries below — is in this set. This is what makes
+ * `currentBalance`/`institutionName`/`userEmail`-style camelCase fields get
+ * caught, not just their snake_case spellings.
+ *
+ * Because token matching is per-word, every entry here must be safe to
+ * redact in *any* compound it appears in — not just the specific field name
+ * that motivated adding it. Two words are deliberately NOT bare entries:
+ *
+ * - `account`: would redact `accountCount`/`accountId`-style metadata that
+ *   carries no PII itself. (`account_name`/`account_mask`/`account_id`
+ *   below stay as exact multi-word entries — they still catch the literal
+ *   snake_case key, just not `accountName` etc. via token matching.)
+ * - `name`: would redact `typeName`/`fieldName`-style generic fields.
+ *   `institutionName`/`merchantName` are still caught via the `institution`/
+ *   `merchant` tokens, so a bare `name` entry isn't needed for the PII
+ *   cases we know about; the tradeoff is `accountName` isn't caught by
+ *   token matching either (only its literal snake_case form is, via
+ *   `account_name`) — a known, accepted gap rather than an over-scrub.
+ *
+ * `description` was removed as a bare entry for the same reason: it would
+ * redact `descriptionLength`-style metadata. This does drop token-level
+ * protection for a literal `description` field (e.g. a transaction/rule
+ * description, which can carry raw merchant text) — no current call site
+ * forwards one into analytics properties, and UI display of description
+ * content is already covered by `data-ph-mask` (session replay), which is
+ * the actual defense for that field's *content*.
  */
 export const PII_PROPERTY_DENYLIST = new Set([
   'merchant',
@@ -13,7 +41,6 @@ export const PII_PROPERTY_DENYLIST = new Set([
   'nickname',
   'institution',
   'institution_name',
-  'description',
   'account_name',
   'balance',
   'amount',
@@ -36,6 +63,26 @@ export const PII_PROPERTY_DENYLIST = new Set([
   'cookie',
   'set-cookie',
 ])
+
+/** Splits a key on camelCase boundaries and `_`/`-`, lowercased. */
+function tokenize(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .split(/[_-]/)
+    .filter(Boolean)
+    .map(token => token.toLowerCase())
+}
+
+/**
+ * True if `key` should be redacted: either the whole lowercased key matches
+ * a denylist entry (covers multi-word snake_case entries like
+ * `account_name`, which are never reachable via single-token matching), or
+ * any individual camelCase/snake_case/kebab-case token of the key does.
+ */
+function isPiiKey(key: string): boolean {
+  if (PII_PROPERTY_DENYLIST.has(key.toLowerCase())) return true
+  return tokenize(key).some(token => PII_PROPERTY_DENYLIST.has(token))
+}
 
 const REDACTED = '[Redacted]'
 // Deep enough for real-world nested payloads this function is asked to scrub
@@ -82,7 +129,7 @@ export function redactPii<T>(value: T, depth = 0, seen: WeakSet<object> = new We
 
     const out: Record<string, unknown> = {}
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      if (PII_PROPERTY_DENYLIST.has(key.toLowerCase())) {
+      if (isPiiKey(key)) {
         out[key] = REDACTED
         continue
       }

@@ -10,7 +10,11 @@
  * DataTable's own <td> renderer applies data-ph-mask to the entire name cell,
  * covering both the rule name and description rendered there. This matches the
  * masking applied in AutoCategorizationRuleCard (name at :76, description at :83).
- * `description` is a PII_PROPERTY_DENYLIST member (posthog.ts:3-17).
+ * `description` is NOT a PII_PROPERTY_DENYLIST member (see piiScrubbing.ts —
+ * removed as a bare denylist token because it false-positives on metadata
+ * fields like `descriptionLength`); the `data-ph-mask` cell masking above is
+ * this column's actual defense against leaking description content via
+ * PostHog session replay/analytics.
  * Other columns (status, priority, conditions, category, matches) are non-PII.
  */
 

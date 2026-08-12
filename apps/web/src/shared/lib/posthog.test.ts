@@ -19,6 +19,11 @@ describe('posthog config', () => {
         nickname: 'My Checking',
         institution: 'Chase',
         institution_name: 'Chase Bank',
+        // Not denylisted (see piiScrubbing.ts): a bare `description` entry
+        // would false-positive on `descriptionLength`-style metadata under
+        // Sentry's token matching, which shares this same denylist. The
+        // `data-ph-mask` cell masking in AutoCategorizationRuleTable is the
+        // actual defense against leaking description content via replay.
         description: 'Coffee',
         account_name: 'Checking',
         balance: 1234.56,
@@ -36,7 +41,6 @@ describe('posthog config', () => {
     expect(out?.properties?.nickname).toBeUndefined();
     expect(out?.properties?.institution).toBeUndefined();
     expect(out?.properties?.institution_name).toBeUndefined();
-    expect(out?.properties?.description).toBeUndefined();
     expect(out?.properties?.account_name).toBeUndefined();
     expect(out?.properties?.balance).toBeUndefined();
     expect(out?.properties?.amount).toBeUndefined();
@@ -47,6 +51,7 @@ describe('posthog config', () => {
     // Non-PII properties must be preserved
     expect(out?.properties?.merchant_id).toBe('abc-123');
     expect(out?.properties?.user_id).toBe('u1');
+    expect(out?.properties?.description).toBe('Coffee');
   });
 
   test('before_send passes event through when no PII properties present', () => {
