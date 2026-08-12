@@ -146,6 +146,65 @@ func TestInternalMetricsPort_DefaultAndEnvOverride(t *testing.T) {
 	})
 }
 
+// TestResolveInternalMetricsPort_CollisionWithPublicPort is the fix for the coordinator's
+// review finding: if INTERNAL_METRICS_PORT is misconfigured to equal cfg.Port (8080 is
+// cfg.Port's own default — see config.go's `getEnv("PORT", "8080")`), the internal
+// listener would bind that port first and succeed, then the public listener's own
+// e.Start() bind on the same port fails — but main.go only logs that, it doesn't exit.
+// The process would stay up with the public API silently dead. This test proves
+// resolveInternalMetricsPort refuses that configuration outright, rather than letting it
+// reach bindInternalMetricsListener at all.
+func TestResolveInternalMetricsPort_CollisionWithPublicPort(t *testing.T) {
+	_, err := resolveInternalMetricsPort("8080", "8080")
+	if err == nil {
+		t.Fatal("resolveInternalMetricsPort(\"8080\", \"8080\") returned nil error, want a collision error — " +
+			"binding the same port as the public listener would silently take the public API offline while /metrics kept working")
+	}
+	if !strings.Contains(err.Error(), "8080") {
+		t.Errorf("collision error %q should name the colliding port value", err.Error())
+	}
+}
+
+// TestResolveInternalMetricsPort_NoCollisionWhenDistinct proves the happy path: distinct,
+// valid ports pass validation unchanged.
+func TestResolveInternalMetricsPort_NoCollisionWhenDistinct(t *testing.T) {
+	got, err := resolveInternalMetricsPort("9091", "8080")
+	if err != nil {
+		t.Fatalf("resolveInternalMetricsPort(\"9091\", \"8080\") returned unexpected error: %v", err)
+	}
+	if got != "9091" {
+		t.Errorf("resolveInternalMetricsPort(\"9091\", \"8080\") = %q, want %q", got, "9091")
+	}
+}
+
+// TestResolveInternalMetricsPort_RejectsInvalidValues proves malformed or out-of-range
+// INTERNAL_METRICS_PORT values are rejected loudly (a startup error) rather than being
+// passed through to net.Listen, where the failure mode would be less clear.
+func TestResolveInternalMetricsPort_RejectsInvalidValues(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"non-numeric", "not-a-port"},
+		{"empty string", ""},
+		{"zero", "0"},
+		{"negative", "-1"},
+		{"too large", "65536"},
+		{"way too large", "999999"},
+		{"float", "9091.5"},
+		{"leading plus is fine per strconv.Atoi but check trailing garbage", "9091abc"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := resolveInternalMetricsPort(c.raw, "8080")
+			if err == nil {
+				t.Errorf("resolveInternalMetricsPort(%q, \"8080\") returned nil error, want a validation error", c.raw)
+			}
+		})
+	}
+}
+
 // TestInternalMetricsListener_IsWiredIntoMain is the one remaining text check, and it
 // deliberately checks only WIRING: that main.go actually binds the internal listener,
 // treats a bind failure as fatal, registers /metrics on the INTERNAL api (not the public
@@ -160,8 +219,14 @@ func TestInternalMetricsListener_IsWiredIntoMain(t *testing.T) {
 	}
 	src := string(data)
 
-	if !strings.Contains(src, "bindInternalMetricsListener(internalMetricsPort())") {
-		t.Error("main.go must call bindInternalMetricsListener(internalMetricsPort()) to open the internal metrics listener")
+	if !strings.Contains(src, "resolveInternalMetricsPort(internalMetricsPort(), cfg.Port)") {
+		t.Error("main.go must validate the internal metrics port against cfg.Port via resolveInternalMetricsPort(internalMetricsPort(), cfg.Port) BEFORE binding — otherwise a collision with cfg.Port can silently take the public API offline")
+	}
+	if !strings.Contains(src, "Invalid internal metrics port configuration") {
+		t.Error("main.go must treat an invalid/colliding internal metrics port as fatal, with a distinct log message from the bind-failure path")
+	}
+	if !strings.Contains(src, "bindInternalMetricsListener(resolvedInternalMetricsPort)") {
+		t.Error("main.go must call bindInternalMetricsListener with the VALIDATED port (resolvedInternalMetricsPort), not the raw, unvalidated internalMetricsPort() value")
 	}
 	if !strings.Contains(src, "os.Exit(1)") || !strings.Contains(src, "Failed to bind internal metrics listener") {
 		t.Error("main.go must treat a bind failure for the internal metrics listener as fatal (os.Exit(1)), not a silent no-op")

@@ -189,8 +189,15 @@ func main() {
 	// rates, dead-letter state, and GDPR-deletion internals, and was reachable from the
 	// public internet unauthenticated. See internal_metrics.go for the full rationale and
 	// the listener construction. Binding happens synchronously so a failure to bind is a
-	// startup error (os.Exit(1) below), not a silent no-op.
-	internalMetricsListener, err := bindInternalMetricsListener(internalMetricsPort())
+	// startup error (os.Exit(1) below), not a silent no-op. resolveInternalMetricsPort
+	// also fails loudly here — rather than downstream as a silently-dead public API — if
+	// INTERNAL_METRICS_PORT collides with cfg.Port or is not a valid TCP port.
+	resolvedInternalMetricsPort, err := resolveInternalMetricsPort(internalMetricsPort(), cfg.Port)
+	if err != nil {
+		appLogger.Error("Invalid internal metrics port configuration", "error", err)
+		os.Exit(1)
+	}
+	internalMetricsListener, err := bindInternalMetricsListener(resolvedInternalMetricsPort)
 	if err != nil {
 		appLogger.Error("Failed to bind internal metrics listener", "error", err)
 		os.Exit(1)
