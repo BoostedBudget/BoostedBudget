@@ -9,6 +9,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -298,28 +300,58 @@ func TestIPRateLimiter_ExemptPathProbeNotStarvedByPublicTraffic(t *testing.T) {
 		"unrelated public traffic to the same exempt path must not share the probe's bucket")
 }
 
-// TestIPRateLimiter_MalformedCFConnectingIPFallsBackNotUsedAsKey proves that a
-// malformed (or duplicated) Cf-Connecting-Ip on an otherwise-gated request is
-// never used verbatim as a bucket key: two different garbage values from the
-// same already-verified Fly-Client-Ip peer must still share one bucket.
-func TestIPRateLimiter_MalformedCFConnectingIPFallsBackNotUsedAsKey(t *testing.T) {
+// TestIPRateLimiter_MalformedCFConnectingIPFallsBackToSentinelNotUsedAsKey
+// proves that a malformed (or duplicated) Cf-Connecting-Ip on an otherwise
+// Cloudflare-gated request is never used verbatim as a bucket key. Per the
+// #1514 fix-round-1 ruling, it does NOT fall back to Fly-Client-Ip or
+// RemoteAddr (both are the Fly proxy's address in production, not the real
+// client). It falls back to the single fixed sentinel bucket instead — proven
+// here by two garbage-header requests from two DIFFERENT real peers still
+// sharing one bucket, which per-peer fallback (the old behavior) would not do.
+func TestIPRateLimiter_MalformedCFConnectingIPFallsBackToSentinelNotUsedAsKey(t *testing.T) {
 	cfg := middleware.RateLimitConfig{IPLimit: 2, WindowDuration: time.Minute}
 	e := newEchoWithGateStatus(cfg, middleware.GateStatusPassed)
 
-	for i := 0; i < 2; i++ {
-		code := doRateLimitedRequest(e, "/test", fmt.Sprintf("192.0.2.1:%d", 1000+i), map[string][]string{
-			"Cf-Connecting-Ip": {"not-an-ip"},
-			"Fly-Client-Ip":    {"192.0.2.1"},
-		})
-		assert.Equal(t, http.StatusOK, code, "request %d should pass", i+1)
-	}
-
-	code := doRateLimitedRequest(e, "/test", "192.0.2.1:1099", map[string][]string{
-		"Cf-Connecting-Ip": {"also-garbage"},
+	code1 := doRateLimitedRequest(e, "/test", "192.0.2.1:1000", map[string][]string{
+		"Cf-Connecting-Ip": {"not-an-ip"},
 		"Fly-Client-Ip":    {"192.0.2.1"},
 	})
-	assert.Equal(t, http.StatusTooManyRequests, code,
-		"malformed Cf-Connecting-Ip must fall back to the verified Fly-Client-Ip, not be used verbatim")
+	assert.Equal(t, http.StatusOK, code1, "first anomalous request should pass")
+
+	// A second anomalous request from a DIFFERENT real peer, with a DIFFERENT
+	// garbage Cf-Connecting-Ip and a DIFFERENT Fly-Client-Ip. If either header
+	// were used as (or to derive) the key, this would land in its own fresh
+	// bucket and return 200. It must instead share the sentinel bucket with the
+	// first request and be throttled.
+	code2 := doRateLimitedRequest(e, "/test", "198.51.100.9:2000", map[string][]string{
+		"Cf-Connecting-Ip": {"also-garbage"},
+		"Fly-Client-Ip":    {"198.51.100.9"},
+	})
+	assert.Equal(t, http.StatusOK, code2, "second anomalous request (still under the 2-req cap) should pass")
+
+	code3 := doRateLimitedRequest(e, "/test", "203.0.113.77:3000", map[string][]string{
+		"Cf-Connecting-Ip": {"still-garbage"},
+		"Fly-Client-Ip":    {"203.0.113.77"},
+	})
+	assert.Equal(t, http.StatusTooManyRequests, code3,
+		"a third anomalous request from yet another peer must share the global sentinel bucket and be throttled")
+}
+
+// TestIPRateLimiter_SentinelFallbackIsObservable proves the sentinel branch
+// increments observability.RateLimitIdentitySentinelFallbackTotal every time
+// it fires, so this near-should-never-happen path is monitorable rather than
+// silent.
+func TestIPRateLimiter_SentinelFallbackIsObservable(t *testing.T) {
+	cfg := middleware.RateLimitConfig{IPLimit: 100, WindowDuration: time.Minute}
+	e := newEchoWithGateStatus(cfg, middleware.GateStatusPassed)
+
+	before := testutil.ToFloat64(observability.RateLimitIdentitySentinelFallbackTotal)
+
+	doRateLimitedRequest(e, "/test", "192.0.2.50:1000", nil) // no Cf-Connecting-Ip at all
+
+	after := testutil.ToFloat64(observability.RateLimitIdentitySentinelFallbackTotal)
+	assert.Equal(t, before+1, after,
+		"a Cloudflare-gated request with no usable Cf-Connecting-Ip must increment the sentinel-fallback counter exactly once")
 }
 
 // TestIPRateLimiter_IPv6FormsCanonicalizeToSameBucket proves that IPv6 addresses

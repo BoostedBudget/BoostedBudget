@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"container/list"
 	"net"
 	"net/http"
 	"net/netip"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"golang.org/x/time/rate"
 )
 
@@ -63,6 +65,27 @@ func isAuthEndpoint(path string) bool {
 		strings.HasPrefix(path, "/api/v1/qa/auth/")
 }
 
+// identitySentinelFallback is the rate-limit bucket key used when a
+// Cloudflare-gated request (GateStatusPassed) has no verifiable client
+// identity — see clientIdentity. It is a fixed string that netip.ParseAddr can
+// never produce from a real address (IP addresses cannot contain "!"), so it
+// is guaranteed to never collide with a real per-client bucket.
+//
+// Deliberate trade-off, decided explicitly rather than defaulting to a
+// per-source fallback: every anomalous request that reaches this branch shares
+// ONE bucket, globally, for as long as the anomaly persists — worse for
+// availability than a per-source bucket, on purpose. Both per-source
+// alternatives considered here were rejected: Fly-Client-Ip and RemoteAddr are
+// both the Fly *proxy's* address in production (not the real end client), so
+// keying on either would silently collapse many unrelated customers into one
+// shared bucket while looking like a legitimate per-customer identity. The
+// sentinel is deliberately never mistaken for a real identity, and pairs with
+// RateLimitIdentitySentinelFallbackTotal so this path is observable: it should
+// be near-zero in practice, and a rising count means Cloudflare has stopped
+// sending Cf-Connecting-Ip as expected and needs investigation, not that more
+// users are hitting it.
+const identitySentinelFallback = "!rate-limit-identity-unresolved!"
+
 // singleValuedHeaderAddr returns the canonicalized address carried by a header
 // that is only trustworthy when it appears exactly once and parses as a valid
 // IP. Zero occurrences, more than one occurrence (possible header-injection /
@@ -82,9 +105,8 @@ func singleValuedHeaderAddr(r *http.Request, canonicalHeader string) (netip.Addr
 
 // remoteAddrIdentity canonicalizes the raw TCP peer address (r.RemoteAddr),
 // stripping the port. Unlike any HTTP header, this value is not something an
-// HTTP client can set — it's the actual socket peer address as observed by this
-// process (or, on Fly.io, by Fly's edge, which forwards it faithfully for the
-// same reason CloudflareOnly trusts Fly-Client-Ip).
+// HTTP client can set at the HTTP layer — it's the actual socket peer address
+// as observed by this process.
 func remoteAddrIdentity(r *http.Request) string {
 	host := r.RemoteAddr
 	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
@@ -108,21 +130,25 @@ func remoteAddrIdentity(r *http.Request) string {
 //   - GateStatusPassed: CloudflareOnly already verified the immediate peer is a
 //     genuine Cloudflare edge IP and the X-Origin-Secret matched, so the
 //     Cf-Connecting-Ip header Cloudflare itself attaches (the real end-client
-//     IP) is trustworthy. If it's missing, duplicated, or malformed, fall back
-//     to the already-verified Fly-Client-Ip peer address; this typically
-//     succeeds because CloudflareOnly parsed that same header via Header.Get()
-//     to reach GateStatusPassed, but it is not guaranteed (CloudflareOnly's
-//     check tolerates duplicate headers by taking the first value; this
-//     function's check does not). If even that fails, fall back to RemoteAddr.
-//     No branch here can result in a rejection — only, in that rare edge case,
-//     a coarser shared bucket.
+//     IP) is trustworthy. If it's missing, duplicated, or malformed, this does
+//     NOT fall back to Fly-Client-Ip or RemoteAddr — both are the Fly proxy's
+//     address in production, not the real client, so either would silently
+//     merge unrelated customers into one bucket while looking legitimate.
+//     Instead it uses identitySentinelFallback, a single fixed bucket shared by
+//     all such anomalies, and increments
+//     observability.RateLimitIdentitySentinelFallbackTotal so the anomaly is
+//     observable rather than silent.
 //   - GateStatusExemptPath: CloudflareOnly did not validate anything for this
 //     request (e.g. /health, /metrics — see cloudflare.go's exemptedPaths), so
-//     no header on it has been verified. Fly-Client-Ip is still safe to use when
-//     present because it's set by Fly's own edge from the real TCP connection,
-//     not by the HTTP client; when it's absent (e.g. a local probe with no Fly
-//     proxy in front of it) fall back to RemoteAddr so the probe is never
-//     rejected for a missing header.
+//     no header on it has been verified. Fly-Client-Ip is used when present:
+//     CloudflareOnly's own Layer 1 check already depends on Fly-Client-Ip being
+//     set by Fly's edge from the real TCP connection rather than by the HTTP
+//     client (cloudflare.go:98-113) — this is an assumption inherited from
+//     that pre-existing gate, not something re-verified here, and if it were
+//     false, CloudflareOnly's CIDR check would already be broken, independent
+//     of this middleware. When Fly-Client-Ip is absent (e.g. a local probe with
+//     no Fly proxy in front of it) fall back to RemoteAddr so the probe is
+//     never rejected for a missing header.
 //   - GateStatusBypassEnv / GateStatusUnknown: no gate ran at all (dev/local/
 //     test/qa bypass, or CloudflareOnly isn't wired into this chain at all).
 //     Trust nothing but the raw RemoteAddr.
@@ -137,10 +163,8 @@ func clientIdentity(c echo.Context) string {
 		if addr, ok := singleValuedHeaderAddr(r, "Cf-Connecting-Ip"); ok {
 			return addr.String()
 		}
-		if addr, ok := singleValuedHeaderAddr(r, "Fly-Client-Ip"); ok {
-			return addr.String()
-		}
-		return remoteAddrIdentity(r)
+		observability.RateLimitIdentitySentinelFallbackTotal.Inc()
+		return identitySentinelFallback
 	case GateStatusExemptPath:
 		if addr, ok := singleValuedHeaderAddr(r, "Fly-Client-Ip"); ok {
 			return addr.String()
@@ -151,17 +175,31 @@ func clientIdentity(c echo.Context) string {
 	}
 }
 
-// ipLimiterEntry holds a rate limiter and the last time it was accessed.
+// ipLimiterEntry holds a rate limiter, the identity key it belongs to (needed
+// to remove it from ipLimiterStore.entries on eviction/cleanup), and the last
+// time it was accessed.
 type ipLimiterEntry struct {
+	key      string
 	limiter  *rate.Limiter
 	lastSeen time.Time
 }
 
 // ipLimiterStore manages per-identity rate limiters with automatic cleanup of
 // stale entries and a hard cap on the number of entries it will hold.
+//
+// entries and order together form an intrusive LRU: order is a doubly linked
+// list with the most-recently-seen entry at the front and the
+// least-recently-seen at the back, and entries maps each identity key straight
+// to its *list.Element so get() never needs to scan. Every access moves its
+// element to the front and refreshes its lastSeen, so list order and lastSeen
+// order are always identical — which is what lets both eviction (evict the
+// back) and cleanup (walk from the back until a non-stale entry is found) run
+// in time proportional to work done, not to the number of entries in the
+// store.
 type ipLimiterStore struct {
 	mu         sync.Mutex
-	entries    map[string]*ipLimiterEntry
+	entries    map[string]*list.Element
+	order      *list.List
 	limit      rate.Limit
 	burst      int
 	maxEntries int
@@ -170,7 +208,8 @@ type ipLimiterStore struct {
 func newIPLimiterStore(requestsPerWindow int, window time.Duration, maxEntries int) *ipLimiterStore {
 	rps := rate.Limit(float64(requestsPerWindow) / window.Seconds())
 	return &ipLimiterStore{
-		entries:    make(map[string]*ipLimiterEntry),
+		entries:    make(map[string]*list.Element),
+		order:      list.New(),
 		limit:      rps,
 		burst:      requestsPerWindow, // burst equals the window limit
 		maxEntries: maxEntries,
@@ -186,8 +225,10 @@ func (s *ipLimiterStore) get(key string) *rate.Limiter {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if entry, ok := s.entries[key]; ok {
+	if elem, ok := s.entries[key]; ok {
+		entry := elem.Value.(*ipLimiterEntry)
 		entry.lastSeen = time.Now()
+		s.order.MoveToFront(elem)
 		return entry.limiter
 	}
 
@@ -196,29 +237,27 @@ func (s *ipLimiterStore) get(key string) *rate.Limiter {
 	}
 
 	entry := &ipLimiterEntry{
+		key:      key,
 		limiter:  rate.NewLimiter(s.limit, s.burst),
 		lastSeen: time.Now(),
 	}
-	s.entries[key] = entry
+	elem := s.order.PushFront(entry)
+	s.entries[key] = elem
 	return entry.limiter
 }
 
-// evictStalestLocked removes the single least-recently-seen entry. Callers must
-// hold s.mu. This is O(n) in the current entry count, but only runs when the
-// store is already at capacity — i.e. at most once per accepted new identity,
-// not on every request.
+// evictStalestLocked removes the single least-recently-seen entry (the back of
+// s.order). Callers must hold s.mu. O(1): the LRU list already tracks the
+// stalest entry at its tail, so this needs neither a map scan nor a re-sort —
+// unlike a plain map-of-timestamps, which would need an O(n) scan to find it.
 func (s *ipLimiterStore) evictStalestLocked() {
-	var staleKey string
-	var staleTime time.Time
-	found := false
-	for k, e := range s.entries {
-		if !found || e.lastSeen.Before(staleTime) {
-			staleKey, staleTime, found = k, e.lastSeen, true
-		}
+	back := s.order.Back()
+	if back == nil {
+		return
 	}
-	if found {
-		delete(s.entries, staleKey)
-	}
+	entry := back.Value.(*ipLimiterEntry)
+	delete(s.entries, entry.key)
+	s.order.Remove(back)
 }
 
 // len reports the current number of tracked entries (test/introspection use).
@@ -228,14 +267,25 @@ func (s *ipLimiterStore) len() int {
 	return len(s.entries)
 }
 
+// cleanup purges entries not seen within maxAge. Because s.order is kept in
+// strict lastSeen order (see the ipLimiterStore doc comment), this only needs
+// to walk from the back until it finds a non-stale entry — the moment one
+// entry isn't stale, nothing further toward the front can be either.
 func (s *ipLimiterStore) cleanup(maxAge time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cutoff := time.Now().Add(-maxAge)
-	for ip, entry := range s.entries {
-		if entry.lastSeen.Before(cutoff) {
-			delete(s.entries, ip)
+	for {
+		back := s.order.Back()
+		if back == nil {
+			return
 		}
+		entry := back.Value.(*ipLimiterEntry)
+		if !entry.lastSeen.Before(cutoff) {
+			return
+		}
+		delete(s.entries, entry.key)
+		s.order.Remove(back)
 	}
 }
 
