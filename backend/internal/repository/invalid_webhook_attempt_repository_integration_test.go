@@ -292,6 +292,62 @@ func TestInvalidWebhookAttemptCap_RestartHole_Integration(t *testing.T) {
 			"this assertion must fail if that's what's happening")
 }
 
+// TestInvalidWebhookAttemptCap_RestartHole_WithoutStartupTrim_Integration is the RED-evidence
+// sibling to the test above (round-1 review, Important 2): a compile failure from the constructor
+// signature change is not a behavioural demonstration that the fix is load-bearing. This exercises
+// the PRE-fix behaviour through the CURRENT API — a repository built via struct literal, exactly
+// like every other test in this file that predates G3, with startupTrimEnabled left at its zero
+// value (false) — running the identical restart/insert pattern as the test above. Because no
+// force-trim ever fires, no call in any instance's short lifetime reaches trimInterval, so the
+// count-based trim never runs either: this must land exactly numRestarts*perRestart rows,
+// unboundedly exceeding the fixed instance's ceiling.
+//
+// This stays in the suite permanently as a mutation guard: if startupTrimEnabled's effect were
+// ever silently disabled in Record, this test's assertion (mirrored from the sibling's ceiling)
+// would start passing for the WRONG reason on the fixed path too, but this test's own exact-count
+// assertion would immediately reveal that the "manual, no-startup-trim" construction still behaves
+// identically to the "real constructor" one — which is exactly the regression this pair of tests
+// is designed to catch.
+func TestInvalidWebhookAttemptCap_RestartHole_WithoutStartupTrim_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx, "DELETE FROM invalid_webhook_attempts")
+	require.NoError(t, err)
+
+	const testCap = 5
+	const trimInterval = 50
+	const perRestart = 3
+	const numRestarts = 20
+	// Mirrors the sibling test's ceiling exactly, so a reader can compare the two numbers directly.
+	const fixedCeiling = testCap + (perRestart - 1)
+
+	for restart := 0; restart < numRestarts; restart++ {
+		// Deliberately NOT NewInvalidWebhookAttemptRepository — a raw struct literal has
+		// startupTrimEnabled at its zero value (false), so the first call of each "restart" gets
+		// no forced trim. This is the pre-G3 behaviour, reachable through the current API by any
+		// caller that (like every pre-G3 test in this file) builds the struct directly.
+		repo := &invalidWebhookAttemptRepository{db: pool, trimInterval: trimInterval, cap: testCap, retentionDays: 30}
+
+		for i := 0; i < perRestart; i++ {
+			require.NoError(t, repo.Record(ctx, "plaid", 1, fmt.Sprintf("norestart-%d-call-%d", restart, i)))
+		}
+	}
+
+	var finalCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM invalid_webhook_attempts WHERE provider = 'plaid'").Scan(&finalCount))
+	t.Logf("without startupTrimEnabled: finalCount=%d (fixedCeiling=%d, numRestarts*perRestart=%d)",
+		finalCount, fixedCeiling, numRestarts*perRestart)
+
+	require.Equal(t, numRestarts*perRestart, finalCount,
+		"without startupTrimEnabled, no call in any short-lived instance ever reaches trimInterval, "+
+			"so NO trim (count-based or age-based) ever fires — the row count grows exactly linearly "+
+			"with the number of restarts")
+	require.Greater(t, finalCount, fixedCeiling,
+		"this must exceed the fixed test's ceiling — that gap IS the forced startup trim's effect")
+}
+
 // TestInvalidWebhookAttemptCap_AgeRetention_Integration is Issue #1514 G3, requirement 2: bound
 // growth by time as well as count. A row-count cap alone assumes trims eventually fire; an
 // age-based retention window is a second, orthogonal bound that reclaims rows purely on elapsed
