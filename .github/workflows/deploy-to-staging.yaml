@@ -578,6 +578,57 @@ jobs:
           VITE_POSTHOG_KEY: ${{ secrets.POSTHOG_API_KEY }}
         run: bun run build
 
+      # Issue #1514 (G6): vite.config.ts uses sourcemap: 'hidden', so dist/**/*.map is
+      # produced but not referenced by the built .js. Upload those maps to Sentry so
+      # symbolication works, then unconditionally delete them below — deletion does not
+      # depend on this step running or succeeding (continue-on-error: true here, plus
+      # `if: always()` on the delete step), so a missing/invalid SENTRY_AUTH_TOKEN or a
+      # Sentry API failure can never cause maps to ship.
+      - name: Install sentry-cli
+        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        continue-on-error: true
+        env:
+          # Pin + verify, per the golang-migrate pattern in test.yml (#1514 F13).
+          SENTRY_CLI_VERSION: '3.6.2'
+          SENTRY_CLI_SHA256: 5a497deb1e388cc6445c09ddd6d2da4fc2aae8295405d6393c2e0ee635ca3687
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/bin"
+          curl -sSfL -o "$HOME/bin/sentry-cli" "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Darwin-arm64"
+          echo "${SENTRY_CLI_SHA256}  $HOME/bin/sentry-cli" | shasum -a 256 -c -
+          chmod +x "$HOME/bin/sentry-cli"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          "$HOME/bin/sentry-cli" --version
+
+      - name: Upload source maps to Sentry
+        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        continue-on-error: true
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+        run: |
+          set -euo pipefail
+          sentry-cli sourcemaps inject ./dist
+          sentry-cli sourcemaps upload --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" ./dist
+
+      # Unconditional: runs whether the upload step above was skipped (no token),
+      # failed, or succeeded. This is the only step in this job responsible for
+      # guaranteeing maps never ship, so it does not gate on anything upstream.
+      - name: Delete source maps before deploy
+        if: always()
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: |
+          set -euo pipefail
+          find dist -type f -name '*.map' -delete
+          remaining=$(find dist -type f -name '*.map' | wc -l | tr -d ' ')
+          if [ "$remaining" -ne 0 ]; then
+            echo "::error::${remaining} .map file(s) still present in dist/ after deletion."
+            exit 1
+          fi
+          echo "Confirmed: no .map files remain in dist/."
+
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4
         with:
