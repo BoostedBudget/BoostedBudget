@@ -297,6 +297,11 @@ func TestInternalMetricsListener_IsWiredIntoMain(t *testing.T) {
 	// next two statements after each other — i.e. in the same `if err != nil { ... }`
 	// branch as main.go actually has it (cmd/server/main.go ~:200) — not merely present
 	// independently anywhere in the file.
+	// CAUTION: this regex requires os.Exit(1) to be the LITERAL next statement after the
+	// appLogger.Error(...) call in main.go (only whitespace/newlines may sit between them). An
+	// otherwise-harmless comment inserted between those two lines in main.go will make this
+	// match fail even though behavior is unchanged — that tightness is intentional (see the
+	// comment above), so fix main.go's formatting rather than loosening this pattern.
 	bindFailureIsFatal := regexp.MustCompile(
 		`appLogger\.Error\(\s*"Failed to bind internal metrics listener"\s*,\s*"error"\s*,\s*err\s*\)\s*\n\s*os\.Exit\(1\)`,
 	)
