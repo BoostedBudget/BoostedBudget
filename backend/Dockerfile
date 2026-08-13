@@ -38,10 +38,19 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o server \
     ./cmd/server
 
-# Build golang-migrate from source with Go 1.25.7 (for security)
-# This ensures migrate binary has no CVEs, unlike pre-compiled releases
+# Build golang-migrate from source using this stage's pinned Go toolchain (see GO_VERSION
+# and the digest-pinned builder FROM above), rather than downloading a prebuilt release binary.
 # #1514: pinned to v4.19.1 (latest release as of 2026-08-12) instead of floating @latest,
 # so the version baked into the production image is reproducible and reviewable.
+# Integrity comes from Go's module checksum database, which authenticates the module
+# source by default for public modules.
+#
+# What this does NOT provide: building from source cannot "ensure no CVEs" — an earlier
+# version of this comment claimed exactly that, and also named a Go version (1.25.7) that
+# had already drifted from the toolchain actually in use. Vulnerabilities may still exist in
+# migrate v4.19.1 itself, in its transitive dependencies, or in the pinned toolchain. What it
+# does buy is a reproducible, reviewable input and no dependence on a third-party release
+# binary. Keep this claim narrow; do not restore a "no CVEs" guarantee.
 RUN CGO_ENABLED=0 GOOS=linux go install \
     -tags 'postgres' \
     -ldflags="-w -s" \
