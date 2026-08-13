@@ -572,23 +572,24 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 		return nil
 	}
 
-	// Issue #1514: defense-in-depth signature guard — refuses to dispatch a Paddle webhook whose
-	// signature was never verified. Should be unreachable in normal operation; exists as a
-	// backstop. See HandlePaddleWebhook and ReplayPaddleWebhook for the primary guards.
+	// Issue #1514: this guard reads webhook.SignatureValid and refuses to dispatch when it is
+	// false. See HandlePaddleWebhook and ReplayPaddleWebhook for the primary guards.
 	//
-	// This will never succeed on retry — nothing in this file modifies SignatureValid — so it
-	// cancels the job via river.JobCancel rather than returning nil. In River v0.43.0, returning
-	// nil from Work is *successful completion*, not cancellation (see river.JobCancel's doc
-	// comment: it "cancel[s] the job at the end of execution"); returning nil here would record a
-	// refused webhook as a completed job and emit jobs_completed_total{status="success"} for it.
+	// A retry re-fetches the row via GetByID and re-reads SignatureValid; nothing in this file
+	// modifies that field, so it cancels the job via river.JobCancel rather than returning nil.
+	// In River v0.43.0, returning nil from Work is *successful completion*, not cancellation (see
+	// river.JobCancel's doc comment: it "cancel[s] the job at the end of execution"); returning
+	// nil here would record a refused webhook as a completed job and emit
+	// jobs_completed_total{status="success"} for it.
 	//
 	// No analytics.Capture here: EventID and EventType are supplied by the caller and are not
 	// validated by this guard; emitting them to PostHog would ship unverified data into
 	// analytics. See webhook_processing.go's guard for the analogous Plaid-side handling.
 	if !webhook.SignatureValid {
 		observability.InvalidWebhookAttemptsTotal.WithLabelValues("paddle_worker_guard").Inc()
-		// Logs only webhook_id — our own DB primary key. event_id and event_type are Paddle's
-		// own values, supplied by the caller, and are omitted from this log.
+		// Logs only webhook_id, which this function uses solely as a lookup key (GetByID,
+		// MarkFailed) and never reads as content. event_id and event_type are Paddle's own
+		// payload values, supplied by the caller, and are omitted from this log.
 		w.logger.Error("refusing to process Paddle webhook with invalid signature; cancelling job",
 			"webhook_id", args.WebhookID,
 		)
