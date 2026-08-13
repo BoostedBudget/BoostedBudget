@@ -761,6 +761,83 @@ func TestWorker_InvalidSignature_MarkFailedError(t *testing.T) {
 	mockWebhookRepo.AssertExpectations(t)
 }
 
+// TestWorker_InvalidSignature_SkipsAnalytics verifies that a signature_valid=false row must
+// never drive PostHog analytics. Mirrors
+// TestWebhookProcessor_TransactionWebhook_InvalidSignature_SkipsAnalytics (webhook_processor_test.go)
+// — the identical defect fixed on the Plaid poller: WebhookID/EventID/EventType on this row are
+// attacker-derived (the signature never verified them), so emitting them to PostHog as event
+// properties leaks unverified, potentially forged data into analytics. The guard's own metric
+// (InvalidWebhookAttemptsTotal) plus the error log already give the security signal — see this
+// test's sibling in webhook_processing.go's guard (which never called analytics at all) for the
+// precedent this worker is being made consistent with.
+func TestWorker_InvalidSignature_SkipsAnalytics(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockAna := new(mockAnalyticsClient)
+	worker.SetAnalytics(mockAna)
+
+	webhook := loadWebhookFixture(t, "subscription_created.json")
+	webhook.SignatureValid = false
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.created",
+	}
+	job := createRiverJob(args)
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err, "invalid-signature guard must cancel the job via river.JobCancel")
+	mockAna.AssertNotCalled(t, "Capture")
+	mockProfileRepo.AssertNotCalled(t, "UpdatePaddleCustomerID")
+	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWorker_InvalidSignature_MarkFailedError_DoesNotReemitAnalyticsOnRetry verifies that a
+// MarkFailed persistence failure — which makes River retry the whole Work call — does not cause
+// the guard to re-emit an analytics event on every retry. Regression coverage for the case the
+// prior round's fix (return a retryable error instead of nil) introduced: if Capture() ran before
+// the now-fallible MarkFailed call, a stuck MarkFailed would drive a PostHog event on every single
+// attempt for as long as the DB stayed unavailable, repeatedly re-emitting the same
+// attacker-derived job arguments.
+func TestWorker_InvalidSignature_MarkFailedError_DoesNotReemitAnalyticsOnRetry(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockAna := new(mockAnalyticsClient)
+	worker.SetAnalytics(mockAna)
+
+	webhook := loadWebhookFixture(t, "subscription_created.json")
+	webhook.SignatureValid = false
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.created",
+	}
+	job := createRiverJob(args)
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(errors.New("db unavailable"))
+
+	// Simulate two River attempts hitting the same persistently-failing MarkFailed call.
+	err1 := worker.Work(ctx, job)
+	err2 := worker.Work(ctx, job)
+
+	require.Error(t, err1)
+	require.Error(t, err2)
+	mockAna.AssertNotCalled(t, "Capture")
+	mockProfileRepo.AssertNotCalled(t, "UpdatePaddleCustomerID")
+	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
 // TestWorker_AlreadyProcessed_Idempotent tests idempotency
 func TestWorker_AlreadyProcessed_Idempotent(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
