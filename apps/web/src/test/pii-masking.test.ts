@@ -269,6 +269,51 @@ describe('scanForUnmaskedPII', () => {
       const violations = scanForUnmaskedPII(root, sentinels)
       expect(violations.length).toBeGreaterThan(0)
     })
+
+    // Round 2 of this review: every test above wraps the shadow host / template in an
+    // extra `<div>` before scanning — `collectScanRoots` only ever called
+    // `querySelectorAll('*')`, which returns DESCENDANTS of the node it's called on, never
+    // that node itself. Passing the host/template directly as the scan root (no wrapper)
+    // is exactly the case that was silently missed.
+    test('flags a sentinel in a shadow root when the HOST ITSELF (not a wrapper) is the scan root', () => {
+      const host = document.createElement('div')
+      const shadow = host.attachShadow({ mode: 'open' })
+      const span = document.createElement('span')
+      span.textContent = 'SENTINEL_SHADOW_HOST_ROOT'
+      shadow.appendChild(span)
+
+      const sentinels: PIISentinel[] = [{ value: 'SENTINEL_SHADOW_HOST_ROOT', fieldDescription: 'account_name in shadow DOM (host as scan root)' }]
+      const violations = scanForUnmaskedPII(host, sentinels)
+      expect(violations.length).toBeGreaterThan(0)
+    })
+
+    test('flags a sentinel in <template>.content when the TEMPLATE ITSELF (not a wrapper) is the scan root', () => {
+      const tmpl = document.createElement('template') as HTMLTemplateElement
+      const span = document.createElement('span')
+      span.textContent = 'SENTINEL_TEMPLATE_ROOT'
+      tmpl.content.appendChild(span)
+
+      const sentinels: PIISentinel[] = [{ value: 'SENTINEL_TEMPLATE_ROOT', fieldDescription: 'account_name in <template> (template as scan root)' }]
+      const violations = scanForUnmaskedPII(tmpl, sentinels)
+      expect(violations.length).toBeGreaterThan(0)
+    })
+
+    // Every masking test above puts the `data-ph-mask` ancestor INSIDE the shadow root, so
+    // `hasMaskedAncestor`'s `ShadowRoot.host` bridge (walking OUT of the shadow tree into
+    // the light DOM) is never actually exercised — a mask living outside a shadow host,
+    // covering content rendered inside it, is the direction that bridge exists for.
+    test('a data-ph-mask OUTSIDE a shadow host is honored for content rendered inside it', () => {
+      const masked = document.createElement('div')
+      masked.setAttribute('data-ph-mask', '')
+      const host = document.createElement('div')
+      masked.appendChild(host)
+      const shadow = host.attachShadow({ mode: 'open' })
+      const span = document.createElement('span')
+      span.textContent = '$1,234.56'
+      shadow.appendChild(span)
+
+      expect(scanForUnmaskedPII(masked, [])).toEqual([])
+    })
   })
 
   // Round 3 (#1514 fix round 3): href/src used to be excluded BY NAME on the theory that

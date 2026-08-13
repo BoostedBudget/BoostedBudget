@@ -1,3 +1,8 @@
+// Issue #1514 (fix round 7): single source of truth for capability-route path patterns —
+// see redactUrlPath below and client.ts's own doc comment for why this lives there, not
+// duplicated here.
+import { redactCapabilityUrlPath } from '@boostedbudget/api-client/client'
+
 /**
  * Property names that carry financial PII (merchant/account/institution
  * details, balances) or third-party auth/session secrets, and must never be
@@ -264,43 +269,26 @@ export function stripQueryString(url: string): string {
 }
 
 /**
- * Issue #1514 (fix round 6): known route SHAPES whose path segment is itself a bearer
- * CAPABILITY token, not an opaque resource id — the backend validates the entire request
- * by the token alone (e.g. `CancelDeletion`, `backend/internal/huma/operations/deletion.go`;
- * household invite accept/decline, `household.go`). `stripQueryString` only ever strips from
- * `?` onward, so it does not (and structurally cannot) touch a token embedded as a raw path
- * segment — that gap is what let the account-deletion cancellation token survive Sentry
- * breadcrumbs/`beforeSend` intact.
+ * Issue #1514 (fix round 6, widened in round 7): redacts known capability-token PATH
+ * segments (e.g. the account-deletion cancellation link, the household-invite link) —
+ * `stripQueryString` only ever strips from `?` onward, so it does not (and structurally
+ * cannot) touch a token embedded as a raw path segment.
  *
- * This is deliberately a route-SHAPE allowlist (regex per known route), not a value-SHAPE
- * heuristic ("looks like a JWT" / "long random string"): shape-sniffing would either miss a
- * non-JWT token or over-redact legitimate opaque resource ids that are NOT capabilities on
- * their own (e.g. `/accounts/{id}`, `/budgets/{id}` — scoped by the caller's authenticated
- * session, not bearer-validated by the id alone). Add one line here whenever a new route
- * embeds a bearer credential directly in its path; do not try to generalize the pattern
- * beyond routes that are actually public/token-validated.
- */
-const CAPABILITY_URL_PATH_PATTERNS: RegExp[] = [
-  // /api/v1/user/delete/cancel/{token} — public; CancelDeletionInput's doc says "the
-  // token validates the request" (deletion.go).
-  /(\/user\/delete\/cancel\/)[^/?#]+/gi,
-  // /api/v1/households/invites/{token}[/accept|/decline] — public; Token is the "raw
-  // invite token from the invite link" (household.go).
-  /(\/households\/invites\/)[^/?#]+/gi,
-]
-
-/**
- * Replaces a known capability-token path segment with `[redacted]`, preserving the rest
- * of the URL (including any trailing path segments, e.g. `/accept`) so the route shape
- * itself stays legible for debugging. Query strings are a separate concern handled by
- * `stripQueryString` — use `sanitizeUrl` below to apply both at once.
+ * Round 6 covered only the API path shape (`/api/v1/user/delete/cancel/{token}`) — but the
+ * ACTUAL exposure is the FRONTEND route the emailed link points at: `/cancel-deletion/{token}`
+ * (`App.tsx`'s route), which lands in the PAGE URL itself once a user clicks the email.
+ *
+ * The pattern list (`CAPABILITY_URL_PATH_PATTERNS`) used to be duplicated here — it drifted
+ * out of sync by missing every frontend route shape entirely. `packages/api-client`'s
+ * `client.ts` is now the single source of truth: apps/web already depends on that package
+ * (not the reverse), so importing its `redactCapabilityUrlPath` here — rather than
+ * maintaining a second copy of the pattern list — respects the existing dependency
+ * direction instead of inverting it. See `client.ts`'s own doc comment for the full,
+ * re-derived route list and the reasoning for a route-SHAPE allowlist over a value-shape
+ * heuristic. Add a new capability route there (only there) when one is introduced.
  */
 export function redactUrlPath(url: string): string {
-  let out = url
-  for (const pattern of CAPABILITY_URL_PATH_PATTERNS) {
-    out = out.replace(pattern, (_match, prefix: string) => `${prefix}[redacted]`)
-  }
-  return out
+  return redactCapabilityUrlPath(url) ?? url
 }
 
 /**
@@ -317,13 +305,23 @@ export function sanitizeUrl(url: string): string {
  * from any property literally named `url`, anywhere inside an arbitrarily
  * nested object/array (e.g. a raw Axios error's `config`/`response`).
  *
- * Redaction is by *property name* only — string/number values are never
- * scanned for PII-shaped content. This is a deliberate scope limit: content
- * scanning would risk destroying unrelated diagnostic signal (error
- * messages, stack traces, non-PII context) that engineers rely on to debug
- * production issues.
+ * Redaction of PII (financial/account/session data) is by *property name*
+ * only — string/number values are never scanned for PII-SHAPED content. This
+ * is a deliberate scope limit: general content scanning would risk destroying
+ * unrelated diagnostic signal (error messages, stack traces, non-PII context)
+ * that engineers rely on to debug production issues.
+ *
+ * Issue #1514 (fix round 7): capability-route redaction is the ONE exception to
+ * "never scans string content" — every string value this function visits (not
+ * just ones keyed `url`) is passed through `redactUrlPath`, so a bearer token
+ * embedded in `breadcrumb.message`, an exception `value`, or a stack-frame
+ * string is caught even though none of those properties is named `url`. This
+ * stays a targeted rewrite, not a content scan, because `redactUrlPath` only
+ * ever matches the small set of known capability-route shapes — an ordinary
+ * error message containing a slash or a non-capability path is untouched.
  */
 export function redactPii<T>(value: T, depth = 0, seen: WeakSet<object> = new WeakSet()): T {
+  if (typeof value === 'string') return redactUrlPath(value) as unknown as T
   if (value === null || typeof value !== 'object') return value
   if (depth >= MAX_DEPTH) return '[Truncated]' as unknown as T
   if (seen.has(value as object)) return '[Circular]' as unknown as T

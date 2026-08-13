@@ -1,6 +1,6 @@
 import * as Sentry from '@sentry/react'
 import type { Breadcrumb, ErrorEvent, EventHint } from '@sentry/react'
-import { redactPii, sanitizeUrl } from './piiScrubbing'
+import { redactPii, redactUrlPath, sanitizeUrl } from './piiScrubbing'
 
 /**
  * Scrubbing hooks shared by `initSentry` and exercised directly in tests.
@@ -29,10 +29,15 @@ import { redactPii, sanitizeUrl } from './piiScrubbing'
  *   residual scope limit is narrower than that: a query string or cookie
  *   value nested under some *other*, non-denylisted key name (e.g. a
  *   third-party payload that renames the field) would still pass through
- *   unredacted, because matching is by key name, not by content. The
- *   exception `value` (message string) is never content-scanned, only passed through
- *   the same by-key redaction as everything else, so a plain error message
- *   is preserved unless it happens to sit under a denylisted key.
+ *   unredacted, because matching is by key name, not by content, for PII.
+ *   Capability-route redaction (fix round 7) is the one exception: `redactPii`
+ *   runs every string value it visits — including `event.exception`'s `value`
+ *   (message) field and breadcrumb `message` (handled directly in
+ *   `beforeBreadcrumb` below, since it isn't nested under `data`) — through
+ *   `redactUrlPath`, so a bearer token embedded in ordinary error text is
+ *   still caught even though it isn't a denylisted key. This stays a targeted
+ *   rewrite (only the known capability-route shapes match), not a general PII
+ *   content scan — an ordinary error message is otherwise preserved verbatim.
  */
 export function sentryScrubbingOptions(): {
   beforeBreadcrumb: (breadcrumb: Breadcrumb) => Breadcrumb | null
@@ -43,6 +48,13 @@ export function sentryScrubbingOptions(): {
       if (breadcrumb.category === 'console') return null
       if (breadcrumb.data) {
         breadcrumb.data = redactPii(breadcrumb.data)
+      }
+      // Issue #1514 (fix round 7): `breadcrumb.message` (e.g. a 'navigation' breadcrumb's
+      // "Navigated to <url>" text) was never touched — only `breadcrumb.data` was. A
+      // capability URL (the account-deletion/household-invite page a user just navigated
+      // to) reaches this field directly, not nested under `data`.
+      if (typeof breadcrumb.message === 'string') {
+        breadcrumb.message = redactUrlPath(breadcrumb.message)
       }
       return breadcrumb
     },

@@ -78,6 +78,43 @@ describe('redactUrlPath', () => {
     expect(result).toBe('https://app.example.com/api/v1/households/invites/[redacted]/accept');
   });
 
+  // Issue #1514 (fix round 7): the ORIGINAL fix only covered the API path shape
+  // (`/api/v1/user/delete/cancel/{token}`). The actual exposure is the FRONTEND route the
+  // emailed link points at — `/cancel-deletion/{token}` (App.tsx's route, built by
+  // backend/internal/services/email_service.go:116's `cancellationURL`) — which the page
+  // URL itself carries once a user clicks the email. Neither of the two patterns above
+  // matches that shape.
+  test('redacts the frontend cancel-deletion page route (the actual emailed link shape)', () => {
+    const url = `https://app.example.com/cancel-deletion/${TOKEN}`;
+    const result = redactUrlPath(url);
+    expect(result).not.toContain(TOKEN);
+    expect(result).toBe('https://app.example.com/cancel-deletion/[redacted]');
+  });
+
+  // household_service.go:1055 builds the emailed invite link as
+  // `frontendURL + "/households/invites/" + rawToken` — no `/api/v1` prefix. The existing
+  // pattern above has no `/api/v1` anchor, so it already matches this shape too; this test
+  // confirms that rather than assuming it.
+  test('redacts the frontend household-invite page route (no /api/v1 prefix)', () => {
+    const url = `https://app.example.com/households/invites/${TOKEN}`;
+    const result = redactUrlPath(url);
+    expect(result).not.toContain(TOKEN);
+    expect(result).toBe('https://app.example.com/households/invites/[redacted]');
+  });
+
+  // App.tsx also registers a second, differently-spelled route to the same
+  // AcceptInvitePage — "an alias matching the original issue text" per
+  // AcceptInvitePage.tsx's own comment. Nothing in the backend currently builds a link in
+  // this shape, but the route is live, so a token-bearing URL of this shape can still
+  // reach the app (an old bookmark, a manually-typed link, etc.) and must be redacted the
+  // same way.
+  test('redacts the legacy /household/invite/{token} alias route', () => {
+    const url = `https://app.example.com/household/invite/${TOKEN}`;
+    const result = redactUrlPath(url);
+    expect(result).not.toContain(TOKEN);
+    expect(result).toBe('https://app.example.com/household/invite/[redacted]');
+  });
+
   test('leaves a URL with no known capability route unchanged', () => {
     const url = 'https://app.example.com/api/v1/accounts/acc_123';
     expect(redactUrlPath(url)).toBe(url);
@@ -587,5 +624,56 @@ describe('redactPii', () => {
     expect(typed.response.config.url).toBe('https://api.boostedbudget.com/v1/accounts');
     // The cycle back to the same axiosError object is cut with the sentinel.
     expect(typed.response.axiosError).toBe('[Circular]');
+  });
+
+  // Issue #1514 (fix round 7): "Redaction is by property name only — string values are
+  // never scanned for PII-shaped content" (see this function's own doc comment above) was
+  // true and reasonable for PII-shaped content, but it also meant a capability URL sitting
+  // in ANY string value — `breadcrumb.message`, an exception `value`, a stack-frame
+  // string — survived untouched unless it happened to be under a property literally named
+  // `url`. This widens `redactPii` to run every string value it visits through
+  // `redactUrlPath` — deliberately still a targeted rewrite (redactUrlPath only ever
+  // matches the known capability-route shapes), not a general content scan, so it cannot
+  // introduce new false positives on ordinary error text.
+  describe('capability-route redaction applies to string values generally, not just `url`-keyed ones', () => {
+    const TOKEN = 'eyJhbGciOiJIUzI1NiJ9.SENTINEL_GENERAL_STRING_TOKEN.xyz';
+
+    test('redacts a capability URL embedded in an arbitrary string value (not keyed "url")', () => {
+      const input = {
+        message: `Request failed: https://app.example.com/cancel-deletion/${TOKEN}`,
+      };
+      const result = redactPii(input) as Record<string, unknown>;
+      expect(result.message).not.toContain(TOKEN);
+      expect(result.message).toBe('Request failed: https://app.example.com/cancel-deletion/[redacted]');
+    });
+
+    test('redacts a capability URL inside a nested stack-frame-shaped string', () => {
+      const input = {
+        exception: {
+          values: [
+            {
+              value: `Network Error: https://app.example.com/households/invites/${TOKEN}/accept`,
+              stacktrace: {
+                frames: [
+                  { filename: 'app.js', context_line: `fetch("/households/invites/${TOKEN}")` },
+                ],
+              },
+            },
+          ],
+        },
+      };
+      const result = redactPii(input) as {
+        exception: { values: Array<{ value: string; stacktrace: { frames: Array<{ filename: string; context_line: string }> } }> };
+      };
+      const frame = result.exception.values[0].stacktrace.frames[0];
+      expect(result.exception.values[0].value).not.toContain(TOKEN);
+      expect(frame.context_line).not.toContain(TOKEN);
+    });
+
+    test('does not over-redact ordinary strings that merely contain a slash', () => {
+      const input = { message: 'Loaded 3/5 accounts successfully' };
+      const result = redactPii(input) as Record<string, unknown>;
+      expect(result.message).toBe('Loaded 3/5 accounts successfully');
+    });
   });
 });

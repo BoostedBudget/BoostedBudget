@@ -260,6 +260,46 @@ describe('useDeletion', () => {
       })
       expect(result.current.cancelError?.message).not.toContain(SENTINEL_TOKEN)
     })
+
+    // Issue #1514 (fix round 8): the message-redaction fix above used to construct a bare
+    // `new Error(redactedMessage)`, discarding the original error's name/stack/cause — real
+    // diagnostic information. This proves those survive alongside the redacted message.
+    it('preserves name, stack, and cause on the sanitized cancelError (does not discard diagnostics)', async () => {
+      const SENTINEL_TOKEN = 'SENTINEL_DIAGNOSTIC_TOKEN_ABC'
+      class CustomFetchError extends Error {
+        constructor(message: string) {
+          super(message)
+          this.name = 'CustomFetchError'
+        }
+      }
+      const original = new CustomFetchError(`Request failed: /api/v1/user/delete/cancel/${SENTINEL_TOKEN}`)
+      mockCancelDeletion.mockRejectedValue(original)
+
+      const { result } = renderHook(() => useDeletion(), {
+        wrapper: createWrapper(),
+      })
+
+      await act(async () => {
+        await result.current.cancelAccountDeletion(testToken)
+      })
+
+      await waitFor(() => {
+        expect(result.current.cancelError).toBeInstanceOf(Error)
+      })
+
+      const sanitized = result.current.cancelError!
+      // name preserved
+      expect(sanitized.name).toBe('CustomFetchError')
+      // cause preserved — the ORIGINAL error (with its unredacted message) is still
+      // reachable for anyone who needs full diagnostics, e.g. an error-tracking SDK's own
+      // cause-chain capture (which independently gets sanitized via piiScrubbing.ts's
+      // Sentry integration, not this hook).
+      expect(sanitized.cause).toBe(original)
+      // stack preserved, but with the token still scrubbed (a raw stack's first line is
+      // "`${name}: ${message}`", so copying it unsanitized would reintroduce the leak).
+      expect(sanitized.stack).toBeTruthy()
+      expect(sanitized.stack).not.toContain(SENTINEL_TOKEN)
+    })
   })
 
   describe('State Management Tests', () => {
