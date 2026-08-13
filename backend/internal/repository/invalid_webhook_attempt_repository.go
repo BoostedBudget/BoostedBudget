@@ -334,8 +334,15 @@ const trimInvalidWebhookAttemptsByAgeQuery = `
 // — runs only once every effectiveTrimInterval() calls for this provider (per nextInsertCount's
 // atomic counter), OR once, unconditionally, on the first call for this provider through an
 // instance built via NewInvalidWebhookAttemptRepository (Issue #1514 G3 — closes the restart hole
-// where an instance's counter never reaches the interval boundary). See the
-// invalidWebhookAttemptTrimInterval doc comment for the exact hard ceiling this guarantees.
+// where an instance's counter never reaches the interval boundary).
+//
+// ⚠ This sentence used to say "see … for the exact hard ceiling this guarantees" (corrected in
+// Phase 14). There is NO hard ceiling: the doc comment it points at says so itself — under
+// concurrency there is no fixed instantaneous ceiling and no concurrency-independent formula for
+// the overshoot. The deterministic invalidWebhookAttemptCap + invalidWebhookAttemptTrimInterval - 1
+// holds only in the degenerate sequential regime. What the schedule does guarantee is that
+// whichever trim commits drains the whole provider back to the cap, so the count cannot drift
+// upward indefinitely. See the invalidWebhookAttemptTrimInterval doc comment for the full analysis.
 func (r *invalidWebhookAttemptRepository) Record(ctx context.Context, provider string, bodyLength int, bodySHA256 string) error {
 	if _, err := r.db.Exec(ctx, insertInvalidWebhookAttemptQuery, provider, bodyLength, bodySHA256); err != nil {
 		return fmt.Errorf("failed to insert invalid webhook attempt: %w", err)

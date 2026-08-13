@@ -577,12 +577,14 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 	// row — so this worker should never actually see one. It refuses to dispatch anyway, in case
 	// something upstream (a bug, a future write path, a pre-fix row) got a bad row into the queue.
 	//
-	// This will NEVER succeed on retry — the signature can't become valid — so it follows this
-	// worker's own established permanent-failure convention (see the Processed check above, and
-	// TestWorker_WebhookNotFound_CancelsJob: "return nil to cancel the job"). Returning an error
-	// here instead would burn River's default retry/backoff budget on a row that can never
-	// process, delaying its arrival at the dead-letter queue for no benefit — the security
-	// property (never dispatched) already holds on every attempt.
+	// This will NEVER succeed on retry — the signature can't become valid — so it cancels the job
+	// via river.JobCancel rather than returning nil. In River v0.43.0, returning nil from Work is
+	// *successful completion*, not cancellation (see river.JobCancel's doc comment: it "cancel[s]
+	// the job at the end of execution"); returning nil here would record a refused, forged webhook
+	// as a completed job and emit jobs_completed_total{status="success"} for it. river.JobCancel
+	// keeps the same no-further-retry behavior while reporting the outcome truthfully. Mirrors
+	// WebhookProcessingWorker's identical guard (webhook_processing.go) — see its doc comment for
+	// the full rationale.
 	if !webhook.SignatureValid {
 		observability.InvalidWebhookAttemptsTotal.WithLabelValues("paddle_worker_guard").Inc()
 		w.logger.Error("refusing to process Paddle webhook with invalid signature; cancelling job",
@@ -597,8 +599,20 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 				"event_type": args.EventType,
 			})
 		}
-		_ = w.paddleWebhookRepo.MarkFailed(ctx, args.WebhookID, "rejected: signature_valid=false")
-		return nil
+		if failErr := w.paddleWebhookRepo.MarkFailed(ctx, args.WebhookID, "rejected: signature_valid=false"); failErr != nil {
+			// Don't swallow this: MarkFailed is what removes the row from unprocessed-eligibility
+			// and records why it was refused. If it fails (e.g. a transient DB error), surface a
+			// plain retryable error so River tries again — the security property still holds on
+			// every attempt, since retrying re-fetches the webhook, finds SignatureValid still
+			// false, and hits this same guard again rather than ever reaching dispatch.
+			w.logger.Error("failed to mark Paddle webhook as failed after signature guard; will retry",
+				"webhook_id", args.WebhookID,
+				"event_id", args.EventID,
+				"error", failErr,
+			)
+			return fmt.Errorf("failed to record invalid-signature refusal: %w", failErr)
+		}
+		return river.JobCancel(errInvalidWebhookSignature)
 	}
 
 	var processErr error
