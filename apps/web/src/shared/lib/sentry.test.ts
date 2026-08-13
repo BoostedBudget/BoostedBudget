@@ -3,7 +3,7 @@ import { sentryScrubbingOptions } from './sentry';
 import type { Breadcrumb } from '@sentry/react';
 
 describe('sentry scrubbing options', () => {
-  const { beforeBreadcrumb, beforeSend } = sentryScrubbingOptions();
+  const { beforeBreadcrumb, beforeSend, beforeSendTransaction, beforeSendSpan } = sentryScrubbingOptions();
 
   // Issue #1514 (fix round 6): the account-deletion cancellation token is a bearer
   // CAPABILITY embedded as a raw URL PATH SEGMENT (not a query param) — see
@@ -467,5 +467,85 @@ describe('sentry scrubbing options', () => {
       expect(request.query_string).toBe('[Redacted]');
       expect(request.cookies).toBe('[Redacted]');
     });
+  });
+
+  // Issue #1514 (fix round 9): `tracesSampleRate: 0.1` + `Sentry.browserTracingIntegration()`
+  // means ~1 in 10 page views of a capability-bearing route (e.g. /cancel-deletion/{token})
+  // emit a PERFORMANCE TRANSACTION event — a completely separate pipeline from
+  // `beforeSend`, which is error/message-only and never sees transaction events at all.
+  // No `beforeSendTransaction` existed before this round, so every field browser tracing
+  // populates went out unredacted regardless of everything fixed in rounds 6-8.
+  //
+  // The event/span shapes below are NOT guessed — they were captured by actually running
+  // `@sentry/react`'s `browserTracingIntegration()` against a real pageload at
+  // `/cancel-deletion/{token}` (via a custom transport that records the envelope instead of
+  // sending it) and inspecting the real output. The token showed up in FOUR places:
+  //   - `event.transaction` (the transaction "name" — literally the pathname)
+  //   - `event.contexts.trace.data['url.path']` and `['url.full']`
+  //   - `event.request.url` (same field `beforeSend` handles for error events, but
+  //     transaction events go through a separate hook that never touched it before)
+  //   - the pageload root span's own `description` and `data['url.path']`/`['url.full']`,
+  //     reachable via the separate `beforeSendSpan` hook (called per-span, not per-event)
+  describe('capability token in performance transactions (#1514 fix round 9)', () => {
+    test('redacts the token from event.transaction, contexts.trace.data, and request.url', () => {
+      const event = {
+        type: 'transaction',
+        transaction: `/cancel-deletion/${CANCEL_TOKEN}`,
+        contexts: {
+          trace: {
+            op: 'pageload',
+            origin: 'auto.pageload.browser',
+            data: {
+              'sentry.origin': 'auto.pageload.browser',
+              'sentry.op': 'pageload',
+              'url.path': `/cancel-deletion/${CANCEL_TOKEN}`,
+              'url.full': `http://app.example.com/cancel-deletion/${CANCEL_TOKEN}`,
+            },
+          },
+        },
+        request: {
+          url: `http://app.example.com/cancel-deletion/${CANCEL_TOKEN}`,
+        },
+        transaction_info: { source: 'url' },
+      }
+
+      const result = beforeSendTransaction(event as Parameters<typeof beforeSendTransaction>[0], {})
+
+      expect(result?.transaction).not.toContain(CANCEL_TOKEN)
+      expect(result?.transaction).toBe('/cancel-deletion/[redacted]')
+
+      const traceData = (result?.contexts as Record<string, { data: Record<string, string> }> | undefined)?.trace.data
+      expect(traceData?.['url.path']).not.toContain(CANCEL_TOKEN)
+      expect(traceData?.['url.full']).not.toContain(CANCEL_TOKEN)
+
+      expect(result?.request?.url).not.toContain(CANCEL_TOKEN)
+      expect(result?.request?.url).toBe('http://app.example.com/cancel-deletion/[redacted]')
+    })
+
+    test('redacts the token from a child span (fetch/xhr) description and data via beforeSendSpan', () => {
+      const span = {
+        description: `GET /households/invites/${CANCEL_TOKEN}/accept`,
+        op: 'http.client',
+        span_id: 'be2b2580bf3910d9',
+        trace_id: 'c7354c615a484009a21cf9c2d4d9c729',
+        start_timestamp: 0,
+        timestamp: 1,
+        origin: 'auto.http.browser',
+        data: {
+          'url.path': `/households/invites/${CANCEL_TOKEN}/accept`,
+          'url.full': `http://app.example.com/api/v1/households/invites/${CANCEL_TOKEN}/accept`,
+          'http.method': 'GET',
+        },
+      }
+
+      const result = beforeSendSpan(span as Parameters<typeof beforeSendSpan>[0])
+
+      expect(result.description).not.toContain(CANCEL_TOKEN)
+      expect(result.data?.['url.path']).not.toContain(CANCEL_TOKEN)
+      expect(result.data?.['url.full']).not.toContain(CANCEL_TOKEN)
+      // Non-URL span fields must survive untouched.
+      expect(result.op).toBe('http.client')
+      expect(result.data?.['http.method']).toBe('GET')
+    })
   });
 });

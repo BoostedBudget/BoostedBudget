@@ -2,6 +2,15 @@ import * as Sentry from '@sentry/react'
 import type { Breadcrumb, ErrorEvent, EventHint } from '@sentry/react'
 import { redactPii, redactUrlPath, sanitizeUrl } from './piiScrubbing'
 
+// `SpanJSON`/`TransactionEvent` aren't part of `@sentry/react`'s public export surface
+// (they live in `@sentry/core`, which this package doesn't declare as a direct
+// dependency) — derived structurally from `Sentry.init`'s own options type instead of
+// importing them by name.
+type SentryInitOptions = NonNullable<Parameters<typeof Sentry.init>[0]>
+type BeforeSendTransactionFn = NonNullable<SentryInitOptions['beforeSendTransaction']>
+type BeforeSendSpanFn = NonNullable<SentryInitOptions['beforeSendSpan']>
+type TransactionEvent = Parameters<BeforeSendTransactionFn>[0]
+
 /**
  * Scrubbing hooks shared by `initSentry` and exercised directly in tests.
  *
@@ -42,6 +51,8 @@ import { redactPii, redactUrlPath, sanitizeUrl } from './piiScrubbing'
 export function sentryScrubbingOptions(): {
   beforeBreadcrumb: (breadcrumb: Breadcrumb) => Breadcrumb | null
   beforeSend: (event: ErrorEvent, hint: EventHint) => ErrorEvent | null
+  beforeSendTransaction: (event: TransactionEvent, hint: EventHint) => TransactionEvent | null
+  beforeSendSpan: BeforeSendSpanFn
 } {
   return {
     beforeBreadcrumb(breadcrumb) {
@@ -83,6 +94,51 @@ export function sentryScrubbingOptions(): {
         event.contexts = redactPii(event.contexts)
       }
       return event
+    },
+    // Issue #1514 (fix round 9): `beforeSend` is ERROR/message-only — it never sees
+    // performance transaction events, which are a completely separate pipeline. With
+    // `tracesSampleRate: 0.1` and `browserTracingIntegration()` enabled below, roughly
+    // 1 in 10 page views of a capability route (e.g. /cancel-deletion/{token}) emitted a
+    // transaction whose OWN name is the raw pathname — bypassing every fix in rounds 6-8
+    // entirely, since none of them touch this hook.
+    //
+    // Verified empirically (not guessed): ran the real `browserTracingIntegration()`
+    // against a pageload at a token-bearing path with a recording transport and inspected
+    // the actual event. The token showed up in `event.transaction` (the transaction
+    // "name"), `event.contexts.trace.data['url.path']`/`['url.full']`, and
+    // `event.request.url` — reusing the exact same `redactUrlPath`/`sanitizeUrl`/
+    // `redactPii` helpers `beforeSend` above uses, not a forked copy.
+    beforeSendTransaction(event) {
+      if (typeof event.transaction === 'string') {
+        event.transaction = redactUrlPath(event.transaction)
+      }
+      if (event.request?.url) {
+        event.request = { ...event.request, url: sanitizeUrl(event.request.url) }
+      }
+      if (event.request) {
+        event.request = redactPii(event.request)
+      }
+      if (event.contexts) {
+        event.contexts = redactPii(event.contexts)
+      }
+      if (event.extra) {
+        event.extra = redactPii(event.extra)
+      }
+      if (event.spans) {
+        event.spans = redactPii(event.spans)
+      }
+      return event
+    },
+    // Issue #1514 (fix round 9): child spans (e.g. an instrumented fetch/XHR call to a
+    // capability route) are ALSO reachable independently of `beforeSendTransaction` — this
+    // hook runs once per span. Verified the same way: a span's `description` (e.g.
+    // "GET /households/invites/{token}/accept") and `data['url.path']`/`['url.full']`
+    // carry the token exactly like the transaction-level fields above.
+    beforeSendSpan(span) {
+      if (typeof span.description === 'string') {
+        span.description = redactUrlPath(span.description)
+      }
+      return redactPii(span)
     },
   }
 }
