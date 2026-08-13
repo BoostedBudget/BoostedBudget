@@ -75,13 +75,20 @@ export function MobileNav({
 
               <div className="border-t pt-4">
                 <div className="flex items-center gap-3 mb-4">
+                  {/*
+                   * Issue #1514: PostHog session replay records DOM attributes verbatim;
+                   * data-ph-mask masks element TEXT only, never attribute values. The avatar
+                   * `alt` must stay structural (no PII) — the visible name/email carry
+                   * data-ph-mask instead, since the avatar sits directly beside them and is
+                   * decorative in context.
+                   */}
                   <Avatar className="h-10 w-10">
-                    <AvatarImage src={user?.picture} alt={user?.name || 'User'} />
+                    <AvatarImage src={user?.picture} alt="User avatar" />
                     <AvatarFallback>{initials}</AvatarFallback>
                   </Avatar>
                   <div className="flex flex-col">
-                    <span className="text-sm font-medium">{user?.name}</span>
-                    <span className="text-xs text-muted-foreground">{user?.email}</span>
+                    <span className="text-sm font-medium" data-ph-mask>{user?.name}</span>
+                    <span className="text-xs text-muted-foreground" data-ph-mask>{user?.email}</span>
                   </div>
                 </div>
 

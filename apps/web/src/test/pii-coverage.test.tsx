@@ -176,6 +176,13 @@ const { UsersPage } = await import('@/features/admin/components/UsersPage')
 const { WebhooksPage } = await import('@/features/admin/components/WebhooksPage')
 const { HealthDashboardPage } = await import('@/features/admin/components/HealthDashboardPage')
 
+// --- Round 17 (#1514): AutoCategorizationRuleEditor target-tags + global chrome (name/email) ---
+const { AutoCategorizationRuleEditor } = await import(
+  '@/features/auto-categorization/components/AutoCategorizationRuleEditor'
+)
+const { MobileNav } = await import('@/components/layout/MobileNav')
+const { UserDropdown } = await import('@/components/layout/UserDropdown')
+
 const SENTINEL_MERCHANT = 'SENTINEL_MERCHANT_XYZ'
 const SENTINEL_NICKNAME = 'SENTINEL_NICKNAME_ABC'
 const SENTINEL_DESC = 'SENTINEL_DESC_QRS'
@@ -189,6 +196,7 @@ const SENTINEL_CATEGORY_NAME = 'SENTINEL_CATEGORY_RSTU'
 const SENTINEL_EMAIL = 'sentinel@pii-test.invalid'
 const SENTINEL_ACCOUNT_NAME = 'SENTINEL_ACCOUNT_ZXCV'
 const SENTINEL_SECURITY_NAME = 'SENTINEL_SECURITY_QRST'
+const SENTINEL_USER_NAME = 'Sentinel Username Person'
 
 function createWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
@@ -2515,5 +2523,92 @@ describe('PII coverage — Round 16: HealthDashboardPage', () => {
       timeout: 3000,
     })
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+})
+
+// --- Round 17 (#1514): three call sites found unmasked/leaking after fourteen prior review
+// rounds because none of them was imported into this gate. This is the per-call-site
+// stopgap; issue #1521 tracks the structural fix (a lint rule / component-level default) so
+// this class of gap stops depending on someone remembering to add an import here. ---
+
+describe('PII coverage — Round 17: AutoCategorizationRuleEditor target tags', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseGetUserCategories.mockReturnValue({ data: [], isLoading: false, error: null })
+    mockUseGetPlaidPrimaryCategories.mockReturnValue({ data: [], isLoading: false, error: null })
+  })
+
+  const ruleWithTag = {
+    id: 'acat-pii-17',
+    user_id: 'user-1',
+    name: 'Sentinel Editor Rule',
+    enabled: true,
+    priority: 1,
+    conditions: [],
+    condition_logic: 'AND' as const,
+    target_kind: null,
+    target_tags: [SENTINEL_TAG],
+    tag_behavior: 'add' as const,
+    source: 'manual' as const,
+    match_count: 0,
+    override_count: 0,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
+  }
+
+  test('target tag remove button never leaks the tag value into a DOM attribute', async () => {
+    render(
+      <AutoCategorizationRuleEditor
+        mode="edit"
+        rule={ruleWithTag}
+        onSave={mock(async () => {})}
+        onCancel={mock(() => {})}
+      />,
+      { wrapper: createWrapper() },
+    )
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_TAG, fieldDescription: 'auto_cat_rule.target_tags remove-button label (#1514)' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+describe('PII coverage — Round 17: MobileNav / UserDropdown global chrome (name + email)', () => {
+  const sentinelUser = { name: SENTINEL_USER_NAME, email: SENTINEL_EMAIL, picture: undefined }
+  const sentinels: PIISentinel[] = [
+    { value: SENTINEL_USER_NAME, fieldDescription: 'authenticated user.name in global nav chrome' },
+    { value: SENTINEL_EMAIL, fieldDescription: 'authenticated user.email in global nav chrome' },
+  ]
+
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('MobileNav masks the signed-in user name/email and uses a structural avatar alt', async () => {
+    const user = userEvent.setup()
+    render(
+      <MobileNav
+        isAuthenticated={true}
+        user={sentinelUser}
+        onLogout={mock(() => {})}
+        onLogin={mock(() => {})}
+      />,
+      { wrapper: createWrapper() },
+    )
+    await user.click(screen.getByRole('button', { name: /open menu/i }))
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  test('UserDropdown masks the signed-in user name/email and uses a structural avatar alt', async () => {
+    const user = userEvent.setup()
+    render(
+      <UserDropdown user={sentinelUser} onLogout={mock(() => {})} />,
+      { wrapper: createWrapper() },
+    )
+    await user.click(screen.getByRole('button', { name: /user menu/i }))
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 })

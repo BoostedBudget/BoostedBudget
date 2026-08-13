@@ -5,7 +5,7 @@
  * Issue #346: Custom Transaction Categorization Rules
  */
 
-import { useState, useCallback, useMemo } from 'react'
+import { useId, useState, useCallback, useMemo } from 'react'
 import type {
   CategorizationRule,
   CreateRuleRequest,
@@ -186,6 +186,14 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
   const [errors, setErrors] = useState<FormErrors>({})
   const [conditionErrors, setConditionErrors] = useState<ConditionErrors>({})
   const [pfcDetailedPrimarySelections, setPfcDetailedPrimarySelections] = useState<Record<number, string>>({})
+
+  // Issue #1514: PostHog session replay records DOM attributes verbatim; data-ph-mask
+  // masks element TEXT only, never attribute values. The tag remove button's accessible
+  // name must carry the tag (for rotor/"buttons list" screen-reader navigation across
+  // multiple simultaneously-rendered tags), but no attribute may ever contain it — so the
+  // button's `aria-labelledby` holds only an opaque id, and the accessible name is computed
+  // at read time from a `data-ph-mask`'d sr-only span's TEXT (matches IncomeSourceItem.tsx).
+  const removeTagLabelId = useId()
 
   // Lazy-load detailed categories for pfc_detailed conditions or pfc-kind targets
   const needsPlaidDetailed = useMemo(
@@ -905,20 +913,26 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
         <div className="mb-4">
           <label className={labelClass}>Target Tags</label>
           <div className="flex flex-wrap gap-1.5 mb-2">
-            {targetTags.map((tag) => (
-              <span key={tag} className="inline-flex items-center gap-1 px-2 py-1 text-[0.8125rem] bg-info/10 text-info rounded">
-                {tag}
-                <button
-                  type="button"
-                  className="p-0 text-base leading-none border-none bg-transparent text-current cursor-pointer opacity-70 hover:opacity-100"
-                  onClick={() => removeTag(tag)}
-                  disabled={saving}
-                  aria-label={`Remove tag ${tag}`}
-                >
-                  &times;
-                </button>
-              </span>
-            ))}
+            {targetTags.map((tag, index) => {
+              const labelId = `${removeTagLabelId}-${index}`
+              return (
+                <span key={tag} className="inline-flex items-center gap-1 px-2 py-1 text-[0.8125rem] bg-info/10 text-info rounded">
+                  <span data-ph-mask>{tag}</span>
+                  <span id={labelId} className="sr-only" data-ph-mask>
+                    {`Remove tag ${tag}`}
+                  </span>
+                  <button
+                    type="button"
+                    className="p-0 text-base leading-none border-none bg-transparent text-current cursor-pointer opacity-70 hover:opacity-100"
+                    onClick={() => removeTag(tag)}
+                    disabled={saving}
+                    aria-labelledby={labelId}
+                  >
+                    &times;
+                  </button>
+                </span>
+              )
+            })}
           </div>
           <div className="flex gap-2">
             {tags.length > 0 ? (

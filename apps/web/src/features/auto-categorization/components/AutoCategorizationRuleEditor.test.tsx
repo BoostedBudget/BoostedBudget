@@ -390,6 +390,42 @@ describe('AutoCategorizationRuleEditor', () => {
 
       expect(screen.queryByText('morning')).not.toBeInTheDocument()
     })
+
+    // Issue #1514: PostHog session replay records DOM attributes verbatim; data-ph-mask
+    // masks element TEXT only, never attribute values. aria-label={`Remove tag ${tag}`}
+    // put the user-authored tag directly into an attribute — assert on the attribute
+    // itself (not the accessible name), because an accessible-name assertion stays green
+    // even if a future "simplification" reverts to a plain aria-label.
+    it('never puts a target tag value into any DOM attribute, and keeps distinct accessible names per tag (issue #1514)', () => {
+      const ruleWithTwoTags: CategorizationRule = {
+        ...mockExistingRule,
+        target_tags: ['morning', 'evening'],
+      }
+      const { container } = render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithTwoTags}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          categories={mockCategories}
+        />
+      )
+
+      // No attribute anywhere in the rendered tree may contain a raw tag value.
+      for (const el of container.querySelectorAll('*')) {
+        for (const attr of el.getAttributeNames()) {
+          const value = (el.getAttribute(attr) ?? '').toLowerCase()
+          expect(value).not.toContain('morning')
+          expect(value).not.toContain('evening')
+        }
+      }
+
+      // Two tags render simultaneously — each remove button must still have a distinct
+      // accessible name (screen-reader rotor / "buttons list" navigation depends on this).
+      const removeMorningBtn = screen.getByRole('button', { name: /morning/i })
+      const removeEveningBtn = screen.getByRole('button', { name: /evening/i })
+      expect(removeMorningBtn).not.toBe(removeEveningBtn)
+    })
   })
 
   describe('Saving state', () => {
