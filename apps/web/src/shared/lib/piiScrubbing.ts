@@ -319,6 +319,24 @@ export function sanitizeUrl(url: string): string {
  * stays a targeted rewrite, not a content scan, because `redactUrlPath` only
  * ever matches the small set of known capability-route shapes — an ordinary
  * error message containing a slash or a non-capability path is untouched.
+ *
+ * KNOWN LIMITATION (fix round 10, deliberate, not fixed): this function redacts
+ * VALUES only — a denylisted word or a capability-route shape embedded in a
+ * PROPERTY KEY (e.g. `{ [`token_${rawToken}`]: 'x' }`, or a key that is itself
+ * `https://app.example.com/cancel-deletion/<token>`) survives untouched, and a
+ * transport probe confirmed this concretely: a token placed in a
+ * `contexts.trace.data` key was not redacted. This is deliberately NOT fixed,
+ * for two reasons: (1) no known code path in this app or the Sentry/browser-
+ * tracing SDK puts a capability token or PII in a key name — every real
+ * exposure found across fix rounds 6-10 was in a VALUE; (2) renaming keys is a
+ * genuinely riskier transform than redacting values — two originally-distinct
+ * keys could redact to the same output key and silently overwrite each other
+ * (an object literally cannot hold two entries with the same key), and Sentry's
+ * own event shape depends on specific literal key names (`url`, `data`,
+ * `headers`, ...) that a blanket key-rewrite could corrupt if a redaction
+ * pattern ever coincidentally matched part of one. If a real key-based leak is
+ * ever found, prefer a narrow, explicit fix at the call site over a general
+ * key-scanning pass here.
  */
 export function redactPii<T>(value: T, depth = 0, seen: WeakSet<object> = new WeakSet()): T {
   if (typeof value === 'string') return redactUrlPath(value) as unknown as T

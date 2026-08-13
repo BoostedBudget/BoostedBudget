@@ -547,5 +547,94 @@ describe('sentry scrubbing options', () => {
       expect(result.op).toBe('http.client')
       expect(result.data?.['http.method']).toBe('GET')
     })
+
+    // Issue #1514 (fix round 10): a second empirical SDK probe — extending the round-9
+    // probe to inject the fields a transaction event can ALSO carry (tags, measurements,
+    // user, sdkProcessingMetadata, breadcrumbs, server_name) — found the token surviving
+    // in `tags.route` specifically (browser tracing sets route-shaped tags), confirmed by
+    // a real transport capturing the actual envelope. `event.tags` was never touched by
+    // round 9's `beforeSendTransaction`. This test covers every field the probe checked,
+    // not just the one named, per the reviewer's explicit instruction not to fix only the
+    // cited field.
+    test('redacts the token from tags, user, sdkProcessingMetadata, breadcrumbs, and server_name — not just tags', () => {
+      const event = {
+        type: 'transaction',
+        transaction: `/cancel-deletion/${CANCEL_TOKEN}`,
+        tags: { route: `/cancel-deletion/${CANCEL_TOKEN}`, custom: 'foo' },
+        measurements: { lcp: { value: 123, unit: 'millisecond' } },
+        user: { id: 'user_1', email: `user+${CANCEL_TOKEN}@example.com` },
+        // `server_name` is a Node-SDK-flavored field the browser SDK realistically never
+        // populates with a URL — this value is deliberately shaped like a capability route
+        // (not a realistic hostname) to prove the defensive `redactUrlPath` pass on it
+        // works IF it ever did carry one, not because the probe found this happening.
+        server_name: `https://app.example.com/cancel-deletion/${CANCEL_TOKEN}`,
+        sdkProcessingMetadata: {
+          dynamicSamplingContext: { transaction: `/cancel-deletion/${CANCEL_TOKEN}` },
+        },
+        breadcrumbs: [
+          { category: 'navigation', message: `Navigated to https://app.example.com/cancel-deletion/${CANCEL_TOKEN}` },
+        ],
+      }
+
+      const result = beforeSendTransaction(event as Parameters<typeof beforeSendTransaction>[0], {})
+
+      const r = result as unknown as Record<string, unknown>
+      expect(JSON.stringify(r.tags)).not.toContain(CANCEL_TOKEN)
+      expect((r.tags as Record<string, string>).custom).toBe('foo')
+      expect(JSON.stringify(r.user)).not.toContain(CANCEL_TOKEN)
+      expect((r.user as Record<string, string>).id).toBe('user_1')
+      expect(r.server_name).not.toContain(CANCEL_TOKEN)
+      expect(JSON.stringify(r.sdkProcessingMetadata)).not.toContain(CANCEL_TOKEN)
+      expect(JSON.stringify(r.breadcrumbs)).not.toContain(CANCEL_TOKEN)
+      // measurements never carry a URL in practice (numeric value + unit), but must
+      // survive the pass through unchanged rather than being dropped.
+      expect((r.measurements as Record<string, { value: number }>).lcp.value).toBe(123)
+    })
+  });
+
+  // Issue #1514 (fix round 11): a live SDK probe (captureException on a real page at a
+  // token-bearing route, with `browserTracingIntegration` active) found the SAME fields
+  // round 10 fixed on TransactionEvent were NEVER fixed on ErrorEvent — `beforeSend` only
+  // ever walked `request`/`exception`/`extra`/`contexts`. `browserTracingIntegration`
+  // populates `tags`/`transaction` on error events too (they share the same active page),
+  // so this was a live gap, not theoretical, even though nothing in this app currently
+  // calls `Sentry.setUser`/`setTag` directly (verified by grep) to also populate `user`.
+  describe('error events cover the SAME field set as transaction events (#1514 fix round 11)', () => {
+    test('redacts the token from event.transaction and tags on an ErrorEvent (not just TransactionEvent)', () => {
+      const event = {
+        exception: { values: [{ type: 'Error', value: 'boom' }] },
+        transaction: `/cancel-deletion/${CANCEL_TOKEN}`,
+        tags: { route: `/cancel-deletion/${CANCEL_TOKEN}`, custom: 'foo' },
+      }
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {})
+
+      expect(result?.transaction).not.toContain(CANCEL_TOKEN)
+      expect(result?.transaction).toBe('/cancel-deletion/[redacted]')
+      const tags = result?.tags as Record<string, string>
+      expect(tags.route).not.toContain(CANCEL_TOKEN)
+      expect(tags.custom).toBe('foo')
+    })
+
+    test('redacts the token from user, breadcrumbs, and sdkProcessingMetadata on an ErrorEvent', () => {
+      const event = {
+        exception: { values: [{ type: 'Error', value: 'boom' }] },
+        user: { id: 'user_1', email: `user+${CANCEL_TOKEN}@example.com` },
+        breadcrumbs: [
+          { category: 'navigation', message: `Navigated to https://app.example.com/cancel-deletion/${CANCEL_TOKEN}` },
+        ],
+        sdkProcessingMetadata: {
+          dynamicSamplingContext: { transaction: `/cancel-deletion/${CANCEL_TOKEN}` },
+        },
+      }
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {})
+
+      const r = result as unknown as Record<string, unknown>
+      expect(JSON.stringify(r.user)).not.toContain(CANCEL_TOKEN)
+      expect((r.user as Record<string, string>).id).toBe('user_1')
+      expect(JSON.stringify(r.breadcrumbs)).not.toContain(CANCEL_TOKEN)
+      expect(JSON.stringify(r.sdkProcessingMetadata)).not.toContain(CANCEL_TOKEN)
+    })
   });
 });
