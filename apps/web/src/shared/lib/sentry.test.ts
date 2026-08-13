@@ -277,5 +277,46 @@ describe('sentry scrubbing options', () => {
       expect(frame.filename).toBe('app.js');
       expect(frame.function).toBe('submitCheckout');
     });
+
+    test('scrubs PII carried directly on event.request (headers, cookies, data) not just its url', () => {
+      // Regression test: event.request previously only had its `url` field
+      // rewritten (query-stripped) by beforeSend; every other Sentry request
+      // field — query_string, headers, cookies, data — passed through
+      // untouched. This event puts PII under `request` itself (not `extra`),
+      // which is exactly the shape the earlier Axios test above never
+      // exercised (that test only ever put `url` under `request`).
+      const event = {
+        request: {
+          url: 'https://api.example/accounts?account_id=acc_123',
+          query_string: 'account_id=acc_123&token=secret',
+          headers: { Authorization: 'Bearer secret', Cookie: 'session=abc' },
+          cookies: { session: 'abc' },
+          data: { account_name: 'Private Checking', currentBalance: 1234.56 },
+        },
+      };
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {});
+
+      const request = result?.request as Record<string, unknown>;
+      const headers = request.headers as Record<string, unknown>;
+      const cookies = request.cookies as Record<string, unknown>;
+      const data = request.data as Record<string, unknown>;
+
+      // url must still be query-stripped (pre-existing behaviour, must not regress)
+      expect(request.url).toBe('https://api.example/accounts');
+      // headers carrying auth/session secrets must be redacted
+      expect(headers.Authorization).toBe('[Redacted]');
+      expect(headers.Cookie).toBe('[Redacted]');
+      // financial PII in request body data must be redacted
+      expect(data.account_name).toBe('[Redacted]');
+      expect(data.currentBalance).toBe('[Redacted]');
+      // Known scope limit of key-based (not content-based) redaction: neither
+      // `query_string` nor `cookies` themselves match a denylisted token, and
+      // their *values*/nested keys are not content-scanned, so these survive
+      // unredacted. Pinned here deliberately so a future denylist change that
+      // silently starts redacting them doesn't look like a regression.
+      expect(request.query_string).toBe('account_id=acc_123&token=secret');
+      expect(cookies.session).toBe('abc');
+    });
   });
 });

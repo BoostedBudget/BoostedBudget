@@ -16,10 +16,16 @@ import { redactPii, stripQueryString } from './piiScrubbing'
  *   `ErrorBoundary.tsx`, `FeatureErrorBoundary.tsx`), and any Axios error
  *   `config`/`response` data an error handler attaches to `extra`/`contexts`.
  *   It also strips query strings from request URLs, which can carry
- *   account/session identifiers, and redacts `event.exception` itself —
- *   covering stack-frame `vars` (local variables some SDKs attach per
- *   frame) by property name, the same as `extra`/`contexts`. The exception
- *   `value` (message string) is never content-scanned, only passed through
+ *   account/session identifiers, and redacts `event.exception`, `event.request`,
+ *   `event.extra`, and `event.contexts` by property name — covering
+ *   `event.request`'s `headers`/`data`/`query_string` fields (e.g. an
+ *   `Authorization`/`Cookie` header) as well as stack-frame `vars` (local
+ *   variables some SDKs attach per frame) inside `event.exception`. Redaction
+ *   is by *key name* only (see `redactPii` in `piiScrubbing.ts`): a
+ *   `query_string` value or a nested `cookies` object whose keys don't
+ *   themselves match a denylisted token is passed through unredacted — this
+ *   is a known scope limit of key-based matching, not a bug fixed here. The
+ *   exception `value` (message string) is never content-scanned, only passed through
  *   the same by-key redaction as everything else, so a plain error message
  *   is preserved unless it happens to sit under a denylisted key.
  */
@@ -38,6 +44,13 @@ export function sentryScrubbingOptions(): {
     beforeSend(event) {
       if (event.request?.url) {
         event.request = { ...event.request, url: stripQueryString(event.request.url) }
+      }
+      // `redactPii` itself special-cases any property literally named `url`
+      // by running it through `stripQueryString`, so redacting `event.request`
+      // after the explicit strip above re-strips the (already-stripped) url
+      // as a no-op — it cannot undo or bypass the strip above.
+      if (event.request) {
+        event.request = redactPii(event.request)
       }
       if (event.exception) {
         event.exception = redactPii(event.exception)
