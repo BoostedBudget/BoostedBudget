@@ -154,31 +154,39 @@ const DENYLIST_MAX_WORDS = Math.max(
  * matched: every entry that matched via the un-filtered tokens still matches
  * once the (non-matching) digit tokens are removed from between them.
  *
- * **`*_id` / `*Id` allowlisting.** A key whose last token is `id` (e.g.
- * `merchant_id`, `institutionId`) is exempted from the bare-token window
- * scan below and is redacted only if the *whole* tokenized key is itself an
- * explicit `PII_PROPERTY_DENYLIST` entry (`account_id`, `link_session_id` —
- * currently the only two). This is a deliberate, narrow allowlist, not a
- * byproduct: `merchant_id`/`institution_id` are opaque identifiers (the
- * documented `trackEvent` pattern — pass `{ merchant_id: uuid }`, never the
- * name), and without this carve-out they were being deleted anyway, because
- * they still contain the bare `merchant`/`institution` token that the window
- * scan matches regardless of the trailing `id`. `account_id` and
- * `link_session_id` stay redacted because they're still explicit denylist
- * entries — this carve-out only stops the *implicit* bare-token match, it
- * does not remove anything from the denylist itself. Any future `*_id` field
- * that should be redacted must be added to `PII_PROPERTY_DENYLIST` as its own
- * full compound entry; adding its non-id word as a new bare token would not
- * work, since this carve-out bypasses the window scan entirely for id keys.
+ * **`ID_ALLOWLIST`.** Exactly two keys are exempted from the bare-token
+ * window scan below, matched on their normalized/tokenized form so both
+ * spellings hit one entry: `merchant_id` (covers `merchant_id` and
+ * `merchantId`) and `institution_id` (covers `institution_id` and
+ * `institutionId`). Nothing else is exempted. These are opaque identifiers —
+ * the documented `trackEvent` pattern is to pass `{ merchant_id: uuid }`,
+ * never the name — and without this carve-out they'd be deleted anyway,
+ * because they still contain the bare `merchant`/`institution` token the
+ * window scan matches regardless of the trailing `id`.
+ *
+ * This replaces an earlier version of this carve-out that exempted *every*
+ * key whose last token is `id`, not just these two. That was a real privacy
+ * regression: any denylisted bare token followed by an `id` suffix
+ * (`email_id`, `nickname_id`, `balance_id`, `merchant_name_id`, ...) survived
+ * scrubbing too, on both the PostHog and Sentry paths — see
+ * `piiScrubbing.test.ts`'s "defect 2" test block for the adversarial keys
+ * that regression let through. A shape-based exemption (anything ending in
+ * `id`) is not a narrow allowlist merely because few denylist *entries*
+ * happen to end in `_id`; the number of incoming *keys* it exempts is
+ * unbounded. `ID_ALLOWLIST` fixes that by naming the two keys explicitly:
+ * everything else — including any future `*_id` field — goes through the
+ * ordinary token scan and is redacted if it contains a denylisted token.
+ * Add a new key here only if it is itself an opaque identifier with no PII
+ * in its name; do not add it just because it ends in `id`.
  */
+const ID_ALLOWLIST = new Set(['merchant_id', 'institution_id'])
+
 export function isPiiKey(key: string): boolean {
   if (PII_PROPERTY_DENYLIST.has(key.toLowerCase())) return true
   const tokens = tokenize(key).filter(token => !/^\d+$/.test(token))
   if (tokens.length === 0) return false
 
-  if (tokens[tokens.length - 1] === 'id') {
-    return PII_PROPERTY_DENYLIST.has(tokens.join('_'))
-  }
+  if (ID_ALLOWLIST.has(tokens.join('_'))) return false
 
   const maxWindow = Math.min(DENYLIST_MAX_WORDS, tokens.length)
   for (let windowSize = 1; windowSize <= maxWindow; windowSize++) {
