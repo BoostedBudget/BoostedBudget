@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { IncomeSourceItem } from './IncomeSourceItem'
 import type { IncomeSource } from '../../types'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 describe('IncomeSourceItem', () => {
   const mockOnRemove = mock(() => {})
@@ -151,7 +152,9 @@ describe('IncomeSourceItem', () => {
   // ==========================================================================
 
   describe('Accessibility', () => {
-    it('has accessible remove button with aria-label', () => {
+    it('has accessible remove button with a generic, non-PII aria-label for tag sources', () => {
+      // Issue #1514: the label must not interpolate the tag value -- aria-label is
+      // recorded verbatim by session replay and cannot be masked like element text.
       const source: IncomeSource = {
         type: 'tag',
         value: 'Freelance',
@@ -159,11 +162,12 @@ describe('IncomeSourceItem', () => {
 
       render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
 
-      const removeButton = screen.getByRole('button', { name: /remove.*freelance/i });
+      const removeButton = screen.getByRole('button', { name: /remove tag income source/i });
       expect(removeButton).toBeInTheDocument();
+      expect(removeButton.getAttribute('aria-label')).not.toContain('Freelance');
     });
 
-    it('has accessible remove button for pfc_primary with formatted name', () => {
+    it('has accessible remove button with a generic, non-PII aria-label for pfc_primary sources', () => {
       const source: IncomeSource = {
         type: 'pfc_primary',
         value: 'INCOME',
@@ -171,7 +175,7 @@ describe('IncomeSourceItem', () => {
 
       render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
 
-      const removeButton = screen.getByRole('button', { name: /remove.*income/i });
+      const removeButton = screen.getByRole('button', { name: /remove category income source/i });
       expect(removeButton).toBeInTheDocument();
     });
 
@@ -273,6 +277,39 @@ describe('IncomeSourceItem', () => {
     });
   });
 });
+
+describe('remove button accessible name excludes PII (issue #1514: aria-label is unmaskable)', () => {
+  const mockOnRemove = mock(() => {})
+
+  // Every DOM attribute on the button -- not just aria-label -- must be free of the PII.
+  // aria-label text is recorded verbatim by PostHog session replay and data-ph-mask only
+  // covers element TEXT content, never attribute values.
+  function attributeValues(el: Element): string[] {
+    return Array.from(el.attributes).map((a) => a.value)
+  }
+
+  it('does not include the user-entered tag value in any DOM attribute on the remove button', () => {
+    const source: IncomeSource = {
+      type: 'tag',
+      value: 'ZzTagSentinelZz-Freelance-Client-Acme',
+    }
+
+    render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />)
+
+    const button = screen.getByRole('button', { name: /remove/i })
+    const values = attributeValues(button)
+    expect(values.some((v) => v.includes('ZzTagSentinelZz-Freelance-Client-Acme'))).toBe(false)
+
+    // Scope the scanner to the button itself: the visible tag text (a separate span) is
+    // intentionally left unmasked per the code comment above data-ph-mask at ~line 73
+    // ("pfc/tag labels aren't financial PII") -- that policy is out of scope here. This
+    // test is only about the button's own attributes, which must never carry the value.
+    const sentinels: PIISentinel[] = [
+      { value: 'ZzTagSentinelZz-Freelance-Client-Acme', fieldDescription: 'source.value (tag)' },
+    ]
+    expect(scanForUnmaskedPII(button, sentinels)).toEqual([])
+  })
+})
 
 describe('Unknown type fallback', () => {
   const mockOnRemove = mock(() => {})
