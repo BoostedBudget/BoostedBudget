@@ -8,9 +8,18 @@
 -- signature_valid = false row removes that residual poisoning risk without adding new
 -- application-level "is this duplicate row actually trustworthy?" logic to the hot path.
 --
--- Safe to run at any deployment stage: as of this writing there are zero production users (see
--- issue tracker), so this is a no-op in practice; it is still the correct one-time fix for
--- environments (staging/QA) that may carry pre-fix rows, and is idempotent (deletes nothing on a
--- second run once the offending rows are gone).
+-- This is a one-time cleanup, and a no-op in production today: as of this writing there are zero
+-- production users (see issue tracker), so there are no rows there to delete. It is the correct
+-- one-time fix for staging/QA environments that may carry pre-fix rows, and it is idempotent
+-- (deletes nothing on a second run once the offending rows are gone).
+--
+-- This migration's ordering relative to a Fly rolling deploy is NOT resolved by that idempotency
+-- and does matter (see #1527): backend/scripts/docker-entrypoint.sh:116 runs migrations before
+-- the new machine starts serving, but backend/fly.staging.toml:100's `strategy = "rolling"` keeps
+-- the OLD release serving traffic throughout the rollout. That old release still writes
+-- signature_valid = false rows on every invalid-signature delivery it receives, so a row written
+-- after this DELETE runs — but before the old release stops serving — survives the purge
+-- undeleted. That is accepted, documented risk here, not something this migration fixes; #1527
+-- tracks whatever follow-up (if any) is needed.
 DELETE FROM paddle_webhook_events WHERE signature_valid = false;
 DELETE FROM webhook_events WHERE signature_valid = false;
