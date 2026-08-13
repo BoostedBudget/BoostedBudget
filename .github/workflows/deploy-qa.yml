@@ -152,6 +152,14 @@ jobs:
             echo "::notice::Triggered by: @${DEPLOY_AUTHOR}"
           fi
 
+          # #1514: fail loudly instead of letting a blank/unresolved HEAD_SHA flow
+          # downstream, where an empty `ref:` on a checkout step silently falls back
+          # to the default branch instead of erroring — a worse failure than today.
+          if [ -z "$HEAD_SHA" ] || [ "$HEAD_SHA" = "null" ]; then
+            echo "::error::Failed to resolve an immutable commit SHA for this deployment (got '${HEAD_SHA}'). Refusing to proceed with an unpinned ref."
+            exit 1
+          fi
+
           # Use randomized heredoc delimiters for $GITHUB_OUTPUT: DEPLOY_TITLE and
           # HEAD_REF originate from PR-controlled data (title/branch name) and may
           # contain newlines or content that collides with a fixed delimiter.
@@ -211,10 +219,15 @@ jobs:
       contents: read
       packages: write
     outputs:
-      # Pass through the build target info to downstream jobs
+      # Pass through the build target info to downstream jobs.
+      # #1514: `sha` is the immutable commit checked out and built — it is the
+      # ONLY value downstream jobs may use as a checkout `ref:`. There is
+      # intentionally no `ref` (mutable branch name) output here; passing that
+      # around invited a TOCTOU where a later push to the branch could deploy
+      # unreviewed code under QA secrets while the summary still named the
+      # originally-reviewed commit.
       tag_prefix: ${{ steps.build-target.outputs.tag_prefix }}
       sha: ${{ steps.build-target.outputs.sha }}
-      ref: ${{ steps.build-target.outputs.ref }}
     env:
       UNIQUE_WORKSPACE: workspace-build-images-${{ matrix.component }}-${{ github.run_id }}
 
@@ -234,20 +247,32 @@ jobs:
           HEAD_SHA: ${{ needs.deployment-metadata.outputs.head_sha }}
           TAG_PREFIX: ${{ needs.deployment-metadata.outputs.tag_prefix }}
         run: |
-          echo "ref=${HEAD_REF}" >> "$GITHUB_OUTPUT"
+          # #1514: HEAD_REF (mutable branch name) is logged for humans only and
+          # MUST NOT be used as a checkout ref — see job outputs comment above.
+          # Guard against an empty/unresolved SHA rather than letting a blank
+          # `ref:` on a later checkout step silently fall back to the default
+          # branch (also checked at the point HEAD_SHA is first produced, in
+          # the deployment-metadata job, but re-checked here defensively since
+          # this is the value that actually becomes the checkout target).
+          if [ -z "$HEAD_SHA" ] || ! echo "$HEAD_SHA" | grep -qE '^[0-9a-f]{7,40}$'; then
+            echo "::error::HEAD_SHA is empty or not a valid commit SHA ('${HEAD_SHA}'). Refusing to check out an unpinned ref."
+            exit 1
+          fi
           echo "sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
           echo "tag_prefix=${TAG_PREFIX}" >> "$GITHUB_OUTPUT"
           if [ "$MODE" = "pr" ]; then
-            echo "::notice::Building PR #${PR_NUMBER} branch: ${HEAD_REF}"
+            echo "::notice::Building PR #${PR_NUMBER} branch: ${HEAD_REF} @ ${HEAD_SHA}"
           else
-            echo "::notice::Building branch: ${HEAD_REF}"
+            echo "::notice::Building branch: ${HEAD_REF} @ ${HEAD_SHA}"
           fi
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
-          ref: ${{ steps.build-target.outputs.ref }}
+          # #1514: pin to the immutable SHA, not a mutable branch ref — see
+          # note on the build-images job `outputs:` block above.
+          ref: ${{ steps.build-target.outputs.sha }}
 
       - name: Resolve BUILD_DATE
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
@@ -394,7 +419,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
-          ref: ${{ needs.build-images.outputs.ref }}
+          # #1514: pin to the immutable SHA that was actually built, not a
+          # mutable branch ref. A push between metadata capture and this
+          # checkout must not change what gets deployed with live QA secrets.
+          ref: ${{ needs.build-images.outputs.sha }}
 
       # #1514: fail loudly if a required QA secret is missing/renamed/typo'd, instead of
       # letting the .env.qa heredoc silently substitute a weak, repo-committed default
@@ -454,17 +482,28 @@ jobs:
 
       - name: Create .env.qa from secrets
         run: |
-          # Use outputs from build-images job for image tags
-          TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
-          SHA="${{ needs.build-images.outputs.sha }}"
-
-          cat > ${{ env.UNIQUE_WORKSPACE }}/.env.qa << EOF
+          # #1514: the heredoc delimiter below is quoted ('EOF') so bash writes
+          # the body byte-for-byte with NO shell expansion of its contents.
+          # Every secret is substituted by GitHub Actions ${{ }} templating at
+          # workflow-compile time, before bash ever sees this script — that
+          # substitution is unaffected by heredoc quoting either way. Quoting
+          # matters for what bash itself would otherwise do at runtime: a
+          # secret containing literal `$$`, `` `cmd` ``, or `$(cmd)` would
+          # silently be expanded/command-substituted by an UNQUOTED heredoc
+          # (e.g. a password with `$$` becomes bash's PID, corrupting both the
+          # password and any DATABASE_URL built from it, with no error). We
+          # previously used real bash variables (${TAG_PREFIX}, ${SHA}) here,
+          # which needed runtime expansion and would have broken under quoting
+          # — they are now inlined directly as ${{ }} expressions instead
+          # (also GH-Actions-substituted pre-bash), so quoting the delimiter is
+          # safe and every line below still produces the same output as before.
+          cat > ${{ env.UNIQUE_WORKSPACE }}/.env.qa << 'EOF'
           # Application Settings
           COMPOSE_PROJECT_NAME=boostedbudget-qa
           NODE_ENV=qa
           GO_ENV=qa
           ENVIRONMENT=qa
-          VERSION=${TAG_PREFIX}-${SHA}
+          VERSION=${{ needs.build-images.outputs.tag_prefix }}-${{ needs.build-images.outputs.sha }}
           PRIMARY_REGION=iad
 
           # CORS Configuration
@@ -472,8 +511,8 @@ jobs:
 
           # Docker Image Configuration (pull from GHCR)
           PULL_FROM_GHCR=true
-          BACKEND_IMAGE=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${TAG_PREFIX}-${SHA}
-          FRONTEND_IMAGE=${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${TAG_PREFIX}-${SHA}
+          BACKEND_IMAGE=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ needs.build-images.outputs.tag_prefix }}-${{ needs.build-images.outputs.sha }}
+          FRONTEND_IMAGE=${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ needs.build-images.outputs.tag_prefix }}-${{ needs.build-images.outputs.sha }}
 
           # URLs
           BACKEND_URL=http://localhost:8080
@@ -573,6 +612,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
+          # #1514: without an explicit ref this defaults to the ref that
+          # triggered the workflow_dispatch, not the commit that was actually
+          # built/deployed above. Pin to the same immutable SHA for consistency.
+          ref: ${{ needs.build-images.outputs.sha }}
 
       - name: Run smoke tests
         timeout-minutes: 5
