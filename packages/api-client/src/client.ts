@@ -43,6 +43,41 @@ let hasEverAuthenticated = false
 // Public API paths that should never trigger a sign-in redirect on 401
 const PUBLIC_API_PATHS = ['/api/v1/user/delete/cancel/']
 
+/**
+ * Issue #1514 (fix round 6): known route SHAPES whose path segment is a bearer
+ * CAPABILITY token, not an opaque resource id — the backend validates the entire
+ * request by the token alone (`/user/delete/cancel/{token}`,
+ * `/households/invites/{token}[/accept|/decline]` — see
+ * backend/internal/huma/operations/deletion.go and household.go).
+ *
+ * Duplicated here (not imported) rather than shared with
+ * apps/web/src/shared/lib/piiScrubbing.ts's `redactUrlPath`, which is the more
+ * heavily documented canonical version: this package does not depend on apps/web,
+ * and apps/web depends on this package, so importing across that boundary would
+ * invert it. Keep the two pattern lists in sync — add a new capability route to
+ * both when one is introduced.
+ *
+ * Deliberately a route-SHAPE allowlist (regex per known route), not a value-shape
+ * heuristic ("looks like a JWT"): shape-sniffing would either miss a non-JWT token
+ * or over-redact legitimate opaque resource ids that are NOT capabilities on their
+ * own (e.g. `/accounts/{id}`).
+ */
+const CAPABILITY_URL_PATH_PATTERNS: RegExp[] = [
+  /(\/user\/delete\/cancel\/)[^/?#]+/gi,
+  /(\/households\/invites\/)[^/?#]+/gi,
+]
+
+/** Replaces a known capability-token path segment with `[redacted]`. Exported for
+ * direct unit testing (see client.test.ts). */
+export function redactCapabilityUrlPath(url: string | undefined): string | undefined {
+  if (!url) return url
+  let out = url
+  for (const pattern of CAPABILITY_URL_PATH_PATTERNS) {
+    out = out.replace(pattern, (_match, prefix: string) => `${prefix}[redacted]`)
+  }
+  return out
+}
+
 // Response error interceptor
 AXIOS_INSTANCE.interceptors.response.use(
   (response) => response,
@@ -53,7 +88,7 @@ AXIOS_INSTANCE.interceptors.response.use(
     // Log structured error in development
     if (import.meta.env.DEV) {
       console.error('[API Error]', {
-        url: error.config?.url,
+        url: redactCapabilityUrlPath(error.config?.url),
         status: error.response?.status,
         requestId,
       })

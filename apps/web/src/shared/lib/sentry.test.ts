@@ -5,6 +5,77 @@ import type { Breadcrumb } from '@sentry/react';
 describe('sentry scrubbing options', () => {
   const { beforeBreadcrumb, beforeSend } = sentryScrubbingOptions();
 
+  // Issue #1514 (fix round 6): the account-deletion cancellation token is a bearer
+  // CAPABILITY embedded as a raw URL PATH SEGMENT (not a query param) — see
+  // backend/internal/huma/operations/deletion.go's CancelDeletion (public endpoint,
+  // "the token validates the request"). `stripQueryString` never touched path segments,
+  // so the token previously survived beforeSend/beforeBreadcrumb intact. These are RED
+  // against the OLD `stripQueryString`-only behaviour and prove the fix closes all three
+  // paths the token can reach: event.request.url, an xhr breadcrumb's data.url, and a
+  // nested Axios config/response object under event.extra.
+  const CANCEL_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.SENTINEL_CANCEL_TOKEN.xyz'
+
+  describe('capability token in URL path (#1514 fix round 6)', () => {
+    test('redacts the token from event.request.url', () => {
+      const event = {
+        request: { url: `https://app.example.com/api/v1/user/delete/cancel/${CANCEL_TOKEN}` },
+      }
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {})
+
+      expect(result?.request?.url).not.toContain(CANCEL_TOKEN)
+      expect(result?.request?.url).toBe('https://app.example.com/api/v1/user/delete/cancel/[redacted]')
+    })
+
+    test('redacts the token from an xhr breadcrumb data.url', () => {
+      const breadcrumb: Breadcrumb = {
+        category: 'xhr',
+        level: 'info',
+        data: {
+          url: `https://app.example.com/api/v1/user/delete/cancel/${CANCEL_TOKEN}`,
+          method: 'GET',
+        },
+      }
+
+      const result = beforeBreadcrumb(breadcrumb)
+
+      expect(result?.data?.url).not.toContain(CANCEL_TOKEN)
+      expect(result?.data?.url).toBe('https://app.example.com/api/v1/user/delete/cancel/[redacted]')
+    })
+
+    test('redacts the token from a nested Axios config.url under event.extra', () => {
+      const event = {
+        exception: { values: [{ type: 'AxiosError', value: 'Request failed with status code 400' }] },
+        extra: {
+          axiosError: {
+            config: { url: `https://app.example.com/api/v1/user/delete/cancel/${CANCEL_TOKEN}` },
+            response: { status: 400, config: { url: `https://app.example.com/api/v1/user/delete/cancel/${CANCEL_TOKEN}` } },
+          },
+        },
+      }
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {})
+
+      const extra = result?.extra as {
+        axiosError: { config: { url: string }; response: { config: { url: string } } }
+      }
+      expect(extra.axiosError.config.url).not.toContain(CANCEL_TOKEN)
+      expect(extra.axiosError.response.config.url).not.toContain(CANCEL_TOKEN)
+      expect(extra.axiosError.config.url).toBe('https://app.example.com/api/v1/user/delete/cancel/[redacted]')
+    })
+
+    test('redacts a household-invite token the same way', () => {
+      const event = {
+        request: { url: `https://app.example.com/api/v1/households/invites/${CANCEL_TOKEN}/accept` },
+      }
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {})
+
+      expect(result?.request?.url).not.toContain(CANCEL_TOKEN)
+      expect(result?.request?.url).toBe('https://app.example.com/api/v1/households/invites/[redacted]/accept')
+    })
+  })
+
   describe('beforeBreadcrumb', () => {
     test('drops a console breadcrumb carrying a Paddle payload with an email', () => {
       const breadcrumb: Breadcrumb = {

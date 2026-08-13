@@ -158,6 +158,26 @@ describe('useDeletion', () => {
       expect(result.current.requestError).toBeInstanceOf(Error)
       expect(result.current.requestError?.message).toBeTruthy()
     })
+
+    // Issue #1514 (fix round 6): same containment rule as cancelError below — applied
+    // uniformly to requestError too, since the general rule is "any error message this
+    // hook surfaces," not a special case for the cancel path alone.
+    it('redacts a capability-bearing URL if one appears in the request error message', async () => {
+      const SENTINEL_TOKEN = 'SENTINEL_CAPABILITY_TOKEN_ABC'
+      const error = new Error(`Request failed: /api/v1/households/invites/${SENTINEL_TOKEN}/accept`)
+      mockUseRequestDeletion.mockReturnValue({
+        mutateAsync: mockRequestDeletionMutateAsync,
+        isPending: false,
+        isError: true,
+        error,
+      })
+
+      const { result } = renderHook(() => useDeletion(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.requestError?.message).not.toContain(SENTINEL_TOKEN)
+    })
   })
 
   describe('Cancel Deletion Tests', () => {
@@ -212,6 +232,33 @@ describe('useDeletion', () => {
       })
 
       expect(response!).toBeNull()
+    })
+
+    // Issue #1514 (fix round 6): the cancellation token is a bearer CAPABILITY (the
+    // backend's CancelDeletion endpoint is public and validates the request by the token
+    // alone). requestError/cancelError are rendered verbatim by DeleteAccountSection, so
+    // if the underlying error's message ever embeds the request URL (some network/adapter
+    // failures do), the token would land back in DOM text. This is a general containment
+    // rule (any capability-bearing URL path segment, not special-cased to this one route)
+    // applied at the one place both errors are constructed.
+    it('redacts a capability-bearing URL if one appears in the cancel error message', async () => {
+      const SENTINEL_TOKEN = 'SENTINEL_CAPABILITY_TOKEN_XYZ'
+      mockCancelDeletion.mockRejectedValue(
+        new Error(`Request failed: /api/v1/user/delete/cancel/${SENTINEL_TOKEN}`)
+      )
+
+      const { result } = renderHook(() => useDeletion(), {
+        wrapper: createWrapper(),
+      })
+
+      await act(async () => {
+        await result.current.cancelAccountDeletion(testToken)
+      })
+
+      await waitFor(() => {
+        expect(result.current.cancelError).toBeInstanceOf(Error)
+      })
+      expect(result.current.cancelError?.message).not.toContain(SENTINEL_TOKEN)
     })
   })
 

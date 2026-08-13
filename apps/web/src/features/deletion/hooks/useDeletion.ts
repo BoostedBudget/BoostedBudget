@@ -16,6 +16,7 @@ import type {
   RequestDeletionResponseBody,
   CancelDeletionResponseBody,
 } from '@boostedbudget/api-client/models'
+import { redactUrlPath } from '@/shared/lib/piiScrubbing'
 
 export interface UseDeletionResult {
   // Request deletion
@@ -82,17 +83,36 @@ export function useDeletion(): UseDeletionResult {
     }
   }
 
-  // Convert errors to Error instances
+  // Convert errors to Error instances.
+  //
+  // Issue #1514 (fix round 6): both of these are rendered verbatim by consumers
+  // (DeleteAccountSection.tsx shows requestError/cancelError.message directly). The
+  // account-deletion cancellation token is a bearer CAPABILITY (the backend's
+  // CancelDeletion endpoint is public and validates the request by the token alone) —
+  // some network/adapter failures embed the request URL in the error message, which would
+  // put the token right back into DOM text even though the component never touches a URL
+  // itself. `redactUrlPath` is applied here, unconditionally, to whatever message text
+  // reaches either error — a general containment rule, not a special case for the cancel
+  // path (requestError goes through the same treatment even though today's known capability
+  // routes don't overlap with the request-deletion endpoint itself).
   const requestError = requestMutation.error
-    ? (requestMutation.error instanceof Error
-        ? requestMutation.error
-        : new Error('Failed to request account deletion'))
+    ? new Error(
+        redactUrlPath(
+          requestMutation.error instanceof Error
+            ? requestMutation.error.message
+            : 'Failed to request account deletion'
+        )
+      )
     : null
 
   const cancelError = cancelMutation.error
-    ? (cancelMutation.error instanceof Error
-        ? cancelMutation.error
-        : new Error('Failed to cancel account deletion'))
+    ? new Error(
+        redactUrlPath(
+          cancelMutation.error instanceof Error
+            ? cancelMutation.error.message
+            : 'Failed to cancel account deletion'
+        )
+      )
     : null
 
   return {
