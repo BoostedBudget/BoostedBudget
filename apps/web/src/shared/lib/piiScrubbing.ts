@@ -61,9 +61,20 @@ export const PII_PROPERTY_DENYLIST = new Set([
   'target_amount',
   'current_amount',
   'total_saved',
-  // Sentry-only additions: fields that show up in raw Plaid/Paddle payloads
-  // and Axios request/response bodies, but never in PostHog's analytics
-  // `properties` payloads (which are hand-built, not raw third-party data).
+  // These entries originated from raw Plaid/Paddle payloads and Axios
+  // request/response bodies (Sentry's use case), not from hand-built
+  // PostHog `properties`. Before unification they applied to Sentry only;
+  // now that both consumers share `isPiiKey`, they apply to *both* paths —
+  // including PostHog's `trackEvent` properties, which is a real behavior
+  // change, not just a doc note. One concrete consequence: a bare `email`/
+  // `mask` token also matches boolean flags that merely contain the word,
+  // e.g. a hypothetical `emailNotificationsEnabled` or `maskEnabled` — no
+  // current call site sends either, so this is a widened contract without
+  // present-day data loss, not a live bug. This is accepted rather than
+  // narrowed: `email` as a bare token is what catches `userEmail`/
+  // `customerEmail` (real PII), and narrowing it to avoid the boolean-flag
+  // false positive would reopen that real gap, which is worse than the
+  // over-scrub of an unused hypothetical flag name.
   'email',
   'customer_email',
   'account_mask',
@@ -142,10 +153,33 @@ const DENYLIST_MAX_WORDS = Math.max(
  * (e.g. `account1Name`, `public1Token`), never suppress one that already
  * matched: every entry that matched via the un-filtered tokens still matches
  * once the (non-matching) digit tokens are removed from between them.
+ *
+ * **`*_id` / `*Id` allowlisting.** A key whose last token is `id` (e.g.
+ * `merchant_id`, `institutionId`) is exempted from the bare-token window
+ * scan below and is redacted only if the *whole* tokenized key is itself an
+ * explicit `PII_PROPERTY_DENYLIST` entry (`account_id`, `link_session_id` —
+ * currently the only two). This is a deliberate, narrow allowlist, not a
+ * byproduct: `merchant_id`/`institution_id` are opaque identifiers (the
+ * documented `trackEvent` pattern — pass `{ merchant_id: uuid }`, never the
+ * name), and without this carve-out they were being deleted anyway, because
+ * they still contain the bare `merchant`/`institution` token that the window
+ * scan matches regardless of the trailing `id`. `account_id` and
+ * `link_session_id` stay redacted because they're still explicit denylist
+ * entries — this carve-out only stops the *implicit* bare-token match, it
+ * does not remove anything from the denylist itself. Any future `*_id` field
+ * that should be redacted must be added to `PII_PROPERTY_DENYLIST` as its own
+ * full compound entry; adding its non-id word as a new bare token would not
+ * work, since this carve-out bypasses the window scan entirely for id keys.
  */
 export function isPiiKey(key: string): boolean {
   if (PII_PROPERTY_DENYLIST.has(key.toLowerCase())) return true
   const tokens = tokenize(key).filter(token => !/^\d+$/.test(token))
+  if (tokens.length === 0) return false
+
+  if (tokens[tokens.length - 1] === 'id') {
+    return PII_PROPERTY_DENYLIST.has(tokens.join('_'))
+  }
+
   const maxWindow = Math.min(DENYLIST_MAX_WORDS, tokens.length)
   for (let windowSize = 1; windowSize <= maxWindow; windowSize++) {
     for (let start = 0; start + windowSize <= tokens.length; start++) {
