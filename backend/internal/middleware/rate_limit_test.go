@@ -301,13 +301,17 @@ func TestIPRateLimiter_ExemptPathProbeNotStarvedByPublicTraffic(t *testing.T) {
 }
 
 // TestIPRateLimiter_MalformedCFConnectingIPFallsBackToSentinelNotUsedAsKey
-// proves that a malformed (or duplicated) Cf-Connecting-Ip on an otherwise
-// Cloudflare-gated request is never used verbatim as a bucket key. Per the
-// #1514 fix-round-1 ruling, it does NOT fall back to Fly-Client-Ip or
-// RemoteAddr (both are the Fly proxy's address in production, not the real
-// client). It falls back to the single fixed sentinel bucket instead — proven
-// here by two garbage-header requests from two DIFFERENT real peers still
-// sharing one bucket, which per-peer fallback (the old behavior) would not do.
+// proves that a malformed Cf-Connecting-Ip on an otherwise Cloudflare-gated
+// request is never used verbatim as a bucket key. Per the #1514 fix-round-1
+// ruling, it does NOT fall back to Fly-Client-Ip or RemoteAddr (both are the
+// Fly proxy's address in production, not the real client). It falls back to
+// the single fixed sentinel bucket instead — proven here by two garbage-header
+// requests from two DIFFERENT real peers still sharing one bucket, which
+// per-peer fallback (the old behavior) would not do. The duplicated-header
+// case (two Cf-Connecting-Ip values on one request) is a separate code path
+// in singleValuedHeaderAddr (len(values) != 1) and is covered by
+// TestIPRateLimiter_DuplicatedCFConnectingIPFallsBackToSentinelNotUsedAsKey
+// below, not by this test.
 func TestIPRateLimiter_MalformedCFConnectingIPFallsBackToSentinelNotUsedAsKey(t *testing.T) {
 	cfg := middleware.RateLimitConfig{IPLimit: 2, WindowDuration: time.Minute}
 	e := newEchoWithGateStatus(cfg, middleware.GateStatusPassed)
@@ -335,6 +339,45 @@ func TestIPRateLimiter_MalformedCFConnectingIPFallsBackToSentinelNotUsedAsKey(t 
 	})
 	assert.Equal(t, http.StatusTooManyRequests, code3,
 		"a third anomalous request from yet another peer must share the global sentinel bucket and be throttled")
+}
+
+// TestIPRateLimiter_DuplicatedCFConnectingIPFallsBackToSentinelNotUsedAsKey
+// exercises the multi-value branch of singleValuedHeaderAddr (len(values) != 1)
+// that the malformed-value test above never reaches: each request there sends
+// exactly one Cf-Connecting-Ip value (just an unparseable one). Here every
+// request genuinely carries TWO Cf-Connecting-Ip header occurrences — each
+// individually a validly-formed, DIFFERENT IP — proving duplication alone
+// (independent of whether either value parses) is rejected as untrustworthy
+// and falls back to the sentinel bucket, using the same
+// different-peers-share-one-bucket proof as the malformed-value test.
+func TestIPRateLimiter_DuplicatedCFConnectingIPFallsBackToSentinelNotUsedAsKey(t *testing.T) {
+	cfg := middleware.RateLimitConfig{IPLimit: 2, WindowDuration: time.Minute}
+	e := newEchoWithGateStatus(cfg, middleware.GateStatusPassed)
+
+	code1 := doRateLimitedRequest(e, "/test", "192.0.2.2:1000", map[string][]string{
+		"Cf-Connecting-Ip": {"192.0.2.100", "192.0.2.101"},
+		"Fly-Client-Ip":    {"192.0.2.2"},
+	})
+	assert.Equal(t, http.StatusOK, code1, "first duplicated-header request should pass")
+
+	// A second request from a DIFFERENT real peer, with a DIFFERENT pair of
+	// duplicated Cf-Connecting-Ip values and a DIFFERENT Fly-Client-Ip. If the
+	// first (or any) of the duplicated values were used as (or to derive) the
+	// key, this would land in its own fresh bucket and return 200. It must
+	// instead share the sentinel bucket with the first request and be
+	// throttled once the cap is reached.
+	code2 := doRateLimitedRequest(e, "/test", "198.51.100.10:2000", map[string][]string{
+		"Cf-Connecting-Ip": {"198.51.100.200", "198.51.100.201"},
+		"Fly-Client-Ip":    {"198.51.100.10"},
+	})
+	assert.Equal(t, http.StatusOK, code2, "second duplicated-header request (still under the 2-req cap) should pass")
+
+	code3 := doRateLimitedRequest(e, "/test", "203.0.113.88:3000", map[string][]string{
+		"Cf-Connecting-Ip": {"203.0.113.200", "203.0.113.201"},
+		"Fly-Client-Ip":    {"203.0.113.88"},
+	})
+	assert.Equal(t, http.StatusTooManyRequests, code3,
+		"a third duplicated-header request from yet another peer must share the global sentinel bucket and be throttled")
 }
 
 // TestIPRateLimiter_SentinelFallbackIsObservable proves the sentinel branch
