@@ -299,6 +299,42 @@ describe('isPiiKey: digit-interrupted ID_ALLOWLIST entries (issue #1514, defect 
   expectMatrix(stillSurvivesBenign, false);
 });
 
+describe('isPiiKey: punctuation-delimited keys bypass the matcher (issue #1514)', () => {
+  // tokenize() only ever split on `[_-]`. A denylisted word joined to the
+  // rest of the key by ANY other separator — `.`, `/`, whitespace — produced
+  // a single un-split token that never equals a denylist entry and never
+  // enters the window scan as its own word, so isPiiKey silently returned
+  // false. This is the RED: every key below survives (is NOT redacted) under
+  // the pre-fix tokenizer, through both real consumers (redactPii and
+  // PostHog's before_send), not just isPiiKey in isolation.
+  const punctuationKeysThatMustBeRedacted: string[] = [
+    'merchant.name',
+    'user.email',
+    'merchant/name',
+    'current balance',
+    'institution.name',
+    'account.balance',
+  ];
+
+  for (const key of punctuationKeysThatMustBeRedacted) {
+    test(`${key} is redacted (isPiiKey)`, () => {
+      expect(isPiiKey(key)).toBe(true);
+    });
+
+    test(`${key} is redacted (redactPii)`, () => {
+      const result = redactPii({ [key]: 'sensitive-value' }) as Record<string, unknown>;
+      expect(result[key]).toBe('[Redacted]');
+    });
+
+    test(`${key} is redacted (posthog before_send)`, () => {
+      const cfg = posthogConfig();
+      const event = { event: 'test_event', properties: { [key]: 'sensitive-value' } };
+      const out = cfg.before_send?.(event as Parameters<NonNullable<typeof cfg.before_send>>[0]);
+      expect(out?.properties?.[key]).toBeUndefined();
+    });
+  }
+});
+
 describe('redactPii', () => {
   test('redacts a denylisted key nested inside a plain array', () => {
     const input = {

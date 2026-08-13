@@ -5,8 +5,9 @@
  *
  * Shared by a single matcher, `isPiiKey` below, used by both PostHog's
  * `before_send` (see `posthog.ts`) and Sentry's `redactPii`: a key is split
- * on camelCase boundaries and `_`/`-` (e.g. `accountBalance` /
- * `account_balance` → `['account', 'balance']`), lowercased, and redacted if
+ * on camelCase boundaries and any of `_`/`-`/`.`/`/`/`:`/`\`/whitespace (e.g.
+ * `accountBalance` / `account_balance` / `account.balance` →
+ * `['account', 'balance']`), lowercased, and redacted if
  * any contiguous token window — or the whole lowercased key, for multi-word
  * entries below — is in this set. This is what makes
  * `currentBalance`/`institutionName`/`userEmail`-style camelCase fields get
@@ -106,10 +107,11 @@ export const PII_PROPERTY_DENYLIST = new Set([
 
 /**
  * Splits a key into lowercase word tokens on camelCase/PascalCase
- * boundaries, acronym boundaries, digit runs, and `_`/`-`. Exported for
- * direct unit testing — bugs here are exactly as dangerous as the exact-
- * match bug this replaced, since a token that's silently swallowed or never
- * split off is a token that can never match the denylist.
+ * boundaries, acronym boundaries, digit runs, and the separator set below.
+ * Exported for direct unit testing — bugs here are exactly as dangerous as
+ * the exact-match bug this replaced, since a token that's silently
+ * swallowed or never split off is a token that can never match the
+ * denylist.
  *
  * Passes run in this order (each one only inserts `_`; nothing is removed):
  * 1. Acronym→word boundary: `HTTPStatus` → `HTTP_Status`, `userIDBalance` →
@@ -118,6 +120,19 @@ export const PII_PROPERTY_DENYLIST = new Set([
  * 2. lower/digit→upper boundary: `userID_Balance` → `user_ID_Balance`.
  * 3. letter→digit boundary: `balance2` → `balance_2`.
  * 4. digit→letter boundary: `2Name` → `2_Name`.
+ *
+ * The final split runs on `[_\-./\s:\\]` — every punctuation/whitespace
+ * separator this codebase's key spellings plausibly use, not just `_`/`-`:
+ * `.` (dotted property paths, e.g. `merchant.name` from a flattened Axios
+ * body), `/` (slash-joined keys, e.g. `merchant/name`), whitespace (a raw
+ * label used as a key, e.g. `"current balance"`), `:` (namespaced keys, a
+ * common convention for cache/analytics keys, e.g. `user:email`), and `\`
+ * (Windows-style path segments that occasionally leak into serialized
+ * payloads). Before this widened set, a denylisted word joined to the rest
+ * of a key by any separator outside `[_-]` produced a single un-split token
+ * that could never match the denylist or enter the window scan as its own
+ * word — see `piiScrubbing.test.ts`'s "punctuation-delimited keys" block for
+ * the adversarial keys that gap let through.
  */
 export function tokenize(key: string): string[] {
   return key
@@ -125,7 +140,7 @@ export function tokenize(key: string): string[] {
     .replace(/([\p{Ll}\p{Nd}])(\p{Lu})/gu, '$1_$2')
     .replace(/(\p{L})(\p{Nd})/gu, '$1_$2')
     .replace(/(\p{Nd})(\p{L})/gu, '$1_$2')
-    .split(/[_-]/)
+    .split(/[_\-./\s:\\]/)
     .filter(Boolean)
     .map(token => token.toLowerCase())
 }
@@ -196,6 +211,21 @@ const DENYLIST_MAX_WORDS = Math.max(
  * ordinary token scan and is redacted if it contains a denylisted token.
  * Add a new key here only if it is itself an opaque identifier with no PII
  * in its name; do not add it just because it ends in `id`.
+ *
+ * **Punctuation spellings of the allowlisted keys.** Widening `tokenize`'s
+ * separator set (see its doc comment) means `merchant.id` and `merchant/id`
+ * now normalize to the same `['merchant', 'id']` tokens as `merchant_id`/
+ * `merchantId` and are therefore allowlist-exempt too, even though neither
+ * punctuation spelling was named explicitly. This is accepted deliberately,
+ * not overlooked: the allowlist's own rationale is "this is an opaque
+ * identifier, not a name" (see above), and that rationale is about the
+ * *value* `merchant_id` identifies, not about which separator glues the two
+ * words together — a dotted or slashed spelling of the same identifier
+ * carries the same non-PII payload. The alternative (requiring the
+ * allowlist to match only the literal `_`/camelCase spellings) would just
+ * mean `merchant.id`-style keys fall through to the ordinary window scan and
+ * get redacted-as-if-PII, which is a false positive, not a safety gain —
+ * there is no PII in an opaque id field regardless of its separator.
  */
 const ID_ALLOWLIST = new Set(['merchant_id', 'institution_id'])
 
