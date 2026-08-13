@@ -585,6 +585,16 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 	// keeps the same no-further-retry behavior while reporting the outcome truthfully. Mirrors
 	// WebhookProcessingWorker's identical guard (webhook_processing.go) — see its doc comment for
 	// the full rationale.
+	//
+	// Deliberately no analytics.Capture here (round-2 review fix). WebhookID/EventID/EventType on
+	// an unverified row are attacker-derived — the signature never confirmed them — so emitting
+	// them as PostHog event properties would ship unverified, potentially forged data into
+	// analytics on every attempt, and MarkFailed below can fail and be retried, which would have
+	// re-emitted the same properties on every retry for as long as the failure persisted. The
+	// InvalidWebhookAttemptsTotal metric plus the error log above already give the security
+	// signal; there is also no PostHog dashboard or consumer of
+	// phclient.EventInvalidSignatureWebhookRejected anywhere in this codebase to regress. Matches
+	// WebhookProcessingWorker's guard, which never called analytics here either.
 	if !webhook.SignatureValid {
 		observability.InvalidWebhookAttemptsTotal.WithLabelValues("paddle_worker_guard").Inc()
 		w.logger.Error("refusing to process Paddle webhook with invalid signature; cancelling job",
@@ -592,13 +602,6 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 			"event_id", args.EventID,
 			"event_type", args.EventType,
 		)
-		if w.analytics != nil {
-			w.analytics.Capture("", phclient.EventInvalidSignatureWebhookRejected, map[string]interface{}{
-				"webhook_id": args.WebhookID,
-				"event_id":   args.EventID,
-				"event_type": args.EventType,
-			})
-		}
 		if failErr := w.paddleWebhookRepo.MarkFailed(ctx, args.WebhookID, "rejected: signature_valid=false"); failErr != nil {
 			// Don't swallow this: MarkFailed is what removes the row from unprocessed-eligibility
 			// and records why it was refused. If it fails (e.g. a transient DB error), surface a

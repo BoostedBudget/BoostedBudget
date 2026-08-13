@@ -55,10 +55,15 @@ const invalidWebhookAttemptCap = 10000
 //     invalidWebhookAttemptCap + invalidWebhookAttemptTrimInterval — there is no fixed
 //     concurrency-independent formula for "how far above," because that overshoot scales with
 //     how many concurrent inserts land in the window before the next trim, not with the interval
-//     constant. What DOES hold, regardless of concurrency: whichever call's trim eventually
-//     commits drains the WHOLE provider's row count back down to invalidWebhookAttemptCap (trim
-//     is not scoped to "this call's own rows" — see trim()), so the count cannot drift upward
-//     indefinitely; it is bounded by how long the current overshoot window lasts, not by
+//     constant. What DOES hold, regardless of concurrency — stated carefully, because the round-4
+//     wording of this sentence overclaimed and was corrected in round 14: whichever call's trim
+//     commits removes every row of this provider ranked beyond invalidWebhookAttemptCap **as of
+//     that DELETE's own snapshot**, and trim is not scoped to "this call's own rows" (see trim()).
+//     It does NOT restore the cap exactly: trimInvalidWebhookAttemptsQuery ranks in a subquery
+//     evaluated against that snapshot while inserts commit unlocked and concurrently, so a row
+//     committing after the snapshot survives the trim and the count can still exceed the cap right
+//     after it commits. The useful consequence is narrower: the excess is bounded by what commits
+//     inside one trim window rather than accumulating across windows, so the count cannot grow with
 //     cumulative attack volume. Only in the degenerate case of at most one in-flight Record call
 //     for this provider at a time (no concurrent rejections) does this collapse to the tighter,
 //     deterministic invalidWebhookAttemptCap + invalidWebhookAttemptTrimInterval - 1 — which is
@@ -340,9 +345,21 @@ const trimInvalidWebhookAttemptsByAgeQuery = `
 // Phase 14). There is NO hard ceiling: the doc comment it points at says so itself — under
 // concurrency there is no fixed instantaneous ceiling and no concurrency-independent formula for
 // the overshoot. The deterministic invalidWebhookAttemptCap + invalidWebhookAttemptTrimInterval - 1
-// holds only in the degenerate sequential regime. What the schedule does guarantee is that
-// whichever trim commits drains the whole provider back to the cap, so the count cannot drift
-// upward indefinitely. See the invalidWebhookAttemptTrimInterval doc comment for the full analysis.
+// holds only in the degenerate sequential regime.
+//
+// ⚠⚠ And a second correction, in the opposite direction, to the first attempt at the paragraph
+// above: it claimed "whichever trim commits drains the whole provider back to the cap". That is
+// also false. trimInvalidWebhookAttemptsQuery ranks rows in a subquery evaluated against the
+// DELETE statement's own snapshot, while inserts commit unlocked and concurrently — so a row that
+// commits after that snapshot is invisible to the ranking and survives the trim. The count
+// immediately after a trim commits can therefore still exceed the cap.
+//
+// What actually holds is weaker and worth stating exactly: each committing trim removes everything
+// ranked beyond the cap *as of its own snapshot*, and trim is not scoped to the calling request's
+// rows, so the excess is bounded by what commits inside one trim window rather than accumulating
+// across windows. That is why the count cannot grow with cumulative attack volume — not because
+// any single trim restores the cap exactly. See the invalidWebhookAttemptTrimInterval doc comment
+// for the full analysis.
 func (r *invalidWebhookAttemptRepository) Record(ctx context.Context, provider string, bodyLength int, bodySHA256 string) error {
 	if _, err := r.db.Exec(ctx, insertInvalidWebhookAttemptQuery, provider, bodyLength, bodySHA256); err != nil {
 		return fmt.Errorf("failed to insert invalid webhook attempt: %w", err)
