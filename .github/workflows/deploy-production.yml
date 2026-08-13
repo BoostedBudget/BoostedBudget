@@ -430,6 +430,11 @@ jobs:
 
       - name: Setup Fly.io CLI
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
+        with:
+          # Pinned so this step installs a known-good flyctl build, not whatever
+          # setup-flyctl treats as "latest" at run time. Confirmed release exists:
+          # https://github.com/superfly/flyctl/releases/tag/v0.4.82
+          version: 0.4.82
 
       - name: Configure Docker
         run: |
@@ -513,6 +518,11 @@ jobs:
 
       - name: Setup Fly.io CLI
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
+        with:
+          # Pinned so this step installs a known-good flyctl build, not whatever
+          # setup-flyctl treats as "latest" at run time. Confirmed release exists:
+          # https://github.com/superfly/flyctl/releases/tag/v0.4.82
+          version: 0.4.82
 
       - name: Select image and preflight check
         id: image-select
