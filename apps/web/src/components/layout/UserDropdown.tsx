@@ -40,8 +40,15 @@ export function UserDropdown({ user, onLogout, className }: UserDropdownProps) {
             className="relative h-10 w-10 rounded-full"
             aria-label="User menu"
           >
+            {/*
+             * Issue #1514: PostHog session replay records DOM attributes verbatim;
+             * data-ph-mask masks element TEXT only, never attribute values. The avatar
+             * `alt` must stay structural (no PII) — the visible name/email carry
+             * data-ph-mask instead, since the avatar sits directly beside them and is
+             * decorative in context.
+             */}
             <Avatar className="h-10 w-10">
-              <AvatarImage src={user.picture} alt={user.name || 'User'} />
+              <AvatarImage src={user.picture} alt="User avatar" />
               <AvatarFallback>{initials}</AvatarFallback>
             </Avatar>
           </Button>
@@ -49,8 +56,8 @@ export function UserDropdown({ user, onLogout, className }: UserDropdownProps) {
         <DropdownMenuContent className="w-56" align="end" forceMount>
           <DropdownMenuLabel className="font-normal">
             <div className="flex flex-col space-y-1">
-              <p className="text-sm font-medium leading-none">{user.name}</p>
-              <p className="text-xs leading-none text-muted-foreground">{user.email}</p>
+              <p className="text-sm font-medium leading-none" data-ph-mask>{user.name}</p>
+              <p className="text-xs leading-none text-muted-foreground" data-ph-mask>{user.email}</p>
             </div>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
