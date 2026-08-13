@@ -76,6 +76,83 @@ describe('sentry scrubbing options', () => {
     })
   })
 
+  // Issue #1514 (fix round 7): round 6 only covered the API path shape
+  // (`/api/v1/user/delete/cancel/{token}`). The actual exposure is the FRONTEND route the
+  // emailed link points at (`/cancel-deletion/{token}`, App.tsx) — the token lands in the
+  // PAGE URL once a user clicks the email, so it reaches event.request.url (the current
+  // page, not an API call), the Referer header, breadcrumb messages, and exception
+  // values/stack-frame text — none of which the round-6 fix touched.
+  describe('capability token in the PAGE URL, not just an API call URL (#1514 fix round 7)', () => {
+    test('redacts the token when event.request.url IS the cancel-deletion page itself', () => {
+      const event = {
+        request: { url: `https://app.example.com/cancel-deletion/${CANCEL_TOKEN}` },
+      }
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {})
+
+      expect(result?.request?.url).not.toContain(CANCEL_TOKEN)
+      expect(result?.request?.url).toBe('https://app.example.com/cancel-deletion/[redacted]')
+    })
+
+    test('redacts the token from a Referer header carrying the page URL', () => {
+      const event = {
+        request: {
+          headers: { Referer: `https://app.example.com/cancel-deletion/${CANCEL_TOKEN}` },
+        },
+      }
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {})
+
+      const headers = result?.request?.headers as Record<string, string>
+      expect(headers.Referer).not.toContain(CANCEL_TOKEN)
+      expect(headers.Referer).toBe('https://app.example.com/cancel-deletion/[redacted]')
+    })
+
+    test('redacts the token from a breadcrumb message (never touched by beforeBreadcrumb before)', () => {
+      const breadcrumb: Breadcrumb = {
+        category: 'navigation',
+        level: 'info',
+        message: `Navigated to https://app.example.com/cancel-deletion/${CANCEL_TOKEN}`,
+      }
+
+      const result = beforeBreadcrumb(breadcrumb)
+
+      expect(result?.message).not.toContain(CANCEL_TOKEN)
+      expect(result?.message).toBe('Navigated to https://app.example.com/cancel-deletion/[redacted]')
+    })
+
+    test('redacts the token from an exception value (message) carrying the page URL', () => {
+      const event = {
+        exception: {
+          values: [
+            {
+              type: 'Error',
+              value: `Failed to load https://app.example.com/cancel-deletion/${CANCEL_TOKEN}`,
+            },
+          ],
+        },
+      }
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {})
+
+      expect(result?.exception?.values?.[0]?.value).not.toContain(CANCEL_TOKEN)
+      expect(result?.exception?.values?.[0]?.value).toBe(
+        'Failed to load https://app.example.com/cancel-deletion/[redacted]'
+      )
+    })
+
+    test('redacts the token from the legacy /household/invite/{token} alias route', () => {
+      const event = {
+        request: { url: `https://app.example.com/household/invite/${CANCEL_TOKEN}` },
+      }
+
+      const result = beforeSend(event as Parameters<typeof beforeSend>[0], {})
+
+      expect(result?.request?.url).not.toContain(CANCEL_TOKEN)
+      expect(result?.request?.url).toBe('https://app.example.com/household/invite/[redacted]')
+    })
+  })
+
   describe('beforeBreadcrumb', () => {
     test('drops a console breadcrumb carrying a Paddle payload with an email', () => {
       const breadcrumb: Breadcrumb = {

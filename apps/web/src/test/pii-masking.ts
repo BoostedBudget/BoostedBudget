@@ -171,21 +171,38 @@ function collectScanRoots(container: Element): (Element | DocumentFragment)[] {
   const queue: (Element | DocumentFragment)[] = [container];
   const visited = new Set<Element | DocumentFragment>();
 
+  // Issue #1514 (scanner-completeness review, round 2): `querySelectorAll('*')` only ever
+  // returns DESCENDANTS of the node it's called on — never that node itself. The original
+  // version of this function only ever called it, so `scanForUnmaskedPII(shadowHost, ...)`
+  // or `scanForUnmaskedPII(templateElement, ...)` — the scan root itself being the shadow
+  // host / template, not merely containing one somewhere inside it — silently missed that
+  // root's OWN shadow root / `.content`. Every earlier test happened to wrap the host/
+  // template in an extra `<div>` before scanning, which is exactly why they passed anyway.
+  const checkElementForNestedRoots = (el: Element) => {
+    if (el instanceof HTMLTemplateElement) {
+      TEMPLATE_HOST_BY_CONTENT.set(el.content, el);
+      roots.push(el.content);
+      queue.push(el.content);
+    }
+    if (el.shadowRoot) {
+      roots.push(el.shadowRoot);
+      queue.push(el.shadowRoot);
+    }
+  };
+
   while (queue.length > 0) {
     const current = queue.shift()!;
     if (visited.has(current)) continue;
     visited.add(current);
 
+    // Check `current` itself first (only meaningful when it's an Element — a ShadowRoot/
+    // template-content DocumentFragment can't itself be a template or have a shadowRoot),
+    // then every descendant.
+    if (current instanceof Element) {
+      checkElementForNestedRoots(current);
+    }
     for (const el of Array.from(current.querySelectorAll('*'))) {
-      if (el instanceof HTMLTemplateElement) {
-        TEMPLATE_HOST_BY_CONTENT.set(el.content, el);
-        roots.push(el.content);
-        queue.push(el.content);
-      }
-      if (el.shadowRoot) {
-        roots.push(el.shadowRoot);
-        queue.push(el.shadowRoot);
-      }
+      checkElementForNestedRoots(el);
     }
   }
 
