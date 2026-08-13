@@ -37,6 +37,16 @@ import { redactUrlPath } from '@/shared/lib/piiScrubbing'
  * `.message` fixed) and attaches the original error as `.cause`, so nothing is lost for
  * anyone who inspects the error object directly — only the rendered `.message` string (and
  * the copied `.stack`'s message line) are sanitized.
+ *
+ * RESOLVED (fix round 10): attaching the raw, unredacted original error as `.cause` was
+ * flagged as a possible bypass, since Sentry's `linkedErrorsIntegration` (a default
+ * integration — see `sentry.ts`) walks `.cause` and creates a SEPARATE exception entry
+ * for it if this error ever reaches `Sentry.captureException`. Probe-confirmed there is no
+ * bypass: `beforeSend` (`sentry.ts`) recursively redacts the ENTIRE `event.exception`
+ * object via `redactPii`, which includes every linked-error entry `linkedErrorsIntegration`
+ * adds, not just the top-level one — so the `.cause`-carried original message gets the same
+ * `redactUrlPath` treatment before it ever leaves the browser. Do not re-litigate this
+ * without a fresh probe; this was checked, not assumed.
  */
 function sanitizeError(error: unknown, fallbackMessage: string): Error {
   if (!(error instanceof Error)) {
