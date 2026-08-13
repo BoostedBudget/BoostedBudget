@@ -152,15 +152,9 @@ func main() {
 	go middleware.StartCIDRRefresher(cfCtx, 24*time.Hour, cfCIDRRef)
 
 	// Middleware (order matters!)
-	e.Use(middleware.RequestID())                                                    // 1. Generate request IDs first
-	e.Use(middleware.SecurityHeaders(cfg.Environment))                               // 2. Security hardening headers
-	e.Use(middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment)) // 3. Cloudflare-only enforcement: blocks direct *.fly.dev access
-	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                       // 4. Per-IP rate limiting
-		IPLimit:           cfg.RateLimitIP,
-		AuthEndpointLimit: cfg.RateLimitAuth,
-		WindowDuration:    time.Minute,
-		MaxEntries:        cfg.RateLimitMaxEntries,
-	}))
+	e.Use(middleware.RequestID())                                                          // 1. Generate request IDs first
+	e.Use(middleware.SecurityHeaders(cfg.Environment))                                     // 2. Security hardening headers
+	registerCloudflareAndRateLimitMiddleware(e, cfCIDRRef, cfg)                            // 3-4. Cloudflare gate, then per-IP rate limiting (order load-bearing, see helper doc)
 	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                            // 5. Panic recovery (formats RFC 9457 response)
 	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                               // 6. Sentry panic reporting
 	e.Use(otelecho.Middleware("boostedbudget-api"))                                        // 7. OTEL tracing
@@ -452,25 +446,25 @@ func main() {
 		accountRepo := repository.NewAccountRepository(db, fieldEncryptor)
 		transactionRepo := repository.NewTransactionRepository(db, fieldEncryptor)
 		webhookRepo := repository.NewWebhookRepository(db, fieldEncryptor)
-		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db, fieldEncryptor)                         // Issue #45, #46: Paddle webhooks
+		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db, fieldEncryptor)                                         // Issue #45, #46: Paddle webhooks
 		invalidWebhookAttemptRepo = repository.NewInvalidWebhookAttemptRepository(db, cfg.InvalidWebhookAttemptRetentionDays) // Issue #1514: bounded invalid-attempt audit
-		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db, fieldEncryptor)                 // Issues #747 #748: Paddle transaction audit log
-		identityRepo := repository.NewUserIdentityRepository(db, fieldEncryptor)                              // Maps Clerk IDs to user UUIDs
-		notificationRepo := repository.NewNotificationRepository(db, fieldEncryptor)                          // Issue #257: Notification storage
-		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)                                    // Issue #353: Balance tracking
-		userTagRepo := repository.NewUserTagRepository(db)                                                    // Issue #345: User tags
-		customCategoryRepo := repository.NewCustomCategoryRepository(db)                                      // Issue #345: Custom categories
-		categorizationRuleRepo := repository.NewCategorizationRuleRepository(db)                              // Issue #346: Categorization rules
-		analyticsRepo := repository.NewAnalyticsRepository(db)                                                // Issue #354: Cash flow analytics
-		budgetRepo := repository.NewBudgetRepository(db)                                                      // Issue #28: Budget management
-		savingsGoalRepo := repository.NewSavingsGoalRepository(db)                                            // Issue #28: Savings goals
-		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)                                // Issue #354: Dashboard preferences
-		transferSuggestionRepo := repository.NewTransferSuggestionRepositoryWithEncryptor(db, fieldEncryptor) // Issue #36 / #1267: Transfer suggestions (enc for account-name enrichment)
-		boostRepo := repository.NewBoostsRepository(db)                                                       // Issue #37: Boosts
-		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)                                // Issue #639: Admin user management
-		systemHealthRepo := repository.NewSystemHealthRepository(db)                                          // Issue #640: System health monitoring
-		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)                                        // Issue #640: Dead letter queue metrics
-		plaidOrphanedItemRepo := repository.NewPlaidOrphanedItemRepository(db, fieldEncryptor)                // Issue #1497: orphaned Plaid Items surviving a GDPR erasure (enc: every identifying column is ciphertext)
+		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db, fieldEncryptor)                                 // Issues #747 #748: Paddle transaction audit log
+		identityRepo := repository.NewUserIdentityRepository(db, fieldEncryptor)                                              // Maps Clerk IDs to user UUIDs
+		notificationRepo := repository.NewNotificationRepository(db, fieldEncryptor)                                          // Issue #257: Notification storage
+		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)                                                    // Issue #353: Balance tracking
+		userTagRepo := repository.NewUserTagRepository(db)                                                                    // Issue #345: User tags
+		customCategoryRepo := repository.NewCustomCategoryRepository(db)                                                      // Issue #345: Custom categories
+		categorizationRuleRepo := repository.NewCategorizationRuleRepository(db)                                              // Issue #346: Categorization rules
+		analyticsRepo := repository.NewAnalyticsRepository(db)                                                                // Issue #354: Cash flow analytics
+		budgetRepo := repository.NewBudgetRepository(db)                                                                      // Issue #28: Budget management
+		savingsGoalRepo := repository.NewSavingsGoalRepository(db)                                                            // Issue #28: Savings goals
+		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)                                                // Issue #354: Dashboard preferences
+		transferSuggestionRepo := repository.NewTransferSuggestionRepositoryWithEncryptor(db, fieldEncryptor)                 // Issue #36 / #1267: Transfer suggestions (enc for account-name enrichment)
+		boostRepo := repository.NewBoostsRepository(db)                                                                       // Issue #37: Boosts
+		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)                                                // Issue #639: Admin user management
+		systemHealthRepo := repository.NewSystemHealthRepository(db)                                                          // Issue #640: System health monitoring
+		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)                                                        // Issue #640: Dead letter queue metrics
+		plaidOrphanedItemRepo := repository.NewPlaidOrphanedItemRepository(db, fieldEncryptor)                                // Issue #1497: orphaned Plaid Items surviving a GDPR erasure (enc: every identifying column is ciphertext)
 		// Issue #1458: a second, bound JobHealthRepository instance for systemHealthService below —
 		// distinct from the one constructed inline at startJobHealthMetricsCollector's call site
 		// above, which is unbound (passed directly as an argument, never stored) and so can't be
@@ -2212,6 +2206,40 @@ func main() {
 	}
 
 	appLogger.Info("Server stopped gracefully")
+}
+
+// registerCloudflareAndRateLimitMiddleware registers, in this exact order,
+// the two middleware whose relative order the rate limiter's identity model
+// depends on: CloudflareOnly MUST run before IPRateLimiter.
+//
+// Why the order is load-bearing: IPRateLimiter's clientIdentity (see
+// internal/middleware/rate_limit.go) trusts the Cf-Connecting-Ip header only
+// when the current request's echo.Context already carries
+// middleware.GateStatusPassed — the status CloudflareOnly stamps onto the
+// context after verifying the immediate peer is a genuine Cloudflare edge IP
+// and the X-Origin-Secret matched. That status is set on the SAME
+// echo.Context that flows through the rest of the chain, so it is only
+// visible to middleware that runs AFTER CloudflareOnly in registration order.
+// If IPRateLimiter were registered first, it would always observe the
+// zero-value GateStatusUnknown (CloudflareOnly hasn't run yet at that point
+// in the chain) and fall back to the request's RemoteAddr for every request —
+// which, in this app's Fly.io deployment, is the Fly proxy's fixed internal
+// address for effectively every inbound request, not the real end client.
+// That collapses per-client rate limiting into one shared bucket, letting one
+// client exhaust the budget for everyone else.
+//
+// See issue1514_rate_limit_ordering_test.go for a behavioural test that
+// builds this exact chain via httptest and demonstrates the failure mode
+// above when the two calls are (deliberately, temporarily, for that test's
+// RED demonstration only) reordered.
+func registerCloudflareAndRateLimitMiddleware(e *echo.Echo, cfCIDRRef *atomic.Pointer[[]netip.Prefix], cfg *config.Config) {
+	e.Use(middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment)) // Cloudflare-only enforcement: blocks direct *.fly.dev access
+	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                       // Per-IP rate limiting
+		IPLimit:           cfg.RateLimitIP,
+		AuthEndpointLimit: cfg.RateLimitAuth,
+		WindowDuration:    time.Minute,
+		MaxEntries:        cfg.RateLimitMaxEntries,
+	}))
 }
 
 // dbPoolAdapter adapts *pgxpool.Pool to services.DatabasePool interface (Issue #640)
