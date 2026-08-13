@@ -15,8 +15,11 @@ import (
 //
 // It NEVER receives the raw payload or any attacker-chosen identifier (e.g. a Paddle event_id):
 // only the provider name, the body length, and a SHA-256 digest of the body are recorded, and
-// the underlying store enforces a hard row cap so this can never grow unboundedly even under
-// sustained attack (see repository.InvalidWebhookAttemptRepository).
+// the underlying store enforces an amortised row bound per provider: trimming back to the cap
+// runs only every invalidWebhookAttemptTrimInterval-th Record call, so the table can legitimately
+// reach roughly cap + trimInterval - 1 rows (currently 10000 + 50 - 1) before a trim fires, plus
+// further overshoot from concurrent writers racing between trims — see
+// repository.InvalidWebhookAttemptRepository for the exact schedule and concurrency caveats.
 //
 // The Prometheus counter is always incremented, even if repo is nil or the write fails, so the
 // security signal survives a degraded or unconfigured audit store.

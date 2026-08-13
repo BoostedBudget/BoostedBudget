@@ -21,13 +21,9 @@ PostHog has **three independent leakage paths**. `data-ph-mask` only covers the 
 
 `autocapture` is **disabled** (`autocapture: false`). Autocapture records `$el_text`, CSS selectors, and attributes for every click/change/submit, independently of session replay. A click on `<button>Delete $1,234 transaction</button>` would leak the amount via `$el_text` even if the element is `data-ph-mask`'d in the replay. Disabling autocapture eliminates this path entirely.
 
-A `before_send` hook additionally strips known PII property names from any event before transmission:
+A `before_send` hook additionally redacts known PII properties from any event before transmission, using the same matcher Sentry's `beforeSend`/`beforeBreadcrumb` share (`piiScrubbing.ts`'s `isPiiKey`, shared via `PII_PROPERTY_DENYLIST`). Matching is **token-based**, not exact-string: a key is split on camelCase boundaries and `_`/`-` (e.g. `currentBalance` → `['current', 'balance']`, `institutionName` → `['institution', 'name']`), lowercased, and redacted if any contiguous token window is in the denylist — so a camelCase property doesn't need to appear literally in the list to be caught; it's caught via its token(s).
 
-```
-merchant, merchant_name, nickname, institution, institution_name,
-description, account_name, balance, amount, current_balance,
-target_amount, current_amount, total_saved
-```
+The denylist itself (`PII_PROPERTY_DENYLIST` in `piiScrubbing.ts`) currently includes bare entries like `merchant`, `nickname`, `institution`, `balance`, `amount`, `email`, plus multi-word compounds like `account_name`, `institution_name`, `current_balance`, `target_amount`, `current_amount`, `total_saved`, `customer_email`, `query_string`, `cookies` — see that file for the authoritative, current list. Two words are **deliberately excluded** as bare entries to avoid over-scrubbing: `account` (would redact benign fields like `accountCount`) and `name` (would redact `typeName`/`fieldName`). `description` was also removed as a bare entry for the same reason (`descriptionLength` would over-match); this means a literal `description` field's *content* is no longer protected by this token match, and relies instead on `data-ph-mask` at the display layer. `accountName` is still caught, not via a bare `account` or `name` token, but via the two-token adjacent-window check matching the `account_name` compound entry.
 
 `trackEvent` callers must pass IDs (UUIDs) as properties, never human-readable names.
 
@@ -109,6 +105,9 @@ Radix Dialog content renders in a portal but typically inherits `data-ph-mask` f
 
 - **ARIA labels with PII**: `aria-label="Balance: $1,234"` is recorded verbatim in session replays. Use structural labels: `aria-label="Account balance"`.
 - **`title` / `placeholder` / `alt` with PII**: Same reason. Use generic labels.
+- **The attribute rule, in full**: any value interpolated into `aria-label`, `title`, `alt`, or `placeholder` is recorded **verbatim** by session replay — `data-ph-mask` only strips *text content*, never attributes, and there is no attribute-masking mechanism to reach for instead. The only fix is to make the attribute value itself free of PII — a structural/generic label, not a masked one. Two worked examples in this tree:
+  - `AccountCard.tsx` (`aria-labelledby`, not `aria-label`): the link points at a same-page `<span id=... data-ph-mask>` whose *text* carries the account details and is masked normally; the attribute itself only ever holds the element id, never the PII.
+  - `IncomeSourceItem.tsx`'s `getRemoveAriaLabel` (commit `010c136e`): the label is built from a `switch` on `source.type` and never interpolates the source's amount, tag text, or category label — it's generic by construction, so there's nothing in the attribute to leak.
 - **URL search params with PII**: PostHog records the full URL. Don't push merchant names, account nicknames, or amounts into URL state.
 - **`trackEvent` with human-readable PII**: `trackEvent('drilldown', { merchant: merchantName })` leaks the name. Pass `{ merchant_id: uuid }` instead.
 - **Wrapping card roots**: Wrapping `<div data-ph-mask>` around an entire card masks CTAs and sort buttons in the replay, reducing its debugging value.
@@ -151,4 +150,4 @@ cd apps/web && bun run test
 2. Choose the mechanism: inline `data-ph-mask`, `maskedColumnIds`, portal label wrap, or `before_send` denylist.
 3. Add a sentinel to the relevant page test in `src/test/pii-coverage.test.tsx`.
 4. Update this doc's classification table.
-5. If passing as `trackEvent` property, confirm the property name is in the `before_send` denylist.
+5. If passing as a `trackEvent` property, confirm the property name is caught by `isPiiKey` (`piiScrubbing.ts`) — either as a bare `PII_PROPERTY_DENYLIST` entry or via its camelCase/`_`/`-` tokens, not by grepping for the literal string in the list. Run `isPiiKey('yourFieldName')` (or check it in the `pii-coverage.test.tsx` suite) rather than assuming; `account`, `name`, and `description` are deliberately *not* bare entries, so a field like `descriptionText` needs an explicit mask elsewhere, not this denylist.

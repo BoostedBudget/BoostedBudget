@@ -21,10 +21,15 @@ import { redactPii, stripQueryString } from './piiScrubbing'
  *   `event.request`'s `headers`/`data`/`query_string` fields (e.g. an
  *   `Authorization`/`Cookie` header) as well as stack-frame `vars` (local
  *   variables some SDKs attach per frame) inside `event.exception`. Redaction
- *   is by *key name* only (see `redactPii` in `piiScrubbing.ts`): a
- *   `query_string` value or a nested `cookies` object whose keys don't
- *   themselves match a denylisted token is passed through unredacted — this
- *   is a known scope limit of key-based matching, not a bug fixed here. The
+ *   is by *key name* only (see `redactPii` in `piiScrubbing.ts`): `query_string`
+ *   and `cookies` are both bare entries in `PII_PROPERTY_DENYLIST`, so a
+ *   `request.query_string` value or a nested `cookies` object is redacted
+ *   wholesale (the entire value replaced, not scanned) whenever that exact
+ *   key is hit — regardless of what its own nested keys are named. The
+ *   residual scope limit is narrower than that: a query string or cookie
+ *   value nested under some *other*, non-denylisted key name (e.g. a
+ *   third-party payload that renames the field) would still pass through
+ *   unredacted, because matching is by key name, not by content. The
  *   exception `value` (message string) is never content-scanned, only passed through
  *   the same by-key redaction as everything else, so a plain error message
  *   is preserved unless it happens to sit under a denylisted key.
