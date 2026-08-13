@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { Pencil, EyeOff, GripVertical, Unplug } from 'lucide-react'
 import { Link } from 'react-router'
 import { cn } from '@/lib/utils'
@@ -45,6 +46,7 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
   // Display name: nickname > official_name > name
   const displayName = nickname || official_name || name
   const typeLabel = getAccountTypeLabel(type, subtype)
+  const summaryLinkLabelId = useId()
 
 
   return (
@@ -68,15 +70,16 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
           to={`/accounts/${account.id}`}
           className="flex-1 block hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-lg"
           // PII: aria-label is recorded verbatim by session replay; data-ph-mask only covers
-          // text content, not attributes. aria-labelledby stores only the element id in the
-          // attribute; the accessible name (account type and mask) is computed at
+          // text content, not attributes. aria-labelledby stores only an opaque useId() value
+          // in the attribute; the accessible name (account type and mask) is computed at
           // read time from the sr-only span below, so that PII never appears as attribute text.
-          // The account's own id — an opaque, non-financial UUID — still appears as attribute
-          // text three times (this `href`, the span's `id` below, and this `aria-labelledby`
-          // reference to it); that's an accepted trade-off, not something this pattern hides.
-          aria-labelledby={`account-link-label-${account.id}`}
+          // `href` still carries account.id — an opaque, non-financial UUID — because routing
+          // depends on it; changing that would be an out-of-scope routing change. The
+          // aria-labelledby/id pair no longer carries it (matches IncomeSourceItem.tsx's
+          // getRemoveLabelText pattern).
+          aria-labelledby={summaryLinkLabelId}
         >
-          <span id={`account-link-label-${account.id}`} className="sr-only" data-ph-mask>
+          <span id={summaryLinkLabelId} className="sr-only" data-ph-mask>
             {`View ${typeLabel} account${mask ? ` ending in ${mask}` : ''} details`}
           </span>
           <AccountSummaryHeader
