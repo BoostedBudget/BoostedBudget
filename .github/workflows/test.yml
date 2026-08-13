@@ -1232,6 +1232,23 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bun run typecheck
 
+      # Issue #1514 (fix round 9): regression gate for the rrweb <option>-masking proof —
+      # verifies the ACTUAL PostHog session-replay recorder (posthog-js's vendored rrweb
+      # fork, not our own scanForUnmaskedPII test double) still masks a data-ph-mask
+      # <option>'s text. Belongs in this fast job, not the "E2E tests" job below: it needs
+      # only Chromium — no backend, no webServer, no Clerk auth (see
+      # apps/web/e2e/rrweb-mask-proof/playwright.config.ts, a dedicated minimal config
+      # separate from the main E2E harness). A routine posthog-js bump is exactly the kind
+      # of change that could silently break this mechanism, which eight of #1514's
+      # <option>-text fixes depend on.
+      - name: Install Chromium for rrweb mask-proof
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run rrweb <option> masking proof
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bun run test:rrweb-mask-proof
+
       - name: Run frontend tests with coverage
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
