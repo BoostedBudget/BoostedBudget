@@ -693,10 +693,12 @@ func TestWorker_WebhookNotFound_CancelsJob(t *testing.T) {
 // independently refuses to process a webhook row whose signature was never valid, even if
 // something upstream enqueued it. No subscription mutation must occur.
 //
-// Round-1 review fix: returns nil (cancel the job), matching this worker's own established
-// permanent-failure convention (see TestWorker_WebhookNotFound_CancelsJob) — the signature can
-// never become valid on retry, so returning an error here would only burn River's retry/backoff
-// budget before the job reaches the dead-letter queue, with no security benefit.
+// Round-2 fix: must actually cancel the River job via river.JobCancel, not merely return nil.
+// Returning nil is *successful completion* in River v0.43.0 (see river.JobCancel's doc comment:
+// it "cancel[s] the job at the end of execution"), which would misreport a refused, forged
+// webhook as a completed job and emit jobs_completed_total{status="success"} for it. Mirrors
+// TestWebhookProcessingWorker_Work_InvalidSignature_RefusesProcessing (webhook_processing_test.go)
+// — the Plaid worker's equivalent guard.
 func TestWorker_InvalidSignature_RefusesToDispatch(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
@@ -716,7 +718,44 @@ func TestWorker_InvalidSignature_RefusesToDispatch(t *testing.T) {
 
 	err := worker.Work(ctx, job)
 
-	require.NoError(t, err, "must cancel (not retry) a signature_valid=false row — it can never become valid")
+	require.Error(t, err, "invalid-signature guard must cancel the job via river.JobCancel, not complete it with nil")
+	var cancelErr *river.JobCancelError
+	require.ErrorAs(t, err, &cancelErr, "error must be a *river.JobCancelError so River records the job as cancelled")
+	mockProfileRepo.AssertNotCalled(t, "UpdatePaddleCustomerID")
+	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWorker_InvalidSignature_MarkFailedError verifies that a transient failure to persist the
+// MarkFailed record (e.g. a DB blip) surfaces as a retryable error rather than being swallowed
+// into a silent, successful-looking nil return. This is the bug fixed by Issue #1514: the old
+// code discarded MarkFailed's error entirely and always returned nil, so a signature-invalid row
+// could be left in a permanently unprocessed state while River recorded the job as a clean
+// success. The security property (the forged row is never dispatched) must still hold — re-fetching
+// on retry still sees SignatureValid=false and hits this same guard again. Mirrors
+// TestWebhookProcessingWorker_Work_InvalidSignature_MarkFailedError (webhook_processing_test.go).
+func TestWorker_InvalidSignature_MarkFailedError(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_created.json")
+	webhook.SignatureValid = false
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.created",
+	}
+	job := createRiverJob(args)
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(errors.New("db unavailable"))
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err, "a MarkFailed failure must not be swallowed into a nil return")
+	var cancelErr *river.JobCancelError
+	require.NotErrorAs(t, err, &cancelErr, "a MarkFailed failure should be retryable, not a cancellation")
 	mockProfileRepo.AssertNotCalled(t, "UpdatePaddleCustomerID")
 	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
 	mockWebhookRepo.AssertExpectations(t)
