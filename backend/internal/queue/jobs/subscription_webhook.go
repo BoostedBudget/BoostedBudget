@@ -597,20 +597,34 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 	// WebhookProcessingWorker's guard, which never called analytics here either.
 	if !webhook.SignatureValid {
 		observability.InvalidWebhookAttemptsTotal.WithLabelValues("paddle_worker_guard").Inc()
+		// Round-3 review fix: logs only webhook_id (our own DB primary key) + event_type (a
+		// bounded category — see the switch below, which falls back to "unknown Paddle event
+		// type" for anything else) on this path. Deliberately omits event_id: unlike webhook_id,
+		// it is Paddle's own opaque identifier taken straight from an unverified request body, so
+		// on a signature_valid=false row it is attacker-influenced with no verification behind it.
+		// Mirrors this codebase's existing, documented convention for the identical guard on the
+		// Plaid side — both WebhookProcessingWorker's guard (webhook_processing.go) and
+		// WebhookProcessor.refuseIfInvalidSignature (webhook_processor.go, see its "Issue #1514
+		// finding F2" doc comment) log only their row's internal id + bounded type, never the
+		// other payload-derived identifier (there, item_id) that's also available on the args.
+		// webhook_id/event_type here are not treated as trusted by anything downstream of this
+		// log line — they exist solely so an operator can correlate a Sentry/OTEL alert back to
+		// the row for investigation.
 		w.logger.Error("refusing to process Paddle webhook with invalid signature; cancelling job",
 			"webhook_id", args.WebhookID,
-			"event_id", args.EventID,
 			"event_type", args.EventType,
 		)
 		if failErr := w.paddleWebhookRepo.MarkFailed(ctx, args.WebhookID, "rejected: signature_valid=false"); failErr != nil {
-			// Don't swallow this: MarkFailed is what removes the row from unprocessed-eligibility
-			// and records why it was refused. If it fails (e.g. a transient DB error), surface a
-			// plain retryable error so River tries again — the security property still holds on
-			// every attempt, since retrying re-fetches the webhook, finds SignatureValid still
-			// false, and hits this same guard again rather than ever reaching dispatch.
+			// Don't swallow this: MarkFailed records why the row was refused (processing_error,
+			// processing_attempts) so River tries again on persistence failure — see MarkFailed's
+			// doc comment on PaddleWebhookRepository (paddle_webhook_repository.go) and this
+			// method's own doc comment above for why it deliberately does NOT set processed=true,
+			// and why that is fine here. The security property still holds on every attempt,
+			// since retrying re-fetches the webhook, finds SignatureValid still false, and hits
+			// this same guard again rather than ever reaching dispatch.
 			w.logger.Error("failed to mark Paddle webhook as failed after signature guard; will retry",
 				"webhook_id", args.WebhookID,
-				"event_id", args.EventID,
+				"event_type", args.EventType,
 				"error", failErr,
 			)
 			return fmt.Errorf("failed to record invalid-signature refusal: %w", failErr)
