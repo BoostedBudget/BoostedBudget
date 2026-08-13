@@ -19,6 +19,7 @@ describe('posthog config', () => {
         nickname: 'My Checking',
         institution: 'Chase',
         institution_name: 'Chase Bank',
+        institution_id: 'inst-456',
         // Not denylisted (see piiScrubbing.ts): a bare `description` entry
         // would false-positive on `descriptionLength`-style metadata under
         // the shared tokenizing matcher. The `data-ph-mask` cell masking in
@@ -48,16 +49,17 @@ describe('posthog config', () => {
     expect(out?.properties?.target_amount).toBeUndefined();
     expect(out?.properties?.current_amount).toBeUndefined();
     expect(out?.properties?.total_saved).toBeUndefined();
-    // merchant_id is now redacted too: before_send used to delete by exact
-    // literal key match, which let `merchant_id` (containing the `merchant`
-    // token, but not itself a denylist entry, and not an exact match either)
-    // survive. Now that before_send shares Sentry's tokenizing `isPiiKey`
-    // matcher, `merchant_id` tokenizes to ['merchant', 'id'] and the
-    // `merchant` token matches — the same as it always has for Sentry. One
-    // matcher, one contract, beats two divergent ones; no current call site
-    // passes `merchant_id` into analytics properties, so this closes a real
-    // (if latent) gap rather than opening one.
-    expect(out?.properties?.merchant_id).toBeUndefined();
+    // merchant_id must SURVIVE (issue #1514, defect 1): it's the sanctioned
+    // trackEvent pattern this doc's "what NOT to do" section recommends —
+    // `{ merchant_id: uuid }` instead of `{ merchant: name }` — and a prior
+    // round of this unification wrongly pinned it as redacted, which would
+    // have silently deleted every engineer's compliant analytics call.
+    // `isPiiKey` now allowlists keys whose last token is `id` unless the
+    // whole key is itself an explicit denylist entry (only `account_id` and
+    // `link_session_id` are); see piiScrubbing.ts's isPiiKey doc comment.
+    expect(out?.properties?.merchant_id).toBe('abc-123');
+    // Same allowlist applies to institution_id.
+    expect(out?.properties?.institution_id).toBe('inst-456');
     // Non-PII properties must be preserved
     expect(out?.properties?.user_id).toBe('u1');
     expect(out?.properties?.description).toBe('Coffee');

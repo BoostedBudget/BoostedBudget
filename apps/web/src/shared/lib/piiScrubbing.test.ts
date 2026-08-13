@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { redactPii, stripQueryString, tokenize } from './piiScrubbing';
+import { isPiiKey, redactPii, stripQueryString, tokenize } from './piiScrubbing';
 
 describe('tokenize', () => {
   // Table-driven so a failure names exactly which key shape broke, and the
@@ -51,6 +51,100 @@ describe('stripQueryString', () => {
       'https://api.example.com/v1/accounts'
     );
   });
+});
+
+describe('isPiiKey: *_id allowlist (issue #1514, defect 1)', () => {
+  // Prior to this fix, `merchant_id` tokenized to ['merchant', 'id'], and the
+  // bare-token window scan matched the `merchant` entry regardless of the
+  // trailing `id` — so `isPiiKey('merchant_id')` returned `true` and the
+  // documented trackEvent pattern (`{ merchant_id: uuid }`, per
+  // docs/security/posthog-pii-masking.md's "what NOT to do" section) was
+  // silently deleted from PostHog events by `before_send`. Same bug for
+  // `institution_id`. This matrix pins the full, deliberately narrow fix:
+  // a key ending in `id` survives unless the whole key is itself an
+  // explicit denylist entry (only `account_id` and `link_session_id` are).
+  const idKeysThatMustSurvive: string[] = [
+    'merchant_id',
+    'merchantId',
+    'institution_id',
+    'institutionId',
+    // Benign *_id/_type properties actually used at real trackEvent call
+    // sites in this codebase (issue #1514 brief) — none of these were ever
+    // broken, but they must not regress alongside the merchant_id/
+    // institution_id fix, since both paths run through the same *_id
+    // branch in isPiiKey.
+    'transaction_id',
+    'goal_id',
+    'record_id',
+    'contribution_id',
+    'job_id',
+    'widget_id',
+    'columnId',
+    'step_id',
+  ];
+
+  for (const key of idKeysThatMustSurvive) {
+    test(`${key} survives (not on the denylist itself)`, () => {
+      expect(isPiiKey(key)).toBe(false);
+    });
+  }
+
+  const idKeysThatMustStayRedacted: string[] = ['account_id', 'accountId', 'link_session_id', 'linkSessionId'];
+
+  for (const key of idKeysThatMustStayRedacted) {
+    test(`${key} stays redacted (explicit denylist entry)`, () => {
+      expect(isPiiKey(key)).toBe(true);
+    });
+  }
+
+  // Name variants (not *_id) must be unaffected by the *_id carve-out —
+  // they still go through the ordinary bare-token window scan.
+  const nameKeysThatMustStayRedacted: string[] = [
+    'merchant',
+    'merchantName',
+    'merchant_name',
+    'institution',
+    'institutionName',
+    'institution_name',
+  ];
+
+  for (const key of nameKeysThatMustStayRedacted) {
+    test(`${key} stays redacted (name variant, not an id key)`, () => {
+      expect(isPiiKey(key)).toBe(true);
+    });
+  }
+
+  test('amount (a non-id benign-adjacent PII field) still stays redacted', () => {
+    expect(isPiiKey('amount')).toBe(true);
+  });
+
+  // The other ~16 benign trackEvent property names from the issue #1514
+  // brief that aren't *_id-shaped — confirming the unification didn't
+  // over-scrub these either.
+  const otherBenignPropertyNames: string[] = [
+    'widget_type',
+    'query_length',
+    'excluded_count',
+    'tab',
+    'theme',
+    'page',
+    'count',
+    'sort',
+    'event_type',
+    'new_basis',
+    'parent_kind',
+    'preset',
+    'scope',
+    'resolved',
+    'enabled',
+    'deleted',
+  ];
+
+  for (const key of otherBenignPropertyNames) {
+    test(`${key} survives (benign, non-id trackEvent property)`, () => {
+      expect(isPiiKey(key)).toBe(false);
+    });
+  }
 });
 
 describe('redactPii', () => {
