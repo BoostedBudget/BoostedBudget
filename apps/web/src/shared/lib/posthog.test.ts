@@ -54,9 +54,11 @@ describe('posthog config', () => {
     // `{ merchant_id: uuid }` instead of `{ merchant: name }` — and a prior
     // round of this unification wrongly pinned it as redacted, which would
     // have silently deleted every engineer's compliant analytics call.
-    // `isPiiKey` now allowlists keys whose last token is `id` unless the
-    // whole key is itself an explicit denylist entry (only `account_id` and
-    // `link_session_id` are); see piiScrubbing.ts's isPiiKey doc comment.
+    // `isPiiKey` allowlists exactly `merchant_id`/`institution_id` (and their
+    // camelCase forms) by name — see piiScrubbing.ts's `ID_ALLOWLIST` and its
+    // isPiiKey doc comment; a broader "any key ending in id" version of this
+    // carve-out was tried and reverted for being a privacy regression (issue
+    // #1514, defect 2).
     expect(out?.properties?.merchant_id).toBe('abc-123');
     // Same allowlist applies to institution_id.
     expect(out?.properties?.institution_id).toBe('inst-456');

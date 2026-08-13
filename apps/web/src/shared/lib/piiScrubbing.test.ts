@@ -53,26 +53,83 @@ describe('stripQueryString', () => {
   });
 });
 
-describe('isPiiKey: *_id allowlist (issue #1514, defect 1)', () => {
-  // Prior to this fix, `merchant_id` tokenized to ['merchant', 'id'], and the
-  // bare-token window scan matched the `merchant` entry regardless of the
-  // trailing `id` — so `isPiiKey('merchant_id')` returned `true` and the
-  // documented trackEvent pattern (`{ merchant_id: uuid }`, per
-  // docs/security/posthog-pii-masking.md's "what NOT to do" section) was
-  // silently deleted from PostHog events by `before_send`. Same bug for
-  // `institution_id`. This matrix pins the full, deliberately narrow fix:
-  // a key ending in `id` survives unless the whole key is itself an
-  // explicit denylist entry (only `account_id` and `link_session_id` are).
-  const idKeysThatMustSurvive: string[] = [
+describe('isPiiKey: merchant_id/institution_id allowlist (issue #1514, defect 2)', () => {
+  // Defect 1's fix exempted every key whose *last token* is `id` from the
+  // bare-token window scan, redacting only on an explicit whole-key denylist
+  // match. That is not narrow: it allowlisted the entire `*_id` shape, not
+  // two specific keys, so any denylisted bare token followed by an `id`
+  // suffix survived too (`email_id`, `nickname_id`, `balance_id`, ...). This
+  // block is the RED for that regression — every one of these keys survives
+  // scrubbing under the pre-fix suffix rule; run this block against that code
+  // and quote the real failure before trusting the fix below.
+  const adversarialKeysThatMustBeRedacted: string[] = [
+    'email_id',
+    'emailId',
+    'user_email_id',
+    'nickname_id',
+    'balance_id',
+    'current_balance_id',
+    'maskId',
+    'merchant_name_id',
+    'accountNameId',
+  ];
+
+  for (const key of adversarialKeysThatMustBeRedacted) {
+    test(`${key} is redacted (defect 2 regression: ending in id is not a free pass)`, () => {
+      expect(isPiiKey(key)).toBe(true);
+    });
+  }
+
+  // The fix: an explicit, named allowlist of exactly two keys (both
+  // spellings, matched on the normalized/tokenized form so `merchant_id` and
+  // `merchantId` hit the same entry) — not a shape-based carve-out. This is
+  // the entire allowlist; it covers nothing else.
+  const allowlistedIdKeysThatMustSurvive: string[] = [
     'merchant_id',
     'merchantId',
     'institution_id',
     'institutionId',
-    // Benign *_id/_type properties actually used at real trackEvent call
-    // sites in this codebase (issue #1514 brief) — none of these were ever
-    // broken, but they must not regress alongside the merchant_id/
-    // institution_id fix, since both paths run through the same *_id
-    // branch in isPiiKey.
+  ];
+
+  for (const key of allowlistedIdKeysThatMustSurvive) {
+    test(`${key} survives (explicit allowlist entry)`, () => {
+      expect(isPiiKey(key)).toBe(false);
+    });
+  }
+
+  // Explicit denylist entries and name variants (not *_id) must be
+  // unaffected by the allowlist, which only ever suppresses a match for its
+  // two named keys — it never adds one and never widens beyond them.
+  const mustStayRedacted: string[] = [
+    'account_id',
+    'link_session_id',
+    'merchant',
+    'merchantName',
+    'merchant_name',
+    'institution',
+    'institutionName',
+    'institution_name',
+    'amount',
+    'currentBalance',
+    'userEmail',
+    'query_string',
+    'cookies',
+  ];
+
+  for (const key of mustStayRedacted) {
+    test(`${key} stays redacted`, () => {
+      expect(isPiiKey(key)).toBe(true);
+    });
+  }
+
+  // Benign trackEvent property names actually used at real call sites across
+  // the codebase (issue #1514 brief). None of these are in
+  // PII_PROPERTY_DENYLIST or the merchant_id/institution_id allowlist — they
+  // survive because the ordinary token scan never matches them, not because
+  // of any carve-out. Do NOT add these to the allowlist: the allowlist exists
+  // only for keys that would otherwise be redacted, and padding it here would
+  // hide whether the underlying scan still works.
+  const benignPropertyNamesThatMustSurviveWithoutAllowlisting: string[] = [
     'transaction_id',
     'goal_id',
     'record_id',
@@ -81,47 +138,6 @@ describe('isPiiKey: *_id allowlist (issue #1514, defect 1)', () => {
     'widget_id',
     'columnId',
     'step_id',
-  ];
-
-  for (const key of idKeysThatMustSurvive) {
-    test(`${key} survives (not on the denylist itself)`, () => {
-      expect(isPiiKey(key)).toBe(false);
-    });
-  }
-
-  const idKeysThatMustStayRedacted: string[] = ['account_id', 'accountId', 'link_session_id', 'linkSessionId'];
-
-  for (const key of idKeysThatMustStayRedacted) {
-    test(`${key} stays redacted (explicit denylist entry)`, () => {
-      expect(isPiiKey(key)).toBe(true);
-    });
-  }
-
-  // Name variants (not *_id) must be unaffected by the *_id carve-out —
-  // they still go through the ordinary bare-token window scan.
-  const nameKeysThatMustStayRedacted: string[] = [
-    'merchant',
-    'merchantName',
-    'merchant_name',
-    'institution',
-    'institutionName',
-    'institution_name',
-  ];
-
-  for (const key of nameKeysThatMustStayRedacted) {
-    test(`${key} stays redacted (name variant, not an id key)`, () => {
-      expect(isPiiKey(key)).toBe(true);
-    });
-  }
-
-  test('amount (a non-id benign-adjacent PII field) still stays redacted', () => {
-    expect(isPiiKey('amount')).toBe(true);
-  });
-
-  // The other ~16 benign trackEvent property names from the issue #1514
-  // brief that aren't *_id-shaped — confirming the unification didn't
-  // over-scrub these either.
-  const otherBenignPropertyNames: string[] = [
     'widget_type',
     'query_length',
     'excluded_count',
@@ -140,8 +156,8 @@ describe('isPiiKey: *_id allowlist (issue #1514, defect 1)', () => {
     'deleted',
   ];
 
-  for (const key of otherBenignPropertyNames) {
-    test(`${key} survives (benign, non-id trackEvent property)`, () => {
+  for (const key of benignPropertyNamesThatMustSurviveWithoutAllowlisting) {
+    test(`${key} survives (benign, not allowlisted)`, () => {
       expect(isPiiKey(key)).toBe(false);
     });
   }
