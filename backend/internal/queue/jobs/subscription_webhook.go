@@ -597,22 +597,20 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 	// WebhookProcessingWorker's guard, which never called analytics here either.
 	if !webhook.SignatureValid {
 		observability.InvalidWebhookAttemptsTotal.WithLabelValues("paddle_worker_guard").Inc()
-		// Round-3 review fix: logs only webhook_id (our own DB primary key) + event_type (a
-		// bounded category — see the switch below, which falls back to "unknown Paddle event
-		// type" for anything else) on this path. Deliberately omits event_id: unlike webhook_id,
-		// it is Paddle's own opaque identifier taken straight from an unverified request body, so
-		// on a signature_valid=false row it is attacker-influenced with no verification behind it.
-		// Mirrors this codebase's existing, documented convention for the identical guard on the
-		// Plaid side — both WebhookProcessingWorker's guard (webhook_processing.go) and
-		// WebhookProcessor.refuseIfInvalidSignature (webhook_processor.go, see its "Issue #1514
-		// finding F2" doc comment) log only their row's internal id + bounded type, never the
-		// other payload-derived identifier (there, item_id) that's also available on the args.
-		// webhook_id/event_type here are not treated as trusted by anything downstream of this
-		// log line — they exist solely so an operator can correlate a Sentry/OTEL alert back to
-		// the row for investigation.
+		// Round-4 review fix: logs ONLY webhook_id — our own DB primary key, assigned by
+		// paddleWebhookRepository.Create via uuid.New(), never attacker-supplied. Both event_id
+		// and event_type are omitted, not just event_id: an earlier round kept event_type here on
+		// the claim that it was "bounded by the switch below" — false on inspection. That switch
+		// (further down in this function) validates webhook.EventType, a value read from the DB
+		// row, NOT args.EventType, which is what this log line would have emitted; it never even
+		// executes on this path (execution returns/cancels out of this guard first); and
+		// SubscriptionWebhookArgs.EventType is an unconstrained string with no allowlist applied
+		// anywhere before this point. So args.EventType is exactly as attacker-influenced and
+		// unvalidated as event_id was. webhook_id alone is sufficient for an operator to pull up
+		// the full row (including EventID/EventType) via GetByID/the admin webhook dashboard —
+		// nothing operationally is lost by not also logging the row's other fields here.
 		w.logger.Error("refusing to process Paddle webhook with invalid signature; cancelling job",
 			"webhook_id", args.WebhookID,
-			"event_type", args.EventType,
 		)
 		if failErr := w.paddleWebhookRepo.MarkFailed(ctx, args.WebhookID, "rejected: signature_valid=false"); failErr != nil {
 			// Don't swallow this: MarkFailed records why the row was refused (processing_error,
@@ -624,7 +622,6 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 			// this same guard again rather than ever reaching dispatch.
 			w.logger.Error("failed to mark Paddle webhook as failed after signature guard; will retry",
 				"webhook_id", args.WebhookID,
-				"event_type", args.EventType,
 				"error", failErr,
 			)
 			return fmt.Errorf("failed to record invalid-signature refusal: %w", failErr)

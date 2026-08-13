@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -835,6 +836,73 @@ func TestWorker_InvalidSignature_MarkFailedError_DoesNotReemitAnalyticsOnRetry(t
 	mockAna.AssertNotCalled(t, "Capture")
 	mockProfileRepo.AssertNotCalled(t, "UpdatePaddleCustomerID")
 	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// errorLevelLogLines returns only the lines of a slog text-handler buffer emitted at
+// level=ERROR, filtering out unrelated Info/Warn lines (e.g. this worker's unconditional
+// job-start log). Error-level logs are the ones observability/logger.go tees to Sentry
+// (slogsentry.Option{Level: slog.LevelError}), so this is the actual telemetry surface a
+// "does this attacker-controlled value reach Sentry" assertion needs to inspect — Info-level
+// lines never reach Sentry regardless of what fields they carry.
+func errorLevelLogLines(logOutput string) string {
+	var errLines []string
+	for _, line := range strings.Split(logOutput, "\n") {
+		if strings.Contains(line, "level=ERROR") {
+			errLines = append(errLines, line)
+		}
+	}
+	return strings.Join(errLines, "\n")
+}
+
+// TestWorker_InvalidSignature_DoesNotLogRawEventType verifies Issue #1514 round-4 review fix: the
+// guard's error logs must not include args.EventType at all. A prior round justified logging it as
+// "bounded by the switch below" — false on inspection: the switch further down validates
+// webhook.EventType (a value read from the DB row), not args.EventType (what the guard actually
+// logs); SubscriptionWebhookArgs.EventType is an unconstrained string; and the switch never
+// executes on this path anyway — execution returns/cancels out of the guard before ever reaching
+// it. So an attacker-influenced, unvalidated string was reaching error-level logs, which tee to
+// Sentry/OTEL (see observability/logger.go) — exactly what dropping event_id in the previous round
+// was meant to prevent. This pins the chosen fix: drop event_type from the guard's ERROR-level logs
+// entirely, keeping only webhook_id (assigned by our own system via uuid.New() in
+// paddleWebhookRepository.Create, never attacker-supplied).
+//
+// Scoped to error-level lines only (see errorLevelLogLines): the worker's unconditional,
+// pre-signature-check Info-level job-start log also carries event_type and is out of scope here —
+// it never reaches Sentry (Info is below the tee's Error threshold), it fires identically for
+// every job regardless of signature validity, and it is symmetric with the equivalent Plaid
+// worker's own job-start log (webhook_processing.go) — none of which this guard-specific fix
+// touches.
+func TestWorker_InvalidSignature_DoesNotLogRawEventType(t *testing.T) {
+	worker, mockWebhookRepo, _, _, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	var logBuf bytes.Buffer
+	worker.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	webhook := loadWebhookFixture(t, "subscription_created.json")
+	webhook.SignatureValid = false
+
+	// A distinctive, never-legitimate value: if this string leaks into the ERROR-level log output
+	// at all, the guard is still logging the raw, unvalidated args.EventType.
+	const sentinelEventType = "attacker.controlled.sentinel.event.type.should.never.be.logged"
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: sentinelEventType,
+	}
+	job := createRiverJob(args)
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err, "invalid-signature guard must cancel the job via river.JobCancel")
+	errLines := errorLevelLogLines(logBuf.String())
+	assert.NotContains(t, errLines, sentinelEventType, "the guard's ERROR-level logs must never carry the raw, unvalidated event_type")
+	assert.Contains(t, errLines, "test-webhook-id-123", "the guard must still log webhook_id for operator correlation")
 	mockWebhookRepo.AssertExpectations(t)
 }
 
