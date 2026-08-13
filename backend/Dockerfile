@@ -73,7 +73,7 @@ RUN echo "Installing runtime dependencies..." && \
         [ $i -lt 3 ] && sleep 5; }; \
     done
 
-# Copy golang-migrate binary from builder stage (built with Go 1.25.7 for security)
+# Copy golang-migrate binary from builder stage (see toolchain provenance note above)
 COPY --from=builder /go/bin/migrate /usr/local/bin/migrate
 RUN chmod +x /usr/local/bin/migrate && \
     migrate -version
