@@ -152,9 +152,11 @@ describe('IncomeSourceItem', () => {
   // ==========================================================================
 
   describe('Accessibility', () => {
-    it('has accessible remove button with a generic, non-PII aria-label for tag sources', () => {
-      // Issue #1514: the label must not interpolate the tag value -- aria-label is
+    it('has an accessible remove button whose name carries the tag value via aria-labelledby, not aria-label', () => {
+      // Issue #1514: the value must not appear in any ATTRIBUTE -- aria-label is
       // recorded verbatim by session replay and cannot be masked like element text.
+      // The accessible name now comes from a referenced sr-only span's text (see
+      // AccountCard.tsx pattern), so the value is free to appear in the computed name.
       const source: IncomeSource = {
         type: 'tag',
         value: 'Freelance',
@@ -162,12 +164,13 @@ describe('IncomeSourceItem', () => {
 
       render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
 
-      const removeButton = screen.getByRole('button', { name: /remove tag income source/i });
+      const removeButton = screen.getByRole('button', { name: /remove freelance tag income source/i });
       expect(removeButton).toBeInTheDocument();
-      expect(removeButton.getAttribute('aria-label')).not.toContain('Freelance');
+      expect(removeButton.getAttribute('aria-label')).toBeNull();
+      expect(removeButton.getAttribute('aria-labelledby')).not.toContain('Freelance');
     });
 
-    it('has accessible remove button with a generic, non-PII aria-label for pfc_primary sources', () => {
+    it('has an accessible remove button whose name carries the category value for pfc_primary sources', () => {
       const source: IncomeSource = {
         type: 'pfc_primary',
         value: 'INCOME',
@@ -175,8 +178,58 @@ describe('IncomeSourceItem', () => {
 
       render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
 
-      const removeButton = screen.getByRole('button', { name: /remove category income source/i });
+      const removeButton = screen.getByRole('button', { name: /remove income category income source/i });
       expect(removeButton).toBeInTheDocument();
+    });
+
+    it('gives two rows of the same type but different values distinct accessible names (WCAG 2.1 AA rotor navigation)', () => {
+      // Issue #1514 follow-up: a generic value-free label made byte-identical accessible
+      // names for every row of a given type, which is invisible to linear reading (list
+      // semantics + adjacent text rescue it) but breaks rotor/"buttons list" navigation,
+      // where only the control's own accessible name is shown.
+      const sourceA: IncomeSource = { type: 'tag', value: 'Freelance' };
+      const sourceB: IncomeSource = { type: 'tag', value: 'Consulting' };
+
+      const { unmount } = render(<IncomeSourceItem source={sourceA} onRemove={mockOnRemove} />);
+      const buttonA = screen.getByRole('button', { name: /remove/i });
+      const nameA = buttonA.getAttribute('aria-labelledby')
+        ? document.getElementById(buttonA.getAttribute('aria-labelledby')!)?.textContent
+        : buttonA.getAttribute('aria-label');
+      unmount();
+
+      render(<IncomeSourceItem source={sourceB} onRemove={mockOnRemove} />);
+      const buttonB = screen.getByRole('button', { name: /remove/i });
+      const nameB = buttonB.getAttribute('aria-labelledby')
+        ? document.getElementById(buttonB.getAttribute('aria-labelledby')!)?.textContent
+        : buttonB.getAttribute('aria-label');
+
+      expect(nameA).toBeTruthy();
+      expect(nameB).toBeTruthy();
+      expect(nameA).not.toEqual(nameB);
+    });
+
+    it('backs the accessible name with an sr-only, data-ph-mask span whose text (not any attribute) carries the value', () => {
+      const source: IncomeSource = {
+        type: 'tag',
+        value: 'ZzDistinctSentinelZz',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      const removeButton = screen.getByRole('button', { name: /remove/i });
+      const labelledbyId = removeButton.getAttribute('aria-labelledby');
+      expect(labelledbyId).toBeTruthy();
+      expect(labelledbyId).not.toContain('ZzDistinctSentinelZz');
+
+      const labelSpan = document.getElementById(labelledbyId!);
+      expect(labelSpan).not.toBeNull();
+      expect(labelSpan).toHaveClass('sr-only');
+      expect(labelSpan!.getAttribute('data-ph-mask')).not.toBeNull();
+      expect(labelSpan!.textContent).toContain('ZzDistinctSentinelZz');
+
+      // No attribute anywhere on the button carries the value.
+      const values = Array.from(removeButton.attributes).map((a) => a.value);
+      expect(values.some((v) => v.includes('ZzDistinctSentinelZz'))).toBe(false);
     });
 
 

@@ -5,6 +5,7 @@
  * Displays a single configured income source with type icon, value, description, and remove button.
  */
 
+import { useId } from 'react';
 import { XIcon, TagIcon, DollarSignIcon, FolderIcon } from 'lucide-react';
 import { formatCurrencyFull } from '@/shared/charts/formatters';
 import type { IncomeSource } from '../../types';
@@ -47,21 +48,25 @@ function getIcon(type: IncomeSource['type']): React.ReactNode {
 }
 
 /**
- * Issue #1514: this label MUST NOT interpolate any source-derived value (currency amount,
- * tag text, or category label). aria-label is recorded verbatim by PostHog session replay
- * and `data-ph-mask` cannot cover it -- masking only applies to element text content, never
- * to attribute values. The label is intentionally generic (action + kind), not the value.
+ * Issue #1514: the remove button's accessible name must carry the distinguishing value
+ * (so two rows of the same type get distinct names for rotor/"buttons list" screen-reader
+ * navigation -- WCAG 2.1 AA), but no DOM ATTRIBUTE may ever contain that value: aria-label
+ * is recorded verbatim by PostHog session replay and `data-ph-mask` cannot cover it --
+ * masking only applies to element text content, never to attribute values.
+ *
+ * Pattern (matches AccountCard.tsx:67-80): the button's `aria-labelledby` attribute holds
+ * only an opaque element id (from `useId()`, never source-derived). The accessible name is
+ * computed at read time from the referenced `sr-only` span's TEXT, which carries the value
+ * and is masked normally via `data-ph-mask` in session replay.
  */
-function getRemoveAriaLabel(source: IncomeSource): string {
+function getRemoveLabelText(source: IncomeSource, displayValue: string): string {
   switch (source.type) {
     case 'tag':
-      return 'Remove tag income source';
+      return `Remove ${displayValue} tag income source`;
     case 'pfc_primary':
-      return 'Remove category income source';
-    case 'manual':
-      return 'Remove manual income source';
+      return `Remove ${displayValue} category income source`;
     default:
-      return 'Remove income source';
+      return `Remove ${displayValue} income source`;
   }
 }
 
@@ -72,6 +77,7 @@ export function IncomeSourceItem({
 }: IncomeSourceItemProps) {
   const displayValue = getDisplayValue(source);
   const hasDescription = source.description && source.description.trim().length > 0;
+  const removeLabelId = useId();
 
   return (
     <div className="flex items-center justify-between px-4 py-3 bg-muted border border-border rounded-lg gap-3">
@@ -100,15 +106,20 @@ export function IncomeSourceItem({
         </div>
       </div>
       {source.type !== 'manual' ? (
-        <button
-          type="button"
-          className="flex items-center justify-center w-7 h-7 rounded-md bg-transparent text-muted-foreground cursor-pointer transition-colors duration-150 shrink-0 hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
-          onClick={onRemove}
-          disabled={disabled}
-          aria-label={getRemoveAriaLabel(source)}
-        >
-          <XIcon className="w-4 h-4" />
-        </button>
+        <>
+          <span id={removeLabelId} className="sr-only" data-ph-mask>
+            {getRemoveLabelText(source, displayValue)}
+          </span>
+          <button
+            type="button"
+            className="flex items-center justify-center w-7 h-7 rounded-md bg-transparent text-muted-foreground cursor-pointer transition-colors duration-150 shrink-0 hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={onRemove}
+            disabled={disabled}
+            aria-labelledby={removeLabelId}
+          >
+            <XIcon className="w-4 h-4" />
+          </button>
+        </>
       ) : (
         <Badge variant="secondary" size="sm" className="shrink-0">
           legacy
