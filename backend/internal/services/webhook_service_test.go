@@ -30,8 +30,8 @@ func generateTestKeyPair(t *testing.T) (*ecdsa.PrivateKey, *ecdsa.PublicKey) {
 // Test helper: Create valid JWT with ES256
 func createTestJWT(t *testing.T, privateKey *ecdsa.PrivateKey, kid string, bodyHash string, issuedAt time.Time) string {
 	token := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
-		"iat":                   issuedAt.Unix(),
-		"request_body_sha256":   bodyHash,
+		"iat":                 issuedAt.Unix(),
+		"request_body_sha256": bodyHash,
 	})
 	token.Header["kid"] = kid
 
@@ -168,6 +168,41 @@ func TestVerifyWebhook_ExpiredJWT(t *testing.T) {
 	assert.Error(t, err)
 	assert.False(t, valid)
 	assert.Contains(t, err.Error(), "JWT too old")
+}
+
+// TestVerifyWebhook_FutureJWT verifies Issue #1514 Part B: an iat claim far in the future must be
+// rejected symmetrically with the stale-JWT case above, mirroring
+// paddle_webhook_service.go's checkTimestampTolerance (which rejects both directions). Before the
+// fix, VerifyWebhook only bounded time.Since(issuedAt), so an arbitrarily future-dated iat was
+// accepted outright.
+func TestVerifyWebhook_FutureJWT(t *testing.T) {
+	privateKey, publicKey := generateTestKeyPair(t)
+	kid := "test-key-id"
+
+	body := []byte(`{"webhook_type":"TRANSACTIONS"}`)
+	bodyHash := sha256.Sum256(body)
+	bodyHashHex := fmt.Sprintf("%x", bodyHash)
+
+	// Create JWT issued 10 minutes in the future (beyond the 5-minute tolerance).
+	futureTime := time.Now().Add(10 * time.Minute)
+	jwtString := createTestJWT(t, privateKey, kid, bodyHashHex, futureTime)
+
+	jwkCache := &mockJWKCache{
+		jwks: map[string]*ecdsa.PublicKey{
+			kid: publicKey,
+		},
+	}
+	service := &webhookService{
+		jwkCache: jwkCache,
+	}
+
+	// Execute
+	valid, err := service.VerifyWebhook(context.Background(), body, jwtString)
+
+	// Assert - should fail due to a future-dated iat
+	assert.Error(t, err)
+	assert.False(t, valid)
+	assert.Contains(t, err.Error(), "future")
 }
 
 func TestVerifyWebhook_WrongAlgorithm(t *testing.T) {
