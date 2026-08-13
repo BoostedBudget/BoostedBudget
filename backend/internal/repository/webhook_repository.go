@@ -221,11 +221,13 @@ func (r *webhookRepository) MarkProcessed(ctx context.Context, id string) error 
 // unset: domain.WebhookEvent.ProcessedAt documents "when the webhook was successfully
 // processed", and this row was not.
 //
-// This implementation currently has exactly one real (non-test) caller: the invalid-signature
-// guard in queue/jobs/webhook_processing.go, which never expects a further retry (the
-// signature can't become valid later) — so unconditionally setting processed = true here does
-// not clobber any legitimate-retry caller. If a future caller needs "failed but still eligible
-// for retry" semantics, it must not reuse this method as-is.
+// This implementation currently has two real (non-test) callers, both invalid-signature
+// guards that never expect a further retry (the signature can't become valid later): the
+// River worker's guard in queue/jobs/webhook_processing.go, and the legacy WebhookProcessor
+// poller's guard (refuseIfInvalidSignature) in workers/webhook_processor.go. Neither expects
+// a legitimate retry, so unconditionally setting processed = true here does not clobber either
+// caller. If a future caller needs "failed but still eligible for retry" semantics, it must
+// not reuse this method as-is.
 func (r *webhookRepository) MarkFailed(ctx context.Context, id string, errorMsg string) error {
 	query := `
 		UPDATE webhook_events
@@ -403,9 +405,11 @@ func (r *webhookRepository) Update(ctx context.Context, event *domain.WebhookEve
 // Used by WebhookProcessor to fetch TRANSACTIONS webhooks ready for processing
 //
 // Issue #1514: deliberately does NOT filter on signature_valid — callers must guard before
-// dispatching a returned row to a downstream service. Both current consumers do: the legacy
-// WebhookProcessor poller (workers/webhook_processor.go, refuseIfInvalidSignature) and the
-// River worker (queue/jobs/webhook_processing.go, its SignatureValid check).
+// dispatching a returned row to a downstream service. The legacy WebhookProcessor poller
+// (workers/webhook_processor.go, refuseIfInvalidSignature) is the only caller of this method
+// and does so. The River worker (queue/jobs/webhook_processing.go) is NOT a caller of this
+// method — it fetches by id via GetByID instead — but has its own equivalent SignatureValid
+// check before dispatch.
 func (r *webhookRepository) GetUnprocessedByType(ctx context.Context, webhookType string, limit int) ([]domain.WebhookEvent, error) {
 	query := `
 		SELECT id, webhook_type, webhook_code, item_id, error_code,

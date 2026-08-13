@@ -101,6 +101,10 @@ var (
 	//   paddle_replay_guard - ReplayPaddleWebhook refused to replay a signature_valid=false row
 	//   plaid_worker_guard  - WebhookProcessingWorker refused to dispatch a signature_valid=false
 	//                         Plaid row it was handed (defense-in-depth; should be near-zero)
+	//   plaid_legacy_poller_guard - the legacy WebhookProcessor poller's refuseIfInvalidSignature
+	//                         refused to dispatch a signature_valid=false row (workers/webhook_processor.go).
+	//                         That poller is unwired dead code (production uses the River worker
+	//                         above instead), so this label should be permanently zero in production.
 	InvalidWebhookAttemptsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "invalid_webhook_attempts_total",
 		Help: "Number of webhook deliveries rejected for missing or invalid signature, by provider/site.",
