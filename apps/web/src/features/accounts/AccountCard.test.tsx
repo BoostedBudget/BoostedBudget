@@ -281,6 +281,29 @@ describe('AccountCard', () => {
       expect(attributeValues(link).some((v) => v.includes('undefined'))).toBe(false)
       expect(attributeValues(link).some((v) => v.includes('ending in'))).toBe(false)
     })
+
+    it('does not put account.id in any rendered attribute other than the link href (issue #1514)', () => {
+      const { container } = renderWithRouter(<AccountCard account={mockAccount} />)
+
+      const violations: string[] = []
+      container.querySelectorAll('*').forEach((el) => {
+        Array.from(el.attributes).forEach((attr) => {
+          if (attr.name === 'href') return
+          if (attr.value.includes(mockAccount.id)) {
+            violations.push(`${el.tagName.toLowerCase()}[${attr.name}="${attr.value}"]`)
+          }
+        })
+      })
+      expect(violations).toEqual([])
+
+      // The href is the one accepted exception and must still carry the id (routing dependency).
+      const link = container.querySelector(`a[href="/accounts/${mockAccount.id}"]`)
+      expect(link).toBeTruthy()
+
+      // The accessible name must still compute correctly from the masked sr-only span.
+      const accessibleLink = screen.getByRole('link', { name: /view bank account - checking account ending in 0000 details/i })
+      expect(accessibleLink).toBe(link)
+    })
   })
 
   describe('disconnected badge copy (issue #1495: generalised, cause-agnostic wording)', () => {
