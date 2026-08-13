@@ -237,7 +237,7 @@ function App() {
           }
         },
       })
-      console.log('Paddle initialized successfully', { environment: paddleEnv })
+      devLog('Paddle initialized successfully', { environment: paddleEnv })
     } catch (error) {
       console.error('Failed to initialize Paddle:', error)
     }
@@ -262,7 +262,7 @@ function App() {
   }
 
   const handleConsentChange = async (consents: CookieConsentSettings) => {
-    console.log('Cookie consents updated:', consents)
+    devLog('Cookie consents updated:', consents)
 
     if (consents.analytics) {
       posthog.opt_in_capturing()
@@ -274,7 +274,7 @@ function App() {
       try {
         const privacyUpdate = cookieToPrivacySettings(consents)
         await updatePrivacyMutation.mutateAsync({ data: privacyUpdate })
-        console.log('Cookie consent synced to backend')
+        devLog('Cookie consent synced to backend')
       } catch (error) {
         console.error('Failed to sync cookie consent to backend:', error)
       }
@@ -282,10 +282,10 @@ function App() {
   }
 
   const handlePrivacySettingsChange = (settings: PrivacySettingsType) => {
-    console.log('Privacy settings updated:', settings)
+    devLog('Privacy settings updated:', settings)
     const cookieSettings = privacySettingsToCookie(settings)
     updateConsentCookie(cookieSettings)
-    console.log('Privacy settings synced to cookie')
+    devLog('Privacy settings synced to cookie')
   }
 
   return (
