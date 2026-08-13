@@ -212,9 +212,13 @@ const epochBoundSlackSeconds int64 = 86400
 
 // checkTimestampTolerance rejects tsUnix if it is farther than s.tolerance from s.now() in
 // EITHER direction. Symmetric by design (issue #1514, F3): a too-old timestamp is a replay risk,
-// and — unlike backend/internal/services/webhook_service.go's Plaid JWT check, which only
-// bounds time.Since(issuedAt) and so accepts arbitrarily future-dated tokens — an unbounded
-// future timestamp is just as dangerous here and must be rejected too.
+// and an unbounded future timestamp is just as dangerous and must be rejected too.
+// backend/internal/services/webhook_service.go's checkIatTolerance bounds Plaid's JWT `iat` the
+// same way, in both directions — the two providers no longer differ on that point. What does
+// still differ: s.tolerance here is operator-configurable via
+// PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS (default 5s, capped at
+// config.PaddleWebhookTimestampToleranceMaxSeconds = 300s), while Plaid's iatTolerance is a
+// hardcoded 5-minute constant with no config knob.
 //
 // Bug fixed here (issue #1514, G2, fix-round-2): for a `ts=` far enough in the future,
 // `now.Sub(eventTime)` is unrepresentable as an int64 nanosecond count and time.Duration
