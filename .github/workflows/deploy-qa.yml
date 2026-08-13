@@ -484,7 +484,13 @@ jobs:
         run: |
           # #1514: the heredoc delimiter below is quoted ('EOF') so bash writes
           # the body byte-for-byte with NO shell expansion of its contents.
-          # Every secret is substituted by GitHub Actions ${{ }} templating at
+          # NOTE: do not write a literal empty GitHub expression in this block, even
+          # inside a shell comment — expressions are templated anywhere in a `run:`
+          # script, and an empty one is a workflow-compile error (actionlint:
+          # "unexpected end of input while parsing variable access"). That is why the
+          # mechanism is described in words below rather than shown in syntax.
+          #
+          # Every secret is substituted by GitHub Actions expression templating at
           # workflow-compile time, before bash ever sees this script — that
           # substitution is unaffected by heredoc quoting either way. Quoting
           # matters for what bash itself would otherwise do at runtime: a
@@ -494,7 +500,7 @@ jobs:
           # password and any DATABASE_URL built from it, with no error). We
           # previously used real bash variables (${TAG_PREFIX}, ${SHA}) here,
           # which needed runtime expansion and would have broken under quoting
-          # — they are now inlined directly as ${{ }} expressions instead
+          # — they are now inlined directly as GitHub Actions expressions instead
           # (also GH-Actions-substituted pre-bash), so quoting the delimiter is
           # safe and every line below still produces the same output as before.
           cat > ${{ env.UNIQUE_WORKSPACE }}/.env.qa << 'EOF'
