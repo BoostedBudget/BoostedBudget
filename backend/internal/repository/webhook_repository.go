@@ -38,7 +38,8 @@ type WebhookRepository interface {
 
 	// MarkFailed marks a webhook event as failed with an error message (Issue #1514).
 	// Used by the worker's signature-validity guard to record why a row was refused
-	// without leaving it eligible for indefinite retry.
+	// without leaving it eligible for indefinite retry: it sets processed = true, which
+	// removes the row from GetUnprocessed/GetUnprocessedByType's result set.
 	MarkFailed(ctx context.Context, id string, errorMsg string) error
 
 	// GetUnprocessed retrieves all unprocessed webhook events
@@ -211,11 +212,25 @@ func (r *webhookRepository) MarkProcessed(ctx context.Context, id string) error 
 	return nil
 }
 
-// MarkFailed marks a webhook event as failed with an error message (Issue #1514).
+// MarkFailed marks a webhook event as permanently failed with an error message (Issue #1514).
+//
+// Sets processed = true so the row stops being selected by GetUnprocessed /
+// GetUnprocessedByType (both filter on processed = false) — otherwise a refused row would
+// remain "eligible for indefinite retry" by any poller that scans those queries, contradicting
+// the WebhookRepository interface's contract (see ~:39-41). processed_at is deliberately left
+// unset: domain.WebhookEvent.ProcessedAt documents "when the webhook was successfully
+// processed", and this row was not.
+//
+// This implementation currently has exactly one real (non-test) caller: the invalid-signature
+// guard in queue/jobs/webhook_processing.go, which never expects a further retry (the
+// signature can't become valid later) — so unconditionally setting processed = true here does
+// not clobber any legitimate-retry caller. If a future caller needs "failed but still eligible
+// for retry" semantics, it must not reuse this method as-is.
 func (r *webhookRepository) MarkFailed(ctx context.Context, id string, errorMsg string) error {
 	query := `
 		UPDATE webhook_events
 		SET processing_error = $2,
+		    processed = true,
 		    retry_count = retry_count + 1,
 		    updated_at = NOW()
 		WHERE id = $1
