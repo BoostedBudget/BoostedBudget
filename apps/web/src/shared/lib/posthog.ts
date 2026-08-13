@@ -1,5 +1,5 @@
 import posthog, { type PostHogConfig } from 'posthog-js'
-import { PII_PROPERTY_DENYLIST } from './piiScrubbing'
+import { isPiiKey } from './piiScrubbing'
 
 export function posthogConfig(): Partial<PostHogConfig> {
   return {
@@ -20,8 +20,18 @@ export function posthogConfig(): Partial<PostHogConfig> {
     before_send: (event) => {
       if (!event) return null
       if (event.properties) {
-        for (const key of PII_PROPERTY_DENYLIST) {
-          delete (event.properties as Record<string, unknown>)[key]
+        const properties = event.properties as Record<string, unknown>
+        // Iterate the event's OWN keys through the same tokenizing matcher
+        // Sentry uses (`isPiiKey`, see piiScrubbing.ts), rather than deleting
+        // exact literal denylist entries — that exact-match approach let
+        // camelCase PII (`currentBalance`, `institutionName`,
+        // `accountBalance`, ...) sail through untouched. Delete (not
+        // redact-in-place) to preserve this function's prior behaviour of
+        // dropping the property entirely rather than sending a marker value.
+        for (const key of Object.keys(properties)) {
+          if (isPiiKey(key)) {
+            delete properties[key]
+          }
         }
       }
       return event
