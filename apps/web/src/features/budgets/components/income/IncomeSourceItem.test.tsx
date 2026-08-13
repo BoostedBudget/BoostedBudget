@@ -187,25 +187,42 @@ describe('IncomeSourceItem', () => {
       // names for every row of a given type, which is invisible to linear reading (list
       // semantics + adjacent text rescue it) but breaks rotor/"buttons list" navigation,
       // where only the control's own accessible name is shown.
+      //
+      // Both rows are rendered SIMULTANEOUSLY in one container -- a broken implementation
+      // using a hard-coded (non-useId) label element id would still pass a version of this
+      // test that unmounts row A before mounting row B, because the two ids would never
+      // collide in the DOM at the same time. Only coexistence proves distinctness.
       const sourceA: IncomeSource = { type: 'tag', value: 'Freelance' };
       const sourceB: IncomeSource = { type: 'tag', value: 'Consulting' };
 
-      const { unmount } = render(<IncomeSourceItem source={sourceA} onRemove={mockOnRemove} />);
-      const buttonA = screen.getByRole('button', { name: /remove/i });
-      const nameA = buttonA.getAttribute('aria-labelledby')
-        ? document.getElementById(buttonA.getAttribute('aria-labelledby')!)?.textContent
-        : buttonA.getAttribute('aria-label');
-      unmount();
+      render(
+        <>
+          <IncomeSourceItem source={sourceA} onRemove={mockOnRemove} />
+          <IncomeSourceItem source={sourceB} onRemove={mockOnRemove} />
+        </>
+      );
 
-      render(<IncomeSourceItem source={sourceB} onRemove={mockOnRemove} />);
-      const buttonB = screen.getByRole('button', { name: /remove/i });
-      const nameB = buttonB.getAttribute('aria-labelledby')
-        ? document.getElementById(buttonB.getAttribute('aria-labelledby')!)?.textContent
-        : buttonB.getAttribute('aria-label');
+      const buttons = screen.getAllByRole('button', { name: /remove/i });
+      expect(buttons).toHaveLength(2);
+      const [buttonA, buttonB] = buttons;
 
-      expect(nameA).toBeTruthy();
-      expect(nameB).toBeTruthy();
-      expect(nameA).not.toEqual(nameB);
+      expect(buttonA).toHaveAccessibleName('Remove Freelance tag income source');
+      expect(buttonB).toHaveAccessibleName('Remove Consulting tag income source');
+      expect(buttonA).not.toHaveAccessibleName(buttonB.getAttribute('aria-label') ?? '');
+
+      const labelledbyA = buttonA.getAttribute('aria-labelledby');
+      const labelledbyB = buttonB.getAttribute('aria-labelledby');
+      expect(labelledbyA).toBeTruthy();
+      expect(labelledbyB).toBeTruthy();
+      // Each button's aria-labelledby must resolve to its OWN label element, not a
+      // shared/duplicate one -- this is what a hard-coded id would violate.
+      expect(labelledbyA).not.toEqual(labelledbyB);
+
+      const labelElA = document.getElementById(labelledbyA!);
+      const labelElB = document.getElementById(labelledbyB!);
+      expect(labelElA).not.toBeNull();
+      expect(labelElB).not.toBeNull();
+      expect(labelElA).not.toBe(labelElB);
     });
 
     it('backs the accessible name with an sr-only, data-ph-mask span whose text (not any attribute) carries the value', () => {
