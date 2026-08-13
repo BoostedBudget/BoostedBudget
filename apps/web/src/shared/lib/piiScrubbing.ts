@@ -144,15 +144,17 @@ const DENYLIST_MAX_WORDS = Math.max(
  * a denylist entry, or some contiguous run of its tokens — joined with `_`,
  * from length 1 up to the longest denylist entry's word count — does.
  *
- * Pure-digit tokens (e.g. the `1` in `account1Name`) are dropped before the
- * windows are built. Without this, a digit sitting between two words breaks
- * contiguity and a compound entry like `account_name` can never match
- * `account1Name` even though `accountName` matches it directly — the digit
- * would silently make the field un-redactable. The denylist has no digit-only
- * entries, so dropping digit tokens can only ever surface additional matches
- * (e.g. `account1Name`, `public1Token`), never suppress one that already
- * matched: every entry that matched via the un-filtered tokens still matches
- * once the (non-matching) digit tokens are removed from between them.
+ * Pure-digit tokens (e.g. the `1` in `account1Name`) are dropped from the
+ * token list used to build the window scan below (but NOT from the list used
+ * for the `ID_ALLOWLIST` comparison — see that section). Without this, a
+ * digit sitting between two words breaks contiguity and a compound entry
+ * like `account_name` can never match `account1Name` even though
+ * `accountName` matches it directly — the digit would silently make the
+ * field un-redactable. The denylist has no digit-only entries, so dropping
+ * digit tokens can only ever surface additional matches (e.g.
+ * `account1Name`, `public1Token`), never suppress one that already matched:
+ * every entry that matched via the un-filtered tokens still matches once the
+ * (non-matching) digit tokens are removed from between them.
  *
  * **`ID_ALLOWLIST`.** Exactly two keys are exempted from the bare-token
  * window scan below, matched on their normalized/tokenized form so both
@@ -163,6 +165,22 @@ const DENYLIST_MAX_WORDS = Math.max(
  * never the name — and without this carve-out they'd be deleted anyway,
  * because they still contain the bare `merchant`/`institution` token the
  * window scan matches regardless of the trailing `id`.
+ *
+ * The allowlist comparison MUST run against the *unfiltered* token join, not
+ * the digit-filtered one used for the window scan below. A key like
+ * `merchant_1_id` tokenizes to `['merchant', '1', 'id']`; if the digit were
+ * dropped first, the remaining `['merchant', 'id']` would join to the exact
+ * string `merchant_id` and match the allowlist, exempting an unbounded
+ * family of digit-infix variants (`merchant_1_id`, `merchant_99_id`,
+ * `institution_1_id`, `merchant_id2`, ...) that the allowlist is documented
+ * as never covering — a privacy hole in the same shape as defect 2 below,
+ * just one level subtler. Comparing against the unfiltered join closes that:
+ * `merchant_1_id`'s unfiltered join is `merchant_1_id`, which is not in
+ * `ID_ALLOWLIST`, so it falls through to the ordinary window scan, where the
+ * (now digit-filtered) bare `merchant` token redacts it. Genuine allowlist
+ * keys are unaffected because they never had a digit token to begin with:
+ * `merchant_id`/`merchantId` both tokenize to `['merchant', 'id']` whether or
+ * not digits are filtered.
  *
  * This replaces an earlier version of this carve-out that exempted *every*
  * key whose last token is `id`, not just these two. That was a real privacy
@@ -183,10 +201,13 @@ const ID_ALLOWLIST = new Set(['merchant_id', 'institution_id'])
 
 export function isPiiKey(key: string): boolean {
   if (PII_PROPERTY_DENYLIST.has(key.toLowerCase())) return true
-  const tokens = tokenize(key).filter(token => !/^\d+$/.test(token))
-  if (tokens.length === 0) return false
+  const rawTokens = tokenize(key)
+  if (rawTokens.length === 0) return false
 
-  if (ID_ALLOWLIST.has(tokens.join('_'))) return false
+  if (ID_ALLOWLIST.has(rawTokens.join('_'))) return false
+
+  const tokens = rawTokens.filter(token => !/^\d+$/.test(token))
+  if (tokens.length === 0) return false
 
   const maxWindow = Math.min(DENYLIST_MAX_WORDS, tokens.length)
   for (let windowSize = 1; windowSize <= maxWindow; windowSize++) {

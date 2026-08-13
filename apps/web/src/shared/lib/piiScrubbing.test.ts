@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { isPiiKey, redactPii, stripQueryString, tokenize } from './piiScrubbing';
+import { posthogConfig } from './posthog';
 
 describe('tokenize', () => {
   // Table-driven so a failure names exactly which key shape broke, and the
@@ -161,6 +162,141 @@ describe('isPiiKey: merchant_id/institution_id allowlist (issue #1514, defect 2)
       expect(isPiiKey(key)).toBe(false);
     });
   }
+});
+
+describe('isPiiKey: digit-interrupted ID_ALLOWLIST entries (issue #1514, defect 3)', () => {
+  // The pre-fix code filtered pure-digit tokens out of `tokens` BEFORE
+  // comparing against ID_ALLOWLIST, so a digit sitting inside `merchant_id`
+  // was invisible to the allowlist check: `merchant_1_id` tokenizes to
+  // ['merchant', '1', 'id'], the '1' is dropped, and the remaining
+  // ['merchant', 'id'] joins to the literal string 'merchant_id' — which IS
+  // in ID_ALLOWLIST, even though the allowlist is documented as exempting
+  // exactly the two keys `merchant_id`/`institution_id`, not an unbounded
+  // family of digit-infix variants. The fix compares the allowlist against
+  // the UNFILTERED token join and only drops digit tokens afterward, for the
+  // window scan. This is the RED: every one of these keys survives scrubbing
+  // under the pre-fix code (verified by running this block before the fix).
+  const digitDefeatsAllowlistMustBeRedacted: string[] = [
+    'merchant_1_id',
+    'merchant_2_id',
+    'merchant_99_id',
+    'merchant_0_id',
+    'institution_1_id',
+    'merchant_id2',
+    'MERCHANT_7_ID',
+  ];
+
+  // Both spellings and separator/case variants of the two genuinely
+  // allowlisted keys must still be exempt — the fix must not narrow the
+  // allowlist while closing the digit-infix gap.
+  const stillExempt: string[] = [
+    'merchant_id',
+    'merchantId',
+    'institution_id',
+    'institutionId',
+    'merchant-id',
+    'merchant__id',
+    'MERCHANT_ID',
+    '_merchant_id',
+  ];
+
+  // Full re-run of the previously verified redact/survive matrices, plus the
+  // digit-filter regression guard (`account1Name`) that this fix must not
+  // break: the digit filter still has to run for the ordinary window scan,
+  // just after (not instead of) the allowlist comparison.
+  const stillRedacted: string[] = [
+    'email_id',
+    'emailId',
+    'user_email_id',
+    'nickname_id',
+    'balance_id',
+    'current_balance_id',
+    'maskId',
+    'merchant_name_id',
+    'accountNameId',
+    'account_id',
+    'accountId',
+    'link_session_id',
+    'merchant',
+    'merchantName',
+    'merchant_name',
+    'institution',
+    'institutionName',
+    'institution_name',
+    'amount',
+    'currentBalance',
+    'userEmail',
+    'query_string',
+    'cookies',
+    'account1Name',
+  ];
+
+  const stillSurvivesBenign: string[] = [
+    'transaction_id',
+    'goal_id',
+    'record_id',
+    'contribution_id',
+    'job_id',
+    'widget_id',
+    'columnId',
+    'step_id',
+    'widget_type',
+    'query_length',
+    'excluded_count',
+    'tab',
+    'theme',
+    'page',
+    'count',
+    'sort',
+    'event_type',
+    'new_basis',
+    'parent_kind',
+    'preset',
+    'scope',
+    'resolved',
+    'enabled',
+    'deleted',
+  ];
+
+  // Exercise every key above through all three real consumers: isPiiKey
+  // directly, Sentry's redactPii, and PostHog's before_send. isPiiKey is
+  // shared by both analytics paths — a fix verified against isPiiKey alone
+  // could still leave one of the two consumers broken (see the file-header
+  // comment on the pre-unification PostHog exact-match bug).
+  function expectMatrix(keys: string[], expectRedacted: boolean) {
+    for (const key of keys) {
+      const label = expectRedacted ? 'is redacted' : 'survives';
+
+      test(`${key} ${label} (isPiiKey)`, () => {
+        expect(isPiiKey(key)).toBe(expectRedacted);
+      });
+
+      test(`${key} ${label} (redactPii)`, () => {
+        const result = redactPii({ [key]: 'sensitive-value' }) as Record<string, unknown>;
+        if (expectRedacted) {
+          expect(result[key]).toBe('[Redacted]');
+        } else {
+          expect(result[key]).toBe('sensitive-value');
+        }
+      });
+
+      test(`${key} ${label} (posthog before_send)`, () => {
+        const cfg = posthogConfig();
+        const event = { event: 'test_event', properties: { [key]: 'sensitive-value' } };
+        const out = cfg.before_send?.(event as Parameters<NonNullable<typeof cfg.before_send>>[0]);
+        if (expectRedacted) {
+          expect(out?.properties?.[key]).toBeUndefined();
+        } else {
+          expect(out?.properties?.[key]).toBe('sensitive-value');
+        }
+      });
+    }
+  }
+
+  expectMatrix(digitDefeatsAllowlistMustBeRedacted, true);
+  expectMatrix(stillExempt, false);
+  expectMatrix(stillRedacted, true);
+  expectMatrix(stillSurvivesBenign, false);
 });
 
 describe('redactPii', () => {
