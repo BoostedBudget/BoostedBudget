@@ -3,14 +3,17 @@
  * details, balances) or third-party auth/session secrets, and must never be
  * sent to third-party analytics/observability tools.
  *
- * Shared by PostHog's `before_send` (see `posthog.ts`), which deletes
- * properties by exact key match, and Sentry's `redactPii` below, which also
- * matches by *token*: a key is split on camelCase boundaries and `_`/`-`
- * (e.g. `accountBalance` / `account_balance` → `['account', 'balance']`),
- * lowercased, and redacted if any token — or the whole lowercased key, for
- * multi-word snake_case entries below — is in this set. This is what makes
+ * Shared by a single matcher, `isPiiKey` below, used by both PostHog's
+ * `before_send` (see `posthog.ts`) and Sentry's `redactPii`: a key is split
+ * on camelCase boundaries and `_`/`-` (e.g. `accountBalance` /
+ * `account_balance` → `['account', 'balance']`), lowercased, and redacted if
+ * any contiguous token window — or the whole lowercased key, for multi-word
+ * entries below — is in this set. This is what makes
  * `currentBalance`/`institutionName`/`userEmail`-style camelCase fields get
- * caught, not just their snake_case spellings.
+ * caught, not just their snake_case spellings, on *both* paths. (Before this
+ * was unified, PostHog matched only the exact literal key and silently
+ * missed every camelCase near-miss Sentry caught — see git history on this
+ * file for that bug.)
  *
  * Because token matching is per-word, every entry here must be safe to
  * redact in *any* compound it appears in — not just the specific field name
@@ -34,17 +37,16 @@
  * content is already covered by `data-ph-mask` (session replay), which is
  * the actual defense for that field's *content*.
  *
- * ⚠ Do NOT delete `account_name` / `institution_name` / `merchant_name` /
- * `current_balance` / `target_amount` / `current_amount` / `account_mask` /
- * `account_id` / `customer_email` as "redundant" because their component
- * words (`institution`, `merchant`, `balance`, `amount`, `email`) already
- * cover them via Sentry's token matching below. They are NOT redundant:
- * **PostHog's** `before_send` (see `posthog.ts`) deletes properties by
- * *exact literal key* match against this same Set and never tokenizes —
- * `balance` alone cannot match a literal `current_balance` property there.
- * Deleting the compound entry would silently reopen PostHog leakage of that
- * exact field while Sentry's coverage stayed intact, which is the opposite
- * of an obvious regression.
+ * The multi-word entries below (`account_name`, `institution_name`,
+ * `merchant_name`, `current_balance`, `target_amount`, `current_amount`,
+ * `account_mask`, `account_id`, `customer_email`, `query_string`) are still
+ * NOT redundant with their component single-word tokens, even now that both
+ * PostHog and Sentry tokenize: a bare `account`/`name`/`query`/`string`
+ * entry would each cause its own over-scrub (see above), so the only way to
+ * catch these specific compounds is as multi-word windows. Deleting one of
+ * these compound entries reopens a real gap on *both* analytics paths, not
+ * just one — that's the part of this warning that changed post-unification;
+ * it used to be "PostHog-only," it is now "both."
  */
 export const PII_PROPERTY_DENYLIST = new Set([
   'merchant',
@@ -73,6 +75,22 @@ export const PII_PROPERTY_DENYLIST = new Set([
   'authorization',
   'cookie',
   'set-cookie',
+  // Sentry `event.request` fields that key-based matching otherwise misses:
+  // `query_string` tokenizes to ['query', 'string'], neither of which is a
+  // PII word on its own, so its raw value (e.g. `account_id=acc_123&token=
+  // secret`) passed through unredacted; `cookies` is a nested *container*
+  // (`{ session: '...' }`), not a header, so it never matched the singular
+  // `cookie` header entry above. Both are bare entries so the whole value/
+  // object is redacted, the same way any other denylist hit is. `cookies` is
+  // deliberately NOT split into redacting only its inner keys (e.g. a bare
+  // `session` entry): `session` alone would also catch benign fields like a
+  // hypothetical `sessionCount`/`session_id`-style metadata field, which is
+  // exactly the over-scrub class the `account`/`name` exclusions above guard
+  // against — redacting the whole `cookies` container avoids that without
+  // losing coverage, since nothing legitimate needs cookie values in
+  // analytics/error payloads.
+  'query_string',
+  'cookies',
 ])
 
 /**
@@ -125,7 +143,7 @@ const DENYLIST_MAX_WORDS = Math.max(
  * matched: every entry that matched via the un-filtered tokens still matches
  * once the (non-matching) digit tokens are removed from between them.
  */
-function isPiiKey(key: string): boolean {
+export function isPiiKey(key: string): boolean {
   if (PII_PROPERTY_DENYLIST.has(key.toLowerCase())) return true
   const tokens = tokenize(key).filter(token => !/^\d+$/.test(token))
   const maxWindow = Math.min(DENYLIST_MAX_WORDS, tokens.length)

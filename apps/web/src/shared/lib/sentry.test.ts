@@ -299,7 +299,6 @@ describe('sentry scrubbing options', () => {
 
       const request = result?.request as Record<string, unknown>;
       const headers = request.headers as Record<string, unknown>;
-      const cookies = request.cookies as Record<string, unknown>;
       const data = request.data as Record<string, unknown>;
 
       // url must still be query-stripped (pre-existing behaviour, must not regress)
@@ -310,13 +309,15 @@ describe('sentry scrubbing options', () => {
       // financial PII in request body data must be redacted
       expect(data.account_name).toBe('[Redacted]');
       expect(data.currentBalance).toBe('[Redacted]');
-      // Known scope limit of key-based (not content-based) redaction: neither
-      // `query_string` nor `cookies` themselves match a denylisted token, and
-      // their *values*/nested keys are not content-scanned, so these survive
-      // unredacted. Pinned here deliberately so a future denylist change that
-      // silently starts redacting them doesn't look like a regression.
-      expect(request.query_string).toBe('account_id=acc_123&token=secret');
-      expect(cookies.session).toBe('abc');
+      // `query_string` and `cookies` are now bare PII_PROPERTY_DENYLIST
+      // entries (see piiScrubbing.ts): `query_string`'s raw value can carry
+      // account/session identifiers the same way a URL's query string can,
+      // and `cookies` is a nested container whose inner keys (e.g. `session`)
+      // don't themselves match a denylisted token, so the only way to close
+      // it is to redact the whole container. These previously survived as a
+      // documented scope limit; that gap is now closed.
+      expect(request.query_string).toBe('[Redacted]');
+      expect(request.cookies).toBe('[Redacted]');
     });
   });
 });
