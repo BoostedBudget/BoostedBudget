@@ -46,9 +46,23 @@ function getIcon(type: IncomeSource['type']): React.ReactNode {
   }
 }
 
+/**
+ * Issue #1514: this label MUST NOT interpolate any source-derived value (currency amount,
+ * tag text, or category label). aria-label is recorded verbatim by PostHog session replay
+ * and `data-ph-mask` cannot cover it -- masking only applies to element text content, never
+ * to attribute values. The label is intentionally generic (action + kind), not the value.
+ */
 function getRemoveAriaLabel(source: IncomeSource): string {
-  const displayValue = getDisplayValue(source);
-  return `Remove ${displayValue}`;
+  switch (source.type) {
+    case 'tag':
+      return 'Remove tag income source';
+    case 'pfc_primary':
+      return 'Remove category income source';
+    case 'manual':
+      return 'Remove manual income source';
+    default:
+      return 'Remove income source';
+  }
 }
 
 export function IncomeSourceItem({
