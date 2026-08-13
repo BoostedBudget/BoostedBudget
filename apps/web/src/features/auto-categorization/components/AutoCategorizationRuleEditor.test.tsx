@@ -9,7 +9,8 @@ import userEvent from '@testing-library/user-event'
 import { AutoCategorizationRuleEditor } from './AutoCategorizationRuleEditor'
 import type { CategorizationRule } from '../types'
 import { fillInputByLabel, fillInput } from '@/test/utils/formTestHelpers'
-import { mockUseGetPlaidDetailedCategories } from '@/test/mocks/categories-api'
+import { mockUseGetPlaidDetailedCategories, mockUseGetUserCategories } from '@/test/mocks/categories-api'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 describe('AutoCategorizationRuleEditor', () => {
   const mockOnSave = mock(() => Promise.resolve())
@@ -1652,5 +1653,95 @@ describe('AutoCategorizationRuleEditor', () => {
       })
     })
 
+  })
+
+  // Issue #1514 (fix round 2): SearchableSelect only masks option label/sublabel text
+  // when its `maskOptions` prop is set — it does not mask by default. The custom-category
+  // and tag pickers here passed user-authored labels without that prop, so the open
+  // dropdown rendered raw category/tag names as unmasked text.
+  describe('PII masking (#1514): SearchableSelect option masking', () => {
+    const SENTINEL_CUSTOM_CATEGORY = 'SENTINEL_CUSTOM_CATEGORY_QRST'
+    const SENTINEL_RULE_TAG = 'SENTINEL_RULE_TAG_WXYZ'
+
+    beforeEach(() => {
+      mockUseGetUserCategories.mockReturnValue({
+        data: [{ id: 'cat-sentinel', name: SENTINEL_CUSTOM_CATEGORY }],
+        isLoading: false,
+        error: null,
+      })
+    })
+
+    it('masks custom category names in the "…or a custom category" dropdown', async () => {
+      const user = userEvent.setup({ delay: null })
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          plaidPrimaries={mockPlaidPrimaries}
+        />
+      )
+
+      const combobox = screen.getByRole('combobox', { name: /use a custom category target/i })
+      await user.click(combobox)
+      await screen.findByRole('listbox')
+
+      const sentinels: PIISentinel[] = [
+        { value: SENTINEL_CUSTOM_CATEGORY, fieldDescription: 'custom_category.name in "switch to custom" dropdown' },
+      ]
+      expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+    })
+
+    it('masks custom category names in the main target-category dropdown when targetKind is custom', async () => {
+      const user = userEvent.setup({ delay: null })
+      const ruleWithCustomTarget: CategorizationRule = {
+        ...mockExistingRule,
+        target_kind: 'custom',
+        target_pfc_primary: null,
+        target_pfc_detailed: null,
+        target_custom_category_id: 'cat-sentinel',
+        target_tags: [],
+      }
+      render(
+        <AutoCategorizationRuleEditor
+          mode="edit"
+          rule={ruleWithCustomTarget}
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          plaidPrimaries={mockPlaidPrimaries}
+        />
+      )
+
+      const combobox = screen.getByRole('combobox', { name: /custom category target/i })
+      await user.click(combobox)
+      await screen.findByRole('listbox')
+
+      const sentinels: PIISentinel[] = [
+        { value: SENTINEL_CUSTOM_CATEGORY, fieldDescription: 'custom_category.name in target-category dropdown' },
+      ]
+      expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+    })
+
+    it('masks user tag names in the Select tag dropdown', async () => {
+      const user = userEvent.setup({ delay: null })
+      render(
+        <AutoCategorizationRuleEditor
+          mode="create"
+          onSave={mockOnSave}
+          onCancel={mockOnCancel}
+          plaidPrimaries={mockPlaidPrimaries}
+          tags={[{ id: 'tag-sentinel', name: SENTINEL_RULE_TAG }]}
+        />
+      )
+
+      const combobox = screen.getByRole('combobox', { name: /select tag/i })
+      await user.click(combobox)
+      await screen.findByRole('listbox')
+
+      const sentinels: PIISentinel[] = [
+        { value: SENTINEL_RULE_TAG, fieldDescription: 'user_tag.name in Select tag dropdown' },
+      ]
+      expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+    })
   })
 })

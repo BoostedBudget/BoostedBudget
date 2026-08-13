@@ -113,6 +113,7 @@ Radix Dialog content renders in a portal but typically inherits `data-ph-mask` f
 - **URL search params with PII**: PostHog records the full URL. Don't push merchant names, account nicknames, or amounts into URL state.
 - **`trackEvent` with human-readable PII**: `trackEvent('drilldown', { merchant: merchantName })` leaks the name. Pass `{ merchant_id: uuid }` instead.
 - **Wrapping card roots**: Wrapping `<div data-ph-mask>` around an entire card masks CTAs and sort buttons in the replay, reducing its debugging value.
+- **Secrets/capability tokens are not covered by this policy, and session replay does not care about the distinction**: everything above is about *identifying* a user. A bearer token, magic link, or other capability credential rendered in the DOM (e.g. `DeleteAccountSection.tsx`'s old account-deletion cancellation link, embedded in both `href` and link text) is a different risk — anyone who obtains it can *act*, not just learn who someone is — but session replay captures it exactly as readily, and an `href`/`src` attribute is exactly as unmaskable as any other attribute. There is no masking fix for a secret: the only correct answer is to never render it (e.g. call the API directly from a button handler, keeping the token in memory only). If you find one of these, treat it as a security bug, not a masking gap — `data-ph-mask` cannot and should not be reached for.
 
 ---
 

@@ -231,6 +231,7 @@ export function DataTable<T,>({
   data,
   columns,
   rowKey,
+  sensitiveRowKey = false,
   sort,
   onSortChange,
   filters,
@@ -669,7 +670,7 @@ export function DataTable<T,>({
                       key={rowKey(row)}
                       ref={virtualization.dynamicRowHeight !== false ? virtualizer.measureElement : undefined}
                       data-index={virtualItem.index}
-                      data-row-id={rowKey(row)}
+                      data-row-id={sensitiveRowKey ? undefined : rowKey(row)}
                       className={cn(
                         'transition-colors',
                         onRowClick && 'cursor-pointer hover:bg-muted/50',
@@ -754,7 +755,7 @@ export function DataTable<T,>({
                   return (
                     <tr
                       key={rowKey(row)}
-                      data-row-id={rowKey(row)}
+                      data-row-id={sensitiveRowKey ? undefined : rowKey(row)}
                       className={cn(
                         'transition-colors',
                         onRowClick && 'cursor-pointer hover:bg-muted/50',

@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { RolloverAction } from '../../types'
 import type { Budget } from '../../../budgets/types'
 import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 const mockBudgets: Budget[] = [
   {
@@ -538,6 +539,52 @@ describe('RolloverActionForm', () => {
       expect(screen.getByLabelText(/target budget/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/target category/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/rollover type/i)).toBeInTheDocument()
+    })
+  })
+
+  // Issue #1514 (fix round 3): all four <option> lists here (source/target budget,
+  // source/target category) render raw budget names and formatBudgetCategoryLabel()'s
+  // user-authored savings-goal name as unmasked <option> TEXT (the value attributes are
+  // already opaque ids). <option> cannot contain a <span>, so the fix is data-ph-mask on
+  // the <option> element itself — assert with the widened scanner so it covers text, not
+  // just attributes.
+  describe('PII masking (#1514)', () => {
+    it('masks budget names and the savings-goal name in all four picker options', () => {
+      mockUseBudgets.mockReturnValue({
+        budgets: [
+          {
+            ...mockBudgets[0],
+            categories: [
+              ...mockBudgets[0].categories!,
+              {
+                id: 'cat-savings-1',
+                budget_id: 'budget-1',
+                category_kind: 'savings',
+                savings_goal_name: 'My Vacation Fund',
+                allocated_amount: 100,
+                spent_amount: 0,
+                created_at: '2024-01-01',
+                updated_at: '2024-01-01',
+                tags: [],
+                match_logic: 'any',
+              },
+            ],
+          },
+          mockBudgets[1],
+        ],
+        loading: false,
+        error: null,
+      })
+
+      renderWithProviders(
+        <RolloverActionForm action={defaultAction} onChange={() => {}} />
+      )
+
+      const sentinels: PIISentinel[] = [
+        { value: 'Monthly Budget', fieldDescription: 'budget.name in RolloverActionForm budget pickers <option>' },
+        { value: 'My Vacation Fund', fieldDescription: 'savings_goal_name in RolloverActionForm category pickers <option>' },
+      ]
+      expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
     })
   })
 })

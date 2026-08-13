@@ -2,6 +2,7 @@ import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { IncomeSourcePicker } from './IncomeSourcePicker'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 import type { IncomeSource } from '../../types'
 import type { UserTag } from '@/features/tags/types'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
@@ -379,6 +380,37 @@ describe('IncomeSourcePicker', () => {
   // ==========================================================================
   // Curated Categories Test (brand-new user)
   // ==========================================================================
+
+  // Issue #1514 (fix round 2): user-authored tag names were never masked here — the
+  // visible <option> text had no data-ph-mask, AND the tag name was written verbatim
+  // into the <option value> DOM attribute (a scanned attribute PostHog session replay
+  // records verbatim; this component simply had no test using the scanner before now).
+  describe('PII masking (#1514)', () => {
+    it('never puts a tag name into an <option value> attribute, and masks the visible text', async () => {
+      const user = userEvent.setup({ delay: null });
+      render(
+        <IncomeSourcePicker
+          availableCategories={mockCategories}
+          availableTags={mockTags}
+          existingSources={[]}
+          onAdd={mockOnAdd}
+        />
+      );
+
+      const typeSelector = screen.getByRole('combobox', { name: /source type/i });
+      await user.selectOptions(typeSelector, 'tag');
+
+      await waitFor(() => {
+        expect(screen.getByRole('combobox', { name: /select tag/i })).toBeInTheDocument();
+      });
+
+      const sentinels: PIISentinel[] = mockTags.map((tag) => ({
+        value: tag.name,
+        fieldDescription: 'user_tag.name in IncomeSourcePicker <option>',
+      }));
+      expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([]);
+    });
+  });
 
   describe('Curated categories', () => {
     it('lists_curated_income_categories_for_new_user', () => {

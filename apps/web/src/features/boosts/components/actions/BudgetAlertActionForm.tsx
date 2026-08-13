@@ -160,7 +160,7 @@ export function BudgetAlertActionForm({
         >
           <option value="">Select a budget...</option>
           {budgets.map((budget) => (
-            <option key={budget.id} value={budget.id}>
+            <option key={budget.id} value={budget.id} data-ph-mask>
               {budget.name}
             </option>
           ))}
@@ -182,7 +182,7 @@ export function BudgetAlertActionForm({
           >
             <option value="">All Categories</option>
             {categories.map((category) => (
-              <option key={category.id} value={category.id}>
+              <option key={category.id} value={category.id} data-ph-mask>
                 {formatBudgetCategoryLabel(category)}
               </option>
             ))}

@@ -123,4 +123,72 @@ describe('scanForUnmaskedPII', () => {
       expect(scanForUnmaskedPII(root, [])).toEqual([])
     }
   })
+
+  // Round 2 (#1514 fix round): SCANNED_ATTRS was a hand-curated allowlist
+  // ('aria-label', 'aria-description', 'title', 'placeholder', 'alt', 'value') that
+  // structurally could not see PII written into a `data-*` attribute — exactly where
+  // DataTable's `data-row-id={rowKey(row)}` put a raw merchant name. A curated list only
+  // ever knows about attribute names someone remembered to add; this closes that gap by
+  // scanning every attribute except a documented safe list, rather than adding one more
+  // name to the same kind of list that caused the miss.
+  test('flags PII in a data-* attribute (issue #1514 round 2)', () => {
+    const root = el('div', {}, el('tr', { 'data-row-id': 'SENTINEL_MERCHANT_XYZ' }, 'safe text'))
+    const sentinels: PIISentinel[] = [
+      { value: 'SENTINEL_MERCHANT_XYZ', fieldDescription: 'merchant_name in data-row-id' },
+    ]
+    const violations = scanForUnmaskedPII(root, sentinels)
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations.some((v) => v.via === 'data-row-id')).toBe(true)
+  })
+
+  test('flags currency in an arbitrary data-* attribute even with no named sentinel', () => {
+    const root = el('div', {}, el('span', { 'data-tooltip': 'Balance: $1,234.56' }, 'safe text'))
+    const violations = scanForUnmaskedPII(root, [])
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations.some((v) => v.via === 'data-tooltip')).toBe(true)
+  })
+
+  test('does not flag name-excluded structural attributes (class, id, role, type)', () => {
+    const root = el('img', {
+      class: 'avatar-image',
+      id: 'avatar-1',
+      role: 'img',
+      type: 'button',
+    })
+    expect(scanForUnmaskedPII(root, [])).toEqual([])
+  })
+
+  // Round 3 (#1514 fix round 3): href/src used to be excluded BY NAME on the theory that
+  // they only ever hold opaque ids/routes — but a name-based exclusion doesn't know a
+  // future href/src carrying real PII from one that doesn't. They're now scanned like any
+  // other attribute; this passes because the VALUE (an opaque Clerk-style resource URL,
+  // matching MobileNav/UserDropdown/MembersList's real avatar `src`) doesn't match any of
+  // matchPII's shapes — not because the attribute name is exempt.
+  test('src/href with opaque, non-PII-shaped values pass (scanned, not excluded)', () => {
+    const root = el('img', {
+      src: 'https://img.clerk.com/eyJhbGciOiJub25lIn0.opaque-token',
+      href: '#',
+    })
+    expect(scanForUnmaskedPII(root, [])).toEqual([])
+  })
+
+  test('flags a sentinel value carried in href', () => {
+    const root = el('a', { href: '/search?q=SENTINEL_MERCHANT_HREF' }, 'Search')
+    const sentinels: PIISentinel[] = [
+      { value: 'SENTINEL_MERCHANT_HREF', fieldDescription: 'merchant_name in href' },
+    ]
+    const violations = scanForUnmaskedPII(root, sentinels)
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations.some((v) => v.via === 'href')).toBe(true)
+  })
+
+  test('flags a sentinel value carried in src', () => {
+    const root = el('img', { src: 'https://example.com/avatars/SENTINEL_NAME_SRC.png' })
+    const sentinels: PIISentinel[] = [
+      { value: 'SENTINEL_NAME_SRC', fieldDescription: 'user.name in src' },
+    ]
+    const violations = scanForUnmaskedPII(root, sentinels)
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations.some((v) => v.via === 'src')).toBe(true)
+  })
 });
