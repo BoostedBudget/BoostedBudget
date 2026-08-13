@@ -264,6 +264,55 @@ export function stripQueryString(url: string): string {
 }
 
 /**
+ * Issue #1514 (fix round 6): known route SHAPES whose path segment is itself a bearer
+ * CAPABILITY token, not an opaque resource id — the backend validates the entire request
+ * by the token alone (e.g. `CancelDeletion`, `backend/internal/huma/operations/deletion.go`;
+ * household invite accept/decline, `household.go`). `stripQueryString` only ever strips from
+ * `?` onward, so it does not (and structurally cannot) touch a token embedded as a raw path
+ * segment — that gap is what let the account-deletion cancellation token survive Sentry
+ * breadcrumbs/`beforeSend` intact.
+ *
+ * This is deliberately a route-SHAPE allowlist (regex per known route), not a value-SHAPE
+ * heuristic ("looks like a JWT" / "long random string"): shape-sniffing would either miss a
+ * non-JWT token or over-redact legitimate opaque resource ids that are NOT capabilities on
+ * their own (e.g. `/accounts/{id}`, `/budgets/{id}` — scoped by the caller's authenticated
+ * session, not bearer-validated by the id alone). Add one line here whenever a new route
+ * embeds a bearer credential directly in its path; do not try to generalize the pattern
+ * beyond routes that are actually public/token-validated.
+ */
+const CAPABILITY_URL_PATH_PATTERNS: RegExp[] = [
+  // /api/v1/user/delete/cancel/{token} — public; CancelDeletionInput's doc says "the
+  // token validates the request" (deletion.go).
+  /(\/user\/delete\/cancel\/)[^/?#]+/gi,
+  // /api/v1/households/invites/{token}[/accept|/decline] — public; Token is the "raw
+  // invite token from the invite link" (household.go).
+  /(\/households\/invites\/)[^/?#]+/gi,
+]
+
+/**
+ * Replaces a known capability-token path segment with `[redacted]`, preserving the rest
+ * of the URL (including any trailing path segments, e.g. `/accept`) so the route shape
+ * itself stays legible for debugging. Query strings are a separate concern handled by
+ * `stripQueryString` — use `sanitizeUrl` below to apply both at once.
+ */
+export function redactUrlPath(url: string): string {
+  let out = url
+  for (const pattern of CAPABILITY_URL_PATH_PATTERNS) {
+    out = out.replace(pattern, (_match, prefix: string) => `${prefix}[redacted]`)
+  }
+  return out
+}
+
+/**
+ * The one function call sites should reach for whenever a `url` value (or any string that
+ * might embed one, e.g. an error message) could reach an observability payload: strips the
+ * query string, then redacts any known capability-token path segment.
+ */
+export function sanitizeUrl(url: string): string {
+  return redactUrlPath(stripQueryString(url))
+}
+
+/**
  * Recursively redacts denylisted property names and strips query strings
  * from any property literally named `url`, anywhere inside an arbitrarily
  * nested object/array (e.g. a raw Axios error's `config`/`response`).
@@ -300,7 +349,7 @@ export function redactPii<T>(value: T, depth = 0, seen: WeakSet<object> = new We
         continue
       }
       if (key === 'url' && typeof val === 'string') {
-        out[key] = stripQueryString(val)
+        out[key] = sanitizeUrl(val)
         continue
       }
       out[key] = redactPii(val, depth + 1, seen)

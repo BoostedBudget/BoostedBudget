@@ -148,14 +148,127 @@ describe('scanForUnmaskedPII', () => {
     expect(violations.some((v) => v.via === 'data-tooltip')).toBe(true)
   })
 
-  test('does not flag name-excluded structural attributes (class, id, role, type)', () => {
+  test('does not flag name-excluded structural attributes (class, role, type)', () => {
     const root = el('img', {
       class: 'avatar-image',
-      id: 'avatar-1',
       role: 'img',
       type: 'button',
     })
     expect(scanForUnmaskedPII(root, [])).toEqual([])
+  })
+
+  // Round 4 (#1514 fix round; scanner-completeness review): `id`, `name`, and `srcset`
+  // were still name-excluded on the theory that they're always structural — but a
+  // name-based exclusion doesn't know that from the attribute name alone, the exact
+  // failure this file has already corrected twice (data-* attrs, then href/src). Remove
+  // them from the exclusion list and let content-matching (which only fires on a sentinel
+  // substring, a currency shape, or an account-mask shape) do the filtering, same as
+  // every other scanned attribute.
+  test('flags a sentinel value carried in id', () => {
+    const root = el('div', { id: 'SENTINEL_ID_VALUE' }, 'safe text')
+    const sentinels: PIISentinel[] = [{ value: 'SENTINEL_ID_VALUE', fieldDescription: 'account_name in id' }]
+    const violations = scanForUnmaskedPII(root, sentinels)
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations.some((v) => v.via === 'id')).toBe(true)
+  })
+
+  test('flags a sentinel value carried in name', () => {
+    const input = document.createElement('input')
+    input.setAttribute('name', 'SENTINEL_NAME_VALUE')
+    const root = el('div', {}, input)
+    const sentinels: PIISentinel[] = [{ value: 'SENTINEL_NAME_VALUE', fieldDescription: 'account_name in name' }]
+    const violations = scanForUnmaskedPII(root, sentinels)
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations.some((v) => v.via === 'name')).toBe(true)
+  })
+
+  test('flags a sentinel value carried in srcset', () => {
+    const img = document.createElement('img')
+    img.setAttribute('srcset', '/avatar/SENTINEL_SRCSET_VALUE.png 2x')
+    const root = el('div', {}, img)
+    const sentinels: PIISentinel[] = [{ value: 'SENTINEL_SRCSET_VALUE', fieldDescription: 'account_name in srcset' }]
+    const violations = scanForUnmaskedPII(root, sentinels)
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations.some((v) => v.via === 'srcset')).toBe(true)
+  })
+
+  // `style` is a free-text attribute in principle, but every dynamic `style` binding in
+  // this codebase is a numeric/color value (backgroundColor hex, width/height percentages,
+  // transform) — never interpolated free text — so scanning it costs nothing today. It
+  // stays name-excluded not because attribute names are inherently safe (the opposite is
+  // this file's whole thesis) but because CSS property VALUES are drawn from a closed
+  // grammar in every current call site; if a future `style` binding ever interpolates
+  // human-readable text (e.g. a CSS custom property carrying a label), this exclusion
+  // should be revisited the same way id/name/srcset just were.
+  test('does not flag style (closed-grammar CSS values only, in every current call site)', () => {
+    const root = el('div', { style: 'background-color: #ff0000; width: 50%' })
+    expect(scanForUnmaskedPII(root, [])).toEqual([])
+  })
+
+  describe('shadow DOM and <template> content (issue #1514 scanner-completeness review)', () => {
+    test('flags a sentinel in text inside an open shadow root', () => {
+      const host = document.createElement('div')
+      const shadow = host.attachShadow({ mode: 'open' })
+      const span = document.createElement('span')
+      span.textContent = 'SENTINEL_SHADOW_TEXT'
+      shadow.appendChild(span)
+
+      const root = el('div', {}, host)
+      const sentinels: PIISentinel[] = [{ value: 'SENTINEL_SHADOW_TEXT', fieldDescription: 'account_name in shadow DOM' }]
+      const violations = scanForUnmaskedPII(root, sentinels)
+      expect(violations.length).toBeGreaterThan(0)
+    })
+
+    test('flags a sentinel in an attribute inside an open shadow root', () => {
+      const host = document.createElement('div')
+      const shadow = host.attachShadow({ mode: 'open' })
+      const span = document.createElement('span')
+      span.setAttribute('title', 'SENTINEL_SHADOW_ATTR')
+      shadow.appendChild(span)
+
+      const root = el('div', {}, host)
+      const sentinels: PIISentinel[] = [{ value: 'SENTINEL_SHADOW_ATTR', fieldDescription: 'account_name in shadow DOM attribute' }]
+      const violations = scanForUnmaskedPII(root, sentinels)
+      expect(violations.length).toBeGreaterThan(0)
+    })
+
+    test('respects data-ph-mask on a masked ancestor inside a shadow root', () => {
+      const host = document.createElement('div')
+      const shadow = host.attachShadow({ mode: 'open' })
+      const masked = document.createElement('div')
+      masked.setAttribute('data-ph-mask', '')
+      const span = document.createElement('span')
+      span.textContent = '$1,234.56'
+      masked.appendChild(span)
+      shadow.appendChild(masked)
+
+      const root = el('div', {}, host)
+      expect(scanForUnmaskedPII(root, [])).toEqual([])
+    })
+
+    test('flags a sentinel in text inside a <template> element\'s content', () => {
+      const tmpl = document.createElement('template') as HTMLTemplateElement
+      const span = document.createElement('span')
+      span.textContent = 'SENTINEL_TEMPLATE_TEXT'
+      tmpl.content.appendChild(span)
+
+      const root = el('div', {}, tmpl)
+      const sentinels: PIISentinel[] = [{ value: 'SENTINEL_TEMPLATE_TEXT', fieldDescription: 'account_name in <template>' }]
+      const violations = scanForUnmaskedPII(root, sentinels)
+      expect(violations.length).toBeGreaterThan(0)
+    })
+
+    test('flags a sentinel in an attribute inside a <template> element\'s content', () => {
+      const tmpl = document.createElement('template') as HTMLTemplateElement
+      const span = document.createElement('span')
+      span.setAttribute('title', 'SENTINEL_TEMPLATE_ATTR')
+      tmpl.content.appendChild(span)
+
+      const root = el('div', {}, tmpl)
+      const sentinels: PIISentinel[] = [{ value: 'SENTINEL_TEMPLATE_ATTR', fieldDescription: 'account_name in <template> attribute' }]
+      const violations = scanForUnmaskedPII(root, sentinels)
+      expect(violations.length).toBeGreaterThan(0)
+    })
   })
 
   // Round 3 (#1514 fix round 3): href/src used to be excluded BY NAME on the theory that

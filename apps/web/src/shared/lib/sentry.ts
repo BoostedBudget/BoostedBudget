@@ -1,6 +1,6 @@
 import * as Sentry from '@sentry/react'
 import type { Breadcrumb, ErrorEvent, EventHint } from '@sentry/react'
-import { redactPii, stripQueryString } from './piiScrubbing'
+import { redactPii, sanitizeUrl } from './piiScrubbing'
 
 /**
  * Scrubbing hooks shared by `initSentry` and exercised directly in tests.
@@ -47,13 +47,17 @@ export function sentryScrubbingOptions(): {
       return breadcrumb
     },
     beforeSend(event) {
+      // Issue #1514 (fix round 6): `sanitizeUrl` strips the query string AND redacts any
+      // known capability-token path segment (e.g. the account-deletion cancellation link
+      // — a bearer credential embedded in the PATH, which a query-string-only strip never
+      // touched). `redactPii` below applies the same `sanitizeUrl` to any nested `url` key
+      // it finds (e.g. a nested Axios `config.url`/`response.config.url` under `extra`),
+      // so this explicit line and that recursive pass are redundant on `event.request.url`
+      // specifically — both must still call `sanitizeUrl` (not `stripQueryString`), since
+      // either one running alone must still fully sanitize the URL.
       if (event.request?.url) {
-        event.request = { ...event.request, url: stripQueryString(event.request.url) }
+        event.request = { ...event.request, url: sanitizeUrl(event.request.url) }
       }
-      // `redactPii` itself special-cases any property literally named `url`
-      // by running it through `stripQueryString`, so redacting `event.request`
-      // after the explicit strip above re-strips the (already-stripped) url
-      // as a no-op — it cannot undo or bypass the strip above.
       if (event.request) {
         event.request = redactPii(event.request)
       }

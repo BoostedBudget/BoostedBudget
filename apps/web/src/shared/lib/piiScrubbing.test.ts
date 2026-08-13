@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { isPiiKey, redactPii, stripQueryString, tokenize } from './piiScrubbing';
+import { isPiiKey, redactPii, redactUrlPath, sanitizeUrl, stripQueryString, tokenize } from './piiScrubbing';
 import { posthogConfig } from './posthog';
 
 describe('tokenize', () => {
@@ -51,6 +51,54 @@ describe('stripQueryString', () => {
     expect(stripQueryString('https://api.example.com/v1/accounts')).toBe(
       'https://api.example.com/v1/accounts'
     );
+  });
+});
+
+// Issue #1514 (fix round 6): `stripQueryString` only ever strips from `?` onward — a
+// capability token embedded as a raw PATH SEGMENT (e.g.
+// `/api/v1/user/delete/cancel/<token>`, which the backend's CancelDeletion endpoint
+// treats as the entire authentication for the request — see
+// backend/internal/huma/operations/deletion.go) survives it completely. This is a
+// bearer-capability leak, not PII, but the containment mechanism (redact by URL shape,
+// not query string) is the same kind of fix.
+describe('redactUrlPath', () => {
+  const TOKEN = 'eyJhbGciOiJIUzI1NiJ9.SENTINEL_CAPABILITY_TOKEN.abc123';
+
+  test('redacts the account-deletion cancellation token path segment', () => {
+    const url = `https://app.example.com/api/v1/user/delete/cancel/${TOKEN}`;
+    const result = redactUrlPath(url);
+    expect(result).not.toContain(TOKEN);
+    expect(result).toBe('https://app.example.com/api/v1/user/delete/cancel/[redacted]');
+  });
+
+  test('redacts the household-invite token path segment, including trailing /accept', () => {
+    const url = `https://app.example.com/api/v1/households/invites/${TOKEN}/accept`;
+    const result = redactUrlPath(url);
+    expect(result).not.toContain(TOKEN);
+    expect(result).toBe('https://app.example.com/api/v1/households/invites/[redacted]/accept');
+  });
+
+  test('leaves a URL with no known capability route unchanged', () => {
+    const url = 'https://app.example.com/api/v1/accounts/acc_123';
+    expect(redactUrlPath(url)).toBe(url);
+  });
+
+  test('leaves a resource id path (not a capability route) unchanged', () => {
+    // /accounts/{id} is an opaque resource id scoped by an authenticated session — not a
+    // bearer capability on its own — so it must NOT be redacted by this function.
+    const url = 'https://app.example.com/api/v1/accounts/acc_123/transactions';
+    expect(redactUrlPath(url)).toBe(url);
+  });
+});
+
+describe('sanitizeUrl', () => {
+  test('strips the query string AND redacts a capability path segment in one call', () => {
+    const TOKEN = 'SENTINEL_TOKEN_ABC';
+    const url = `https://app.example.com/api/v1/user/delete/cancel/${TOKEN}?utm_source=email`;
+    const result = sanitizeUrl(url);
+    expect(result).not.toContain(TOKEN);
+    expect(result).not.toContain('utm_source');
+    expect(result).toBe('https://app.example.com/api/v1/user/delete/cancel/[redacted]');
   });
 });
 
