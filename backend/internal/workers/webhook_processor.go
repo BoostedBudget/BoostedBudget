@@ -6,16 +6,33 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
-// WebhookProcessor handles periodic processing of unprocessed webhooks
-// Issue #256: Transaction Sync Service
-// Issue #257: Item Error Handler - Process ITEM Webhooks
+// WebhookProcessor is a LEGACY polling consumer of the webhook_events table.
 //
-// Architecture:
+// ⚠ NOT WIRED INTO PRODUCTION. Production dispatches Plaid webhooks via the River job
+// jobs.NewWebhookProcessingWorker (wired in cmd/server/main.go, see the
+// NewWebhookProcessingWorker call there) instead of this poller. This type is retained for
+// reference/history (Issue #256: Transaction Sync Service; Issue #257: Item Error Handler)
+// and is exercised only by its own test suite — grep for NewWebhookProcessor turning up
+// nothing but comments and tests is expected and desired. Do not wire this into main.go;
+// if a poller is ever needed again, prefer extending the River worker instead of reviving
+// this one.
+//
+// Issue #1514: as dead code this was still a landmine — it dispatched webhooks to
+// downstream services without ever checking SignatureValid, and the ITEM path can change a
+// user's bank-connection status and send notifications/email based on an unverified payload.
+// It now refuses to dispatch any webhook with SignatureValid == false (see
+// refuseIfInvalidSignature below), mirroring the guard already present in the River worker
+// (webhook_processing.go). GetUnprocessedByType does not filter on signature_valid itself, so
+// this guard is this type's own responsibility, not the repository's.
+//
+// Architecture (as originally built, if ever revived):
 // - Polls webhook_events table every 30 seconds (configurable)
 // - Fetches up to batchSize unprocessed webhooks for each type:
 //   * TRANSACTIONS webhooks → TransactionSyncService.ProcessWebhook()
@@ -41,7 +58,11 @@ type ItemWebhookPayload struct {
 	} `json:"error"`
 }
 
-// NewWebhookProcessor creates a new WebhookProcessor instance
+// NewWebhookProcessor creates a new WebhookProcessor instance.
+//
+// ⚠ Not used by production — see the WebhookProcessor doc comment above. This constructor
+// exists for the legacy poller's own test suite; do not call it from cmd/server/main.go or
+// any other production wiring.
 //
 // Parameters:
 //   - syncService: Handles TRANSACTIONS webhook processing (Plaid transaction sync)
@@ -49,11 +70,6 @@ type ItemWebhookPayload struct {
 //   - webhookRepo: Fetches unprocessed webhooks from database
 //   - interval: How often to poll for webhooks (e.g., 30 seconds)
 //   - batchSize: Maximum webhooks to process per iteration per type (e.g., 10)
-//
-// Example usage:
-//
-//	processor := NewWebhookProcessor(syncService, itemErrorService, webhookRepo, 30*time.Second, 10)
-//	go processor.Start(ctx) // Run in background goroutine
 func NewWebhookProcessor(
 	syncService services.TransactionSyncService,
 	itemErrorService services.ItemErrorService,
@@ -108,6 +124,38 @@ func (w *WebhookProcessor) ProcessPendingWebhooks(ctx context.Context) error {
 	return nil
 }
 
+// refuseIfInvalidSignature reports whether webhook has an unverified signature and, if so,
+// marks it as failed so it is never re-selected by GetUnprocessedByType (Issue #1514).
+//
+// GetUnprocessedByType (webhook_repository.go) deliberately does not filter on
+// signature_valid, so every caller of it — this poller included — must guard before
+// dispatching to a downstream service. Neither TransactionSyncService.ProcessWebhook nor
+// ItemErrorService.ProcessWebhook checks SignatureValid themselves.
+//
+// Does not log the signature/HMAC value itself (only webhook id + type) - see finding F2 of
+// issue #1514.
+func (w *WebhookProcessor) refuseIfInvalidSignature(ctx context.Context, webhook *domain.WebhookEvent) bool {
+	if webhook.SignatureValid {
+		return false
+	}
+
+	observability.InvalidWebhookAttemptsTotal.WithLabelValues("plaid_legacy_poller_guard").Inc()
+	w.logger.Error("refusing to dispatch webhook with invalid signature",
+		"webhook_id", webhook.ID,
+		"webhook_type", webhook.WebhookType,
+	)
+
+	if err := w.webhookRepo.MarkFailed(ctx, webhook.ID, "rejected: signature_valid=false"); err != nil {
+		w.logger.Error("failed to mark webhook as failed after signature guard",
+			"webhook_id", webhook.ID,
+			"webhook_type", webhook.WebhookType,
+			"error", err,
+		)
+	}
+
+	return true
+}
+
 // processTransactionWebhooks processes unprocessed TRANSACTIONS webhooks
 func (w *WebhookProcessor) processTransactionWebhooks(ctx context.Context) error {
 	// Get unprocessed TRANSACTIONS webhooks (respects retry schedule via next_retry_at)
@@ -151,6 +199,14 @@ func (w *WebhookProcessor) processTransactionWebhooks(ctx context.Context) error
 		}
 		if w.analytics != nil {
 			w.analytics.Capture(distinctID, posthog.EventWebhookReceived, p)
+		}
+
+		// Issue #1514: refuse to dispatch webhooks whose signature was never verified.
+		// GetUnprocessedByType does not filter on signature_valid (see
+		// webhook_repository.go GetUnprocessedByType doc comment), so this poller must guard
+		// itself before handing a row to TransactionSyncService.
+		if w.refuseIfInvalidSignature(ctx, webhook) {
+			continue
 		}
 
 		// Process this webhook via TransactionSyncService
@@ -237,6 +293,14 @@ func (w *WebhookProcessor) processItemWebhooks(ctx context.Context) error {
 			continue
 		}
 
+		// Issue #1514: refuse to dispatch webhooks whose signature was never verified.
+		// This path is especially dangerous to leave unguarded: ItemErrorService.ProcessWebhook
+		// can change a user's bank-connection status and send notifications/email based on an
+		// unverified payload (see item_error_service.go).
+		if w.refuseIfInvalidSignature(ctx, webhook) {
+			continue
+		}
+
 		// Process via ItemErrorService
 		if err := w.itemErrorService.ProcessWebhook(
 			ctx,
@@ -265,20 +329,16 @@ func (w *WebhookProcessor) processItemWebhooks(ctx context.Context) error {
 	return nil
 }
 
-// Start begins the processor's periodic webhook processing
-// Runs until context is cancelled
+// Start begins the processor's periodic webhook processing.
+// Runs until context is cancelled.
 //
-// Behavior:
+// ⚠ Not called from production — this is exercised only by this package's tests. See the
+// WebhookProcessor doc comment for what actually runs (jobs.NewWebhookProcessingWorker).
+//
+// Behavior (if ever revived):
 // - Runs ProcessPendingWebhooks() immediately on startup
 // - Then runs periodically based on interval (e.g., every 30 seconds)
 // - Gracefully shuts down when context is cancelled
-//
-// Usage:
-//
-//	processor := NewWebhookProcessor(...)
-//	go processor.Start(ctx) // Run in background
-//	// ... later ...
-//	cancel() // Triggers graceful shutdown
 func (w *WebhookProcessor) Start(ctx context.Context) {
 	w.logger.Info("webhook processor starting", "interval", w.interval, "batch_size", w.batchSize)
 

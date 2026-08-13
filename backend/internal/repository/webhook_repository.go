@@ -401,6 +401,11 @@ func (r *webhookRepository) Update(ctx context.Context, event *domain.WebhookEve
 //
 // Orders by: created_at ASC (oldest first for FIFO processing)
 // Used by WebhookProcessor to fetch TRANSACTIONS webhooks ready for processing
+//
+// Issue #1514: deliberately does NOT filter on signature_valid — callers must guard before
+// dispatching a returned row to a downstream service. Both current consumers do: the legacy
+// WebhookProcessor poller (workers/webhook_processor.go, refuseIfInvalidSignature) and the
+// River worker (queue/jobs/webhook_processing.go, its SignatureValid check).
 func (r *webhookRepository) GetUnprocessedByType(ctx context.Context, webhookType string, limit int) ([]domain.WebhookEvent, error) {
 	query := `
 		SELECT id, webhook_type, webhook_code, item_id, error_code,
