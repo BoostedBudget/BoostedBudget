@@ -36,6 +36,11 @@ type WebhookRepository interface {
 	// Used after successful processing to prevent double-processing
 	MarkProcessed(ctx context.Context, id string) error
 
+	// MarkFailed marks a webhook event as failed with an error message (Issue #1514).
+	// Used by the worker's signature-validity guard to record why a row was refused
+	// without leaving it eligible for indefinite retry.
+	MarkFailed(ctx context.Context, id string, errorMsg string) error
+
 	// GetUnprocessed retrieves all unprocessed webhook events
 	// Ordered by created_at ASC (oldest first) for manual replay
 	GetUnprocessed(ctx context.Context) ([]domain.WebhookEvent, error)
@@ -201,6 +206,28 @@ func (r *webhookRepository) MarkProcessed(ctx context.Context, id string) error 
 	_, err := r.db.Exec(ctx, query, now, id)
 	if err != nil {
 		return fmt.Errorf("failed to mark webhook as processed: %w", err)
+	}
+
+	return nil
+}
+
+// MarkFailed marks a webhook event as failed with an error message (Issue #1514).
+func (r *webhookRepository) MarkFailed(ctx context.Context, id string, errorMsg string) error {
+	query := `
+		UPDATE webhook_events
+		SET processing_error = $2,
+		    retry_count = retry_count + 1,
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+
+	result, err := r.db.Exec(ctx, query, id, errorMsg)
+	if err != nil {
+		return fmt.Errorf("failed to mark webhook as failed: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return ErrWebhookNotFound
 	}
 
 	return nil

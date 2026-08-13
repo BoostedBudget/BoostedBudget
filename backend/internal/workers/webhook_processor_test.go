@@ -38,7 +38,8 @@ func (m *MockTransactionSyncServiceForWorker) SyncTransactions(ctx context.Conte
 }
 
 // SetTransferCorrelationService satisfies the TransactionSyncService interface (Issue #972: B4).
-func (m *MockTransactionSyncServiceForWorker) SetTransferCorrelationService(_ services.TransferCorrelationService) {}
+func (m *MockTransactionSyncServiceForWorker) SetTransferCorrelationService(_ services.TransferCorrelationService) {
+}
 
 // SetSavingsProgressServices satisfies the TransactionSyncService interface (Issue #1300: G2).
 func (m *MockTransactionSyncServiceForWorker) SetSavingsProgressServices(_ services.SyncContributionCleaner, _ services.SyncGoalProgressUpdater, _ services.SyncManagedCategoryBackfiller) {
@@ -90,6 +91,11 @@ func (m *MockWebhookRepoForWorker) Create(ctx context.Context, event *domain.Web
 
 func (m *MockWebhookRepoForWorker) MarkProcessed(ctx context.Context, id string) error {
 	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
+func (m *MockWebhookRepoForWorker) MarkFailed(ctx context.Context, id string, errorMsg string) error {
+	args := m.Called(ctx, id, errorMsg)
 	return args.Error(0)
 }
 

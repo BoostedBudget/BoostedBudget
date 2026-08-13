@@ -47,6 +47,10 @@ func (m *mockWebhookRepository) MarkProcessed(ctx context.Context, id string) er
 	return m.processErr
 }
 
+func (m *mockWebhookRepository) MarkFailed(ctx context.Context, id string, errorMsg string) error {
+	return m.processErr
+}
+
 func (m *mockWebhookRepository) GetUnprocessed(ctx context.Context) ([]domain.WebhookEvent, error) {
 	return m.events, nil
 }

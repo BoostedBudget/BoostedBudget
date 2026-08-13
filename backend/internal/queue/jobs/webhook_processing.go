@@ -35,6 +35,10 @@ func (WebhookProcessingArgs) Kind() string { return "webhook_processing" }
 type WebhookRepository interface {
 	// GetByID fetches a webhook event by ID
 	GetByID(ctx context.Context, id string) (*domain.WebhookEvent, error)
+
+	// MarkFailed marks a webhook event as failed with an error message (Issue #1514).
+	// Used by the signature-validity guard to record why a row was refused.
+	MarkFailed(ctx context.Context, id string, errorMsg string) error
 }
 
 // TransactionSyncService defines the methods needed to process TRANSACTIONS webhooks.
@@ -150,6 +154,35 @@ func (w *WebhookProcessingWorker) Work(ctx context.Context, job *river.Job[Webho
 			"job_id", job.ID,
 			"webhook_id", args.WebhookID,
 		)
+		return nil
+	}
+
+	// Issue #1514: defense-in-depth, mirroring SubscriptionWebhookWorker's guard
+	// (subscription_webhook.go). HandlePlaidWebhook validates the JWT signature before
+	// persisting the row, so this worker should never actually see signature_valid=false —
+	// it refuses to dispatch anyway, in case something upstream (a bug, a future write path,
+	// a pre-fix row) got a bad row into the queue.
+	//
+	// This will NEVER succeed on retry — the signature can't become valid — so it returns nil
+	// to cancel the job rather than an error, following this worker's own established
+	// permanent-failure convention (see the "webhook not found" and "already processed" cases
+	// above). Returning an error here instead would burn River's default retry/backoff budget
+	// on a row that can never process, delaying its arrival at the dead-letter queue for no
+	// benefit — the security property (never dispatched) already holds on every attempt.
+	if !webhook.SignatureValid {
+		observability.InvalidWebhookAttemptsTotal.WithLabelValues("plaid_worker_guard").Inc()
+		w.logger.Error("refusing to process Plaid webhook with invalid signature; cancelling job",
+			"job_id", job.ID,
+			"webhook_id", args.WebhookID,
+			"webhook_type", webhook.WebhookType,
+		)
+		if failErr := w.webhookRepo.MarkFailed(ctx, args.WebhookID, "rejected: signature_valid=false"); failErr != nil {
+			w.logger.Warn("failed to mark webhook as failed after signature guard",
+				"job_id", job.ID,
+				"webhook_id", args.WebhookID,
+				"error", failErr,
+			)
+		}
 		return nil
 	}
 

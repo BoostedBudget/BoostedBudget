@@ -99,6 +99,8 @@ var (
 	//   paddle_worker_guard - SubscriptionWebhookWorker refused to dispatch a signature_valid=false
 	//                         row it was handed (defense-in-depth; should be near-zero in practice)
 	//   paddle_replay_guard - ReplayPaddleWebhook refused to replay a signature_valid=false row
+	//   plaid_worker_guard  - WebhookProcessingWorker refused to dispatch a signature_valid=false
+	//                         Plaid row it was handed (defense-in-depth; should be near-zero)
 	InvalidWebhookAttemptsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "invalid_webhook_attempts_total",
 		Help: "Number of webhook deliveries rejected for missing or invalid signature, by provider/site.",
