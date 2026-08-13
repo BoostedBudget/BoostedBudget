@@ -157,7 +157,15 @@ func (s *webhookService) VerifyWebhook(ctx context.Context, rawBody []byte, sign
 		return false, errors.New("JWT is invalid")
 	}
 
-	// Step 5: Validate iat claim (must be within 5 minutes)
+	// Step 5: Validate iat claim (must be within 5 minutes of the server clock, in EITHER
+	// direction).
+	//
+	// Issue #1514 Part B: symmetric with paddle_webhook_service.go's checkTimestampTolerance.
+	// golang-jwt/v5's own iat check is opt-in via the WithIssuedAt() parser option (see
+	// validator.go: verifyIat defaults to false), and the jwt.Parse call above does not pass it
+	// — so nothing else in this verification path bounds iat. A stale iat is a replay risk, and
+	// an unbounded future iat was previously accepted outright (this asymmetry was confirmed by
+	// reading golang-jwt's validator source, not assumed).
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
 		return false, errors.New("failed to extract claims")
@@ -168,18 +176,18 @@ func (s *webhookService) VerifyWebhook(ctx context.Context, rawBody []byte, sign
 		return false, errors.New("missing iat claim")
 	}
 
-	var issuedAt time.Time
+	var iatUnix int64
 	switch v := iatInterface.(type) {
 	case float64:
-		issuedAt = time.Unix(int64(v), 0)
+		iatUnix = int64(v)
 	case int64:
-		issuedAt = time.Unix(v, 0)
+		iatUnix = v
 	default:
 		return false, fmt.Errorf("invalid iat type: %T", iatInterface)
 	}
 
-	if time.Since(issuedAt) > 5*time.Minute {
-		return false, fmt.Errorf("JWT too old: issued %v ago (max 5 minutes)", time.Since(issuedAt))
+	if err := checkIatTolerance(iatUnix); err != nil {
+		return false, err
 	}
 
 	// Step 6: Verify body hash
@@ -202,6 +210,54 @@ func (s *webhookService) VerifyWebhook(ctx context.Context, rawBody []byte, sign
 	}
 
 	return true, nil
+}
+
+// iatTolerance bounds how far a Plaid webhook JWT's iat claim may drift from the server clock,
+// in either direction (issue #1514 Part B).
+const iatTolerance = 5 * time.Minute
+
+// minSaneIatUnixTimestamp is 2000-01-01T00:00:00Z in Unix seconds. checkIatTolerance uses it as a
+// floor on iat well below any value this service should ever legitimately see, mirroring
+// paddle_webhook_service.go's minSaneUnixTimestamp.
+const minSaneIatUnixTimestamp int64 = 946684800
+
+// iatEpochBoundSlackSeconds pads the upper sane-epoch bound past now+iatTolerance so the pre-check
+// in checkIatTolerance never fights with the exact ±tolerance comparison that follows it — it only
+// exists to keep issuedAt inside a range where time.Time arithmetic (Sub) cannot overflow, not to
+// do the real tolerance decision itself. Mirrors paddle_webhook_service.go's
+// epochBoundSlackSeconds.
+const iatEpochBoundSlackSeconds int64 = 86400
+
+// checkIatTolerance rejects iatUnix if it is farther than iatTolerance from time.Now() in EITHER
+// direction. Symmetric by design (issue #1514 Part B), matching
+// paddle_webhook_service.go's checkTimestampTolerance: a stale iat is a replay risk, and an
+// unbounded future iat is just as dangerous (nothing else in this verification path bounds it —
+// see the Step 5 comment in VerifyWebhook) and must be rejected too.
+//
+// Like checkTimestampTolerance, iatUnix is bounded against a sane epoch range in int64-seconds
+// space BEFORE any time.Time/Duration arithmetic runs, so an extreme attacker-supplied iat cannot
+// hit the same saturate-then-negate overflow that checkTimestampTolerance's doc comment describes
+// (a time.Duration saturates instead of overflowing for deltas that don't fit in an int64
+// nanosecond count, and negating math.MinInt64 does not produce a positive value).
+func checkIatTolerance(iatUnix int64) error {
+	now := time.Now()
+
+	maxSaneUnixTimestamp := now.Unix() + int64(iatTolerance.Seconds()) + iatEpochBoundSlackSeconds
+	if iatUnix < minSaneIatUnixTimestamp || iatUnix > maxSaneUnixTimestamp {
+		return fmt.Errorf("JWT iat %d is outside the sane epoch range [%d, %d]",
+			iatUnix, minSaneIatUnixTimestamp, maxSaneUnixTimestamp)
+	}
+
+	issuedAt := time.Unix(iatUnix, 0)
+	age := now.Sub(issuedAt)
+
+	if age > iatTolerance {
+		return fmt.Errorf("JWT too old: issued %v ago (max %s)", age, iatTolerance)
+	}
+	if age < -iatTolerance {
+		return fmt.Errorf("JWT issued in the future: issued %v from now (max %s)", -age, iatTolerance)
+	}
+	return nil
 }
 
 // getJWKPublicKey fetches JWK from Plaid API with caching.
