@@ -13,6 +13,7 @@ import { BrowserRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { CategorizationRule } from '../types'
 import { AutoCategorizationPage } from './AutoCategorizationPage'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 import {
   mockUseGetUserRules,
   mockRefetchUserRules,
@@ -295,6 +296,29 @@ describe('AutoCategorizationPage', () => {
         expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
       })
       expect(mockDeleteRuleMutateAsync).not.toHaveBeenCalled()
+    })
+
+    // Issue #1514 (fix round 2): the delete-confirmation description interpolated the
+    // user-authored rule name directly into DialogDescription TEXT with no data-ph-mask —
+    // `Are you sure you want to delete "${tableDeleteTarget.name}"?`. Assert with the
+    // scanner (sentinel-based), not just visual inspection, so a future edit that drops
+    // the mask wrapper fails loudly.
+    it('masks the rule name in the table view delete confirmation dialog', async () => {
+      configureQuery({ data: [mockRule1] })
+      renderWithProviders(<AutoCategorizationPage categories={mockCategories} />)
+
+      fireEvent.click(screen.getByRole('button', { name: /table/i }))
+
+      const deleteButton = await screen.findByRole('button', { name: /delete rule/i })
+      fireEvent.click(deleteButton)
+
+      const dialog = await screen.findByRole('alertdialog')
+      expect(within(dialog).getByText(new RegExp(mockRule1.name))).toBeInTheDocument()
+
+      const sentinels: PIISentinel[] = [
+        { value: mockRule1.name, fieldDescription: 'auto_cat_rule.name in delete confirmation dialog' },
+      ]
+      expect(scanForUnmaskedPII(dialog, sentinels)).toEqual([])
     })
   })
 

@@ -350,7 +350,11 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
           }
         }}
         title="Delete Rule"
-        description={tableDeleteTarget ? `Are you sure you want to delete "${tableDeleteTarget.name}"? This action cannot be undone.` : ''}
+        description={
+          tableDeleteTarget ? (
+            <>Are you sure you want to delete &ldquo;<span data-ph-mask>{tableDeleteTarget.name}</span>&rdquo;? This action cannot be undone.</>
+          ) : ''
+        }
         variant="destructive"
         loading={tableDeleting}
       />

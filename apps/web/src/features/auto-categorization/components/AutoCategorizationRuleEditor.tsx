@@ -856,6 +856,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
               aria-label="Custom category target"
               allowClear
               clearLabel="No category change"
+              maskOptions
             />
           ) : (
             <>
@@ -887,6 +888,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
                 aria-label="Use a custom category target"
                 allowClear
                 clearLabel="No category change"
+                maskOptions
               />
             </div>
           )}
@@ -949,6 +951,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
                 placeholder="Search tags..."
                 disabled={saving}
                 aria-label="Select tag"
+                maskOptions
               />
             ) : (
               <>

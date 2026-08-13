@@ -7,7 +7,7 @@ export interface PIIViolation {
   text: string;
   path: string;
   matched: string;
-  via: 'text' | 'aria-label' | 'aria-description' | 'title' | 'placeholder' | 'alt' | 'value';
+  via: 'text' | (string & {});
 }
 
 // Covers: prefix symbols ($1,234 / -$45.99 / +$500 / €500), postfix codes (1,234 USD),
@@ -20,14 +20,87 @@ const CURRENCY_RE =
 const ACCOUNT_MASK_RE =
   /(?:[•●⚫⬤*xX]){2,}[-\s]?\d{3,}|last[_-]?4\s*:?\s*\d{4}|ending\s+in\s+\d{4}/i;
 
-const SCANNED_ATTRS = [
-  'aria-label',
-  'aria-description',
-  'title',
-  'placeholder',
-  'alt',
-  'value',
-] as const;
+// Issue #1514 (fix round 2): this used to be `SCANNED_ATTRS`, an explicit allowlist of
+// attribute NAMES to scan ('aria-label', 'aria-description', 'title', 'placeholder',
+// 'alt', 'value'). That list structurally could not see PII written into any attribute
+// it didn't name — which is exactly how a raw merchant name reached the DOM verbatim via
+// DataTable's `data-row-id={rowKey(row)}`: `data-row-id` was simply never on the list.
+//
+// A curated allowlist of what to scan will always lag reality, because every new
+// attribute anyone writes is invisible to it by default. Inverting to a denylist means
+// every new attribute is scanned by default, and staying unscanned is an explicit,
+// reviewable opt-out. `class`/`style` carry no user data by construction;
+// `id`/`role`/`type`/`for`/`name`/`method`/`action`/`scope`/`colspan`/`rowspan` are
+// structural HTML plumbing; the rest are non-textual SVG geometry/presentation attributes
+// that inline icon libraries (lucide-react) emit on every icon. None of these carry
+// human-readable free text, so excluding them by name (not by inspecting their value) is
+// safe and keeps the scan free of unrelated noise.
+//
+// `href`/`src` are deliberately NOT on this list (fix round 3) — they used to be, on the
+// theory that they "point at resources identified by opaque ids or routes, not literal PII
+// text." That's still true of every href/src value in this codebase today (verified: the
+// Clerk `imageUrl` avatar `src` in MobileNav/UserDropdown/MembersList — see the fix-round
+// report — is an opaque Clerk-or-OAuth-provider resource URL with no name/email text in
+// it; it is now SCANNED, not excluded, and passes on its own merits). But excluding an
+// attribute BY NAME is exactly the failure mode this whole file exists to move away from:
+// a name-based carve-out doesn't know a future `href={`/search?q=${merchantName}`}` is
+// different from today's `href="/profile"` — it exempts the whole attribute regardless of
+// what ends up in it. `matchPII` below only fires on an exact sentinel-value substring, a
+// currency shape, or an account-mask shape — never on arbitrary text — so scanning
+// href/src costs nothing in false positives today and closes that class of gap for free.
+const SAFE_ATTRS = new Set([
+  'class',
+  'style',
+  'id',
+  'role',
+  'type',
+  'rel',
+  'target',
+  'tabindex',
+  'for',
+  'name',
+  'method',
+  'action',
+  'colspan',
+  'rowspan',
+  'scope',
+  'autocomplete',
+  'spellcheck',
+  'contenteditable',
+  'draggable',
+  'lang',
+  'dir',
+  'loading',
+  'decoding',
+  'crossorigin',
+  'referrerpolicy',
+  'sizes',
+  'srcset',
+  // SVG geometry/presentation attributes emitted by inline icon libraries (lucide-react).
+  'width',
+  'height',
+  'viewbox',
+  'xmlns',
+  'fill',
+  'stroke',
+  'stroke-width',
+  'stroke-linecap',
+  'stroke-linejoin',
+  'd',
+  'points',
+  'x',
+  'y',
+  'x1',
+  'x2',
+  'y1',
+  'y2',
+  'cx',
+  'cy',
+  'r',
+  'rx',
+  'ry',
+  'transform',
+]);
 
 function hasMaskedAncestor(node: Node): boolean {
   let cur: Node | null = node;
@@ -136,9 +209,13 @@ export function scanForUnmaskedPII(
   // NOTE: data-ph-mask masks DOM text content only; DOM attributes are recorded verbatim
   // by PostHog session replay (posthog-pii-masking.md:8,18), so we don't skip masked ancestors.
   // Exception: `value` on form controls is masked via maskAllInputs:true in posthog.ts.
+  //
+  // Every attribute is scanned EXCEPT the documented SAFE_ATTRS denylist above — see that
+  // comment for why this inverts the previous explicit-allowlist design.
   const formControlTags = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
   for (const elNode of [container, ...Array.from(container.querySelectorAll('*'))]) {
-    for (const attr of SCANNED_ATTRS) {
+    for (const attr of elNode.getAttributeNames()) {
+      if (SAFE_ATTRS.has(attr)) continue;
       if (attr === 'value' && formControlTags.has(elNode.tagName)) continue;
       const val = elNode.getAttribute(attr);
       if (!val) continue;

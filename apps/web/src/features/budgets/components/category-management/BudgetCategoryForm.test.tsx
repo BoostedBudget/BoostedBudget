@@ -22,6 +22,7 @@ mock.module('../../hooks/usePreviewCategories', () => ({
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BudgetCategoryForm } from './BudgetCategoryForm'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 // Minimal CustomCategory factory
 const makeCustomCategory = (
@@ -206,9 +207,15 @@ describe('BudgetCategoryForm', () => {
       expect(categorySelect).not.toBeDisabled()
     })
 
-    it('should group a custom sub-category under its custom parent (parent_id) in a labeled optgroup', async () => {
-      // A custom parent "Food" with a custom child "Fast Food" (parent_id). The child
-      // option must render under an <optgroup> labeled with the parent's name — AC5 (#1203).
+    // Issue #1514 (fix round 4): the OLD version of this test asserted the child option
+    // rendered under an <optgroup label="Food"> — i.e. it asserted the leak. <optgroup
+    // label> is an ATTRIBUTE and <optgroup> has no child element, so unlike <option> text
+    // there is no way to mask a parent-category-named group label; the only fix is to stop
+    // putting the parent's name in an attribute at all. The child now renders flat,
+    // immediately after its parent option (same relative order, no group header), and the
+    // parent/child <option> TEXT is masked instead. This is a visible UX change — the bold
+    // "Food" group-header row is gone — called out in the #1514 fix-round-4 report.
+    it('renders a custom sub-category flat, immediately after its parent, with no optgroup carrying the parent name', async () => {
       const parent = makeCustomCategory('cat-parent', 'Food')
       const child: CustomCategory = {
         ...makeCustomCategory('cat-child', 'Fast Food'),
@@ -233,10 +240,55 @@ describe('BudgetCategoryForm', () => {
 
       await switchToCustom()
 
+      const parentOption = screen.getByRole('option', { name: /^Food$/i }) as HTMLOptionElement
       const childOption = screen.getByRole('option', { name: /Fast Food/i }) as HTMLOptionElement
-      const group = childOption.closest('optgroup')
-      expect(group).not.toBeNull()
-      expect(group?.label).toBe('Food')
+
+      // No <optgroup> anywhere in this select may carry the parent's name as its label.
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      for (const grp of categorySelect.querySelectorAll('optgroup')) {
+        expect(grp.getAttribute('label')).not.toBe('Food')
+      }
+
+      // The parent→child relationship is still communicated structurally: the child
+      // option immediately follows its parent option in document order.
+      const allOptions = Array.from(categorySelect.querySelectorAll('option'))
+      const parentIndex = allOptions.indexOf(parentOption)
+      expect(allOptions[parentIndex + 1]).toBe(childOption)
+    })
+
+    // Issue #1514 (fix round 4): the custom-category <option> text (parent AND child
+    // names) is user-authored and must be masked — assert with the widened scanner so it
+    // covers text, not just attributes.
+    it('masks custom category names in the category <option> text', async () => {
+      const parent = makeCustomCategory('cat-parent', 'SENTINEL_PARENT_CAT')
+      const child: CustomCategory = {
+        ...makeCustomCategory('cat-child', 'SENTINEL_CHILD_CAT'),
+        parent_id: 'cat-parent',
+      }
+      mockUseGetUserCategories.mockReturnValue({
+        data: [parent, child],
+        isLoading: false,
+        error: null,
+      })
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      await switchToCustom()
+
+      const sentinels: PIISentinel[] = [
+        { value: 'SENTINEL_PARENT_CAT', fieldDescription: 'custom_category.name in category <option>' },
+        { value: 'SENTINEL_CHILD_CAT', fieldDescription: 'custom_category.name (child) in category <option>' },
+      ]
+      expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
     })
 
     it('should NOT show Custom Categories button when useGetUserCategories returns empty', () => {

@@ -71,6 +71,11 @@ import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 import { mockUsePreviewPaddleSubscriptionUpdate } from '@/test/mocks/subscription-api'
 import {
+  mockUseRequestDeletion,
+  mockRequestDeletionMutateAsync,
+  mockCancelDeletion,
+} from '@/test/mocks/user-api'
+import {
   mockUseGetAdminUserSubscription,
   mockUseRemoveAdminUserTierOverride,
 } from '@/test/mocks/admin-subscriptions-api'
@@ -182,6 +187,31 @@ const { AutoCategorizationRuleEditor } = await import(
 )
 const { MobileNav } = await import('@/components/layout/MobileNav')
 const { UserDropdown } = await import('@/components/layout/UserDropdown')
+
+// --- Round 18 (#1514 fix round 2): six sites an independent review found after the
+// scanner was widened to see data-* attributes (see pii-masking.ts's SAFE_ATTRS comment).
+const { TopMerchantsTable } = await import('@/features/reports/components/TopMerchantsTable')
+const { IncomeSourcePicker } = await import('@/features/budgets/components/income/IncomeSourcePicker')
+
+// --- Round 19 (#1514 fix round 3): budget/category-name <option> text found in the same
+// sweep. Only ConditionBuilder is added here — it takes `budgets` as a direct prop, so it
+// needs no hook mock. BudgetAlertActionForm and RolloverActionForm call useBudgets()
+// internally instead, and budgets-wrapper.ts's own comment is explicit that this hook is
+// deliberately NOT globally mocked (mock.module is process-global; wiring it here would
+// intercept BudgetsPage's identical import and silently empty its budget list — exactly
+// the interference that comment warns about, confirmed by running this file with that
+// wiring added: it broke "PII coverage — Budgets list page"). Those two forms keep their
+// scanner-based coverage in their own test files instead (see AutoCategorizationRuleEditor
+// for the same reasoning already applied to SearchableSelect elsewhere in this file).
+const { ConditionBuilder } = await import('@/features/boosts/components/ConditionBuilder')
+
+// --- Round 20 (#1514 fix round 4): custom-category-name <option>/<optgroup> leaks. ---
+const { CustomCategoryForm } = await import('@/features/categories/components/CustomCategoryForm')
+
+// --- Round 21 (#1514 fix round 5): account-deletion cancellation token — a bearer
+// CAPABILITY/SECRET, not PII. Included here as the centralized regression gate for
+// attribute/text exposure even though the risk class differs from the rest of this file.
+const { DeleteAccountSection } = await import('@/features/deletion/components/DeleteAccountSection')
 
 const SENTINEL_MERCHANT = 'SENTINEL_MERCHANT_XYZ'
 const SENTINEL_NICKNAME = 'SENTINEL_NICKNAME_ABC'
@@ -2575,14 +2605,36 @@ describe('PII coverage — Round 17: AutoCategorizationRuleEditor target tags', 
 })
 
 describe('PII coverage — Round 17: MobileNav / UserDropdown global chrome (name + email)', () => {
-  const sentinelUser = { name: SENTINEL_USER_NAME, email: SENTINEL_EMAIL, picture: undefined }
+  // #1514 fix round 2: the earlier version of this block set `picture: undefined`, so
+  // Radix's AvatarImage never mounted an <img> at all and the `alt` attribute path was
+  // never exercised here — a gap identical in kind to the one this whole round exists to
+  // close. Provide a real picture URL and stub `window.Image` (Radix's AvatarImage only
+  // renders an <img> once its internal loading probe resolves "loaded", which never
+  // happens against a fake URL in happy-dom) so the <img alt> actually renders.
+  const sentinelUser = { name: SENTINEL_USER_NAME, email: SENTINEL_EMAIL, picture: 'https://img.clerk.com/sentinel-avatar' }
   const sentinels: PIISentinel[] = [
     { value: SENTINEL_USER_NAME, fieldDescription: 'authenticated user.name in global nav chrome' },
     { value: SENTINEL_EMAIL, fieldDescription: 'authenticated user.email in global nav chrome' },
   ]
 
+  let OriginalImage: typeof window.Image
+
   beforeEach(() => {
     cleanup()
+    OriginalImage = window.Image
+    class ImmediatelyLoadedImage {
+      complete = true
+      naturalWidth = 1
+      src = ''
+      addEventListener() {}
+      removeEventListener() {}
+    }
+    // @ts-expect-error -- test stub, not a full HTMLImageElement
+    window.Image = ImmediatelyLoadedImage
+  })
+
+  afterEach(() => {
+    window.Image = OriginalImage
   })
 
   test('MobileNav masks the signed-in user name/email and uses a structural avatar alt', async () => {
@@ -2598,6 +2650,10 @@ describe('PII coverage — Round 17: MobileNav / UserDropdown global chrome (nam
     )
     await user.click(screen.getByRole('button', { name: /open menu/i }))
     await waitForSentinels(sentinels)
+
+    const avatarImg = document.body.querySelector('img[data-slot="avatar-image"]')
+    expect(avatarImg).not.toBeNull()
+
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 
@@ -2609,6 +2665,293 @@ describe('PII coverage — Round 17: MobileNav / UserDropdown global chrome (nam
     )
     await user.click(screen.getByRole('button', { name: /user menu/i }))
     await waitForSentinels(sentinels)
+
+    const avatarImg = document.body.querySelector('img[data-slot="avatar-image"]')
+    expect(avatarImg).not.toBeNull()
+
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+describe('PII coverage — Round 18 (#1514 fix round 2): six sites found by an independent review after the scanner was widened to see data-* attributes', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('TopMerchantsTable never puts a merchant name into data-row-id', async () => {
+    const data = {
+      start_date: '2024-01-01',
+      end_date: '2024-01-31',
+      top_n: 10,
+      merchants: [
+        { merchant_name: SENTINEL_MERCHANT, total: 150, transaction_count: 15, percentage: 100 },
+      ],
+    }
+    render(
+      <TopMerchantsTable data={data} loading={false} sort={null} onSortChange={mock(() => {})} />,
+      { wrapper: createWrapper() },
+    )
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_MERCHANT, fieldDescription: 'merchant.name in TopMerchantsTable data-row-id (#1514 round 2)' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  test('IncomeSourcePicker masks user tag names in text and <option value>', async () => {
+    const user = userEvent.setup()
+    render(
+      <IncomeSourcePicker
+        availableCategories={[]}
+        availableTags={[{ id: 'tag-1', user_id: 'user-1', name: SENTINEL_TAG, color: '#000', usage_count: 1, created_at: '', updated_at: '' }]}
+        existingSources={[]}
+        onAdd={mock(() => {})}
+      />,
+      { wrapper: createWrapper() },
+    )
+    await user.selectOptions(screen.getByRole('combobox', { name: /source type/i }), 'tag')
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_TAG, fieldDescription: 'user_tag.name in IncomeSourcePicker <option> (#1514 round 2)' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  test('AutoCategorizationRuleEditor masks custom category and tag names in SearchableSelect option dropdowns', async () => {
+    const user = userEvent.setup()
+    mockUseGetUserCategories.mockReturnValue({
+      data: [{ id: 'cat-sentinel', name: SENTINEL_CATEGORY_NAME }],
+      isLoading: false,
+      error: null,
+    })
+    render(
+      <AutoCategorizationRuleEditor
+        mode="create"
+        onSave={mock(async () => {})}
+        onCancel={mock(() => {})}
+        tags={[{ id: 'tag-sentinel', name: SENTINEL_TAG }]}
+      />,
+      { wrapper: createWrapper() },
+    )
+    await user.click(screen.getByRole('combobox', { name: /use a custom category target/i }))
+    await screen.findByRole('listbox')
+    const categorySentinels: PIISentinel[] = [
+      { value: SENTINEL_CATEGORY_NAME, fieldDescription: 'custom_category.name in AutoCategorizationRuleEditor SearchableSelect (#1514 round 2)' },
+    ]
+    expect(scanForUnmaskedPII(document.body, categorySentinels)).toEqual([])
+    await user.keyboard('{Escape}')
+
+    await user.click(screen.getByRole('combobox', { name: /select tag/i }))
+    await screen.findByRole('listbox')
+    const tagSentinels: PIISentinel[] = [
+      { value: SENTINEL_TAG, fieldDescription: 'user_tag.name in AutoCategorizationRuleEditor SearchableSelect (#1514 round 2)' },
+    ]
+    expect(scanForUnmaskedPII(document.body, tagSentinels)).toEqual([])
+  })
+
+  test('AutoCategorizationPage masks the rule name in the delete confirmation dialog', async () => {
+    mockUseGetUserRules.mockReturnValue({
+      data: [
+        {
+          id: 'acat-round18',
+          user_id: 'user-1',
+          name: SENTINEL_RULE_NAME,
+          is_enabled: true,
+          priority: 1,
+          conditions: [],
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+        },
+      ],
+      isLoading: false,
+      error: null,
+    })
+    const user = userEvent.setup()
+    render(<AutoCategorizationPage />, { wrapper: createWrapper() })
+    await user.click(await screen.findByRole('button', { name: /table/i }))
+    const deleteBtn = await screen.findByRole('button', { name: /delete rule/i })
+    await user.click(deleteBtn)
+    const dialog = await screen.findByRole('alertdialog')
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_RULE_NAME, fieldDescription: 'auto_cat_rule.name in delete confirmation dialog (#1514 round 2)' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(dialog, sentinels)).toEqual([])
+  })
+})
+
+describe('PII coverage — Round 19 (#1514 fix round 3): budget/category-name <option> text in boost condition/action forms', () => {
+  // Budget names and formatBudgetCategoryLabel()'s user-authored savings-goal name were
+  // rendered as unmasked <option> TEXT (value attributes were already opaque ids).
+  // <option> cannot contain a <span>, so the fix is data-ph-mask on the <option> itself.
+  const SENTINEL_BUDGET = 'SENTINEL_BUDGET_R19'
+  const SENTINEL_SAVINGS_GOAL = 'SENTINEL_SAVINGS_GOAL_R19'
+
+  const budgetsWithSavingsCategory = [
+    {
+      id: 'budget-r19',
+      user_id: 'user-1',
+      name: SENTINEL_BUDGET,
+      period: 'monthly' as const,
+      start_date: '2024-01-01',
+      amount: 1000,
+      currency_code: 'USD',
+      is_active: true,
+      income_amount: 0,
+      income_sources: [],
+      categories: [
+        {
+          id: 'cat-r19-savings',
+          budget_id: 'budget-r19',
+          category_kind: 'savings',
+          savings_goal_name: SENTINEL_SAVINGS_GOAL,
+          allocated_amount: 100,
+          spent_amount: 0,
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          tags: [],
+          match_logic: 'any' as const,
+        },
+      ],
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    },
+  ]
+
+  const sentinels: PIISentinel[] = [
+    { value: SENTINEL_BUDGET, fieldDescription: 'budget.name in <option> (#1514 round 3)' },
+    { value: SENTINEL_SAVINGS_GOAL, fieldDescription: 'savings_goal_name in <option> (#1514 round 3)' },
+  ]
+
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('ConditionBuilder masks budget and savings-goal names in its budget/category pickers', async () => {
+    render(
+      <ConditionBuilder
+        conditions={[{
+          field: 'budget_category.percent_used',
+          operator: 'gte',
+          value: 80,
+          budget_id: 'budget-r19',
+        }]}
+        logic="AND"
+        onConditionsChange={mock(() => {})}
+        onLogicChange={mock(() => {})}
+        triggerEvent="budget_updated"
+        budgets={budgetsWithSavingsCategory as any}
+      />,
+      { wrapper: createWrapper() },
+    )
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  // BudgetAlertActionForm and RolloverActionForm are NOT added here — see the import
+  // comment above ConditionBuilder for why (useBudgets() would need a process-global
+  // mock.module that breaks "PII coverage — Budgets list page" in this same file).
+  // Their scanner-based RED/GREEN coverage lives in their own component test files:
+  // BudgetAlertActionForm.test.tsx and RolloverActionForm.test.tsx (describe('PII masking
+  // (#1514)')).
+})
+
+describe('PII coverage — Round 20 (#1514 fix round 4): custom-category-name <option>/<optgroup> leaks', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('CustomCategoryForm masks the custom parent category name in the "Nest under" options', () => {
+    const parent = {
+      id: 'cat-parent-r20',
+      user_id: 'user-1',
+      name: SENTINEL_CATEGORY_NAME,
+      usage_count: 0,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    }
+    render(
+      <CustomCategoryForm allCategories={[parent as any]} onSubmit={mock(async () => {})} onCancel={mock(() => {})} />,
+      { wrapper: createWrapper() },
+    )
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_CATEGORY_NAME, fieldDescription: 'custom_category.name in "Nest under" <option> (#1514 round 4)' },
+    ]
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  test('BudgetCategoryForm masks custom category names and puts no parent name into an <optgroup label>', async () => {
+    const parent = { id: 'cat-parent-r20', user_id: 'user-1', name: SENTINEL_CATEGORY_NAME, usage_count: 0, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' }
+    const child = { ...parent, id: 'cat-child-r20', name: 'SENTINEL_CHILD_CAT_R20', parent_id: 'cat-parent-r20' }
+    mockUseGetUserCategories.mockReturnValue({ data: [parent, child], isLoading: false, error: null })
+
+    const user = userEvent.setup()
+    render(
+      <BudgetCategoryForm
+        isOpen={true}
+        onClose={mock(() => {})}
+        onSubmit={mock(async () => {})}
+        mode="create"
+        availableTags={[]}
+      />,
+      { wrapper: createWrapper() },
+    )
+    await user.click(screen.getByRole('button', { name: /custom categories/i }))
+
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_CATEGORY_NAME, fieldDescription: 'custom_category.name in BudgetCategoryForm <option> (#1514 round 4)' },
+      { value: 'SENTINEL_CHILD_CAT_R20', fieldDescription: 'custom_category.name (child) in BudgetCategoryForm <option> (#1514 round 4)' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+
+    // No <optgroup> may carry the parent's name as its `label` attribute (impossible to
+    // mask — see BudgetCategoryForm.tsx's customCategoryOptionGroups doc comment).
+    const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+    for (const grp of categorySelect.querySelectorAll('optgroup')) {
+      expect(grp.getAttribute('label')).not.toBe(SENTINEL_CATEGORY_NAME)
+    }
+  })
+})
+
+describe('PII coverage — Round 21 (#1514 fix round 5): account-deletion cancellation token', () => {
+  // The cancellation token is a bearer CAPABILITY, not PII — the backend's CancelDeletion
+  // endpoint is public and validates the request by the token alone (see
+  // backend/internal/huma/operations/deletion.go), so anyone who obtains it can cancel a
+  // scheduled GDPR erasure. It's included in this centralized gate because the exposure
+  // mechanism (attribute + text node) and the fix (keep it out of the DOM entirely) are
+  // the same shape as the PII findings elsewhere in this file, but the underlying risk —
+  // a stolen capability, not a stolen identity fact — is a different class the masking
+  // policy doc was never designed to cover (see the note added there).
+  const SENTINEL_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.SENTINEL_R21.token'
+
+  beforeEach(() => {
+    cleanup()
+    mockUseRequestDeletion.mockReturnValue({
+      mutateAsync: mockRequestDeletionMutateAsync,
+      isPending: false,
+      isError: false,
+      error: null,
+    })
+    mockRequestDeletionMutateAsync.mockResolvedValue({
+      message: 'Account deletion scheduled',
+      scheduled_at: '2025-11-26T00:00:00Z',
+      cancellation_token: SENTINEL_TOKEN,
+    })
+    mockCancelDeletion.mockResolvedValue({ message: 'Account deletion canceled successfully' })
+  })
+
+  test('never puts the cancellation token into any DOM attribute or text node', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<DeleteAccountSection />, { wrapper: createWrapper() })
+    await user.click(screen.getByRole('button', { name: /delete my account/i }))
+    await user.click(screen.getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: /yes, delete my account/i }))
+    await waitFor(() => expect(screen.getByText(/account deletion scheduled/i)).toBeInTheDocument())
+
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_TOKEN, fieldDescription: 'account_deletion.cancellation_token (capability, #1514 round 5)' },
+    ]
+    expect(scanForUnmaskedPII(container, sentinels)).toEqual([])
   })
 })
