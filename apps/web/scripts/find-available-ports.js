@@ -12,6 +12,9 @@
  *   E2E_POSTGRES_PORT  - Dynamic port for PostgreSQL container
  *   E2E_PROD_PORT      - Dynamic port for Vite production preview (prod-bundle smoke tests)
  *   LHCI_PORT          - Dynamic port for Lighthouse CI static file server
+ *   E2E_METRICS_PORT   - Dynamic port for the backend's internal metrics listener
+ *                        (INTERNAL_METRICS_PORT; hardcoded 9091 collides across parallel
+ *                        E2E runs/CI runners — Issue #1514)
  */
 
 import net from 'net';
@@ -63,7 +66,7 @@ async function main() {
 
     // Each job gets a 100-port range (up to 50 concurrent jobs):
     // Frontend: 30000+offset, Backend: 35000+offset, Postgres: 40000+offset,
-    // Prod: 44000+offset, LHCI: 45000+offset
+    // Prod: 44000+offset, LHCI: 45000+offset, Metrics: 50000+offset
     const frontendStart = 30000 + portOffset;
     const frontendEnd = frontendStart + 99;
     const backendStart = 35000 + portOffset;
@@ -74,6 +77,11 @@ async function main() {
     const prodEnd = prodStart + 99;
     const lhciStart = 45000 + portOffset;
     const lhciEnd = lhciStart + 99;
+    // Metrics band starts above the highest existing band's max possible value
+    // (lhciEnd's ceiling across all offsets is 45099+4900=49999), so it can never
+    // overlap frontend/backend/postgres/prod/lhci at any offset.
+    const metricsStart = 50000 + portOffset;
+    const metricsEnd = metricsStart + 99;
 
     // Find available ports within this job's dedicated range
     const frontendPort = await findAvailablePort(frontendStart, frontendEnd);
@@ -81,6 +89,7 @@ async function main() {
     const postgresPort = await findAvailablePort(postgresStart, postgresEnd);
     const prodPort = await findAvailablePort(prodStart, prodEnd);
     const lhciPort = await findAvailablePort(lhciStart, lhciEnd);
+    const metricsPort = await findAvailablePort(metricsStart, metricsEnd);
 
     // Output as environment variables for CI
     console.log(`E2E_FRONTEND_PORT=${frontendPort}`);
@@ -88,6 +97,7 @@ async function main() {
     console.log(`E2E_POSTGRES_PORT=${postgresPort}`);
     console.log(`E2E_PROD_PORT=${prodPort}`);
     console.log(`LHCI_PORT=${lhciPort}`);
+    console.log(`E2E_METRICS_PORT=${metricsPort}`);
 
     // Also output JSON for programmatic use
     console.error(JSON.stringify({
@@ -96,7 +106,8 @@ async function main() {
       postgres: postgresPort,
       prod: prodPort,
       lhci: lhciPort,
-      range: `frontend=${frontendStart}-${frontendEnd}, backend=${backendStart}-${backendEnd}, postgres=${postgresStart}-${postgresEnd}, prod=${prodStart}-${prodEnd}, lhci=${lhciStart}-${lhciEnd}`
+      metrics: metricsPort,
+      range: `frontend=${frontendStart}-${frontendEnd}, backend=${backendStart}-${backendEnd}, postgres=${postgresStart}-${postgresEnd}, prod=${prodStart}-${prodEnd}, lhci=${lhciStart}-${lhciEnd}, metrics=${metricsStart}-${metricsEnd}`
     }));
   } catch (error) {
     console.error('Error finding available ports:', error.message);

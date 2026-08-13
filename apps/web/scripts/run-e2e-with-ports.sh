@@ -58,8 +58,14 @@ PORTS_OUTPUT=$(node "${SCRIPT_DIR}/find-available-ports.js")
 # Export the environment variables
 export $(echo "$PORTS_OUTPUT" | grep -E "^E2E_")
 
+# The backend's internal metrics listener binds a hardcoded port (default 9091) unless
+# INTERNAL_METRICS_PORT overrides it, and a failed bind is fatal (Issue #1514). Route the
+# dynamically-allocated E2E_METRICS_PORT into it BEFORE the backend starts, so parallel E2E
+# runs / CI runners on this host never collide on 9091.
+export INTERNAL_METRICS_PORT="$E2E_METRICS_PORT"
+
 echo ""
-echo "📍 Using ports: Frontend=$E2E_FRONTEND_PORT Backend=$E2E_BACKEND_PORT Postgres=$E2E_POSTGRES_PORT Prod=$E2E_PROD_PORT"
+echo "📍 Using ports: Frontend=$E2E_FRONTEND_PORT Backend=$E2E_BACKEND_PORT Postgres=$E2E_POSTGRES_PORT Prod=$E2E_PROD_PORT Metrics=$E2E_METRICS_PORT"
 echo ""
 
 # Pre-flight port check — find-available-ports.js only proves a port was free at scan
@@ -88,6 +94,7 @@ check_port_free() {
 check_port_free "$E2E_FRONTEND_PORT" "frontend"
 check_port_free "$E2E_BACKEND_PORT" "backend"
 check_port_free "$E2E_PROD_PORT" "prod"
+check_port_free "$E2E_METRICS_PORT" "metrics"
 echo "Building backend binary..."
 (cd "$BACKEND_DIR" && go build -o bin/server ./cmd/server)
 echo "   Backend built successfully"
