@@ -12,6 +12,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/health"
 	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
@@ -125,4 +126,53 @@ func TestWiring_ApiRequestsAreStillRateLimitedWithRedisDown(t *testing.T) {
 
 	assert.Equal(t, http.StatusTooManyRequests, lastStatus,
 		"requests must still be rate limited (via the in-memory fallback) even though the Redis-backed primary always errors")
+}
+
+// TestBuildRateLimitBackend_SentinelLimitEqualsRegularLimitNotAuthLimit is the fix-round-1
+// regression guard for Issue #1531 Task 7: the sentinel bucket ("rl:v1:sentinel") is used
+// whenever a Cloudflare-gated request's Cf-Connecting-Ip is missing, duplicated, or malformed —
+// and under Redis it is ONE fleet-wide key, not per-machine. Wiring it to cfg.RateLimitAuth (the
+// stricter, per-identity auth-endpoint limit) would mean a Cloudflare header anomaly collapses
+// ALL affected fleet-wide traffic into a bucket capped at the auth limit — 10x tighter than
+// intended, in precisely the incident where the API most needs to keep serving. This asserts the
+// wired sentinel limit matches RegularLimit (cfg.RateLimitIP), not AuthLimit.
+//
+// Uses distinct RateLimitIP/RateLimitAuth values specifically so a backend that wired
+// AuthLimit into the sentinel tier would produce a DIFFERENT (and wrong) emission interval here —
+// see the assertion's failure message for what a reintroduced regression would report.
+func TestBuildRateLimitBackend_SentinelLimitEqualsRegularLimitNotAuthLimit(t *testing.T) {
+	fake := redisclient.NewFake("limiter")
+	fake.RunScriptResult = []any{int64(1), int64(0), int64(9)}
+
+	cfg := &config.Config{
+		RateLimitIP:   100, // RegularLimit — what SentinelLimit must equal
+		RateLimitAuth: 10,  // AuthLimit — what SentinelLimit must NOT equal
+	}
+
+	backend := buildRateLimitBackend(fake, cfg)
+	require.NotNil(t, backend)
+
+	redisBackend, ok := backend.(*ratelimitstore.RedisBackend)
+	require.True(t, ok, "buildRateLimitBackend must return a *ratelimitstore.RedisBackend when given a non-nil client")
+
+	_, err := redisBackend.Allow(context.Background(), domain.RateLimitTierSentinel, "")
+	require.NoError(t, err)
+
+	calls := fake.ScriptCalls()
+	require.Len(t, calls, 1)
+
+	// emission_interval_us = window_us / limit (see ratelimitstore's gcraScript doc comment).
+	// window defaults to 1 minute (buildRateLimitBackend sets Window: time.Minute explicitly).
+	wantEmissionRegular := time.Minute.Microseconds() / int64(cfg.RateLimitIP)
+	wantEmissionAuth := time.Minute.Microseconds() / int64(cfg.RateLimitAuth)
+
+	gotEmission, ok := calls[0].Args[0].(int64)
+	require.True(t, ok, "script call ARGV[1] (emission_interval_us) must be int64, got %T", calls[0].Args[0])
+
+	assert.Equal(t, wantEmissionRegular, gotEmission,
+		"sentinel bucket's emission interval must be derived from RegularLimit (cfg.RateLimitIP), not AuthLimit — "+
+			"the sentinel bucket is a single FLEET-WIDE key, and capping it at the auth limit turns a Cloudflare "+
+			"header anomaly into a fleet-wide outage")
+	assert.NotEqual(t, wantEmissionAuth, gotEmission,
+		"sentinel bucket's emission interval must NOT match what AuthLimit alone would produce")
 }
