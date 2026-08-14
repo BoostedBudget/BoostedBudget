@@ -63,6 +63,12 @@ func alwaysError(err error) func(context.Context, domain.RateLimitTier, string) 
 	}
 }
 
+func alwaysPanic(msg string) func(context.Context, domain.RateLimitTier, string) (domain.RateLimitDecision, error) {
+	return func(context.Context, domain.RateLimitTier, string) (domain.RateLimitDecision, error) {
+		panic(msg)
+	}
+}
+
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(discardWriter{}, nil))
 }
@@ -74,7 +80,7 @@ func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 func TestFallbackLimiter_UsesPrimaryWhenPrimarySucceeds(t *testing.T) {
 	primary := &fakeRateLimitBackend{name: "redis", allowFunc: alwaysAllow()}
 	fallback := &panicBackend{name: "memory"}
-	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger())
+	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger(), nil)
 
 	decision, err := fl.Allow(context.Background(), domain.RateLimitTierRegular, "k")
 	require.NoError(t, err)
@@ -87,7 +93,7 @@ func TestFallbackLimiter_FallsBackToMemoryWhenPrimaryErrors(t *testing.T) {
 	fallback := &fakeRateLimitBackend{name: "memory", allowFunc: func(context.Context, domain.RateLimitTier, string) (domain.RateLimitDecision, error) {
 		return domain.RateLimitDecision{Allowed: true}, nil
 	}}
-	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger())
+	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger(), nil)
 
 	decision, err := fl.Allow(context.Background(), domain.RateLimitTierRegular, "k")
 	require.NoError(t, err)
@@ -101,7 +107,7 @@ func TestFallbackLimiter_FallsBackToMemoryWhenPrimaryExceedsTheTimeout(t *testin
 		return domain.RateLimitDecision{}, ctx.Err()
 	}}
 	fallback := &fakeRateLimitBackend{name: "memory", allowFunc: alwaysAllow()}
-	fl := newFallbackLimiter(primary, fallback, 10*time.Millisecond, discardLogger())
+	fl := newFallbackLimiter(primary, fallback, 10*time.Millisecond, discardLogger(), nil)
 
 	decision, err := fl.Allow(context.Background(), domain.RateLimitTierRegular, "k")
 	require.NoError(t, err)
@@ -115,7 +121,7 @@ func TestFallbackLimiter_NeverAllowsUnlimitedWhenPrimaryIsDown(t *testing.T) {
 	primary := &fakeRateLimitBackend{name: "redis", allowFunc: alwaysError(errors.New("down"))}
 	store := newIPLimiterStore(5, time.Minute, 100)
 	fallback := &memoryBackend{regular: store, auth: store, sentinel: store, window: time.Minute}
-	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger())
+	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger(), nil)
 
 	allowed := 0
 	for i := 0; i < 1000; i++ {
@@ -128,13 +134,48 @@ func TestFallbackLimiter_NeverAllowsUnlimitedWhenPrimaryIsDown(t *testing.T) {
 	assert.Equal(t, 5, allowed, "fallback must enforce the same 5-request limit, never fail open to unlimited")
 }
 
+// TestFallbackLimiter_NeverAllowsUnlimitedWhenPrimaryPanics is the panic-equivalent of
+// TestFallbackLimiter_NeverAllowsUnlimitedWhenPrimaryIsDown above. Fix-round-1 finding: without a
+// recover() inside fallbackLimiter.Allow around the primary call, a panicking primary propagates
+// straight past this decorator to IPRateLimiter's own outer recover(), which fails the REQUEST
+// open (memory limiter never consulted at all) rather than falling back to memory — a systemic,
+// indefinite fail-open for the life of the outage, not a one-off. It also has no edge-triggering,
+// so a sustained panic would emit one logger.Error per request, flooding Sentry through the slog
+// tee. This test proves BOTH properties hold when the primary panics on every call: the memory
+// limit is still enforced across 1000 requests, AND the activation counter increments exactly
+// once (not 1000 times) for the one continuous outage.
+func TestFallbackLimiter_NeverAllowsUnlimitedWhenPrimaryPanics(t *testing.T) {
+	primary := &fakeRateLimitBackend{name: "redis", allowFunc: alwaysPanic("redis client exploded")}
+	store := newIPLimiterStore(5, time.Minute, 100)
+	fallback := &memoryBackend{regular: store, auth: store, sentinel: store, window: time.Minute}
+	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger(), nil)
+
+	before := testutil.ToFloat64(observability.RedisLimiterFallbackActivationsTotal)
+
+	allowed := 0
+	require.NotPanics(t, func() {
+		for i := 0; i < 1000; i++ {
+			decision, err := fl.Allow(context.Background(), domain.RateLimitTierRegular, "panic-key")
+			require.NoError(t, err)
+			if decision.Allowed {
+				allowed++
+			}
+		}
+	})
+
+	after := testutil.ToFloat64(observability.RedisLimiterFallbackActivationsTotal)
+
+	assert.Equal(t, 5, allowed, "a panicking primary must still enforce the same 5-request memory limit, never fail open to unlimited")
+	assert.Equal(t, float64(1), after-before, "1000 requests against one continuous panicking outage must increment the activation counter exactly once, not once per request")
+}
+
 // TestFallbackLimiter_NeverRejectsEverythingWhenPrimaryIsDown proves the fallback still allows
 // the first N requests — a permanently-failing primary must not turn into fail-closed either.
 func TestFallbackLimiter_NeverRejectsEverythingWhenPrimaryIsDown(t *testing.T) {
 	primary := &fakeRateLimitBackend{name: "redis", allowFunc: alwaysError(errors.New("down"))}
 	store := newIPLimiterStore(5, time.Minute, 100)
 	fallback := &memoryBackend{regular: store, auth: store, sentinel: store, window: time.Minute}
-	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger())
+	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger(), nil)
 
 	for i := 0; i < 5; i++ {
 		decision, err := fl.Allow(context.Background(), domain.RateLimitTierRegular, "another-key")
@@ -146,7 +187,7 @@ func TestFallbackLimiter_NeverRejectsEverythingWhenPrimaryIsDown(t *testing.T) {
 func TestFallbackLimiter_ActivationCounterIncrementsOncePerOutageNotOncePerRequest(t *testing.T) {
 	primary := &fakeRateLimitBackend{name: "redis", allowFunc: alwaysError(errors.New("down"))}
 	fallback := &fakeRateLimitBackend{name: "memory", allowFunc: alwaysAllow()}
-	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger())
+	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger(), nil)
 
 	before := testutil.ToFloat64(observability.RedisLimiterFallbackActivationsTotal)
 	for i := 0; i < 500; i++ {
@@ -166,7 +207,7 @@ func TestFallbackLimiter_RecoveryDoesNotIncrementTheActivationCounter(t *testing
 		return domain.RateLimitDecision{Allowed: true}, nil
 	}}
 	fallback := &fakeRateLimitBackend{name: "memory", allowFunc: alwaysAllow()}
-	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger())
+	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger(), nil)
 
 	before := testutil.ToFloat64(observability.RedisLimiterFallbackActivationsTotal)
 	_, _ = fl.Allow(context.Background(), domain.RateLimitTierRegular, "k") // fails -> activation #1
@@ -191,7 +232,7 @@ func TestFallbackLimiter_SecondOutageAfterRecoveryIncrementsAgain(t *testing.T) 
 		return domain.RateLimitDecision{Allowed: true}, nil
 	}}
 	fallback := &fakeRateLimitBackend{name: "memory", allowFunc: alwaysAllow()}
-	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger())
+	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger(), nil)
 
 	before := testutil.ToFloat64(observability.RedisLimiterFallbackActivationsTotal)
 	_, _ = fl.Allow(context.Background(), domain.RateLimitTierRegular, "k") // outage #1
@@ -213,7 +254,7 @@ func TestFallbackLimiter_DegradedGaugeTracksCurrentStateNotHistory(t *testing.T)
 		return domain.RateLimitDecision{Allowed: true}, nil
 	}}
 	fallback := &fakeRateLimitBackend{name: "memory", allowFunc: alwaysAllow()}
-	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger())
+	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger(), nil)
 
 	// The gauge is a single process-wide series shared with every other test in this file, so its
 	// value coming into this test is whatever the LAST transition anywhere left it at -- this test
@@ -237,7 +278,7 @@ func TestFallbackLimiter_NilPrimaryIsDegradedWithoutCountingAnActivation(t *test
 	fallback := &fakeRateLimitBackend{name: "memory", allowFunc: alwaysAllow()}
 
 	before := testutil.ToFloat64(observability.RedisLimiterFallbackActivationsTotal)
-	fl := newFallbackLimiter(nil, fallback, time.Second, discardLogger())
+	fl := newFallbackLimiter(nil, fallback, time.Second, discardLogger(), nil)
 	after := testutil.ToFloat64(observability.RedisLimiterFallbackActivationsTotal)
 
 	assert.Equal(t, float64(1), testutil.ToFloat64(observability.RedisLimiterBackendDegraded.WithLabelValues()),
@@ -272,7 +313,7 @@ func TestFallbackLimiter_ClientDisconnectDoesNotCountAsARedisFailure(t *testing.
 		return domain.RateLimitDecision{Allowed: true}, nil
 	}}
 	fallback := &panicBackend{name: "memory"}
-	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger())
+	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger(), nil)
 
 	reqCtx, cancel := context.WithCancel(context.Background())
 	cancel() // the "client" has already disconnected before the limiter even runs
@@ -334,7 +375,7 @@ func TestFallbackLimiter_ActivationIsLoggedAtErrorLevelSoSentryReceivesIt(t *tes
 
 	primary := &fakeRateLimitBackend{name: "redis", allowFunc: alwaysError(errors.New("down"))}
 	fallback := &fakeRateLimitBackend{name: "memory", allowFunc: alwaysAllow()}
-	fl := newFallbackLimiter(primary, fallback, time.Second, logger)
+	fl := newFallbackLimiter(primary, fallback, time.Second, logger, nil)
 
 	_, _ = fl.Allow(context.Background(), domain.RateLimitTierRegular, "k")
 
@@ -355,7 +396,7 @@ func TestFallbackLimiter_LogsNeverContainTheRedisUrlOrPassword(t *testing.T) {
 	url := "redis://default:" + secret + "@upstash.example.com:6379"
 	primary := &fakeRateLimitBackend{name: "redis", allowFunc: alwaysError(errors.New("dial tcp " + url + ": connection refused"))}
 	fallback := &fakeRateLimitBackend{name: "memory", allowFunc: alwaysAllow()}
-	fl := newFallbackLimiter(primary, fallback, time.Second, logger)
+	fl := newFallbackLimiter(primary, fallback, time.Second, logger, nil)
 
 	_, _ = fl.Allow(context.Background(), domain.RateLimitTierRegular, "k")
 
@@ -367,7 +408,7 @@ func TestFallbackLimiter_LogsNeverContainTheRedisUrlOrPassword(t *testing.T) {
 func TestFallbackLimiter_CommandErrorCounterIsLevelTriggeredUnlikeTheActivationCounter(t *testing.T) {
 	primary := &fakeRateLimitBackend{name: "redis", allowFunc: alwaysError(errors.New("down"))}
 	fallback := &fakeRateLimitBackend{name: "memory", allowFunc: alwaysAllow()}
-	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger())
+	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger(), nil)
 
 	beforeCmd := testutil.ToFloat64(observability.RedisCommandErrorsTotal.WithLabelValues("limiter", "eval"))
 	beforeActivation := testutil.ToFloat64(observability.RedisLimiterFallbackActivationsTotal)
@@ -383,6 +424,35 @@ func TestFallbackLimiter_CommandErrorCounterIsLevelTriggeredUnlikeTheActivationC
 	assert.Equal(t, float64(1), afterActivation-beforeActivation, "the activation counter is edge-triggered: once per outage")
 }
 
+// TestFallbackLimiter_ActiveSecondsAccumulatesWhileStillDegradedWithoutRecovery is the fix-round-1
+// regression test for the previously-flagged concern: RedisLimiterFallbackActiveSeconds used to
+// only accumulate on recovery, so an outage that never recovers (e.g. before a process restart)
+// contributed nothing -- under-reporting exactly the worst incidents. This test drives a
+// degradation and then calls accountElapsedIfDegraded directly (what the background ticker calls
+// periodically) WITHOUT ever recovering, and asserts the counter moved anyway.
+func TestFallbackLimiter_ActiveSecondsAccumulatesWhileStillDegradedWithoutRecovery(t *testing.T) {
+	primary := &fakeRateLimitBackend{name: "redis", allowFunc: alwaysError(errors.New("down"))}
+	fallback := &fakeRateLimitBackend{name: "memory", allowFunc: alwaysAllow()}
+	fl := newFallbackLimiter(primary, fallback, time.Second, discardLogger(), nil)
+
+	_, _ = fl.Allow(context.Background(), domain.RateLimitTierRegular, "k") // degrade; sets degradedSince = now
+
+	// Simulate time having passed since degradation, without ever recovering, by backdating the
+	// internal accounting checkpoint directly (white-box: same package).
+	fl.mu.Lock()
+	fl.degradedSince = fl.degradedSince.Add(-5 * time.Second)
+	fl.mu.Unlock()
+
+	before := testutil.ToFloat64(observability.RedisLimiterFallbackActiveSeconds)
+	fl.accountElapsedIfDegraded() // what the periodic background ticker calls
+	after := testutil.ToFloat64(observability.RedisLimiterFallbackActiveSeconds)
+
+	assert.GreaterOrEqual(t, after-before, float64(5),
+		"active-seconds must accumulate for an outage that never recovers, not just on recovery")
+	assert.Equal(t, float64(1), testutil.ToFloat64(observability.RedisLimiterBackendDegraded.WithLabelValues()),
+		"sanity: this fallbackLimiter must still be degraded -- no recovery occurred in this test")
+}
+
 func TestFallbackLimiter_IsSafeUnderConcurrentUse(t *testing.T) {
 	var toggle atomic.Int64
 	primary := &fakeRateLimitBackend{name: "redis", allowFunc: func(context.Context, domain.RateLimitTier, string) (domain.RateLimitDecision, error) {
@@ -393,7 +463,7 @@ func TestFallbackLimiter_IsSafeUnderConcurrentUse(t *testing.T) {
 	}}
 	store := newIPLimiterStore(1000000, time.Minute, 1000)
 	fallback := &memoryBackend{regular: store, auth: store, sentinel: store, window: time.Minute}
-	fl := newFallbackLimiter(primary, fallback, 5*time.Millisecond, discardLogger())
+	fl := newFallbackLimiter(primary, fallback, 5*time.Millisecond, discardLogger(), nil)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
