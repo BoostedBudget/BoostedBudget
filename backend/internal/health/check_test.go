@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -160,10 +161,28 @@ func TestMemoize_SlowCheckIsBoundedByItsOwnTimeout(t *testing.T) {
 func TestMemoize_CallerCancellationDoesNotPoisonTheSharedResult(t *testing.T) {
 	var calls int32
 	release := make(chan struct{})
+	// started is closed the instant the shared probe begins running. Because
+	// singleflight registers the in-flight call BEFORE invoking the function
+	// (see golang.org/x/sync/singleflight: g.m[key] = c happens before
+	// g.doCall), and the probe below cannot return until release is closed
+	// or its own ctx is done, "started closed" is a deterministic proof that
+	// caller A's singleflight.Do has already registered the in-flight call
+	// and that registration is still live (fn hasn't returned yet).
+	started := make(chan struct{})
+	// The probe MUST observe ctx, or this test proves nothing: a caller's
+	// cancellation can only "poison" the shared result if the probe actually
+	// reacts to ctx.Done(). If A's raw (already-cancelled) ctx were plumbed
+	// through instead of context.WithoutCancel(ctx), this select would fire
+	// the ctx.Done() branch immediately and return context.Canceled.
 	check := Memoize(Options{Name: "t", TTL: time.Minute, Timeout: time.Second}, func(ctx context.Context) error {
 		atomic.AddInt32(&calls, 1)
-		<-release
-		return nil
+		close(started)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			return nil
+		}
 	})
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
@@ -171,19 +190,37 @@ func TestMemoize_CallerCancellationDoesNotPoisonTheSharedResult(t *testing.T) {
 
 	var wg sync.WaitGroup
 	var resB Result
+	// bCalling is closed by caller B's goroutine immediately before it makes
+	// the joining call, and joinScheduled is a WaitGroup B also signals at
+	// the same point. main waits on the channel (a real synchronization
+	// point, not a guessed duration) and then yields the processor
+	// repeatedly with runtime.Gosched() so the scheduler gets every
+	// opportunity to actually run B's call (a handful of non-blocking
+	// instructions: cache-miss check, then singleflight's own mutex-guarded
+	// map lookup) before release is closed. This replaces the previous
+	// fixed-duration time.Sleep(10ms)/time.Sleep(30ms) pair, which assumed a
+	// duration was "surely enough" rather than synchronizing on anything
+	// real; under CI scheduler pressure that assumption is exactly what can
+	// invert and flake.
+	bCalling := make(chan struct{})
+
 	wg.Add(2)
-
 	go func() {
 		defer wg.Done()
-		check(cancelledCtx) // caller A: already-cancelled context
+		check(cancelledCtx) // caller A: already-cancelled context; becomes the singleflight leader
 	}()
 	go func() {
 		defer wg.Done()
-		time.Sleep(10 * time.Millisecond)  // ensure A's Do call registers first
-		resB = check(context.Background()) // caller B: live context
+		<-started // A's Do call has registered the in-flight probe; fn is blocked below
+		close(bCalling)
+		resB = check(context.Background()) // caller B: live context, joins A's in-flight probe
 	}()
 
-	time.Sleep(30 * time.Millisecond)
+	<-started
+	<-bCalling
+	for i := 0; i < 1000; i++ {
+		runtime.Gosched()
+	}
 	close(release)
 	wg.Wait()
 
