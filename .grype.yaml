@@ -1,6 +1,16 @@
 # Grype vulnerability scanner configuration
-# Updated to Go 1.25.7 to fix GO-2026-4337 (crypto/tls vulnerability)
-# Previous CVE ignores for Go 1.25.4 Docker Hub image mismatch have been removed
-# All Go stdlib vulnerabilities should now be resolved
+#
+# Go toolchain is pinned at 1.26.6 (backend/go.mod, backend/Dockerfile,
+# backend/Dockerfile.dev and the GO_VERSION env in the deploy/test workflows).
+# 1.26.6 clears seven stdlib advisories that govulncheck flagged on 1.26.5:
+# GO-2026-6218, -6091, -6090, -6089, -6088, -5972 and -5026.
+#
+# History: an earlier bump to 1.25.7 addressed GO-2026-4337 (crypto/tls), and the
+# CVE ignores that had worked around a 1.25.4 Docker Hub image mismatch were
+# removed at that point.
+#
+# The ignore list is intentionally empty — no suppression is currently needed.
+# Prefer bumping the toolchain over adding an entry here; an ignore hides a finding
+# from every future scan, including ones it was never meant to cover.
 
 ignore: []
