@@ -1759,8 +1759,21 @@ func main() {
 				// just above. cacheInstance.(cache.Purger) always succeeds: both NewCache's
 				// production type and NewNoopCache's disabled-cache type implement Purger (the
 				// latter as a no-op) — see cache.Purger's doc comment.
-				deletionService.SetCache(cacheInstance.(cache.Purger), cacheInstance.Generations(), jobQueue)
-				appLogger.Info("Deletion service connected to cache purge + job queue for GDPR retry")
+				//
+				// #1531 Task 11e: deletionService itself CAN be nil here — it is only assigned when
+				// cfg.DeletionTokenSecret != "" (see the `if cfg.DeletionTokenSecret != ""` gate
+				// far above) — and this call was previously unconditional, so every deployment
+				// without DELETION_TOKEN_SECRET configured (every local/E2E run before this fix,
+				// confirmed via `bun run test:e2e` panicking at server startup with a nil-pointer
+				// dereference on this exact line) crashed the process before it ever bound a port.
+				// Every other caller of deletionService in this file (see e.g. the
+				// `paddleService != nil && deletionService != nil` and
+				// `if deletionService != nil { deletionService.SetPlaidCleanupService(...) }` guards
+				// above) already nil-checks it; this call simply never got one.
+				if deletionService != nil {
+					deletionService.SetCache(cacheInstance.(cache.Purger), cacheInstance.Generations(), jobQueue)
+					appLogger.Info("Deletion service connected to cache purge + job queue for GDPR retry")
+				}
 			}
 		}
 
@@ -1932,6 +1945,11 @@ func main() {
 			// reader — so /admin/health's Redis detail costs zero extra PINGs beyond what the
 			// liveness probe already paid for. See services.SharedHealthChecks's doc comment.
 			sharedHealthChecks,
+			// Issue #1531 Task 11e: cacheInstance satisfies services.CacheStatusReader structurally
+			// (its Enabled(ns) method) — never nil (defaults to cache.NewNoopCache(), whose Enabled
+			// always reports false), so /admin/health's cache_enabled field has a live signal to
+			// report regardless of whether caching is actually turned on for this deployment.
+			cacheInstance,
 		)
 
 		// Issue #633: Dead letter queue admin service.

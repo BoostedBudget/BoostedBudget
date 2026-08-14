@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/health"
 	"github.com/maxnussbaum/BoostedBudget/internal/redisclient"
@@ -78,6 +79,22 @@ type systemHealthService struct {
 	// (both Checks nil) reports "not_configured" for both, matching every other optional
 	// collaborator in this service.
 	healthChecks SharedHealthChecks
+	// cacheStatus backs SystemHealthResponse.CacheEnabled (Issue #1531 Task 11e). Optional/nil-safe:
+	// an unwired cacheStatus reports "disabled" — see CacheStatusReader's doc comment for why that
+	// is not ambiguous the way the other optional collaborators' Available flags are.
+	cacheStatus CacheStatusReader
+}
+
+// CacheStatusReader is the ONE verb the health derivation needs from cache.Cache — matches the
+// narrow-interface convention this file already uses for PlaidOrphanedItemLister and
+// InvalidWebhookAttemptStatsReader. Issue #1531 Task 11e: added so the E2E cache-parity/fail-safe
+// suite can assert against a live signal that caching is actually active before running, rather
+// than trusting cfg.CacheEnabled alone — cache.Cache.Enabled already folds in the hard-disabled
+// constant, the Redis control key, the env-disabled list, and the compiled default (see
+// cache.Control's doc comment), and a disabled/unwired cache's Enabled always returns false (see
+// cache.NewNoopCache), so there is no separate "unavailable" state to track here.
+type CacheStatusReader interface {
+	Enabled(ns cache.Namespace) bool
 }
 
 // SharedHealthChecks bundles the memoized health.Check instances (internal/health) that
@@ -131,6 +148,7 @@ func NewSystemHealthService(
 	plaidOrphanRepo PlaidOrphanedItemLister,
 	invalidWebhookAttemptRepo InvalidWebhookAttemptStatsReader,
 	healthChecks SharedHealthChecks,
+	cacheStatus CacheStatusReader,
 ) SystemHealthService {
 	return &systemHealthService{
 		healthRepo:                healthRepo,
@@ -141,6 +159,7 @@ func NewSystemHealthService(
 		plaidOrphanRepo:           plaidOrphanRepo,
 		invalidWebhookAttemptRepo: invalidWebhookAttemptRepo,
 		healthChecks:              healthChecks,
+		cacheStatus:               cacheStatus,
 	}
 }
 
@@ -253,10 +272,26 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		response.RejectedWebhookAttempts24h = rejectedWebhookMetrics
 	}
 
+	// Cache status (Issue #1531 Task 11e) — deliberately NOT fed into calculateOverallStatus below,
+	// matching every gauge above added after the original health check set: whether a disabled
+	// cache should degrade overall health is a product decision this task never asked for, only
+	// making it VISIBLE (so the E2E guard can gate on it) is in scope.
+	response.CacheEnabled = s.checkCacheEnabled()
+
 	// Calculate overall status
 	response.Status = s.calculateOverallStatus(response)
 
 	return response, nil
+}
+
+// checkCacheEnabled reports whether the analytics-namespace cache is currently active, or false
+// when no CacheStatusReader is wired. See CacheStatusReader's doc comment for why nil and
+// "wired but disabled" are the same reportable state here.
+func (s *systemHealthService) checkCacheEnabled() bool {
+	if s.cacheStatus == nil {
+		return false
+	}
+	return s.cacheStatus.Enabled(cache.NamespaceAnalytics)
 }
 
 // checkDatabase checks database health and connection pool metrics

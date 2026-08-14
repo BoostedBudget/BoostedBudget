@@ -47,6 +47,20 @@ type SystemHealthResponse struct {
 	// restores. See RejectedWebhookAttemptMetrics for what it counts and, critically, what it does
 	// NOT count.
 	RejectedWebhookAttempts24h RejectedWebhookAttemptMetrics `json:"rejected_webhook_attempts_24h"`
+	// CacheEnabled reports whether the analytics-namespace cache (cache.NamespaceAnalytics) is
+	// currently active for this deployment — Issue #1531 Task 11e. It is false whenever
+	// CACHE_ENABLED=false, no cache Redis client could be constructed at startup, the namespace is
+	// disabled via CACHE_NAMESPACES_DISABLED, or a live Redis control-key override has disabled it
+	// — it is the exact same cache.Cache.Enabled call CachedAnalyticsService's own reads use to
+	// decide whether to consult Redis at all, so this can never claim "enabled" while real reads
+	// are silently bypassing the cache.
+	//
+	// This field exists specifically so the E2E cache-parity/fail-safe suite
+	// (apps/web/e2e/cache-*.auth.spec.ts) can gate on a live signal before running, rather than
+	// trusting compiled config or the DB/queue metrics above — the public /health endpoint
+	// deliberately no longer exposes any component breakdown (Task 6's security fix), so this is
+	// the only place left for that guard to check.
+	CacheEnabled bool `json:"cache_enabled"`
 }
 
 // RejectedWebhookAttemptMetrics is the read side of repository.InvalidWebhookAttemptRepository —
