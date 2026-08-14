@@ -30,6 +30,7 @@ jobs:
       mcp: ${{ steps.filter.outputs.mcp }}
       config: ${{ steps.filter.outputs.config }}
       deps: ${{ steps.filter.outputs.deps }}
+      scanconfig: ${{ steps.filter.outputs.scanconfig }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -93,6 +94,14 @@ jobs:
             # config/*.yaml (currently: Backend Tests, which runs tier_config_test.go).
             config:
               - 'config/**'
+            # The Grype scan below reads .grype.yaml, but until #1514's Phase 16 that file
+            # matched no filter — so a PR that only edited it (adding an `ignore:` entry, say)
+            # would skip the very job that consumes it. Not caught earlier because every PR
+            # that has touched .grype.yaml so far also touched backend/**, which triggers the
+            # job anyway. Kept separate from `backend` so a scan-config edit does not fan out
+            # to OpenAPI generation, migrations and integration tests.
+            scanconfig:
+              - '.grype.yaml'
 
   # =============================================================================
   # E2E Tests (starts immediately — no needs — so it gets runner priority over
@@ -1719,7 +1728,8 @@ jobs:
     if: |
       needs.detect-changes.outputs.backend == 'true' ||
       needs.detect-changes.outputs.frontend == 'true' ||
-      needs.detect-changes.outputs.workflow == 'true'
+      needs.detect-changes.outputs.workflow == 'true' ||
+      needs.detect-changes.outputs.scanconfig == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:

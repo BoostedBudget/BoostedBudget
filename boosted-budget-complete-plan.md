@@ -89,7 +89,7 @@ Authentication:
   Token: JWT with Clerk validation
   
 Backend:
-  Language: Go 1.21+
+  Language: Go 1.26.6+
   Framework: Echo/Gin with Clerk middleware
   API Spec: OpenAPI 3.1
   Database: PostgreSQL 17 + Redis 7
