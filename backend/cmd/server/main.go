@@ -180,6 +180,11 @@ func main() {
 	// Redis pool metrics (Issue #1531 Task 2/7): report both clients' local pool state next to
 	// the existing DB pool metrics collector. redisPoolStatsAdapter is the local mirror adapter —
 	// see its doc comment for why internal/observability never imports internal/redisclient.
+	//
+	// Fix round 1: given its own cancellable context (rather than context.Background(),
+	// uncancellable) so shutdownSequence below can stop this goroutine — ordered, per the brief,
+	// after the HTTP/River drain and before the Redis clients close.
+	redisMetricsCtx, redisMetricsCancel := context.WithCancel(context.Background())
 	var redisMetricsSources []observability.RedisPoolStatsSource
 	if limiterClient != nil {
 		redisMetricsSources = append(redisMetricsSources, redisPoolStatsAdapter{limiterClient})
@@ -188,7 +193,7 @@ func main() {
 		redisMetricsSources = append(redisMetricsSources, redisPoolStatsAdapter{cacheClient})
 	}
 	if len(redisMetricsSources) > 0 {
-		observability.StartRedisMetricsCollector(context.Background(), redisMetricsSources...)
+		observability.StartRedisMetricsCollector(redisMetricsCtx, redisMetricsSources...)
 	}
 
 	// Issue #1531 Task 7b: the rate-limit middleware's background cleanup goroutine (and the
@@ -229,15 +234,7 @@ func main() {
 	// (registerCloudflareAndRateLimitMiddleware — the byte-for-byte-pinned issue1514 ordering
 	// test still calls that 3-arg function directly, which now just delegates here with a nil
 	// backend/done/logger, reproducing its exact prior behaviour).
-	var rateLimitBackend middleware.RateLimitBackend
-	if limiterClient != nil {
-		rateLimitBackend = ratelimitstore.NewRedisBackend(limiterClient, ratelimitstore.Options{
-			RegularLimit:  cfg.RateLimitIP,
-			AuthLimit:     cfg.RateLimitAuth,
-			SentinelLimit: cfg.RateLimitAuth,
-			Window:        time.Minute,
-		})
-	}
+	rateLimitBackend := buildRateLimitBackend(limiterClient, cfg)
 	registerCloudflareAndRateLimitMiddlewareWithBackend(e, cfCIDRRef, cfg, rateLimitBackend, rateLimitDone, appLogger) // 3-4. Cloudflare gate, then per-IP rate limiting (order load-bearing, see helper doc)
 	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                            // 5. Panic recovery (formats RFC 9457 response)
 	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                               // 6. Sentry panic reporting
@@ -2340,6 +2337,13 @@ func main() {
 			close(rateLimitDone)
 			return nil
 		}},
+		{Name: "redis_metrics_collector", Fn: func() error {
+			// Fix round 1 (Issue #1531 Task 7 review): stops
+			// observability.StartRedisMetricsCollector's goroutine. Ordered here — after HTTP/River
+			// have drained, before the Redis clients close below — per the brief's step 3.
+			redisMetricsCancel()
+			return nil
+		}},
 		{Name: "cache_redis_client", Fn: func() error {
 			if cacheClient == nil {
 				return nil
@@ -2386,6 +2390,33 @@ func main() {
 // builds this exact chain via httptest and demonstrates the failure mode
 // above when the two calls are (deliberately, temporarily, for that test's
 // RED demonstration only) reordered.
+// buildRateLimitBackend constructs the fleet-wide Redis-backed rate-limit primary from
+// limiterClient/cfg, or returns nil (memory-only) when limiterClient is nil. Extracted from
+// main() so its SentinelLimit choice — the subject of Issue #1531 fix round 1 — is unit-testable
+// without a real Redis server.
+func buildRateLimitBackend(limiterClient redisclient.Client, cfg *config.Config) middleware.RateLimitBackend {
+	if limiterClient == nil {
+		return nil
+	}
+	return ratelimitstore.NewRedisBackend(limiterClient, ratelimitstore.Options{
+		RegularLimit: cfg.RateLimitIP,
+		AuthLimit:    cfg.RateLimitAuth,
+		// SentinelLimit deliberately left unset (Options.withDefaults falls back to
+		// RegularLimit — see TestRedisBackend_SentinelLimitDefaultsToRegularLimitWhenZero),
+		// NOT cfg.RateLimitAuth. The sentinel bucket ("rl:v1:sentinel") is used whenever a
+		// Cloudflare-gated request's Cf-Connecting-Ip is missing, duplicated, or malformed — and
+		// under Redis it is ONE fleet-wide key, not per-machine. A Cloudflare header anomaly
+		// (Managed Transform change, config drift, a CF incident) collapses ALL affected traffic
+		// into that single bucket: capping it at the auth limit would mean the entire fleet falls
+		// over to ~10 req/min in precisely the incident where the API most needs to keep serving.
+		// RegularLimit (fleet-wide, per Task 5's intentional tightening from the old per-machine
+		// limit) is the correct floor. Fix round 1: Task 8 is expected to add a
+		// RATE_LIMIT_SENTINEL_LIMIT env override so this can be raised during a live incident
+		// without a deploy — wire it here (as an explicit field again) once it exists.
+		Window: time.Minute,
+	})
+}
+
 func registerCloudflareAndRateLimitMiddleware(e *echo.Echo, cfCIDRRef *atomic.Pointer[[]netip.Prefix], cfg *config.Config) {
 	// Delegates to the Task 7 variant with a nil backend/done/logger — RateLimitConfig treats all
 	// three as OPTIONAL (nil Backend: memory-only; nil Done: cleanup goroutine never stops; nil
