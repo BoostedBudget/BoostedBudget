@@ -19,6 +19,12 @@ describe('posthog config', () => {
         nickname: 'My Checking',
         institution: 'Chase',
         institution_name: 'Chase Bank',
+        institution_id: 'inst-456',
+        // Not denylisted (see piiScrubbing.ts): a bare `description` entry
+        // would false-positive on `descriptionLength`-style metadata under
+        // the shared tokenizing matcher. The `data-ph-mask` cell masking in
+        // AutoCategorizationRuleTable is the actual defense against leaking
+        // description content via replay.
         description: 'Coffee',
         account_name: 'Checking',
         balance: 1234.56,
@@ -36,7 +42,6 @@ describe('posthog config', () => {
     expect(out?.properties?.nickname).toBeUndefined();
     expect(out?.properties?.institution).toBeUndefined();
     expect(out?.properties?.institution_name).toBeUndefined();
-    expect(out?.properties?.description).toBeUndefined();
     expect(out?.properties?.account_name).toBeUndefined();
     expect(out?.properties?.balance).toBeUndefined();
     expect(out?.properties?.amount).toBeUndefined();
@@ -44,9 +49,43 @@ describe('posthog config', () => {
     expect(out?.properties?.target_amount).toBeUndefined();
     expect(out?.properties?.current_amount).toBeUndefined();
     expect(out?.properties?.total_saved).toBeUndefined();
-    // Non-PII properties must be preserved
+    // merchant_id must SURVIVE (issue #1514, defect 1): it's the sanctioned
+    // trackEvent pattern this doc's "what NOT to do" section recommends —
+    // `{ merchant_id: uuid }` instead of `{ merchant: name }` — and a prior
+    // round of this unification wrongly pinned it as redacted, which would
+    // have silently deleted every engineer's compliant analytics call.
+    // `isPiiKey` allowlists exactly `merchant_id`/`institution_id` (and their
+    // camelCase forms) by name — see piiScrubbing.ts's `ID_ALLOWLIST` and its
+    // isPiiKey doc comment; a broader "any key ending in id" version of this
+    // carve-out was tried and reverted for being a privacy regression (issue
+    // #1514, defect 2).
     expect(out?.properties?.merchant_id).toBe('abc-123');
+    // Same allowlist applies to institution_id.
+    expect(out?.properties?.institution_id).toBe('inst-456');
+    // Non-PII properties must be preserved
     expect(out?.properties?.user_id).toBe('u1');
+    expect(out?.properties?.description).toBe('Coffee');
+  });
+
+  test('before_send redacts camelCase PII near-misses via the same tokenizing matcher Sentry uses', () => {
+    // Regression test: before_send used to delete properties by exact,
+    // case-sensitive literal key match against PII_PROPERTY_DENYLIST, so
+    // camelCase fields sailed straight through even though Sentry's
+    // `redactPii` caught the same fields via token matching. Now both paths
+    // share `isPiiKey`.
+    const cfg = posthogConfig();
+    const event = {
+      event: 'account_viewed',
+      properties: {
+        currentBalance: 100,
+        institutionName: 'Chase',
+        accountBalance: 500,
+      },
+    };
+    const out = cfg.before_send?.(event as Parameters<NonNullable<typeof cfg.before_send>>[0]);
+    expect(out?.properties?.currentBalance).toBeUndefined();
+    expect(out?.properties?.institutionName).toBeUndefined();
+    expect(out?.properties?.accountBalance).toBeUndefined();
   });
 
   test('before_send passes event through when no PII properties present', () => {

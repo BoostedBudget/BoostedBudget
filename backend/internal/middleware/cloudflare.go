@@ -21,6 +21,49 @@ const (
 	cidrRefreshEvery  = 24 * time.Hour
 )
 
+// GateStatus records how a request cleared (or bypassed) CloudflareOnly, so that
+// downstream middleware — specifically the rate limiter — can decide which client
+// identity is trustworthy for THIS request. CloudflareOnly is the only place that
+// knows which of these paths a request took; it must record that before calling
+// next(), because everything downstream sees the same echo.Context.
+type GateStatus int
+
+const (
+	// GateStatusUnknown means CloudflareOnly did not run (e.g. not registered in
+	// this middleware chain, such as a test that wires IPRateLimiter alone).
+	// Callers MUST treat this the same as GateStatusBypassEnv: trust nothing but
+	// the raw transport peer address.
+	GateStatusUnknown GateStatus = iota
+	// GateStatusBypassEnv means the request skipped CloudflareOnly entirely because
+	// bypassEnvironments[env] is true (development/local/test/qa).
+	GateStatusBypassEnv
+	// GateStatusExemptPath means the request hit an exemptedPaths route (/health,
+	// /metrics) and skipped CloudflareOnly's IP/secret checks. Unlike
+	// GateStatusPassed, no header on this request has been validated.
+	GateStatusExemptPath
+	// GateStatusPassed means the request's immediate peer was verified to be in
+	// Cloudflare's published CIDR ranges AND presented the correct X-Origin-Secret.
+	GateStatusPassed
+)
+
+// gateStatusContextKey is the echo.Context key CloudflareOnly uses to publish
+// GateStatus for downstream middleware.
+const gateStatusContextKey = "cf_gate_status"
+
+// SetGateStatus records how a request cleared CloudflareOnly. Exported so tests in
+// other files (e.g. rate_limit_test.go) can simulate a given gate outcome without
+// wiring the full CloudflareOnly middleware.
+func SetGateStatus(c echo.Context, s GateStatus) {
+	c.Set(gateStatusContextKey, s)
+}
+
+// GateStatusFrom reads the GateStatus set by CloudflareOnly for this request. If
+// CloudflareOnly never ran, this returns GateStatusUnknown.
+func GateStatusFrom(c echo.Context) GateStatus {
+	s, _ := c.Get(gateStatusContextKey).(GateStatus)
+	return s
+}
+
 // exemptedPaths bypass CloudflareOnly checks. Includes trailing-slash variants
 // because some health checkers and monitoring probes append a trailing slash.
 var exemptedPaths = map[string]bool{
@@ -85,11 +128,13 @@ func CloudflareOnly(ref *atomic.Pointer[[]netip.Prefix], originSecret string, en
 		return func(c echo.Context) error {
 			// Bypass for local/development/test environments.
 			if bypassEnvironments[env] {
+				SetGateStatus(c, GateStatusBypassEnv)
 				return next(c)
 			}
 
 			// Bypass exempted paths (/health, /metrics).
 			if exemptedPaths[c.Request().URL.Path] {
+				SetGateStatus(c, GateStatusExemptPath)
 				return next(c)
 			}
 
@@ -148,6 +193,7 @@ func CloudflareOnly(ref *atomic.Pointer[[]netip.Prefix], originSecret string, en
 				return c.String(http.StatusForbidden, "Forbidden")
 			}
 
+			SetGateStatus(c, GateStatusPassed)
 			return next(c)
 		}
 	}

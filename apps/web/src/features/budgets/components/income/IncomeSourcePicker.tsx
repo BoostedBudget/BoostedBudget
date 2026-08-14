@@ -44,7 +44,12 @@ export function IncomeSourcePicker({
 }: IncomeSourcePickerProps) {
   const [sourceType, setSourceType] = useState<IncomeSourceType>('pfc_primary');
   const [selectedCategory, setSelectedCategory] = useState('');
-  const [selectedTag, setSelectedTag] = useState('');
+  // Issue #1514 (fix round 2): the <select>'s DOM value must never carry the tag name
+  // itself (PostHog session replay records the `value` attribute verbatim; `data-ph-mask`
+  // masks element TEXT only, never attributes) — so the select is keyed by the tag's
+  // opaque `id`, and the tag's NAME (the actual IncomeSource contract value for type
+  // 'tag') is resolved from availableTags only at add-time, in handleAdd below.
+  const [selectedTagId, setSelectedTagId] = useState('');
 
   // Filter out already selected categories (match both canonical and legacy type)
   const existingCategoryValues = existingSources
@@ -66,7 +71,7 @@ export function IncomeSourcePicker({
   const isAddEnabled =
     !disabled &&
     ((sourceType === 'pfc_primary' && selectedCategory !== '') ||
-      (sourceType === 'tag' && selectedTag !== ''));
+      (sourceType === 'tag' && selectedTagId !== ''));
 
   // Handle type change
   const handleTypeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -74,7 +79,7 @@ export function IncomeSourcePicker({
     setSourceType(newType);
     // Reset selections when type changes
     setSelectedCategory('');
-    setSelectedTag('');
+    setSelectedTagId('');
   }, []);
 
   // Handle add
@@ -87,9 +92,14 @@ export function IncomeSourcePicker({
       case 'pfc_primary':
         source = { type: 'pfc_primary', value: selectedCategory };
         break;
-      case 'tag':
-        source = { type: 'tag', value: selectedTag };
+      case 'tag': {
+        // Resolve the opaque select value back to the tag's name only here, at the
+        // point of emitting the IncomeSource — never earlier, and never into the DOM.
+        const tagName = availableTags.find((t) => t.id === selectedTagId)?.name;
+        if (!tagName) return;
+        source = { type: 'tag', value: tagName };
         break;
+      }
     }
 
     if (!source) return;
@@ -97,8 +107,8 @@ export function IncomeSourcePicker({
 
     // Reset selection
     setSelectedCategory('');
-    setSelectedTag('');
-  }, [sourceType, selectedCategory, selectedTag, isAddEnabled, onAdd]);
+    setSelectedTagId('');
+  }, [sourceType, selectedCategory, selectedTagId, availableTags, isAddEnabled, onAdd]);
 
   const selectCls =
     'px-3 py-2 text-sm bg-card border border-input rounded-md text-foreground cursor-pointer transition-colors duration-150 focus:outline-none focus:border-ring focus:ring-2 focus:ring-ring disabled:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
@@ -159,14 +169,14 @@ export function IncomeSourcePicker({
           <select
             id="tag-select"
             className={selectCls}
-            value={selectedTag}
-            onChange={(e) => setSelectedTag(e.target.value)}
+            value={selectedTagId}
+            onChange={(e) => setSelectedTagId(e.target.value)}
             disabled={disabled}
             aria-label="Select Tag"
           >
             <option value="">Select a tag...</option>
             {availableTagsFiltered.map((tag) => (
-              <option key={tag.id} value={tag.name}>
+              <option key={tag.id} value={tag.id} data-ph-mask>
                 {tag.name}
               </option>
             ))}

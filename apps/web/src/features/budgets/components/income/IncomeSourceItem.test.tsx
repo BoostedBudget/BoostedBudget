@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { IncomeSourceItem } from './IncomeSourceItem'
 import type { IncomeSource } from '../../types'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 describe('IncomeSourceItem', () => {
   const mockOnRemove = mock(() => {})
@@ -151,7 +152,11 @@ describe('IncomeSourceItem', () => {
   // ==========================================================================
 
   describe('Accessibility', () => {
-    it('has accessible remove button with aria-label', () => {
+    it('has an accessible remove button whose name carries the tag value via aria-labelledby, not aria-label', () => {
+      // Issue #1514: the value must not appear in any ATTRIBUTE -- aria-label is
+      // recorded verbatim by session replay and cannot be masked like element text.
+      // The accessible name now comes from a referenced sr-only span's text (see
+      // AccountCard.tsx pattern), so the value is free to appear in the computed name.
       const source: IncomeSource = {
         type: 'tag',
         value: 'Freelance',
@@ -159,11 +164,13 @@ describe('IncomeSourceItem', () => {
 
       render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
 
-      const removeButton = screen.getByRole('button', { name: /remove.*freelance/i });
+      const removeButton = screen.getByRole('button', { name: /remove freelance tag income source/i });
       expect(removeButton).toBeInTheDocument();
+      expect(removeButton.getAttribute('aria-label')).toBeNull();
+      expect(removeButton.getAttribute('aria-labelledby')).not.toContain('Freelance');
     });
 
-    it('has accessible remove button for pfc_primary with formatted name', () => {
+    it('has an accessible remove button whose name carries the category value for pfc_primary sources', () => {
       const source: IncomeSource = {
         type: 'pfc_primary',
         value: 'INCOME',
@@ -171,8 +178,75 @@ describe('IncomeSourceItem', () => {
 
       render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
 
-      const removeButton = screen.getByRole('button', { name: /remove.*income/i });
+      const removeButton = screen.getByRole('button', { name: /remove income category income source/i });
       expect(removeButton).toBeInTheDocument();
+    });
+
+    it('gives two rows of the same type but different values distinct accessible names (WCAG 2.1 AA rotor navigation)', () => {
+      // Issue #1514 follow-up: a generic value-free label made byte-identical accessible
+      // names for every row of a given type, which is invisible to linear reading (list
+      // semantics + adjacent text rescue it) but breaks rotor/"buttons list" navigation,
+      // where only the control's own accessible name is shown.
+      //
+      // Both rows are rendered SIMULTANEOUSLY in one container -- a broken implementation
+      // using a hard-coded (non-useId) label element id would still pass a version of this
+      // test that unmounts row A before mounting row B, because the two ids would never
+      // collide in the DOM at the same time. Only coexistence proves distinctness.
+      const sourceA: IncomeSource = { type: 'tag', value: 'Freelance' };
+      const sourceB: IncomeSource = { type: 'tag', value: 'Consulting' };
+
+      render(
+        <>
+          <IncomeSourceItem source={sourceA} onRemove={mockOnRemove} />
+          <IncomeSourceItem source={sourceB} onRemove={mockOnRemove} />
+        </>
+      );
+
+      const buttons = screen.getAllByRole('button', { name: /remove/i });
+      expect(buttons).toHaveLength(2);
+      const [buttonA, buttonB] = buttons;
+
+      expect(buttonA).toHaveAccessibleName('Remove Freelance tag income source');
+      expect(buttonB).toHaveAccessibleName('Remove Consulting tag income source');
+      expect(buttonA).not.toHaveAccessibleName(buttonB.getAttribute('aria-label') ?? '');
+
+      const labelledbyA = buttonA.getAttribute('aria-labelledby');
+      const labelledbyB = buttonB.getAttribute('aria-labelledby');
+      expect(labelledbyA).toBeTruthy();
+      expect(labelledbyB).toBeTruthy();
+      // Each button's aria-labelledby must resolve to its OWN label element, not a
+      // shared/duplicate one -- this is what a hard-coded id would violate.
+      expect(labelledbyA).not.toEqual(labelledbyB);
+
+      const labelElA = document.getElementById(labelledbyA!);
+      const labelElB = document.getElementById(labelledbyB!);
+      expect(labelElA).not.toBeNull();
+      expect(labelElB).not.toBeNull();
+      expect(labelElA).not.toBe(labelElB);
+    });
+
+    it('backs the accessible name with an sr-only, data-ph-mask span whose text (not any attribute) carries the value', () => {
+      const source: IncomeSource = {
+        type: 'tag',
+        value: 'ZzDistinctSentinelZz',
+      };
+
+      render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />);
+
+      const removeButton = screen.getByRole('button', { name: /remove/i });
+      const labelledbyId = removeButton.getAttribute('aria-labelledby');
+      expect(labelledbyId).toBeTruthy();
+      expect(labelledbyId).not.toContain('ZzDistinctSentinelZz');
+
+      const labelSpan = document.getElementById(labelledbyId!);
+      expect(labelSpan).not.toBeNull();
+      expect(labelSpan).toHaveClass('sr-only');
+      expect(labelSpan!.getAttribute('data-ph-mask')).not.toBeNull();
+      expect(labelSpan!.textContent).toContain('ZzDistinctSentinelZz');
+
+      // No attribute anywhere on the button carries the value.
+      const values = Array.from(removeButton.attributes).map((a) => a.value);
+      expect(values.some((v) => v.includes('ZzDistinctSentinelZz'))).toBe(false);
     });
 
 
@@ -273,6 +347,39 @@ describe('IncomeSourceItem', () => {
     });
   });
 });
+
+describe('remove button accessible name excludes PII (issue #1514: aria-label is unmaskable)', () => {
+  const mockOnRemove = mock(() => {})
+
+  // Every DOM attribute on the button -- not just aria-label -- must be free of the PII.
+  // aria-label text is recorded verbatim by PostHog session replay and data-ph-mask only
+  // covers element TEXT content, never attribute values.
+  function attributeValues(el: Element): string[] {
+    return Array.from(el.attributes).map((a) => a.value)
+  }
+
+  it('does not include the user-entered tag value in any DOM attribute on the remove button', () => {
+    const source: IncomeSource = {
+      type: 'tag',
+      value: 'ZzTagSentinelZz-Freelance-Client-Acme',
+    }
+
+    render(<IncomeSourceItem source={source} onRemove={mockOnRemove} />)
+
+    const button = screen.getByRole('button', { name: /remove/i })
+    const values = attributeValues(button)
+    expect(values.some((v) => v.includes('ZzTagSentinelZz-Freelance-Client-Acme'))).toBe(false)
+
+    // Scope the scanner to the button itself: the visible tag text (a separate span) is
+    // intentionally left unmasked per the code comment above data-ph-mask at ~line 73
+    // ("pfc/tag labels aren't financial PII") -- that policy is out of scope here. This
+    // test is only about the button's own attributes, which must never carry the value.
+    const sentinels: PIISentinel[] = [
+      { value: 'ZzTagSentinelZz-Freelance-Client-Acme', fieldDescription: 'source.value (tag)' },
+    ]
+    expect(scanForUnmaskedPII(button, sentinels)).toEqual([])
+  })
+})
 
 describe('Unknown type fallback', () => {
   const mockOnRemove = mock(() => {})

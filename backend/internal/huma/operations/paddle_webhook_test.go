@@ -55,16 +55,34 @@ func (m *mockPaddleWebhookRepository) GetByEventID(ctx context.Context, eventID 
 }
 
 // Implement other required methods with no-ops (only testing Create and GetByEventID)
-func (m *mockPaddleWebhookRepository) GetByID(ctx context.Context, id string) (*domain.PaddleWebhookEvent, error) { return nil, nil }
-func (m *mockPaddleWebhookRepository) MarkProcessed(ctx context.Context, id string) error                           { return nil }
-func (m *mockPaddleWebhookRepository) MarkFailed(ctx context.Context, id string, errorMsg string) error             { return nil }
-func (m *mockPaddleWebhookRepository) GetUnprocessed(ctx context.Context, limit int) ([]domain.PaddleWebhookEvent, error) { return nil, nil }
-func (m *mockPaddleWebhookRepository) GetUnprocessedByType(ctx context.Context, eventType string, limit int) ([]domain.PaddleWebhookEvent, error) { return nil, nil }
-func (m *mockPaddleWebhookRepository) Update(ctx context.Context, event *domain.PaddleWebhookEvent) error { return nil }
-func (m *mockPaddleWebhookRepository) GetRecentWebhooks(ctx context.Context, limit int) ([]domain.PaddleWebhookEvent, error) { return nil, nil }
-func (m *mockPaddleWebhookRepository) ListWebhookEvents(ctx context.Context, filters domain.WebhookEventFilters, limit, offset int) ([]domain.PaddleWebhookEvent, int, error) { return nil, 0, nil }
-func (m *mockPaddleWebhookRepository) GetWebhookStats(ctx context.Context, timeRangeHours int) (*domain.WebhookStatsResponse, error) { return nil, nil }
-func (m *mockPaddleWebhookRepository) ResetProcessingStatus(ctx context.Context, id string) error { return nil }
+func (m *mockPaddleWebhookRepository) GetByID(ctx context.Context, id string) (*domain.PaddleWebhookEvent, error) {
+	return nil, nil
+}
+func (m *mockPaddleWebhookRepository) MarkProcessed(ctx context.Context, id string) error { return nil }
+func (m *mockPaddleWebhookRepository) MarkFailed(ctx context.Context, id string, errorMsg string) error {
+	return nil
+}
+func (m *mockPaddleWebhookRepository) GetUnprocessed(ctx context.Context, limit int) ([]domain.PaddleWebhookEvent, error) {
+	return nil, nil
+}
+func (m *mockPaddleWebhookRepository) GetUnprocessedByType(ctx context.Context, eventType string, limit int) ([]domain.PaddleWebhookEvent, error) {
+	return nil, nil
+}
+func (m *mockPaddleWebhookRepository) Update(ctx context.Context, event *domain.PaddleWebhookEvent) error {
+	return nil
+}
+func (m *mockPaddleWebhookRepository) GetRecentWebhooks(ctx context.Context, limit int) ([]domain.PaddleWebhookEvent, error) {
+	return nil, nil
+}
+func (m *mockPaddleWebhookRepository) ListWebhookEvents(ctx context.Context, filters domain.WebhookEventFilters, limit, offset int) ([]domain.PaddleWebhookEvent, int, error) {
+	return nil, 0, nil
+}
+func (m *mockPaddleWebhookRepository) GetWebhookStats(ctx context.Context, timeRangeHours int) (*domain.WebhookStatsResponse, error) {
+	return nil, nil
+}
+func (m *mockPaddleWebhookRepository) ResetProcessingStatus(ctx context.Context, id string) error {
+	return nil
+}
 
 // mockJobQueue is a mock implementation of queue.JobQueue
 type mockJobQueue struct {
@@ -170,8 +188,11 @@ func TestHandlePaddleWebhook_ValidSignature_EnqueuesJob(t *testing.T) {
 	assert.Equal(t, "subscription.created", mockQueue.enqueuedJobs[0].EventType)
 }
 
-// TestHandlePaddleWebhook_InvalidSignature_NoJobEnqueued tests that invalid signature prevents job enqueue
-func TestHandlePaddleWebhook_InvalidSignature_NoJobEnqueued(t *testing.T) {
+// TestHandlePaddleWebhook_InvalidSignature_RejectedBeforePersistence tests that a cryptographically
+// invalid signature is rejected with a non-2xx error and NEVER persisted to the full webhook table
+// (Issue #1514: fail closed before persistence — closes the idempotency-poisoning vector, since an
+// invalid attempt carrying an attacker-chosen event_id never reaches the UNIQUE event_id column).
+func TestHandlePaddleWebhook_InvalidSignature_RejectedBeforePersistence(t *testing.T) {
 	handler, mockService, mockRepo, mockQueue := setupTestHandler()
 	mockService.verifyResult = false
 	mockRepo.getByEventErr = repository.ErrPaddleWebhookNotFound
@@ -190,20 +211,17 @@ func TestHandlePaddleWebhook_InvalidSignature_NoJobEnqueued(t *testing.T) {
 
 	output, err := handler.HandlePaddleWebhook(context.Background(), input)
 
-	require.NoError(t, err)
-	require.NotNil(t, output)
-	assert.Equal(t, "ok", output.Body.Status)
+	require.Error(t, err, "invalid signature must be rejected with a non-2xx response")
+	assert.Nil(t, output)
 
-	// Verify webhook was stored
-	assert.Len(t, mockRepo.events, 1)
-	assert.False(t, mockRepo.events[0].SignatureValid)
-
-	// Verify job was NOT enqueued
-	assert.Empty(t, mockQueue.enqueuedJobs, "Job should not be enqueued with invalid signature")
+	// Verify the full webhook row was NEVER persisted, even with an attacker-chosen event_id.
+	assert.Empty(t, mockRepo.events, "invalid-signature webhook must not be persisted to the full webhook table")
+	assert.Empty(t, mockQueue.enqueuedJobs, "invalid-signature webhook must never be enqueued")
 }
 
-// TestHandlePaddleWebhook_MissingSignature_StillProcesses tests webhook with missing signature
-func TestHandlePaddleWebhook_MissingSignature_StillProcesses(t *testing.T) {
+// TestHandlePaddleWebhook_MissingSignature_RejectedBeforePersistence tests webhook with missing
+// signature header is rejected outright — never persisted, never enqueued (Issue #1514).
+func TestHandlePaddleWebhook_MissingSignature_RejectedBeforePersistence(t *testing.T) {
 	handler, _, mockRepo, mockQueue := setupTestHandler()
 	mockRepo.getByEventErr = repository.ErrPaddleWebhookNotFound
 
@@ -221,15 +239,225 @@ func TestHandlePaddleWebhook_MissingSignature_StillProcesses(t *testing.T) {
 
 	output, err := handler.HandlePaddleWebhook(context.Background(), input)
 
+	require.Error(t, err, "missing signature must be rejected with a non-2xx response")
+	assert.Nil(t, output)
+
+	assert.Empty(t, mockRepo.events, "unsigned webhook must not be persisted to the full webhook table")
+	assert.Empty(t, mockQueue.enqueuedJobs)
+}
+
+// TestHandlePaddleWebhook_InvalidAttempt_RecordsBoundedAuditMetadata verifies that rejecting an
+// invalid/unsigned webhook still records bounded metadata (Issue #1514 item 2) via the
+// InvalidAttemptRepo — never the raw payload or the attacker-chosen event_id.
+func TestHandlePaddleWebhook_InvalidAttempt_RecordsBoundedAuditMetadata(t *testing.T) {
+	handler, mockService, _, _ := setupTestHandler()
+	mockService.verifyResult = false
+	invalidRepo := &mockInvalidWebhookAttemptRepository{}
+	handler.invalidAttemptRepo = invalidRepo
+
+	payload := PaddleWebhookPayload{
+		EventID:   "evt_attacker_chosen",
+		EventType: "subscription.created",
+		Data:      map[string]interface{}{},
+	}
+	rawBody, _ := json.Marshal(payload)
+
+	input := &PaddleWebhookInput{
+		PaddleSignature: "ts=1614280549;h1=invalid_signature",
+		RawBody:         rawBody,
+	}
+
+	_, err := handler.HandlePaddleWebhook(context.Background(), input)
+	require.Error(t, err)
+
+	require.Len(t, invalidRepo.calls, 1)
+	assert.Equal(t, "paddle", invalidRepo.calls[0].provider)
+	assert.Equal(t, len(rawBody), invalidRepo.calls[0].bodyLength)
+	assert.NotContains(t, invalidRepo.calls[0].bodySHA256, "evt_attacker_chosen", "must never leak the raw event_id into the audit record")
+}
+
+// TestHandlePaddleWebhook_IdempotencyPoisoningClosed proves that an attacker-chosen event_id on an
+// invalid webhook can no longer suppress a later LEGITIMATE webhook bearing the same event_id
+// (Issue #1514 item — closes the idempotency-poisoning vector described in the security brief).
+func TestHandlePaddleWebhook_IdempotencyPoisoningClosed(t *testing.T) {
+	handler, mockService, mockRepo, mockQueue := setupTestHandler()
+	mockRepo.getByEventErr = repository.ErrPaddleWebhookNotFound
+
+	poisonedEventID := "evt_future_legit_event"
+	payload := PaddleWebhookPayload{
+		EventID:   poisonedEventID,
+		EventType: "subscription.created",
+		Data:      map[string]interface{}{},
+	}
+	rawBody, _ := json.Marshal(payload)
+
+	// Step 1: attacker sends an invalid-signature webhook carrying the event_id they expect a
+	// future legitimate webhook to use.
+	mockService.verifyResult = false
+	attackerInput := &PaddleWebhookInput{
+		PaddleSignature: "ts=1614280549;h1=forged",
+		RawBody:         rawBody,
+	}
+	_, err := handler.HandlePaddleWebhook(context.Background(), attackerInput)
+	require.Error(t, err)
+	require.Empty(t, mockRepo.events, "attacker's invalid attempt must not occupy the event_id")
+
+	// Step 2: the real Paddle webhook, bearing the SAME event_id, arrives later with a valid
+	// signature. It must be processed normally — not suppressed as a "duplicate".
+	mockService.verifyResult = true
+	legitInput := &PaddleWebhookInput{
+		PaddleSignature: "ts=1614280600;h1=genuine",
+		RawBody:         rawBody,
+	}
+	output, err := handler.HandlePaddleWebhook(context.Background(), legitInput)
+
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	assert.Equal(t, "ok", output.Body.Status)
+	require.Len(t, mockRepo.events, 1, "legitimate webhook must be stored")
+	assert.Equal(t, poisonedEventID, mockRepo.events[0].EventID)
+	assert.True(t, mockRepo.events[0].SignatureValid)
+	assert.Len(t, mockQueue.enqueuedJobs, 1, "legitimate webhook must be enqueued for processing")
+}
 
-	// Verify webhook was stored
-	assert.Len(t, mockRepo.events, 1)
-	assert.False(t, mockRepo.events[0].SignatureValid)
+// TestHandlePaddleWebhook_NilRepo_VerifiedWebhook_FailsClosed asserts the fail-closed behaviour of
+// the `h.webhookRepo != nil` guard in HandlePaddleWebhook (Issue #1514 item 4): with a nil
+// WebhookRepo, a signature-VERIFIED webhook must be rejected with a non-2xx, never acked 200,
+// because acking without persisting would silently lose a real billing event forever (Paddle never
+// retries a 2xx). This configuration is unreachable in the wired deployment — see the doc comment
+// above the guard in paddle_webhook.go referencing backend/cmd/server/main.go:2048-2079, where every
+// route registration branch either requires (main.go:2065) or transitively guarantees (main.go:2048,
+// via the outer Clerk-gated block that assigns paddleWebhookRepo before paddleWebhookService can be
+// set) a non-nil repository. This test is belt-and-braces against a wiring regression, not a claim
+// that the nil-repo state occurs in production: IF that wiring invariant is ever broken, the handler
+// must fail closed rather than silently drop the webhook.
+func TestHandlePaddleWebhook_NilRepo_VerifiedWebhook_FailsClosed(t *testing.T) {
+	mockService := &mockPaddleWebhookService{verifyResult: true}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	// Verify job was NOT enqueued (no valid signature)
+	handler := NewPaddleWebhookHandler(PaddleWebhookHandlerDeps{
+		WebhookService: mockService,
+		WebhookRepo:    nil,
+		Logger:         logger,
+	})
+
+	payload := PaddleWebhookPayload{
+		EventID:   "evt_nil_repo_test",
+		EventType: "subscription.created",
+		Data:      map[string]interface{}{},
+	}
+	rawBody, _ := json.Marshal(payload)
+
+	input := &PaddleWebhookInput{
+		PaddleSignature: "ts=1614280549;h1=valid",
+		RawBody:         rawBody,
+	}
+
+	output, err := handler.HandlePaddleWebhook(context.Background(), input)
+
+	require.Error(t, err, "a verified webhook that cannot be persisted must fail closed, not ack 2xx")
+	assert.Nil(t, output)
+}
+
+// TestHandlePaddleWebhook_PoisonedInvalidDuplicate_DoesNotSuppressValidWebhook is the RED test for
+// Issue #1514 item 1: a stored row for this event_id has signature_valid=false (a legacy-poisoned
+// or otherwise-invalid row — see paddle_webhook.go's fail-closed check and migration 000147, which
+// mean this should be rare/legacy, but defence-in-depth means ingestion must not assume it can
+// never happen). GetByEventID finding that row must NOT be treated as "already received" for a
+// NOW-verified webhook bearing the same event_id — that would silently drop a genuine billing
+// event forever. The handler must return a non-2xx so Paddle retries, and must never fabricate a
+// 200 "already received" for a poisoned row.
+func TestHandlePaddleWebhook_PoisonedInvalidDuplicate_DoesNotSuppressValidWebhook(t *testing.T) {
+	handler, mockService, mockRepo, mockQueue := setupTestHandler()
+	mockService.verifyResult = true
+
+	// Existing row was persisted with signature_valid=false (poisoned / legacy).
+	mockRepo.existing = &domain.PaddleWebhookEvent{
+		ID:             "poisoned-webhook-id",
+		EventID:        "evt_poisoned_1234",
+		EventType:      "subscription.created",
+		SignatureValid: false,
+		Processed:      false,
+	}
+	mockRepo.getByEventErr = nil
+
+	payload := PaddleWebhookPayload{
+		EventID:   "evt_poisoned_1234",
+		EventType: "subscription.created",
+		Data:      map[string]interface{}{},
+	}
+	rawBody, _ := json.Marshal(payload)
+
+	input := &PaddleWebhookInput{
+		PaddleSignature: "ts=1614280549;h1=genuine",
+		RawBody:         rawBody,
+	}
+
+	output, err := handler.HandlePaddleWebhook(context.Background(), input)
+
+	require.Error(t, err, "a signature_valid=false stored row must not suppress a later valid webhook as a duplicate")
+	assert.Nil(t, output)
+	assert.Empty(t, mockQueue.enqueuedJobs, "must not enqueue processing for a refused poisoned-duplicate response")
+}
+
+// TestHandlePaddleWebhook_ConcurrentValidDuplicate_ReturnsIdempotentSuccess is the RED test for
+// Issue #1514 item 2: two concurrent deliveries of the same valid event both pass GetByEventID
+// (neither sees the other's row yet), then the loser's Create() hits the unique constraint on
+// event_id and the repository maps that to ErrPaddleWebhookDuplicate. Nothing was lost — the
+// winner already persisted the row — so the loser must return the same idempotent 200 "already
+// received" contract as the check-then-insert branch, not a fabricated 500 that causes Paddle to
+// retry a webhook that was, in fact, already handled.
+func TestHandlePaddleWebhook_ConcurrentValidDuplicate_ReturnsIdempotentSuccess(t *testing.T) {
+	handler, mockService, mockRepo, mockQueue := setupTestHandler()
+	mockService.verifyResult = true
+	mockRepo.getByEventErr = repository.ErrPaddleWebhookNotFound // GetByEventID sees nothing yet
+	mockRepo.createErr = repository.ErrPaddleWebhookDuplicate    // but Create loses the race
+
+	payload := PaddleWebhookPayload{
+		EventID:   "evt_race_1234",
+		EventType: "subscription.created",
+		Data:      map[string]interface{}{},
+	}
+	rawBody, _ := json.Marshal(payload)
+
+	input := &PaddleWebhookInput{
+		PaddleSignature: "ts=1614280549;h1=genuine",
+		RawBody:         rawBody,
+	}
+
+	output, err := handler.HandlePaddleWebhook(context.Background(), input)
+
+	require.NoError(t, err, "a concurrent duplicate insert must be treated as idempotent success, not a persistence outage")
+	require.NotNil(t, output)
+	assert.Equal(t, "ok", output.Body.Status)
+	assert.Empty(t, mockQueue.enqueuedJobs, "the winner already enqueued processing; the loser must not enqueue again")
+}
+
+// TestHandlePaddleWebhook_ValidWebhookPersistenceFails_ReturnsNon2xx verifies that a signature-valid
+// webhook we fail to persist returns a non-2xx response so Paddle retries delivery, instead of
+// silently losing a real billing event forever (Issue #1514 item 5).
+func TestHandlePaddleWebhook_ValidWebhookPersistenceFails_ReturnsNon2xx(t *testing.T) {
+	handler, mockService, mockRepo, mockQueue := setupTestHandler()
+	mockService.verifyResult = true
+	mockRepo.getByEventErr = repository.ErrPaddleWebhookNotFound
+	mockRepo.createErr = errors.New("db unavailable")
+
+	payload := PaddleWebhookPayload{
+		EventID:   "evt_persist_fail",
+		EventType: "subscription.created",
+		Data:      map[string]interface{}{},
+	}
+	rawBody, _ := json.Marshal(payload)
+
+	input := &PaddleWebhookInput{
+		PaddleSignature: "ts=1614280549;h1=valid",
+		RawBody:         rawBody,
+	}
+
+	output, err := handler.HandlePaddleWebhook(context.Background(), input)
+
+	require.Error(t, err, "a persistence failure for a VALID webhook must return a non-2xx response so Paddle retries")
+	assert.Nil(t, output)
 	assert.Empty(t, mockQueue.enqueuedJobs)
 }
 
@@ -240,10 +468,11 @@ func TestHandlePaddleWebhook_DuplicateEvent_ReturnsSuccess(t *testing.T) {
 
 	// Set up existing webhook
 	mockRepo.existing = &domain.PaddleWebhookEvent{
-		ID:        "existing-webhook-id",
-		EventID:   "evt_01h1234567890",
-		EventType: "subscription.created",
-		Processed: true,
+		ID:             "existing-webhook-id",
+		EventID:        "evt_01h1234567890",
+		EventType:      "subscription.created",
+		SignatureValid: true,
+		Processed:      true,
 	}
 	mockRepo.getByEventErr = nil // Webhook found
 
@@ -280,10 +509,11 @@ func TestHandlePaddleWebhook_PendingDuplicate(t *testing.T) {
 
 	// Set up existing webhook that's pending
 	mockRepo.existing = &domain.PaddleWebhookEvent{
-		ID:        "existing-webhook-id",
-		EventID:   "evt_01h1234567890",
-		EventType: "subscription.created",
-		Processed: false, // Still processing
+		ID:             "existing-webhook-id",
+		EventID:        "evt_01h1234567890",
+		EventType:      "subscription.created",
+		SignatureValid: true,
+		Processed:      false, // Still processing
 	}
 	mockRepo.getByEventErr = nil
 
@@ -471,8 +701,10 @@ func TestHandlePaddleWebhook_MissingEventType(t *testing.T) {
 	assert.Empty(t, mockQueue.enqueuedJobs)
 }
 
-// TestHandlePaddleWebhook_Always200OK tests that webhook always returns 200 to prevent retry storms
-func TestHandlePaddleWebhook_Always200OK(t *testing.T) {
+// TestHandlePaddleWebhook_ResultCodes exercises the response-code contract across scenarios:
+// valid signature -> 2xx (unless persistence fails, which must be non-2xx per Issue #1514 item 5);
+// enqueue failure alone -> still 2xx (the webhook itself was durably persisted).
+func TestHandlePaddleWebhook_ResultCodes(t *testing.T) {
 	testCases := []struct {
 		name          string
 		setupRepo     func(*mockPaddleWebhookRepository)
@@ -488,18 +720,21 @@ func TestHandlePaddleWebhook_Always200OK(t *testing.T) {
 			expectSuccess: true,
 		},
 		{
-			name:          "Repository create fails",
-			setupRepo:     func(r *mockPaddleWebhookRepository) { r.createErr = errors.New("db error"); r.getByEventErr = repository.ErrPaddleWebhookNotFound },
+			name: "Repository create fails",
+			setupRepo: func(r *mockPaddleWebhookRepository) {
+				r.createErr = errors.New("db error")
+				r.getByEventErr = repository.ErrPaddleWebhookNotFound
+			},
 			setupService:  func(s *mockPaddleWebhookService) { s.verifyResult = true },
 			setupQueue:    func(q *mockJobQueue) {},
-			expectSuccess: true, // Still returns OK
+			expectSuccess: false, // Issue #1514: must return non-2xx so Paddle retries a lost VALID webhook
 		},
 		{
 			name:          "Queue enqueue fails",
 			setupRepo:     func(r *mockPaddleWebhookRepository) { r.getByEventErr = repository.ErrPaddleWebhookNotFound },
 			setupService:  func(s *mockPaddleWebhookService) { s.verifyResult = true },
 			setupQueue:    func(q *mockJobQueue) { q.enqueueErr = errors.New("queue full") },
-			expectSuccess: true, // Still returns OK
+			expectSuccess: true, // webhook itself was durably stored; enqueue is best-effort
 		},
 	}
 
@@ -528,12 +763,16 @@ func TestHandlePaddleWebhook_Always200OK(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, output)
 				assert.Equal(t, "ok", output.Body.Status)
+			} else {
+				require.Error(t, err)
+				assert.Nil(t, output)
 			}
 		})
 	}
 }
 
-// TestHandlePaddleWebhook_SignatureVerificationError tests signature verification error handling
+// TestHandlePaddleWebhook_SignatureVerificationError tests signature verification error handling.
+// Issue #1514: a signature-verification error means reject — never store, never enqueue.
 func TestHandlePaddleWebhook_SignatureVerificationError(t *testing.T) {
 	handler, mockService, mockRepo, mockQueue := setupTestHandler()
 	mockService.verifyErr = errors.New("signature parsing error")
@@ -553,13 +792,11 @@ func TestHandlePaddleWebhook_SignatureVerificationError(t *testing.T) {
 
 	output, err := handler.HandlePaddleWebhook(context.Background(), input)
 
-	require.NoError(t, err)
-	require.NotNil(t, output)
-	assert.Equal(t, "ok", output.Body.Status)
+	require.Error(t, err)
+	assert.Nil(t, output)
 
-	// Verify webhook was stored with signature_valid = false
-	assert.Len(t, mockRepo.events, 1)
-	assert.False(t, mockRepo.events[0].SignatureValid)
+	// Verify webhook was NOT stored
+	assert.Empty(t, mockRepo.events)
 
 	// Verify NO job was enqueued (invalid signature)
 	assert.Empty(t, mockQueue.enqueuedJobs)

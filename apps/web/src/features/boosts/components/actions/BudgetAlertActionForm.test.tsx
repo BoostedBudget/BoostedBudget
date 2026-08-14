@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { AlertAction } from '../../types'
 import type { Budget } from '../../../budgets/types'
 import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 const mockBudgets: Budget[] = [
   {
@@ -501,6 +502,52 @@ describe('BudgetAlertActionForm', () => {
 
       const channelsGroup = screen.getByRole('group', { name: /notification channels/i })
       expect(channelsGroup).toBeInTheDocument()
+    })
+  })
+
+  // Issue #1514 (fix round 3): the budget picker's <option> text is the raw budget name,
+  // and formatBudgetCategoryLabel() returns the user-authored savings-goal name for
+  // savings-kind categories — both on the policy's PII list, both rendered as unmasked
+  // <option> TEXT (the value attributes are already opaque ids). <option> cannot contain
+  // a <span>, so the fix is data-ph-mask on the <option> element itself — assert with the
+  // widened scanner so it covers text, not just attributes.
+  describe('PII masking (#1514)', () => {
+    it('masks the budget name and savings-goal name in the budget/category picker options', () => {
+      mockUseBudgets.mockReturnValue({
+        budgets: [
+          {
+            ...mockBudgets[0],
+            categories: [
+              ...mockBudgets[0].categories!,
+              {
+                id: 'cat-savings-1',
+                budget_id: 'budget-1',
+                category_kind: 'savings',
+                savings_goal_name: 'My Vacation Fund',
+                allocated_amount: 100,
+                spent_amount: 0,
+                created_at: '2024-01-01',
+                updated_at: '2024-01-01',
+                tags: [],
+                match_logic: 'any',
+              },
+            ],
+          },
+        ],
+        loading: false,
+        error: null,
+      })
+
+      const actionWithBudget: AlertAction = { ...defaultAction, budget_id: 'budget-1' }
+      renderWithProviders(
+        <BudgetAlertActionForm action={actionWithBudget} onChange={() => {}} />
+      )
+
+      const sentinels: PIISentinel[] = [
+        { value: 'Monthly Budget', fieldDescription: 'budget.name in BudgetAlertActionForm budget picker <option>' },
+        { value: 'My Vacation Fund', fieldDescription: 'savings_goal_name in BudgetAlertActionForm category picker <option>' },
+      ]
+      expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
     })
   })
 })

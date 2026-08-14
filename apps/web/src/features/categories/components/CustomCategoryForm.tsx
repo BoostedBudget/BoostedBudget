@@ -144,7 +144,7 @@ export function CustomCategoryForm({
           {customParents.length > 0 && (
             <optgroup label="Custom category">
               {customParents.map((c) => (
-                <option key={c.id} value={`custom:${c.id}`}>
+                <option key={c.id} value={`custom:${c.id}`} data-ph-mask>
                   {c.name}
                 </option>
               ))}

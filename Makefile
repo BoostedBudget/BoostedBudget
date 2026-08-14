@@ -177,6 +177,16 @@ test-all:
 		echo "⚠️  lcov not installed — skipping frontend threshold check (install: brew install lcov)"; \
 	fi
 	@echo ""
+	@echo "3️⃣b rrweb <option> masking proof (issue #1514)..."
+	@# Verifies the ACTUAL PostHog session-replay recorder (posthog-js's vendored rrweb
+	@# fork) still masks a data-ph-mask <option>'s text — not our own scanForUnmaskedPII
+	@# test double. Needs only Chromium (no backend/webServer/Clerk), so it lives here
+	@# rather than in the E2E section below. A routine posthog-js bump is exactly the
+	@# kind of change that could silently break this mechanism.
+	@# `playwright install` is idempotent — it no-ops for browsers already installed.
+	@cd apps/web && bunx playwright install --with-deps chromium
+	@cd apps/web && bun run test:rrweb-mask-proof
+	@echo ""
 	@echo "4️⃣  MCP Server Tests..."
 	@cd apps/mcp-server && bun run test
 	@cd apps/mcp-server && bun run scripts/check-manifest-completeness.ts

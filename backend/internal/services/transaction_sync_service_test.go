@@ -39,6 +39,11 @@ func (m *MockWebhookRepository) MarkProcessed(ctx context.Context, id string) er
 	return args.Error(0)
 }
 
+func (m *MockWebhookRepository) MarkFailed(ctx context.Context, id string, errorMsg string) error {
+	args := m.Called(ctx, id, errorMsg)
+	return args.Error(0)
+}
+
 func (m *MockWebhookRepository) GetUnprocessed(ctx context.Context) ([]domain.WebhookEvent, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
@@ -119,27 +124,27 @@ func TestProcessWebhook_Success(t *testing.T) {
 	// Mock webhook event with item_id
 	itemID := "item-abc"
 	webhookEvent := &domain.WebhookEvent{
-		ID:           webhookID,
-		WebhookType:  "TRANSACTIONS",
-		WebhookCode:  stringPtr("DEFAULT_UPDATE"),
-		ItemID:       &itemID,
-		Payload:      json.RawMessage(`{"webhook_type":"TRANSACTIONS","item_id":"item-abc"}`),
-		Processed:    false,
-		RetryCount:   0,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:          webhookID,
+		WebhookType: "TRANSACTIONS",
+		WebhookCode: stringPtr("DEFAULT_UPDATE"),
+		ItemID:      &itemID,
+		Payload:     json.RawMessage(`{"webhook_type":"TRANSACTIONS","item_id":"item-abc"}`),
+		Processed:   false,
+		RetryCount:  0,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 
 	// Mock linked item with encrypted access token
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-123",
-		ItemID:               itemID,
+		ID:          "linked-item-123",
+		UserID:      "user-123",
+		ItemID:      itemID,
 		AccessToken: "decrypted-access-token",
 		Cursor:      stringPtr("old-cursor"),
-		Provider:             "plaid",
-		CreatedAt:            time.Now(),
-		UpdatedAt:            time.Now(),
+		Provider:    "plaid",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 
 	// Mock webhook update (mark as processing started)
@@ -356,9 +361,9 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 
 	ctx := context.Background()
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
-		UserID:               "user-123",
-		ItemID:               "item-abc",
+		ID:          "linked-item-123",
+		UserID:      "user-123",
+		ItemID:      "item-abc",
 		AccessToken: "decrypted-token",
 		Cursor:      stringPtr("cursor-before"),
 	}
@@ -419,7 +424,7 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 
 	ctx := context.Background()
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
+		ID:          "linked-item-123",
 		AccessToken: "decrypted-token",
 		Cursor:      stringPtr("cursor-page0"),
 	}
@@ -456,9 +461,9 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 
 	// Assert - aggregated results from both pages
 	assert.NoError(t, err)
-	assert.Len(t, result.Added, 2) // txn-1 + txn-2
+	assert.Len(t, result.Added, 2)    // txn-1 + txn-2
 	assert.Len(t, result.Modified, 1) // txn-mod-1
-	assert.Len(t, result.Removed, 1) // txn-rem-1
+	assert.Len(t, result.Removed, 1)  // txn-rem-1
 	assert.Equal(t, "cursor-page2", result.NewCursor)
 
 	mockPlaidService.AssertExpectations(t)
@@ -488,7 +493,7 @@ func TestSyncTransactions_PlaidErrorFirstPage(t *testing.T) {
 	ctx := context.Background()
 	cursor := "existing-cursor" // Set cursor to avoid first-sync path
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
+		ID:          "linked-item-123",
 		AccessToken: "decrypted-token",
 		Cursor:      &cursor, // Re-sync scenario to avoid sync limit checks
 	}
@@ -531,7 +536,7 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 
 	ctx := context.Background()
 	linkedItem := &domain.LinkedItem{
-		ID:                   "linked-item-123",
+		ID:          "linked-item-123",
 		AccessToken: "decrypted-token",
 		Cursor:      stringPtr("cursor-start"),
 	}
@@ -666,7 +671,6 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 
 	mockPlaidService.AssertExpectations(t)
 }
-
 
 // ============================================================================
 // Issue #261: Transaction Storage Logic Tests
@@ -1603,7 +1607,7 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 		{
 			TransactionId: "plaid-txn-restaurant",
 			AccountId:     "plaid-acc-restaurant",
-			Amount:        54.50,  // Tip added: $45 + $9.50 tip
+			Amount:        54.50, // Tip added: $45 + $9.50 tip
 			Date:          "2024-01-14",
 			Name:          "Restaurant",
 			MerchantName:  *plaid.NewNullableString(&merchantRestaurant),
@@ -1613,7 +1617,7 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 		{
 			TransactionId: "plaid-txn-hotel",
 			AccountId:     "plaid-acc-hotel",
-			Amount:        200.00, // Amount unchanged
+			Amount:        200.00,       // Amount unchanged
 			Date:          "2024-01-16", // Posted on checkout (was 2024-01-13 reservation)
 			Name:          "Hotel Reservation",
 			MerchantName:  *plaid.NewNullableString(&merchantHotel),
@@ -1757,7 +1761,6 @@ func TestProcessAddedTransactions_SetsPFCFields(t *testing.T) {
 	mockTransactionRepo.AssertExpectations(t)
 }
 
-
 // strPtrHelper creates a pointer to a string value
 func strPtrHelper(s string) *string {
 	return &s
@@ -1894,21 +1897,40 @@ func (m *mockProfileRepoForCursorTests) GetUsersWithActivePaddleSubscriptions(ct
 }
 
 // Retention tracking stubs (#930)
-func (m *mockProfileRepoForCursorTests) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) { return "", nil }
-func (m *mockProfileRepoForCursorTests) SetRetentionDates(ctx context.Context, userID string, guard repository.RetentionClockGuard, retentionMonths int) error { return nil }
-func (m *mockProfileRepoForCursorTests) ClearRetentionDates(ctx context.Context, userID string) error { return nil }
-func (m *mockProfileRepoForCursorTests) SetRetentionNotice30dSent(ctx context.Context, userID string) error { return nil }
-func (m *mockProfileRepoForCursorTests) SetRetentionNotice7dSent(ctx context.Context, userID string) error { return nil }
-func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) { return nil, nil }
-func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) { return nil, nil }
+func (m *mockProfileRepoForCursorTests) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+	return "", nil
+}
+func (m *mockProfileRepoForCursorTests) SetRetentionDates(ctx context.Context, userID string, guard repository.RetentionClockGuard, retentionMonths int) error {
+	return nil
+}
+func (m *mockProfileRepoForCursorTests) ClearRetentionDates(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *mockProfileRepoForCursorTests) SetRetentionNotice30dSent(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *mockProfileRepoForCursorTests) SetRetentionNotice7dSent(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
+func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
 func (m *mockProfileRepoForCursorTests) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
-func (m *mockProfileRepoForCursorTests) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error { return nil }
-func (m *mockProfileRepoForCursorTests) ClearPastDueStartedAt(ctx context.Context, userID string) error            { return nil }
+func (m *mockProfileRepoForCursorTests) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
+	return nil
+}
+func (m *mockProfileRepoForCursorTests) ClearPastDueStartedAt(ctx context.Context, userID string) error {
+	return nil
+}
 func (m *mockProfileRepoForCursorTests) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{}, nil
 }
+
 // GetUsersNeedingRetentionClockRepair, RepairRetentionClock (Issue #1413 H5 residual) are not
 // exercised by these cursor tests; stubbed to satisfy the widened ProfileRepository interface.
 func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
@@ -1942,7 +1964,9 @@ func (m *mockProfileRepoForCursorTests) ClaimForDeletion(ctx context.Context, us
 func (m *mockProfileRepoForCursorTests) DeletionStillAuthorised(ctx context.Context, userID string, kind repository.DeletionClaimKind, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	return true, nil
 }
-func (m *mockProfileRepoForCursorTests) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) { return nil, nil }
+func (m *mockProfileRepoForCursorTests) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	return nil, nil
+}
 func (m *mockProfileRepoForCursorTests) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
 	return nil
 }
@@ -3826,7 +3850,7 @@ func TestSyncTransactions_DeleteManagedContribNonFatalOnError(t *testing.T) {
 
 	plaidResp := &plaid.TransactionsSyncResponse{
 		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{},
-		Removed: []plaid.RemovedTransaction{{TransactionId: &plaidExtID}},
+		Removed:    []plaid.RemovedTransaction{{TransactionId: &plaidExtID}},
 		NextCursor: "c2", HasMore: false,
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)

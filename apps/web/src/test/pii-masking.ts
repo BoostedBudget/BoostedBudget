@@ -7,7 +7,7 @@ export interface PIIViolation {
   text: string;
   path: string;
   matched: string;
-  via: 'text' | 'aria-label' | 'aria-description' | 'title' | 'placeholder' | 'alt' | 'value';
+  via: 'text' | (string & {});
 }
 
 // Covers: prefix symbols ($1,234 / -$45.99 / +$500 / €500), postfix codes (1,234 USD),
@@ -20,22 +20,193 @@ const CURRENCY_RE =
 const ACCOUNT_MASK_RE =
   /(?:[•●⚫⬤*xX]){2,}[-\s]?\d{3,}|last[_-]?4\s*:?\s*\d{4}|ending\s+in\s+\d{4}/i;
 
-const SCANNED_ATTRS = [
-  'aria-label',
-  'aria-description',
-  'title',
-  'placeholder',
-  'alt',
-  'value',
-] as const;
+// Issue #1514 (fix round 2): this used to be `SCANNED_ATTRS`, an explicit allowlist of
+// attribute NAMES to scan ('aria-label', 'aria-description', 'title', 'placeholder',
+// 'alt', 'value'). That list structurally could not see PII written into any attribute
+// it didn't name — which is exactly how a raw merchant name reached the DOM verbatim via
+// DataTable's `data-row-id={rowKey(row)}`: `data-row-id` was simply never on the list.
+//
+// A curated allowlist of what to scan will always lag reality, because every new
+// attribute anyone writes is invisible to it by default. Inverting to a denylist means
+// every new attribute is scanned by default, and staying unscanned is an explicit,
+// reviewable opt-out. This list has already been trimmed twice as that principle got
+// applied harder each round — `href`/`src` came off in fix round 3 (see below); `id`,
+// `name`, and `srcset` came off in the scanner-completeness review (round 4) for the
+// identical reason: none of them carry PII by virtue of their NAME, only by what a future
+// caller puts in them, and `matchPII` below only fires on an exact sentinel-value
+// substring, a currency shape, or an account-mask shape — never on arbitrary text — so
+// scanning any of these costs nothing in false positives. What's left is either a closed
+// HTML enum (`role`, `type`, `rel`, `method`, `scope`, ...) that cannot syntactically hold
+// free text, or non-textual SVG geometry/presentation attributes inline icon libraries
+// (lucide-react) emit on every icon.
+//
+// `href`/`src` are deliberately NOT on this list (fix round 3) — they used to be, on the
+// theory that they "point at resources identified by opaque ids or routes, not literal PII
+// text." That's still true of every href/src value in this codebase today (verified: the
+// Clerk `imageUrl` avatar `src` in MobileNav/UserDropdown/MembersList — see the fix-round
+// report — is an opaque Clerk-or-OAuth-provider resource URL with no name/email text in
+// it; it is now SCANNED, not excluded, and passes on its own merits). But excluding an
+// attribute BY NAME is exactly the failure mode this whole file exists to move away from:
+// a name-based carve-out doesn't know a future `href={`/search?q=${merchantName}`}` is
+// different from today's `href="/profile"` — it exempts the whole attribute regardless of
+// what ends up in it. Scanning href/src closes that class of gap for free. `action`
+// (a form's submit URL) is the same shape as href/src and was never actually used as a
+// literal DOM attribute anywhere in this codebase (`action={...}` here is always a React
+// component PROP, e.g. `<PageHeader action={<Button/>}>`, never a native
+// `<form action=...>`) — removed for the same reason, not because a leak was found.
+//
+// `id`/`name`/`srcset` came off in the scanner-completeness review (round 4): `id` is
+// usually an opaque `useId()`/Radix-generated token, but "usually" is exactly the kind of
+// promise a name-based exclusion can't keep; `name` (form field name) is normally a
+// structural key like `"email"`, but nothing stops a future caller from setting it
+// dynamically; `srcset` is `src`'s multi-resolution sibling and was excluded for the exact
+// same (now-rejected) reason `src` was in round 3.
+//
+// `style` is the one attribute kept name-excluded rather than proven safe by content —
+// see the dedicated comment below for why that's still a defensible, narrower claim than
+// "the name is safe."
+const SAFE_ATTRS = new Set([
+  'class',
+  'role',
+  'type',
+  'rel',
+  'target',
+  'tabindex',
+  'for',
+  'method',
+  'colspan',
+  'rowspan',
+  'scope',
+  'autocomplete',
+  'spellcheck',
+  'contenteditable',
+  'draggable',
+  'lang',
+  'dir',
+  'loading',
+  'decoding',
+  'crossorigin',
+  'referrerpolicy',
+  'sizes',
+  // `style` is free-text CSS in principle, but every dynamic `style` binding in this
+  // codebase today is a numeric/color value (backgroundColor hex, width/height
+  // percentages, transform) — never interpolated human-readable text — so scanning it
+  // costs nothing today, verified by grep across apps/web/src for `style={{` combined
+  // with `url(`/`background-image`/`content:` (none found). This is a narrower claim
+  // than "the attribute name is safe": if a future `style` binding ever interpolates a
+  // label into a CSS custom property or similar, this exclusion should be revisited the
+  // same way `id`/`name`/`srcset` just were — it is being kept on value-shape evidence,
+  // not name-based trust.
+  'style',
+  // SVG geometry/presentation attributes emitted by inline icon libraries (lucide-react).
+  'width',
+  'height',
+  'viewbox',
+  'xmlns',
+  'fill',
+  'stroke',
+  'stroke-width',
+  'stroke-linecap',
+  'stroke-linejoin',
+  'd',
+  'points',
+  'x',
+  'y',
+  'x1',
+  'x2',
+  'y1',
+  'y2',
+  'cx',
+  'cy',
+  'r',
+  'rx',
+  'ry',
+  'transform',
+]);
+
+// Issue #1514 (scanner-completeness review): a ShadowRoot's `parentNode` is always null
+// (it is the root of its own tree) and a `<template>` element's `.content` DocumentFragment
+// has no live back-reference to its template element at all — so a plain `parentNode` walk
+// silently stops at either boundary and can never see a `data-ph-mask` ancestor sitting in
+// the light DOM above a shadow host or a template. `TEMPLATE_HOST_BY_CONTENT` is populated
+// by `collectScanRoots` below (which discovers every template before any scan runs) so
+// `hasMaskedAncestor` can bridge that gap the same way `ShadowRoot.host` already bridges
+// the shadow-DOM one.
+const TEMPLATE_HOST_BY_CONTENT = new WeakMap<DocumentFragment, HTMLTemplateElement>();
 
 function hasMaskedAncestor(node: Node): boolean {
   let cur: Node | null = node;
   while (cur) {
     if (cur instanceof Element && cur.hasAttribute('data-ph-mask')) return true;
-    cur = cur.parentNode;
+    if (cur.parentNode) {
+      cur = cur.parentNode;
+      continue;
+    }
+    if (cur instanceof ShadowRoot) {
+      cur = cur.host;
+      continue;
+    }
+    const templateHost = TEMPLATE_HOST_BY_CONTENT.get(cur as DocumentFragment);
+    cur = templateHost ?? null;
   }
   return false;
+}
+
+/**
+ * Discovers every scannable subtree reachable from `container`: the container itself, plus
+ * every open shadow root and every `<template>` element's `.content`, recursively (a shadow
+ * root can itself contain more shadow hosts or templates). Neither is reachable via a plain
+ * `querySelectorAll` on the light DOM — a `<template>`'s children are inert/disconnected by
+ * spec, and shadow DOM is a deliberately separate tree — so `scanForUnmaskedPII` used to be
+ * blind to PII rendered inside either.
+ *
+ * Closed shadow roots (`{ mode: 'closed' }`) are NOT discoverable here — `element.shadowRoot`
+ * returns `null` for them by design, and there is no legitimate way around that from outside
+ * the component that created them. No component in this codebase currently uses closed mode
+ * (verified: no `attachShadow` call anywhere in `apps/web/src`), so this is a documented,
+ * not-currently-applicable limitation rather than a live gap.
+ */
+function collectScanRoots(container: Element): (Element | DocumentFragment)[] {
+  const roots: (Element | DocumentFragment)[] = [container];
+  const queue: (Element | DocumentFragment)[] = [container];
+  const visited = new Set<Element | DocumentFragment>();
+
+  // Issue #1514 (scanner-completeness review, round 2): `querySelectorAll('*')` only ever
+  // returns DESCENDANTS of the node it's called on — never that node itself. The original
+  // version of this function only ever called it, so `scanForUnmaskedPII(shadowHost, ...)`
+  // or `scanForUnmaskedPII(templateElement, ...)` — the scan root itself being the shadow
+  // host / template, not merely containing one somewhere inside it — silently missed that
+  // root's OWN shadow root / `.content`. Every earlier test happened to wrap the host/
+  // template in an extra `<div>` before scanning, which is exactly why they passed anyway.
+  const checkElementForNestedRoots = (el: Element) => {
+    if (el instanceof HTMLTemplateElement) {
+      TEMPLATE_HOST_BY_CONTENT.set(el.content, el);
+      roots.push(el.content);
+      queue.push(el.content);
+    }
+    if (el.shadowRoot) {
+      roots.push(el.shadowRoot);
+      queue.push(el.shadowRoot);
+    }
+  };
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+
+    // Check `current` itself first (only meaningful when it's an Element — a ShadowRoot/
+    // template-content DocumentFragment can't itself be a template or have a shadowRoot),
+    // then every descendant.
+    if (current instanceof Element) {
+      checkElementForNestedRoots(current);
+    }
+    for (const el of Array.from(current.querySelectorAll('*'))) {
+      checkElementForNestedRoots(el);
+    }
+  }
+
+  return roots;
 }
 
 function pathTo(node: Node): string {
@@ -114,37 +285,66 @@ export function sentinelsFromFixture(
   return out;
 }
 
+/**
+ * Scans `container` — and, per issue #1514's scanner-completeness review, every open
+ * shadow root and `<template>.content` reachable from it — for unmasked PII.
+ *
+ * ⚠ Portals (Radix dropdowns/dialogs, Sonner toasts) render into a DIFFERENT part of the
+ * light DOM than their trigger — typically as a direct child of `document.body` — so they
+ * are NOT descendants of a narrow component container and this function cannot discover
+ * them from one. This is a caller responsibility, not something this function can fix
+ * structurally: **pass `document.body` (or another ancestor that actually contains both
+ * the trigger and the portal target) whenever the content under test might render into a
+ * portal.** Most of this suite's own tests already do this; a handful deliberately scope
+ * to a narrower element (e.g. a specific dialog) to avoid unrelated false positives
+ * elsewhere on the page — that pattern remains valid, it just must not be used for content
+ * that itself portals elsewhere.
+ */
 export function scanForUnmaskedPII(
   container: HTMLElement,
   sentinels: PIISentinel[],
 ): PIIViolation[] {
   const out: PIIViolation[] = [];
-
-  // Walk text nodes (TreeWalker does not cross Shadow DOM — acceptable; codebase uses light DOM).
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-  let node: Node | null;
-  while ((node = walker.nextNode())) {
-    const text = (node.textContent ?? '').trim();
-    if (!text) continue;
-    const matched = matchPII(text, sentinels);
-    if (!matched) continue;
-    if (hasMaskedAncestor(node)) continue;
-    out.push({ text, path: pathTo(node.parentNode as Element), matched, via: 'text' });
-  }
-
-  // Scan attributes on every element (including container itself).
-  // NOTE: data-ph-mask masks DOM text content only; DOM attributes are recorded verbatim
-  // by PostHog session replay (posthog-pii-masking.md:8,18), so we don't skip masked ancestors.
-  // Exception: `value` on form controls is masked via maskAllInputs:true in posthog.ts.
   const formControlTags = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
-  for (const elNode of [container, ...Array.from(container.querySelectorAll('*'))]) {
-    for (const attr of SCANNED_ATTRS) {
-      if (attr === 'value' && formControlTags.has(elNode.tagName)) continue;
-      const val = elNode.getAttribute(attr);
-      if (!val) continue;
-      const matched = matchPII(val, sentinels);
+
+  // Issue #1514 (scanner-completeness review): a single TreeWalker/querySelectorAll pass
+  // over `container` cannot see into shadow DOM or `<template>.content` — both are
+  // separate trees the light DOM traversal never enters. Scan every discovered subtree
+  // the same way, not just the top-level container.
+  for (const root of collectScanRoots(container)) {
+    // Walk text nodes.
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      const text = (node.textContent ?? '').trim();
+      if (!text) continue;
+      const matched = matchPII(text, sentinels);
       if (!matched) continue;
-      out.push({ text: val, path: pathTo(elNode), matched, via: attr });
+      if (hasMaskedAncestor(node)) continue;
+      out.push({ text, path: pathTo(node.parentNode as Element), matched, via: 'text' });
+    }
+
+    // Scan attributes on every element in this subtree (including the root itself, when
+    // the root is an Element — a ShadowRoot/DocumentFragment root has no attributes of
+    // its own).
+    // NOTE: data-ph-mask masks DOM text content only; DOM attributes are recorded verbatim
+    // by PostHog session replay (posthog-pii-masking.md:8,18), so we don't skip masked
+    // ancestors here. Exception: `value` on form controls is masked via
+    // maskAllInputs:true in posthog.ts.
+    //
+    // Every attribute is scanned EXCEPT the documented SAFE_ATTRS denylist above — see
+    // that comment for why this inverts the previous explicit-allowlist design.
+    const rootElements = root instanceof Element ? [root, ...root.querySelectorAll('*')] : root.querySelectorAll('*');
+    for (const elNode of Array.from(rootElements)) {
+      for (const attr of elNode.getAttributeNames()) {
+        if (SAFE_ATTRS.has(attr)) continue;
+        if (attr === 'value' && formControlTags.has(elNode.tagName)) continue;
+        const val = elNode.getAttribute(attr);
+        if (!val) continue;
+        const matched = matchPII(val, sentinels);
+        if (!matched) continue;
+        out.push({ text: val, path: pathTo(elNode), matched, via: attr });
+      }
     }
   }
 

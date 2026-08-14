@@ -36,6 +36,12 @@ type WebhookRepository interface {
 	// Used after successful processing to prevent double-processing
 	MarkProcessed(ctx context.Context, id string) error
 
+	// MarkFailed marks a webhook event as failed with an error message (Issue #1514).
+	// Used by the worker's signature-validity guard to record why a row was refused
+	// without leaving it eligible for indefinite retry: it sets processed = true, which
+	// removes the row from GetUnprocessed/GetUnprocessedByType's result set.
+	MarkFailed(ctx context.Context, id string, errorMsg string) error
+
 	// GetUnprocessed retrieves all unprocessed webhook events
 	// Ordered by created_at ASC (oldest first) for manual replay
 	GetUnprocessed(ctx context.Context) ([]domain.WebhookEvent, error)
@@ -206,6 +212,44 @@ func (r *webhookRepository) MarkProcessed(ctx context.Context, id string) error 
 	return nil
 }
 
+// MarkFailed marks a webhook event as permanently failed with an error message (Issue #1514).
+//
+// Sets processed = true so the row stops being selected by GetUnprocessed /
+// GetUnprocessedByType (both filter on processed = false) — otherwise a refused row would
+// remain "eligible for indefinite retry" by any poller that scans those queries, contradicting
+// the WebhookRepository interface's contract (see ~:39-41). processed_at is deliberately left
+// unset: domain.WebhookEvent.ProcessedAt documents "when the webhook was successfully
+// processed", and this row was not.
+//
+// This implementation currently has two real (non-test) callers, both invalid-signature
+// guards that never expect a further retry (the signature can't become valid later): the
+// River worker's guard in queue/jobs/webhook_processing.go, and the legacy WebhookProcessor
+// poller's guard (refuseIfInvalidSignature) in workers/webhook_processor.go. Neither expects
+// a legitimate retry, so unconditionally setting processed = true here does not clobber either
+// caller. If a future caller needs "failed but still eligible for retry" semantics, it must
+// not reuse this method as-is.
+func (r *webhookRepository) MarkFailed(ctx context.Context, id string, errorMsg string) error {
+	query := `
+		UPDATE webhook_events
+		SET processing_error = $2,
+		    processed = true,
+		    retry_count = retry_count + 1,
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+
+	result, err := r.db.Exec(ctx, query, id, errorMsg)
+	if err != nil {
+		return fmt.Errorf("failed to mark webhook as failed: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return ErrWebhookNotFound
+	}
+
+	return nil
+}
+
 // GetUnprocessed retrieves all unprocessed webhook events
 func (r *webhookRepository) GetUnprocessed(ctx context.Context) ([]domain.WebhookEvent, error) {
 	query := `
@@ -359,6 +403,13 @@ func (r *webhookRepository) Update(ctx context.Context, event *domain.WebhookEve
 //
 // Orders by: created_at ASC (oldest first for FIFO processing)
 // Used by WebhookProcessor to fetch TRANSACTIONS webhooks ready for processing
+//
+// Issue #1514: deliberately does NOT filter on signature_valid — callers must guard before
+// dispatching a returned row to a downstream service. The legacy WebhookProcessor poller
+// (workers/webhook_processor.go, refuseIfInvalidSignature) is the only caller of this method
+// and does so. The River worker (queue/jobs/webhook_processing.go) is NOT a caller of this
+// method — it fetches by id via GetByID instead — but has its own equivalent SignatureValid
+// check before dispatch.
 func (r *webhookRepository) GetUnprocessedByType(ctx context.Context, webhookType string, limit int) ([]domain.WebhookEvent, error) {
 	query := `
 		SELECT id, webhook_type, webhook_code, item_id, error_code,

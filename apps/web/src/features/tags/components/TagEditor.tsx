@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import type { UserTag } from '../types'
 import { useCreateTag } from '@boostedbudget/api-client/endpoints/tags/tags'
 import { ReadOnlyGuard } from '@/auth'
@@ -18,6 +18,9 @@ export function TagEditor({
   onTagCreated,
   disabled = false,
 }: TagEditorProps) {
+  // Prefix ids with a per-instance uid so two TagEditors on the same page never collide
+  // on `tag-remove-label-0` / `tag-option-label-0` (Codex review, issue #1514).
+  const uid = useId()
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [newTagName, setNewTagName] = useState('')
@@ -84,22 +87,28 @@ export function TagEditor({
         {selectedTags.length === 0 ? (
           <span className="text-muted-foreground text-sm italic">No tags</span>
         ) : (
-          selectedTags.map((tagName) => {
+          selectedTags.map((tagName, index) => {
             const tag = getTagByName(tagName)
+            const removeLabelId = `${uid}-tag-remove-label-${index}`
             return (
               <span
                 key={tagName}
                 className="tag-chip inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium text-white"
                 style={{ backgroundColor: tag?.color || '#6B7280' }}
               >
-                {tagName}
+                <span data-ph-mask>{tagName}</span>
                 <button
                   type="button"
                   className="inline-flex items-center justify-center w-4 h-4 p-0 border-none bg-white/30 rounded-full text-white cursor-pointer text-xs leading-none hover:bg-white/50 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => handleRemoveTag(tagName)}
                   disabled={disabled}
-                  aria-label={`Remove ${tagName}`}
+                  // PII: aria-label is recorded verbatim by session replay; tag names are
+                  // free-text user data. aria-labelledby stores only the element id in the
+                  // attribute; the accessible name ("Remove {tagName}") is computed at read
+                  // time from the sr-only span below, so the name never appears as attribute text.
+                  aria-labelledby={removeLabelId}
                 >
+                  <span id={removeLabelId} className="sr-only" data-ph-mask>{`Remove ${tagName}`}</span>
                   ×
                 </button>
               </span>
@@ -123,21 +132,28 @@ export function TagEditor({
 
         {isDropdownOpen && (
           <ul className="absolute top-full left-0 z-50 min-w-40 mt-1 py-1 list-none m-0 bg-card border border-border rounded-md shadow-md" role="listbox">
-            {availableForSelection.map((tag) => (
-              <li
-                key={tag.id}
-                role="option"
-                aria-label={tag.name}
-                className="flex items-center gap-2 px-3 py-2 cursor-pointer text-sm hover:bg-muted"
-                onClick={() => handleAddTag(tag.name)}
-              >
-                <span
-                  className="w-3 h-3 rounded-full shrink-0"
-                  style={{ backgroundColor: tag.color || '#6B7280' }}
-                />
-                {tag.name}
-              </li>
-            ))}
+            {availableForSelection.map((tag) => {
+              const optionLabelId = `${uid}-tag-option-label-${tag.id}`
+              return (
+                <li
+                  key={tag.id}
+                  role="option"
+                  // PII: same class of bug as the "Remove" chip button above — aria-label is
+                  // recorded verbatim by session replay, so the tag name must not be baked
+                  // into it. aria-labelledby stores only the id; the visible span it points
+                  // at carries data-ph-mask so replay redacts its text too.
+                  aria-labelledby={optionLabelId}
+                  className="flex items-center gap-2 px-3 py-2 cursor-pointer text-sm hover:bg-muted"
+                  onClick={() => handleAddTag(tag.name)}
+                >
+                  <span
+                    className="w-3 h-3 rounded-full shrink-0"
+                    style={{ backgroundColor: tag.color || '#6B7280' }}
+                  />
+                  <span id={optionLabelId} data-ph-mask>{tag.name}</span>
+                </li>
+              )
+            })}
 
             {isCreating ? (
               <li className="px-3 py-2 flex flex-col gap-2">

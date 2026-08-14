@@ -155,6 +155,56 @@ describe('MobileNav', () => {
     expect(trigger).toHaveClass('custom-class')
   })
 
+  // Issue #1514: the avatar's `alt` attribute interpolated the user's name
+  // (`alt={user?.name || 'User'}`). PostHog session replay records DOM attributes
+  // verbatim — data-ph-mask masks element TEXT only, never attribute values — so the
+  // name must never appear in any attribute. Assert on the attribute itself (not the
+  // accessible name), so a future "simplification" back to a plain name-bearing alt
+  // fails loudly instead of passing on an unrelated accessible-name query.
+  //
+  // Radix's AvatarImage only mounts an <img> once its internal `new window.Image()`
+  // probe reports `complete && naturalWidth > 0` — which never happens in happy-dom
+  // (no real network fetch), so the fallback initials render instead and the alt
+  // attribute never appears in the DOM at all. Stub `window.Image` so the probe
+  // resolves as "loaded" synchronously, forcing the real <img alt> to mount.
+  it('never puts the user name into any DOM attribute (issue #1514)', async () => {
+    const OriginalImage = window.Image
+    class ImmediatelyLoadedImage {
+      complete = true
+      naturalWidth = 1
+      src = ''
+      addEventListener() {}
+      removeEventListener() {}
+    }
+    // @ts-expect-error -- test stub, not a full HTMLImageElement
+    window.Image = ImmediatelyLoadedImage
+
+    try {
+      const user = userEvent.setup()
+      renderMobileNav()
+
+      await user.click(screen.getByRole('button', { name: /open menu/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText(mockUser.name)).toBeInTheDocument()
+      })
+
+      // Confirm the <img> actually mounted, so this test truly exercises the alt attribute.
+      const avatarImg = document.body.querySelector('img[data-slot="avatar-image"]')
+      expect(avatarImg).not.toBeNull()
+
+      for (const el of document.body.querySelectorAll('*')) {
+        for (const attr of el.getAttributeNames()) {
+          const value = (el.getAttribute(attr) ?? '').toLowerCase()
+          expect(value).not.toContain(mockUser.name.toLowerCase())
+          expect(value).not.toContain(mockUser.email.toLowerCase())
+        }
+      }
+    } finally {
+      window.Image = OriginalImage
+    }
+  })
+
   // Issue #1398 removed the PostHog feature-flag kill-switch prop that used to gate
   // MobileNav's mobile Log In button (pre-removal render guard was
   // `!isAuthenticated && <that prop> && (<Button>...Log In</Button>)`). That prop no

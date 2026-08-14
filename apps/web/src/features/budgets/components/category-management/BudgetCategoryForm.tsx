@@ -4,7 +4,7 @@
  * Supports PFC categories, custom categories, and savings goal linking.
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react';
 import { XIcon, Loader2Icon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -117,11 +117,25 @@ export function BudgetCategoryForm({
 
   // Build <optgroup> sections for the custom category select, reflecting the full custom
   // hierarchy (#1203): childless top-level customs, custom parents with their custom
-  // children nested under the parent's name, then customs nested under a PFC primary.
+  // children, then customs nested under a PFC primary.
+  //
+  // Issue #1514 (fix round 4): a custom parent's group used to be labeled with the
+  // parent's own name (`g.parent.name`) via `<optgroup label>`. `label` is a DOM
+  // ATTRIBUTE — PostHog session replay records attribute values verbatim, `data-ph-mask`
+  // masks element TEXT only, and unlike `<option>`, `<optgroup>` has no child element to
+  // put a mask on instead. There is no way to label a group with a user-authored name
+  // without leaking it. `label: null` marks a group as "cannot be given a safe header" —
+  // its options render flat (no `<optgroup>` wrapper) instead, with the parent's own
+  // option immediately followed by its "— child" options so the relationship is still
+  // conveyed by order, just without a group header naming the parent. This is a visible
+  // UX change (the bold "Food"-style header row is gone for these groups specifically) —
+  // see the #1514 fix-round-4 report. The "Custom (no parent)" and per-PFC-primary group
+  // labels are static/system strings, never user-authored, so they keep real `<optgroup>`
+  // headers.
   const customCategoryOptionGroups = useMemo(() => {
     const cats = (Array.isArray(userCategories) ? userCategories : []) as Parameters<typeof buildCategoryHierarchy>[0];
     const { topLevel, pfcGroups } = buildCategoryHierarchy(cats);
-    const groups: { key: string; label: string; options: { id: string; label: string }[] }[] = [];
+    const groups: { key: string; label: string | null; options: { id: string; label: string }[] }[] = [];
 
     const childless = topLevel.filter((g) => g.children.length === 0).map((g) => g.parent);
     if (childless.length > 0) {
@@ -135,7 +149,7 @@ export function BudgetCategoryForm({
     for (const g of topLevel.filter((g) => g.children.length > 0)) {
       groups.push({
         key: g.parent.id,
-        label: g.parent.name,
+        label: null,
         options: [
           { id: g.parent.id, label: g.parent.name },
           ...g.children.map((c) => ({ id: c.id, label: `— ${c.name}` })),
@@ -471,15 +485,28 @@ export function BudgetCategoryForm({
                 className={cn(inputBase, errors.category && inputError)}
               >
                 <option value="">Select a category...</option>
-                {customCategoryOptionGroups.map((grp) => (
-                  <optgroup key={grp.key} label={grp.label}>
-                    {grp.options.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
+                {customCategoryOptionGroups.map((grp) =>
+                  grp.label !== null ? (
+                    <optgroup key={grp.key} label={grp.label}>
+                      {grp.options.map((opt) => (
+                        <option key={opt.id} value={opt.id} data-ph-mask>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : (
+                    // No safe (non-PII) label exists for this group — see the
+                    // customCategoryOptionGroups doc comment above. Render its options
+                    // flat, without an <optgroup> wrapper.
+                    <Fragment key={grp.key}>
+                      {grp.options.map((opt) => (
+                        <option key={opt.id} value={opt.id} data-ph-mask>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </Fragment>
+                  )
+                )}
               </select>
             )}
 

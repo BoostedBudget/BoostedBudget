@@ -4,7 +4,7 @@ BoostedBudget is a GDPR-compliant personal finance and budgeting platform featur
 
 ## 📋 Project Overview
 
-- **Stack:** Go 1.25+/Huma | React 19/TS5/Vite 7/Bun | PostgreSQL 17/Redis 7 | golang-migrate+Squawk | Clerk/Plaid/Paddle | Docker→GHCR→Fly.io
+- **Stack:** Go 1.26.6+/Huma | React 19/TS5/Vite 7/Bun | PostgreSQL 17/Redis 7 | golang-migrate+Squawk | Clerk/Plaid/Paddle | Docker→GHCR→Fly.io
 - **Tiers** (`config/subscription_tiers.yaml`): Premium $8.99 + household tiers ($12.99-$18.99), no free tier, 60-day trial.
 - **Region:** Single-region (us-east-1) MVP, multi-region Phase 7+.
 

@@ -75,13 +75,31 @@ export function MobileNav({
 
               <div className="border-t pt-4">
                 <div className="flex items-center gap-3 mb-4">
+                  {/*
+                   * Issue #1514: PostHog session replay records DOM attributes verbatim;
+                   * data-ph-mask masks element TEXT only, never attribute values. `alt`
+                   * stays a generic, non-PII description ("User avatar") rather than the
+                   * user's name — the visible name/email beside it carry data-ph-mask
+                   * instead, so the accessible description and the masked text stay
+                   * independent (this isn't a decorative image: it's the user's photo,
+                   * it just doesn't need to repeat what's already announced by the
+                   * adjacent name text).
+                   *
+                   * `src={user?.picture}` (Clerk's `imageUrl`) is NOT treated as PII here:
+                   * Clerk resource URLs/ids are opaque by design (same convention as
+                   * `user_`/`sess_`/`org_` ids), and for OAuth-sourced avatars (this app
+                   * enables Google/Microsoft/Apple) the URL points at the provider's own
+                   * opaque per-account photo resource — neither path embeds the user's
+                   * name or email as literal text. Investigated for #1514 fix round 2;
+                   * revisit only if Clerk's URL format changes.
+                   */}
                   <Avatar className="h-10 w-10">
-                    <AvatarImage src={user?.picture} alt={user?.name || 'User'} />
+                    <AvatarImage src={user?.picture} alt="User avatar" />
                     <AvatarFallback>{initials}</AvatarFallback>
                   </Avatar>
                   <div className="flex flex-col">
-                    <span className="text-sm font-medium">{user?.name}</span>
-                    <span className="text-xs text-muted-foreground">{user?.email}</span>
+                    <span className="text-sm font-medium" data-ph-mask>{user?.name}</span>
+                    <span className="text-xs text-muted-foreground" data-ph-mask>{user?.email}</span>
                   </div>
                 </div>
 

@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.26.5'
+  GO_VERSION: '1.26.6'
   NODE_VERSION: '20'
 
 jobs:
@@ -30,13 +30,14 @@ jobs:
       mcp: ${{ steps.filter.outputs.mcp }}
       config: ${{ steps.filter.outputs.config }}
       deps: ${{ steps.filter.outputs.deps }}
+      scanconfig: ${{ steps.filter.outputs.scanconfig }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # NOTE: Workspace cleanup (used across all jobs):
       # Each job cleans before checkout to prevent permission issues on self-hosted runners.
       # This is critical for macOS runners where sudo access is required for cleanup.
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
         with:
           filters: |
@@ -93,6 +94,14 @@ jobs:
             # config/*.yaml (currently: Backend Tests, which runs tier_config_test.go).
             config:
               - 'config/**'
+            # The Grype scan below reads .grype.yaml, but until #1514's Phase 16 that file
+            # matched no filter — so a PR that only edited it (adding an `ignore:` entry, say)
+            # would skip the very job that consumes it. Not caught earlier because every PR
+            # that has touched .grype.yaml so far also touched backend/**, which triggers the
+            # job anyway. Kept separate from `backend` so a scan-config edit does not fan out
+            # to OpenAPI generation, migrations and integration tests.
+            scanconfig:
+              - '.grype.yaml'
 
   # =============================================================================
   # E2E Tests (starts immediately — no needs — so it gets runner priority over
@@ -125,7 +134,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
@@ -162,7 +171,7 @@ jobs:
         run: bash scripts/__tests__/check-mcp-job-triggers.test.sh
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
 
@@ -179,7 +188,7 @@ jobs:
         run: bunx playwright install webkit
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
@@ -203,10 +212,19 @@ jobs:
         run: chmod +x $GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}/backend/bin/server
 
       - name: Install golang-migrate
+        env:
+          # #1514: pin to a specific release and verify the published checksum before
+          # executing the binary — the previous `releases/latest` URL was mutable and
+          # unverified.
+          MIGRATE_VERSION: v4.19.1
+          MIGRATE_SHA256: a8cc8657afd1c2c93c78e8b77fd2275d150c29ebc1fff0e8fe0be68751503468
         run: |
           # Install golang-migrate to user bin (no sudo needed on self-hosted runners)
           mkdir -p $HOME/bin
-          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz | tar -xz
+          curl -sSfL -o migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.darwin-arm64.tar.gz"
+          echo "${MIGRATE_SHA256}  migrate.tar.gz" | shasum -a 256 -c -
+          tar -xz -f migrate.tar.gz migrate
+          rm -f migrate.tar.gz
           mv migrate $HOME/bin/
           echo "$HOME/bin" >> $GITHUB_PATH
           $HOME/bin/migrate --version
@@ -360,7 +378,7 @@ jobs:
       - name: Upload E2E test results
         id: upload-playwright-report
         if: success() || failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         continue-on-error: true
         with:
           name: playwright-report-${{ github.run_id }}
@@ -375,7 +393,7 @@ jobs:
       - name: Upload E2E test videos (on failure)
         id: upload-playwright-videos
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         continue-on-error: true
         with:
           name: playwright-videos-${{ github.run_id }}
@@ -409,13 +427,13 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
@@ -432,7 +450,7 @@ jobs:
 
       - name: Restore Go modules cache
         id: cache-go-modules
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/go/pkg/mod
           # Key: go-modules-<os>-go<version>-<sum-hash>
@@ -488,18 +506,18 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
 
       - name: Setup Node.js (for npx orval)
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '22'
 
@@ -585,13 +603,13 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.14"
 
@@ -671,18 +689,18 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.14"
 
@@ -769,13 +787,13 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
@@ -814,7 +832,7 @@ jobs:
         # DOES change Go source still gets a warm (if imperfect) starting cache rather than
         # a fully cold one.
         id: cache-go-build
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.GOCACHE }}
           key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
@@ -824,7 +842,7 @@ jobs:
 
       - name: Restore Go modules cache
         id: cache-go-modules
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/go/pkg/mod
           key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
@@ -864,7 +882,7 @@ jobs:
 
       - name: Upload backend coverage report
         id: upload-backend-coverage
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         continue-on-error: true
         with:
           name: backend-coverage-${{ github.run_id }}
@@ -880,7 +898,7 @@ jobs:
 
       - name: Save Go modules cache
         if: always() && steps.cache-go-modules.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/go/pkg/mod
           key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
@@ -911,7 +929,7 @@ jobs:
         # remains visible rather than being fully silent.
         if: always()
         continue-on-error: true
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.GOCACHE }}
           key: gocache-backend-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
@@ -975,13 +993,13 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
@@ -1012,7 +1030,7 @@ jobs:
         # (any source hash), then to the most recent cache for this OS at all, so a
         # commit that DOES change Go source still gets a warm (if imperfect) cache.
         id: cache-go-build
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.GOCACHE }}
           key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
@@ -1022,7 +1040,7 @@ jobs:
 
       - name: Restore Go modules cache
         id: cache-go-modules
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/go/pkg/mod
           key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
@@ -1100,12 +1118,20 @@ jobs:
           echo "DATABASE_URL is set (port $POSTGRES_PORT)"
 
       - name: Install golang-migrate (job-local)
+        env:
+          # #1514: pin to a specific release and verify the published checksum before
+          # executing the binary — the previous `releases/latest` URL was mutable and
+          # unverified.
+          MIGRATE_VERSION: v4.19.1
+          MIGRATE_SHA256: a8cc8657afd1c2c93c78e8b77fd2275d150c29ebc1fff0e8fe0be68751503468
         run: |
           # Install into a job-local dir under RUNNER_TEMP to avoid write-racing
           # the migration-tests job which also installs migrate into $HOME/bin.
           mkdir -p "$RUNNER_TEMP/bin-integ"
-          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz \
-            | tar -xz -C "$RUNNER_TEMP/bin-integ" migrate
+          curl -sSfL -o "$RUNNER_TEMP/migrate.tar.gz" "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.darwin-arm64.tar.gz"
+          (cd "$RUNNER_TEMP" && echo "${MIGRATE_SHA256}  migrate.tar.gz" | shasum -a 256 -c -)
+          tar -xz -f "$RUNNER_TEMP/migrate.tar.gz" -C "$RUNNER_TEMP/bin-integ" migrate
+          rm -f "$RUNNER_TEMP/migrate.tar.gz"
           echo "$RUNNER_TEMP/bin-integ" >> $GITHUB_PATH
           "$RUNNER_TEMP/bin-integ/migrate" --version
 
@@ -1163,7 +1189,7 @@ jobs:
         # failure), so a PERSISTENT save failure remains visible rather than being fully silent.
         if: always()
         continue-on-error: true
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.GOCACHE }}
           key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
@@ -1192,14 +1218,14 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
           fetch-depth: 1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.14"
 
@@ -1214,6 +1240,23 @@ jobs:
       - name: Typecheck frontend
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bun run typecheck
+
+      # Issue #1514 (fix round 9): regression gate for the rrweb <option>-masking proof —
+      # verifies the ACTUAL PostHog session-replay recorder (posthog-js's vendored rrweb
+      # fork, not our own scanForUnmaskedPII test double) still masks a data-ph-mask
+      # <option>'s text. Belongs in this fast job, not the "E2E tests" job below: it needs
+      # only Chromium — no backend, no webServer, no Clerk auth (see
+      # apps/web/e2e/rrweb-mask-proof/playwright.config.ts, a dedicated minimal config
+      # separate from the main E2E harness). A routine posthog-js bump is exactly the kind
+      # of change that could silently break this mechanism, which eight of #1514's
+      # <option>-text fixes depend on.
+      - name: Install Chromium for rrweb mask-proof
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run rrweb <option> masking proof
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bun run test:rrweb-mask-proof
 
       - name: Run frontend tests with coverage
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
@@ -1273,7 +1316,7 @@ jobs:
 
       - name: Upload combined coverage report
         id: upload-frontend-coverage
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         continue-on-error: true
         with:
           name: frontend-coverage-${{ github.run_id }}
@@ -1306,7 +1349,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
@@ -1505,9 +1548,18 @@ jobs:
           done
 
       - name: Install migration tools
+        env:
+          # #1514: pin to a specific release and verify the published checksum before
+          # executing the binary — the previous `releases/latest` URL was mutable and
+          # unverified.
+          MIGRATE_VERSION: v4.19.1
+          MIGRATE_SHA256: a8cc8657afd1c2c93c78e8b77fd2275d150c29ebc1fff0e8fe0be68751503468
         run: |
           mkdir -p $HOME/bin
-          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz | tar -xz
+          curl -sSfL -o migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.darwin-arm64.tar.gz"
+          echo "${MIGRATE_SHA256}  migrate.tar.gz" | shasum -a 256 -c -
+          tar -xz -f migrate.tar.gz migrate
+          rm -f migrate.tar.gz
           mv migrate $HOME/bin/
           echo "$HOME/bin" >> $GITHUB_PATH
           npm install -g squawk-cli
@@ -1556,7 +1608,7 @@ jobs:
       - name: Upload performance benchmarks
         id: upload-migration-perf
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         continue-on-error: true
         with:
           name: migration-performance-${{ github.run_id }}
@@ -1599,7 +1651,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
@@ -1609,7 +1661,7 @@ jobs:
       # =========================================================================
       - name: Setup Go
         if: matrix.component == 'backend'
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: ${{ env.UNIQUE_WORKSPACE }}/backend/go.mod
           cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/backend/go.sum
@@ -1637,7 +1689,7 @@ jobs:
       # =========================================================================
       - name: Setup Bun
         if: matrix.component == 'frontend'
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
 
@@ -1676,7 +1728,8 @@ jobs:
     if: |
       needs.detect-changes.outputs.backend == 'true' ||
       needs.detect-changes.outputs.frontend == 'true' ||
-      needs.detect-changes.outputs.workflow == 'true'
+      needs.detect-changes.outputs.workflow == 'true' ||
+      needs.detect-changes.outputs.scanconfig == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
     strategy:
       matrix:
@@ -1689,13 +1742,13 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Set Dockerfile path
         id: dockerfile
@@ -1707,7 +1760,7 @@ jobs:
           fi
 
       - name: Build Docker image (local only)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: ${{ env.UNIQUE_WORKSPACE }}
           file: ${{ env.UNIQUE_WORKSPACE }}/${{ steps.dockerfile.outputs.path }}
@@ -1767,14 +1820,14 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
           fetch-depth: 1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
 
@@ -1825,14 +1878,14 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           clean: false
           fetch-depth: 1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
 

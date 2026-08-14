@@ -40,8 +40,26 @@ export function UserDropdown({ user, onLogout, className }: UserDropdownProps) {
             className="relative h-10 w-10 rounded-full"
             aria-label="User menu"
           >
+            {/*
+             * Issue #1514: PostHog session replay records DOM attributes verbatim;
+             * data-ph-mask masks element TEXT only, never attribute values. `alt` stays
+             * a generic, non-PII description ("User avatar") rather than the user's
+             * name — the visible name/email in the open dropdown carry data-ph-mask
+             * instead, so the accessible description and the masked text stay
+             * independent (this isn't a decorative image: it's the user's photo, it
+             * just doesn't need to repeat what's already announced by the adjacent
+             * name text).
+             *
+             * `src={user.picture}` (Clerk's `imageUrl`) is NOT treated as PII here:
+             * Clerk resource URLs/ids are opaque by design (same convention as
+             * `user_`/`sess_`/`org_` ids), and for OAuth-sourced avatars (this app
+             * enables Google/Microsoft/Apple) the URL points at the provider's own
+             * opaque per-account photo resource — neither path embeds the user's name
+             * or email as literal text. Investigated for #1514 fix round 2; revisit
+             * only if Clerk's URL format changes.
+             */}
             <Avatar className="h-10 w-10">
-              <AvatarImage src={user.picture} alt={user.name || 'User'} />
+              <AvatarImage src={user.picture} alt="User avatar" />
               <AvatarFallback>{initials}</AvatarFallback>
             </Avatar>
           </Button>
@@ -49,8 +67,8 @@ export function UserDropdown({ user, onLogout, className }: UserDropdownProps) {
         <DropdownMenuContent className="w-56" align="end" forceMount>
           <DropdownMenuLabel className="font-normal">
             <div className="flex flex-col space-y-1">
-              <p className="text-sm font-medium leading-none">{user.name}</p>
-              <p className="text-xs leading-none text-muted-foreground">{user.email}</p>
+              <p className="text-sm font-medium leading-none" data-ph-mask>{user.name}</p>
+              <p className="text-xs leading-none text-muted-foreground" data-ph-mask>{user.email}</p>
             </div>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
