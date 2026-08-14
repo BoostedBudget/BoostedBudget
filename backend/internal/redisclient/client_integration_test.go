@@ -169,3 +169,47 @@ func TestClientIntegration_CloseIsIdempotent(t *testing.T) {
 	require.NoError(t, c.Close())
 	require.NoError(t, c.Close(), "a second Close must not error or panic")
 }
+
+// TestClientIntegration_GetSetSetNXMGetDel exercises the Issue #1531 Task 9 data-command
+// additions against a real Redis server: a miss reports ErrNotFound (not a zero-value string with
+// a nil error), SetNX only wins once per key, and MGet reports per-key presence rather than
+// folding a missing key into an empty string.
+func TestClientIntegration_GetSetSetNXMGetDel(t *testing.T) {
+	url := connectTestRedisURL(t)
+	c := newTestClient(t, Options{URL: url, Name: t.Name()})
+	ctx := context.Background()
+
+	key := t.Name() + ":k1"
+	t.Cleanup(func() { _ = c.Del(context.Background(), key) })
+
+	_, err := c.Get(ctx, key)
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	require.NoError(t, c.Set(ctx, key, "v1", time.Minute))
+	val, err := c.Get(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, "v1", val)
+
+	genKey := t.Name() + ":gen"
+	t.Cleanup(func() { _ = c.Del(context.Background(), genKey) })
+	ok, err := c.SetNX(ctx, genKey, "token-a", 0)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	ok, err = c.SetNX(ctx, genKey, "token-b", 0)
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	vals, found, err := c.MGet(ctx, key, genKey, key+":missing")
+	require.NoError(t, err)
+	require.Len(t, vals, 3)
+	require.Len(t, found, 3)
+	assert.True(t, found[0])
+	assert.Equal(t, "v1", vals[0])
+	assert.True(t, found[1])
+	assert.Equal(t, "token-a", vals[1])
+	assert.False(t, found[2])
+
+	require.NoError(t, c.Del(ctx, key))
+	_, err = c.Get(ctx, key)
+	assert.ErrorIs(t, err, ErrNotFound)
+}

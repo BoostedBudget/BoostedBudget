@@ -45,3 +45,91 @@ func TestFake_SatisfiesClientAndRecordsInvocations(t *testing.T) {
 	require.NoError(t, f.Close())
 	assert.Equal(t, 1, f.CloseCalls())
 }
+
+// TestFake_GetSetDelRoundTrip exercises the Task 9 in-memory data-command additions: Get on a
+// missing key returns ErrNotFound (never a zero-value string with a nil error, which callers could
+// mistake for a real empty cached value), Set makes it visible, and Del removes it again.
+func TestFake_GetSetDelRoundTrip(t *testing.T) {
+	f := NewFake("cache")
+	ctx := context.Background()
+
+	_, err := f.Get(ctx, "missing")
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	require.NoError(t, f.Set(ctx, "k1", "v1", 0))
+	val, err := f.Get(ctx, "k1")
+	require.NoError(t, err)
+	assert.Equal(t, "v1", val)
+
+	require.NoError(t, f.Del(ctx, "k1"))
+	_, err = f.Get(ctx, "k1")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+// TestFake_SetNX proves the fake's SetNX honours "set only if absent" semantics: the first caller
+// wins and gets ok=true; a second caller against the same key gets ok=false and the value is left
+// untouched (this is the primitive generation-minting under a race depends on).
+func TestFake_SetNX(t *testing.T) {
+	f := NewFake("cache")
+	ctx := context.Background()
+
+	ok, err := f.SetNX(ctx, "gen", "token-a", 0)
+	require.NoError(t, err)
+	assert.True(t, ok)
+
+	ok, err = f.SetNX(ctx, "gen", "token-b", 0)
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	val, err := f.Get(ctx, "gen")
+	require.NoError(t, err)
+	assert.Equal(t, "token-a", val, "SetNX must not overwrite an existing value")
+}
+
+// TestFake_MGet proves the fake reports per-key presence rather than folding a missing key into a
+// zero-value string: MGET against Redis returns a nil entry for a missing key, distinct from a
+// key holding an actual empty string.
+func TestFake_MGet(t *testing.T) {
+	f := NewFake("cache")
+	ctx := context.Background()
+
+	require.NoError(t, f.Set(ctx, "a", "va", 0))
+	require.NoError(t, f.Set(ctx, "b", "", 0))
+
+	vals, found, err := f.MGet(ctx, "a", "b", "c")
+	require.NoError(t, err)
+	require.Len(t, vals, 3)
+	require.Len(t, found, 3)
+
+	assert.True(t, found[0])
+	assert.Equal(t, "va", vals[0])
+	assert.True(t, found[1])
+	assert.Equal(t, "", vals[1])
+	assert.False(t, found[2])
+}
+
+// TestFake_ErrorInjectionForNewDataCommands lets consumers (Task 9) drive the "Redis errored"
+// paths for Get/Set/SetNX/MGet/Del without a real server.
+func TestFake_ErrorInjectionForNewDataCommands(t *testing.T) {
+	f := NewFake("cache")
+	ctx := context.Background()
+	boom := errors.New("boom")
+
+	f.GetErr = boom
+	_, err := f.Get(ctx, "k")
+	assert.ErrorIs(t, err, boom)
+
+	f.SetErr = boom
+	assert.ErrorIs(t, f.Set(ctx, "k", "v", 0), boom)
+
+	f.SetNXErr = boom
+	_, err = f.SetNX(ctx, "k", "v", 0)
+	assert.ErrorIs(t, err, boom)
+
+	f.MGetErr = boom
+	_, _, err = f.MGet(ctx, "k")
+	assert.ErrorIs(t, err, boom)
+
+	f.DelErr = boom
+	assert.ErrorIs(t, f.Del(ctx, "k"), boom)
+}
