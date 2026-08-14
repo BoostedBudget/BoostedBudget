@@ -17,7 +17,8 @@ func TestControl_RunPollsUntilContextDone(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, fake.Set(ctx, ControlKey(NamespaceAnalytics), "off", 0))
 
-	c := NewControl(fake, []Namespace{NamespaceAnalytics})
+	c, err := NewControl(fake, []Namespace{NamespaceAnalytics})
+	require.NoError(t, err)
 
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
 	defer cancel()
@@ -46,22 +47,33 @@ func TestControl_NilReceiverIsSafe(t *testing.T) {
 	assert.False(t, observed)
 }
 
-// TestControlKeysLiveOnTheNonEvictingInstance is a documentation-level test: Control is
-// constructed against WHATEVER redisclient.Client it is given, and this package builds no
-// wiring that could route it to the cache's own instance by accident (that wiring is Task 10's,
-// against the LIMITER's no-eviction client). This test pins that Control has no special-case
-// dependency on any particular client identity, so Task 10 remains free (and correctly
-// responsible) to pass the limiter's client.
+// TestControlKeysLiveOnTheNonEvictingInstance is a REAL runtime guard, not a documentation-only
+// assertion: NewControl must reject a client whose Name() is not LimiterClientName ("limiter") —
+// in particular, it must reject the cache's own (eviction-enabled) "cache"-named client — and
+// accept a client correctly named "limiter". A prior version of this test constructed Control
+// against redisclient.NewFake("limiter") but never exercised a mismatched name, so it passed
+// regardless of which client Task 10 might wire in; this version can actually fail.
 func TestControlKeysLiveOnTheNonEvictingInstance(t *testing.T) {
+	cacheFake := redisclient.NewFake("cache")
+	_, err := NewControl(cacheFake, []Namespace{NamespaceAnalytics})
+	assert.Error(t, err, "NewControl must refuse a client not named %q", LimiterClientName)
+
 	limiterFake := redisclient.NewFake("limiter")
 	require.NoError(t, limiterFake.Set(context.Background(), ControlKey(NamespaceAnalytics), "off", 0))
 
-	c := NewControl(limiterFake, []Namespace{NamespaceAnalytics})
+	c, err := NewControl(limiterFake, []Namespace{NamespaceAnalytics})
+	require.NoError(t, err, "NewControl must accept a client named %q", LimiterClientName)
 	require.NoError(t, c.Poll(context.Background()))
 
 	enabled, observed := c.Enabled(NamespaceAnalytics)
 	assert.True(t, observed)
 	assert.False(t, enabled)
+}
+
+// TestNewControl_RejectsNilClient guards the other half of the same construction check.
+func TestNewControl_RejectsNilClient(t *testing.T) {
+	_, err := NewControl(nil, []Namespace{NamespaceAnalytics})
+	assert.Error(t, err)
 }
 
 func TestControlKey_MissingAfterObservedOffResolvesToOff(t *testing.T) {
@@ -70,7 +82,8 @@ func TestControlKey_MissingAfterObservedOffResolvesToOff(t *testing.T) {
 	key := ControlKey(NamespaceAnalytics)
 	require.NoError(t, fake.Set(ctx, key, "off", 0))
 
-	c := NewControl(fake, []Namespace{NamespaceAnalytics})
+	c, err := NewControl(fake, []Namespace{NamespaceAnalytics})
+	require.NoError(t, err)
 	require.NoError(t, c.Poll(ctx))
 	enabled, observed := c.Enabled(NamespaceAnalytics)
 	require.True(t, observed)
@@ -89,7 +102,8 @@ func TestControlKey_MissingAfterObservedOffResolvesToOff(t *testing.T) {
 
 func TestControlKey_NeverObserved_IsNotObserved(t *testing.T) {
 	fake := redisclient.NewFake("limiter")
-	c := NewControl(fake, []Namespace{NamespaceAnalytics})
+	c, err := NewControl(fake, []Namespace{NamespaceAnalytics})
+	require.NoError(t, err)
 	require.NoError(t, c.Poll(context.Background()))
 
 	_, observed := c.Enabled(NamespaceAnalytics)
@@ -102,14 +116,15 @@ func TestControlKeyPollFailure_KeepsLastSnapshot(t *testing.T) {
 	key := ControlKey(NamespaceAnalytics)
 	require.NoError(t, fake.Set(ctx, key, "off", 0))
 
-	c := NewControl(fake, []Namespace{NamespaceAnalytics})
+	c, err := NewControl(fake, []Namespace{NamespaceAnalytics})
+	require.NoError(t, err)
 	require.NoError(t, c.Poll(ctx))
 	enabledBefore, observedBefore := c.Enabled(NamespaceAnalytics)
 	require.True(t, observedBefore)
 	require.False(t, enabledBefore)
 
 	fake.MGetErr = errors.New("redis: timeout")
-	err := c.Poll(ctx)
+	err = c.Poll(ctx)
 	assert.Error(t, err)
 
 	enabledAfter, observedAfter := c.Enabled(NamespaceAnalytics)
@@ -127,7 +142,8 @@ func TestEntitlementNamespaceCannotBeEnabled(t *testing.T) {
 	fake := redisclient.NewFake("cache")
 	limiterFake := redisclient.NewFake("limiter")
 	require.NoError(t, limiterFake.Set(context.Background(), ControlKey(NamespaceEntitlement), "on", 0))
-	ctrl := NewControl(limiterFake, []Namespace{NamespaceEntitlement})
+	ctrl, err := NewControl(limiterFake, []Namespace{NamespaceEntitlement})
+	require.NoError(t, err)
 	require.NoError(t, ctrl.Poll(context.Background()))
 
 	c := NewCache(Options{Client: fake, Control: ctrl})
