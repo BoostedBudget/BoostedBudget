@@ -14,7 +14,6 @@ package main
 // main.go's source.
 
 import (
-	"context"
 	"log/slog"
 	"net"
 	"net/http"
@@ -24,7 +23,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
 	"github.com/labstack/echo/v4"
@@ -101,11 +99,13 @@ func TestPublicRouteRegistration_MetricsNotServed_HealthUnchanged(t *testing.T) 
 	e := echo.New()
 	api := humaecho.NewV4(e, humaconfig.NewAPIConfig(cfg.Version, cfg.Environment))
 
-	dbCheckFn := createDBCheck()
+	// Issue #1531 Task 7c: createDBCheck(nil) now correctly 503s (a nil pool is an ERROR, not a
+	// healthy no-op — see that function's doc comment), so a healthy fake pinger is used here
+	// instead of nil: this test's job is to pin /health's behaviour is unchanged by the
+	// metrics-listener split, not to re-exercise Task 7's nil-pool handling (see
+	// health_checks_test.go for that).
 	healthHandler := operations.NewHealthHandler(slog.Default(), health.Registry{
-		DB: func(ctx context.Context) health.Result {
-			return health.Result{Err: dbCheckFn(), ObservedAt: time.Now()}
-		},
+		DB: createDBCheck(alwaysHealthyPinger{}),
 	})
 	operations.RegisterHealthRoutes(api, healthHandler)
 
