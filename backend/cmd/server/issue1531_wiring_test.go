@@ -50,6 +50,34 @@ func (s slowFailingRedisClient) RunScript(_ context.Context, _ *redis.Script, _ 
 func (s slowFailingRedisClient) PoolStats() redisclient.PoolStats { return redisclient.PoolStats{} }
 func (s slowFailingRedisClient) Close() error                     { return nil }
 
+// Get, Set, SetNX, MGet, and Del (added to redisclient.Client for Issue #1531 Task 9) are never
+// exercised by this test — it only ever wires slowFailingRedisClient in as a Ping/RunScript-based
+// health check — but the interface requires an implementation of every method.
+func (s slowFailingRedisClient) Get(_ context.Context, _ string) (string, error) {
+	time.Sleep(s.delay)
+	return "", errors.New("simulated redis completely down")
+}
+
+func (s slowFailingRedisClient) Set(_ context.Context, _, _ string, _ time.Duration) error {
+	time.Sleep(s.delay)
+	return errors.New("simulated redis completely down")
+}
+
+func (s slowFailingRedisClient) SetNX(_ context.Context, _, _ string, _ time.Duration) (bool, error) {
+	time.Sleep(s.delay)
+	return false, errors.New("simulated redis completely down")
+}
+
+func (s slowFailingRedisClient) MGet(_ context.Context, _ ...string) ([]string, []bool, error) {
+	time.Sleep(s.delay)
+	return nil, nil, errors.New("simulated redis completely down")
+}
+
+func (s slowFailingRedisClient) Del(_ context.Context, _ ...string) error {
+	time.Sleep(s.delay)
+	return errors.New("simulated redis completely down")
+}
+
 var _ redisclient.Client = slowFailingRedisClient{}
 
 // TestWiring_HealthProbeSucceedsAndIsFastWithRedisCompletelyDown is the self-inflicted-outage

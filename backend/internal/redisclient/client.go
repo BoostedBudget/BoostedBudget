@@ -57,6 +57,11 @@ import (
 // "Redis is not configured for this environment" and proceed with a nil Client, not a fatal error.
 var ErrNotConfigured = errors.New("redis: not configured")
 
+// ErrNotFound is returned by Get when key does not exist. It is a translation of go-redis's
+// redis.Nil sentinel: callers of this package (Task 9's internal/cache in particular) must never
+// need to import go-redis themselves just to recognise a cache miss.
+var ErrNotFound = errors.New("redis: key not found")
+
 // Options configures a Client returned by New. Zero-valued fields are replaced with the defaults
 // documented on the package doc comment and on each field below.
 type Options struct {
@@ -142,6 +147,25 @@ type Client interface {
 	PoolStats() PoolStats
 	// Close releases the underlying connection pool. Safe to call more than once.
 	Close() error
+
+	// Get, Set, SetNX, MGet, and Del (added for Task 9's internal/cache) are gated by the same
+	// circuit breaker as Ping/RunScript. A missing key is never a breaker failure: Get translates
+	// go-redis's redis.Nil into ErrNotFound WITHOUT recording it against the breaker, and MGet
+	// reports per-key presence the same way — only a genuine transport/server error trips it.
+
+	// Get returns the string value stored at key, or ErrNotFound if key does not exist.
+	Get(ctx context.Context, key string) (string, error)
+	// Set stores value at key. ttl <= 0 means "no expiration" (SET without EX/PX).
+	Set(ctx context.Context, key, value string, ttl time.Duration) error
+	// SetNX stores value at key only if key does not already exist, returning true if this call
+	// won the race. ttl <= 0 means "no expiration".
+	SetNX(ctx context.Context, key, value string, ttl time.Duration) (bool, error)
+	// MGet returns values and a parallel found slice (found[i] is false, and vals[i] is "", for any
+	// key that does not exist) — this is the ONLY way a caller can distinguish "missing" from "set
+	// to the empty string", which matters for control.go's kill-switch resolution.
+	MGet(ctx context.Context, keys ...string) (vals []string, found []bool, err error)
+	// Del deletes the given keys. Deleting a key that does not exist is not an error.
+	Del(ctx context.Context, keys ...string) error
 }
 
 // client is the production Client implementation backed by a real *redis.Client.
@@ -242,6 +266,85 @@ func (c *client) Close() error {
 		c.closeErr = c.rdb.Close()
 	})
 	return c.closeErr
+}
+
+func (c *client) Get(ctx context.Context, key string) (string, error) {
+	var val string
+	var notFound bool
+	err := c.breaker.call(func() error {
+		v, innerErr := c.rdb.Get(ctx, key).Result()
+		if errors.Is(innerErr, redis.Nil) {
+			// A miss is not a breaker failure — see the Client doc comment above.
+			notFound = true
+			return nil
+		}
+		if innerErr != nil {
+			return innerErr
+		}
+		val = v
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if notFound {
+		return "", ErrNotFound
+	}
+	return val, nil
+}
+
+func (c *client) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	if ttl < 0 {
+		ttl = 0
+	}
+	return c.breaker.call(func() error {
+		return c.rdb.Set(ctx, key, value, ttl).Err()
+	})
+}
+
+func (c *client) SetNX(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
+	if ttl < 0 {
+		ttl = 0
+	}
+	var ok bool
+	err := c.breaker.call(func() error {
+		v, innerErr := c.rdb.SetNX(ctx, key, value, ttl).Result()
+		ok = v
+		return innerErr
+	})
+	return ok, err
+}
+
+func (c *client) MGet(ctx context.Context, keys ...string) ([]string, []bool, error) {
+	var vals []string
+	var found []bool
+	err := c.breaker.call(func() error {
+		res, innerErr := c.rdb.MGet(ctx, keys...).Result()
+		if innerErr != nil {
+			return innerErr
+		}
+		vals = make([]string, len(res))
+		found = make([]bool, len(res))
+		for i, r := range res {
+			s, ok := r.(string)
+			if !ok {
+				continue // nil (missing key) or an unexpected type: leave found[i] false
+			}
+			vals[i] = s
+			found[i] = true
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return vals, found, nil
+}
+
+func (c *client) Del(ctx context.Context, keys ...string) error {
+	return c.breaker.call(func() error {
+		return c.rdb.Del(ctx, keys...).Err()
+	})
 }
 
 // mapPoolStats copies the fields this package cares about from go-redis's pool.Stats into our own
