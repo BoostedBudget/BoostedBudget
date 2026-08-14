@@ -14,6 +14,8 @@ package main
 // main.go's source.
 
 import (
+	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,10 +24,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	"github.com/maxnussbaum/BoostedBudget/internal/health"
 	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
 )
@@ -97,12 +101,12 @@ func TestPublicRouteRegistration_MetricsNotServed_HealthUnchanged(t *testing.T) 
 	e := echo.New()
 	api := humaecho.NewV4(e, humaconfig.NewAPIConfig(cfg.Version, cfg.Environment))
 
-	healthHandler := operations.NewHealthHandler(
-		createDBCheck(),
-		createRedisCheck(),
-		createClerkCheck(),
-		cfg.Version,
-	)
+	dbCheckFn := createDBCheck()
+	healthHandler := operations.NewHealthHandler(slog.Default(), health.Registry{
+		DB: func(ctx context.Context) health.Result {
+			return health.Result{Err: dbCheckFn(), ObservedAt: time.Now()}
+		},
+	})
 	operations.RegisterHealthRoutes(api, healthHandler)
 
 	// Sanity check that this is genuinely the public API's config and not a stand-in: on

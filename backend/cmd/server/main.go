@@ -23,6 +23,7 @@ import (
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/health"
 	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
@@ -170,13 +171,24 @@ func main() {
 	humaAPI := humaecho.NewV4(e, humaconfig.NewAPIConfig(cfg.Version, cfg.Environment))
 	appLogger.Info("Huma API initialized - OpenAPI at /openapi.json, Docs at /docs")
 
-	// Health check handler (no auth required) - Huma operation
-	healthHandler := operations.NewHealthHandler(
-		createDBCheck(),
-		createRedisCheck(),
-		createClerkCheck(),
-		cfg.Version,
-	)
+	// Health check handler (no auth required) - Huma operation.
+	//
+	// Issue #1531 Task 6: the public /health response was slimmed to a bare
+	// {"status":"ok"}/503, and GetHealth now only ever reads registry.DB —
+	// registry.Redis/registry.Clerk are deliberately left nil here, since
+	// they're non-critical and running them on an unauthenticated endpoint is
+	// pure cost with no effect on the response. This is a minimal adapter from
+	// the existing func() error stub to health.Check so cmd/server keeps
+	// compiling; Task 7 replaces createDBCheck/createRedisCheck/createClerkCheck
+	// with real health.Registry-backed checks and rewires this call properly
+	// (constructing the full Registry once and sharing it with the admin
+	// health endpoint).
+	dbCheckFn := createDBCheck()
+	healthHandler := operations.NewHealthHandler(appLogger, health.Registry{
+		DB: func(ctx context.Context) health.Result {
+			return health.Result{Err: dbCheckFn(), ObservedAt: time.Now()}
+		},
+	})
 	operations.RegisterHealthRoutes(humaAPI, healthHandler)
 
 	// Metrics endpoint (Prometheus format) — internal-only listener, NOT the public Huma
