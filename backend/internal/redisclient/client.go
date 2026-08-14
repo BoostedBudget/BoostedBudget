@@ -166,6 +166,12 @@ type Client interface {
 	MGet(ctx context.Context, keys ...string) (vals []string, found []bool, err error)
 	// Del deletes the given keys. Deleting a key that does not exist is not an error.
 	Del(ctx context.Context, keys ...string) error
+	// Scan enumerates every key matching pattern (a Redis glob, e.g. "bb:c:{u:<uid>}:*") via
+	// SCAN cursor iteration (never the O(N)-blocking KEYS command). Added for Task 10b's GDPR
+	// deletion purge, which must enumerate a user's own cache keys by scope tag before deleting
+	// them outright — none of Get/Set/MGet/Del can do that. Gated by the same circuit breaker as
+	// every other command.
+	Scan(ctx context.Context, pattern string) ([]string, error)
 }
 
 // client is the production Client implementation backed by a real *redis.Client.
@@ -345,6 +351,31 @@ func (c *client) Del(ctx context.Context, keys ...string) error {
 	return c.breaker.call(func() error {
 		return c.rdb.Del(ctx, keys...).Err()
 	})
+}
+
+// scanBatchSize is the COUNT hint passed to each SCAN call — a hint only, not a hard limit.
+const scanBatchSize = 500
+
+func (c *client) Scan(ctx context.Context, pattern string) ([]string, error) {
+	var keys []string
+	err := c.breaker.call(func() error {
+		var cursor uint64
+		for {
+			batch, next, innerErr := c.rdb.Scan(ctx, cursor, pattern, scanBatchSize).Result()
+			if innerErr != nil {
+				return innerErr
+			}
+			keys = append(keys, batch...)
+			cursor = next
+			if cursor == 0 {
+				return nil
+			}
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
 }
 
 // mapPoolStats copies the fields this package cares about from go-redis's pool.Stats into our own

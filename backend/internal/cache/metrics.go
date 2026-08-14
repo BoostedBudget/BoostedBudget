@@ -72,12 +72,13 @@ var (
 // Result labels for cacheRequestsTotal — a closed enum, never derived from anything caller-
 // supplied.
 const (
-	resultHit            = "hit"
-	resultMiss           = "miss"
-	resultError          = "error"
-	resultBypassDisabled = "bypass_disabled"
-	resultBypassGenError = "bypass_gen_error"
-	resultBypassCircuit  = "bypass_circuit"
+	resultHit              = "hit"
+	resultMiss             = "miss"
+	resultError            = "error"
+	resultBypassDisabled   = "bypass_disabled"
+	resultBypassGenError   = "bypass_gen_error"
+	resultBypassCircuit    = "bypass_circuit"
+	resultBypassTombstoned = "bypass_tombstoned"
 )
 
 const (

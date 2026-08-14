@@ -133,3 +133,32 @@ func TestFake_ErrorInjectionForNewDataCommands(t *testing.T) {
 	f.DelErr = boom
 	assert.ErrorIs(t, f.Del(ctx, "k"), boom)
 }
+
+// TestFake_ScanMatchesGlobPattern is the RED test for Issue #1531 Task 10b's GDPR purge: the
+// purge path needs to enumerate every data+generation key under a scope tag (e.g.
+// "bb:c:{u:<uid>}:*") to delete them outright, which Get/Set/MGet/Del cannot do since none of
+// them enumerate keys by pattern.
+func TestFake_ScanMatchesGlobPattern(t *testing.T) {
+	f := NewFake("cache")
+	ctx := context.Background()
+
+	require.NoError(t, f.Set(ctx, "bb:c:{u:1}:analytics:v1:gABC:Method:hash1", "v", 0))
+	require.NoError(t, f.Set(ctx, "bb:c:{u:1}:analytics:v1:gABC:Method:hash2", "v", 0))
+	require.NoError(t, f.Set(ctx, "bb:c:{u:1}:gen", "ABC", 0))
+	require.NoError(t, f.Set(ctx, "bb:c:{u:2}:analytics:v1:gABC:Method:hash1", "v", 0))
+
+	keys, err := f.Scan(ctx, "bb:c:{u:1}:*")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{
+		"bb:c:{u:1}:analytics:v1:gABC:Method:hash1",
+		"bb:c:{u:1}:analytics:v1:gABC:Method:hash2",
+		"bb:c:{u:1}:gen",
+	}, keys)
+}
+
+func TestFake_ScanErr(t *testing.T) {
+	f := NewFake("cache")
+	f.ScanErr = errors.New("boom")
+	_, err := f.Scan(context.Background(), "*")
+	assert.ErrorIs(t, err, f.ScanErr)
+}

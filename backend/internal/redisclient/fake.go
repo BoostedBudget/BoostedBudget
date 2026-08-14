@@ -5,6 +5,7 @@ package redisclient
 
 import (
 	"context"
+	"path"
 	"sync"
 	"time"
 
@@ -50,6 +51,8 @@ type Fake struct {
 	MGetErr error
 	// DelErr, when non-nil, is returned by every Del call.
 	DelErr error
+	// ScanErr, when non-nil, is returned by every Scan call.
+	ScanErr error
 
 	pingCalls      int
 	runScriptCalls int
@@ -59,6 +62,7 @@ type Fake struct {
 	setNXCalls     int
 	mgetCalls      int
 	delCalls       int
+	scanCalls      int
 	scriptCalls    []ScriptCall
 
 	store map[string]string
@@ -205,6 +209,32 @@ func (f *Fake) Del(_ context.Context, keys ...string) error {
 	return nil
 }
 
+// Scan enumerates in-memory store keys matching pattern via path.Match, which for the ':'-separated
+// key shapes this package renders behaves identically to Redis glob matching (path.Match's '*'
+// only refuses to cross '/', which never appears in a cache key).
+func (f *Fake) Scan(_ context.Context, pattern string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scanCalls++
+	if f.ScanErr != nil {
+		return nil, f.ScanErr
+	}
+	var out []string
+	for k := range f.store {
+		if ok, _ := path.Match(pattern, k); ok {
+			out = append(out, k)
+		}
+	}
+	return out, nil
+}
+
+// ScanCalls returns how many times Scan has been invoked.
+func (f *Fake) ScanCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.scanCalls
+}
+
 // GetCalls returns how many times Get has been invoked.
 func (f *Fake) GetCalls() int {
 	f.mu.Lock()
@@ -247,7 +277,7 @@ func (f *Fake) DelCalls() int {
 func (f *Fake) TotalCommandCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.pingCalls + f.runScriptCalls + f.getCalls + f.setCalls + f.setNXCalls + f.mgetCalls + f.delCalls
+	return f.pingCalls + f.runScriptCalls + f.getCalls + f.setCalls + f.setNXCalls + f.mgetCalls + f.delCalls + f.scanCalls
 }
 
 var _ Client = (*Fake)(nil)

@@ -12,11 +12,26 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
-	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
+
+// cachePurgeRetryJobArgs mirrors jobs.CachePurgeRetryArgs (internal/queue/jobs/cache_purge_retry.go)
+// so this package can enqueue a durable retry without importing internal/queue/jobs, which would
+// create an import cycle: jobs already imports services. Six other args types in this codebase
+// document the identical mirroring pattern (see account_service.go's plaidSyncJobArgs) — the JSON
+// shape and Kind() string here MUST match jobs.CachePurgeRetryArgs exactly.
+type cachePurgeRetryJobArgs struct {
+	UserID      string `json:"user_id"`
+	ClerkUserID string `json:"clerk_user_id"`
+	HouseholdID string `json:"household_id,omitempty"`
+}
+
+func (cachePurgeRetryJobArgs) Kind() string { return "cache_purge_retry" }
 
 // ErrDeletionAuthorisationRevoked is returned by ExecuteDeletion's internal cleanup helpers when a
 // use-time recheck finds that the authorisation this run was claimed under no longer holds — in
@@ -94,6 +109,18 @@ type DeletionService interface {
 	// optional capability — a nil claims repo makes ExecuteDeletion fail loudly rather
 	// than silently falling back to the old, race-prone guard-only behavior.
 	SetWorkClaimsRepo(repo repository.WorkClaimsRepository)
+
+	// SetCache wires Issue #1531 Task 10b's GDPR deletion purge: purger deletes the deleted
+	// user's own u:<userID>/k:<hash(clerkID)> cache footprint immediately (see cache.Purger's doc
+	// comment for why immediate deletion, not a generation bump, is used for THOSE two scopes);
+	// gens bumps the generation of any household the user belonged to, orphaning (not deleting —
+	// it legitimately contains other members' data) that household's cached aggregates; jq
+	// enqueues a durable retry (internal/queue/jobs.CachePurgeRetryArgs) if the purge itself
+	// fails, so a Redis outage never lets a GDPR deletion silently complete with an un-purged
+	// cache. All three are nil-safe: nil purger/gens/jq (mirrors a disabled/noop cache, or a
+	// caller not yet wired) skips the corresponding step entirely — ExecuteDeletion's own
+	// cascade/erasure is unaffected either way.
+	SetCache(purger cache.Purger, gens *cache.Generations, jq queue.JobQueue)
 }
 
 // HouseholdReader is the narrow household-read capability DeletionService needs.
@@ -126,6 +153,9 @@ type deletionService struct {
 	inviteRevoker    HouseholdInviteRevoker          // #1367 — Phase 3: nil skips invite revocation
 	db               repository.DB                   // #1367 — Phase 3: nil falls back to non-transactional guard
 	claimsRepo       repository.WorkClaimsRepository // Issue #1413 C2: required for ExecuteDeletion
+	cachePurger      cache.Purger                    // Issue #1531 Task 10b: nil skips the cache purge
+	cacheGens        *cache.Generations              // Issue #1531 Task 10b: nil skips the household bump
+	jobQueue         queue.JobQueue                  // Issue #1531 Task 10b: nil skips the durable-retry enqueue
 	gracePeriodDays  int
 	tokenSecret      string
 }
@@ -814,6 +844,22 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// it. deleted == false is a NORMAL, EXPECTED outcome — NOT an error — covering that
 	// precondition-lost case AND Critical finding C2 (an un-cleaned Plaid item still exists):
 	// release the claim (never Complete) and let the next scheduled run re-evaluate.
+	// Issue #1531 Task 10b: capture the user's household membership BEFORE the cascade runs — the
+	// cascade's household_members row for this user is gone once DeleteUserCascade commits, so a
+	// post-cascade lookup would always report "not found" and the household's cached aggregates
+	// (which genuinely contain this user's transactions, joined across shared household accounts)
+	// would never get orphaned. A lookup failure here is logged and treated as "no household" —
+	// this must never abort a GDPR deletion that has already passed every eligibility check above.
+	var cachePurgeHouseholdID string
+	if s.householdReader != nil {
+		if household, _, found, hhErr := s.householdReader.GetHouseholdForUser(ctx, userID); hhErr != nil {
+			slog.Default().Error("gdpr deletion: household lookup failed before cascade; the user's "+
+				"household (if any) will not have its cache orphaned", "user_id", userID, "error", hhErr)
+		} else if found {
+			cachePurgeHouseholdID = household.ID
+		}
+	}
+
 	deleted, err := s.profileRepo.DeleteUserCascade(ctx, userID, user.DeletionRequestedAt)
 	if err != nil {
 		releaseClaim(err.Error())
@@ -909,6 +955,13 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 		reportSurvivingResidue("the cascade's own re-verification refused after external work had already been issued")
 		return nil
 	}
+
+	// Issue #1531 Task 10b: GDPR deletion cache purge. `deleted == true` above is proof the erasure
+	// already committed — this is purely about the cache's OWN, separate copies of that user's
+	// data (and, for the household scope, orphaning this user's contribution to it). See
+	// purgeCacheForDeletedUser's doc comment for the full design (why u:/k: are deleted outright
+	// while the household scope is only bumped, and the durable-retry-on-failure behaviour).
+	s.purgeCacheForDeletedUser(ctx, userID, user.ClerkUserID, cachePurgeHouseholdID)
 
 	// Mark the claim durably complete. A false ok (with no error) means our lease was
 	// reclaimed by another worker while we were doing the work above — i.e. the external
@@ -1078,6 +1131,57 @@ func (s *deletionService) SetHouseholdReader(r HouseholdReader) {
 // #1367 — Phase 3.
 func (s *deletionService) SetHouseholdInviteRevoker(r HouseholdInviteRevoker) {
 	s.inviteRevoker = r
+}
+
+// SetCache wires the GDPR deletion purge — see the DeletionService interface doc comment.
+func (s *deletionService) SetCache(purger cache.Purger, gens *cache.Generations, jq queue.JobQueue) {
+	s.cachePurger = purger
+	s.cacheGens = gens
+	s.jobQueue = jq
+}
+
+// purgeCacheForDeletedUser is called ONLY after DeleteUserCascade has committed (deleted == true):
+// the erasure is already durable, so this is entirely about the cache's OWN copies of that data.
+//
+//   - u:<userID> and k:<hash(clerkID)> are purged OUTRIGHT (cache.Purger.PurgeUser) — see that
+//     method's doc comment for why immediate deletion, not a generation bump + TTL wait, is used
+//     for these two scopes specifically.
+//   - householdID's generation is bumped (never deleted — it legitimately contains OTHER
+//     members' data too), orphaning this user's contribution to any cached household aggregate.
+//
+// A PurgeUser failure enqueues a durable retry (River) rather than being logged and dropped: see
+// cache.Purger's doc comment on why a Redis purge failure must never silently complete a deletion
+// with an un-purged cache. The household bump is void by design (cache.Generations.Bump never
+// returns an error, consistent with every other bump call site in this codebase) — the retry job
+// re-attempts it too, for good measure, since it is idempotent.
+func (s *deletionService) purgeCacheForDeletedUser(ctx context.Context, userID, clerkUserID, householdID string) {
+	if s.cachePurger != nil {
+		if err := s.cachePurger.PurgeUser(ctx, userID, clerkUserID); err != nil {
+			slog.Default().Error("gdpr deletion: cache purge failed; enqueuing durable retry",
+				"user_id", userID, "error", err)
+			s.enqueueCachePurgeRetry(ctx, userID, clerkUserID, householdID)
+		}
+	}
+	if householdID != "" && s.cacheGens != nil {
+		s.cacheGens.Bump(ctx, cache.ScopeHousehold, householdID, "gdpr_deletion")
+	}
+}
+
+// enqueueCachePurgeRetry enqueues cachePurgeRetryJobArgs (mirrors jobs.CachePurgeRetryArgs) via
+// the injected queue.JobQueue. A nil jobQueue (not yet wired) or an enqueue failure is logged at
+// ERROR — there is nothing further to fall back to on this specific path — but never returned:
+// this is called from a place that has already decided the overall deletion succeeded.
+func (s *deletionService) enqueueCachePurgeRetry(ctx context.Context, userID, clerkUserID, householdID string) {
+	if s.jobQueue == nil {
+		slog.Default().Error("gdpr deletion: cache purge failed and no job queue is wired — "+
+			"the cache purge retry job cannot be enqueued", "user_id", userID)
+		return
+	}
+	args := cachePurgeRetryJobArgs{UserID: userID, ClerkUserID: clerkUserID, HouseholdID: householdID}
+	if _, err := s.jobQueue.Enqueue(ctx, args); err != nil {
+		slog.Default().Error("gdpr deletion: failed to enqueue cache purge retry job",
+			"user_id", userID, "error", err)
+	}
 }
 
 // deferIfCascadeGuardWillRefuse answers, before the Paddle leg spends anything irreversible, whether
