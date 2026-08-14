@@ -113,6 +113,21 @@ func StartRedisContainer(t *testing.T, serverArgs ...string) *Container {
 	return &Container{URL: url, Client: client, name: name}
 }
 
+// Stop docker-stops (not removes) the container: the process is killed so nothing on its port
+// answers Redis commands anymore, but the container itself is left in place for t.Cleanup's
+// `docker rm -f` to reap as usual. Added for Issue #1531 Task 11b's redis-down parity suite,
+// which needs "Redis is unreachable" as a mid-test state change, not merely "never started" —
+// docker stop is what makes that reproducible on a container this process fully owns (never valid
+// against the shared cache/limiter instances ConnectTestRedis/NewIsolatedCache point at).
+func (c *Container) Stop(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), dockerRunTimeout)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "docker", "stop", c.name).CombinedOutput(); err != nil {
+		t.Fatalf("cachetest.Container.Stop: docker stop failed: %v\n%s", err, out)
+	}
+}
+
 // hostPortFor asks Docker which host port it assigned to name's published 6379/tcp, via
 // `docker port` — the container's own inspection, not a value this process guessed beforehand.
 func hostPortFor(t *testing.T, name string) int {
