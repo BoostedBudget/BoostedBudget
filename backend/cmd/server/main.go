@@ -274,8 +274,8 @@ func main() {
 	go middleware.StartCIDRRefresher(cfCtx, 24*time.Hour, cfCIDRRef)
 
 	// Middleware (order matters!)
-	e.Use(middleware.RequestID())                                                          // 1. Generate request IDs first
-	e.Use(middleware.SecurityHeaders(cfg.Environment))                                     // 2. Security hardening headers
+	e.Use(middleware.RequestID())                      // 1. Generate request IDs first
+	e.Use(middleware.SecurityHeaders(cfg.Environment)) // 2. Security hardening headers
 	// Issue #1531 Task 7: the fleet-wide Redis-backed primary (nil-safe: memory-only when
 	// limiterClient is nil), wired via the same ordering-critical helper
 	// (registerCloudflareAndRateLimitMiddleware — the byte-for-byte-pinned issue1514 ordering
@@ -283,13 +283,13 @@ func main() {
 	// backend/done/logger, reproducing its exact prior behaviour).
 	rateLimitBackend := buildRateLimitBackend(limiterClient, cfg)
 	registerCloudflareAndRateLimitMiddlewareWithBackend(e, cfCIDRRef, cfg, rateLimitBackend, rateLimitDone, appLogger) // 3-4. Cloudflare gate, then per-IP rate limiting (order load-bearing, see helper doc)
-	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                            // 5. Panic recovery (formats RFC 9457 response)
-	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                               // 6. Sentry panic reporting
-	e.Use(otelecho.Middleware("boostedbudget-api"))                                        // 7. OTEL tracing
-	e.Use(middleware.StructuredLogging(appLogger))                                         // 8. slog-based HTTP logging
-	e.Use(middleware.MetricsMiddleware())                                                  // 9. Prometheus metrics
-	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                       // 10. Request body size limit
-	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins))) // 10. CORS handling with configured origins
+	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                                                        // 5. Panic recovery (formats RFC 9457 response)
+	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                                                           // 6. Sentry panic reporting
+	e.Use(otelecho.Middleware("boostedbudget-api"))                                                                    // 7. OTEL tracing
+	e.Use(middleware.StructuredLogging(appLogger))                                                                     // 8. slog-based HTTP logging
+	e.Use(middleware.MetricsMiddleware())                                                                              // 9. Prometheus metrics
+	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                                                   // 10. Request body size limit
+	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins)))                             // 10. CORS handling with configured origins
 
 	// Initialize Huma API wrapping Echo for OpenAPI generation
 	// Huma provides automatic OpenAPI 3.1 spec generation from Go code
@@ -1301,6 +1301,15 @@ func main() {
 					merchantRepo, // Issue #1163: Merchant batch-upsert
 					appLogger,
 				)
+
+				// Issue #1531 Task 10b-2: wire cache invalidation so a Plaid sync (which never
+				// passes through the HTTP mutation middleware — it runs from a River job)
+				// still bumps the synced user's (and their household's) cache generation once,
+				// at the end of SyncTransactions. cacheInstance is never nil (see the Task 10b
+				// comment at cachePurgeRetryWorker's construction below); householdRepo
+				// structurally satisfies services.SyncCacheHouseholdLookup, same as it already
+				// does for humamiddleware.HouseholdLookup.
+				transactionSyncService.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
 
 				// Issue #972: Initialize TransferCorrelationService and wire into sync pipeline (B4)
 				transferCorrelationService := services.NewTransferCorrelationService(
