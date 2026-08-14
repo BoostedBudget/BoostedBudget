@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/health"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -170,6 +171,12 @@ func TestSystemHealthService_GetSystemHealth_Success(t *testing.T) {
 		deadLetterRepo: mockDeadLetterRepo,
 		pool:           mockPool,
 		plaidEnv:       "sandbox",
+		// Issue #1531 Task 7d: checkClerk now reads the shared memoized Check instead of an
+		// unconditional "up" placeholder. This test simulates an entirely healthy system, so wire
+		// a Check that reports healthy, matching the pre-#1531 placeholder's assertion below.
+		healthChecks: SharedHealthChecks{
+			Clerk: func(ctx context.Context) health.Result { return health.Result{} },
+		},
 	}
 
 	ctx := context.Background()

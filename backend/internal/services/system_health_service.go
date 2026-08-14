@@ -2,11 +2,15 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/health"
+	"github.com/maxnussbaum/BoostedBudget/internal/redisclient"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -68,6 +72,33 @@ type systemHealthService struct {
 	// #1514 requirement #5). Optional/nil-safe: an unwired repo reports "unavailable", never a
 	// confident zero — same convention as plaidOrphanRepo above.
 	invalidWebhookAttemptRepo InvalidWebhookAttemptStatsReader
+	// healthChecks holds the SHARED memoized Clerk/Redis Check instances (Issue #1531 Task 7d) —
+	// the same instances cmd/server hands to the public /health handler, so an admin page load
+	// reuses whatever the liveness probe already paid for instead of re-probing. Zero value
+	// (both Checks nil) reports "not_configured" for both, matching every other optional
+	// collaborator in this service.
+	healthChecks SharedHealthChecks
+}
+
+// SharedHealthChecks bundles the memoized health.Check instances (internal/health) that
+// SystemHealthService reuses rather than re-probing, plus an optional way to read the limiter
+// Redis client's local pool stats for the /admin/health Redis detail. See internal/health's
+// package doc comment for why sharing one Check instance across consumers matters most during an
+// outage — an admin page load must not fire a second Redis PING (or Clerk call) that the public
+// liveness probe already paid for a moment earlier.
+type SharedHealthChecks struct {
+	// Clerk is the same Check the public /health handler's registry.Clerk holds (though that
+	// handler never calls it — see operations.HealthHandler's doc comment). Nil means Clerk is
+	// not configured for this deployment.
+	Clerk health.Check
+	// Redis is the same Check the public /health handler's registry.Redis holds (also never
+	// called there). Nil means no Redis client is wired for this deployment.
+	Redis health.Check
+	// RedisPoolStats optionally reports the limiter Redis client's local connection-pool state.
+	// Nil when no Redis client is wired — checkRedis skips populating RedisHealth.PoolStats
+	// entirely rather than reporting a zero-valued snapshot that would look like an idle-but-live
+	// pool.
+	RedisPoolStats func() redisclient.PoolStats
 }
 
 // PlaidOrphanedItemLister is the ONE verb the health derivation needs from
@@ -99,6 +130,7 @@ func NewSystemHealthService(
 	jobHealthRepo repository.JobHealthRepository,
 	plaidOrphanRepo PlaidOrphanedItemLister,
 	invalidWebhookAttemptRepo InvalidWebhookAttemptStatsReader,
+	healthChecks SharedHealthChecks,
 ) SystemHealthService {
 	return &systemHealthService{
 		healthRepo:                healthRepo,
@@ -108,6 +140,7 @@ func NewSystemHealthService(
 		jobHealthRepo:             jobHealthRepo,
 		plaidOrphanRepo:           plaidOrphanRepo,
 		invalidWebhookAttemptRepo: invalidWebhookAttemptRepo,
+		healthChecks:              healthChecks,
 	}
 }
 
@@ -123,6 +156,9 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		Database: s.checkDatabase(ctx),
 		Clerk:    s.checkClerk(ctx),
 		Plaid:    s.checkPlaid(ctx),
+		// Redis is deliberately NOT consulted by calculateOverallStatus below — see
+		// domain.ServiceHealthStatuses.Redis's doc comment for why (#1531 explicit non-goal).
+		Redis: s.checkRedis(ctx),
 	}
 
 	// Get queue metrics for all queues
@@ -251,12 +287,89 @@ func (s *systemHealthService) checkDatabase(ctx context.Context) domain.Database
 	}
 }
 
-// checkClerk checks Clerk service status (placeholder)
+// checkClerk reports Clerk service status via the SHARED memoized Clerk health.Check (Issue
+// #1531 Task 7d) — the same Check instance the public /health handler's registry.Clerk holds,
+// so an admin page load never fires a second api.clerk.com/v1/jwks call beyond whatever the
+// liveness probe already paid for within the check's TTL.
 func (s *systemHealthService) checkClerk(ctx context.Context) domain.ServiceHealth {
-	// Placeholder - Clerk is considered up if configured
+	if s.healthChecks.Clerk == nil {
+		return domain.ServiceHealth{Status: "not_configured"}
+	}
+
+	result := s.healthChecks.Clerk(ctx)
+	status := "up"
+	if !result.Healthy() {
+		status = "down"
+	}
 	return domain.ServiceHealth{
-		Status:    "up",
-		LatencyMs: 0,
+		Status:    status,
+		LatencyMs: result.Latency.Milliseconds(),
+	}
+}
+
+// checkRedis derives the admin-only domain.RedisHealth detail from the SHARED memoized Redis
+// health.Check (Issue #1531 Task 7d) — the same Check instance the public /health handler's
+// registry.Redis holds (but never calls). Redis is deliberately never critical here: this method
+// only DESCRIBES Redis's state, and its caller (GetSystemHealth) deliberately excludes the
+// result from calculateOverallStatus. See domain.ServiceHealthStatuses.Redis's doc comment.
+func (s *systemHealthService) checkRedis(ctx context.Context) domain.RedisHealth {
+	if s.healthChecks.Redis == nil {
+		return domain.RedisHealth{Status: "not_configured", Reason: "not_configured"}
+	}
+
+	result := s.healthChecks.Redis(ctx)
+	h := domain.RedisHealth{
+		LatencyMs:     result.Latency.Milliseconds(),
+		ObservedAgoMs: time.Since(result.ObservedAt).Milliseconds(),
+	}
+	if result.Healthy() {
+		h.Status = "up"
+	} else {
+		h.Status = "down"
+		h.Reason = classifyRedisError(result.Err)
+	}
+
+	if s.healthChecks.RedisPoolStats != nil {
+		stats := s.healthChecks.RedisPoolStats()
+		h.PoolStats = &domain.RedisPoolStats{
+			Hits:       stats.Hits,
+			Misses:     stats.Misses,
+			Timeouts:   stats.Timeouts,
+			TotalConns: stats.TotalConns,
+			IdleConns:  stats.IdleConns,
+			StaleConns: stats.StaleConns,
+			PoolSize:   stats.PoolSize,
+		}
+	}
+
+	return h
+}
+
+// classifyRedisError maps a Redis health-check error into a SANITIZED CLASSIFICATION —
+// "timeout", "connection_refused", "auth_failed", or "unknown" — and NEVER returns the raw error
+// text. See domain.RedisHealth.Reason's doc comment for why: admin screens get screenshotted
+// into support tickets and pasted into Slack, and the full error (host:port, Upstash endpoint
+// names, credentials-adjacent detail) is already in slog/Sentry, findable by request ID.
+func classifyRedisError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, redisclient.ErrBreakerOpen) {
+		return "timeout"
+	}
+
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "i/o timeout") || strings.Contains(msg, "deadline exceeded"):
+		return "timeout"
+	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "no route to host") ||
+		strings.Contains(msg, "network is unreachable") || strings.Contains(msg, "no such host"):
+		return "connection_refused"
+	case strings.Contains(msg, "noauth") || strings.Contains(msg, "wrongpass") ||
+		strings.Contains(msg, "invalid password") || strings.Contains(msg, "authentication"):
+		return "auth_failed"
+	default:
+		return "unknown"
 	}
 }
 

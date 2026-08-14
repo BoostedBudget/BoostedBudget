@@ -1,0 +1,128 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
+	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	"github.com/maxnussbaum/BoostedBudget/internal/health"
+	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
+	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
+	"github.com/maxnussbaum/BoostedBudget/internal/ratelimitstore"
+	"github.com/maxnussbaum/BoostedBudget/internal/redisclient"
+	redis "github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// slowFailingRedisClient is a redisclient.Client that IGNORES its context and always fails after
+// a fixed real delay. Deliberately ignoring ctx: a health.Options.Timeout wrapper only bounds the
+// context handed to the probe function — a probe that ignores context cancellation (as a raw
+// blocking call sometimes does) can still run for its own full duration. Wiring a Redis check
+// backed by this client is how TestWiring_HealthProbeSucceedsAndIsFastWithRedisCompletelyDown
+// proves GetHealth structurally never invokes it, rather than merely invoking-but-bounding it.
+type slowFailingRedisClient struct {
+	name  string
+	delay time.Duration
+}
+
+func (s slowFailingRedisClient) Name() string         { return s.name }
+func (s slowFailingRedisClient) RedactedAddr() string { return "slow:0" }
+
+func (s slowFailingRedisClient) Ping(_ context.Context) error {
+	time.Sleep(s.delay)
+	return errors.New("simulated redis completely down")
+}
+
+func (s slowFailingRedisClient) RunScript(_ context.Context, _ *redis.Script, _ []string, _ ...any) (any, error) {
+	time.Sleep(s.delay)
+	return nil, errors.New("simulated redis completely down")
+}
+
+func (s slowFailingRedisClient) PoolStats() redisclient.PoolStats { return redisclient.PoolStats{} }
+func (s slowFailingRedisClient) Close() error                     { return nil }
+
+var _ redisclient.Client = slowFailingRedisClient{}
+
+// TestWiring_HealthProbeSucceedsAndIsFastWithRedisCompletelyDown is the self-inflicted-outage
+// guard for Issue #1531 Task 7c: /health is Fly's liveness probe, and this proves that wiring a
+// REAL (if completely down) Redis client into health.Registry.Redis cannot slow down or fail
+// /health, because operations.HealthHandler.GetHealth structurally never reads registry.Redis.
+//
+// The Redis client used here ignores ctx entirely and sleeps 5 real seconds before failing — far
+// longer than createRedisCheck's own 500ms Timeout — specifically so that if GetHealth were ever
+// changed to also consult registry.Redis, this test would time out and fail loudly instead of
+// merely running slow within some tolerance.
+func TestWiring_HealthProbeSucceedsAndIsFastWithRedisCompletelyDown(t *testing.T) {
+	registry := health.Registry{
+		DB:    createDBCheck(alwaysHealthyPinger{}),
+		Redis: createRedisCheck(slowFailingRedisClient{name: "limiter", delay: 5 * time.Second}),
+	}
+
+	e := echo.New()
+	humaAPI := humaecho.NewV4(e, humaconfig.NewAPIConfig("test", "test"))
+	handler := operations.NewHealthHandler(slog.Default(), registry)
+	operations.RegisterHealthRoutes(humaAPI, handler)
+
+	srv := httptest.NewServer(e)
+	defer srv.Close()
+
+	start := time.Now()
+	resp, err := http.Get(srv.URL + "/health")
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Less(t, elapsed, 100*time.Millisecond,
+		"GET /health must stay fast even with a completely-down (5s-delayed-failure) Redis client wired into the registry")
+}
+
+// TestWiring_ApiRequestsAreStillRateLimitedWithRedisDown proves that when the Redis-backed
+// primary rate-limit backend is down, requests are still rate limited — via the in-memory
+// fallback (internal/middleware's fallbackLimiter, Task 5) — rather than the outage silently
+// disabling rate limiting altogether.
+func TestWiring_ApiRequestsAreStillRateLimitedWithRedisDown(t *testing.T) {
+	e := echo.New()
+	cfCIDRRef := newOrderingTestCFCIDRRef()
+	cfg := &config.Config{
+		Environment:         "development", // in CloudflareOnly's bypassEnvironments
+		RateLimitIP:         2,
+		RateLimitAuth:       2,
+		RateLimitMaxEntries: 100,
+	}
+
+	fake := redisclient.NewFake("limiter")
+	fake.RunScriptErr = errors.New("simulated redis down")
+	backend := ratelimitstore.NewRedisBackend(fake, ratelimitstore.Options{
+		RegularLimit: cfg.RateLimitIP,
+		AuthLimit:    cfg.RateLimitAuth,
+		Window:       time.Minute,
+	})
+	done := make(chan struct{})
+	defer close(done)
+
+	registerCloudflareAndRateLimitMiddlewareWithBackend(e, cfCIDRRef, cfg, backend, done, nil)
+	e.GET("/", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
+
+	srv := httptest.NewServer(e)
+	defer srv.Close()
+
+	var lastStatus int
+	for i := 0; i < 5; i++ {
+		resp, err := srv.Client().Get(srv.URL + "/")
+		require.NoError(t, err)
+		lastStatus = resp.StatusCode
+		resp.Body.Close()
+	}
+
+	assert.Equal(t, http.StatusTooManyRequests, lastStatus,
+		"requests must still be rate limited (via the in-memory fallback) even though the Redis-backed primary always errors")
+}

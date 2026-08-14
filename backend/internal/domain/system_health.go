@@ -284,6 +284,58 @@ type ServiceHealthStatuses struct {
 	Database DatabaseHealth `json:"database"`
 	Clerk    ServiceHealth  `json:"clerk"`
 	Plaid    PlaidHealth    `json:"plaid"`
+	// Redis is the admin-only detail view of the shared Redis health check (Issue #1531 Task 7d).
+	// It follows the same "unwired optional collaborator reports unavailable, never a confident
+	// zero" convention as JobBacklogMetrics/PlaidOrphanedItemMetrics/DeletionResidueMetrics above
+	// (RedisHealth.Status == "not_configured" rather than a bare zero-value "up").
+	//
+	// ⚠ REDIS MUST NEVER FEED calculateOverallStatus. This is an explicit #1531 non-goal: /health
+	// (Fly's liveness probe) already never reads Redis at all (Issue #1531 Task 6), and this field
+	// existing on the ADMIN response must not become a backdoor that couples the same "Redis blip
+	// cycles every machine" hazard into the admin dashboard's status rollup. See
+	// TestSystemHealth_RedisDownDoesNotChangeOverallStatus.
+	Redis RedisHealth `json:"redis"`
+}
+
+// RedisHealth is the admin-only detail view of the shared, memoized Redis health.Check (Issue
+// #1531 Task 7d) — reusing the SAME Check instance the public /health handler holds (but never
+// calls), so an admin page load costs zero extra Redis PINGs beyond whatever the liveness probe
+// already paid for.
+type RedisHealth struct {
+	// Status is "up", "down", or "not_configured" (no Redis client wired for this deployment).
+	Status string `json:"status"`
+	// Reason is a SANITIZED CLASSIFICATION — one of "timeout", "connection_refused",
+	// "auth_failed", "not_configured", "unknown", or "" (Status == "up") — and is NEVER the raw
+	// error text. Admin screens get screenshotted into support tickets and pasted into Slack; the
+	// full error (host:port, Upstash endpoint names) is already in slog/Sentry, findable by
+	// request ID. This deliberately tightens what issue #1531 permits.
+	Reason string `json:"reason,omitempty"`
+	// LatencyMs is the PROBE's latency (health.Result.Latency), not the time it took to read a
+	// cached Result.
+	LatencyMs int64 `json:"latency_ms"`
+	// ObservedAgoMs is how long ago (in ms) the memoized probe that produced this Result actually
+	// ran (health.Result.ObservedAt) — an admin page load can be reading a Result that is up to
+	// the check's TTL old, and this makes that staleness honest instead of implied.
+	ObservedAgoMs int64 `json:"observed_ago_ms"`
+	// PoolStats is the limiter Redis client's local connection-pool snapshot, or nil when no
+	// Redis client is wired for this deployment. Reads local pool state only — no extra Redis
+	// command is ever dispatched to populate this (see observability.RedisPoolStatsSource's doc
+	// comment for the same discipline on the Prometheus side).
+	PoolStats *RedisPoolStats `json:"pool_stats,omitempty"`
+}
+
+// RedisPoolStats mirrors redisclient.PoolStats / observability.RedisPoolStats for the
+// /admin/health wire response. Its own copy, per this codebase's established mirroring
+// convention (see observability.RedisPoolStats's doc comment) — this domain package must never
+// import internal/redisclient just to describe a wire shape.
+type RedisPoolStats struct {
+	Hits       uint32 `json:"hits"`       // cumulative since client construction
+	Misses     uint32 `json:"misses"`     // cumulative since client construction
+	Timeouts   uint32 `json:"timeouts"`   // cumulative since client construction
+	TotalConns uint32 `json:"total_conns"`
+	IdleConns  uint32 `json:"idle_conns"`
+	StaleConns uint32 `json:"stale_conns"`
+	PoolSize   int    `json:"pool_size"` // configured
 }
 
 // DatabaseHealth represents database connection pool health
