@@ -50,6 +50,16 @@ func TestNew_AppliesTightDefaultTimeouts(t *testing.T) {
 	assert.LessOrEqual(t, cl.opts.ReadTimeout, 500*time.Millisecond)
 	assert.LessOrEqual(t, cl.opts.WriteTimeout, 500*time.Millisecond)
 	assert.Equal(t, 0, cl.opts.MaxRetries)
+
+	// go-redis treats its own Options.MaxRetries == 0 (pre-construction) as "use the built-in
+	// default of 3", so New must pass -1 ("disable retries") instead when our own default (0,
+	// meaning "no retries") is in effect. go-redis's own NewClient then normalizes that -1 back to
+	// 0 internally (verified directly against go-redis: an input of -1 reads back as 0, an input
+	// of unset/0 reads back as 3) — so 0 on the CONSTRUCTED client is the correct proof retries are
+	// disabled, and is NOT the same as "the translation never ran": if client.go's
+	// `if resolved.MaxRetries == 0 { parsed.MaxRetries = -1 }` were deleted, the raw 0 would flow
+	// through unmodified and go-redis's own init would turn it into 3, not 0.
+	assert.Equal(t, 0, cl.rdb.Options().MaxRetries, "default MaxRetries must reach go-redis as 0 (disabled), not go-redis's own default of 3")
 }
 
 func TestNew_EnablesContextTimeout(t *testing.T) {
@@ -81,6 +91,9 @@ func TestNew_ExplicitOptionsOverrideDefaults(t *testing.T) {
 	cl, ok := c.(*client)
 	require.True(t, ok)
 
+	// cl.opts is New's own resolved-Options bookkeeping; assert on it too, but it is not proof the
+	// values reached go-redis (it would read the same even if the parsed.XxxTimeout = resolved.XXX
+	// wiring in New were deleted). The real client's own Options() is the one that matters.
 	assert.Equal(t, 2*time.Second, cl.opts.DialTimeout)
 	assert.Equal(t, 50*time.Millisecond, cl.opts.ReadTimeout)
 	assert.Equal(t, 75*time.Millisecond, cl.opts.WriteTimeout)
@@ -88,7 +101,15 @@ func TestNew_ExplicitOptionsOverrideDefaults(t *testing.T) {
 	assert.Equal(t, 42, cl.opts.PoolSize)
 	assert.Equal(t, 7, cl.opts.MinIdleConns)
 	assert.Equal(t, 3, cl.opts.MaxRetries)
-	assert.Equal(t, 3, cl.rdb.Options().MaxRetries, "an explicit non-zero MaxRetries must reach go-redis untranslated")
+
+	got := cl.rdb.Options()
+	assert.Equal(t, 2*time.Second, got.DialTimeout, "DialTimeout must reach the real go-redis client")
+	assert.Equal(t, 50*time.Millisecond, got.ReadTimeout, "ReadTimeout must reach the real go-redis client")
+	assert.Equal(t, 75*time.Millisecond, got.WriteTimeout, "WriteTimeout must reach the real go-redis client")
+	assert.Equal(t, 100*time.Millisecond, got.PoolTimeout, "PoolTimeout must reach the real go-redis client")
+	assert.Equal(t, 42, got.PoolSize, "PoolSize must reach the real go-redis client")
+	assert.Equal(t, 7, got.MinIdleConns, "MinIdleConns must reach the real go-redis client")
+	assert.Equal(t, 3, got.MaxRetries, "an explicit non-zero MaxRetries must reach go-redis untranslated")
 }
 
 func TestClient_NameReturnsConfiguredName(t *testing.T) {
