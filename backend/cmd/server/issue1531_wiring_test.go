@@ -78,6 +78,13 @@ func (s slowFailingRedisClient) Del(_ context.Context, _ ...string) error {
 	return errors.New("simulated redis completely down")
 }
 
+// Scan (added to redisclient.Client for Issue #1531 Task 10b's GDPR purge) is never exercised by
+// this test either, for the same reason as Get/Set/SetNX/MGet/Del above.
+func (s slowFailingRedisClient) Scan(_ context.Context, _ string) ([]string, error) {
+	time.Sleep(s.delay)
+	return nil, errors.New("simulated redis completely down")
+}
+
 var _ redisclient.Client = slowFailingRedisClient{}
 
 // TestWiring_HealthProbeSucceedsAndIsFastWithRedisCompletelyDown is the self-inflicted-outage

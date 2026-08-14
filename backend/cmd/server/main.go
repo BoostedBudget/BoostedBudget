@@ -1561,6 +1561,15 @@ func main() {
 				river.AddWorker(riverWorkers, emailChangePropagationWorker)
 				appLogger.Info("Email change propagation worker registered with River")
 			}
+
+			// Issue #1531 Task 10b: durable retry for a failed GDPR-deletion cache purge (see
+			// deletion_service.go's purgeCacheForDeletedUser / enqueueCachePurgeRetry). Always
+			// registered — cacheInstance is never nil (it defaults to cache.NewNoopCache(), whose
+			// Purger implementation is a no-op), so this worker is always constructible and simply
+			// does nothing when the cache is disabled.
+			cachePurgeRetryWorker := jobs.NewCachePurgeRetryWorker(cacheInstance.(cache.Purger), cacheInstance.Generations(), appLogger)
+			river.AddWorker(riverWorkers, cachePurgeRetryWorker)
+			appLogger.Info("Cache purge retry worker registered with River")
 			if accountDeletionWorker != nil {
 				river.AddWorker(riverWorkers, accountDeletionWorker)
 				appLogger.Info("Account deletion worker registered with River")
@@ -1710,6 +1719,15 @@ func main() {
 				// Issue #1123: Wire job queue for async effective_category_name refresh
 				customCategoryService.SetJobQueue(jobQueue)
 				appLogger.Info("Custom category service connected to job queue for rename cascade")
+
+				// Issue #1531 Task 10b: GDPR deletion cache purge. Wired here (not alongside
+				// deletionService's other Set* calls above) because it needs jobQueue for the
+				// durable-retry enqueue, and jobQueue isn't constructed until riverClient succeeds,
+				// just above. cacheInstance.(cache.Purger) always succeeds: both NewCache's
+				// production type and NewNoopCache's disabled-cache type implement Purger (the
+				// latter as a no-op) — see cache.Purger's doc comment.
+				deletionService.SetCache(cacheInstance.(cache.Purger), cacheInstance.Generations(), jobQueue)
+				appLogger.Info("Deletion service connected to cache purge + job queue for GDPR retry")
 			}
 		}
 
@@ -1763,6 +1781,15 @@ func main() {
 		// #1367 — Phase 3: household-aware — a covered member's own stale read-only status no longer locks them out.
 		humaAPI.UseMiddleware(humamiddleware.NewReadOnlyMiddleware(householdEntitlementService))
 		appLogger.Info("Huma read-only enforcement middleware applied")
+
+		// Issue #1531 Task 10b: cache-invalidation middleware. MUST register after both the Clerk
+		// middleware (so inputs.UserIDKey is populated) and NewReadOnlyMiddleware (so a request the
+		// read-only gate blocked with 403/503 never reaches this middleware and never bumps —
+		// nothing committed). cacheInstance.Generations() is nil for a disabled/noop cache (Task 9's
+		// NewNoopCache), which the middleware treats as a pure pass-through — see its own doc
+		// comment. householdRepo satisfies humamiddleware.HouseholdLookup structurally.
+		humaAPI.UseMiddleware(humamiddleware.NewCacheInvalidationMiddleware(cacheInstance.Generations(), householdRepo, appLogger))
+		appLogger.Info("Cache invalidation middleware applied")
 
 		// Load admin email config and create AdminService (Issue #309)
 		//

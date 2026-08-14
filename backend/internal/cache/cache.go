@@ -123,9 +123,10 @@ func (c *redisCache) GetOrLoad(
 	}
 
 	dataKey := k.DataKey(cfg.SchemaVersion, gen)
+	scopeTag := k.ScopeTag()
 
 	raw, err, shared := c.sf.Do(dataKey, func() (any, error) {
-		res, lerr := c.getOrLoadOnce(ctx, ns, cfg, dataKey, loader)
+		res, lerr := c.getOrLoadOnce(ctx, ns, cfg, dataKey, scopeTag, loader)
 		return res, lerr
 	})
 	if shared {
@@ -141,7 +142,7 @@ func (c *redisCache) GetOrLoad(
 // getOrLoadOnce runs the actual GET -> decode -> (miss ? loader+SET : return) sequence for one
 // fully-rendered data key. Only ever invoked once per in-flight key, via singleflight.
 func (c *redisCache) getOrLoadOnce(
-	ctx context.Context, ns Namespace, cfg namespaceConfig, dataKey string,
+	ctx context.Context, ns Namespace, cfg namespaceConfig, dataKey, scopeTag string,
 	loader func(context.Context) ([]byte, error),
 ) (sfResult, error) {
 	getStart := c.now()
@@ -167,11 +168,11 @@ func (c *redisCache) getOrLoadOnce(
 			cacheErrorsTotal.WithLabelValues(string(ns), opGet, errKindCodec).Inc()
 		}
 		cacheRequestsTotal.WithLabelValues(string(ns), resultError).Inc()
-		return c.loadAndSet(ctx, ns, cfg, dataKey, loader)
+		return c.loadAndSet(ctx, ns, cfg, dataKey, scopeTag, loader)
 
 	case errors.Is(err, redisclient.ErrNotFound):
 		cacheRequestsTotal.WithLabelValues(string(ns), resultMiss).Inc()
-		return c.loadAndSet(ctx, ns, cfg, dataKey, loader)
+		return c.loadAndSet(ctx, ns, cfg, dataKey, scopeTag, loader)
 
 	case errors.Is(err, redisclient.ErrBreakerOpen):
 		// Circuit open: loader only. Skip even attempting a SET — the breaker would reject that
@@ -187,25 +188,35 @@ func (c *redisCache) getOrLoadOnce(
 		// Any other Redis GET error: treat as miss, still attempt loader -> SET.
 		cacheErrorsTotal.WithLabelValues(string(ns), opGet, errKindRedis).Inc()
 		cacheRequestsTotal.WithLabelValues(string(ns), resultError).Inc()
-		return c.loadAndSet(ctx, ns, cfg, dataKey, loader)
+		return c.loadAndSet(ctx, ns, cfg, dataKey, scopeTag, loader)
 	}
 }
 
 // loadAndSet calls loader and, only on success, best-effort caches the result. A loader error is
 // propagated as-is and NOTHING is cached.
 func (c *redisCache) loadAndSet(
-	ctx context.Context, ns Namespace, cfg namespaceConfig, dataKey string,
+	ctx context.Context, ns Namespace, cfg namespaceConfig, dataKey, scopeTag string,
 	loader func(context.Context) ([]byte, error),
 ) (sfResult, error) {
 	val, err := loader(ctx)
 	if err != nil {
 		return sfResult{}, err
 	}
-	c.set(ctx, ns, cfg, dataKey, val)
+	c.set(ctx, ns, cfg, dataKey, scopeTag, val)
 	return sfResult{data: val, hit: false}, nil
 }
 
-func (c *redisCache) set(ctx context.Context, ns Namespace, cfg namespaceConfig, dataKey string, val []byte) {
+// set writes val into dataKey, UNLESS scopeTag currently carries an active deletion tombstone
+// (Issue #1531 Task 10b's GDPR purge — see purge.go's Purger doc comment): the tombstone check
+// runs before every write in this package, closing the race where a fill that started before a
+// user's deletion finishes and tries to write stale data back into their scope after the purge
+// has already scanned and deleted it.
+func (c *redisCache) set(ctx context.Context, ns Namespace, cfg namespaceConfig, dataKey, scopeTag string, val []byte) {
+	if c.isTombstoned(ctx, scopeTag) {
+		cacheRequestsTotal.WithLabelValues(string(ns), resultBypassTombstoned).Inc()
+		return
+	}
+
 	env, err := encodeEnvelope(cfg.SchemaVersion, val, c.now())
 	if err != nil {
 		cacheErrorsTotal.WithLabelValues(string(ns), opSet, errKindCodec).Inc()
