@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"container/list"
+	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -11,9 +13,17 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"golang.org/x/time/rate"
 )
+
+// defaultRedisLimiterTimeout bounds how long IPRateLimiter waits on the injected primary
+// (Redis-backed) RateLimitBackend before treating it as failed and falling back to memory. Task
+// 7/8 (main.go wiring) may make this configurable; until then this fixed value keeps the primary
+// call bounded regardless of the caller's own request context (see fallbackLimiter's doc comment
+// on why the probe is detached from that context entirely).
+const defaultRedisLimiterTimeout = 50 * time.Millisecond
 
 // RateLimitConfig configures the rate limiting middleware.
 type RateLimitConfig struct {
@@ -37,6 +47,24 @@ type RateLimitConfig struct {
 	// exceeds MaxEntries — the cap is enforced on every insert, not just at
 	// cleanup time. Default: 20000.
 	MaxEntries int
+
+	// Backend is the primary (typically Redis-backed, fleet-wide) rate-limit backend. OPTIONAL:
+	// nil means memory-only, exactly today's pre-#1531 behaviour — every existing call site and
+	// test that constructs a RateLimitConfig without this field compiles and behaves unchanged.
+	// When set, IPRateLimiter wraps it in a fallback decorator (see fallbackLimiter) so a Backend
+	// outage degrades to the in-memory limiter rather than failing the request path open or
+	// closed. Exempt paths (see isExemptPath) never consult Backend at all, by design.
+	Backend RateLimitBackend
+
+	// Done, when non-nil, stops the background cleanup goroutine when closed. OPTIONAL: nil means
+	// "never stop" — a nil channel blocks forever in a select, which is exactly today's behaviour
+	// (the goroutine ran for the life of the process either way). Set this in tests, or from a
+	// caller with its own shutdown signal, to avoid leaking the goroutine.
+	Done <-chan struct{}
+
+	// Logger receives fallback-activation/recovery log lines (see fallbackLimiter). OPTIONAL: nil
+	// uses slog.Default().
+	Logger *slog.Logger
 }
 
 func (c *RateLimitConfig) withDefaults() RateLimitConfig {
@@ -289,53 +317,169 @@ func (s *ipLimiterStore) cleanup(maxAge time.Duration) {
 	}
 }
 
-// IPRateLimiter returns an Echo-level middleware that enforces per-identity rate
-// limiting. It uses an in-memory token bucket (golang.org/x/time/rate).
-// Appropriate for single-region MVP; can be upgraded to Redis for multi-instance.
+// memoryBackend adapts the three per-tier ipLimiterStore instances to RateLimitBackend. It never
+// modifies ipLimiterStore itself (that type has three dedicated internal tests and a documented,
+// correct evict-before-insert invariant that this task must not touch) — it only wraps it.
 //
-// Two separate stores are maintained:
-//   - Regular store: used for all standard API paths
-//   - Auth store: stricter limit for sensitive paths (/webhooks/*, /api/v1/qa/auth/*)
+// ⚠ Retry-After is always window, exactly the fixed WindowDuration, never the actual remaining
+// wait computed by golang.org/x/time/rate. That is deliberate: it is what the pre-#1531 limiter
+// always returned, and TestIPRateLimiter_429HasRetryAfterHeader (and every other existing
+// Retry-After assertion) must keep passing unmodified. See fallbackLimiter's doc comment for the
+// resulting Retry-After inconsistency against the Redis backend, and why it is left as a
+// documented follow-up rather than unified here.
+type memoryBackend struct {
+	regular, auth, sentinel *ipLimiterStore
+	window                  time.Duration
+}
+
+// Name identifies this backend for logs/metrics.
+func (m *memoryBackend) Name() string { return "memory" }
+
+// storeFor returns the per-tier store backing tier.
+func (m *memoryBackend) storeFor(tier domain.RateLimitTier) *ipLimiterStore {
+	switch tier {
+	case domain.RateLimitTierAuth:
+		return m.auth
+	case domain.RateLimitTierSentinel:
+		return m.sentinel
+	default:
+		return m.regular
+	}
+}
+
+// Allow never returns an error: golang.org/x/time/rate.Limiter.Allow cannot fail, which is exactly
+// what makes this a safe unconditional fallback for fallbackLimiter.
+func (m *memoryBackend) Allow(_ context.Context, tier domain.RateLimitTier, key string) (domain.RateLimitDecision, error) {
+	limiter := m.storeFor(tier).get(key)
+	if limiter.Allow() {
+		return domain.RateLimitDecision{Allowed: true}, nil
+	}
+	return domain.RateLimitDecision{Allowed: false, RetryAfter: m.window}, nil
+}
+
+// tierForRequest picks the domain.RateLimitTier for a request, given its path and already-resolved
+// client identity key. Sentinel takes precedence over the path-based auth/regular split: the
+// sentinel bucket exists specifically because identity resolution failed (see
+// identitySentinelFallback), which is orthogonal to which path was hit, and the fleet-wide
+// sentinel bucket is deliberately coarse regardless of path.
 //
-// Both stores are hard-capped at RateLimitConfig.MaxEntries with stale-first
-// eviction (see ipLimiterStore.get), bounding worst-case memory regardless of
-// how many distinct identities are seen.
+// ⚠ This function is the ONLY thing that selects a domain.RateLimitTier for a live request, and it
+// can only ever return one of the three named constants (RateLimitTierRegular/Auth/Sentinel) by
+// construction — never an out-of-range value. That matters because
+// internal/ratelimitstore.RedisBackend.limitFor silently maps any out-of-range tier to
+// RegularLimit via a default branch (Task 4 review carry-forward); this function is what prevents
+// an unmapped tier from ever reaching it. See TestTierForRequest_NeverProducesAnUnmappedTier.
+func tierForRequest(path, key string) domain.RateLimitTier {
+	if key == identitySentinelFallback {
+		return domain.RateLimitTierSentinel
+	}
+	if isAuthEndpoint(path) {
+		return domain.RateLimitTierAuth
+	}
+	return domain.RateLimitTierRegular
+}
+
+// IPRateLimiter returns an Echo-level middleware that enforces per-identity rate limiting.
 //
-// Per-request identity is source-aware — see clientIdentity — and depends on
-// whether CloudflareOnly ran ahead of this middleware in the chain and what it
-// found. If CloudflareOnly is not registered ahead of IPRateLimiter, every
-// request is treated as ungated (RemoteAddr only).
+// Two backends compose here:
+//   - memoryBackend: an in-memory token bucket (golang.org/x/time/rate), always present.
+//   - cfg.Backend: OPTIONAL primary (in production, the Redis-backed fleet-wide GCRA limiter).
+//     nil means memory-only — today's pre-#1531 behaviour, unchanged.
+//
+// When cfg.Backend is set, it is wrapped in a fallbackLimiter so a primary outage degrades to the
+// per-machine memory backend rather than failing the request path open or closed. See
+// fallbackLimiter's doc comment for the full security and observability rationale.
+//
+// ⚠ Exempt paths (isExemptPath — /health today) ALWAYS use the memory backend directly, bypassing
+// the fallbackLimiter (and therefore cfg.Backend) entirely. Coupling /health — Fly's liveness
+// probe — to Redis availability is exactly what "never fail closed" forbids, and the probe path is
+// low-volume enough that fleet-wide accounting buys nothing. See
+// TestIPRateLimiter_ExemptPathsNeverTouchThePrimaryBackend.
+//
+// Three separate per-tier stores are maintained (see memoryBackend/tierForRequest): regular, auth
+// (stricter limit for /webhooks/*, /api/v1/qa/auth/*), and sentinel (the fleet-wide bucket used
+// when client identity could not be resolved — see identitySentinelFallback). All three are
+// hard-capped at RateLimitConfig.MaxEntries with stale-first eviction (see ipLimiterStore.get),
+// bounding worst-case memory regardless of how many distinct identities are seen.
+//
+// Per-request identity is source-aware — see clientIdentity — and depends on whether CloudflareOnly
+// ran ahead of this middleware in the chain and what it found. If CloudflareOnly is not registered
+// ahead of IPRateLimiter, every request is treated as ungated (RemoteAddr only).
+//
+// A panic anywhere in this handler (including from an injected backend) is recovered, logged, and
+// falls through to next(ec) rather than crashing the connection: IPRateLimiter sits ahead of
+// PanicRecovery and sentryecho in the middleware chain (see cmd/server/main.go), so a panic here
+// would otherwise be caught by nobody.
 func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 	c := cfg.withDefaults()
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 
 	regularStore := newIPLimiterStore(c.IPLimit, c.WindowDuration, c.MaxEntries)
 	authStore := newIPLimiterStore(c.AuthEndpointLimit, c.WindowDuration, c.MaxEntries)
+	sentinelStore := newIPLimiterStore(c.IPLimit, c.WindowDuration, c.MaxEntries)
 
-	// Background cleanup of stale entries
+	memBackend := &memoryBackend{regular: regularStore, auth: authStore, sentinel: sentinelStore, window: c.WindowDuration}
+	effective := newFallbackLimiter(cfg.Backend, memBackend, defaultRedisLimiterTimeout, logger)
+
+	// Background cleanup of stale entries. Stops when cfg.Done is closed; a nil cfg.Done blocks
+	// forever in the select, which is identical to today's "never stops" behaviour.
 	go func() {
 		ticker := time.NewTicker(c.CleanupInterval)
 		defer ticker.Stop()
-		for range ticker.C {
-			regularStore.cleanup(c.CleanupInterval * 2)
-			authStore.cleanup(c.CleanupInterval * 2)
+		for {
+			select {
+			case <-ticker.C:
+				regularStore.cleanup(c.CleanupInterval * 2)
+				authStore.cleanup(c.CleanupInterval * 2)
+				sentinelStore.cleanup(c.CleanupInterval * 2)
+			case <-cfg.Done:
+				return
+			}
 		}
 	}()
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(ec echo.Context) error {
-			key := clientIdentity(ec)
+		return func(ec echo.Context) (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Error("rate limiter panicked; allowing request through",
+						"panic", r, "path", ec.Request().URL.Path)
+					err = next(ec)
+				}
+			}()
 
-			store := regularStore
-			if isAuthEndpoint(ec.Request().URL.Path) {
-				store = authStore
+			path := ec.Request().URL.Path
+			key := clientIdentity(ec)
+			tier := tierForRequest(path, key)
+
+			backend := RateLimitBackend(effective)
+			if isExemptPath(path) {
+				backend = memBackend
 			}
 
-			limiter := store.get(key)
-			if !limiter.Allow() {
-				retryAfter := strconv.Itoa(int(c.WindowDuration.Seconds()))
-				ec.Response().Header().Set("Retry-After", retryAfter)
+			decision, dErr := backend.Allow(ec.Request().Context(), tier, key)
+			if dErr != nil {
+				// Neither memoryBackend nor fallbackLimiter (which always resolves through
+				// memoryBackend on primary failure) can return an error in practice. Treat an
+				// unexpected error the same as "allow" — availability over enforcement, same
+				// bias as everywhere else in this file.
+				return next(ec)
+			}
+
+			if !decision.Allowed {
+				observability.RateLimitRejectionsTotal.WithLabelValues(tier.String()).Inc()
+
+				retryAfter := decision.RetryAfter
+				secs := int(retryAfter.Seconds())
+				if secs < 1 {
+					secs = 1
+				}
+				ec.Response().Header().Set("Retry-After", strconv.Itoa(secs))
 				return echo.NewHTTPError(http.StatusTooManyRequests,
-					"rate limit exceeded, please retry after "+retryAfter+" seconds")
+					"rate limit exceeded, please retry after "+strconv.Itoa(secs)+" seconds")
 			}
 
 			return next(ec)
