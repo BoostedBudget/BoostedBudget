@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/riverqueue/river"
 )
@@ -31,6 +32,9 @@ type EffectiveCategoryRefreshWorker struct {
 
 	transactionRepo effectiveCategoryUpdater
 	logger          *slog.Logger
+	// cacheGens is optional (nil = cache invalidation disabled/not wired); see
+	// SetCacheInvalidation. Issue #1531 Task 10b-2a-iii.
+	cacheGens *cache.Generations
 }
 
 // EffectiveCategoryRefreshWorkerDeps holds dependencies for EffectiveCategoryRefreshWorker.
@@ -49,6 +53,24 @@ func NewEffectiveCategoryRefreshWorker(deps EffectiveCategoryRefreshWorkerDeps) 
 		transactionRepo: deps.TransactionRepo,
 		logger:          logger,
 	}
+}
+
+// SetCacheInvalidation wires cache generation bumping (setter injection, matching this
+// codebase's established convention). Issue #1531 Task 10b-2a-iii: this job directly rewrites
+// transactions.effective_category_name — the very field several cached analytics queries GROUP
+// BY (spending by category/merchant, budget vs actual) — with no bump anywhere. Optional: nil is
+// a safe no-op.
+func (w *EffectiveCategoryRefreshWorker) SetCacheInvalidation(gens *cache.Generations) {
+	w.cacheGens = gens
+}
+
+// bumpCacheForUser invalidates userID's cached analytics after this job's rename cascade has
+// committed. Void by design, matching every other generation bump in this codebase.
+func (w *EffectiveCategoryRefreshWorker) bumpCacheForUser(ctx context.Context, userID string) {
+	if w.cacheGens == nil {
+		return
+	}
+	w.cacheGens.Bump(ctx, cache.ScopeUser, userID, "effective_category_refresh")
 }
 
 // Work executes the effective category refresh job.
@@ -93,6 +115,9 @@ func (w *EffectiveCategoryRefreshWorker) Work(ctx context.Context, job *river.Jo
 		"rows_updated", rowsUpdated,
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
+
+	// Issue #1531 Task 10b-2a-iii: bump only after the rename cascade above has committed.
+	w.bumpCacheForUser(ctx, args.UserID)
 
 	return nil
 }

@@ -115,19 +115,92 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"tier override on the user's profile (a subscription-tier field) — the same deliberately- " +
 		"uncached bucket. MEDIUM CONFIDENCE: flagged in the report for controller confirmation."},
 
-	// --- Unclassified: not confidently reviewed. See task-10b-3-report.md worklist table for the
-	// full read on each (several look like likely real gaps, not merely unreviewed). ---
-	"boost_evaluation.go":               {kind: dispositionUnclassified},
-	"budget_period_close_check.go":      {kind: dispositionUnclassified},
-	"effective_category_refresh.go":     {kind: dispositionUnclassified},
-	"household_member_cleanup_check.go": {kind: dispositionUnclassified},
-	"household_over_capacity_check.go":  {kind: dispositionUnclassified},
-	"item_cleanup.go":                   {kind: dispositionUnclassified},
-	"item_cleanup_check.go":             {kind: dispositionUnclassified},
-	"portfolio_snapshot_worker.go":      {kind: dispositionUnclassified},
-	"savings_stats_worker.go":           {kind: dispositionUnclassified},
-	"subscription_webhook.go":           {kind: dispositionUnclassified},
-	"plaid_orphan_retry.go":             {kind: dispositionUnclassified},
+	// --- Bumps (Task 10b-2a-iii — see task-10b-2a-iii-report.md for full RED->GREEN evidence
+	// on each). ---
+	"effective_category_refresh.go": {dispositionBumps, "rewrites " +
+		"transactions.effective_category_name (the field several cached analytics queries GROUP " +
+		"BY) via TransactionRepository.UpdateEffectiveCategoryNameByCustomCategoryID, and NOW " +
+		"bumps ScopeUser after a successful call — see " +
+		"TestEffectiveCategoryRefreshWorker_Work_BumpsUserCacheGenerationAfterSuccess. NOTE: " +
+		"ScopeUser only, no household-scope bump — a household member's spending-by-category view " +
+		"(cached under ScopeHousehold, see cache.ScopeFor) reads this same denormalized column too, " +
+		"so a rename by one household member could leave another member's household-scoped cache " +
+		"stale until TTL. This mirrors investment_sync_service.go/liability_sync_service.go's own " +
+		"accepted ScopeUser-only simplification (their doc comments state the same trade-off " +
+		"explicitly) rather than a new gap introduced here; flagged, not fixed, to keep this slice " +
+		"bounded — see the report's Concerns section."},
+	"household_over_capacity_check.go": {dispositionBumps, "autoOffboard's call to " +
+		"OffboardExcessMembers removes household members via HouseholdService.removeMemberTx — a " +
+		"helper with no bump of its own and, for this job's call site specifically, no HTTP " +
+		"middleware coverage (OffboardExcessMembers has exactly one caller, this job). NOW bumps " +
+		"ScopeHousehold after a successful auto-offboard that actually removed at least one member " +
+		"— see TestHouseholdOverCapacityCheck_AutoOffboard_BumpsHouseholdCacheGeneration. The " +
+		"OverCapacity-bookkeeping-only branches (SetOverCapacity/ClearOverCapacity/notice markers) " +
+		"do NOT bump — reviewed and found to carry no cache impact of their own, see " +
+		"TestHouseholdOverCapacityCheck_SetOverCapacity_DoesNotBumpHousehold."},
+
+	// --- NoCacheImpact (Task 10b-2a-iii). ---
+	"portfolio_snapshot_worker.go": {dispositionNoCacheImpact, "CORRECTED from an initial " +
+		"ExplicitBump attempt after Codex adversarial review disproved the premise: this job's " +
+		"comment (and investment_sync_service.go's own bumpCacheForUser comment, from an earlier " +
+		"task) both claimed 'e.g. GetNetWorthTrend' reads portfolio snapshots. It does not — " +
+		"GetNetWorthTrend (analytics_service.go) reads ONLY BalanceSnapshotRepository. Grepped " +
+		"every reference to PortfolioSnapshotRepository repo-wide: it is read EXCLUSIVELY by " +
+		"investmentService.GetPortfolioSummary/GetPortfolioHistory (investment_service.go), both " +
+		"served directly from huma/operations/investments.go with NO cache.GetOrLoad wrapper — " +
+		"uncached, always-fresh reads. Bumping cache.Generations for this write invalidates a " +
+		"namespace nothing about this data actually populates. See the report's Concerns section — " +
+		"this also means the PRE-EXISTING bump in investment_sync_service.go's SyncHoldings (after " +
+		"the same Upsert call) is likely based on the same incorrect premise, though that is a " +
+		"prior task's code and out of scope to change here."},
+	"item_cleanup.go": {dispositionNoCacheImpact, "CORRECTED from an initial ExplicitBump attempt " +
+		"after Codex adversarial review disproved the premise: every cached analytics query filters " +
+		"on `accounts.status = 'active'` (repository/analytics_repository.go), never on " +
+		"linked_items status. Grepped plaid_item_cleanup_service.go end to end: it never references " +
+		"AccountRepository or the accounts table at all — RemoveItem only writes " +
+		"linked_items.plaid_removed_at/status, and this job's own ClearCleanupSchedule/Delete write " +
+		"only linked_items too. LinkedItemRepository.Delete's own WHERE NOT EXISTS (SELECT 1 FROM " +
+		"accounts WHERE linked_item_id = $1) guard confirms accounts are removed through a SEPARATE " +
+		"path (accountService.DeleteAccount, called only from the secured, HTTP-middleware-covered " +
+		"DELETE /accounts/{id} operation) before this job's Delete can ever succeed. So this job's " +
+		"own writes never change what any cached analytics query returns; the task-10b-3-report.md " +
+		"worklist's original 'no bump observed' framing was correct that no bump exists, but wrong " +
+		"that one is needed."},
+	"savings_stats_worker.go": {dispositionNoCacheImpact, "writes SavingsImpactRepository." +
+		"WriteSnapshot (a GLOBAL k-anonymity-gated aggregate row), which is read ONLY by " +
+		"GetSavingsImpactAggregate/GetSavingsImpactMe (huma/operations/savings_impact.go) via " +
+		"direct repository calls — GetLatestSnapshot/GetUserImpact — with NO cache.GetOrLoad " +
+		"wrapping anywhere; the aggregate endpoint's only caching is an HTTP Cache-Control header " +
+		"(a CDN concern, not cache.Generations). The ACTUALLY-cached \"savings rate\" " +
+		"(methodGetSavingsRateForPeriod in analytics_service_cached.go) is computed from a " +
+		"completely different repository (analyticsRepo, transactions/budget-based) and is not fed " +
+		"by this snapshot table at all. Verified by grep: no GetOrLoad/NamespaceAnalytics reference " +
+		"anywhere near SavingsImpactRepository."},
+	"household_member_cleanup_check.go": {dispositionNoCacheImpact, "PurgeRemovedMembership " +
+		"deletes bookkeeping (the stale household_members row, its household_account_shares, and " +
+		"its entitlement) for a membership that has already been status='removed' for 30+ days. " +
+		"Every household-scoped analytics query filters household_account_shares on " +
+		"`ua.user_id = ANY($3)` where $3 is the ACTIVE member ID list computed fresh per request " +
+		"(HouseholdService.ResolveScope -> ActiveMemberUserIDs) — this member was excluded from " +
+		"that list, and therefore from every cached household-scoped result, from the moment of " +
+		"the ORIGINAL removal, regardless of which of removeMemberTx's three call paths performed " +
+		"it (the two HTTP-covered ones, RemoveMember/ForceDisband, OR OffboardExcessMembers, which " +
+		"is job-only and now bumps ScopeHousehold itself — see the household_over_capacity_check.go " +
+		"entry). CORRECTED: an earlier draft of this entry claimed the original removal 'goes " +
+		"through the HTTP mutation middleware' unconditionally, which is false for the " +
+		"OffboardExcessMembers path (Codex adversarial review caught this contradiction against " +
+		"this file's own corrected finding). This deferred purge changes nothing about what is " +
+		"currently included in any live aggregate regardless of which path removed the member; " +
+		"it deletes rows that were already unreachable. NamespaceEntitlement is HardDisabled, so " +
+		"the entitlement-expiry write carries no cache impact either way."},
+
+	// --- Unclassified: not confidently reviewed. See task-10b-3-report.md worklist table
+	// (Slice B/C) for the full read on each; out of scope for Task 10b-2a-iii's Slice A. ---
+	"boost_evaluation.go":          {kind: dispositionUnclassified},
+	"budget_period_close_check.go": {kind: dispositionUnclassified},
+	"item_cleanup_check.go":        {kind: dispositionUnclassified},
+	"subscription_webhook.go":      {kind: dispositionUnclassified},
+	"plaid_orphan_retry.go":        {kind: dispositionUnclassified},
 }
 
 // listJobFiles returns the basenames of every non-test .go file directly in dir.

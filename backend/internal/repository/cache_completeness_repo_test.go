@@ -13,7 +13,7 @@ package repository
 //     analytics_rows, dashprefs, identity). detail is mandatory and non-empty.
 //   - dispositionUnclassified{}                 — not yet confidently reviewed. FAILS the
 //     completeness check on its own, precisely so a wrong guess is never recorded as a pass. See
-//     task-10b-3-report.md for the full worklist these 138 entries produce — that table, not this
+//     task-10b-3-report.md for the full worklist these entries produce (138 originally; 129 remain after Task 10b-2a-iii reclassified 9) — that table, not this
 //     guard, is the actual deliverable of this task.
 //
 // WHAT THIS DOES NOT PROVE (read this before trusting a green — or even a loudly-skipped — run):
@@ -105,7 +105,7 @@ type repoMethodDisposition struct {
 
 // repoMethodDispositions classifies every "InterfaceName.MethodName" pair in this package matched
 // by looksMutating. See the package doc comment for what each disposition kind means, its limits,
-// and why 138 of these are dispositionUnclassified (a deliberate, loudly-skipped gap — see
+// and why 129 of these are dispositionUnclassified (138 originally, before Task 10b-2a-iii reclassified 9) (a deliberate, loudly-skipped gap — see
 // task-10b-3-report.md's worklist table, which is the actual output of this task).
 var repoMethodDispositions = map[string]repoMethodDisposition{
 	"TransactionRepository.CreateBatch":                                   {dispositionExplicitBump, "services/transaction_sync_service.go SyncTransactions — bumps via defer + any-commit flag."},
@@ -114,7 +114,7 @@ var repoMethodDispositions = map[string]repoMethodDisposition{
 	"HoldingRepository.ReplaceForAccount":                                 {dispositionExplicitBump, "services/investment_sync_service.go SyncHoldings — bumpCacheForUser runs after (line ~339)."},
 	"InvestmentTransactionRepository.UpsertBatch":                         {dispositionExplicitBump, "services/investment_sync_service.go SyncInvestmentTransactions — bumpCacheForUser runs after (line ~204)."},
 	"LinkedItemRepository.UpdateInvestmentsLastSyncedDate":                {dispositionExplicitBump, "services/investment_sync_service.go SyncHoldings — bumpCacheForUser runs after."},
-	"PortfolioSnapshotRepository.Upsert":                                  {dispositionExplicitBump, "services/investment_sync_service.go SyncHoldings calls this then bumpCacheForUser (line ~319/339). CAVEAT: queue/jobs/portfolio_snapshot_worker.go ALSO calls this same repo method directly from a periodic job, and that job is Unclassified in the job-disposition guard — this method-level entry cannot express that the job's call site may be uncovered. Flagged as the single highest-priority follow-up in the report."},
+	"PortfolioSnapshotRepository.Upsert":                                  {dispositionExplicitBump, "services/investment_sync_service.go SyncHoldings calls this then bumpCacheForUser (line ~319/339), citing 'e.g. GetNetWorthTrend'. CORRECTED CAVEAT (Task 10b-2a-iii, Codex adversarial review): that premise does not hold — GetNetWorthTrend (analytics_service.go) reads ONLY BalanceSnapshotRepository, never PortfolioSnapshotRepository. Repo-wide grep confirms PortfolioSnapshotRepository is read EXCLUSIVELY by investmentService.GetPortfolioSummary/GetPortfolioHistory (investment_service.go), served uncached (no cache.GetOrLoad) directly from huma/operations/investments.go. So THIS bump appears to invalidate a namespace nothing about this write actually populates — likely a mis-premised bump from a prior task, not fixed here (out of scope: it is prior-task code, not one of this task's six files). queue/jobs/portfolio_snapshot_worker.go's OWN direct call to this same method was investigated for a matching bump and found, on the same evidence, to have genuine NoCacheImpact too — see that file's disposition entry in cache_completeness_jobs_test.go and the report's Concerns section. Left ExplicitBump here only because a Bump call literally still runs after this write in SyncHoldings; the disposition documents that call exists, not that it is well-founded."},
 	"CreditLiabilityRepository.ReplaceForAccount":                         {dispositionExplicitBump, "services/liability_sync_service.go SyncLiabilities — bumpCacheForUser runs after."},
 	"MortgageLiabilityRepository.ReplaceForAccount":                       {dispositionExplicitBump, "services/liability_sync_service.go SyncLiabilities — bumpCacheForUser runs after."},
 	"StudentLoanLiabilityRepository.ReplaceForAccount":                    {dispositionExplicitBump, "services/liability_sync_service.go SyncLiabilities — bumpCacheForUser runs after."},
@@ -128,7 +128,7 @@ var repoMethodDispositions = map[string]repoMethodDisposition{
 	"HouseholdRepository.UpdateHouseholdName":                             {dispositionCoveredByHTTPMiddleware, "services/household_service.go, called only by the secured updateHouseholdName Huma operation."},
 	"HouseholdRepository.DeleteHousehold":                                 {dispositionCoveredByHTTPMiddleware, "services/household_service.go, called only by the secured deleteHousehold Huma operation."},
 	"HouseholdRepository.InsertMember":                                    {dispositionCoveredByHTTPMiddleware, "services/household_service.go, both call sites (create-household owner row, accept-invite) are behind secured Huma operations; no job caller found."},
-	"HouseholdRepository.RemoveMember":                                    {dispositionCoveredByHTTPMiddleware, "services/household_service.go, called only by the secured removeHouseholdMember Huma operation; no job caller found (DISTINCT from DeleteRemovedMember, which IS job-called — see Unclassified)."},
+	"HouseholdRepository.RemoveMember":                                    {dispositionExplicitBump, "CORRECTED Task 10b-2a-iii (was wrongly CoveredByHTTPMiddleware-only): called from services/household_service.go's shared removeMemberTx helper, which has THREE callers, not one — RemoveMember (secured Huma op, HTTP-middleware-covered) and ForceDisband (also Huma-op-covered), AND OffboardExcessMembers, which has NO HTTP caller at all (its only caller is queue/jobs/household_over_capacity_check.go's autoOffboard). The job now bumps ScopeHousehold itself after a successful auto-offboard that actually removed members — see TestHouseholdOverCapacityCheck_AutoOffboard_BumpsHouseholdCacheGeneration. All three known call sites are now covered (two via HTTP middleware, one via this job's own bump)."},
 	"HouseholdInviteRepository.Create":                                    {dispositionCoveredByHTTPMiddleware, "services/household_service.go, called only by the secured createHouseholdInvite Huma operation."},
 	"HouseholdInviteRepository.MarkAccepted":                              {dispositionCoveredByHTTPMiddleware, "services/household_service.go, called only by the secured acceptHouseholdInvite Huma operation."},
 	"HouseholdInviteRepository.MarkDeclined":                              {dispositionCoveredByHTTPMiddleware, "services/household_service.go, called only by the secured declineHouseholdInvite Huma operation."},
@@ -225,16 +225,16 @@ var repoMethodDispositions = map[string]repoMethodDisposition{
 	"CustomCategoryRepository.ClearParentForChildren":                     {dispositionUnclassified, ""},
 	"CustomCategoryRepository.DeleteWithReassignment":                     {dispositionUnclassified, ""},
 	"HouseholdInviteRepository.RevokeAllPendingForHousehold":              {dispositionUnclassified, ""},
-	"HouseholdRepository.DeleteRemovedMember":                             {dispositionUnclassified, ""},
-	"HouseholdRepository.SetOverCapacity":                                 {dispositionUnclassified, ""},
-	"HouseholdRepository.ClearOverCapacity":                               {dispositionUnclassified, ""},
-	"HouseholdRepository.ClearOverCapacityIfAnchorMatches":                {dispositionUnclassified, ""},
-	"HouseholdRepository.MarkOverCapacityStartNoticeSent":                 {dispositionUnclassified, ""},
-	"HouseholdRepository.MarkOverCapacityWarn3dSent":                      {dispositionUnclassified, ""},
+	"HouseholdRepository.DeleteRemovedMember":                             {dispositionNoCacheImpact, "Task 10b-2a-iii: queue/jobs/household_member_cleanup_check.go's PurgeRemovedMembership calls this ONLY for a membership already status='removed' for 30+ days — every household-scoped analytics query filters household_account_shares on the ACTIVE member ID list (HouseholdService.ResolveScope -> ActiveMemberUserIDs, computed fresh per request), which already excluded this member from the moment of the ORIGINAL removal. This deferred purge deletes rows already unreachable by any live aggregate; see task-10b-2a-iii-report.md for the full trace."},
+	"HouseholdRepository.SetOverCapacity":                                 {dispositionNoCacheImpact, "Task 10b-2a-iii: writes household.over_capacity_since bookkeeping only — no cached analytics query reads this field. The actual membership change on the auto-offboard path is a SEPARATE write (removeMemberTx -> HouseholdRepository.RemoveMember, called via OffboardExcessMembers), which queue/jobs/household_over_capacity_check.go now bumps ScopeHousehold for. See task-10b-2a-iii-report.md."},
+	"HouseholdRepository.ClearOverCapacity":                               {dispositionNoCacheImpact, "Task 10b-2a-iii: clears the same over_capacity_since/notice-marker bookkeeping SetOverCapacity sets — no cached analytics query reads it. See that entry's detail."},
+	"HouseholdRepository.ClearOverCapacityIfAnchorMatches":                {dispositionNoCacheImpact, "Task 10b-2a-iii: same over-capacity bookkeeping as ClearOverCapacity, anchor-guarded variant used exclusively after autoOffboard — the membership change itself is already bumped at that call site, not this bookkeeping clear."},
+	"HouseholdRepository.MarkOverCapacityStartNoticeSent":                 {dispositionNoCacheImpact, "Task 10b-2a-iii: records that a grace-period email was sent — an audit/notice marker, not analytics-relevant data."},
+	"HouseholdRepository.MarkOverCapacityWarn3dSent":                      {dispositionNoCacheImpact, "Task 10b-2a-iii: same as MarkOverCapacityStartNoticeSent — notice-sent marker, not analytics-relevant data."},
 	"HouseholdRepository.RestoreMember":                                   {dispositionUnclassified, ""},
 	"LinkedItemRepository.Create":                                         {dispositionUnclassified, ""},
 	"LinkedItemRepository.UpdateCursor":                                   {dispositionUnclassified, ""},
-	"LinkedItemRepository.Delete":                                         {dispositionUnclassified, ""},
+	"LinkedItemRepository.Delete":                                         {dispositionNoCacheImpact, "Task 10b-2a-iii: sole caller is queue/jobs/item_cleanup.go. Its own guard clause — `DELETE FROM linked_items WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM accounts WHERE linked_item_id = $1)` — proves this method never fires while any account still references the item; accounts are removed through a SEPARATE, HTTP-middleware-covered path (accountService.DeleteAccount, called only from the secured DELETE /accounts/{id} operation) first. Every cached analytics query filters on `accounts.status = 'active'`, never on linked_items — confirmed by grepping repository/analytics_repository.go — so this delete changes nothing any cached read depends on. An initial pass in this task wrongly classified this ExplicitBump on the assumption that item removal changes the account universe; Codex adversarial review caught the error by tracing that no code path in plaid_item_cleanup_service.go or item_cleanup.go ever touches AccountRepository."},
 	"LinkedItemRepository.DeleteByUser":                                   {dispositionUnclassified, ""},
 	"LinkedItemRepository.MarkForCleanup":                                 {dispositionUnclassified, ""},
 	"LinkedItemRepository.ClearCleanupSchedule":                           {dispositionUnclassified, ""},
@@ -280,7 +280,7 @@ var repoMethodDispositions = map[string]repoMethodDisposition{
 	"SavingsGoalRepository.Delete":                                        {dispositionUnclassified, ""},
 	"SavingsGoalRepository.UpdateCurrentAmount":                           {dispositionUnclassified, ""},
 	"SavingsGoalRepository.MarkCompleted":                                 {dispositionUnclassified, ""},
-	"SavingsImpactRepository.WriteSnapshot":                               {dispositionUnclassified, ""},
+	"SavingsImpactRepository.WriteSnapshot":                               {dispositionNoCacheImpact, "Task 10b-2a-iii: writes the GLOBAL k-anonymity-gated savings-impact aggregate row, read ONLY by GetSavingsImpactAggregate/GetSavingsImpactMe (huma/operations/savings_impact.go) via direct repository calls (GetLatestSnapshot/GetUserImpact) with no cache.GetOrLoad wrapping anywhere — verified by grep. The aggregate endpoint's only caching is an HTTP Cache-Control header (a CDN concern, not cache.Generations). The method GROUP BY methodGetSavingsRateForPeriod IS cached (NamespaceAnalytics), but it is computed from analyticsRepo (transactions/budget), a completely different repository, and is not fed by this snapshot table. See task-10b-2a-iii-report.md."},
 	"SecurityRepository.UpsertBatch":                                      {dispositionUnclassified, ""},
 	"SubscriptionOverrideRepository.CreateOverride":                       {dispositionUnclassified, ""},
 	"SubscriptionOverrideRepository.DeleteOverride":                       {dispositionUnclassified, ""},
@@ -290,7 +290,7 @@ var repoMethodDispositions = map[string]repoMethodDisposition{
 	"TransactionRepository.UpdateCategory":                                {dispositionUnclassified, ""},
 	"TransactionRepository.SetReviewed":                                   {dispositionUnclassified, ""},
 	"TransactionRepository.BulkUpdateCategory":                            {dispositionUnclassified, ""},
-	"TransactionRepository.UpdateEffectiveCategoryNameByCustomCategoryID": {dispositionUnclassified, ""},
+	"TransactionRepository.UpdateEffectiveCategoryNameByCustomCategoryID": {dispositionExplicitBump, "Task 10b-2a-iii: queue/jobs/effective_category_refresh.go now bumps ScopeUser after a successful call — see TestEffectiveCategoryRefreshWorker_Work_BumpsUserCacheGenerationAfterSuccess. Sole caller of this method."},
 	"TransferSuggestionRepository.Create":                                 {dispositionUnclassified, ""},
 	"TransferSuggestionRepository.UpdateStatus":                           {dispositionUnclassified, ""},
 	"TransferSuggestionRepository.CancelAcceptedSuggestion":               {dispositionUnclassified, ""},
