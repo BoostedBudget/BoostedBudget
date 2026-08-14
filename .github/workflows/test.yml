@@ -981,12 +981,33 @@ jobs:
     # steps below, keyed separately from backend-test's since compile flags differ), so
     # warm runs should compile much faster now. Re-measure actual wall-clock time across a
     # few real CI runs before lowering this — don't drop it back to 15m without that data.
-    timeout-minutes: 25
+    # #1531 Task 11e: raised 25m -> 30m. Compile time is unaffected (the Task 11b-d integration
+    # files already existed and were already compiled by this job before this change — they just
+    # silently t.Skip'd at runtime for lack of a real Redis). What changes here is that those
+    # tests — the full cache-parity harness (4 suites) and the fail-safe suite (FLUSHDB, eviction,
+    # 50x50 concurrency under -race, bump-failure) — now actually EXECUTE for the first time, plus
+    # two new `docker run`/health-wait blocks for the Redis containers below. All of that measured
+    # low single-digit seconds locally (see task-11e-report.md); the 5m margin is headroom for a
+    # cold `docker pull redis:7-alpine` on a runner that hasn't cached the image yet, not because
+    # execution time is expected to meaningfully grow. Re-measure across real CI runs before
+    # lowering, same as the note above.
+    timeout-minutes: 30
     env:
       UNIQUE_WORKSPACE: workspace-backend-integration-test-${{ github.run_id }}
-      # Container name is unique per run AND per rerun attempt, so a killed
+      # Container names are unique per run AND per rerun attempt, so a killed
       # prior attempt can never collide with this one.
       PG_CONTAINER: test-postgres-integ-${{ github.run_id }}-${{ github.run_attempt }}
+      # #1531 Task 11e: two SEPARATE disposable Redis containers — one standing in for the app's
+      # cache backend, one for the rate-limit backend — exported as REDIS_TEST_URL /
+      # CACHE_REDIS_TEST_URL (see cachetest.ConnectTestRedis / redisclient's client_integration_test.go
+      # / ratelimitstore's redis_backend_integration_test.go). Deliberately two containers, not one
+      # shared instance: the fail-safe suite's FLUSHDB/eviction tests use their own fully disposable
+      # StartRedisContainer instances per-test anyway, but ConnectTestRedis-based parity tests share
+      # whichever single instance CACHE_REDIS_TEST_URL points at across the whole run, and giving
+      # cache and rate-limit tests independent instances keeps them from stepping on each other's
+      # keys/memory pressure.
+      CACHE_REDIS_CONTAINER: test-redis-cache-integ-${{ github.run_id }}-${{ github.run_attempt }}
+      RATELIMIT_REDIS_CONTAINER: test-redis-ratelimit-integ-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - name: Clean workspace (fix permission issues)
@@ -1107,15 +1128,111 @@ jobs:
             sleep 1
           done
 
-      - name: Guard — DATABASE_URL must be set
+      - name: Start Redis containers (dynamic ports)
         run: |
-          # Integration tests call t.Skip() when DATABASE_URL is unset, which
-          # makes them appear green while testing nothing. Fail loudly instead.
+          # #1531 Task 11e: mirrors "Start PostgreSQL container (dynamic port)" above —
+          # same reap-orphans / dynamic-host-port / health-wait shape, same rationale.
+          # Two independent containers (see the CACHE_REDIS_CONTAINER / RATELIMIT_REDIS_CONTAINER
+          # env comment above for why two, not one).
+          docker ps -aq --filter "name=test-redis-cache-integ-${{ github.run_id }}-" \
+            | xargs -r docker rm -f 2>/dev/null || true
+          docker ps -aq --filter "name=test-redis-ratelimit-integ-${{ github.run_id }}-" \
+            | xargs -r docker rm -f 2>/dev/null || true
+          docker rm -f ${{ env.CACHE_REDIS_CONTAINER }} 2>/dev/null || true
+          docker rm -f ${{ env.RATELIMIT_REDIS_CONTAINER }} 2>/dev/null || true
+
+          echo "Pulling Redis image..."
+          for i in 1 2 3; do
+            docker pull redis:7-alpine && break || {
+              echo "Pull attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 10
+            }
+          done
+
+          # -p 6379 (no host side) lets Docker pick a free port for each — same reason
+          # as Postgres above: avoids clashing with any other job/container on the runner.
+          docker run -d \
+            --name ${{ env.CACHE_REDIS_CONTAINER }} \
+            -p 6379 \
+            --health-cmd "redis-cli ping" \
+            --health-interval 5s \
+            --health-timeout 3s \
+            --health-retries 10 \
+            redis:7-alpine
+
+          docker run -d \
+            --name ${{ env.RATELIMIT_REDIS_CONTAINER }} \
+            -p 6379 \
+            --health-cmd "redis-cli ping" \
+            --health-interval 5s \
+            --health-timeout 3s \
+            --health-retries 10 \
+            redis:7-alpine
+
+          sleep 2
+          CACHE_REDIS_PORT=$(docker port ${{ env.CACHE_REDIS_CONTAINER }} 6379 | cut -d: -f2)
+          RATELIMIT_REDIS_PORT=$(docker port ${{ env.RATELIMIT_REDIS_CONTAINER }} 6379 | cut -d: -f2)
+          echo "Cache Redis running on dynamically assigned port: $CACHE_REDIS_PORT"
+          echo "Rate-limit Redis running on dynamically assigned port: $RATELIMIT_REDIS_PORT"
+
+          # Deliberately NOT the app's own CACHE_REDIS_URL / RATE_LIMIT_REDIS_URL — those would
+          # leak into every config.Load() unit test on this runner and silently change what they
+          # assert. See cachetest/redis.go and redisclient/client_integration_test.go doc comments.
+          echo "CACHE_REDIS_TEST_URL=redis://localhost:$CACHE_REDIS_PORT/0" >> $GITHUB_ENV
+          echo "REDIS_TEST_URL=redis://localhost:$RATELIMIT_REDIS_PORT/0" >> $GITHUB_ENV
+
+          echo "Waiting for cache Redis to be ready..."
+          for i in {1..30}; do
+            if docker exec ${{ env.CACHE_REDIS_CONTAINER }} redis-cli ping 2>/dev/null | grep -q PONG; then
+              echo "Cache Redis is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "::error::Timeout waiting for cache Redis to start"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "Waiting for rate-limit Redis to be ready..."
+          for i in {1..30}; do
+            if docker exec ${{ env.RATELIMIT_REDIS_CONTAINER }} redis-cli ping 2>/dev/null | grep -q PONG; then
+              echo "Rate-limit Redis is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "::error::Timeout waiting for rate-limit Redis to start"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Guard — DATABASE_URL, CACHE_REDIS_TEST_URL, REDIS_TEST_URL must be set
+        run: |
+          # Integration tests call t.Skip() when these are unset, which makes them appear
+          # green while testing nothing. Fail loudly instead.
+          # #1531 Task 11e: extended from DATABASE_URL-only to also cover the two Redis test
+          # URLs — cachetest.ConnectTestRedis (CACHE_REDIS_TEST_URL) and redisclient's /
+          # ratelimitstore's own integration tests (REDIS_TEST_URL) t.Skip identically on an
+          # unset var, which would otherwise let the entire #1531 cache-parity and fail-safe
+          # suite report "ok" having executed zero cases.
+          MISSING=""
           if [ -z "$DATABASE_URL" ]; then
-            echo "::error::DATABASE_URL is unset — integration tests would silently skip"
+            MISSING="${MISSING}DATABASE_URL "
+          fi
+          if [ -z "$CACHE_REDIS_TEST_URL" ]; then
+            MISSING="${MISSING}CACHE_REDIS_TEST_URL "
+          fi
+          if [ -z "$REDIS_TEST_URL" ]; then
+            MISSING="${MISSING}REDIS_TEST_URL "
+          fi
+          if [ -n "$MISSING" ]; then
+            echo "::error::Unset env var(s) would make integration tests silently skip: $MISSING"
             exit 1
           fi
           echo "DATABASE_URL is set (port $POSTGRES_PORT)"
+          echo "CACHE_REDIS_TEST_URL is set"
+          echo "REDIS_TEST_URL is set"
 
       - name: Install golang-migrate (job-local)
         env:
@@ -1146,6 +1263,8 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
+          CACHE_REDIS_TEST_URL: ${{ env.CACHE_REDIS_TEST_URL }}
+          REDIS_TEST_URL: ${{ env.REDIS_TEST_URL }}
         run: |
           set -euo pipefail
 
@@ -1197,6 +1316,12 @@ jobs:
       - name: Cleanup PostgreSQL container
         if: always()
         run: docker rm -f ${{ env.PG_CONTAINER }} 2>/dev/null || true
+
+      - name: Cleanup Redis containers
+        if: always()
+        run: |
+          docker rm -f ${{ env.CACHE_REDIS_CONTAINER }} 2>/dev/null || true
+          docker rm -f ${{ env.RATELIMIT_REDIS_CONTAINER }} 2>/dev/null || true
 
       - name: Final workspace cleanup
         if: always()

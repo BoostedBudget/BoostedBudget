@@ -210,7 +210,7 @@ export default defineConfig({
       //   with no direct signal that rate limiting was the cause. This is a test-only
       //   override (only reaches this backend process, started fresh per E2E run) — it does
       //   not touch the production default of 100.
-      command: `cd ../../backend && PORT=${backendPort} ENVIRONMENT=qa DATABASE_URL="${databaseUrl}" CLERK_SECRET_KEY="${process.env.CLERK_SECRET_KEY || ''}" CLERK_PUBLISHABLE_KEY="${process.env.CLERK_PUBLISHABLE_KEY || ''}" RATE_LIMIT_IP=100000 ./bin/server`,
+      command: `cd ../../backend && PORT=${backendPort} ENVIRONMENT=qa DATABASE_URL="${databaseUrl}" CLERK_SECRET_KEY="${process.env.CLERK_SECRET_KEY || ''}" CLERK_PUBLISHABLE_KEY="${process.env.CLERK_PUBLISHABLE_KEY || ''}" RATE_LIMIT_IP=100000 CACHE_REDIS_URL="${process.env.CACHE_REDIS_URL || ''}" RATE_LIMIT_REDIS_URL="${process.env.RATE_LIMIT_REDIS_URL || ''}" ./bin/server`,
       url: `http://localhost:${backendPort}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
