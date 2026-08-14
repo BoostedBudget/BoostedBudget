@@ -206,6 +206,8 @@ func TestLoad_ProductionValidation_PassesWithAllRequiredFields(t *testing.T) {
 	t.Setenv("PADDLE_WEBHOOK_SECRET", "test-webhook-secret")
 	t.Setenv("CF_ORIGIN_SECRET", "a3f9e2c1b0d84726f5e3a1c0b9d87264a3f9e2c1b0d84726f5e3a1c0b9d87264")
 	t.Setenv("DELETION_TOKEN_SECRET", "test-deletion-token-secret")
+	// Issue #1531 Task 8: RATE_LIMIT_REDIS_URL is now required in production/staging.
+	t.Setenv("RATE_LIMIT_REDIS_URL", "rediss://:pw@limiter.internal:6379/0")
 
 	_, err := Load()
 	assert.NoError(t, err)
@@ -395,6 +397,9 @@ func TestLoad_ProductionValidation_AggregatesErrors(t *testing.T) {
 	t.Setenv("PADDLE_WEBHOOK_SECRET", "")
 	t.Setenv("CF_ORIGIN_SECRET", "")
 	t.Setenv("DELETION_TOKEN_SECRET", "")
+	// Cleared (not just omitted): an ambient RATE_LIMIT_REDIS_URL export would
+	// otherwise leak in and mask a real regression in this check.
+	t.Setenv("RATE_LIMIT_REDIS_URL", "")
 
 	_, err := Load()
 	require.Error(t, err)
@@ -406,6 +411,7 @@ func TestLoad_ProductionValidation_AggregatesErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "PADDLE")
 	assert.Contains(t, err.Error(), "CF_ORIGIN_SECRET")
 	assert.Contains(t, err.Error(), "DELETION_TOKEN_SECRET")
+	assert.Contains(t, err.Error(), "RATE_LIMIT_REDIS_URL")
 }
 
 func TestLoad_DevelopmentSkipsValidation(t *testing.T) {
@@ -466,4 +472,263 @@ func TestLoad_MCPWorkerSecretConfigurable(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "test-mcp-worker-secret", cfg.MCPWorkerSecret)
+}
+
+// ─── Issue #1531 Task 8: RATE_LIMIT_REDIS_URL rename, cache/tuning fields, RabbitMQURL removal ──
+
+// setProdRequiredEnv stubs every field validate() requires in production/staging EXCEPT the
+// Redis fields under test here, so each test below only needs to set/clear the Redis-specific
+// env vars it cares about. Mirrors the existing pattern in this file (e.g.
+// TestLoad_ProductionValidation_PassesWithAllRequiredFields) of explicitly clearing/setting every
+// checked field rather than relying on ambient shell state.
+func setProdRequiredEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost/db")
+	t.Setenv("CLERK_SECRET_KEY", "sk_live_test")
+	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://boostedbudget.com")
+	t.Setenv("PLAID_CLIENT_ID", "test-client-id")
+	t.Setenv("PLAID_SECRET", "test-secret")
+	t.Setenv("PADDLE_API_KEY", "test-api-key")
+	t.Setenv("PADDLE_WEBHOOK_SECRET", "test-webhook-secret")
+	t.Setenv("CF_ORIGIN_SECRET", "a3f9e2c1b0d84726f5e3a1c0b9d87264a3f9e2c1b0d84726f5e3a1c0b9d87264")
+	t.Setenv("DELETION_TOKEN_SECRET", "test-deletion-token-secret")
+}
+
+// TestConfig_RateLimitRedisURLDefaultsToEmptyNotLocalhost is the RED test for the hazard
+// documented on RateLimitRedisURL's doc comment: a production deploy that forgot the secret used
+// to silently default to redis://localhost:6379, trip the breaker, and run permanently on the
+// in-memory limiter fallback — a correct alert with a misleading cause.
+func TestConfig_RateLimitRedisURLDefaultsToEmptyNotLocalhost(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RATE_LIMIT_REDIS_URL", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "", cfg.RateLimitRedisURL,
+		"RateLimitRedisURL must default to empty, never redis://localhost:6379")
+}
+
+func TestConfig_RateLimitRedisURLConfigurable(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RATE_LIMIT_REDIS_URL", "rediss://:pw@limiter.internal:6379/0")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "rediss://:pw@limiter.internal:6379/0", cfg.RateLimitRedisURL)
+}
+
+func TestConfig_ValidateRequiresRateLimitRedisURLInProduction(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "production")
+	setProdRequiredEnv(t)
+	// Cleared (not just omitted): an ambient RATE_LIMIT_REDIS_URL export would
+	// otherwise leak in and mask a real regression in this check.
+	t.Setenv("RATE_LIMIT_REDIS_URL", "")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "RATE_LIMIT_REDIS_URL")
+}
+
+func TestConfig_ValidateRejectsNonRedisSchemeForRateLimitRedisURL(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "production")
+	setProdRequiredEnv(t)
+	t.Setenv("RATE_LIMIT_REDIS_URL", "http://not-redis.example.com:6379")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "RATE_LIMIT_REDIS_URL")
+	assert.Contains(t, err.Error(), "scheme")
+}
+
+func TestConfig_ValidateDoesNotRequireCacheRedisURL(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "production")
+	setProdRequiredEnv(t)
+	t.Setenv("RATE_LIMIT_REDIS_URL", "rediss://:sup3rs3cr3t@limiter.internal:6379/0")
+	t.Setenv("CACHE_REDIS_URL", "")
+
+	_, err := Load()
+	assert.NoError(t, err)
+}
+
+// TestConfig_ValidateRejectsCacheAndLimiterSharingOneURL is the discrimination-proof test for the
+// hazard documented on RateLimitRedisURL's doc comment: pointing the cache at the same Redis
+// instance as the rate limiter (provisioned noeviction) makes an evicting cache write OOM the
+// limiter's SET — a permanent limiter fallback with an unrelated-looking cause.
+func TestConfig_ValidateRejectsCacheAndLimiterSharingOneURL(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "production")
+	setProdRequiredEnv(t)
+	sharedURL := "rediss://:sup3rs3cr3t@shared.internal:6379/0"
+	t.Setenv("RATE_LIMIT_REDIS_URL", sharedURL)
+	t.Setenv("CACHE_REDIS_URL", sharedURL)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CACHE_REDIS_URL")
+	assert.Contains(t, err.Error(), "RATE_LIMIT_REDIS_URL")
+}
+
+// TestConfig_ValidationErrorsNeverContainTheURLPassword is the discrimination-proof test for the
+// "never leak the password" rule: uses a distinctive password (sup3rs3cr3t) and asserts it
+// appears nowhere in the joined validation error output, even though every other field is ALSO
+// cleared so validate() emits its full set of joined errors.
+func TestConfig_ValidationErrorsNeverContainTheURLPassword(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "production")
+	// Deliberately clear everything else so validate() reports every possible error alongside
+	// the redis ones — proving the password never leaks through ANY joined error message, not
+	// just the redis-specific ones.
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("CLERK_SECRET_KEY", "")
+	t.Setenv("ENCRYPTION_KEY", "")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "")
+	t.Setenv("PLAID_CLIENT_ID", "")
+	t.Setenv("PLAID_SECRET", "")
+	t.Setenv("PADDLE_API_KEY", "")
+	t.Setenv("PADDLE_WEBHOOK_SECRET", "")
+	t.Setenv("CF_ORIGIN_SECRET", "")
+	t.Setenv("DELETION_TOKEN_SECRET", "")
+	// Same URL for both fields: also exercises the cache/limiter-sharing rule's error message.
+	sharedURL := "rediss://user:sup3rs3cr3t@limiter.internal:6379/0"
+	t.Setenv("RATE_LIMIT_REDIS_URL", sharedURL)
+	t.Setenv("CACHE_REDIS_URL", sharedURL)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "sup3rs3cr3t",
+		"validation error messages must never contain the Redis URL — it carries a password; refer to the env var by name only")
+}
+
+func TestConfig_RateLimitBackendRejectsUnknownValues(t *testing.T) {
+	// Must be rejected in EVERY environment, not just production/staging — an unrecognised
+	// RATE_LIMIT_BACKEND value is a config typo the process should never silently misinterpret.
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RATE_LIMIT_BACKEND", "bogus")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "RATE_LIMIT_BACKEND")
+}
+
+func TestConfig_RateLimitBackendAcceptsKnownValues(t *testing.T) {
+	for _, v := range []string{"auto", "memory", "redis"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", "development")
+			t.Setenv("RATE_LIMIT_BACKEND", v)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+			assert.Equal(t, v, cfg.RateLimitBackend)
+		})
+	}
+}
+
+func TestConfig_RateLimitBackendDefaultsToAuto(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RATE_LIMIT_BACKEND", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "auto", cfg.RateLimitBackend)
+}
+
+// TestConfig_RateLimitSentinelLimitZeroMeansUseIPLimit pins the config-layer half of the
+// contract with ratelimitstore.Options.withDefaults (TestRedisBackend_SentinelLimitDefaultsToRegularLimitWhenZero
+// on that side): RateLimitSentinelLimit's zero-value default must remain 0, which
+// ratelimitstore interprets as "use RegularLimit (RateLimitIP)".
+func TestConfig_RateLimitSentinelLimitZeroMeansUseIPLimit(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RATE_LIMIT_SENTINEL_LIMIT", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, 0, cfg.RateLimitSentinelLimit)
+}
+
+func TestConfig_RateLimitSentinelLimitConfigurable(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RATE_LIMIT_SENTINEL_LIMIT", "500")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, 500, cfg.RateLimitSentinelLimit)
+}
+
+func TestConfig_RateLimitFallbackDivisorDefaultsToOne(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RATE_LIMIT_FALLBACK_DIVISOR", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, 1, cfg.RateLimitFallbackDivisor)
+}
+
+func TestConfig_RateLimitFallbackDivisorConfigurable(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RATE_LIMIT_FALLBACK_DIVISOR", "4")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, 4, cfg.RateLimitFallbackDivisor)
+}
+
+func TestConfig_CacheEnabledDefaultsToTrue(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("CACHE_ENABLED", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.True(t, cfg.CacheEnabled)
+}
+
+func TestConfig_CacheEnabledConfigurable(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("CACHE_ENABLED", "false")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.False(t, cfg.CacheEnabled)
+}
+
+func TestConfig_CacheNamespacesDisabledDefaultsToEmpty(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("CACHE_NAMESPACES_DISABLED", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "", cfg.CacheNamespacesDisabled)
+}
+
+func TestConfig_CacheNamespacesDisabledConfigurable(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("CACHE_NAMESPACES_DISABLED", "budget-summary,net-worth")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "budget-summary,net-worth", cfg.CacheNamespacesDisabled)
+}
+
+func TestConfig_RedisTimeoutMsAndPoolSizeDefaults(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("REDIS_TIMEOUT_MS", "")
+	t.Setenv("REDIS_POOL_SIZE", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, 200, cfg.RedisTimeoutMs)
+	assert.Equal(t, 10, cfg.RedisPoolSize)
+}
+
+// TestConfig_RabbitMQURLIsGone is a compile-time-only assertion for issue #1531 Task 8:
+// Config.RabbitMQURL no longer exists — zero consumers, no `amqp` import anywhere in the Go tree
+// (River, Postgres-backed, is the queue). There is nothing to assert about its absence at runtime
+// beyond "this package still compiles" without the field; this test is a named, discoverable
+// marker of that fact rather than relying solely on reading config.go.
+func TestConfig_RabbitMQURLIsGone(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	_ = cfg // no RabbitMQURL field exists to reference — that absence IS the assertion
 }

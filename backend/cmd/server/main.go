@@ -131,16 +131,16 @@ func main() {
 	// Issue #1531 Task 7c/7d: construct the two Redis clients — limiter (fleet-wide rate
 	// limiting, wired below) and cache (Task 9, out of scope here).
 	//
-	// ⚠ COORDINATION NOTE FOR TASK 8: config does not yet have a dedicated cache Redis URL field.
-	// The limiter client below uses the existing cfg.RedisURL (defaults to
-	// redis://localhost:6379) — the only Redis URL config has today. The cache client is
-	// deliberately constructed with an EMPTY URL (always ErrNotConfigured, always nil) rather
-	// than reusing cfg.RedisURL: internal/redisclient's package doc comment explains why sharing
-	// one URL between a noeviction-provisioned limiter instance and a cache is a real hazard (an
-	// evicting cache write can OOM the limiter's SETs), not a style preference. Task 8 must add a
-	// dedicated CacheRedisURL (or equivalent) config field; Task 9 wires it into cacheClient below.
+	// Task 8: cfg.RateLimitRedisURL (RATE_LIMIT_REDIS_URL) replaces the old generic cfg.RedisURL
+	// (REDIS_URL) — the rename exists so there is no generic "the Redis URL" left for a future
+	// change to point the cache at. The two clients below use TWO SEPARATE config fields
+	// (RateLimitRedisURL / CacheRedisURL) precisely so they can never be pointed at the same
+	// instance by accident: internal/redisclient's package doc comment explains why sharing one
+	// URL between a noeviction-provisioned limiter instance and a cache is a real hazard (an
+	// evicting cache write can OOM the limiter's SETs) — config.validate() also hard-errors in
+	// production/staging if the two URLs are ever set to the same value.
 	limiterClient, err := redisclient.New(redisclient.Options{
-		URL:  cfg.RedisURL,
+		URL:  cfg.RateLimitRedisURL,
 		Name: "limiter",
 	})
 	if err != nil {
@@ -164,7 +164,7 @@ func main() {
 	}
 
 	cacheClient, err := redisclient.New(redisclient.Options{
-		URL:  "", // Task 8/9: no dedicated cache Redis URL config field exists yet
+		URL:  cfg.CacheRedisURL,
 		Name: "cache",
 	})
 	if err != nil {
@@ -2401,19 +2401,23 @@ func buildRateLimitBackend(limiterClient redisclient.Client, cfg *config.Config)
 	return ratelimitstore.NewRedisBackend(limiterClient, ratelimitstore.Options{
 		RegularLimit: cfg.RateLimitIP,
 		AuthLimit:    cfg.RateLimitAuth,
-		// SentinelLimit deliberately left unset (Options.withDefaults falls back to
-		// RegularLimit — see TestRedisBackend_SentinelLimitDefaultsToRegularLimitWhenZero),
-		// NOT cfg.RateLimitAuth. The sentinel bucket ("rl:v1:sentinel") is used whenever a
-		// Cloudflare-gated request's Cf-Connecting-Ip is missing, duplicated, or malformed — and
-		// under Redis it is ONE fleet-wide key, not per-machine. A Cloudflare header anomaly
-		// (Managed Transform change, config drift, a CF incident) collapses ALL affected traffic
-		// into that single bucket: capping it at the auth limit would mean the entire fleet falls
-		// over to ~10 req/min in precisely the incident where the API most needs to keep serving.
-		// RegularLimit (fleet-wide, per Task 5's intentional tightening from the old per-machine
-		// limit) is the correct floor. Fix round 1: Task 8 is expected to add a
-		// RATE_LIMIT_SENTINEL_LIMIT env override so this can be raised during a live incident
-		// without a deploy — wire it here (as an explicit field again) once it exists.
-		Window: time.Minute,
+		// SentinelLimit is now wired explicitly from cfg.RateLimitSentinelLimit
+		// (RATE_LIMIT_SENTINEL_LIMIT, Task 8) so an operator can raise the sentinel bucket's
+		// limit during a live incident without a deploy. Zero (the default) still means "use
+		// RegularLimit, not AuthLimit" — Options.withDefaults treats any <=0 SentinelLimit as
+		// "fall back to RegularLimit" (see TestRedisBackend_SentinelLimitDefaultsToRegularLimitWhenZero),
+		// so passing an explicit zero here preserves that fix-round-1 behaviour exactly; it is NOT
+		// a regression to "wire the field explicitly" as fix round 1's comment anticipated. The
+		// sentinel bucket ("rl:v1:sentinel") is used whenever a Cloudflare-gated request's
+		// Cf-Connecting-Ip is missing, duplicated, or malformed — and under Redis it is ONE
+		// fleet-wide key, not per-machine. A Cloudflare header anomaly (Managed Transform change,
+		// config drift, a CF incident) collapses ALL affected traffic into that single bucket:
+		// capping it at the auth limit would mean the entire fleet falls over to ~10 req/min in
+		// precisely the incident where the API most needs to keep serving. RegularLimit (the
+		// zero-value default) is the correct floor; RATE_LIMIT_SENTINEL_LIMIT lets it be raised
+		// higher still without a deploy.
+		SentinelLimit: cfg.RateLimitSentinelLimit,
+		Window:        time.Minute,
 	})
 }
 
@@ -2437,14 +2441,41 @@ func registerCloudflareAndRateLimitMiddleware(e *echo.Echo, cfCIDRRef *atomic.Po
 func registerCloudflareAndRateLimitMiddlewareWithBackend(e *echo.Echo, cfCIDRRef *atomic.Pointer[[]netip.Prefix], cfg *config.Config, backend middleware.RateLimitBackend, done <-chan struct{}, logger *slog.Logger) {
 	e.Use(middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment)) // Cloudflare-only enforcement: blocks direct *.fly.dev access
 	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                       // Per-IP rate limiting
-		IPLimit:           cfg.RateLimitIP,
-		AuthEndpointLimit: cfg.RateLimitAuth,
+		// IPLimit/AuthEndpointLimit here feed ONLY the in-memory fallback store (memoryBackend) —
+		// the Redis-backed primary gets its own RegularLimit/AuthLimit via buildRateLimitBackend
+		// above, unaffected by this division. cfg.RateLimitFallbackDivisor (Task 8) divides these
+		// so N machines independently falling back to memory-only limiting do not multiply the
+		// intended FLEET-WIDE budget by N — see rateLimitFallbackLimit's doc comment.
+		IPLimit:           rateLimitFallbackLimit(cfg.RateLimitIP, cfg.RateLimitFallbackDivisor),
+		AuthEndpointLimit: rateLimitFallbackLimit(cfg.RateLimitAuth, cfg.RateLimitFallbackDivisor),
 		WindowDuration:    time.Minute,
 		MaxEntries:        cfg.RateLimitMaxEntries,
 		Backend:           backend,
 		Done:              done,
 		Logger:            logger,
 	}))
+}
+
+// rateLimitFallbackLimit divides limit by divisor for the in-memory rate-limit fallback (see
+// registerCloudflareAndRateLimitMiddlewareWithBackend). Issue #1531 Task 8: when the fleet-wide
+// Redis-backed primary is unavailable, every machine falls back independently to its own
+// in-memory limiter — N machines each enforcing the FULL fleet-wide limit multiplies the intended
+// budget by N. Dividing the per-machine fallback limit by (an operator-tunable estimate of) fleet
+// size keeps the aggregate closer to the intended budget during an outage.
+//
+// divisor <= 0 is treated as 1 (no division — today's behaviour, and the config default), rather
+// than panicking or dividing by zero. The result is floored at 1: a limit that divides down to 0
+// would silently disable the fallback limiter entirely (every request "allowed" by construction),
+// which is worse than an overly generous but still-enforcing limit.
+func rateLimitFallbackLimit(limit, divisor int) int {
+	if divisor <= 0 {
+		divisor = 1
+	}
+	result := limit / divisor
+	if result < 1 {
+		result = 1
+	}
+	return result
 }
 
 // redisPoolStatsAdapter adapts redisclient.Client to observability.RedisPoolStatsSource — a

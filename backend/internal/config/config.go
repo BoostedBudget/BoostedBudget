@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -64,10 +65,57 @@ type Config struct {
 	DatabaseMaxConns int32
 
 	// Redis
-	RedisURL string
+	//
+	// Issue #1531 Task 8: RATE_LIMIT_REDIS_URL replaces the old generic REDIS_URL. The rename
+	// exists so there is no generic "the Redis URL" left for a future change to point the cache
+	// at — internal/redisclient's package doc comment explains why sharing one URL between the
+	// noeviction-provisioned limiter instance and a cache is a real hazard (an evicting cache
+	// write can OOM the limiter's SETs), producing a permanent limiter fallback with an
+	// unrelated-looking cause. validate() below enforces RateLimitRedisURL != CacheRedisURL.
+	//
+	// The default is "" (was "redis://localhost:6379"). A production deploy that forgot the
+	// secret used to silently dial localhost, trip the circuit breaker, run permanently on the
+	// in-memory limiter, and fire the fallback alert on every boot — a correct alert with a
+	// misleading cause (looks like a Redis outage, is actually a missing secret). An empty
+	// default lets RATE_LIMIT_BACKEND=auto resolve honestly to memory, and validate() refuses to
+	// boot production/staging without it.
+	RateLimitRedisURL string // env: RATE_LIMIT_REDIS_URL, default: ""
 
-	// RabbitMQ
-	RabbitMQURL string
+	// CacheRedisURL (Task 9) is a SEPARATE Redis instance/URL from RateLimitRedisURL — never the
+	// same value; see the warning above. Optional: an empty value means "no cache" (Task 9 must
+	// treat cache-client construction failure as non-fatal).
+	CacheRedisURL string // env: CACHE_REDIS_URL, default: ""
+
+	// RedisTimeoutMs and RedisPoolSize are read by Task 9's redisclient.Options construction for
+	// both the limiter and cache clients.
+	RedisTimeoutMs int // env: REDIS_TIMEOUT_MS, default: 200
+	RedisPoolSize  int // env: REDIS_POOL_SIZE, default: 10
+
+	// RateLimitBackend selects the fleet-wide rate-limit primary: "auto" (Redis when configured,
+	// memory otherwise), "memory" (force in-memory, per-machine), or "redis" (force Redis-backed).
+	// Rejected at Load() time — unconditionally, not just in production/staging — if it is
+	// anything other than these three values.
+	RateLimitBackend string // env: RATE_LIMIT_BACKEND, default: "auto"
+
+	// RateLimitSentinelLimit overrides the fleet-wide sentinel bucket's limit (see
+	// buildRateLimitBackend in cmd/server/main.go). Zero means "use RateLimitIP" —
+	// ratelimitstore.Options.withDefaults already treats <=0 as "fall back to RegularLimit"
+	// (TestRedisBackend_SentinelLimitDefaultsToRegularLimitWhenZero); this field just lets an
+	// operator raise the sentinel limit during a live incident without a deploy.
+	RateLimitSentinelLimit int // env: RATE_LIMIT_SENTINEL_LIMIT, default: 0
+
+	// RateLimitFallbackDivisor divides the per-machine in-memory fallback limiter's limits so
+	// N machines independently falling back to memory-only limiting do not multiply the
+	// intended FLEET-WIDE budget by N. Divisor 1 (default) is today's behaviour (no division).
+	// Callers must guard against a zero/negative divisor and against a divisor that would floor
+	// a limit to 0 (see rateLimitFallbackLimit in cmd/server/main.go).
+	RateLimitFallbackDivisor int // env: RATE_LIMIT_FALLBACK_DIVISOR, default: 1
+
+	// CacheEnabled/CacheNamespacesDisabled (Task 9): CacheEnabled is the top-level kill switch;
+	// CacheNamespacesDisabled is a comma-separated list of cache namespaces to bypass
+	// individually while leaving the rest of the cache enabled.
+	CacheEnabled            bool   // env: CACHE_ENABLED, default: true
+	CacheNamespacesDisabled string // env: CACHE_NAMESPACES_DISABLED, default: "" (comma-separated)
 
 	// Clerk
 	ClerkSecretKey      string
@@ -194,11 +242,21 @@ func Load() (*Config, error) {
 		DatabaseURL:      getEnv("DATABASE_URL", ""),
 		DatabaseMaxConns: int32(getEnvAsInt("DATABASE_MAX_CONNS", 25)),
 
-		// Redis
-		RedisURL: getEnv("REDIS_URL", "redis://localhost:6379"),
+		// Redis (issue #1531 Task 8: RATE_LIMIT_REDIS_URL replaces REDIS_URL — see the field's
+		// doc comment above for why the default is now "" rather than localhost)
+		RateLimitRedisURL: getEnv("RATE_LIMIT_REDIS_URL", ""),
+		CacheRedisURL:     getEnv("CACHE_REDIS_URL", ""),
+		RedisTimeoutMs:    getEnvAsInt("REDIS_TIMEOUT_MS", 200),
+		RedisPoolSize:     getEnvAsInt("REDIS_POOL_SIZE", 10),
 
-		// RabbitMQ
-		RabbitMQURL: getEnv("RABBITMQ_URL", "amqp://localhost:5672/"),
+		// Rate-limit backend selection and tuning (issue #1531 Task 8)
+		RateLimitBackend:         getEnv("RATE_LIMIT_BACKEND", "auto"),
+		RateLimitSentinelLimit:   getEnvAsInt("RATE_LIMIT_SENTINEL_LIMIT", 0),
+		RateLimitFallbackDivisor: getEnvAsInt("RATE_LIMIT_FALLBACK_DIVISOR", 1),
+
+		// Cache (issue #1531 Task 8 fields; Task 9 wires these into behaviour)
+		CacheEnabled:            getEnvBool("CACHE_ENABLED", true),
+		CacheNamespacesDisabled: getEnv("CACHE_NAMESPACES_DISABLED", ""),
 
 		// Clerk
 		ClerkSecretKey:      getEnv("CLERK_SECRET_KEY", ""),
@@ -271,6 +329,18 @@ func Load() (*Config, error) {
 		MCPWorkerSecret: getEnv("MCP_WORKER_SECRET", ""),
 	}
 
+	// RATE_LIMIT_BACKEND is validated unconditionally — in every environment, not just
+	// production/staging — because an unrecognised value is a config typo the process should
+	// never silently misinterpret as "auto", regardless of where it's running.
+	switch cfg.RateLimitBackend {
+	case "auto", "memory", "redis":
+	default:
+		return nil, fmt.Errorf(
+			"RATE_LIMIT_BACKEND must be one of \"auto\", \"memory\", or \"redis\" (got %q)",
+			cfg.RateLimitBackend,
+		)
+	}
+
 	// Validate required fields for production
 	if cfg.Environment == "production" || cfg.Environment == "staging" {
 		if err := cfg.validate(); err != nil {
@@ -332,7 +402,53 @@ func (c *Config) validate() error {
 		errs = append(errs, fmt.Errorf("DELETION_TOKEN_SECRET is required"))
 	}
 
+	// Rate-limit Redis URL (issue #1531 Task 8): required non-empty in production/staging — see
+	// RateLimitRedisURL's doc comment for why the old localhost default was a hazard. Error
+	// messages below deliberately never interpolate the URL value itself (it carries a
+	// password) — refer to the env var by name only.
+	if c.RateLimitRedisURL == "" {
+		errs = append(errs, fmt.Errorf("RATE_LIMIT_REDIS_URL is required"))
+	} else if err := validateRedisURLScheme("RATE_LIMIT_REDIS_URL", c.RateLimitRedisURL); err != nil {
+		errs = append(errs, err)
+	}
+
+	// Cache Redis URL is optional, but if set it must (a) parse as a redis/rediss URL and (b) be
+	// a DIFFERENT instance than RateLimitRedisURL. Sharing one URL between the two would point
+	// the cache at a noeviction-provisioned limiter instance — see internal/redisclient's package
+	// doc comment: an evicting cache write there produces "OOM command not allowed" on the
+	// limiter's SET, a permanent limiter fallback with an unrelated-looking cause.
+	if c.CacheRedisURL != "" {
+		if err := validateRedisURLScheme("CACHE_REDIS_URL", c.CacheRedisURL); err != nil {
+			errs = append(errs, err)
+		}
+		if c.CacheRedisURL == c.RateLimitRedisURL {
+			errs = append(errs, fmt.Errorf(
+				"CACHE_REDIS_URL must not be the same value as RATE_LIMIT_REDIS_URL — they must "+
+					"point at two separate Redis instances (a shared noeviction-provisioned limiter "+
+					"instance will OOM under cache writes; see internal/redisclient's package doc)",
+			))
+		}
+	}
+
 	return errors.Join(errs...)
+}
+
+// validateRedisURLScheme checks that value parses as a URL with scheme "redis" or "rediss".
+// It never includes value (the URL, which may carry a password) in its returned error — only
+// fieldName, the env var name — so a validation failure can be logged/surfaced safely.
+//
+// This uses only net/url, deliberately: internal/config is a leaf package and must not import
+// go-redis. The real redis.ParseURL runs in internal/redisclient.New, and cmd/server/main.go
+// already fails fast on that error one line after constructing the client.
+func validateRedisURLScheme(fieldName, value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("%s must be a valid URL", fieldName)
+	}
+	if parsed.Scheme != "redis" && parsed.Scheme != "rediss" {
+		return fmt.Errorf("%s must use the redis:// or rediss:// scheme", fieldName)
+	}
+	return nil
 }
 
 // getEnv retrieves an environment variable or returns a default value
