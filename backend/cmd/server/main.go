@@ -1380,6 +1380,13 @@ func main() {
 				if phClient != nil {
 					investmentSyncService.SetAnalytics(phClient)
 				}
+				// Issue #1531 Task 10b-2a-ii: wire cache invalidation so a HOLDINGS/
+				// INVESTMENTS_TRANSACTIONS webhook (routed through ProcessWebhook, which is also
+				// what InvestmentHoldingsSyncWorker/InvestmentTransactionsSyncWorker call) bumps
+				// the synced user's cache generation — GetNetWorthTrend folds in holdings and
+				// investment-transaction data. Scope is user-only (no household lookup), matching
+				// the brief's table. cacheInstance is never nil (see cachePurgeRetryWorker below).
+				investmentSyncService.SetCacheInvalidation(cacheInstance.Generations())
 
 				// Issue #910: Initialize LiabilitySyncService for credit, mortgage, student loan liabilities
 				liabilitySyncService := services.NewLiabilitySyncService(
@@ -1396,6 +1403,10 @@ func main() {
 				if phClient != nil {
 					liabilitySyncService.SetAnalytics(phClient)
 				}
+				// Issue #1531 Task 10b-2a-ii: wire cache invalidation so a LIABILITIES webhook
+				// (routed through ProcessWebhook, which calls SyncLiabilities below) bumps the
+				// synced user's cache generation — GetNetWorthTrend folds in liability data.
+				liabilitySyncService.SetCacheInvalidation(cacheInstance.Generations())
 
 				// Create WebhookProcessingWorker with all dependencies
 				// Issue #659: InvestmentSyncSvc added for HOLDINGS and INVESTMENTS_TRANSACTIONS routing

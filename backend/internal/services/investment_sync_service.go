@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -41,24 +42,49 @@ type InvestmentSyncService interface {
 
 	// SetAnalytics sets the PostHog analytics client (setter injection to avoid circular dependencies).
 	SetAnalytics(a phclient.Analytics)
+
+	// SetCacheInvalidation wires cache generation bumping (setter injection, matching
+	// TransactionSyncService's convention). Issue #1531 Task 10b-2a-ii: GetNetWorthTrend is a
+	// cached read that folds in holdings/investment-transaction data, so a Plaid HOLDINGS or
+	// INVESTMENTS_TRANSACTIONS webhook — routed through ProcessWebhook, which calls SyncHoldings/
+	// SyncInvestmentTransactions below — must bump the synced user's cache generation once those
+	// writes commit. Optional: nil is a safe no-op (every call site is nil-guarded).
+	SetCacheInvalidation(gens *cache.Generations)
 }
 
 type investmentSyncService struct {
-	logger               *slog.Logger
-	analytics            phclient.Analytics
-	webhookRepo          repository.WebhookRepository
-	linkedItemRepo       repository.LinkedItemRepository
-	accountRepo          repository.AccountRepository
-	securityRepo         repository.SecurityRepository
-	holdingRepo          repository.HoldingRepository
-	investmentTxnRepo    repository.InvestmentTransactionRepository
+	logger                *slog.Logger
+	analytics             phclient.Analytics
+	webhookRepo           repository.WebhookRepository
+	linkedItemRepo        repository.LinkedItemRepository
+	accountRepo           repository.AccountRepository
+	securityRepo          repository.SecurityRepository
+	holdingRepo           repository.HoldingRepository
+	investmentTxnRepo     repository.InvestmentTransactionRepository
 	portfolioSnapshotRepo repository.PortfolioSnapshotRepository
-	plaidService         PlaidService
+	plaidService          PlaidService
+	cacheGens             *cache.Generations
 }
 
 // SetAnalytics sets the PostHog analytics client.
 func (s *investmentSyncService) SetAnalytics(a phclient.Analytics) {
 	s.analytics = a
+}
+
+// SetCacheInvalidation wires cache generation bumping. See the interface method's doc comment.
+func (s *investmentSyncService) SetCacheInvalidation(gens *cache.Generations) {
+	s.cacheGens = gens
+}
+
+// bumpCacheForUser invalidates userID's cached analytics (e.g. GetNetWorthTrend) after a
+// SyncHoldings/SyncInvestmentTransactions call has committed at least one write. Void by
+// design — cache.Generations.Bump itself logs+counts its own Redis failures — matching every
+// other generation bump in this codebase.
+func (s *investmentSyncService) bumpCacheForUser(ctx context.Context, userID string) {
+	if s.cacheGens == nil {
+		return
+	}
+	s.cacheGens.Bump(ctx, cache.ScopeUser, userID, "investment_sync")
 }
 
 // NewInvestmentSyncService creates a new InvestmentSyncService.
@@ -168,6 +194,17 @@ func (s *investmentSyncService) ProcessWebhook(ctx context.Context, webhook *dom
 // replaces all holdings per account. Since Plaid returns a full snapshot (no delta),
 // we delete existing holdings and insert fresh ones inside a single DB transaction.
 func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *domain.LinkedItem) (*domain.HoldingSyncResult, error) {
+	// Issue #1531 Task 10b-2a-ii: bump the user's cache generation once, on the way out,
+	// whenever at least one account's holdings were actually replaced below — regardless of
+	// whether a LATER account in the loop fails. See transaction_sync_service.go's identical
+	// defer for why "any commit, then bump" is required rather than bumping only on full success.
+	var cacheBumpNeeded bool
+	defer func() {
+		if cacheBumpNeeded {
+			s.bumpCacheForUser(ctx, linkedItem.UserID)
+		}
+	}()
+
 	accessToken := linkedItem.AccessToken
 
 	resp, err := s.plaidService.InvestmentsHoldingsGet(ctx, accessToken)
@@ -252,6 +289,7 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 		if err := s.holdingRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, domainHoldings); err != nil {
 			return result, fmt.Errorf("failed to replace holdings for account %s: %w", internalAccountID, err)
 		}
+		cacheBumpNeeded = true
 
 		result.HoldingsReplaced += len(domainHoldings)
 		result.AccountsProcessed++
@@ -293,6 +331,15 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 // On incremental sync, startDate = investments_last_synced_date - 1 day (safety overlap).
 // On first sync, uses a 2-year lookback. Updates investments_last_synced_date only on full success.
 func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, linkedItem *domain.LinkedItem) (*domain.InvestmentTransactionSyncResult, error) {
+	// Issue #1531 Task 10b-2a-ii: same "any commit, then bump" defer as SyncHoldings above —
+	// a page that commits transactions before a LATER page fails must still bump.
+	var cacheBumpNeeded bool
+	defer func() {
+		if cacheBumpNeeded {
+			s.bumpCacheForUser(ctx, linkedItem.UserID)
+		}
+	}()
+
 	accessToken := linkedItem.AccessToken
 
 	now := time.Now().UTC()
@@ -364,6 +411,7 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 			if err != nil {
 				return result, fmt.Errorf("failed to upsert transactions on page %d: %w", result.PagesProcessed, err)
 			}
+			cacheBumpNeeded = true
 			result.TransactionsInserted += inserted
 			result.TransactionsSkipped += len(domainTxns) - inserted
 		}

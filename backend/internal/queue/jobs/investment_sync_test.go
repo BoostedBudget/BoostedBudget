@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
@@ -45,6 +46,8 @@ func (m *MockInvestmentSyncService) SyncInvestmentTransactions(ctx context.Conte
 }
 
 func (m *MockInvestmentSyncService) SetAnalytics(_ phclient.Analytics) {}
+
+func (m *MockInvestmentSyncService) SetCacheInvalidation(_ *cache.Generations) {}
 
 // ─── Holdings Worker Tests ────────────────────────────────────────────────────
 
@@ -261,10 +264,10 @@ func TestInvestmentTransactionsSyncWorker_Work_Success(t *testing.T) {
 	}
 
 	txnResult := &domain.InvestmentTransactionSyncResult{
-		PagesProcessed:      2,
+		PagesProcessed:       2,
 		TransactionsInserted: 45,
 		TransactionsSkipped:  5,
-		SecuritiesUpserted:  3,
+		SecuritiesUpserted:   3,
 	}
 
 	mockRepo := new(MockLinkedItemRepository)

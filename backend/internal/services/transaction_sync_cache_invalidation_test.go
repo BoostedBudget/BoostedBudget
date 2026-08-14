@@ -16,6 +16,7 @@ import (
 
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
@@ -165,6 +166,89 @@ func TestSyncTransactions_HouseholdLookupFailureDoesNotFailSync(t *testing.T) {
 	postGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
 	require.NoError(t, err)
 	assert.NotEqual(t, preGen, postGen, "the user-scope bump must still have happened despite the household lookup error")
+}
+
+// TestSyncTransactions_BumpsOnPartialCommitEvenWhenSyncLaterFails is the carried-forward fix
+// from 2a-i's review: SyncTransactions used to bump ONLY on its final success path, so a sync
+// that stored Added transactions and THEN failed while processing Modified transactions left
+// the user's cache generation untouched — a permanently stale cached view (until the namespace
+// TTL) despite genuinely new data having committed. This drives the real storage path (Added
+// succeeds via CreateBatch, Modified fails via Update) and asserts the generation still changed.
+func TestSyncTransactions_BumpsOnPartialCommitEvenWhenSyncLaterFails(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+
+	service := NewTransactionSyncService(
+		nil, // webhookRepo
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, // profileRepo
+		nil, // balanceSnapshotRepo
+		mockPlaidService,
+		nil, // subscriptionService
+		nil, // ruleApplicationService
+		nil, // budgetSyncService
+		nil, // transactionMonitorService
+		nil, // merchantRepo
+		nil, // logger
+	)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{
+		ID:          "linked-item-partial",
+		UserID:      "user-partial-commit",
+		ItemID:      "item-partial",
+		AccessToken: "decrypted-token",
+		Cursor:      stringPtr("cursor-before"),
+	}
+
+	accounts := []domain.Account{
+		{ID: "account-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: linkedItem.UserID},
+	}
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return(accounts, nil)
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{
+			{TransactionId: "txn-added", AccountId: "plaid-acc-1", Amount: 10.0, Date: "2024-01-15", Name: "Added"},
+		},
+		Modified: []plaid.Transaction{
+			{TransactionId: "txn-modified", AccountId: "plaid-acc-1", Amount: 20.0, Date: "2024-01-16", Name: "Modified"},
+		},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "cursor-after",
+		HasMore:    false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-before", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-after").Return(nil)
+
+	// Added transaction: storage SUCCEEDS — this is the commit that must not be lost.
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(map[string]bool{}, nil)
+
+	// Modified transaction: storage FAILS after the Added commit above.
+	existingTxn := &domain.Transaction{ID: "existing-uuid", ExternalTransactionID: stringPtr("txn-modified")}
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "txn-modified", linkedItem.UserID).Return(existingTxn, nil)
+	mockTransactionRepo.On("Update", ctx, mock.Anything).Return(errors.New("update failed"))
+
+	fake := redisclient.NewFake("cache")
+	c := cache.NewCache(cache.Options{Client: fake})
+	hhReader := &mockHouseholdReaderForDeletion{}
+	hhReader.On("GetHouseholdForUser", ctx, linkedItem.UserID).Return(nil, false, false, nil)
+	service.SetCacheInvalidation(c.Generations(), hhReader)
+
+	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
+	require.NoError(t, err)
+
+	_, syncErr := service.SyncTransactions(ctx, linkedItem)
+	require.Error(t, syncErr, "the sync as a whole must still surface the Modified-processing failure")
+
+	postGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
+	require.NoError(t, err)
+	assert.NotEqual(t, preGen, postGen,
+		"Added transactions committed before the Modified failure — the cache MUST be bumped "+
+			"even though SyncTransactions ultimately returned an error")
 }
 
 // TestSyncTransactions_NoBumpWhenCacheInvalidationNotWired is the regression guard for every
