@@ -1,10 +1,18 @@
 # Multi-stage production Dockerfile for Backend
 # Stage 1: Builder
-# #1514: digest-pinned to golang:1.26.5-alpine (multi-arch manifest list digest, resolved
-# from Docker Hub on 2026-08-12). If GO_VERSION is bumped, this digest must be re-resolved
-# for the new tag or the pin will silently pull mismatched content.
-ARG GO_VERSION=1.26.5
-FROM golang:${GO_VERSION}-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
+# #1514: digest-pinned to golang:1.26.6-alpine (multi-arch manifest list digest, resolved
+# from Docker Hub on 2026-08-13). If GO_VERSION is bumped, this digest must be re-resolved
+# for the new tag or the pin will silently pull mismatched content — the digest wins over the
+# tag, so bumping the version alone is a silent no-op that keeps building the old toolchain.
+# Resolve with: docker buildx imagetools inspect golang:<version>-alpine  (take the top-level
+# index Digest, not a per-platform manifest digest).
+#
+# Bumped 1.26.5 -> 1.26.6 to clear seven Go standard-library advisories reported by
+# govulncheck: GO-2026-6218 (net/url), GO-2026-6091 (html/template), GO-2026-6090
+# (crypto/tls), GO-2026-6089 (net/http), GO-2026-6088 (encoding/xml), GO-2026-5972
+# (encoding/asn1) and GO-2026-5026 (net/http via x/net/idna). All are fixed in go1.26.6.
+ARG GO_VERSION=1.26.6
+FROM golang:${GO_VERSION}-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS builder
 
 # Install build dependencies
 RUN echo "Installing build dependencies..." && \
