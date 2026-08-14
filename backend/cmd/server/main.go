@@ -2464,10 +2464,22 @@ func registerCloudflareAndRateLimitMiddlewareWithBackend(e *echo.Echo, cfCIDRRef
 // size keeps the aggregate closer to the intended budget during an outage.
 //
 // divisor <= 0 is treated as 1 (no division — today's behaviour, and the config default), rather
-// than panicking or dividing by zero. The result is floored at 1: a limit that divides down to 0
-// would silently disable the fallback limiter entirely (every request "allowed" by construction),
-// which is worse than an overly generous but still-enforcing limit.
+// than panicking or dividing by zero.
+//
+// limit <= 0 passes through UNCHANGED — deliberately NOT floored to 1 here (fix round 1).
+// middleware.RateLimitConfig.withDefaults() is the ONE place that owns the "IPLimit/
+// AuthEndpointLimit <= 0 means fall back to the built-in default (100/10)" contract. A
+// misconfigured RATE_LIMIT_IP=0 or RATE_LIMIT_AUTH=0 must keep self-healing through that single
+// defaulting path. Flooring a non-positive limit to 1 here — this function's first version did —
+// pre-empts withDefaults() and turns a self-correcting misconfiguration (silently falls back to
+// 100 req/min) into a near-total lockout (1 req/min): a real behaviour regression, caught in fix
+// round 1, not a pre-existing gap. Only a genuinely positive limit is divided and floored at 1
+// (so a divisor larger than the limit degrades to "1 request per window", never to "0 requests" —
+// which would silently disable the fallback limiter, letting every request through unenforced).
 func rateLimitFallbackLimit(limit, divisor int) int {
+	if limit <= 0 {
+		return limit
+	}
 	if divisor <= 0 {
 		divisor = 1
 	}

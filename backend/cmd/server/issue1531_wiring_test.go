@@ -176,3 +176,44 @@ func TestBuildRateLimitBackend_SentinelLimitEqualsRegularLimitNotAuthLimit(t *te
 	assert.NotEqual(t, wantEmissionAuth, gotEmission,
 		"sentinel bucket's emission interval must NOT match what AuthLimit alone would produce")
 }
+
+// TestRateLimitFallbackLimit is the fix-round-1 regression test for Issue #1531 Task 8's
+// RATE_LIMIT_FALLBACK_DIVISOR wiring: rateLimitFallbackLimit divides the in-memory fallback
+// limiter's per-machine limit so N machines independently falling back to memory-only limiting
+// don't multiply the intended fleet-wide budget by N.
+//
+// The limit=0 case is the discrimination proof for the fix itself: the FIRST version of this
+// function floored limit<=0 to 1, which silently turned a self-correcting misconfiguration
+// (RATE_LIMIT_IP=0, which middleware.RateLimitConfig.withDefaults() maps to its built-in default
+// of 100) into a near-total lockout (1 req/min) — a real behaviour regression this function
+// introduced, not a pre-existing one. limit<=0 must pass through UNCHANGED so
+// withDefaults()'s "<=0 means use the default" contract still fires downstream, exactly as it did
+// before RATE_LIMIT_FALLBACK_DIVISOR existed.
+func TestRateLimitFallbackLimit(t *testing.T) {
+	testCases := []struct {
+		name    string
+		limit   int
+		divisor int
+		want    int
+	}{
+		{"divisor 0 treated as 1 (no division)", 100, 0, 100},
+		{"divisor negative treated as 1 (no division)", 100, -3, 100},
+		{"divisor 1 is a no-op", 100, 1, 100},
+		{"normal divisor divides evenly", 100, 2, 50},
+		{"divisor larger than limit floors at 1, never 0", 100, 1000, 1},
+		{
+			"limit 0 passes through UNCHANGED, not floored to 1 — must keep " +
+				"middleware.RateLimitConfig.withDefaults()'s <=0-means-default contract alive",
+			0, 1, 0,
+		},
+		{"limit negative also passes through unchanged", -5, 2, -5},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := rateLimitFallbackLimit(tc.limit, tc.divisor)
+			assert.Equal(t, tc.want, got,
+				"rateLimitFallbackLimit(%d, %d) must equal %d", tc.limit, tc.divisor, tc.want)
+		})
+	}
+}
