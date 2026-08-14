@@ -22,7 +22,7 @@ BoostedBudget is a global budgeting platform that helps users optimize their fin
 ### Technology Stack
 
 **Backend:**
-- Go 1.25+ with Echo framework
+- Go 1.26.6+ with Echo framework
 - PostgreSQL 17
 - Redis 7
 - RabbitMQ 3
@@ -57,7 +57,7 @@ No free tier. New users get a **60-day Premium trial** (no payment required).
 ### Prerequisites
 
 - **Docker** and **Docker Compose** (required)
-- **Go 1.25+** (for local backend development)
+- **Go 1.26.6+** (for local backend development)
 - **Node.js 20+** (for local frontend development)
 - **Make** (optional, for convenience commands)
 

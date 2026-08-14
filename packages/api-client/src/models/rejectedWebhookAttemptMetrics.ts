@@ -30,34 +30,12 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import {
-  faker
-} from '@faker-js/faker';
+import type { RejectedWebhookAttemptMetricsByProvider } from './rejectedWebhookAttemptMetricsByProvider';
 
-import {
-  HttpResponse,
-  delay,
-  http
-} from 'msw';
-import type {
-  RequestHandlerOptions
-} from 'msw';
-
-
-export const getGetMetricsResponseMock = (): string => (faker.word.sample())
-
-
-export const getGetMetricsMockHandler = (overrideResponse?: string | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<string> | string), options?: RequestHandlerOptions) => {
-  return http.get('*/metrics', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getGetMetricsResponseMock(),
-      { status: 200
-      })
-  }, options)
+export interface RejectedWebhookAttemptMetrics {
+  available: boolean;
+  by_provider: RejectedWebhookAttemptMetricsByProvider;
+  /** @nullable */
+  most_recent_at: string | null;
+  total_24h: number;
 }
-export const getMonitoringMock = () => [
-  getGetMetricsMockHandler()
-]

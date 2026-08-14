@@ -2,15 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
 	"sync/atomic"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
 	sentryecho "github.com/getsentry/sentry-go/echo"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -149,14 +152,9 @@ func main() {
 	go middleware.StartCIDRRefresher(cfCtx, 24*time.Hour, cfCIDRRef)
 
 	// Middleware (order matters!)
-	e.Use(middleware.RequestID())                                                    // 1. Generate request IDs first
-	e.Use(middleware.SecurityHeaders(cfg.Environment))                               // 2. Security hardening headers
-	e.Use(middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment)) // 3. Cloudflare-only enforcement: blocks direct *.fly.dev access
-	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                       // 4. Per-IP rate limiting
-		IPLimit:           cfg.RateLimitIP,
-		AuthEndpointLimit: cfg.RateLimitAuth,
-		WindowDuration:    time.Minute,
-	}))
+	e.Use(middleware.RequestID())                                                          // 1. Generate request IDs first
+	e.Use(middleware.SecurityHeaders(cfg.Environment))                                     // 2. Security hardening headers
+	registerCloudflareAndRateLimitMiddleware(e, cfCIDRRef, cfg)                            // 3-4. Cloudflare gate, then per-IP rate limiting (order load-bearing, see helper doc)
 	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                            // 5. Panic recovery (formats RFC 9457 response)
 	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                               // 6. Sentry panic reporting
 	e.Use(otelecho.Middleware("boostedbudget-api"))                                        // 7. OTEL tracing
@@ -181,10 +179,47 @@ func main() {
 	)
 	operations.RegisterHealthRoutes(humaAPI, healthHandler)
 
-	// Metrics endpoint (Prometheus format) - Huma operation
-	humaMetricsHandler := operations.NewMetricsHandler()
-	operations.RegisterMetricsRoutes(humaAPI, humaMetricsHandler)
-	appLogger.Info("Huma metrics route registered")
+	// Metrics endpoint (Prometheus format) — internal-only listener, NOT the public Huma
+	// API (humaAPI/e) above. Issue #1514: /metrics exposes River queue depth, Plaid error
+	// rates, dead-letter state, and GDPR-deletion internals, and was reachable from the
+	// public internet unauthenticated. See internal_metrics.go for the full rationale and
+	// the listener construction. Binding happens synchronously so a failure to bind is a
+	// startup error (os.Exit(1) below), not a silent no-op. resolveInternalMetricsPort
+	// also fails loudly here — rather than downstream as a silently-dead public API — if
+	// INTERNAL_METRICS_PORT collides with cfg.Port or is not a valid TCP port.
+	//
+	// Gated on cfg.EnableMetrics (ENABLE_METRICS, default true — see config.go) so the flag
+	// actually controls something: previously it was read and never consulted. Fly's
+	// [metrics] scrape config in fly.toml/fly.staging.toml points at this listener's port
+	// (9091) in every environment that deploys this binary, so ENABLE_METRICS=false will
+	// produce failing Fly scrapes wherever it's set — that is the intended, documented
+	// tradeoff of an operator explicitly disabling metrics, not a bug.
+	var internalMetricsEcho *echo.Echo
+	if cfg.EnableMetrics {
+		resolvedInternalMetricsPort, err := resolveInternalMetricsPort(internalMetricsPort(), cfg.Port)
+		if err != nil {
+			appLogger.Error("Invalid internal metrics port configuration", "error", err)
+			os.Exit(1)
+		}
+		internalMetricsListener, err := bindInternalMetricsListener(resolvedInternalMetricsPort)
+		if err != nil {
+			appLogger.Error("Failed to bind internal metrics listener", "error", err)
+			os.Exit(1)
+		}
+		var internalHumaAPI huma.API
+		internalMetricsEcho, internalHumaAPI = newInternalMetricsAPI(cfg)
+		internalMetricsEcho.Listener = internalMetricsListener
+		humaMetricsHandler := operations.NewMetricsHandler()
+		operations.RegisterMetricsRoutes(internalHumaAPI, humaMetricsHandler)
+		go func() {
+			if err := internalMetricsEcho.Start(""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				appLogger.Error("Internal metrics listener stopped", "error", err)
+			}
+		}()
+		appLogger.Info("Internal metrics listener started", "address", internalMetricsListener.Addr().String())
+	} else {
+		appLogger.Info("Internal metrics listener disabled via ENABLE_METRICS=false — any Fly [metrics] scrape config still pointed at this instance will fail")
+	}
 
 	// Load tier configuration (used by both public and authenticated endpoints)
 	tierConfig, err := config.LoadTierConfig()
@@ -337,6 +372,10 @@ func main() {
 	var subscriptionWebhookWorker *jobs.SubscriptionWebhookWorker
 	var paddleWebhookRepo repository.PaddleWebhookRepository
 	var paddleTransactionRepo repository.PaddleTransactionRepository // Issues #747 #748
+	// Issue #1514: bounded audit signal for rejected (unsigned/invalid-signature) webhook
+	// deliveries. Requires only a DB connection (no encryption — see repository doc comment on
+	// why raw payload is never stored), so it's constructed alongside paddleWebhookRepo below.
+	var invalidWebhookAttemptRepo repository.InvalidWebhookAttemptRepository
 
 	// Declare encryption service and field encryptor at outer scope so they are accessible
 	// in both the authenticated block and later public webhook handlers.
@@ -407,24 +446,25 @@ func main() {
 		accountRepo := repository.NewAccountRepository(db, fieldEncryptor)
 		transactionRepo := repository.NewTransactionRepository(db, fieldEncryptor)
 		webhookRepo := repository.NewWebhookRepository(db, fieldEncryptor)
-		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db, fieldEncryptor)                         // Issue #45, #46: Paddle webhooks
-		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db, fieldEncryptor)                 // Issues #747 #748: Paddle transaction audit log
-		identityRepo := repository.NewUserIdentityRepository(db, fieldEncryptor)                              // Maps Clerk IDs to user UUIDs
-		notificationRepo := repository.NewNotificationRepository(db, fieldEncryptor)                          // Issue #257: Notification storage
-		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)                                    // Issue #353: Balance tracking
-		userTagRepo := repository.NewUserTagRepository(db)                                                    // Issue #345: User tags
-		customCategoryRepo := repository.NewCustomCategoryRepository(db)                                      // Issue #345: Custom categories
-		categorizationRuleRepo := repository.NewCategorizationRuleRepository(db)                              // Issue #346: Categorization rules
-		analyticsRepo := repository.NewAnalyticsRepository(db)                                                // Issue #354: Cash flow analytics
-		budgetRepo := repository.NewBudgetRepository(db)                                                      // Issue #28: Budget management
-		savingsGoalRepo := repository.NewSavingsGoalRepository(db)                                            // Issue #28: Savings goals
-		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)                                // Issue #354: Dashboard preferences
-		transferSuggestionRepo := repository.NewTransferSuggestionRepositoryWithEncryptor(db, fieldEncryptor) // Issue #36 / #1267: Transfer suggestions (enc for account-name enrichment)
-		boostRepo := repository.NewBoostsRepository(db)                                                       // Issue #37: Boosts
-		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)                                // Issue #639: Admin user management
-		systemHealthRepo := repository.NewSystemHealthRepository(db)                                          // Issue #640: System health monitoring
-		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)                                        // Issue #640: Dead letter queue metrics
-		plaidOrphanedItemRepo := repository.NewPlaidOrphanedItemRepository(db, fieldEncryptor)                // Issue #1497: orphaned Plaid Items surviving a GDPR erasure (enc: every identifying column is ciphertext)
+		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db, fieldEncryptor)                                         // Issue #45, #46: Paddle webhooks
+		invalidWebhookAttemptRepo = repository.NewInvalidWebhookAttemptRepository(db, cfg.InvalidWebhookAttemptRetentionDays) // Issue #1514: bounded invalid-attempt audit
+		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db, fieldEncryptor)                                 // Issues #747 #748: Paddle transaction audit log
+		identityRepo := repository.NewUserIdentityRepository(db, fieldEncryptor)                                              // Maps Clerk IDs to user UUIDs
+		notificationRepo := repository.NewNotificationRepository(db, fieldEncryptor)                                          // Issue #257: Notification storage
+		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)                                                    // Issue #353: Balance tracking
+		userTagRepo := repository.NewUserTagRepository(db)                                                                    // Issue #345: User tags
+		customCategoryRepo := repository.NewCustomCategoryRepository(db)                                                      // Issue #345: Custom categories
+		categorizationRuleRepo := repository.NewCategorizationRuleRepository(db)                                              // Issue #346: Categorization rules
+		analyticsRepo := repository.NewAnalyticsRepository(db)                                                                // Issue #354: Cash flow analytics
+		budgetRepo := repository.NewBudgetRepository(db)                                                                      // Issue #28: Budget management
+		savingsGoalRepo := repository.NewSavingsGoalRepository(db)                                                            // Issue #28: Savings goals
+		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)                                                // Issue #354: Dashboard preferences
+		transferSuggestionRepo := repository.NewTransferSuggestionRepositoryWithEncryptor(db, fieldEncryptor)                 // Issue #36 / #1267: Transfer suggestions (enc for account-name enrichment)
+		boostRepo := repository.NewBoostsRepository(db)                                                                       // Issue #37: Boosts
+		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)                                                // Issue #639: Admin user management
+		systemHealthRepo := repository.NewSystemHealthRepository(db)                                                          // Issue #640: System health monitoring
+		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)                                                        // Issue #640: Dead letter queue metrics
+		plaidOrphanedItemRepo := repository.NewPlaidOrphanedItemRepository(db, fieldEncryptor)                                // Issue #1497: orphaned Plaid Items surviving a GDPR erasure (enc: every identifying column is ciphertext)
 		// Issue #1458: a second, bound JobHealthRepository instance for systemHealthService below —
 		// distinct from the one constructed inline at startJobHealthMetricsCollector's call site
 		// above, which is unbound (passed directly as an argument, never stored) and so can't be
@@ -1648,6 +1688,12 @@ func main() {
 			// happened, whether or not this deployment can talk to Plaid, and a deployment without
 			// Plaid credentials is precisely the one where nothing automated will ever clear them.
 			plaidOrphanedItemRepo,
+			// Issue #1514 requirement #5: backs the "Rejected webhook attempts (24h)" tile —
+			// the operator-visibility signal restored after Phase 1 removed invalid-signature
+			// webhooks from paddle_webhook_events/webhook_events. Narrowed at the interface
+			// (services.InvalidWebhookAttemptStatsReader) to GetStats24h alone, same discipline
+			// as plaidOrphanedItemRepo above.
+			invalidWebhookAttemptRepo,
 		)
 
 		// Issue #633: Dead letter queue admin service.
@@ -1976,10 +2022,11 @@ func main() {
 		// Register Huma plaid webhook route (Issue #559: Huma migration)
 		// Issue #573: Pass jobQueue for async webhook processing
 		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(operations.PlaidWebhookHandlerDeps{
-			WebhookService: webhookService,
-			WebhookRepo:    webhookRepoForHandler,
-			JobQueue:       jobQueue,
-			Logger:         appLogger,
+			WebhookService:     webhookService,
+			WebhookRepo:        webhookRepoForHandler,
+			InvalidAttemptRepo: repository.NewInvalidWebhookAttemptRepository(db, cfg.InvalidWebhookAttemptRetentionDays), // Issue #1514
+			JobQueue:           jobQueue,
+			Logger:             appLogger,
 		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
 
@@ -1993,13 +2040,18 @@ func main() {
 		// Fallback: Basic webhook handler without signature verification
 		// Used when Plaid credentials are not configured (e.g., local development)
 		humaPlaidWebhookHandler := operations.NewPlaidWebhookHandler(operations.PlaidWebhookHandlerDeps{
-			WebhookRepo: repository.NewWebhookRepository(db, fieldEncryptor),
-			JobQueue:    jobQueue,
-			Logger:      appLogger,
+			WebhookRepo:        repository.NewWebhookRepository(db, fieldEncryptor),
+			InvalidAttemptRepo: repository.NewInvalidWebhookAttemptRepository(db, cfg.InvalidWebhookAttemptRetentionDays), // Issue #1514
+			JobQueue:           jobQueue,
+			Logger:             appLogger,
 		})
 		operations.RegisterPlaidWebhookRoutes(humaAPI, humaPlaidWebhookHandler)
-		appLogger.Info("Huma Plaid webhook route registered at POST /webhooks/plaid (verification disabled)")
-		appLogger.Warn("Webhook signature verification disabled (Plaid credentials not configured)")
+		appLogger.Info("Huma Plaid webhook route registered at POST /webhooks/plaid (no verifier configured)")
+		// Issue #1514: no webhookService means HandlePlaidWebhook's verifySignature always fails
+		// closed — every delivery to this route now gets rejected with 401, it is NOT processed
+		// audit-trail-style as before this fix. Log that plainly so local/QA debugging doesn't
+		// mistake "every webhook 401s" for a bug.
+		appLogger.Warn("Plaid webhook signature verifier not configured — ALL incoming webhooks will be rejected (401), not processed (Plaid credentials not configured)")
 	} else {
 		appLogger.Warn("Webhook endpoint disabled (requires DATABASE_URL)")
 	}
@@ -2010,10 +2062,11 @@ func main() {
 	if db != nil && paddleWebhookService != nil {
 		// Register Huma paddle webhook route
 		humaPaddleWebhookHandler := operations.NewPaddleWebhookHandler(operations.PaddleWebhookHandlerDeps{
-			WebhookService: paddleWebhookService,
-			WebhookRepo:    paddleWebhookRepo,
-			JobQueue:       jobQueue,
-			Logger:         appLogger,
+			WebhookService:     paddleWebhookService,
+			WebhookRepo:        paddleWebhookRepo,
+			InvalidAttemptRepo: invalidWebhookAttemptRepo, // Issue #1514
+			JobQueue:           jobQueue,
+			Logger:             appLogger,
 		})
 		operations.RegisterPaddleWebhookRoutes(humaAPI, humaPaddleWebhookHandler)
 
@@ -2027,13 +2080,17 @@ func main() {
 		// Fallback: Basic webhook handler without signature verification
 		// Used when Paddle credentials are not configured (e.g., local development)
 		humaPaddleWebhookHandler := operations.NewPaddleWebhookHandler(operations.PaddleWebhookHandlerDeps{
-			WebhookRepo: paddleWebhookRepo,
-			JobQueue:    jobQueue,
-			Logger:      appLogger,
+			WebhookRepo:        paddleWebhookRepo,
+			InvalidAttemptRepo: invalidWebhookAttemptRepo, // Issue #1514
+			JobQueue:           jobQueue,
+			Logger:             appLogger,
 		})
 		operations.RegisterPaddleWebhookRoutes(humaAPI, humaPaddleWebhookHandler)
-		appLogger.Info("Huma Paddle webhook route registered at POST /webhooks/paddle (verification disabled)")
-		appLogger.Warn("Paddle webhook signature verification disabled (webhook secret not configured)")
+		appLogger.Info("Huma Paddle webhook route registered at POST /webhooks/paddle (no verifier configured)")
+		// Issue #1514: no webhookService means HandlePaddleWebhook's verifySignature always fails
+		// closed — every delivery to this route now gets rejected with 401, it is NOT processed
+		// audit-trail-style as before this fix.
+		appLogger.Warn("Paddle webhook signature verifier not configured — ALL incoming webhooks will be rejected (401), not processed (webhook secret not configured)")
 	} else {
 		appLogger.Warn("Paddle webhook endpoint disabled (requires DATABASE_URL)")
 	}
@@ -2130,9 +2187,18 @@ func main() {
 		workerCancel()
 	}
 
-	// Shutdown HTTP server
+	// Shutdown HTTP server(s)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// Issue #1514: shut down the internal metrics listener alongside the public one so
+	// neither leaks a bound port or an unclosed goroutine on exit. internalMetricsEcho is
+	// nil when ENABLE_METRICS=false (listener was never started above).
+	if internalMetricsEcho != nil {
+		if err := internalMetricsEcho.Shutdown(ctx); err != nil {
+			appLogger.Error("Internal metrics listener forced to shutdown", "error", err)
+		}
+	}
 
 	if err := e.Shutdown(ctx); err != nil {
 		appLogger.Error("Server forced to shutdown", "error", err)
@@ -2140,6 +2206,40 @@ func main() {
 	}
 
 	appLogger.Info("Server stopped gracefully")
+}
+
+// registerCloudflareAndRateLimitMiddleware registers, in this exact order,
+// the two middleware whose relative order the rate limiter's identity model
+// depends on: CloudflareOnly MUST run before IPRateLimiter.
+//
+// Why the order is load-bearing: IPRateLimiter's clientIdentity (see
+// internal/middleware/rate_limit.go) trusts the Cf-Connecting-Ip header only
+// when the current request's echo.Context already carries
+// middleware.GateStatusPassed — the status CloudflareOnly stamps onto the
+// context after verifying the immediate peer is a genuine Cloudflare edge IP
+// and the X-Origin-Secret matched. That status is set on the SAME
+// echo.Context that flows through the rest of the chain, so it is only
+// visible to middleware that runs AFTER CloudflareOnly in registration order.
+// If IPRateLimiter were registered first, it would always observe the
+// zero-value GateStatusUnknown (CloudflareOnly hasn't run yet at that point
+// in the chain) and fall back to the request's RemoteAddr for every request —
+// which, in this app's Fly.io deployment, is the Fly proxy's fixed internal
+// address for effectively every inbound request, not the real end client.
+// That collapses per-client rate limiting into one shared bucket, letting one
+// client exhaust the budget for everyone else.
+//
+// See issue1514_rate_limit_ordering_test.go for a behavioural test that
+// builds this exact chain via httptest and demonstrates the failure mode
+// above when the two calls are (deliberately, temporarily, for that test's
+// RED demonstration only) reordered.
+func registerCloudflareAndRateLimitMiddleware(e *echo.Echo, cfCIDRRef *atomic.Pointer[[]netip.Prefix], cfg *config.Config) {
+	e.Use(middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment)) // Cloudflare-only enforcement: blocks direct *.fly.dev access
+	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                       // Per-IP rate limiting
+		IPLimit:           cfg.RateLimitIP,
+		AuthEndpointLimit: cfg.RateLimitAuth,
+		WindowDuration:    time.Minute,
+		MaxEntries:        cfg.RateLimitMaxEntries,
+	}))
 }
 
 // dbPoolAdapter adapts *pgxpool.Pool to services.DatabasePool interface (Issue #640)

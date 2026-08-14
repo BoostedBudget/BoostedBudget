@@ -57,7 +57,12 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    // Issue #1514 (G6): 'hidden' still emits .map files (so Sentry can symbolicate) but
+    // omits the `//# sourceMappingURL=` comment from the built .js bundles, so browsers
+    // never fetch the maps. The CI deploy workflows upload the maps to Sentry via
+    // sentry-cli, then unconditionally delete dist/**/*.map before `wrangler pages deploy`
+    // so they're never published to Cloudflare Pages regardless of upload outcome.
+    sourcemap: 'hidden',
     // Vite 8 uses Rolldown internally; rolldownOptions is the preferred API.
     rolldownOptions: {
       output: {

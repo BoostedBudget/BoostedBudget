@@ -2,26 +2,46 @@ package middleware
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
 	echomiddleware "github.com/labstack/echo/v4/middleware"
 )
 
+// corsPermissiveEnvironments is the explicit allowlist of ENVIRONMENT values in which a
+// wildcard/empty CORS_ALLOWED_ORIGINS is tolerated. Deliberately an allowlist rather than a
+// blocklist of "production": an unset, misspelled, or newly-introduced ENVIRONMENT value must
+// fail SAFE (no wildcard CORS) rather than silently falling through a switch's default case,
+// matching the fail-safe allowlist pattern in
+// backend/internal/config/qa_auth_bypass_gate.go and domain.IsNonProductionEnvironment
+// (issue #1514, F10).
+//
+//   - "development" is the local dev default (config.Load's getEnv("ENVIRONMENT",
+//     "development")) and docker-compose.yml — needed so `make dev` keeps working without
+//     CORS_ALLOWED_ORIGINS set.
+//   - "qa" is the deployed QA environment (docker-compose.qa.yml,
+//     .github/workflows/deploy-qa.yml, and the Playwright E2E backend in
+//     apps/web/playwright.config.ts) — needed so the E2E/QA flows keep working.
+//
+// "staging" and "production" are deliberately NOT here: both fail closed on wildcard/empty
+// origins. Staging used to only warn (the bug this fix closes) — a permissive staging config
+// is exactly how a bad value gets copy-pasted into production.
+var corsPermissiveEnvironments = map[string]struct{}{
+	"development": {},
+	"qa":          {},
+}
+
 // ValidateCORSConfig checks that the CORS configuration is safe for the given environment.
-// Returns an error if wildcard origins are used in production.
-// Logs a warning if wildcard origins are used in staging.
+// Returns an error if wildcard/empty origins are used anywhere except the environments in
+// corsPermissiveEnvironments (development, qa) — this includes production, staging, and any
+// unrecognised/unset environment value.
 // For non-wildcard origins, validates each is a valid http(s) URL.
 func ValidateCORSConfig(allowedOrigins, environment string) error {
 	isWildcard := allowedOrigins == "" || allowedOrigins == "*"
 
 	if isWildcard {
-		switch environment {
-		case "production":
-			return fmt.Errorf("CORS_ALLOWED_ORIGINS cannot be '*' or empty in production: set explicit allowed origins")
-		case "staging":
-			slog.Warn("CORS_ALLOWED_ORIGINS is '*' in staging — consider setting explicit origins")
+		if _, ok := corsPermissiveEnvironments[environment]; !ok {
+			return fmt.Errorf("CORS_ALLOWED_ORIGINS cannot be '*' or empty in environment %q: set explicit allowed origins", environment)
 		}
 		return nil
 	}

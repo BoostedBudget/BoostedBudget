@@ -293,7 +293,7 @@ describe('helper functions', () => {
 // ── Completeness: every known operationId is classified ───────────────────
 
 describe('completeness', () => {
-  it('covers all 195 known operationIds (no unknown ops in the spec)', async () => {
+  it('covers all 194 known operationIds (no unknown ops in the spec)', async () => {
     // We import the full list to ensure no ops are silently absent
     // +8 from Issue #138: getHoldings, getPortfolioSummary, getPortfolioHistory,
     //   getInvestmentTransactions, getPortfolioAllocationBreakdown, getTopMovers,
@@ -318,8 +318,13 @@ describe('completeness', () => {
     // +1 from Issue #1497 item 2: recordAdminPlaidOrphanedItemOperatorResolution (excluded —
     //   blanket admin policy; an operator attestation is an authenticated-human act by definition
     //   and has no meaning coming from an agent, which cannot have removed anything at Plaid)
+    // -1 from Issue #1514: getMetrics removed. /metrics moved to an internal-only listener and is
+    //   no longer registered for spec generation, so it has no spec-index entry left to classify;
+    //   keeping it would have made it a manifest-only entry, invisible to the capabilitySummary
+    //   aggregates (see capability-summary.drift.test.ts). It was an *excluded* op, so the
+    //   allowed/read/write/destructive counts are unchanged.
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(195)
+    expect(ALL_OPERATION_IDS.length).toBe(194)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

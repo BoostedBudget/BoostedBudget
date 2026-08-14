@@ -38,7 +38,8 @@ func (m *MockTransactionSyncServiceForWorker) SyncTransactions(ctx context.Conte
 }
 
 // SetTransferCorrelationService satisfies the TransactionSyncService interface (Issue #972: B4).
-func (m *MockTransactionSyncServiceForWorker) SetTransferCorrelationService(_ services.TransferCorrelationService) {}
+func (m *MockTransactionSyncServiceForWorker) SetTransferCorrelationService(_ services.TransferCorrelationService) {
+}
 
 // SetSavingsProgressServices satisfies the TransactionSyncService interface (Issue #1300: G2).
 func (m *MockTransactionSyncServiceForWorker) SetSavingsProgressServices(_ services.SyncContributionCleaner, _ services.SyncGoalProgressUpdater, _ services.SyncManagedCategoryBackfiller) {
@@ -90,6 +91,11 @@ func (m *MockWebhookRepoForWorker) Create(ctx context.Context, event *domain.Web
 
 func (m *MockWebhookRepoForWorker) MarkProcessed(ctx context.Context, id string) error {
 	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
+func (m *MockWebhookRepoForWorker) MarkFailed(ctx context.Context, id string, errorMsg string) error {
+	args := m.Called(ctx, id, errorMsg)
 	return args.Error(0)
 }
 
@@ -154,22 +160,24 @@ func TestWebhookProcessor_ProcessPendingWebhooks_Success(t *testing.T) {
 	itemID2 := "item-2"
 	webhooks := []domain.WebhookEvent{
 		{
-			ID:          "webhook-1",
-			WebhookType: "TRANSACTIONS",
-			ItemID:      &itemID1,
-			Payload:     json.RawMessage(`{"webhook_type":"TRANSACTIONS"}`),
-			Processed:   false,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
+			ID:             "webhook-1",
+			WebhookType:    "TRANSACTIONS",
+			ItemID:         &itemID1,
+			Payload:        json.RawMessage(`{"webhook_type":"TRANSACTIONS"}`),
+			SignatureValid: true,
+			Processed:      false,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		},
 		{
-			ID:          "webhook-2",
-			WebhookType: "TRANSACTIONS",
-			ItemID:      &itemID2,
-			Payload:     json.RawMessage(`{"webhook_type":"TRANSACTIONS"}`),
-			Processed:   false,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
+			ID:             "webhook-2",
+			WebhookType:    "TRANSACTIONS",
+			ItemID:         &itemID2,
+			Payload:        json.RawMessage(`{"webhook_type":"TRANSACTIONS"}`),
+			SignatureValid: true,
+			Processed:      false,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		},
 	}
 
@@ -229,31 +237,34 @@ func TestWebhookProcessor_ProcessPendingWebhooks_PartialFailure(t *testing.T) {
 	itemID3 := "item-3"
 	webhooks := []domain.WebhookEvent{
 		{
-			ID:          "webhook-1",
-			WebhookType: "TRANSACTIONS",
-			ItemID:      &itemID1,
-			Payload:     json.RawMessage(`{}`),
-			Processed:   false,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
+			ID:             "webhook-1",
+			WebhookType:    "TRANSACTIONS",
+			ItemID:         &itemID1,
+			Payload:        json.RawMessage(`{}`),
+			SignatureValid: true,
+			Processed:      false,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		},
 		{
-			ID:          "webhook-2",
-			WebhookType: "TRANSACTIONS",
-			ItemID:      &itemID2,
-			Payload:     json.RawMessage(`{}`),
-			Processed:   false,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
+			ID:             "webhook-2",
+			WebhookType:    "TRANSACTIONS",
+			ItemID:         &itemID2,
+			Payload:        json.RawMessage(`{}`),
+			SignatureValid: true,
+			Processed:      false,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		},
 		{
-			ID:          "webhook-3",
-			WebhookType: "TRANSACTIONS",
-			ItemID:      &itemID3,
-			Payload:     json.RawMessage(`{}`),
-			Processed:   false,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
+			ID:             "webhook-3",
+			WebhookType:    "TRANSACTIONS",
+			ItemID:         &itemID3,
+			Payload:        json.RawMessage(`{}`),
+			SignatureValid: true,
+			Processed:      false,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		},
 	}
 
@@ -326,13 +337,14 @@ func TestWebhookProcessor_Start_ProcessesOnStartup(t *testing.T) {
 
 	itemID := "item-1"
 	webhook := domain.WebhookEvent{
-		ID:          "webhook-startup",
-		WebhookType: "TRANSACTIONS",
-		ItemID:      &itemID,
-		Payload:     json.RawMessage(`{}`),
-		Processed:   false,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             "webhook-startup",
+		WebhookType:    "TRANSACTIONS",
+		ItemID:         &itemID,
+		Payload:        json.RawMessage(`{}`),
+		SignatureValid: true,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Mock: First call (on startup) returns 1 webhook
@@ -372,13 +384,14 @@ func TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_Success(t *testing.
 	// Create ITEM webhook with error details in payload
 	itemID1 := "item-1"
 	itemWebhook := domain.WebhookEvent{
-		ID:          "webhook-item-1",
-		WebhookType: "ITEM",
-		ItemID:      &itemID1,
-		Payload:     json.RawMessage(`{"error":{"error_type":"ITEM_LOGIN_REQUIRED","error_code":"ITEM_LOGIN_REQUIRED","error_message":"User credentials changed"}}`),
-		Processed:   false,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             "webhook-item-1",
+		WebhookType:    "ITEM",
+		ItemID:         &itemID1,
+		Payload:        json.RawMessage(`{"error":{"error_type":"ITEM_LOGIN_REQUIRED","error_code":"ITEM_LOGIN_REQUIRED","error_message":"User credentials changed"}}`),
+		SignatureValid: true,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Mock: No TRANSACTIONS webhooks
@@ -412,22 +425,24 @@ func TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_PartialFailure(t *t
 	itemID2 := "item-2"
 	webhooks := []domain.WebhookEvent{
 		{
-			ID:          "webhook-item-1",
-			WebhookType: "ITEM",
-			ItemID:      &itemID1,
-			Payload:     json.RawMessage(`{"error":{"error_type":"ITEM_LOGIN_REQUIRED","error_code":"ITEM_LOGIN_REQUIRED","error_message":"User credentials changed"}}`),
-			Processed:   false,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
+			ID:             "webhook-item-1",
+			WebhookType:    "ITEM",
+			ItemID:         &itemID1,
+			Payload:        json.RawMessage(`{"error":{"error_type":"ITEM_LOGIN_REQUIRED","error_code":"ITEM_LOGIN_REQUIRED","error_message":"User credentials changed"}}`),
+			SignatureValid: true,
+			Processed:      false,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		},
 		{
-			ID:          "webhook-item-2",
-			WebhookType: "ITEM",
-			ItemID:      &itemID2,
-			Payload:     json.RawMessage(`{"error":{"error_type":"ERROR","error_code":"INSTITUTION_DOWN","error_message":"Institution temporarily unavailable"}}`),
-			Processed:   false,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
+			ID:             "webhook-item-2",
+			WebhookType:    "ITEM",
+			ItemID:         &itemID2,
+			Payload:        json.RawMessage(`{"error":{"error_type":"ERROR","error_code":"INSTITUTION_DOWN","error_message":"Institution temporarily unavailable"}}`),
+			SignatureValid: true,
+			Processed:      false,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		},
 	}
 
@@ -464,25 +479,27 @@ func TestWebhookProcessor_ProcessPendingWebhooks_MixedWebhooks(t *testing.T) {
 	// Create TRANSACTIONS webhook
 	itemID1 := "item-1"
 	transactionWebhook := domain.WebhookEvent{
-		ID:          "webhook-txn-1",
-		WebhookType: "TRANSACTIONS",
-		ItemID:      &itemID1,
-		Payload:     json.RawMessage(`{"webhook_type":"TRANSACTIONS"}`),
-		Processed:   false,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             "webhook-txn-1",
+		WebhookType:    "TRANSACTIONS",
+		ItemID:         &itemID1,
+		Payload:        json.RawMessage(`{"webhook_type":"TRANSACTIONS"}`),
+		SignatureValid: true,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Create ITEM webhook
 	itemID2 := "item-2"
 	itemWebhook := domain.WebhookEvent{
-		ID:          "webhook-item-1",
-		WebhookType: "ITEM",
-		ItemID:      &itemID2,
-		Payload:     json.RawMessage(`{"error":{"error_type":"PENDING_EXPIRATION","error_code":"PENDING_EXPIRATION","error_message":"Item expiring soon"}}`),
-		Processed:   false,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             "webhook-item-1",
+		WebhookType:    "ITEM",
+		ItemID:         &itemID2,
+		Payload:        json.RawMessage(`{"error":{"error_type":"PENDING_EXPIRATION","error_code":"PENDING_EXPIRATION","error_message":"Item expiring soon"}}`),
+		SignatureValid: true,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Mock: GetUnprocessedByType returns TRANSACTIONS webhooks
@@ -518,13 +535,14 @@ func TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_InvalidPayload(t *t
 	// Create ITEM webhook with invalid JSON payload
 	itemID := "item-1"
 	webhook := domain.WebhookEvent{
-		ID:          "webhook-item-invalid",
-		WebhookType: "ITEM",
-		ItemID:      &itemID,
-		Payload:     json.RawMessage(`{invalid json`),
-		Processed:   false,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             "webhook-item-invalid",
+		WebhookType:    "ITEM",
+		ItemID:         &itemID,
+		Payload:        json.RawMessage(`{invalid json`),
+		SignatureValid: true, // this test targets payload-parsing failure, not the signature guard
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Mock: No TRANSACTIONS webhooks
@@ -607,13 +625,14 @@ func TestWebhookProcessor_ItemWebhook_NilItemID(t *testing.T) {
 
 	// Create ITEM webhook with nil ItemID
 	webhook := domain.WebhookEvent{
-		ID:          "webhook-nil-item",
-		WebhookType: "ITEM",
-		ItemID:      nil, // This should be skipped
-		Payload:     json.RawMessage(`{"error":{"error_type":"ERROR","error_code":"CODE","error_message":"msg"}}`),
-		Processed:   false,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             "webhook-nil-item",
+		WebhookType:    "ITEM",
+		ItemID:         nil, // This should be skipped
+		Payload:        json.RawMessage(`{"error":{"error_type":"ERROR","error_code":"CODE","error_message":"msg"}}`),
+		SignatureValid: true, // this test targets the nil-ItemID skip, not the signature guard
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Mock: No TRANSACTIONS webhooks
@@ -643,13 +662,14 @@ func TestWebhookProcessor_ItemWebhook_MissingErrorType(t *testing.T) {
 	// Create ITEM webhook with empty error fields
 	itemID := "item-1"
 	webhook := domain.WebhookEvent{
-		ID:          "webhook-empty-error",
-		WebhookType: "ITEM",
-		ItemID:      &itemID,
-		Payload:     json.RawMessage(`{"error":{"error_type":"","error_code":"","error_message":""}}`),
-		Processed:   false,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             "webhook-empty-error",
+		WebhookType:    "ITEM",
+		ItemID:         &itemID,
+		Payload:        json.RawMessage(`{"error":{"error_type":"","error_code":"","error_message":""}}`),
+		SignatureValid: true, // this test targets the missing-error-fields skip, not the signature guard
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Mock: No TRANSACTIONS webhooks
@@ -710,14 +730,15 @@ func TestWebhookProcessor_ProcessPendingWebhooks_TransactionWebhook_Analytics(t 
 	itemID := "item-1"
 	webhookCode := "SYNC_UPDATES_AVAILABLE"
 	webhook := domain.WebhookEvent{
-		ID:          "webhook-1",
-		WebhookType: "TRANSACTIONS",
-		ItemID:      &itemID,
-		WebhookCode: &webhookCode,
-		Payload:     json.RawMessage(`{}`),
-		Processed:   false,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             "webhook-1",
+		WebhookType:    "TRANSACTIONS",
+		ItemID:         &itemID,
+		WebhookCode:    &webhookCode,
+		Payload:        json.RawMessage(`{}`),
+		SignatureValid: true,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Mock: GetUnprocessedByType returns webhook
@@ -758,14 +779,15 @@ func TestWebhookProcessor_ProcessPendingWebhooks_ItemWebhook_Analytics(t *testin
 	// Create test ITEM webhook
 	itemID := "item-1"
 	webhook := domain.WebhookEvent{
-		ID:          "webhook-item-1",
-		WebhookType: "ITEM",
-		ItemID:      &itemID,
-		WebhookCode: nil, // No webhook code for ITEM webhooks
-		Payload:     json.RawMessage(`{"error":{"error_type":"ITEM_LOGIN_REQUIRED","error_code":"ITEM_LOGIN_REQUIRED","error_message":"User credentials changed"}}`),
-		Processed:   false,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             "webhook-item-1",
+		WebhookType:    "ITEM",
+		ItemID:         &itemID,
+		WebhookCode:    nil, // No webhook code for ITEM webhooks
+		Payload:        json.RawMessage(`{"error":{"error_type":"ITEM_LOGIN_REQUIRED","error_code":"ITEM_LOGIN_REQUIRED","error_message":"User credentials changed"}}`),
+		SignatureValid: true,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Mock: No TRANSACTIONS webhooks
@@ -805,14 +827,15 @@ func TestWebhookProcessor_ProcessPendingWebhooks_AnalyticsWithNilItemID(t *testi
 
 	// Create test webhook with nil ItemID
 	webhook := domain.WebhookEvent{
-		ID:          "webhook-1",
-		WebhookType: "TRANSACTIONS",
-		ItemID:      nil, // No ItemID - should fallback to "system"
-		WebhookCode: nil,
-		Payload:     json.RawMessage(`{}`),
-		Processed:   false,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             "webhook-1",
+		WebhookType:    "TRANSACTIONS",
+		ItemID:         nil, // No ItemID - should fallback to "system"
+		WebhookCode:    nil,
+		Payload:        json.RawMessage(`{}`),
+		SignatureValid: true,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Mock: GetUnprocessedByType returns webhook
@@ -852,14 +875,15 @@ func TestWebhookProcessor_ProcessPendingWebhooks_AnalyticsNilClient(t *testing.T
 	// Create test webhook
 	itemID := "item-1"
 	webhook := domain.WebhookEvent{
-		ID:          "webhook-1",
-		WebhookType: "TRANSACTIONS",
-		ItemID:      &itemID,
-		WebhookCode: nil,
-		Payload:     json.RawMessage(`{}`),
-		Processed:   false,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             "webhook-1",
+		WebhookType:    "TRANSACTIONS",
+		ItemID:         &itemID,
+		WebhookCode:    nil,
+		Payload:        json.RawMessage(`{}`),
+		SignatureValid: true,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Mock: GetUnprocessedByType returns webhook
@@ -877,4 +901,206 @@ func TestWebhookProcessor_ProcessPendingWebhooks_AnalyticsNilClient(t *testing.T
 	assert.NoError(t, err)
 	mockWebhookRepo.AssertExpectations(t)
 	mockSyncService.AssertExpectations(t)
+}
+
+// ============================================================================
+// Issue #1514: Signature Validity Guard Tests
+//
+// This legacy poller is unwired dead code (production runs
+// jobs.NewWebhookProcessingWorker instead - see main.go), but it must not be a
+// landmine if ever revived: it must refuse to dispatch webhooks whose
+// signature was never verified (SignatureValid: false).
+// ============================================================================
+
+// TestWebhookProcessor_TransactionWebhook_InvalidSignature_NotDispatched tests that a
+// TRANSACTIONS webhook with SignatureValid: false is NOT dispatched to TransactionSyncService.
+func TestWebhookProcessor_TransactionWebhook_InvalidSignature_NotDispatched(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
+
+	itemID := "item-1"
+	webhook := domain.WebhookEvent{
+		ID:             "webhook-invalid-sig-txn",
+		WebhookType:    "TRANSACTIONS",
+		ItemID:         &itemID,
+		Payload:        json.RawMessage(`{}`),
+		SignatureValid: false,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).Return([]domain.WebhookEvent{webhook}, nil)
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{}, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "webhook-invalid-sig-txn", mock.AnythingOfType("string")).Return(nil)
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert - refused row must never reach the sync service
+	assert.NoError(t, err)
+	mockSyncService.AssertNotCalled(t, "ProcessWebhook")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWebhookProcessor_ItemWebhook_InvalidSignature_NotDispatched tests that an ITEM webhook
+// with SignatureValid: false is NOT dispatched to ItemErrorService (which can change a user's
+// bank-connection status and send notifications/email).
+func TestWebhookProcessor_ItemWebhook_InvalidSignature_NotDispatched(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
+
+	itemID := "item-1"
+	webhook := domain.WebhookEvent{
+		ID:             "webhook-invalid-sig-item",
+		WebhookType:    "ITEM",
+		ItemID:         &itemID,
+		Payload:        json.RawMessage(`{"error":{"error_type":"ITEM_LOGIN_REQUIRED","error_code":"ITEM_LOGIN_REQUIRED","error_message":"User credentials changed"}}`),
+		SignatureValid: false,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).Return([]domain.WebhookEvent{}, nil)
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{webhook}, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "webhook-invalid-sig-item", mock.AnythingOfType("string")).Return(nil)
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert - refused row must never reach the item error service
+	assert.NoError(t, err)
+	mockItemErrorService.AssertNotCalled(t, "ProcessWebhook")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWebhookProcessor_TransactionWebhook_InvalidSignature_SkipsAnalytics tests that the
+// signature guard runs BEFORE the PostHog analytics capture on the TRANSACTIONS path, not
+// after it. An unverified row's ItemID is attacker-supplied and must never be used as an
+// analytics distinct_id.
+func TestWebhookProcessor_TransactionWebhook_InvalidSignature_SkipsAnalytics(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+	mockAnalytics := new(MockAnalytics)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
+	processor.SetAnalytics(mockAnalytics)
+
+	itemID := "item-1"
+	webhook := domain.WebhookEvent{
+		ID:             "webhook-invalid-sig-txn-analytics",
+		WebhookType:    "TRANSACTIONS",
+		ItemID:         &itemID,
+		Payload:        json.RawMessage(`{}`),
+		SignatureValid: false,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).Return([]domain.WebhookEvent{webhook}, nil)
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{}, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "webhook-invalid-sig-txn-analytics", mock.AnythingOfType("string")).Return(nil)
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert - the refused row must never reach PostHog
+	assert.NoError(t, err)
+	mockAnalytics.AssertNotCalled(t, "Capture")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWebhookProcessor_ItemWebhook_InvalidSignature_SkipsValidationAndAnalytics tests that the
+// signature guard on the ITEM path runs BEFORE the nil-ItemID check, before analytics capture,
+// and before payload parsing/validation. A webhook with a nil ItemID AND an invalid signature
+// must still be MarkFailed by the signature guard - if the nil-ItemID `continue` ran first, the
+// row would silently skip the guard and remain processed=false forever (Defect 1).
+func TestWebhookProcessor_ItemWebhook_InvalidSignature_SkipsValidationAndAnalytics(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+	mockAnalytics := new(MockAnalytics)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
+	processor.SetAnalytics(mockAnalytics)
+
+	// Nil ItemID AND invalid signature AND malformed payload - if the guard ran anywhere
+	// other than first, one of the pre-guard checks would `continue` before MarkFailed is
+	// ever called.
+	webhook := domain.WebhookEvent{
+		ID:             "webhook-invalid-sig-item-nil-item-id",
+		WebhookType:    "ITEM",
+		ItemID:         nil,
+		Payload:        json.RawMessage(`{invalid json`),
+		SignatureValid: false,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).Return([]domain.WebhookEvent{}, nil)
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{webhook}, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "webhook-invalid-sig-item-nil-item-id", mock.AnythingOfType("string")).Return(nil)
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert - the guard must have run (MarkFailed called, asserted via AssertExpectations
+	// below) despite the nil ItemID and malformed payload that would otherwise `continue` first.
+	assert.NoError(t, err)
+	mockAnalytics.AssertNotCalled(t, "Capture")
+	mockItemErrorService.AssertNotCalled(t, "ProcessWebhook")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWebhookProcessor_TransactionWebhook_InvalidSignature_MarkFailedError_Propagates tests
+// that a failure to persist the invalid-signature refusal (MarkFailed) is surfaced as a
+// non-nil error from ProcessPendingWebhooks, rather than silently treated as handled (Defect
+// 2). Dispatch must still be refused unconditionally even though persistence failed.
+func TestWebhookProcessor_TransactionWebhook_InvalidSignature_MarkFailedError_Propagates(t *testing.T) {
+	ctx := context.Background()
+	mockSyncService := new(MockTransactionSyncServiceForWorker)
+	mockItemErrorService := new(MockItemErrorServiceForWorker)
+	mockWebhookRepo := new(MockWebhookRepoForWorker)
+
+	processor := NewWebhookProcessor(mockSyncService, mockItemErrorService, mockWebhookRepo, 30*time.Second, 10, nil)
+
+	itemID := "item-1"
+	webhook := domain.WebhookEvent{
+		ID:             "webhook-invalid-sig-markfailed-err",
+		WebhookType:    "TRANSACTIONS",
+		ItemID:         &itemID,
+		Payload:        json.RawMessage(`{}`),
+		SignatureValid: false,
+		Processed:      false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "TRANSACTIONS", 10).Return([]domain.WebhookEvent{webhook}, nil)
+	mockWebhookRepo.On("GetUnprocessedByType", ctx, "ITEM", 10).Return([]domain.WebhookEvent{}, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "webhook-invalid-sig-markfailed-err", mock.AnythingOfType("string")).
+		Return(errors.New("db unavailable"))
+
+	// Execute
+	err := processor.ProcessPendingWebhooks(ctx)
+
+	// Assert - dispatch is still refused, but the persistence failure is surfaced, not swallowed
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "webhook-invalid-sig-markfailed-err")
+	mockSyncService.AssertNotCalled(t, "ProcessWebhook")
+	mockWebhookRepo.AssertExpectations(t)
 }

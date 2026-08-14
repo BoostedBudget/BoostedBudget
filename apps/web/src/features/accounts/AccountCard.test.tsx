@@ -12,6 +12,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { AccountCard } from './AccountCard'
 import type { Account } from './types'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 function renderWithRouter(ui: React.ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>)
@@ -186,7 +187,7 @@ describe('AccountCard', () => {
     it('renders a link to /accounts/:id wrapping the summary region', () => {
       renderWithRouter(<AccountCard account={mockAccount} />)
 
-      const link = screen.getByRole('link', { name: /view chase total checking account details/i })
+      const link = screen.getByRole('link', { name: /view bank account - checking account ending in 0000 details/i })
       expect(link).toBeInTheDocument()
       expect(link).toHaveAttribute('href', `/accounts/${mockAccount.id}`)
     })
@@ -196,7 +197,7 @@ describe('AccountCard', () => {
         <AccountCard account={mockAccount} onEdit={mock(() => {})} onDelete={mock(() => {})} />
       )
 
-      const link = screen.getByRole('link', { name: /view chase total checking account details/i })
+      const link = screen.getByRole('link', { name: /view bank account - checking account ending in 0000 details/i })
       // Buttons should be outside the link element
       expect(link.querySelector('button')).toBeNull()
     })
@@ -205,7 +206,7 @@ describe('AccountCard', () => {
       const onEdit = mock(() => {})
       renderWithRouter(<AccountCard account={mockAccount} onEdit={onEdit} />)
 
-      const link = screen.getByRole('link', { name: /view chase total checking account details/i })
+      const link = screen.getByRole('link', { name: /view bank account - checking account ending in 0000 details/i })
       const editButton = screen.getByRole('button', { name: /edit account/i })
       // The edit button should not be a descendant of the link
       expect(link.contains(editButton)).toBe(false)
@@ -215,9 +216,93 @@ describe('AccountCard', () => {
       const onDelete = mock(() => {})
       renderWithRouter(<AccountCard account={mockAccount} onDelete={onDelete} />)
 
-      const link = screen.getByRole('link', { name: /view chase total checking account details/i })
+      const link = screen.getByRole('link', { name: /view bank account - checking account ending in 0000 details/i })
       const deleteButton = screen.getByText('Delete Account')
       expect(link.contains(deleteButton)).toBe(false)
+    })
+  })
+
+  describe('summary link accessible name excludes PII (issue #1514: aria-label is unmaskable)', () => {
+    // Every DOM attribute on the link — not just aria-label — must be free of the PII.
+    // This is what actually matters for PostHog session replay: it records attributes
+    // verbatim regardless of which attribute name carries the leak.
+    function attributeValues(el: Element): string[] {
+      return Array.from(el.attributes).map((a) => a.value)
+    }
+
+    it('does not include the nickname or institution name in any DOM attribute on the link', () => {
+      const accountWithNickname: Account = {
+        ...mockAccount,
+        nickname: 'My Secret Vacation Fund',
+        institution_name: 'Chase',
+      }
+      const { container } = renderWithRouter(<AccountCard account={accountWithNickname} />)
+
+      const link = container.querySelector('a[href$="/accounts/' + accountWithNickname.id + '"]') as HTMLElement
+      expect(link).toBeTruthy()
+      const values = attributeValues(link)
+      expect(values.some((v) => v.includes('My Secret Vacation Fund'))).toBe(false)
+      expect(values.some((v) => v.includes('Chase Total Checking'))).toBe(false)
+      expect(values.some((v) => v.includes('Chase'))).toBe(false)
+
+      // Belt-and-suspenders: the project's own PII scanner (used elsewhere for exactly this
+      // class of bug) must find zero attribute-borne violations on the whole rendered card.
+      const sentinels: PIISentinel[] = [
+        { value: 'My Secret Vacation Fund', fieldDescription: 'account.nickname' },
+        { value: 'Chase', fieldDescription: 'account.institution_name' },
+      ]
+      expect(scanForUnmaskedPII(container, sentinels)).toEqual([])
+    })
+
+    it('still distinguishes two different accounts from each other via the accessible name', () => {
+      const accountA: Account = { ...mockAccount, id: 'acct-a', mask: '1111' }
+      const accountB: Account = { ...mockAccount, id: 'acct-b', mask: '2222' }
+      const { rerender } = renderWithRouter(<AccountCard account={accountA} />)
+      expect(
+        screen.getByRole('link', { name: /view bank account - checking account ending in 1111 details/i })
+      ).toBeInTheDocument()
+
+      rerender(
+        <MemoryRouter>
+          <AccountCard account={accountB} />
+        </MemoryRouter>
+      )
+      expect(
+        screen.getByRole('link', { name: /view bank account - checking account ending in 2222 details/i })
+      ).toBeInTheDocument()
+    })
+
+    it('omits the mask clause (no "undefined") when mask is absent', () => {
+      const accountWithoutMask: Account = { ...mockAccount, mask: undefined }
+      const { container } = renderWithRouter(<AccountCard account={accountWithoutMask} />)
+
+      const link = screen.getByRole('link', { name: /view bank account - checking account details/i })
+      expect(container.textContent).not.toContain('undefined')
+      expect(attributeValues(link).some((v) => v.includes('undefined'))).toBe(false)
+      expect(attributeValues(link).some((v) => v.includes('ending in'))).toBe(false)
+    })
+
+    it('does not put account.id in any rendered attribute other than the link href (issue #1514)', () => {
+      const { container } = renderWithRouter(<AccountCard account={mockAccount} />)
+
+      const violations: string[] = []
+      container.querySelectorAll('*').forEach((el) => {
+        Array.from(el.attributes).forEach((attr) => {
+          if (attr.name === 'href') return
+          if (attr.value.includes(mockAccount.id)) {
+            violations.push(`${el.tagName.toLowerCase()}[${attr.name}="${attr.value}"]`)
+          }
+        })
+      })
+      expect(violations).toEqual([])
+
+      // The href is the one accepted exception and must still carry the id (routing dependency).
+      const link = container.querySelector(`a[href="/accounts/${mockAccount.id}"]`)
+      expect(link).toBeTruthy()
+
+      // The accessible name must still compute correctly from the masked sr-only span.
+      const accessibleLink = screen.getByRole('link', { name: /view bank account - checking account ending in 0000 details/i })
+      expect(accessibleLink).toBe(link)
     })
   })
 

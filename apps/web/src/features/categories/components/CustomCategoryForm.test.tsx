@@ -7,6 +7,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 // pfcOptions reads static data — no mock needed (mocking it pollutes the global suite).
 import { CustomCategoryForm } from './CustomCategoryForm'
 import type { CustomCategory } from '../types'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 function cat(p: Partial<CustomCategory> & { id: string; name: string }): CustomCategory {
   return { user_id: 'u1', usage_count: 0, created_at: '', updated_at: '', ...p }
@@ -94,5 +95,19 @@ describe('CustomCategoryForm', () => {
     const values = Array.from(select.querySelectorAll('option')).map((o) => o.value)
     expect(values).toContain('custom:top')
     expect(values).not.toContain('custom:nested')
+  })
+
+  // Issue #1514 (fix round 4): the custom-parent <option> text is the user-authored
+  // category name, rendered unmasked. <option> cannot contain a <span>, so the fix is
+  // data-ph-mask on the <option> element itself — assert with the widened scanner so it
+  // covers text, not just attributes.
+  it('masks the custom parent category name in the "Nest under" options', () => {
+    const cats = [cat({ id: 'top', name: 'SENTINEL_PARENT_CATEGORY' })]
+    render(<CustomCategoryForm allCategories={cats} onSubmit={mock(() => Promise.resolve())} onCancel={() => {}} />)
+
+    const sentinels: PIISentinel[] = [
+      { value: 'SENTINEL_PARENT_CATEGORY', fieldDescription: 'custom_category.name in "Nest under" <option>' },
+    ]
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 })

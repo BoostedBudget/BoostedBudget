@@ -265,7 +265,7 @@ function ConditionRow({ condition, index, availableFields, budgets, onChange, on
               <option value={condition.budget_id} disabled>(deleted — re-select)</option>
             )}
             {(budgets ?? []).map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
+              <option key={b.id} value={b.id} data-ph-mask>{b.name}</option>
             ))}
           </select>
         </div>
@@ -289,7 +289,7 @@ function ConditionRow({ condition, index, availableFields, budgets, onChange, on
               <option value={condition.category_id} disabled>(deleted — re-select)</option>
             )}
             {scopedCategories.map((category) => (
-              <option key={category.id} value={category.id}>
+              <option key={category.id} value={category.id} data-ph-mask>
                 {formatBudgetCategoryLabel(category)}
               </option>
             ))}

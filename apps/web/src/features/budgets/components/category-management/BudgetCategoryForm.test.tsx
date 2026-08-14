@@ -22,6 +22,7 @@ mock.module('../../hooks/usePreviewCategories', () => ({
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BudgetCategoryForm } from './BudgetCategoryForm'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 // Minimal CustomCategory factory
 const makeCustomCategory = (
@@ -206,9 +207,15 @@ describe('BudgetCategoryForm', () => {
       expect(categorySelect).not.toBeDisabled()
     })
 
-    it('should group a custom sub-category under its custom parent (parent_id) in a labeled optgroup', async () => {
-      // A custom parent "Food" with a custom child "Fast Food" (parent_id). The child
-      // option must render under an <optgroup> labeled with the parent's name — AC5 (#1203).
+    // Issue #1514 (fix round 4): the OLD version of this test asserted the child option
+    // rendered under an <optgroup label="Food"> — i.e. it asserted the leak. <optgroup
+    // label> is an ATTRIBUTE and <optgroup> has no child element, so unlike <option> text
+    // there is no way to mask a parent-category-named group label; the only fix is to stop
+    // putting the parent's name in an attribute at all. The child now renders flat,
+    // immediately after its parent option (same relative order, no group header), and the
+    // parent/child <option> TEXT is masked instead. This is a visible UX change — the bold
+    // "Food" group-header row is gone — called out in the #1514 fix-round-4 report.
+    it('renders a custom sub-category flat, immediately after its parent, with no optgroup carrying the parent name', async () => {
       const parent = makeCustomCategory('cat-parent', 'Food')
       const child: CustomCategory = {
         ...makeCustomCategory('cat-child', 'Fast Food'),
@@ -233,10 +240,172 @@ describe('BudgetCategoryForm', () => {
 
       await switchToCustom()
 
+      const parentOption = screen.getByRole('option', { name: /^Food$/i }) as HTMLOptionElement
       const childOption = screen.getByRole('option', { name: /Fast Food/i }) as HTMLOptionElement
-      const group = childOption.closest('optgroup')
-      expect(group).not.toBeNull()
-      expect(group?.label).toBe('Food')
+
+      // No <optgroup> anywhere in this select may carry the parent's name as its label.
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      for (const grp of categorySelect.querySelectorAll('optgroup')) {
+        expect(grp.getAttribute('label')).not.toBe('Food')
+      }
+
+      // The parent→child relationship is still communicated structurally: the child
+      // option immediately follows its parent option in document order.
+      const allOptions = Array.from(categorySelect.querySelectorAll('option'))
+      const parentIndex = allOptions.indexOf(parentOption)
+      expect(allOptions[parentIndex + 1]).toBe(childOption)
+    })
+
+    // Issue #1514 (scanner-completeness / optgroup-coverage review): the test above only
+    // ever exercised ONE parent with ONE child. These three cases cover the shapes an
+    // independent review flagged as unproven: multiple present parents (do their
+    // flattened option runs stay correctly grouped by proximity, not interleaved?), a
+    // childless parent mixed in with one that has children (does flattening only apply to
+    // groups that actually need it?), and an orphaned child.
+    it('flattens multiple parents-with-children without interleaving their child options', async () => {
+      const foodParent = makeCustomCategory('cat-food', 'Food')
+      const foodChild: CustomCategory = { ...makeCustomCategory('cat-fastfood', 'Fast Food'), parent_id: 'cat-food' }
+      const travelParent = makeCustomCategory('cat-travel', 'Travel')
+      const travelChild: CustomCategory = { ...makeCustomCategory('cat-flights', 'Flights'), parent_id: 'cat-travel' }
+      mockUseGetUserCategories.mockReturnValue({
+        data: [foodParent, foodChild, travelParent, travelChild],
+        isLoading: false,
+        error: null,
+      })
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+      await switchToCustom()
+
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      // No optgroup may carry either parent's name (both are PII-bearing groups).
+      for (const grp of categorySelect.querySelectorAll('optgroup')) {
+        expect(['Food', 'Travel']).not.toContain(grp.getAttribute('label'))
+      }
+
+      const allOptions = Array.from(categorySelect.querySelectorAll('option')).map((o) => o.textContent?.trim())
+      const foodIdx = allOptions.indexOf('Food')
+      const travelIdx = allOptions.indexOf('Travel')
+      // Each parent's own child sits immediately after it — not after the OTHER parent.
+      expect(allOptions[foodIdx + 1]).toBe('— Fast Food')
+      expect(allOptions[travelIdx + 1]).toBe('— Flights')
+    })
+
+    it('renders a childless parent as a plain option alongside a parent that has children', async () => {
+      const lonelyParent = makeCustomCategory('cat-lonely', 'Lonely')
+      const foodParent = makeCustomCategory('cat-food', 'Food')
+      const foodChild: CustomCategory = { ...makeCustomCategory('cat-fastfood', 'Fast Food'), parent_id: 'cat-food' }
+      mockUseGetUserCategories.mockReturnValue({
+        data: [lonelyParent, foodParent, foodChild],
+        isLoading: false,
+        error: null,
+      })
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+      await switchToCustom()
+
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      // The childless parent still renders as a selectable option...
+      expect(screen.getByRole('option', { name: /^Lonely$/i })).toBeInTheDocument()
+      // ...under the static, non-PII "Custom (no parent)" header (this group's label was
+      // never PII-bearing — it's a childless-top-level bucket, not named after any one
+      // category — so it keeps a real <optgroup>, unlike the Food/Fast Food group).
+      const lonelyOption = screen.getByRole('option', { name: /^Lonely$/i })
+      expect(lonelyOption.closest('optgroup')?.getAttribute('label')).toBe('Custom (no parent)')
+      // The Food/Fast Food pairing is unaffected by Lonely's presence.
+      const allOptions = Array.from(categorySelect.querySelectorAll('option')).map((o) => o.textContent?.trim())
+      const foodIdx = allOptions.indexOf('Food')
+      expect(allOptions[foodIdx + 1]).toBe('— Fast Food')
+    })
+
+    // KNOWN BUG (issue #1514 scanner-completeness review), NOT FIXED HERE: confirmed via
+    // buildCategoryHierarchy.ts — `childrenByParent` collects every category with a
+    // `parent_id`, including ones whose parent is absent from the `categories` array, but
+    // `topLevel` (the only place children are read back out) is built by mapping over
+    // `topLevelParents` alone. A child whose `parent_id` doesn't match any category in the
+    // list is therefore silently dropped from the picker entirely — not shown flat, not
+    // shown under any group, just gone. This is a pre-existing data-loss bug, orthogonal to
+    // PII masking (the fix in this round only changes how a PRESENT parent's group is
+    // labeled). Investigated and confirmed, but a real fix requires a product decision
+    // (surface orphans in their own group? fall back to treating them as top-level? show a
+    // warning?) that doesn't belong in a security-fix round — reported for a follow-up
+    // ticket instead. This test documents the CURRENT (buggy) behavior so a silent
+    // behavior change is caught, not to bless it as correct.
+    it('documents a known bug: an orphaned child (parent not in the category list) disappears entirely', async () => {
+      const orphan: CustomCategory = { ...makeCustomCategory('cat-orphan', 'Orphaned Child'), parent_id: 'cat-missing-parent' }
+      mockUseGetUserCategories.mockReturnValue({
+        data: [orphan],
+        isLoading: false,
+        error: null,
+      })
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+      await switchToCustom()
+
+      // BUG: the orphaned child should arguably still be selectable somehow, but today it
+      // is not present anywhere in the category picker at all.
+      expect(screen.queryByRole('option', { name: /Orphaned Child/i })).not.toBeInTheDocument()
+    })
+
+    // Issue #1514 (fix round 4): the custom-category <option> text (parent AND child
+    // names) is user-authored and must be masked — assert with the widened scanner so it
+    // covers text, not just attributes.
+    it('masks custom category names in the category <option> text', async () => {
+      const parent = makeCustomCategory('cat-parent', 'SENTINEL_PARENT_CAT')
+      const child: CustomCategory = {
+        ...makeCustomCategory('cat-child', 'SENTINEL_CHILD_CAT'),
+        parent_id: 'cat-parent',
+      }
+      mockUseGetUserCategories.mockReturnValue({
+        data: [parent, child],
+        isLoading: false,
+        error: null,
+      })
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+        />
+      )
+
+      await switchToCustom()
+
+      const sentinels: PIISentinel[] = [
+        { value: 'SENTINEL_PARENT_CAT', fieldDescription: 'custom_category.name in category <option>' },
+        { value: 'SENTINEL_CHILD_CAT', fieldDescription: 'custom_category.name (child) in category <option>' },
+      ]
+      expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
     })
 
     it('should NOT show Custom Categories button when useGetUserCategories returns empty', () => {

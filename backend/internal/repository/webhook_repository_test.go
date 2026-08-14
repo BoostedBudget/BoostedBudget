@@ -150,6 +150,35 @@ func TestWebhookEventMarkProcessed_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestWebhookRepository_MarkFailed_SetsProcessedTrue pins Issue #1514's contract on the
+// WebhookRepository interface (~webhook_repository.go:39-41): MarkFailed must not "leave it
+// eligible for indefinite retry". GetUnprocessed/GetUnprocessedByType both filter on
+// `processed = false`, so MarkFailed must set processed = true or a signature-invalid row
+// stays selectable forever by those queries (e.g. the legacy WebhookProcessor poller).
+// MarkFailed has exactly one real (non-test) caller in this codebase — the invalid-signature
+// guard in queue/jobs/webhook_processing.go — so there is no legitimate-retry caller here that
+// this would break (contrast with Paddle's MarkFailed, which IS also called on ordinary
+// processing failures and must keep retrying).
+func TestWebhookRepository_MarkFailed_SetsProcessedTrue(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	enc := newTestFieldEncryptor(t)
+	repo := NewWebhookRepository(mock, enc)
+	ctx := context.Background()
+	webhookID := "test-id-123"
+
+	mock.ExpectExec(`UPDATE webhook_events SET processing_error = \$2, processed = true`).
+		WithArgs(webhookID, "rejected: signature_valid=false").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err = repo.MarkFailed(ctx, webhookID, "rejected: signature_valid=false")
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestWebhookEventGetUnprocessed_Multiple(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)

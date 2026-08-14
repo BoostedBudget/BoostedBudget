@@ -33,8 +33,15 @@ kill_timeout = 30
 [experimental]
   auto_rollback = true
 
+# Issue #1514: /metrics moved off the public listener (port 8080, mapped to the public
+# 80/443 service below) onto its own internal-only listener on port 9091. 9091 is NOT
+# listed in any [[services.ports]] entry, so it is never reachable from the public
+# internet — only Fly's own metrics scraper reaches it, over the private 6PN network,
+# the same way health-check probes reach the app without going through fly-proxy's
+# public HTTP layer. Must match INTERNAL_METRICS_PORT / defaultInternalMetricsPort in
+# backend/cmd/server/internal_metrics.go (defaults to 9091 if unset).
 [metrics]
-  port = 8080
+  port = 9091
   path = "/metrics"
 
 [[services]]

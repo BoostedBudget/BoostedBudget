@@ -31,6 +31,11 @@ func (m *MockWebhookRepository) GetByID(ctx context.Context, id string) (*domain
 	return args.Get(0).(*domain.WebhookEvent), args.Error(1)
 }
 
+func (m *MockWebhookRepository) MarkFailed(ctx context.Context, id string, errorMsg string) error {
+	args := m.Called(ctx, id, errorMsg)
+	return args.Error(0)
+}
+
 // MockWebhookTransactionSyncService mocks TransactionSyncService for webhook tests
 type MockWebhookTransactionSyncService struct {
 	mock.Mock
@@ -99,11 +104,12 @@ func TestWebhookProcessingWorker_Work_TransactionsWebhook_Success(t *testing.T) 
 	itemID := "plaid-item-123"
 
 	webhook := &domain.WebhookEvent{
-		ID:          webhookID,
-		WebhookType: "TRANSACTIONS",
-		WebhookCode: stringPtr("DEFAULT_UPDATE"),
-		ItemID:      &itemID,
-		Processed:   false,
+		ID:             webhookID,
+		WebhookType:    "TRANSACTIONS",
+		WebhookCode:    stringPtr("DEFAULT_UPDATE"),
+		ItemID:         &itemID,
+		SignatureValid: true,
+		Processed:      false,
 	}
 
 	mockRepo := new(MockWebhookRepository)
@@ -140,12 +146,13 @@ func TestWebhookProcessingWorker_Work_ItemWebhook_Success(t *testing.T) {
 	itemID := "plaid-item-123"
 
 	webhook := &domain.WebhookEvent{
-		ID:          webhookID,
-		WebhookType: "ITEM",
-		WebhookCode: stringPtr("ERROR"),
-		ItemID:      &itemID,
-		ErrorCode:   stringPtr("ITEM_LOGIN_REQUIRED"),
-		Processed:   false,
+		ID:             webhookID,
+		WebhookType:    "ITEM",
+		WebhookCode:    stringPtr("ERROR"),
+		ItemID:         &itemID,
+		ErrorCode:      stringPtr("ITEM_LOGIN_REQUIRED"),
+		SignatureValid: true,
+		Processed:      false,
 	}
 
 	mockRepo := new(MockWebhookRepository)
@@ -246,6 +253,111 @@ func TestWebhookProcessingWorker_Work_AlreadyProcessed(t *testing.T) {
 	mockItemErrorSvc.AssertNotCalled(t, "ProcessWebhook")
 }
 
+// TestWebhookProcessingWorker_Work_InvalidSignature_RefusesProcessing verifies Issue #1514's
+// defense-in-depth guard: a webhook row with signature_valid=false must never be dispatched to
+// a downstream sync service, must be cancelled via river.JobCancel (a truthful "cancelled",
+// not a nil "successfully completed") never retried, and must be recorded via MarkFailed.
+func TestWebhookProcessingWorker_Work_InvalidSignature_RefusesProcessing(t *testing.T) {
+	ctx := context.Background()
+	webhookID := uuid.New().String()
+	itemID := "plaid-item-123"
+
+	webhook := &domain.WebhookEvent{
+		ID:             webhookID,
+		WebhookType:    "TRANSACTIONS",
+		WebhookCode:    stringPtr("DEFAULT_UPDATE"),
+		ItemID:         &itemID,
+		SignatureValid: false,
+		Processed:      false,
+	}
+
+	mockRepo := new(MockWebhookRepository)
+	mockSyncSvc := new(MockWebhookTransactionSyncService)
+	mockItemErrorSvc := new(MockItemErrorService)
+
+	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
+	mockRepo.On("MarkFailed", ctx, webhookID, mock.AnythingOfType("string")).Return(nil)
+
+	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
+		WebhookRepo:        mockRepo,
+		TransactionSyncSvc: mockSyncSvc,
+		ItemErrorSvc:       mockItemErrorSvc,
+		Logger:             newTestWebhookLogger(),
+	})
+
+	job := newTestWebhookProcessingJob(WebhookProcessingArgs{
+		WebhookID:   webhookID,
+		WebhookType: "TRANSACTIONS",
+		ItemID:      itemID,
+	})
+
+	err := worker.Work(ctx, job)
+
+	// Must actually cancel the River job (river.JobCancel), not merely return nil.
+	// Returning nil is *successful completion* in River v0.43.0 (see JobCancel's doc
+	// comment in error.go: "wraps err and can be returned ... to cancel the job at
+	// the end of execution"), which would misreport a refused forged webhook as a
+	// completed job and increment jobs_completed_total{status="success"}.
+	require.Error(t, err, "invalid-signature guard must cancel the job via river.JobCancel, not complete it with nil")
+	var cancelErr *river.JobCancelError
+	require.ErrorAs(t, err, &cancelErr, "error must be a *river.JobCancelError so River records the job as cancelled")
+	mockRepo.AssertExpectations(t)
+	mockSyncSvc.AssertNotCalled(t, "ProcessWebhook")
+	mockItemErrorSvc.AssertNotCalled(t, "ProcessWebhook")
+}
+
+// TestWebhookProcessingWorker_Work_InvalidSignature_MarkFailedError verifies that a transient
+// failure to persist the MarkFailed record (e.g. a DB blip) surfaces as a retryable error rather
+// than being swallowed into a silent, successful-looking nil return. The security property (the
+// forged row is never dispatched) must still hold - re-fetching on retry still sees
+// SignatureValid=false and hits this same guard again.
+func TestWebhookProcessingWorker_Work_InvalidSignature_MarkFailedError(t *testing.T) {
+	ctx := context.Background()
+	webhookID := uuid.New().String()
+	itemID := "plaid-item-123"
+
+	webhook := &domain.WebhookEvent{
+		ID:             webhookID,
+		WebhookType:    "TRANSACTIONS",
+		WebhookCode:    stringPtr("DEFAULT_UPDATE"),
+		ItemID:         &itemID,
+		SignatureValid: false,
+		Processed:      false,
+	}
+
+	mockRepo := new(MockWebhookRepository)
+	mockSyncSvc := new(MockWebhookTransactionSyncService)
+	mockItemErrorSvc := new(MockItemErrorService)
+
+	mockRepo.On("GetByID", ctx, webhookID).Return(webhook, nil)
+	mockRepo.On("MarkFailed", ctx, webhookID, mock.AnythingOfType("string")).Return(errors.New("db unavailable"))
+
+	worker := NewWebhookProcessingWorker(WebhookProcessingWorkerDeps{
+		WebhookRepo:        mockRepo,
+		TransactionSyncSvc: mockSyncSvc,
+		ItemErrorSvc:       mockItemErrorSvc,
+		Logger:             newTestWebhookLogger(),
+	})
+
+	job := newTestWebhookProcessingJob(WebhookProcessingArgs{
+		WebhookID:   webhookID,
+		WebhookType: "TRANSACTIONS",
+		ItemID:      itemID,
+	})
+
+	err := worker.Work(ctx, job)
+
+	// Must surface as a plain retryable error (NOT nil, and NOT a JobCancelError) so a
+	// transient MarkFailed failure gets another attempt at recording the refusal, instead
+	// of the job silently completing "successfully" with the refusal never recorded anywhere.
+	require.Error(t, err, "a MarkFailed failure must not be swallowed into a nil return")
+	var cancelErr *river.JobCancelError
+	require.NotErrorAs(t, err, &cancelErr, "a MarkFailed failure should be retryable, not a cancellation")
+	mockRepo.AssertExpectations(t)
+	mockSyncSvc.AssertNotCalled(t, "ProcessWebhook")
+	mockItemErrorSvc.AssertNotCalled(t, "ProcessWebhook")
+}
+
 func TestWebhookProcessingWorker_Work_RepositoryError(t *testing.T) {
 	ctx := context.Background()
 	webhookID := uuid.New().String()
@@ -283,10 +395,11 @@ func TestWebhookProcessingWorker_Work_TransactionProcessingError(t *testing.T) {
 	itemID := "plaid-item-123"
 
 	webhook := &domain.WebhookEvent{
-		ID:          webhookID,
-		WebhookType: "TRANSACTIONS",
-		ItemID:      &itemID,
-		Processed:   false,
+		ID:             webhookID,
+		WebhookType:    "TRANSACTIONS",
+		ItemID:         &itemID,
+		SignatureValid: true,
+		Processed:      false,
 	}
 
 	mockRepo := new(MockWebhookRepository)
@@ -324,11 +437,12 @@ func TestWebhookProcessingWorker_Work_ItemWebhook_MissingItemID(t *testing.T) {
 	webhookID := uuid.New().String()
 
 	webhook := &domain.WebhookEvent{
-		ID:          webhookID,
-		WebhookType: "ITEM",
-		WebhookCode: stringPtr("ERROR"),
-		ItemID:      nil, // Missing item_id
-		Processed:   false,
+		ID:             webhookID,
+		WebhookType:    "ITEM",
+		WebhookCode:    stringPtr("ERROR"),
+		ItemID:         nil, // Missing item_id
+		SignatureValid: true,
+		Processed:      false,
 	}
 
 	mockRepo := new(MockWebhookRepository)
@@ -364,10 +478,11 @@ func TestWebhookProcessingWorker_Work_UnknownWebhookType(t *testing.T) {
 	itemID := "plaid-item-123"
 
 	webhook := &domain.WebhookEvent{
-		ID:          webhookID,
-		WebhookType: "UNKNOWN_TYPE",
-		ItemID:      &itemID,
-		Processed:   false,
+		ID:             webhookID,
+		WebhookType:    "UNKNOWN_TYPE",
+		ItemID:         &itemID,
+		SignatureValid: true,
+		Processed:      false,
 	}
 
 	mockRepo := new(MockWebhookRepository)
@@ -405,11 +520,12 @@ func TestWebhookProcessingWorker_Work_LiabilitiesWebhook_RoutedToLiabilitySyncSe
 	itemID := "plaid-item-liabilities-123"
 
 	webhook := &domain.WebhookEvent{
-		ID:          webhookID,
-		WebhookType: "LIABILITIES",
-		WebhookCode: stringPtr("DEFAULT_UPDATE"),
-		ItemID:      &itemID,
-		Processed:   false,
+		ID:             webhookID,
+		WebhookType:    "LIABILITIES",
+		WebhookCode:    stringPtr("DEFAULT_UPDATE"),
+		ItemID:         &itemID,
+		SignatureValid: true,
+		Processed:      false,
 	}
 
 	mockRepo := new(MockWebhookRepository)
@@ -451,11 +567,12 @@ func TestWebhookProcessingWorker_Work_HoldingsWebhook_RoutedToInvestmentSyncServ
 	itemID := "plaid-item-holdings-456"
 
 	webhook := &domain.WebhookEvent{
-		ID:          webhookID,
-		WebhookType: "HOLDINGS",
-		WebhookCode: stringPtr("DEFAULT_UPDATE"),
-		ItemID:      &itemID,
-		Processed:   false,
+		ID:             webhookID,
+		WebhookType:    "HOLDINGS",
+		WebhookCode:    stringPtr("DEFAULT_UPDATE"),
+		ItemID:         &itemID,
+		SignatureValid: true,
+		Processed:      false,
 	}
 
 	mockRepo := new(MockWebhookRepository)
@@ -497,11 +614,12 @@ func TestWebhookProcessingWorker_Work_InvestmentTransactionsWebhook_Success(t *t
 	itemID := "plaid-item-inv-txn-789"
 
 	webhook := &domain.WebhookEvent{
-		ID:          webhookID,
-		WebhookType: "INVESTMENTS_TRANSACTIONS",
-		WebhookCode: stringPtr("DEFAULT_UPDATE"),
-		ItemID:      &itemID,
-		Processed:   false,
+		ID:             webhookID,
+		WebhookType:    "INVESTMENTS_TRANSACTIONS",
+		WebhookCode:    stringPtr("DEFAULT_UPDATE"),
+		ItemID:         &itemID,
+		SignatureValid: true,
+		Processed:      false,
 	}
 
 	mockRepo := new(MockWebhookRepository)
@@ -543,11 +661,12 @@ func TestWebhookProcessingWorker_Work_InvestmentTransactionsWebhook_Error(t *tes
 	itemID := "plaid-item-inv-txn-789"
 
 	webhook := &domain.WebhookEvent{
-		ID:          webhookID,
-		WebhookType: "INVESTMENTS_TRANSACTIONS",
-		WebhookCode: stringPtr("DEFAULT_UPDATE"),
-		ItemID:      &itemID,
-		Processed:   false,
+		ID:             webhookID,
+		WebhookType:    "INVESTMENTS_TRANSACTIONS",
+		WebhookCode:    stringPtr("DEFAULT_UPDATE"),
+		ItemID:         &itemID,
+		SignatureValid: true,
+		Processed:      false,
 	}
 
 	mockRepo := new(MockWebhookRepository)

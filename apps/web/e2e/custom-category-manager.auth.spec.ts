@@ -83,8 +83,8 @@ test.describe('Custom Category Manager - Authenticated', () => {
     await page.click('button:has-text("Categories")')
 
     await expect(page.getByText('Custom categories')).toBeVisible()
-    await expect(page.getByText('Food Budget')).toBeVisible()
-    await expect(page.getByText('Fast Food')).toBeVisible()
+    await expect(page.getByText('Food Budget', { exact: true })).toBeVisible()
+    await expect(page.getByText('Fast Food', { exact: true })).toBeVisible()
   })
 
   test('opens the create-category form', async ({ page }) => {
@@ -104,7 +104,7 @@ test.describe('Custom Category Manager - Authenticated', () => {
     await page.waitForLoadState('networkidle')
     await page.click('button:has-text("Categories")')
 
-    await page.click('button[aria-label="Delete Food Budget"]')
+    await page.getByRole('button', { name: 'Delete Food Budget' }).click()
 
     await expect(page.getByText('Delete category')).toBeVisible()
   })

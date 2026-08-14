@@ -138,7 +138,7 @@ Dispatch: Deploy to Staging  (uses current staging HEAD)
 ## Environment Variables
 
 ```yaml
-GO_VERSION: '1.26.5'    # Go version for backend builds and tests
+GO_VERSION: '1.26.6'    # Go version for backend builds and tests
 NODE_VERSION: '22'       # Node version (staging/prod); '20' in test/QA
 REGISTRY: 'ghcr.io'     # Container registry
 ```

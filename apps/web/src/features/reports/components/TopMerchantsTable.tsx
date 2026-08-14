@@ -103,7 +103,12 @@ export function TopMerchantsTable({
       <DataTable<SpendingMerchant>
         data={sortedMerchants}
         columns={columns}
+        // Issue #1514 (fix round 2): merchant_name is the only unique-per-row field this
+        // aggregate response guarantees (merchant_id is optional/nullable), so it stays the
+        // React reconciliation key — but that key must never reach the DOM. sensitiveRowKey
+        // tells DataTable to skip emitting `data-row-id`; see its doc comment in types.ts.
         rowKey={(row) => row.merchant_name}
+        sensitiveRowKey
         sort={sort}
         onSortChange={onSortChange}
         filters={{}}

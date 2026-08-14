@@ -30,7 +30,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GO_VERSION: '1.26.5'
+  GO_VERSION: '1.26.6'
   NODE_VERSION: '20'
   REGISTRY: ghcr.io
   BACKEND_IMAGE_NAME: boostedbudget/boostedbudget-backend
@@ -53,11 +53,11 @@ jobs:
 
     steps:
       - name: Validate inputs
+        env:
+          MODE: ${{ github.event.inputs.deployment_mode }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          BRANCH_NAME: ${{ github.event.inputs.branch_name }}
         run: |
-          MODE="${{ github.event.inputs.deployment_mode }}"
-          PR_NUMBER="${{ github.event.inputs.pr_number }}"
-          BRANCH_NAME="${{ github.event.inputs.branch_name }}"
-
           if [ "$MODE" = "pr" ]; then
             if [ -z "$PR_NUMBER" ]; then
               echo "::error::PR number is required when deployment_mode=pr"
@@ -77,16 +77,21 @@ jobs:
 
       - name: Fetch deployment information
         id: deploy-info
+        env:
+          MODE: ${{ github.event.inputs.deployment_mode }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          BRANCH_NAME: ${{ github.event.inputs.branch_name }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          MODE="${{ github.event.inputs.deployment_mode }}"
-
           if [ "$MODE" = "pr" ]; then
-            echo "Fetching metadata for PR #${{ github.event.inputs.pr_number }}..."
+            echo "Fetching metadata for PR #${PR_NUMBER}..."
 
             # Use curl + GitHub API instead of gh CLI (gh not available on self-hosted runners)
-            PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            PR_DATA=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
               -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.inputs.pr_number }}")
+              "https://api.github.com/repos/${GH_REPOSITORY}/pulls/${PR_NUMBER}")
 
             # Check for API errors
             if echo "$PR_DATA" | jq -e '.message' > /dev/null 2>&1; then
@@ -99,12 +104,12 @@ jobs:
             PR_STATE=$(echo "$PR_DATA" | jq -r '.state')
             PR_MERGED=$(echo "$PR_DATA" | jq -r '.merged')
             if [ "$PR_MERGED" = "true" ]; then
-              echo "::error::PR #${{ github.event.inputs.pr_number }} is merged. Can only deploy open PRs in PR mode."
+              echo "::error::PR #${PR_NUMBER} is merged. Can only deploy open PRs in PR mode."
               echo "::notice::Tip: Use 'branch' deployment mode to deploy the merged branch instead."
               exit 1
             fi
             if [ "$PR_STATE" = "closed" ]; then
-              echo "::error::PR #${{ github.event.inputs.pr_number }} is closed. Can only deploy open PRs in PR mode."
+              echo "::error::PR #${PR_NUMBER} is closed. Can only deploy open PRs in PR mode."
               exit 1
             fi
 
@@ -114,21 +119,20 @@ jobs:
             HEAD_REF=$(echo "$PR_DATA" | jq -r '.head.ref')
             DEPLOY_TITLE=$(echo "$PR_DATA" | jq -r '.title')
             DEPLOY_AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login')
-            TAG_PREFIX="pr-${{ github.event.inputs.pr_number }}"
+            TAG_PREFIX="pr-${PR_NUMBER}"
 
-            echo "::notice::PR #${{ github.event.inputs.pr_number }}: ${DEPLOY_TITLE}"
+            echo "::notice::PR #${PR_NUMBER}: ${DEPLOY_TITLE}"
             echo "::notice::Branch: ${HEAD_REF} (${HEAD_SHA})"
             echo "::notice::Author: @${DEPLOY_AUTHOR}"
 
           else
             # Branch mode
-            BRANCH_NAME="${{ github.event.inputs.branch_name }}"
             echo "Fetching metadata for branch '${BRANCH_NAME}'..."
 
             # Fetch branch info from GitHub API
-            BRANCH_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            BRANCH_DATA=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
               -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/${{ github.repository }}/branches/${BRANCH_NAME}")
+              "https://api.github.com/repos/${GH_REPOSITORY}/branches/${BRANCH_NAME}")
 
             # Check for API errors
             if echo "$BRANCH_DATA" | jq -e '.message' > /dev/null 2>&1; then
@@ -139,7 +143,7 @@ jobs:
             HEAD_SHA=$(echo "$BRANCH_DATA" | jq -r '.commit.sha')
             HEAD_REF="${BRANCH_NAME}"
             DEPLOY_TITLE="Branch deployment: ${BRANCH_NAME}"
-            DEPLOY_AUTHOR="${{ github.actor }}"
+            DEPLOY_AUTHOR="${GH_ACTOR}"
             # Sanitize branch name for tag (replace / with -)
             SANITIZED_BRANCH=$(echo "$BRANCH_NAME" | sed 's/\//-/g')
             TAG_PREFIX="branch-${SANITIZED_BRANCH}"
@@ -148,31 +152,57 @@ jobs:
             echo "::notice::Triggered by: @${DEPLOY_AUTHOR}"
           fi
 
-          echo "head_sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
-          echo "head_ref=${HEAD_REF}" >> $GITHUB_OUTPUT
-          echo "deploy_title=${DEPLOY_TITLE}" >> $GITHUB_OUTPUT
-          echo "deploy_author=${DEPLOY_AUTHOR}" >> $GITHUB_OUTPUT
-          echo "tag_prefix=${TAG_PREFIX}" >> $GITHUB_OUTPUT
+          # #1514: fail loudly instead of letting a blank/unresolved HEAD_SHA flow
+          # downstream, where an empty `ref:` on a checkout step silently falls back
+          # to the default branch instead of erroring — a worse failure than today.
+          if [ -z "$HEAD_SHA" ] || [ "$HEAD_SHA" = "null" ]; then
+            echo "::error::Failed to resolve an immutable commit SHA for this deployment (got '${HEAD_SHA}'). Refusing to proceed with an unpinned ref."
+            exit 1
+          fi
+
+          # Use randomized heredoc delimiters for $GITHUB_OUTPUT: DEPLOY_TITLE and
+          # HEAD_REF originate from PR-controlled data (title/branch name) and may
+          # contain newlines or content that collides with a fixed delimiter.
+          DELIM="EOF_$(openssl rand -hex 16)"
+          {
+            echo "head_sha=${HEAD_SHA}"
+            echo "head_ref<<${DELIM}"
+            echo "${HEAD_REF}"
+            echo "${DELIM}"
+            echo "deploy_title<<${DELIM}"
+            echo "${DEPLOY_TITLE}"
+            echo "${DELIM}"
+            echo "deploy_author<<${DELIM}"
+            echo "${DEPLOY_AUTHOR}"
+            echo "${DELIM}"
+            echo "tag_prefix=${TAG_PREFIX}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Deployment metadata summary
+        env:
+          MODE: ${{ github.event.inputs.deployment_mode }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          BRANCH_NAME: ${{ github.event.inputs.branch_name }}
+          DEPLOY_TITLE: ${{ steps.deploy-info.outputs.deploy_title }}
+          DEPLOY_AUTHOR: ${{ steps.deploy-info.outputs.deploy_author }}
+          HEAD_REF: ${{ steps.deploy-info.outputs.head_ref }}
+          HEAD_SHA: ${{ steps.deploy-info.outputs.head_sha }}
         run: |
-          MODE="${{ github.event.inputs.deployment_mode }}"
-
           if [ "$MODE" = "pr" ]; then
             echo "### 📋 PR Deployment Metadata" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Mode:** PR Deployment" >> $GITHUB_STEP_SUMMARY
-            echo "**PR:** #${{ github.event.inputs.pr_number }} - ${{ steps.deploy-info.outputs.deploy_title }}" >> $GITHUB_STEP_SUMMARY
-            echo "**Author:** @${{ steps.deploy-info.outputs.deploy_author }}" >> $GITHUB_STEP_SUMMARY
+            echo "**PR:** #${PR_NUMBER} - ${DEPLOY_TITLE}" >> $GITHUB_STEP_SUMMARY
+            echo "**Author:** @${DEPLOY_AUTHOR}" >> $GITHUB_STEP_SUMMARY
           else
             echo "### 📋 Branch Deployment Metadata" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Mode:** Branch Deployment" >> $GITHUB_STEP_SUMMARY
-            echo "**Branch:** \`${{ github.event.inputs.branch_name }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "**Triggered by:** @${{ steps.deploy-info.outputs.deploy_author }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Branch:** \`${BRANCH_NAME}\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Triggered by:** @${DEPLOY_AUTHOR}" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "**Ref:** \`${{ steps.deploy-info.outputs.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** \`${{ steps.deploy-info.outputs.head_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Ref:** \`${HEAD_REF}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${HEAD_SHA}\`" >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
   # Build and Push Images to GHCR (Parallelized via Matrix)
@@ -189,10 +219,15 @@ jobs:
       contents: read
       packages: write
     outputs:
-      # Pass through the build target info to downstream jobs
+      # Pass through the build target info to downstream jobs.
+      # #1514: `sha` is the immutable commit checked out and built — it is the
+      # ONLY value downstream jobs may use as a checkout `ref:`. There is
+      # intentionally no `ref` (mutable branch name) output here; passing that
+      # around invited a TOCTOU where a later push to the branch could deploy
+      # unreviewed code under QA secrets while the summary still named the
+      # originally-reviewed commit.
       tag_prefix: ${{ steps.build-target.outputs.tag_prefix }}
       sha: ${{ steps.build-target.outputs.sha }}
-      ref: ${{ steps.build-target.outputs.ref }}
     env:
       UNIQUE_WORKSPACE: workspace-build-images-${{ matrix.component }}-${{ github.run_id }}
 
@@ -205,28 +240,46 @@ jobs:
 
       - name: Determine build target
         id: build-target
+        env:
+          MODE: ${{ github.event.inputs.deployment_mode }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          HEAD_REF: ${{ needs.deployment-metadata.outputs.head_ref }}
+          HEAD_SHA: ${{ needs.deployment-metadata.outputs.head_sha }}
+          TAG_PREFIX: ${{ needs.deployment-metadata.outputs.tag_prefix }}
         run: |
-          echo "ref=${{ needs.deployment-metadata.outputs.head_ref }}" >> $GITHUB_OUTPUT
-          echo "sha=${{ needs.deployment-metadata.outputs.head_sha }}" >> $GITHUB_OUTPUT
-          echo "tag_prefix=${{ needs.deployment-metadata.outputs.tag_prefix }}" >> $GITHUB_OUTPUT
-          if [ "${{ github.event.inputs.deployment_mode }}" = "pr" ]; then
-            echo "::notice::Building PR #${{ github.event.inputs.pr_number }} branch: ${{ needs.deployment-metadata.outputs.head_ref }}"
+          # #1514: HEAD_REF (mutable branch name) is logged for humans only and
+          # MUST NOT be used as a checkout ref — see job outputs comment above.
+          # Guard against an empty/unresolved SHA rather than letting a blank
+          # `ref:` on a later checkout step silently fall back to the default
+          # branch (also checked at the point HEAD_SHA is first produced, in
+          # the deployment-metadata job, but re-checked here defensively since
+          # this is the value that actually becomes the checkout target).
+          if [ -z "$HEAD_SHA" ] || ! echo "$HEAD_SHA" | grep -qE '^[0-9a-f]{7,40}$'; then
+            echo "::error::HEAD_SHA is empty or not a valid commit SHA ('${HEAD_SHA}'). Refusing to check out an unpinned ref."
+            exit 1
+          fi
+          echo "sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "tag_prefix=${TAG_PREFIX}" >> "$GITHUB_OUTPUT"
+          if [ "$MODE" = "pr" ]; then
+            echo "::notice::Building PR #${PR_NUMBER} branch: ${HEAD_REF} @ ${HEAD_SHA}"
           else
-            echo "::notice::Building branch: ${{ needs.deployment-metadata.outputs.head_ref }}"
+            echo "::notice::Building branch: ${HEAD_REF} @ ${HEAD_SHA}"
           fi
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
-          ref: ${{ steps.build-target.outputs.ref }}
+          # #1514: pin to the immutable SHA, not a mutable branch ref — see
+          # note on the build-images job `outputs:` block above.
+          ref: ${{ steps.build-target.outputs.sha }}
 
       - name: Resolve BUILD_DATE
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: echo "BUILD_DATE=$(git show -s --format=%cI HEAD)" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Configure Docker to avoid keychain conflicts
         run: |
@@ -314,7 +367,7 @@ jobs:
 
       - name: Build and push ${{ matrix.component }} image
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: ${{ env.UNIQUE_WORKSPACE }}
           file: ${{ env.UNIQUE_WORKSPACE }}/${{ steps.dockerfile.outputs.path }}
@@ -363,10 +416,61 @@ jobs:
           sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
-          ref: ${{ needs.build-images.outputs.ref }}
+          # #1514: pin to the immutable SHA that was actually built, not a
+          # mutable branch ref. A push between metadata capture and this
+          # checkout must not change what gets deployed with live QA secrets.
+          ref: ${{ needs.build-images.outputs.sha }}
+
+      # #1514: fail loudly if a required QA secret is missing/renamed/typo'd, instead of
+      # letting the .env.qa heredoc silently substitute a weak, repo-committed default
+      # (e.g. the old ENCRYPTION_KEY fallback, a real usable AES-256 key checked into git).
+      - name: Validate required QA secrets are set
+        env:
+          QA_SSL_CERT: ${{ secrets.QA_SSL_CERT }}
+          QA_SSL_KEY: ${{ secrets.QA_SSL_KEY }}
+          CORS_ALLOWED_ORIGINS_QA: ${{ secrets.CORS_ALLOWED_ORIGINS_QA }}
+          POSTGRES_PASSWORD_QA: ${{ secrets.POSTGRES_PASSWORD_QA }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          PLAID_CLIENT_ID_QA: ${{ secrets.PLAID_CLIENT_ID_QA }}
+          PLAID_SECRET_QA: ${{ secrets.PLAID_SECRET_QA }}
+          PLAID_REDIRECT_URI_QA: ${{ secrets.PLAID_REDIRECT_URI_QA }}
+          PLAID_WEBHOOK_URL_QA: ${{ secrets.PLAID_WEBHOOK_URL_QA }}
+          ENCRYPTION_KEY_QA: ${{ secrets.ENCRYPTION_KEY_QA }}
+          QA_BYPASS_SECRET: ${{ secrets.QA_BYPASS_SECRET }}
+          QA_ADMIN_CLERK_USER_ID: ${{ secrets.QA_ADMIN_CLERK_USER_ID }}
+          QA_PREMIUM_CLERK_USER_ID: ${{ secrets.QA_PREMIUM_CLERK_USER_ID }}
+        run: |
+          required_secrets=(
+            QA_SSL_CERT
+            QA_SSL_KEY
+            CORS_ALLOWED_ORIGINS_QA
+            POSTGRES_PASSWORD_QA
+            CLERK_SECRET_KEY
+            CLERK_PUBLISHABLE_KEY
+            PLAID_CLIENT_ID_QA
+            PLAID_SECRET_QA
+            PLAID_REDIRECT_URI_QA
+            PLAID_WEBHOOK_URL_QA
+            ENCRYPTION_KEY_QA
+            QA_BYPASS_SECRET
+            QA_ADMIN_CLERK_USER_ID
+            QA_PREMIUM_CLERK_USER_ID
+          )
+          missing=()
+          for name in "${required_secrets[@]}"; do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required QA secret(s): ${missing[*]}. Set them in the 'qa' GitHub Environment before deploying."
+            exit 1
+          fi
+          echo "✓ All required QA secrets are set (${#required_secrets[@]} checked)"
 
       - name: Restore SSL certificates from secrets
         run: |
@@ -378,26 +482,43 @@ jobs:
 
       - name: Create .env.qa from secrets
         run: |
-          # Use outputs from build-images job for image tags
-          TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
-          SHA="${{ needs.build-images.outputs.sha }}"
-
-          cat > ${{ env.UNIQUE_WORKSPACE }}/.env.qa << EOF
+          # #1514: the heredoc delimiter below is quoted ('EOF') so bash writes
+          # the body byte-for-byte with NO shell expansion of its contents.
+          # NOTE: do not write a literal empty GitHub expression in this block, even
+          # inside a shell comment — expressions are templated anywhere in a `run:`
+          # script, and an empty one is a workflow-compile error (actionlint:
+          # "unexpected end of input while parsing variable access"). That is why the
+          # mechanism is described in words below rather than shown in syntax.
+          #
+          # Every secret is substituted by GitHub Actions expression templating at
+          # workflow-compile time, before bash ever sees this script — that
+          # substitution is unaffected by heredoc quoting either way. Quoting
+          # matters for what bash itself would otherwise do at runtime: a
+          # secret containing literal `$$`, `` `cmd` ``, or `$(cmd)` would
+          # silently be expanded/command-substituted by an UNQUOTED heredoc
+          # (e.g. a password with `$$` becomes bash's PID, corrupting both the
+          # password and any DATABASE_URL built from it, with no error). We
+          # previously used real bash variables (${TAG_PREFIX}, ${SHA}) here,
+          # which needed runtime expansion and would have broken under quoting
+          # — they are now inlined directly as GitHub Actions expressions instead
+          # (also GH-Actions-substituted pre-bash), so quoting the delimiter is
+          # safe and every line below still produces the same output as before.
+          cat > ${{ env.UNIQUE_WORKSPACE }}/.env.qa << 'EOF'
           # Application Settings
           COMPOSE_PROJECT_NAME=boostedbudget-qa
           NODE_ENV=qa
           GO_ENV=qa
           ENVIRONMENT=qa
-          VERSION=${TAG_PREFIX}-${SHA}
+          VERSION=${{ needs.build-images.outputs.tag_prefix }}-${{ needs.build-images.outputs.sha }}
           PRIMARY_REGION=iad
 
           # CORS Configuration
-          CORS_ALLOWED_ORIGINS=${{ secrets.CORS_ALLOWED_ORIGINS_QA || 'https://qa.example.ts.net:3443,https://localhost:3443' }}
+          CORS_ALLOWED_ORIGINS=${{ secrets.CORS_ALLOWED_ORIGINS_QA }}
 
           # Docker Image Configuration (pull from GHCR)
           PULL_FROM_GHCR=true
-          BACKEND_IMAGE=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${TAG_PREFIX}-${SHA}
-          FRONTEND_IMAGE=${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${TAG_PREFIX}-${SHA}
+          BACKEND_IMAGE=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ needs.build-images.outputs.tag_prefix }}-${{ needs.build-images.outputs.sha }}
+          FRONTEND_IMAGE=${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ needs.build-images.outputs.tag_prefix }}-${{ needs.build-images.outputs.sha }}
 
           # URLs
           BACKEND_URL=http://localhost:8080
@@ -405,8 +526,8 @@ jobs:
 
           # Database (QA)
           POSTGRES_USER=qauser
-          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD_QA || 'qapass' }}
-          DATABASE_URL=postgresql://qauser:${{ secrets.POSTGRES_PASSWORD_QA || 'qapass' }}@localhost:5433/boostedbudget_qa?sslmode=disable
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD_QA }}
+          DATABASE_URL=postgresql://qauser:${{ secrets.POSTGRES_PASSWORD_QA }}@localhost:5433/boostedbudget_qa?sslmode=disable
 
           # Redis (QA)
           REDIS_URL=redis://localhost:6380/0
@@ -420,18 +541,15 @@ jobs:
 
           # Plaid (Sandbox)
           PLAID_ENV=sandbox
-          PLAID_CLIENT_ID=${{ secrets.PLAID_CLIENT_ID_QA || 'changeme' }}
-          PLAID_SECRET=${{ secrets.PLAID_SECRET_QA || 'changeme' }}
+          PLAID_CLIENT_ID=${{ secrets.PLAID_CLIENT_ID_QA }}
+          PLAID_SECRET=${{ secrets.PLAID_SECRET_QA }}
           PLAID_PRODUCTS=auth,transactions,balance
           PLAID_COUNTRY_CODES=US,CA,GB
-          PLAID_REDIRECT_URI=${{ secrets.PLAID_REDIRECT_URI_QA || 'https://localhost:3443/oauth-callback' }}
-          PLAID_WEBHOOK_URL=${{ secrets.PLAID_WEBHOOK_URL_QA || 'http://localhost:8080/webhooks/plaid' }}
-
-          # Stripe (Test Mode)
-          STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY_TEST || 'sk_test_changeme' }}
+          PLAID_REDIRECT_URI=${{ secrets.PLAID_REDIRECT_URI_QA }}
+          PLAID_WEBHOOK_URL=${{ secrets.PLAID_WEBHOOK_URL_QA }}
 
           # Security
-          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY_QA || '12345678901234567890123456789012' }}
+          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY_QA }}
 
           # QA Auth Bypass (Issue #821). QA_AUTH_BYPASS_ENABLED is the explicit opt-in added
           # by #1432 (B2-1): ENVIRONMENT=qa alone no longer registers the route.
@@ -497,9 +615,13 @@ jobs:
           sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
+          # #1514: without an explicit ref this defaults to the ref that
+          # triggered the workflow_dispatch, not the commit that was actually
+          # built/deployed above. Pin to the same immutable SHA for consistency.
+          ref: ${{ needs.build-images.outputs.sha }}
 
       - name: Run smoke tests
         timeout-minutes: 5
@@ -551,25 +673,31 @@ jobs:
 
     steps:
       - name: Create deployment summary
+        env:
+          TAG_PREFIX: ${{ needs.build-images.outputs.tag_prefix }}
+          SHA: ${{ needs.build-images.outputs.sha }}
+          MODE: ${{ github.event.inputs.deployment_mode }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          BRANCH_NAME: ${{ github.event.inputs.branch_name }}
+          DEPLOY_TITLE: ${{ needs.deployment-metadata.outputs.deploy_title }}
+          DEPLOY_AUTHOR: ${{ needs.deployment-metadata.outputs.deploy_author }}
+          HEAD_REF: ${{ needs.deployment-metadata.outputs.head_ref }}
+          GH_ACTOR: ${{ github.actor }}
         run: |
-          TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
-          SHA="${{ needs.build-images.outputs.sha }}"
-          MODE="${{ github.event.inputs.deployment_mode }}"
-
           if [ "$MODE" = "pr" ]; then
-            echo "### 🚀 PR #${{ github.event.inputs.pr_number }} Deployed to QA" >> $GITHUB_STEP_SUMMARY
+            echo "### 🚀 PR #${PR_NUMBER} Deployed to QA" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Mode:** PR Deployment" >> $GITHUB_STEP_SUMMARY
-            echo "**PR:** #${{ github.event.inputs.pr_number }} - ${{ needs.deployment-metadata.outputs.deploy_title }}" >> $GITHUB_STEP_SUMMARY
-            echo "**Author:** @${{ needs.deployment-metadata.outputs.deploy_author }}" >> $GITHUB_STEP_SUMMARY
+            echo "**PR:** #${PR_NUMBER} - ${DEPLOY_TITLE}" >> $GITHUB_STEP_SUMMARY
+            echo "**Author:** @${DEPLOY_AUTHOR}" >> $GITHUB_STEP_SUMMARY
           else
-            echo "### 🚀 Branch '${{ github.event.inputs.branch_name }}' Deployed to QA" >> $GITHUB_STEP_SUMMARY
+            echo "### 🚀 Branch '${BRANCH_NAME}' Deployed to QA" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Mode:** Branch Deployment" >> $GITHUB_STEP_SUMMARY
-            echo "**Branch:** \`${{ github.event.inputs.branch_name }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Branch:** \`${BRANCH_NAME}\`" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "**Ref:** \`${{ needs.deployment-metadata.outputs.head_ref }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Ref:** \`${HEAD_REF}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** @${GH_ACTOR}" >> $GITHUB_STEP_SUMMARY
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Environment:** QA (Mac Mini)" >> $GITHUB_STEP_SUMMARY
@@ -607,12 +735,22 @@ jobs:
 
     steps:
       - name: Comment on PR
+        env:
+          TAG_PREFIX: ${{ needs.build-images.outputs.tag_prefix }}
+          SHA: ${{ needs.build-images.outputs.sha }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          HEAD_REF: ${{ needs.deployment-metadata.outputs.head_ref }}
+          GH_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_SERVER_URL: ${{ github.server_url }}
+          GH_RUN_ID: ${{ github.run_id }}
         run: |
-          TAG_PREFIX="${{ needs.build-images.outputs.tag_prefix }}"
-          SHA="${{ needs.build-images.outputs.sha }}"
-
           # Use curl + GitHub API instead of gh CLI (gh not available on self-hosted runners)
           # GitHub API uses /issues/{number}/comments endpoint for PR comments (PRs are a type of issue)
+          # NOTE: HEAD_REF is PR-controlled (branch name) so it is injected as a
+          # placeholder below and substituted via a shell variable, never directly
+          # into the heredoc text.
           COMMENT_BODY=$(cat << 'EOF'
           ## 🚀 QA Deployment Successful
 
@@ -621,16 +759,16 @@ jobs:
           | Field | Value |
           |-------|-------|
           | **Version** | `TAG_PREFIX_PLACEHOLDER-SHA_PLACEHOLDER` |
-          | **Branch** | `${{ needs.deployment-metadata.outputs.head_ref }}` |
+          | **Branch** | `HEAD_REF_PLACEHOLDER` |
           | **Commit** | `SHA_PLACEHOLDER` |
-          | **Triggered by** | @${{ github.actor }} |
+          | **Triggered by** | @GH_ACTOR_PLACEHOLDER |
 
           ### Access URLs
           - **Frontend:** https://localhost:3000 (or via Tailscale)
           - **Backend API:** http://localhost:8080
 
           ### Workflow Run
-          [View deployment logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          [View deployment logs](GH_SERVER_URL_PLACEHOLDER/GH_REPOSITORY_PLACEHOLDER/actions/runs/GH_RUN_ID_PLACEHOLDER)
 
           ---
           *This is an automated comment from the QA deployment workflow.*
@@ -640,17 +778,22 @@ jobs:
           # Replace placeholders with actual values
           COMMENT_BODY="${COMMENT_BODY//TAG_PREFIX_PLACEHOLDER/$TAG_PREFIX}"
           COMMENT_BODY="${COMMENT_BODY//SHA_PLACEHOLDER/$SHA}"
+          COMMENT_BODY="${COMMENT_BODY//HEAD_REF_PLACEHOLDER/$HEAD_REF}"
+          COMMENT_BODY="${COMMENT_BODY//GH_ACTOR_PLACEHOLDER/$GH_ACTOR}"
+          COMMENT_BODY="${COMMENT_BODY//GH_SERVER_URL_PLACEHOLDER/$GH_SERVER_URL}"
+          COMMENT_BODY="${COMMENT_BODY//GH_REPOSITORY_PLACEHOLDER/$GH_REPOSITORY}"
+          COMMENT_BODY="${COMMENT_BODY//GH_RUN_ID_PLACEHOLDER/$GH_RUN_ID}"
 
           # Post comment via GitHub API
           HTTP_STATUS=$(curl -s -o /tmp/comment_response.json -w "%{http_code}" \
             -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.inputs.pr_number }}/comments" \
+            "https://api.github.com/repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" \
             -d "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')")
 
           if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
-            echo "::notice::✅ Comment added to PR #${{ github.event.inputs.pr_number }}"
+            echo "::notice::✅ Comment added to PR #${PR_NUMBER}"
           else
             echo "::error::Failed to post comment. HTTP status: $HTTP_STATUS"
             cat /tmp/comment_response.json

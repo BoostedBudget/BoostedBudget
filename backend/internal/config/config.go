@@ -3,10 +3,26 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"time"
 )
+
+// PaddleWebhookTimestampToleranceMaxSeconds is the upper bound accepted for
+// PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS (issue #1514 fix-round-1 item 1). Chosen as "a few
+// minutes" per the reviewer's guidance, well above Paddle's documented 5-second SDK default (so
+// legitimate deployment/retry jitter has generous headroom) but far short of the hours/days an
+// operator typo (e.g. mistaking the field for a TTL and entering "999999999") would otherwise
+// produce — a value that large would leave the signature's ts= check accepting almost anything,
+// which is indistinguishable in practice from having no replay window at all on a payments path.
+const PaddleWebhookTimestampToleranceMaxSeconds = 300
+
+// InvalidWebhookAttemptRetentionMaxDays is the upper bound accepted for
+// INVALID_WEBHOOK_ATTEMPT_RETENTION_DAYS (Issue #1514 G3). 365 days is a generous sanity ceiling
+// against an operator typo (e.g. entering a number of hours or minutes by mistake) blowing the
+// retention window out to years for what is meant to be a short-lived operational audit signal.
+const InvalidWebhookAttemptRetentionMaxDays = 365
 
 // Config holds application configuration
 type Config struct {
@@ -37,6 +53,11 @@ type Config struct {
 	// Rate limiting
 	RateLimitIP   int // per-IP requests per minute
 	RateLimitAuth int // per-IP requests per minute for sensitive endpoints
+	// RateLimitMaxEntries caps the number of distinct identities each rate-limit
+	// store tracks (see middleware.RateLimitConfig.MaxEntries). Validated
+	// positive at load time; a zero/invalid RATE_LIMIT_MAX_ENTRIES falls back to
+	// the default rather than producing an uncapped store.
+	RateLimitMaxEntries int
 
 	// Database
 	DatabaseURL      string
@@ -74,6 +95,19 @@ type Config struct {
 	PaddleAPIKey        string
 	PaddleWebhookSecret string
 	PaddleEnvironment   string
+	// PaddleWebhookTimestampToleranceSeconds bounds how far a Paddle webhook's `ts=` signature
+	// component may drift from this server's clock (in EITHER direction — too old or
+	// unreasonably future-dated) before PaddleWebhookService.VerifyWebhook rejects it as a
+	// replay/clock-skew risk (issue #1514, F3). Paddle's documented SDK default tolerance is 5
+	// seconds — we mirror that as our default, but treat it as the vendor's stated behavior
+	// rather than something this codebase has independently verified against live traffic.
+	// Validated at load time to be in (0, PaddleWebhookTimestampToleranceMaxSeconds]; a value
+	// outside that range (zero/negative, OR an operator typo like 999999999) falls back to the
+	// default and logs a warning, rather than either disabling the replay window entirely or
+	// silently accepting a value that would do so in practice (issue #1514 fix-round-1 item 1:
+	// an unbounded-above tunable "looks configured" while completely defeating the control it
+	// exists to enforce).
+	PaddleWebhookTimestampToleranceSeconds int
 
 	// Encryption
 	EncryptionKey string
@@ -92,6 +126,23 @@ type Config struct {
 
 	// DLQ Configuration (#633: Dead Letter Queue admin UI + cleanup)
 	DLQRetentionDays int // env: DLQ_RETENTION_DAYS, default: 30
+
+	// InvalidWebhookAttemptRetentionDays bounds how long a rejected (unsigned/invalid-signature)
+	// webhook audit row (see repository.InvalidWebhookAttemptRepository) is eligible to be deleted
+	// on an age basis — a bound orthogonal to the row-count cap in what it deletes on (elapsed
+	// time, not row count), but NOT wall-clock-scheduled: the age-based DELETE runs only inside
+	// trim(), and trim() only ever runs from Record(), which only ever runs in response to an
+	// incoming rejected webhook (every invalidWebhookAttemptTrimInterval-th call per provider, or
+	// that provider's first call after process startup). So reclamation is traffic-triggered, not
+	// independent of call volume or restart timing: a provider that goes quiet — stops receiving
+	// invalid attempts, with or without a restart — has no future Record call to trigger the
+	// sweep, and its already-written rows persist past this window until (if ever) that provider
+	// is rejected again. See invalidWebhookAttemptTrimInterval's doc comment for the full
+	// mechanism. Default 30 days mirrors this project's existing DeletionGracePeriodDays
+	// convention rather than inventing an unrelated number. Validated at load time via
+	// getEnvAsBoundedPositiveInt; an out-of-range value (<=0 or >
+	// InvalidWebhookAttemptRetentionMaxDays) falls back to the default and logs a warning.
+	InvalidWebhookAttemptRetentionDays int // env: INVALID_WEBHOOK_ATTEMPT_RETENTION_DAYS, default: 30
 
 	// Frontend URL (for cancellation links)
 	FrontendURL string
@@ -135,8 +186,9 @@ func Load() (*Config, error) {
 		MaxBodySize:  getEnv("MAX_BODY_SIZE", "1M"),
 
 		// Rate limiting
-		RateLimitIP:   getEnvAsInt("RATE_LIMIT_IP", 100),
-		RateLimitAuth: getEnvAsInt("RATE_LIMIT_AUTH", 10),
+		RateLimitIP:         getEnvAsInt("RATE_LIMIT_IP", 100),
+		RateLimitAuth:       getEnvAsInt("RATE_LIMIT_AUTH", 10),
+		RateLimitMaxEntries: getEnvAsPositiveInt("RATE_LIMIT_MAX_ENTRIES", 20000),
 
 		// Database
 		DatabaseURL:      getEnv("DATABASE_URL", ""),
@@ -169,6 +221,9 @@ func Load() (*Config, error) {
 		PaddleAPIKey:        getEnv("PADDLE_API_KEY", ""),
 		PaddleWebhookSecret: getEnv("PADDLE_WEBHOOK_SECRET", ""),
 		PaddleEnvironment:   getEnv("PADDLE_ENVIRONMENT", "sandbox"),
+		PaddleWebhookTimestampToleranceSeconds: getEnvAsBoundedPositiveInt(
+			"PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", 5, PaddleWebhookTimestampToleranceMaxSeconds,
+		),
 
 		// Encryption
 		EncryptionKey: getEnv("ENCRYPTION_KEY", ""),
@@ -187,6 +242,10 @@ func Load() (*Config, error) {
 
 		// DLQ Configuration (#633)
 		DLQRetentionDays: getEnvAsInt("DLQ_RETENTION_DAYS", 30),
+
+		InvalidWebhookAttemptRetentionDays: getEnvAsBoundedPositiveInt(
+			"INVALID_WEBHOOK_ATTEMPT_RETENTION_DAYS", 30, InvalidWebhookAttemptRetentionMaxDays,
+		),
 
 		// Frontend URL
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
@@ -320,6 +379,41 @@ func getEnvAsInt(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
+}
+
+// getEnvAsPositiveInt is like getEnvAsInt but rejects zero/negative values,
+// falling back to defaultValue instead. Used for config knobs (like
+// RateLimitMaxEntries) where a zero or negative value would silently disable a
+// safety cap rather than express "unset".
+func getEnvAsPositiveInt(key string, defaultValue int) int {
+	v := getEnvAsInt(key, defaultValue)
+	if v <= 0 {
+		return defaultValue
+	}
+	return v
+}
+
+// getEnvAsBoundedPositiveInt is like getEnvAsPositiveInt but also rejects values above max,
+// falling back to defaultValue (and logging a warning) in EITHER out-of-range direction. Added
+// additively for issue #1514 fix-round-1 item 1 — it does NOT replace or get wired into
+// getEnvAsPositiveInt or its existing callers (e.g. RateLimitMaxEntries), which are owned by
+// other in-flight work on this branch and are left untouched.
+//
+// defaultValue is expected to itself be in (0, max] — getEnvAsInt already falls back to
+// defaultValue for an unset or non-numeric env var, so that path never logs a spurious warning
+// here; only an explicitly out-of-range NUMERIC value (<=0 or >max) does.
+func getEnvAsBoundedPositiveInt(key string, defaultValue, max int) int {
+	v := getEnvAsInt(key, defaultValue)
+	if v <= 0 || v > max {
+		slog.Default().Warn("config value out of range, falling back to default",
+			"key", key,
+			"value", v,
+			"default", defaultValue,
+			"max", max,
+		)
+		return defaultValue
+	}
+	return v
 }
 
 // getEnvAsDuration retrieves an environment variable as a time.Duration or returns a default value.

@@ -1,0 +1,36 @@
+-- Issue #1514 (Codex adversarial review finding, High): closes the residual half of the
+-- idempotency-poisoning vector. HandlePaddleWebhook/HandlePlaidWebhook, as of migration 000146,
+-- never persist an unsigned/invalid-signature delivery into paddle_webhook_events/webhook_events
+-- again — but paddle_webhook_events.event_id is UNIQUE NOT NULL, and any row already sitting in
+-- these tables with signature_valid = false from BEFORE this fix shipped still occupies its
+-- event_id, so a genuinely legitimate webhook reusing that same event_id would still be
+-- suppressed by HandlePaddleWebhook's duplicate check. Purging every pre-existing
+-- signature_valid = false row removes that residual poisoning risk without adding new
+-- application-level "is this duplicate row actually trustworthy?" logic to the hot path.
+--
+-- This is a one-time cleanup, and it is idempotent (deletes nothing on a second run once the
+-- offending rows are gone). It is the correct one-time fix for staging/QA environments that may
+-- carry pre-fix rows.
+--
+-- Production has zero users as of this writing, but do NOT read that as "so there is nothing to
+-- delete" — an earlier version of this comment drew exactly that inference and it does not follow.
+-- These endpoints are PUBLIC: the pre-fix handlers persisted a failed-verification delivery
+-- without any user being involved (no user lookup precedes the Create call), so an unauthenticated
+-- forged or malformed-signature request could create such a row on a system with no users at all.
+-- That is precisely the risk this purge exists to clear, not a reason the purge is unnecessary.
+--
+-- Note also that a pre-fix release does not write a row for *every* invalid-signature delivery:
+-- both handlers json.Unmarshal the body and reject missing required fields (400) BEFORE persisting,
+-- and paddle_webhook_events.event_id is UNIQUE, so duplicates can also fail to insert. The rows
+-- this purge targets are the valid-shape, failed-verification ones.
+--
+-- This migration's ordering relative to a Fly rolling deploy is NOT resolved by that idempotency
+-- and does matter (see #1527): backend/scripts/docker-entrypoint.sh:116 runs migrations before
+-- the new machine starts serving, but backend/fly.staging.toml:100's `strategy = "rolling"` keeps
+-- the OLD release serving traffic throughout the rollout. That old release still writes
+-- signature_valid = false rows for valid-shape deliveries that fail verification, so a row written
+-- after this DELETE runs — but before the old release stops serving — survives the purge
+-- undeleted. That is accepted, documented risk here, not something this migration fixes; #1527
+-- tracks whatever follow-up (if any) is needed.
+DELETE FROM paddle_webhook_events WHERE signature_valid = false;
+DELETE FROM webhook_events WHERE signature_valid = false;

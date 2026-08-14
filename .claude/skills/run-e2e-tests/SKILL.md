@@ -79,7 +79,9 @@ bash scripts/run-e2e-with-ports.sh --project=chromium-no-auth
 
 ## What the Script Does
 
-1. Finds available ports (frontend 30000-34900, backend 35000-39900, postgres 40000-44900)
+1. Finds available ports — one 600-port block per run (`15000 + (runId % 50) * 600`), split
+   into per-service 100-port sub-bands: frontend 15000-44499, backend 15100-44599,
+   postgres 15200-44699 (all below the ephemeral port floor; Issue #1514)
 2. Starts PostgreSQL container (if Docker available)
 3. Runs database migrations via the **golang-migrate** CLI (`run_migrations` in
    `apps/web/scripts/e2e-postgres.sh`)
