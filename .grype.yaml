@@ -1,7 +1,17 @@
 # Grype vulnerability scanner configuration
 #
-# Go toolchain is pinned at 1.26.6 (backend/go.mod, backend/Dockerfile,
-# backend/Dockerfile.dev and the GO_VERSION env in the deploy/test workflows).
+# Go toolchain is at 1.26.6. Two different strengths of "pinned" are in play, and the
+# distinction matters when reasoning about what a scan actually covers:
+#   - backend/Dockerfile        DIGEST-pinned (golang:1.26.6-alpine@sha256:...). The digest
+#                               wins over the tag, so this is the only one that cannot drift.
+#                               Re-resolve it whenever GO_VERSION changes, or the bump is a
+#                               silent no-op that keeps building the old toolchain.
+#   - backend/go.mod            `go 1.26.6` directive — a minimum, auto-downloaded by the
+#                               toolchain; contributors on an older Go are upgraded, not failed.
+#   - backend/Dockerfile.dev    MUTABLE TAG only (golang:1.26.6-alpine, no digest). Local
+#                               development image; it will float if that tag is re-pushed.
+#   - GO_VERSION in the deploy/test workflows — plain strings consumed by setup-go and as a
+#                               docker build-arg.
 # 1.26.6 clears seven stdlib advisories that govulncheck flagged on 1.26.5:
 # GO-2026-6218, -6091, -6090, -6089, -6088, -5972 and -5026.
 #
