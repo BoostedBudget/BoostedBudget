@@ -213,3 +213,44 @@ func TestClientIntegration_GetSetSetNXMGetDel(t *testing.T) {
 	_, err = c.Get(ctx, key)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
+
+// TestClientIntegration_ConsecutiveMissesDoNotTripTheBreaker guards the interaction between Get's
+// redis.Nil special-case and the circuit breaker: a cache miss must NEVER count as a breaker
+// failure. Get is intentionally special-cased at client.go's "A miss is not a breaker failure" —
+// see that comment — but nothing previously exercised the two together: breaker_test.go only
+// drives the breaker in isolation with injected errors, and the ErrNotFound-returning Get tests
+// never asserted on breaker state. If someone deleted that special-case, every cache miss would
+// become a breaker failure, the breaker would trip under entirely normal operation (a cold cache
+// is ALL misses), and the cache would silently stop working — nothing else in the suite would
+// catch it.
+//
+// This issues more consecutive Get misses than FailureThreshold against a REAL Redis server (the
+// interaction under test lives inside the concrete client's real go-redis call, not something a
+// Fake can stand in for), then confirms the breaker is still Closed by making one more real call
+// (Ping) succeed immediately rather than short-circuiting with ErrBreakerOpen.
+func TestClientIntegration_ConsecutiveMissesDoNotTripTheBreaker(t *testing.T) {
+	url := connectTestRedisURL(t)
+	c := newTestClient(t, Options{
+		URL:  url,
+		Name: t.Name(),
+		Breaker: BreakerOptions{
+			FailureThreshold: 3, // low on purpose: fewer misses needed to prove the point
+		},
+	})
+	ctx := context.Background()
+
+	missingKey := t.Name() + ":definitely-absent"
+
+	// Issue more consecutive misses than FailureThreshold. A broken implementation (no redis.Nil
+	// special-case) would trip the breaker to Open partway through this loop.
+	for i := 0; i < 10; i++ {
+		_, err := c.Get(ctx, missingKey)
+		require.ErrorIs(t, err, ErrNotFound, "iteration %d: a miss must report ErrNotFound, not a breaker error", i)
+	}
+
+	// The breaker must still be Closed: a real Ping must succeed, not fail fast with
+	// ErrBreakerOpen.
+	err := c.Ping(ctx)
+	require.NoError(t, err, "10 consecutive cache misses must NOT have tripped the circuit breaker")
+	assert.NotErrorIs(t, err, ErrBreakerOpen)
+}

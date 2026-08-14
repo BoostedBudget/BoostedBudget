@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -10,6 +11,13 @@ import (
 
 // DefaultControlPollInterval is how often Control.Run polls the control keys.
 const DefaultControlPollInterval = 10 * time.Second
+
+// LimiterClientName is the ONLY redisclient.Client name NewControl will accept. It must match the
+// Name Task 7's main.go passes when constructing the limiter's no-eviction client
+// (redisclient.New(redisclient.Options{Name: "limiter", ...})). This is a real runtime guard, not
+// documentation: see NewControl's doc comment for why a name mismatch is refused at construction
+// rather than merely warned about.
+const LimiterClientName = "limiter"
 
 // controlSnapshot is the immutable state atomically swapped in by each poll. observed[ns] is true
 // once ns's control key has EVER been read successfully (whether "on" or "off"); enabled[ns] is
@@ -40,8 +48,25 @@ type Control struct {
 
 // NewControl returns a Control that will poll the control keys for the given namespaces against
 // client.
-func NewControl(client redisclient.Client, namespaces []Namespace) *Control {
-	return &Control{client: client, namespaces: namespaces}
+//
+// client.Name() MUST equal LimiterClientName ("limiter") — NewControl fails fast (returns an
+// error) otherwise, rather than merely documenting the requirement. Construction happens once at
+// boot, so failing there catches a wiring mistake at deploy time instead of leaving it to be
+// discovered mid-incident: if Control were ever pointed at the cache's own (eviction-enabled)
+// instance, an "off" control key evicted from it would read back as MISSING (not an error), fall
+// through to the compiled default of "on", and silently re-enable caching right after an operator
+// hit the emergency kill switch.
+func NewControl(client redisclient.Client, namespaces []Namespace) (*Control, error) {
+	if client == nil {
+		return nil, fmt.Errorf("cache: Control requires a non-nil redisclient.Client")
+	}
+	if client.Name() != LimiterClientName {
+		return nil, fmt.Errorf(
+			"cache: Control must be constructed against the %q (no-eviction) Redis client, got %q — "+
+				"wiring it to any other client risks the emergency kill switch silently re-enabling "+
+				"caching if a control key is evicted", LimiterClientName, client.Name())
+	}
+	return &Control{client: client, namespaces: namespaces}, nil
 }
 
 // Poll runs one synchronous MGET against every configured namespace's control key and updates the
