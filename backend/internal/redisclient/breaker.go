@@ -132,7 +132,10 @@ func (b *breaker) recordResult(err error) {
 			b.openedAt = b.opts.Now()
 		}
 	case stateOpen:
-		// A result arriving while Open should not happen through call() (allow() gates it), but
-		// guard defensively against direct misuse: do nothing, state is already Open.
+		// Unreachable via call(): allow() never returns true while Open (it transitions to
+		// HalfOpen first), so recordResult is never invoked in this state through the normal
+		// call() path. Kept as an explicit, intentional no-op — not dead code to "clean up" — so a
+		// future direct call to recordResult (bypassing allow()) fails safe instead of panicking
+		// on an unhandled case.
 	}
 }

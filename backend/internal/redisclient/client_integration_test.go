@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	redis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,6 +34,30 @@ func newTestClient(t *testing.T, opts Options) Client {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	return c
+}
+
+// newStalledListener returns a raw net.Listener that accepts TCP connections and then never
+// writes a reply — a genuine stall, unlike a closed port (which fails at dial) or a mock that
+// returns an error instantly. Used to prove ReadTimeout/ContextTimeoutEnabled actually bound a
+// blocked read, which nothing that returns immediately could ever demonstrate.
+func newStalledListener(t *testing.T) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Accept and hold the connection open, but never write a reply.
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+
+	return ln
 }
 
 func TestClientIntegration_PingSucceedsAgainstRealRedis(t *testing.T) {
@@ -68,35 +93,55 @@ func TestClientIntegration_PingFailsFastAgainstAnUnreachableServer(t *testing.T)
 // would block for the full ReadTimeout (200ms default) if ContextTimeoutEnabled did not make
 // go-redis respect the shorter 50ms context deadline instead.
 func TestClientIntegration_ContextDeadlineIsHonouredNotJustTheReadTimeout(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer ln.Close()
-
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			// Accept and hold the connection open, but never write a reply: a genuine stall,
-			// unlike a closed port (which fails at dial) or an instantly-erroring mock.
-			t.Cleanup(func() { _ = conn.Close() })
-		}
-	}()
-
+	ln := newStalledListener(t)
 	c := newTestClient(t, Options{URL: "redis://" + ln.Addr().String() + "/0", Name: t.Name()})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
 	start := time.Now()
-	err = c.Ping(ctx)
+	err := c.Ping(ctx)
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
 	assert.Less(t, elapsed, 150*time.Millisecond,
 		"context deadline (50ms) should bound the call, not ReadTimeout (200ms default) — "+
 			"got %s, which is only possible if ContextTimeoutEnabled is honoured", elapsed)
+}
+
+// TestClientIntegration_ReadTimeoutBoundsACommandWithNoContextDeadline is the counterpart to the
+// ContextDeadline test above: it proves ReadTimeout itself (not just the context-deadline
+// shortcut) actually reaches go-redis and bounds a blocked read. context.Background() carries no
+// deadline of its own, so if the `parsed.ReadTimeout = resolved.ReadTimeout` wiring in New were
+// ever deleted, go-redis would fall back to ITS OWN default ReadTimeout (5s), and this call would
+// take seconds instead of ~200ms.
+func TestClientIntegration_ReadTimeoutBoundsACommandWithNoContextDeadline(t *testing.T) {
+	ln := newStalledListener(t)
+	c := newTestClient(t, Options{URL: "redis://" + ln.Addr().String() + "/0", Name: t.Name()})
+
+	start := time.Now()
+	err := c.Ping(context.Background())
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Less(t, elapsed, time.Second,
+		"our 200ms default ReadTimeout should bound the call even with NO context deadline — "+
+			"got %s, which would only happen if go-redis fell back to its own multi-second default", elapsed)
+}
+
+// TestClientIntegration_RunScriptFailsFastAgainstBlackholedServer proves DialerRetries=1 also
+// bounds the dial for RunScript (EVALSHA/EVAL), not just Ping — RunScript is the path Task 4's
+// GCRA rate limiter will actually exercise in production.
+func TestClientIntegration_RunScriptFailsFastAgainstBlackholedServer(t *testing.T) {
+	c := newTestClient(t, Options{URL: "redis://192.0.2.1:6379/0", Name: t.Name()})
+	script := redis.NewScript("return 1")
+
+	start := time.Now()
+	_, err := c.RunScript(context.Background(), script, nil)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Less(t, elapsed, 2*time.Second, "DialerRetries=1 should bound the dial for RunScript too, well under 2s")
 }
 
 func TestClientIntegration_PoolStatsReflectRealUsage(t *testing.T) {
