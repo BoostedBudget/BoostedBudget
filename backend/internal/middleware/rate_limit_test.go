@@ -1,19 +1,44 @@
 package middleware_test
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
+	dto "github.com/prometheus/client_model/go"
+
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// prometheusGatherRateLimitRejections gathers the current sample set for the
+// ratelimit_rejections_total metric family from the default (process-wide) Prometheus registry,
+// returning each individual metric so callers can inspect its labels.
+func prometheusGatherRateLimitRejections(t *testing.T) ([]*dto.Metric, error) {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range families {
+		if f.GetName() == "ratelimit_rejections_total" {
+			return f.GetMetric(), nil
+		}
+	}
+	return nil, nil
+}
 
 func newEchoWithIPLimiter(cfg middleware.RateLimitConfig) *echo.Echo {
 	e := echo.New()
@@ -410,4 +435,274 @@ func TestIPRateLimiter_IPv6FormsCanonicalizeToSameBucket(t *testing.T) {
 	code2 := doRateLimitedRequest(e, "/test", "[2001:0db8:0000:0000:0000:0000:0000:0001]:2000", nil)
 	assert.Equal(t, http.StatusTooManyRequests, code2,
 		"different textual forms of the same IPv6 address must canonicalize to one bucket")
+}
+
+// ---------------------------------------------------------------------------
+// Backend seam — Task 5 (Issue #1531)
+// ---------------------------------------------------------------------------
+
+// fakeBackend is a minimal test double implementing middleware.RateLimitBackend from outside the
+// package (as a real caller — e.g. main.go wiring the Redis backend — would).
+type fakeBackend struct {
+	name      string
+	allowFunc func(ctx context.Context, tier domain.RateLimitTier, key string) (domain.RateLimitDecision, error)
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *fakeBackend) Name() string { return f.name }
+
+func (f *fakeBackend) Allow(ctx context.Context, tier domain.RateLimitTier, key string) (domain.RateLimitDecision, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+	return f.allowFunc(ctx, tier, key)
+}
+
+func (f *fakeBackend) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+// panickingBackend panics the instant Allow is called — proves a code path never touches it at
+// all, rather than merely "wasn't observed to run".
+type panickingBackend struct{}
+
+func (panickingBackend) Name() string { return "panic" }
+func (panickingBackend) Allow(context.Context, domain.RateLimitTier, string) (domain.RateLimitDecision, error) {
+	panic("primary backend must never be called on this path")
+}
+
+// TestIPRateLimiter_DefaultsToTheInMemoryBackendWhenNoneIsInjected pins backward compatibility:
+// a RateLimitConfig with no Backend set (the zero value, which is what every pre-#1531 call site
+// and test already constructs) must behave exactly as it did before this task.
+func TestIPRateLimiter_DefaultsToTheInMemoryBackendWhenNoneIsInjected(t *testing.T) {
+	cfg := middleware.RateLimitConfig{IPLimit: 2, WindowDuration: time.Minute}
+	require.Nil(t, cfg.Backend, "zero-value RateLimitConfig.Backend must be nil")
+	e := newEchoWithIPLimiter(cfg)
+
+	assert.Equal(t, http.StatusOK, makeRequest(e, "192.0.2.10"))
+	assert.Equal(t, http.StatusOK, makeRequest(e, "192.0.2.10"))
+	assert.Equal(t, http.StatusTooManyRequests, makeRequest(e, "192.0.2.10"))
+}
+
+// TestIPRateLimiter_UsesTheInjectedBackend proves a configured Backend is actually consulted (not
+// just accepted and ignored): an injected backend that always denies must produce 429s even on
+// the very first request, which the in-memory backend alone would never do at this limit.
+func TestIPRateLimiter_UsesTheInjectedBackend(t *testing.T) {
+	backend := &fakeBackend{name: "redis", allowFunc: func(context.Context, domain.RateLimitTier, string) (domain.RateLimitDecision, error) {
+		return domain.RateLimitDecision{Allowed: false, RetryAfter: 42 * time.Second}, nil
+	}}
+	cfg := middleware.RateLimitConfig{IPLimit: 100, WindowDuration: time.Minute, Backend: backend}
+	e := newEchoWithIPLimiter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.RemoteAddr = "192.0.2.11:1000"
+	rr := httptest.NewRecorder()
+	e.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusTooManyRequests, rr.Code)
+	assert.Equal(t, "42", rr.Header().Get("Retry-After"))
+	assert.GreaterOrEqual(t, backend.callCount(), 1)
+}
+
+// TestIPRateLimiter_RejectionIncrementsRejectionCounterWithTierLabel drives a rejection on each of
+// the three tiers and asserts observability.RateLimitRejectionsTotal{tier=...} increments by
+// exactly one each time.
+func TestIPRateLimiter_RejectionIncrementsRejectionCounterWithTierLabel(t *testing.T) {
+	t.Run("regular", func(t *testing.T) {
+		cfg := middleware.RateLimitConfig{IPLimit: 1, WindowDuration: time.Minute}
+		e := newEchoWithGateStatus(cfg, middleware.GateStatusUnknown)
+		before := testutil.ToFloat64(observability.RateLimitRejectionsTotal.WithLabelValues("regular"))
+
+		doRateLimitedRequest(e, "/test", "198.51.100.20:1", nil)
+		code := doRateLimitedRequest(e, "/test", "198.51.100.20:2", nil)
+		require.Equal(t, http.StatusTooManyRequests, code)
+
+		after := testutil.ToFloat64(observability.RateLimitRejectionsTotal.WithLabelValues("regular"))
+		assert.Equal(t, before+1, after)
+	})
+
+	t.Run("auth", func(t *testing.T) {
+		cfg := middleware.RateLimitConfig{IPLimit: 100, AuthEndpointLimit: 1, WindowDuration: time.Minute}
+		e := newEchoWithGateStatus(cfg, middleware.GateStatusUnknown)
+		before := testutil.ToFloat64(observability.RateLimitRejectionsTotal.WithLabelValues("auth"))
+
+		doRateLimitedRequest(e, "/webhooks/plaid", "198.51.100.21:1", nil)
+		code := doRateLimitedRequest(e, "/webhooks/plaid", "198.51.100.21:2", nil)
+		require.Equal(t, http.StatusTooManyRequests, code)
+
+		after := testutil.ToFloat64(observability.RateLimitRejectionsTotal.WithLabelValues("auth"))
+		assert.Equal(t, before+1, after)
+	})
+
+	t.Run("sentinel", func(t *testing.T) {
+		cfg := middleware.RateLimitConfig{IPLimit: 1, WindowDuration: time.Minute}
+		e := newEchoWithGateStatus(cfg, middleware.GateStatusPassed)
+		before := testutil.ToFloat64(observability.RateLimitRejectionsTotal.WithLabelValues("sentinel"))
+
+		// No Cf-Connecting-Ip header at all -> falls back to the sentinel bucket (see clientIdentity).
+		doRateLimitedRequest(e, "/test", "198.51.100.22:1", nil)
+		code := doRateLimitedRequest(e, "/test", "198.51.100.23:2", nil)
+		require.Equal(t, http.StatusTooManyRequests, code)
+
+		after := testutil.ToFloat64(observability.RateLimitRejectionsTotal.WithLabelValues("sentinel"))
+		assert.Equal(t, before+1, after)
+	})
+}
+
+// panicCapturingHandler is a minimal slog.Handler that records whether any record was ever
+// handled, used below to detect a panic that IPRateLimiter's own defer recover() caught and
+// logged -- which would otherwise make a purely panic-based "the primary must never be called"
+// proof pass by accident (the handler-level recover legitimately swallows and logs the panic
+// regardless of WHY the primary was invoked, so response code alone cannot distinguish "never
+// called" from "called, panicked, and recovered").
+type panicCapturingHandler struct {
+	mu      sync.Mutex
+	handled bool
+}
+
+func (h *panicCapturingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *panicCapturingHandler) Handle(context.Context, slog.Record) error {
+	h.mu.Lock()
+	h.handled = true
+	h.mu.Unlock()
+	return nil
+}
+func (h *panicCapturingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *panicCapturingHandler) WithGroup(string) slog.Handler      { return h }
+func (h *panicCapturingHandler) sawAnyRecord() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.handled
+}
+
+// TestIPRateLimiter_ExemptPathsNeverTouchThePrimaryBackend is the required discrimination test:
+// the injected primary PANICS the instant Allow is called. Response code 200 alone is NOT proof
+// here, because IPRateLimiter's own defer recover() legitimately catches and logs any panic
+// (including one from the primary) and falls through to next(ec) regardless -- so a 200 would be
+// returned whether or not the exempt-path bypass actually ran. This test additionally asserts NO
+// log record was ever emitted through the injected logger, which the recover() path always
+// produces when it fires. Only both together prove the primary was never called at all.
+func TestIPRateLimiter_ExemptPathsNeverTouchThePrimaryBackend(t *testing.T) {
+	capture := &panicCapturingHandler{}
+	cfg := middleware.RateLimitConfig{
+		IPLimit:        100,
+		WindowDuration: time.Minute,
+		Backend:        panickingBackend{},
+		Logger:         slog.New(capture),
+	}
+	e := echo.New()
+	e.Use(middleware.IPRateLimiter(cfg))
+	e.GET("/health", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.RemoteAddr = "198.51.100.30:1"
+	rr := httptest.NewRecorder()
+	e.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code, "GET /health must succeed")
+	assert.False(t, capture.sawAnyRecord(),
+		"no log record (including a recovered-panic record) may have been emitted — any record proves the panicking primary was actually invoked")
+}
+
+// TestIPRateLimiter_CleanupGoroutineStopsWhenDoneIsClosed proves the cleanup goroutine leak fix:
+// closing cfg.Done must cause the background goroutine to exit.
+func TestIPRateLimiter_CleanupGoroutineStopsWhenDoneIsClosed(t *testing.T) {
+	runtime.GC()
+	before := runtime.NumGoroutine()
+
+	done := make(chan struct{})
+	close(done) // already closed before IPRateLimiter's goroutine even starts
+
+	cfg := middleware.RateLimitConfig{IPLimit: 5, WindowDuration: time.Minute, CleanupInterval: time.Hour, Done: done}
+	_ = middleware.IPRateLimiter(cfg)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runtime.GC()
+		if runtime.NumGoroutine() <= before {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("cleanup goroutine did not stop after Done was closed: goroutines before=%d, now=%d", before, runtime.NumGoroutine())
+}
+
+// TestIPRateLimiter_BackendPanicDoesNotPanicTheRequest proves the handler-level defer recover():
+// a panicking primary backend must not crash the connection or the test process — it is caught,
+// logged, and the request falls through to next(ec).
+func TestIPRateLimiter_BackendPanicDoesNotPanicTheRequest(t *testing.T) {
+	cfg := middleware.RateLimitConfig{IPLimit: 100, WindowDuration: time.Minute, Backend: panickingBackend{}}
+	e := newEchoWithIPLimiter(cfg)
+
+	require.NotPanics(t, func() {
+		code := makeRequest(e, "198.51.100.40")
+		assert.Equal(t, http.StatusOK, code, "a panicking backend must fail open (request falls through to next) rather than crash the connection")
+	})
+}
+
+// TestIPRateLimiter_RetryAfterIsNeverZeroOrNegative proves the middleware itself guards against a
+// misbehaving backend that returns a zero (or negative) RetryAfter on denial — which would invite
+// an immediate retry storm.
+func TestIPRateLimiter_RetryAfterIsNeverZeroOrNegative(t *testing.T) {
+	backend := &fakeBackend{name: "buggy", allowFunc: func(context.Context, domain.RateLimitTier, string) (domain.RateLimitDecision, error) {
+		return domain.RateLimitDecision{Allowed: false, RetryAfter: 0}, nil
+	}}
+	cfg := middleware.RateLimitConfig{IPLimit: 100, WindowDuration: time.Minute, Backend: backend}
+	e := newEchoWithIPLimiter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.RemoteAddr = "198.51.100.50:1"
+	rr := httptest.NewRecorder()
+	e.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusTooManyRequests, rr.Code)
+	retryAfter := rr.Header().Get("Retry-After")
+	require.NotEmpty(t, retryAfter)
+	assert.NotEqual(t, "0", retryAfter)
+	assert.NotContains(t, retryAfter, "-")
+}
+
+// TestRateLimitRejections_OnlyEmitsBoundedTierLabelsFromProductionCode is the REAL enforcement
+// test called for by Task 2's review carry-forward: it drives real rejections across all three
+// tiers through the actual HTTP middleware (not by writing to the counter directly, which would be
+// self-fulfilling) and then inspects every label value the metric family has ever published,
+// asserting each one is in the small fixed set {regular, auth, sentinel}.
+func TestRateLimitRejections_OnlyEmitsBoundedTierLabelsFromProductionCode(t *testing.T) {
+	// Regular tier.
+	regCfg := middleware.RateLimitConfig{IPLimit: 1, WindowDuration: time.Minute}
+	regE := newEchoWithGateStatus(regCfg, middleware.GateStatusUnknown)
+	doRateLimitedRequest(regE, "/test", "203.0.113.10:1", nil)
+	doRateLimitedRequest(regE, "/test", "203.0.113.10:2", nil)
+
+	// Auth tier.
+	authCfg := middleware.RateLimitConfig{IPLimit: 100, AuthEndpointLimit: 1, WindowDuration: time.Minute}
+	authE := newEchoWithGateStatus(authCfg, middleware.GateStatusUnknown)
+	doRateLimitedRequest(authE, "/webhooks/plaid", "203.0.113.11:1", nil)
+	doRateLimitedRequest(authE, "/webhooks/plaid", "203.0.113.11:2", nil)
+
+	// Sentinel tier.
+	sentinelCfg := middleware.RateLimitConfig{IPLimit: 1, WindowDuration: time.Minute}
+	sentinelE := newEchoWithGateStatus(sentinelCfg, middleware.GateStatusPassed)
+	doRateLimitedRequest(sentinelE, "/test", "203.0.113.12:1", nil)
+	doRateLimitedRequest(sentinelE, "/test", "203.0.113.13:2", nil)
+
+	metrics, err := prometheusGatherRateLimitRejections(t)
+	require.NoError(t, err)
+
+	allowed := map[string]bool{"regular": true, "auth": true, "sentinel": true}
+	seen := 0
+	for _, m := range metrics {
+		for _, label := range m.GetLabel() {
+			if label.GetName() != "tier" {
+				continue
+			}
+			seen++
+			assert.True(t, allowed[label.GetValue()], "production code emitted an unbounded/unexpected tier label value: %q", label.GetValue())
+		}
+	}
+	assert.Greater(t, seen, 0, "test must have actually observed at least one tier label, or this assertion is vacuous")
 }
