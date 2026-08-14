@@ -6,11 +6,12 @@
 #                               wins over the tag, so this is the only one that cannot drift.
 #                               Re-resolve it whenever GO_VERSION changes, or the bump is a
 #                               silent no-op that keeps building the old toolchain.
-#   - backend/go.mod            `go 1.26.6` directive — a minimum. Under the default
-#                               GOTOOLCHAIN=auto an older local Go downloads 1.26.6 and
-#                               proceeds; under GOTOOLCHAIN=local it is a HARD FAILURE
-#                               ("go.mod requires go >= 1.26.6 (running go 1.26.5)", exit 1).
-#                               So this upgrades a contributor only if they have not opted out.
+#   - backend/go.mod            `go 1.26.6` directive — a MINIMUM, not a pin (there is no
+#                               `toolchain` line). Whether an older local Go upgrades, fetches,
+#                               or hard-fails is decided by the contributor's GOTOOLCHAIN, not
+#                               by anything in this repo. Do not restate Go's selection rules
+#                               here — they have more modes, and more host-dependence, than a
+#                               comment can track. See https://go.dev/doc/toolchain.
 #   - backend/Dockerfile.dev    MUTABLE TAG only (golang:1.26.6-alpine, no digest). Local
 #                               development image; it will float if that tag is re-pushed.
 #   - GO_VERSION in the deploy/test workflows — plain strings consumed by setup-go and as a
