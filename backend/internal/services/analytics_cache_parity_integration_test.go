@@ -510,10 +510,17 @@ func assertDelta(t *testing.T, d cache.CountsSnapshot, ns cache.Namespace, wantH
 // runParityCase executes the full 7-step body from task-11-brief.md against one case. gens is
 // nil for the cache-disabled and redis-down suites, which don't assert on Bump/metrics the same
 // way (see runParityCase's ns/checkMetrics parameters).
+//
+// ns is the namespace THIS case's method actually lands in. Task 11c generalized this from a
+// hardcoded cache.NamespaceAnalytics: a case landing in the wrong namespace (e.g. an
+// analytics_rows method whose key builder regressed to NamespaceAnalytics) would otherwise
+// silently pass the hit/miss-count assertions while proving nothing about the namespace it
+// claims to cover — assertDelta's "every OTHER namespace must be all-zero" check only catches
+// that if the caller told it which namespace SHOULD have moved.
 func runParityCase(
 	t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	uncachedSvc, cachedSvc AnalyticsService, gens *cache.Generations,
-	tc parityCase, checkMetrics bool,
+	tc parityCase, ns cache.Namespace, checkMetrics bool,
 ) {
 	tc.Seed(t, ctx, pool)
 
@@ -526,7 +533,7 @@ func runParityCase(
 	afterCold := cache.Snapshot()
 	assert.JSONEq(t, mustJSON(t, wantOff), mustJSON(t, gotCold), "%s: cold read must equal ground truth", tc.Name)
 	if checkMetrics {
-		assertDelta(t, afterCold.Delta(before), cache.NamespaceAnalytics, 0, 1, tc.Name+": cold read")
+		assertDelta(t, afterCold.Delta(before), ns, 0, 1, tc.Name+": cold read")
 	}
 
 	// Step 4: warm read — must equal ground truth, and exactly 1 hit / 0 additional misses. This
@@ -537,7 +544,7 @@ func runParityCase(
 	afterWarm := cache.Snapshot()
 	assert.JSONEq(t, mustJSON(t, wantOff), mustJSON(t, gotWarm), "%s: warm read must equal ground truth", tc.Name)
 	if checkMetrics {
-		assertDelta(t, afterWarm.Delta(beforeWarm), cache.NamespaceAnalytics, 1, 0, tc.Name+": warm read")
+		assertDelta(t, afterWarm.Delta(beforeWarm), ns, 1, 0, tc.Name+": warm read")
 	}
 
 	// Step 5: mutate the underlying data, then run the production invalidation hook.
@@ -582,7 +589,7 @@ func TestAnalyticsCacheParity(t *testing.T) {
 			cachedSvc := NewCachedAnalyticsService(inner, c)
 
 			tc := build(t, f, time.Now().UTC())
-			runParityCase(t, ctx, pool, inner, cachedSvc, c.Generations(), tc, true)
+			runParityCase(t, ctx, pool, inner, cachedSvc, c.Generations(), tc, cache.NamespaceAnalytics, true)
 		})
 	}
 }
