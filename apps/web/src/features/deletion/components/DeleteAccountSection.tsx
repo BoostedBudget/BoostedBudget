@@ -16,13 +16,29 @@ import { useDeletion } from '../hooks/useDeletion'
 import { Card } from '@/components/ui/card'
 
 export function DeleteAccountSection() {
-  const { requestAccountDeletion, isRequesting, requestError } = useDeletion()
+  const {
+    requestAccountDeletion,
+    isRequesting,
+    requestError,
+    cancelAccountDeletion,
+    isCanceling,
+    cancelError,
+  } = useDeletion()
 
   const [showConfirmation, setShowConfirmation] = useState(false)
   const [confirmChecked, setConfirmChecked] = useState(false)
   const [deletionScheduled, setDeletionScheduled] = useState(false)
   const [scheduledDate, setScheduledDate] = useState<string | null>(null)
+  // Issue #1514 (fix round 5): the cancellation token is a BEARER CAPABILITY — the
+  // backend's CancelDeletion endpoint is public and validates the request by the token
+  // alone (backend/internal/huma/operations/deletion.go), so anyone who obtains it can
+  // cancel a scheduled GDPR erasure. It must stay in React state / JS memory only and
+  // never be interpolated into a rendered attribute (`href`) or text node — both are
+  // captured by PostHog session replay, and `data-ph-mask` cannot cover an attribute.
+  // Cancellation itself now happens via a button that calls cancelAccountDeletion(token)
+  // directly, instead of rendering a URL for the user to click/copy.
   const [cancellationToken, setCancellationToken] = useState<string | null>(null)
+  const [cancelSuccess, setCancelSuccess] = useState(false)
 
   async function handleDeleteClick() {
     setShowConfirmation(true)
@@ -47,10 +63,18 @@ export function DeleteAccountSection() {
     setConfirmChecked(false)
   }
 
-  // Show cancellation link after deletion is scheduled
-  if (deletionScheduled && cancellationToken) {
-    const cancellationUrl = `${window.location.origin}/cancel-deletion/${cancellationToken}`
+  async function handleCancelDeletionClick() {
+    if (!cancellationToken) {
+      return
+    }
+    const result = await cancelAccountDeletion(cancellationToken)
+    if (result) {
+      setCancelSuccess(true)
+    }
+  }
 
+  // Show cancellation affordance after deletion is scheduled
+  if (deletionScheduled && cancellationToken) {
     return (
       <div className="my-8 p-8 border-2 border-destructive rounded-lg bg-destructive/5">
         <h2 className="mt-0 text-destructive text-2xl mb-4">Account Deletion Scheduled</h2>
@@ -70,24 +94,30 @@ export function DeleteAccountSection() {
 
         <div className="bg-info/5 border border-info rounded-lg p-6">
           <h3 className="mt-0 text-info">Changed your mind?</h3>
-          <p className="my-3 text-info/80">
-            You can cancel the deletion at any time before the scheduled date using this link:
-          </p>
-          <div className="bg-info/10 border border-dashed border-info px-4 py-4 my-4 rounded break-all">
-            <a
-              href={cancellationUrl}
-              className="text-primary no-underline font-mono text-sm hover:underline"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {cancellationUrl}
-            </a>
-          </div>
-          <p className="bg-warning/10 border-l-4 border-warning px-3 py-3 mt-4 rounded text-warning-foreground text-sm">
-            <strong>Important:</strong> Save this link! It's the only way to cancel your account
-            deletion.
-            {/* When SendGrid is integrated (Issue #258), this link will be emailed to you. */}
-          </p>
+          {cancelSuccess ? (
+            <p className="text-success font-medium">
+              Your account deletion has been canceled. Your account and all your data are safe.
+            </p>
+          ) : (
+            <>
+              <p className="my-3 text-info/80">
+                You can cancel the deletion right now, or use the cancellation link we&rsquo;ve
+                emailed you if you&rsquo;d rather do it later.
+              </p>
+              {cancelError && (
+                <div className="bg-destructive/5 border-l-4 border-destructive text-destructive px-4 py-3 my-4 rounded">
+                  {cancelError.message}
+                </div>
+              )}
+              <button
+                onClick={handleCancelDeletionClick}
+                disabled={isCanceling}
+                className="bg-info text-white border-none px-6 py-3 text-base font-bold rounded-md cursor-pointer hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isCanceling ? 'Canceling...' : 'Cancel Account Deletion'}
+              </button>
+            </>
+          )}
         </div>
       </div>
     )

@@ -78,6 +78,16 @@ export interface DataTableProps<T> {
   data: T[]
   columns: ColumnDef<T>[]
   rowKey: (row: T) => string
+  /**
+   * Issue #1514 (fix round 2): set this when `rowKey` returns PII (e.g. a merchant or
+   * account name rather than an opaque id) instead of switching `rowKey` itself to
+   * something non-unique. When true, DataTable omits the `data-row-id` attribute it would
+   * otherwise render — `data-row-id={rowKey(row)}` is a DOM attribute, and PostHog session
+   * replay records attribute VALUES verbatim; `data-ph-mask` masks element text only and
+   * cannot cover it. React's own reconciliation `key` (set from the same `rowKey`) is
+   * unaffected: it never reaches the DOM, so it carries no session-replay exposure.
+   */
+  sensitiveRowKey?: boolean
   /** Optional table identifier forwarded to analytics events (e.g. 'transactions'). */
   tableId?: string
   sort: SortState

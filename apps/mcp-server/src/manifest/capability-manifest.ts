@@ -232,8 +232,11 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('resetDashboardPreferences', REASON_DASHBOARD_DEFERRED),
 
   // ── Health / Monitoring ─────────────────────────────────────────────────
+  // getMetrics was removed here (#1514): /metrics moved to an internal-only
+  // listener and is no longer registered for spec generation, so it has no
+  // spec-index entry to classify. Leaving it would make it a manifest-only
+  // entry — invisible to the capabilitySummary aggregates.
   excluded('getHealth', REASON_INTERNAL),
-  excluded('getMetrics', REASON_INTERNAL),
 
   // ── Household (Issue #1366: household entitlement resolution, Phase 2) ──
   read('getHouseholdEntitlement'),

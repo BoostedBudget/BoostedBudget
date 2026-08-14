@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { devLog } from '@/shared/lib/devLog'
 
 /**
  * Custom hook to listen for Paddle checkout events and handle navigation.
@@ -17,7 +18,8 @@ export function usePaddleEvents() {
     const handleCheckoutCompleted = (event: Event) => {
       const paddleEvent = (event as CustomEvent).detail
       const transactionId = paddleEvent.data?.transaction_id
-      console.log('Checkout completed:', { transactionId, event: paddleEvent })
+      // Paddle checkout payloads carry customer email/billing metadata — dev-only.
+      devLog('Checkout completed:', { transactionId, event: paddleEvent })
       navigate('/billing/success')
     }
 

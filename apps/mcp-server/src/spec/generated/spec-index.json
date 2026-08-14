@@ -4224,18 +4224,6 @@
       "description": "Returns the health status of the API and its dependencies (database, Redis, Clerk)."
     },
     {
-      "operationId": "getMetrics",
-      "method": "GET",
-      "path": "/metrics",
-      "summary": "Get Prometheus metrics",
-      "tags": [
-        "Monitoring"
-      ],
-      "manifestClass": "read",
-      "excluded": true,
-      "description": "Returns Prometheus metrics in text format for monitoring."
-    },
-    {
       "operationId": "paddle-webhook",
       "method": "POST",
       "path": "/webhooks/paddle",

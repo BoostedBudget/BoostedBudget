@@ -572,6 +572,38 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 		return nil
 	}
 
+	// Issue #1514: this guard reads webhook.SignatureValid and refuses to dispatch when it is
+	// false. See HandlePaddleWebhook and ReplayPaddleWebhook for the primary guards.
+	//
+	// A retry re-fetches the row via GetByID and re-reads SignatureValid; nothing in this file
+	// modifies that field, so it cancels the job via river.JobCancel rather than returning nil.
+	// In River v0.43.0, returning nil from Work is *successful completion*, not cancellation (see
+	// river.JobCancel's doc comment: it "cancel[s] the job at the end of execution"); returning
+	// nil here would record a refused webhook as a completed job and emit
+	// jobs_completed_total{status="success"} for it.
+	//
+	// No analytics.Capture here: EventID and EventType are supplied by the caller and are not
+	// validated by this guard; emitting them to PostHog would ship unverified data into
+	// analytics. See webhook_processing.go's guard for the analogous Plaid-side handling.
+	if !webhook.SignatureValid {
+		observability.InvalidWebhookAttemptsTotal.WithLabelValues("paddle_worker_guard").Inc()
+		// Logs only webhook_id, which this function uses solely as a lookup key (GetByID,
+		// MarkFailed) and never reads as content. event_id and event_type are Paddle's own
+		// payload values, supplied by the caller, and are omitted from this log.
+		w.logger.Error("refusing to process Paddle webhook with invalid signature; cancelling job",
+			"webhook_id", args.WebhookID,
+		)
+		if failErr := w.paddleWebhookRepo.MarkFailed(ctx, args.WebhookID, "rejected: signature_valid=false"); failErr != nil {
+			// Persistence failed: return a retryable error instead of swallowing it.
+			w.logger.Error("failed to mark Paddle webhook as failed after signature guard; will retry",
+				"webhook_id", args.WebhookID,
+				"error", failErr,
+			)
+			return fmt.Errorf("failed to record invalid-signature refusal: %w", failErr)
+		}
+		return river.JobCancel(errInvalidWebhookSignature)
+	}
+
 	var processErr error
 	switch webhook.EventType {
 	case "subscription.created":

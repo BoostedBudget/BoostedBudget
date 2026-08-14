@@ -29,7 +29,6 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Create handlers with nil dependencies
 	// These handlers won't be called - they're just needed for type signatures
 	healthHandler := &HealthHandler{Version: "1.0.0"}
-	metricsHandler := &MetricsHandler{}
 	subscriptionTiersHandler := NewSubscriptionTiersHandler(minimalTierConfig)
 	regionsHandler := NewRegionsHandler(minimalRegionConfig)
 	tagHandler := &TagHandler{}
@@ -94,8 +93,14 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	householdShareHandler := &HouseholdShareHandler{}
 
 	// Register all routes
+	//
+	// Issue #1514: /metrics is deliberately NOT registered here. It moved onto an
+	// internal-only listener (see cmd/server/main.go's internalHumaAPI / internal_metrics.go)
+	// and is not part of the public API surface anymore, so it must not be advertised in the
+	// spec generated from this function — doing so previously produced an
+	// unauthenticated-looking public GET /metrics in api/openapi.yaml (and a generated
+	// frontend client for it) that does not exist at runtime.
 	RegisterHealthRoutes(api, healthHandler)
-	RegisterMetricsRoutes(api, metricsHandler)
 	RegisterSubscriptionTiersRoutes(api, subscriptionTiersHandler)
 	RegisterTagRoutes(api, tagHandler)
 	RegisterTransactionRoutes(api, transactionHandler)

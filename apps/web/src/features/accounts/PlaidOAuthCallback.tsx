@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { usePlaidLink } from 'react-plaid-link'
 import { useCreateLinkToken } from '@boostedbudget/api-client/endpoints/plaid/plaid'
+import { devLog } from '@/shared/lib/devLog'
 
 export function PlaidOAuthCallback() {
   const navigate = useNavigate()
@@ -44,13 +45,15 @@ export function PlaidOAuthCallback() {
     token: linkToken,
     receivedRedirectUri, // Critical: tells Plaid Link to continue OAuth flow
     onSuccess: (_publicToken, metadata) => {
-      console.log('OAuth flow completed successfully:', metadata)
+      // Plaid Link metadata carries institution name/id and linked account
+      // names/masks — dev-only.
+      devLog('OAuth flow completed successfully:', metadata)
       // Public token exchange will be handled by the main PlaidLink component
       // For now, redirect back to accounts page
       navigate('/accounts')
     },
     onExit: (err, metadata) => {
-      console.log('OAuth flow exited:', err, metadata)
+      devLog('OAuth flow exited:', err, metadata)
       // Redirect back to accounts page
       navigate('/accounts')
     },

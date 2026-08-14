@@ -12,6 +12,12 @@ interface FilterPillProps {
   onRemove: () => void
 }
 
+// PII review (issue #1514, G5): `aria-label={`Remove ${label} filter`}` intentionally only
+// uses `label`, never `value`. `label` is drawn from a fixed, closed set of filter-type
+// strings ('Date' | 'Status' | 'Investments' | 'Activity' — see
+// TransactionFilterPanel.tsx's FilterPillsSection), not user-entered free text, so it carries
+// no PII. `value` (the actual filter selection, potentially free text) is rendered visibly but
+// deliberately kept out of the aria-label.
 export function FilterPill({ label, value, onRemove }: FilterPillProps) {
   return (
     <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-info/10 text-info rounded-full border border-info/20">

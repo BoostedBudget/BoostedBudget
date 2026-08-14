@@ -31,13 +31,20 @@ mv cert.pem.bak cert.pem 2>/dev/null; mv key.pem.bak key.pem 2>/dev/null
 
 ### Port Allocation
 
-The script dynamically assigns ports to avoid conflicts:
+The script derives one contiguous 600-port block per run (`15000 + (runId % 50) * 600`,
+so 50 possible blocks) and carves it into five 100-port per-service sub-bands, keeping
+every port below this host's ephemeral range (macOS default floor 49152). Runs whose
+`runId % 50` matches (e.g. runs 7 and 57) share a block; `find-available-ports.js`'s
+in-band scan plus `run-e2e-with-ports.sh`'s preflight port check are what make that safe,
+not block uniqueness (Issue #1514):
 
-| Service | Port Range |
+| Service | Port Range (across all 50 blocks) |
 |---------|------------|
-| Frontend | 30000-34900 |
-| Backend | 35000-39900 |
-| PostgreSQL | 40000-44900 |
+| Frontend | 15000-44499 |
+| Backend | 15100-44599 |
+| PostgreSQL | 15200-44699 |
+| Prod (preview) | 15300-44799 |
+| Metrics (internal) | 15400-44899 |
 
 ### Test Projects
 
@@ -157,7 +164,7 @@ psql $DATABASE_URL -c "SELECT * FROM accounts LIMIT 5"
 **Solutions:**
 ```bash
 # Find conflicting process
-lsof -i :30000
+lsof -i :15000
 
 # Kill if needed
 kill -9 <PID>

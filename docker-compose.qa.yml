@@ -30,9 +30,16 @@ services:
     environment:
       POSTGRES_DB: boostedbudget_qa
       POSTGRES_USER: ${POSTGRES_USER:-qauser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qapass}
+      # #1514: no weak fallback — a missing POSTGRES_PASSWORD must fail loudly, not
+      # silently start with a guessable default.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (no default permitted)}
     ports:
-      - "5433:5432"  # Different port to avoid conflict with dev
+      # #1514: loopback-only. This host port is for operator/debugging access on the
+      # Mac Mini itself; the backend container reaches Postgres via the Docker network
+      # (service name "postgres"), so it never needs the host mapping. Binding to
+      # 0.0.0.0 previously exposed an authenticated-but-often-weak Postgres to anything
+      # that could route to the host, including the Tailscale interface.
+      - "127.0.0.1:5433:5432"  # Different port to avoid conflict with dev
     volumes:
       - postgres_qa_data:/var/lib/postgresql/data
     healthcheck:
@@ -47,7 +54,10 @@ services:
     pull_policy: always  # Always pull latest patches
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
-      - "6380:6379"  # Different port to avoid conflict with dev
+      # #1514: loopback-only — see Postgres port comment above for rationale. This
+      # Redis instance also has no authentication configured, so exposure beyond the
+      # host itself is not acceptable.
+      - "127.0.0.1:6380:6379"  # Different port to avoid conflict with dev
     volumes:
       - redis_qa_data:/data
     healthcheck:
@@ -62,8 +72,11 @@ services:
     pull_policy: always  # Always pull latest patches
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
-      - "5673:5672"   # AMQP - different port
-      - "15673:15672" # Management UI - different port
+      # #1514: loopback-only — the management UI has no TLS and RabbitMQ here uses the
+      # default guest:guest credentials (out of scope to change per the issue), so it
+      # must not be reachable from anywhere but the host.
+      - "127.0.0.1:5673:5672"   # AMQP - different port
+      - "127.0.0.1:15673:15672" # Management UI - different port
     volumes:
       - rabbitmq_qa_data:/var/lib/rabbitmq
     healthcheck:
@@ -86,7 +99,7 @@ services:
       ENVIRONMENT: "qa"
       VERSION: "${VERSION:-qa-dev}"
       PRIMARY_REGION: "${PRIMARY_REGION:-iad}"
-      DATABASE_URL: "postgres://${POSTGRES_USER:-qauser}:${POSTGRES_PASSWORD:-qapass}@postgres:5432/boostedbudget_qa?sslmode=disable"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-qauser}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (no default permitted)}@postgres:5432/boostedbudget_qa?sslmode=disable"
       REDIS_URL: "redis://redis:6379"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
       CLERK_SECRET_KEY: "${CLERK_SECRET_KEY}"

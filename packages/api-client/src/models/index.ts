@@ -298,6 +298,8 @@ export * from './recurringSubscriptionsResponse';
 export * from './regionResponse';
 export * from './regionsResponseBody';
 export * from './regionsResponseBodyRegions';
+export * from './rejectedWebhookAttemptMetrics';
+export * from './rejectedWebhookAttemptMetricsByProvider';
 export * from './rejectTransferSuggestionInputBody';
 export * from './rejectTransferSuggestionOutputBody';
 export * from './reorderAccountsOutputBody';

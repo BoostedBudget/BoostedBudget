@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -44,6 +45,126 @@ func TestLoad_ServerTimeoutsConfigurable(t *testing.T) {
 	assert.Equal(t, 45*time.Second, cfg.WriteTimeout)
 	assert.Equal(t, 180*time.Second, cfg.IdleTimeout)
 	assert.Equal(t, "2M", cfg.MaxBodySize)
+}
+
+func TestLoad_RateLimitMaxEntriesDefault(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RATE_LIMIT_MAX_ENTRIES", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 20000, cfg.RateLimitMaxEntries, "RateLimitMaxEntries should default to 20000")
+}
+
+func TestLoad_RateLimitMaxEntriesConfigurable(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("RATE_LIMIT_MAX_ENTRIES", "5000")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 5000, cfg.RateLimitMaxEntries)
+}
+
+func TestLoad_RateLimitMaxEntriesInvalidValueFallsBackToDefault(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+
+	for _, invalid := range []string{"0", "-1", "not-a-number"} {
+		t.Run(invalid, func(t *testing.T) {
+			t.Setenv("RATE_LIMIT_MAX_ENTRIES", invalid)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+
+			assert.Equal(t, 20000, cfg.RateLimitMaxEntries,
+				"a zero/negative/invalid RATE_LIMIT_MAX_ENTRIES must fall back to the default, never produce an uncapped store")
+		})
+	}
+}
+
+func TestLoad_PaddleWebhookTimestampToleranceSecondsDefault(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 5, cfg.PaddleWebhookTimestampToleranceSeconds,
+		"PaddleWebhookTimestampToleranceSeconds should default to 5 (Paddle's documented SDK default)")
+}
+
+func TestLoad_PaddleWebhookTimestampToleranceSecondsConfigurable(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", "30")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 30, cfg.PaddleWebhookTimestampToleranceSeconds)
+}
+
+func TestLoad_PaddleWebhookTimestampToleranceSecondsInvalidValueFallsBackToDefault(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+
+	for _, invalid := range []string{"0", "-1", "not-a-number"} {
+		t.Run(invalid, func(t *testing.T) {
+			t.Setenv("PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", invalid)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+
+			assert.Equal(t, 5, cfg.PaddleWebhookTimestampToleranceSeconds,
+				"a zero/negative/invalid PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS must fall back to the default, never disable the replay window")
+		})
+	}
+}
+
+// TestLoad_PaddleWebhookTimestampToleranceSecondsAboveMaxFallsBackToDefault is issue #1514
+// fix-round-1 item 1's regression test: an operator typo like 999999999 must NOT be accepted as
+// "validly configured" — it would silently and completely disable the replay window on a
+// payments path. It must fall back to the default, exactly like the zero/negative case.
+func TestLoad_PaddleWebhookTimestampToleranceSecondsAboveMaxFallsBackToDefault(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+
+	for _, tooLarge := range []string{"301", "999999999"} {
+		t.Run(tooLarge, func(t *testing.T) {
+			t.Setenv("PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", tooLarge)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+
+			assert.Equal(t, 5, cfg.PaddleWebhookTimestampToleranceSeconds,
+				"a PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS above the max must fall back to the default, never accept a value that effectively disables the replay window")
+		})
+	}
+}
+
+// TestLoad_PaddleWebhookTimestampToleranceSecondsBoundaries checks the inclusive edges: 1 (just
+// above zero) and PaddleWebhookTimestampToleranceMaxSeconds (the max itself) must both be
+// ACCEPTED, since the validation is "reject <=0 or >max", not a stricter open interval.
+func TestLoad_PaddleWebhookTimestampToleranceSecondsBoundaries(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+
+	testCases := []struct {
+		name string
+		env  string
+		want int
+	}{
+		{"lower boundary (1)", "1", 1},
+		{"upper boundary (max)", fmt.Sprintf("%d", PaddleWebhookTimestampToleranceMaxSeconds), PaddleWebhookTimestampToleranceMaxSeconds},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", tc.env)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.want, cfg.PaddleWebhookTimestampToleranceSeconds)
+		})
+	}
 }
 
 func TestLoad_ProductionValidation_RequiresEncryptionKey(t *testing.T) {
