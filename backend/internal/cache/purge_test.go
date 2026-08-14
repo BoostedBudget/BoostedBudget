@@ -2,6 +2,8 @@ package cache
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -145,6 +147,136 @@ func TestPurgeUser_TombstoneIsSetBeforeScan(t *testing.T) {
 		"the tombstone must already be visible by the time Scan runs — if the implementation "+
 			"scans/deletes BEFORE setting the tombstone, a concurrent write landing in that window "+
 			"would not be blocked, reopening the exact race this purge exists to close")
+}
+
+// findSurvivingIdentifiers scans the ENTIRE cache keyspace (keyPrefix+":*" — every scope tag, not
+// just the ones this test file already knows to check) and returns one finding string per
+// surviving key NAME or VALUE that contains userID or clerkUserID as a substring.
+//
+// This is a plain function (no *testing.T dependency) rather than an assertion helper so
+// TestPurgeUser_WholeKeyspaceScan_CatchesAMisKeyedLeak can inspect its result directly without a
+// t.Run/t.Errorf failure propagating up and marking that (deliberately-testing-the-check-itself)
+// test as failed — see that test's own doc comment.
+//
+// This is deliberately NOT the same proof as TestPurgeUser_ExactlyPurgesUserAndIdentityScopes...
+// above: that test (and its siblings) scan by a KNOWN scope-tag pattern — real, valuable coverage
+// of the regression class the brief called out (a u:-only purge leaving k:/h: data behind) — but
+// they can only ever prove "the tags I already enumerated are clean". An UNENUMERATED scope is
+// exactly the shape of bug the original single-scope design had. Scanning the whole keyspace and
+// checking VALUES (not just key names) closes that gap: a future mis-keyed write anywhere in Redis
+// would be caught here even if nobody thought to add a scoped test for that tag.
+//
+// The one documented, allowed survivor is the u: scope's OWN tombstone key: TombstoneKey embeds
+// the raw userID in its name by design (see that function's doc comment — an operator debugging
+// Redis needs to see which user is under a deletion tombstone), and its value is never read as
+// meaningful data. Every other survivor is a genuine finding.
+func findSurvivingIdentifiers(t *testing.T, fake *redisclient.Fake, userTag, userID, clerkUserID string) []string {
+	t.Helper()
+	allowedSurvivorKey := TombstoneKey(userTag)
+
+	keys, err := fake.Scan(context.Background(), keyPrefix+":*")
+	require.NoError(t, err)
+
+	var findings []string
+	for _, k := range keys {
+		if k == allowedSurvivorKey {
+			continue
+		}
+		if strings.Contains(k, userID) {
+			findings = append(findings, fmt.Sprintf("key %q survived the purge and contains the deleted user's ID in its NAME", k))
+		}
+		if strings.Contains(k, clerkUserID) {
+			findings = append(findings, fmt.Sprintf("key %q survived the purge and contains the deleted user's Clerk ID in its NAME", k))
+		}
+		v, getErr := fake.Get(context.Background(), k)
+		if getErr != nil {
+			continue
+		}
+		if strings.Contains(v, userID) {
+			findings = append(findings, fmt.Sprintf("key %q survived the purge with the deleted user's ID still in its VALUE: %q", k, v))
+		}
+		if strings.Contains(v, clerkUserID) {
+			findings = append(findings, fmt.Sprintf("key %q survived the purge with the deleted user's Clerk ID still in its VALUE: %q", k, v))
+		}
+	}
+	return findings
+}
+
+// assertNoSurvivingIdentifier is findSurvivingIdentifiers, reported as t.Errorf — the assertion
+// form actual tests use.
+func assertNoSurvivingIdentifier(t *testing.T, fake *redisclient.Fake, userTag, userID, clerkUserID string) {
+	t.Helper()
+	for _, finding := range findSurvivingIdentifiers(t, fake, userTag, userID, clerkUserID) {
+		t.Error(finding)
+	}
+}
+
+// TestPurgeUser_WholeKeyspaceScan_NoSurvivingUserOrClerkIdentifier is the whole-instance proof the
+// scoped tests above cannot provide (see assertNoSurvivingIdentifier's doc comment). Cached VALUES
+// (not just keys) are seeded to actually embed the identifiers, mirroring what a real cached
+// analytics/identity payload would contain.
+func TestPurgeUser_WholeKeyspaceScan_NoSurvivingUserOrClerkIdentifier(t *testing.T) {
+	fake := redisclient.NewFake("cache")
+	c := NewCache(Options{Client: fake})
+	ctx := context.Background()
+
+	const userID = "user-9f2c"
+	const clerkUserID = "clerk_8a41"
+	userTag := ScopeTag(ScopeUser, userID)
+	clerkTag := ScopeTag(ScopeClerkID, clerkUserID)
+
+	require.NoError(t, fake.Set(ctx, GenerationKey(userTag), "gen1", 0))
+	require.NoError(t, fake.Set(ctx, keyPrefix+":{"+userTag+"}:analytics:v1:ggen1:M:h1",
+		`{"user_id":"`+userID+`","total":42}`, 0))
+	require.NoError(t, fake.Set(ctx, GenerationKey(clerkTag), "gen1", 0))
+	require.NoError(t, fake.Set(ctx, keyPrefix+":{"+clerkTag+"}:identity:v1:ggen1:M:h1",
+		`{"clerk_user_id":"`+clerkUserID+`"}`, 0))
+
+	purger, ok := c.(Purger)
+	require.True(t, ok)
+	require.NoError(t, purger.PurgeUser(ctx, userID, clerkUserID))
+
+	assertNoSurvivingIdentifier(t, fake, userTag, userID, clerkUserID)
+}
+
+// TestPurgeUser_WholeKeyspaceScan_CatchesAMisKeyedLeak is the discrimination proof the reviewer
+// asked for: the whole-keyspace check must not be vacuously true. This seeds data under a
+// DELIBERATELY wrong/unexpected scope tag — one PurgeUser was never told about and structurally
+// cannot reach (it only ever touches u:<userID> and k:<hash(clerkID)>) — containing the clerk
+// user ID, and proves findSurvivingIdentifiers reports it as a finding. Calling the plain
+// (non-*testing.T-failing) function directly, rather than via t.Run, means this test itself stays
+// green while still proving the check would have failed — a permanent proof the mechanism has
+// teeth, not a throwaway manual verification step.
+func TestPurgeUser_WholeKeyspaceScan_CatchesAMisKeyedLeak(t *testing.T) {
+	fake := redisclient.NewFake("cache")
+	c := NewCache(Options{Client: fake})
+	ctx := context.Background()
+
+	const userID = "user-leak-1"
+	const clerkUserID = "clerk_leak_1"
+	userTag := ScopeTag(ScopeUser, userID)
+	const leakKey = keyPrefix + ":{x:mistaken-scope}:analytics:v1:gX:M:h1"
+
+	// Simulate a hypothetical mis-keyed write: some future bug caches data under a scope tag that
+	// is neither u:<userID> nor k:<hash(clerkUserID)> — exactly the shape of leak a scoped-pattern
+	// test (which only ever looks where it already expects to look) cannot see.
+	require.NoError(t, fake.Set(ctx, leakKey, `{"clerk_user_id":"`+clerkUserID+`"}`, 0))
+
+	purger, ok := c.(Purger)
+	require.True(t, ok)
+	require.NoError(t, purger.PurgeUser(ctx, userID, clerkUserID))
+
+	findings := findSurvivingIdentifiers(t, fake, userTag, userID, clerkUserID)
+	assert.NotEmpty(t, findings,
+		"the whole-keyspace scan must catch a survivor under an unexpected/mis-keyed scope tag — "+
+			"an empty result here means the check is not actually looking at the whole keyspace")
+	assert.Contains(t, findings[0], leakKey)
+
+	// Clean up the injected leak and re-confirm the check now reports clean — proves the finding
+	// above was caused by the deliberately-injected leak, not some unrelated test bug.
+	require.NoError(t, fake.Del(ctx, leakKey))
+	findings = findSurvivingIdentifiers(t, fake, userTag, userID, clerkUserID)
+	assert.Empty(t, findings, "removing the injected leak must restore a clean whole-keyspace scan")
 }
 
 func TestNoopCache_PurgeUserIsANoOp(t *testing.T) {
