@@ -896,6 +896,13 @@ func main() {
 			TierConfig:   tierConfig,
 			Logger:       appLogger,
 		})
+		// Issue #1531 Task 10b-2a-iii: wire cache invalidation so an auto-offboard (this
+		// worker's ONLY caller of HouseholdService.OffboardExcessMembers — a job, never an
+		// HTTP request, so NewCacheInvalidationMiddleware never runs for it) bumps the
+		// household's cache generation once membership actually changes. cacheInstance is
+		// never nil (see cachePurgeRetryWorker below); Generations() is nil-safe when the
+		// cache is disabled (NewNoopCache), and bumpCacheForHousehold nil-guards on it.
+		householdOverCapacityCheckWorker.SetCacheInvalidation(cacheInstance.Generations())
 		appLogger.Info("Household over-capacity check worker created (River)")
 
 		// Create deletion services (if token secret configured)
@@ -1213,6 +1220,12 @@ func main() {
 			TransactionRepo: transactionRepo,
 			Logger:          appLogger,
 		})
+		// Issue #1531 Task 10b-2a-iii: wire cache invalidation — this job rewrites
+		// transactions.effective_category_name, the field several cached analytics queries
+		// GROUP BY (spending by category/merchant, budget vs actual), with no prior bump.
+		// cacheInstance is never nil (see cachePurgeRetryWorker below); Generations() is
+		// nil-safe when the cache is disabled.
+		effectiveCategoryRefreshWorker.SetCacheInvalidation(cacheInstance.Generations())
 		appLogger.Info("Effective category refresh worker created (River)")
 
 		// Create Plaid service and account linking (if configured)
