@@ -416,7 +416,11 @@ export function BudgetCategoryManager({
         onOpenChange={(open) => !open && handleCloseDeleteDialog()}
         onConfirm={handleConfirmDelete}
         title="Delete Category"
-        description={deleteDialog.category ? `Are you sure you want to delete the category "${categoryDisplayLabel(deleteDialog.category)}"? This action cannot be undone.` : ''}
+        description={
+          deleteDialog.category ? (
+            <>Are you sure you want to delete the category &ldquo;<span data-ph-mask>{categoryDisplayLabel(deleteDialog.category)}</span>&rdquo;? This action cannot be undone.</>
+          ) : ''
+        }
         variant="destructive"
         loading={isDeleting}
       />

@@ -1,7 +1,18 @@
 # Multi-stage production Dockerfile for Backend
 # Stage 1: Builder
-ARG GO_VERSION=1.26.5
-FROM golang:${GO_VERSION}-alpine AS builder
+# #1514: digest-pinned to golang:1.26.6-alpine (multi-arch manifest list digest, resolved
+# from Docker Hub on 2026-08-13). If GO_VERSION is bumped, this digest must be re-resolved
+# for the new tag or the pin will silently pull mismatched content — the digest wins over the
+# tag, so bumping the version alone is a silent no-op that keeps building the old toolchain.
+# Resolve with: docker buildx imagetools inspect golang:<version>-alpine  (take the top-level
+# index Digest, not a per-platform manifest digest).
+#
+# Bumped 1.26.5 -> 1.26.6 to clear seven Go standard-library advisories reported by
+# govulncheck: GO-2026-6218 (net/url), GO-2026-6091 (html/template), GO-2026-6090
+# (crypto/tls), GO-2026-6089 (net/http), GO-2026-6088 (encoding/xml), GO-2026-5972
+# (encoding/asn1) and GO-2026-5026 (net/http via x/net/idna). All are fixed in go1.26.6.
+ARG GO_VERSION=1.26.6
+FROM golang:${GO_VERSION}-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS builder
 
 # Install build dependencies
 RUN echo "Installing build dependencies..." && \
@@ -35,12 +46,23 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o server \
     ./cmd/server
 
-# Build golang-migrate from source with Go 1.25.7 (for security)
-# This ensures migrate binary has no CVEs, unlike pre-compiled releases
+# Build golang-migrate from source using this stage's pinned Go toolchain (see GO_VERSION
+# and the digest-pinned builder FROM above), rather than downloading a prebuilt release binary.
+# #1514: pinned to v4.19.1 (latest release as of 2026-08-12) instead of floating @latest,
+# so the version baked into the production image is reproducible and reviewable.
+# Integrity comes from Go's module checksum database, which authenticates the module
+# source by default for public modules.
+#
+# What this does NOT provide: building from source cannot "ensure no CVEs" — an earlier
+# version of this comment claimed exactly that, and also named a Go version (1.25.7) that
+# had already drifted from the toolchain actually in use. Vulnerabilities may still exist in
+# migrate v4.19.1 itself, in its transitive dependencies, or in the pinned toolchain. What it
+# does buy is a reproducible, reviewable input and no dependence on a third-party release
+# binary. Keep this claim narrow; do not restore a "no CVEs" guarantee.
 RUN CGO_ENABLED=0 GOOS=linux go install \
     -tags 'postgres' \
     -ldflags="-w -s" \
-    github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+    github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
 
 # Stage 2: Runtime (Debian Bookworm Slim - Minimal but stable)
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
@@ -59,7 +81,7 @@ RUN echo "Installing runtime dependencies..." && \
         [ $i -lt 3 ] && sleep 5; }; \
     done
 
-# Copy golang-migrate binary from builder stage (built with Go 1.25.7 for security)
+# Copy golang-migrate binary from builder stage (see toolchain provenance note above)
 COPY --from=builder /go/bin/migrate /usr/local/bin/migrate
 RUN chmod +x /usr/local/bin/migrate && \
     migrate -version

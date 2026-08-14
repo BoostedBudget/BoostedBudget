@@ -32,6 +32,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BudgetCategoryManager } from './BudgetCategoryManager'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 // Issue #575: Real BudgetCategoryForm needs QueryClientProvider for usePreviewCategories hook
 const createTestQueryClient = () =>
@@ -461,6 +462,14 @@ describe('BudgetCategoryManager — custom category name resolution (Codex gap f
     expect(within(dialog).queryByText(/custom-uuid-1/)).not.toBeInTheDocument()
     // Resolved name must appear in the dialog description
     expect(within(dialog).getByText(/My Restaurants/)).toBeInTheDocument()
+
+    // Issue #1514 (fix round 2): the resolved name was interpolated into
+    // DialogDescription TEXT with no data-ph-mask — assert with the scanner so a future
+    // edit that drops the mask wrapper fails loudly, not just a "text is present" check.
+    const sentinels: PIISentinel[] = [
+      { value: 'My Restaurants', fieldDescription: 'custom_category.name in delete confirmation dialog' },
+    ]
+    expect(scanForUnmaskedPII(dialog, sentinels)).toEqual([])
   })
 
   it('delete confirmation falls back to "Custom category" when name not in map', async () => {

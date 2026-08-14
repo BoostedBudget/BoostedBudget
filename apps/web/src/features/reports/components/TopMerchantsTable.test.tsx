@@ -129,4 +129,19 @@ describe('TopMerchantsTable', () => {
     fireEvent.click(screen.getByText('Amazon'))
     expect(onMerchantClick).toHaveBeenCalledWith({ id: undefined, name: 'Amazon' })
   })
+
+  // Issue #1514 (fix round 2): DataTable used to write `data-row-id={rowKey(row)}`
+  // verbatim, and this table's rowKey was `(row) => row.merchant_name` — a raw merchant
+  // name landing in a DOM attribute PostHog session replay records verbatim. Assert on
+  // the attribute directly (not on visible text, which was already correctly masked via
+  // `maskedColumnIds`), since that's the class of assertion that actually would have
+  // caught this the first time.
+  it('never puts a merchant name into the data-row-id attribute', () => {
+    const { container } = renderTable()
+    for (const row of container.querySelectorAll('[data-row-id]')) {
+      const id = row.getAttribute('data-row-id') ?? ''
+      expect(id.toLowerCase()).not.toContain('starbucks')
+      expect(id.toLowerCase()).not.toContain('amazon')
+    }
+  })
 })

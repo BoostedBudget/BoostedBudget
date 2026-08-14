@@ -1,6 +1,30 @@
 # Grype vulnerability scanner configuration
-# Updated to Go 1.25.7 to fix GO-2026-4337 (crypto/tls vulnerability)
-# Previous CVE ignores for Go 1.25.4 Docker Hub image mismatch have been removed
-# All Go stdlib vulnerabilities should now be resolved
+#
+# Go toolchain is at 1.26.6. Two different strengths of "pinned" are in play, and the
+# distinction matters when reasoning about what a scan actually covers:
+#   - backend/Dockerfile        DIGEST-pinned (golang:1.26.6-alpine@sha256:...). The digest
+#                               wins over the tag, so this is the only one that cannot drift.
+#                               Re-resolve it whenever GO_VERSION changes, or the bump is a
+#                               silent no-op that keeps building the old toolchain.
+#   - backend/go.mod            `go 1.26.6` directive — a MINIMUM, not a pin (there is no
+#                               `toolchain` line). Whether an older local Go upgrades, fetches,
+#                               or hard-fails is decided by the contributor's GOTOOLCHAIN, not
+#                               by anything in this repo. Do not restate Go's selection rules
+#                               here — they have more modes, and more host-dependence, than a
+#                               comment can track. See https://go.dev/doc/toolchain.
+#   - backend/Dockerfile.dev    MUTABLE TAG only (golang:1.26.6-alpine, no digest). Local
+#                               development image; it will float if that tag is re-pushed.
+#   - GO_VERSION in the deploy/test workflows — plain strings consumed by setup-go and as a
+#                               docker build-arg.
+# 1.26.6 clears seven stdlib advisories that govulncheck flagged on 1.26.5:
+# GO-2026-6218, -6091, -6090, -6089, -6088, -5972 and -5026.
+#
+# History: an earlier bump to 1.25.7 addressed GO-2026-4337 (crypto/tls), and the
+# CVE ignores that had worked around a 1.25.4 Docker Hub image mismatch were
+# removed at that point.
+#
+# The ignore list is intentionally empty — no suppression is currently needed.
+# Prefer bumping the toolchain over adding an entry here; an ignore hides a finding
+# from every future scan, including ones it was never meant to cover.
 
 ignore: []

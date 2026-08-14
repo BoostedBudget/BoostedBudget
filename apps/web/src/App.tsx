@@ -27,6 +27,7 @@ import { NotFoundPage } from './features/not-found/NotFoundPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useTheme } from './shared/theme'
 import { posthog } from './shared/lib/posthog'
+import { devLog } from './shared/lib/devLog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
 import { PageSkeleton } from './shared/components/PageSkeleton'
 
@@ -225,7 +226,8 @@ function App() {
       window.Paddle.Initialize({
         token: paddleToken,
         eventCallback: (event) => {
-          console.log('Paddle event:', event)
+          // Paddle events carry customer email/billing metadata — dev-only.
+          devLog('Paddle event:', event)
 
           // Dispatch custom events for checkout lifecycle
           if (event.name === 'checkout.completed') {
@@ -235,7 +237,7 @@ function App() {
           }
         },
       })
-      console.log('Paddle initialized successfully', { environment: paddleEnv })
+      devLog('Paddle initialized successfully', { environment: paddleEnv })
     } catch (error) {
       console.error('Failed to initialize Paddle:', error)
     }
@@ -260,7 +262,7 @@ function App() {
   }
 
   const handleConsentChange = async (consents: CookieConsentSettings) => {
-    console.log('Cookie consents updated:', consents)
+    devLog('Cookie consents updated:', consents)
 
     if (consents.analytics) {
       posthog.opt_in_capturing()
@@ -272,7 +274,7 @@ function App() {
       try {
         const privacyUpdate = cookieToPrivacySettings(consents)
         await updatePrivacyMutation.mutateAsync({ data: privacyUpdate })
-        console.log('Cookie consent synced to backend')
+        devLog('Cookie consent synced to backend')
       } catch (error) {
         console.error('Failed to sync cookie consent to backend:', error)
       }
@@ -280,10 +282,10 @@ function App() {
   }
 
   const handlePrivacySettingsChange = (settings: PrivacySettingsType) => {
-    console.log('Privacy settings updated:', settings)
+    devLog('Privacy settings updated:', settings)
     const cookieSettings = privacySettingsToCookie(settings)
     updateConsentCookie(cookieSettings)
-    console.log('Privacy settings synced to cookie')
+    devLog('Privacy settings synced to cookie')
   }
 
   return (

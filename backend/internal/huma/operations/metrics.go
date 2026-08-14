@@ -55,7 +55,16 @@ func (h *MetricsHandler) GetMetrics(ctx context.Context, input *GetMetricsInput)
 }
 
 // RegisterMetricsRoutes registers metrics routes with the Huma API.
-// Note: This is a public endpoint, no authentication required.
+//
+// Issue #1514: this Operation has no `Security` annotation, so it carries no Clerk
+// authentication regardless of which API instance it's registered on. That is safe ONLY
+// because cmd/server/main.go registers it exclusively on the internal-only metrics
+// listener (see internal_metrics.go), never on the public-facing humaAPI/e — the internal
+// listener is unauthenticated but not reachable from the public internet (see
+// bindInternalMetricsListener's "ACCEPTED RESIDUAL RISK" doc comment for what it IS
+// reachable from). This function itself has no way to enforce that; it is enforced by
+// main.go's wiring, which TestInternalMetricsListener_IsWiredIntoMain in
+// cmd/server/issue1514_internal_metrics_listener_test.go guards against drifting.
 func RegisterMetricsRoutes(api huma.API, handler *MetricsHandler) {
 	// GET /metrics - Prometheus metrics
 	huma.Register(api, huma.Operation{

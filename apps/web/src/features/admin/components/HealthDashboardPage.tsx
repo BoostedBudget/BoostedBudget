@@ -123,6 +123,27 @@ export function HealthDashboardPage() {
   // rather than '0s' when there is nothing to age. See domain.DeletionResidueMetrics (backend).
   const deletionResidueRecords = deletionResidueAvailable ? data.deletion_residue.records : 0;
 
+  // Issue #1514 requirement #5. Same fail-closed shape and the same optional-chaining guard as the
+  // three flags above: a FAILED read and a genuinely quiet 24 hours both arrive as identical
+  // zero-valued fields, and the section itself can be absent on an older cached response or
+  // mid-rolling-deploy.
+  //
+  // ⚠ THIS IS NOT data.paddle_status.failed_webhooks_24h, AND MUST NEVER BE COMPUTED FROM THE SAME
+  // SOURCE. That number counts webhooks that PASSED signature verification and then failed during
+  // processing; this section counts webhooks REJECTED because their signature never verified —
+  // i.e. forged or malformed delivery attempts that were never written to the full webhook table
+  // at all (they are still recorded, into a separate bounded metadata-only table). See
+  // domain.RejectedWebhookAttemptMetrics (backend) for the full distinction. A non-zero reading
+  // here is noteworthy in a way a routine processing failure is not: it means someone is actively
+  // sending requests that fail to authenticate as Paddle or Plaid.
+  const rejectedWebhookAttemptsAvailable = data.rejected_webhook_attempts_24h?.available;
+  const rejectedWebhookAttemptsTotal = rejectedWebhookAttemptsAvailable
+    ? data.rejected_webhook_attempts_24h.total_24h
+    : 0;
+  const rejectedWebhookAttemptsByProvider = rejectedWebhookAttemptsAvailable
+    ? data.rejected_webhook_attempts_24h.by_provider
+    : {};
+
   return (
     <div className="p-8 max-w-[1400px] mx-auto max-md:p-4">
       <header className="flex justify-between items-center mb-8 flex-wrap gap-4 max-md:flex-col max-md:items-start">
@@ -393,6 +414,81 @@ export function HealthDashboardPage() {
             icon={<History size={24} />}
             status={!deletionResidueAvailable ? 'warning' : (deletionResidueRecords > 0 ? 'warning' : 'success')}
           />
+        </div>
+      </section>
+
+      {/* Rejected Webhook Attempts Section (Issue #1514, requirement #5) — the operator-visibility
+          signal restored after Phase 1 stopped persisting unsigned/invalid-signature Paddle and
+          Plaid webhooks into paddle_webhook_events / webhook_events. /admin/webhooks reads that
+          table, which by construction can NEVER again contain one of these rows, so during a live
+          forgery flood that page renders "No webhook events found" — read by an operator as "no
+          attacks", when it actually means "we stopped recording rejections where you're looking."
+          This section is the replacement signal, and its own section (not folded into Paddle
+          Status) precisely because of the next paragraph.
+
+          ⚠ NOT THE SAME THING AS "Failed Webhooks (24h)" IN THE PADDLE STATUS SECTION ABOVE, AND
+          THE TWO MUST NEVER BE WIRED TO THE SAME SOURCE. That card counts webhooks that PASSED
+          signature verification and then failed during processing (an app bug, a transient
+          dependency failure). This section counts webhooks that FAILED signature verification and
+          were never written to that full webhook table at all — someone sending a request that
+          never proved it came from Paddle or Plaid (they are still recorded, into the separate,
+          bounded invalid_webhook_attempts table this section reads). A forgery attempt and a
+          processing bug are unrelated failure modes; see
+          domain.RejectedWebhookAttemptMetrics's own doc comment (backend) for the same warning
+          stated at the source of truth.
+
+          A non-zero count here is deliberately rendered as 'warning', matching this page's
+          existing convention (Job Backlog, Orphaned Plaid Items, Deletion Residue above): it is
+          noteworthy, not neutral — see the brief's framing that a non-zero reading here should not
+          read as routine. */}
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Rejected Webhook Attempts</h2>
+        <p className="mt-0 mb-4 text-sm text-muted-foreground max-w-2xl">
+          Deliveries rejected before verification could confirm they came from Paddle or Plaid.
+          These never appear on the Webhooks page — it only shows deliveries that passed signature
+          verification.
+        </p>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
+          <SummaryCard
+            title="Rejected Attempts (24h)"
+            value={rejectedWebhookAttemptsAvailable ? rejectedWebhookAttemptsTotal.toString() : 'Unavailable'}
+            icon={<Shield size={24} />}
+            status={
+              !rejectedWebhookAttemptsAvailable
+                ? 'warning'
+                : rejectedWebhookAttemptsTotal > 0
+                  ? 'warning'
+                  : 'success'
+            }
+          />
+          <SummaryCard
+            title="Most Recent Attempt"
+            value={
+              !rejectedWebhookAttemptsAvailable
+                ? 'Unavailable'
+                : data.rejected_webhook_attempts_24h.most_recent_at
+                  ? new Date(data.rejected_webhook_attempts_24h.most_recent_at).toLocaleString()
+                  : 'None'
+            }
+            icon={<Clock size={24} />}
+            status={
+              !rejectedWebhookAttemptsAvailable
+                ? 'warning'
+                : data.rejected_webhook_attempts_24h.most_recent_at
+                  ? 'warning'
+                  : 'success'
+            }
+          />
+          {rejectedWebhookAttemptsAvailable &&
+            Object.entries(rejectedWebhookAttemptsByProvider).map(([provider, count]) => (
+              <SummaryCard
+                key={provider}
+                title={`${provider.charAt(0).toUpperCase()}${provider.slice(1)} Attempts (24h)`}
+                value={count.toString()}
+                icon={<AlertTriangle size={24} />}
+                status={count > 0 ? 'warning' : 'success'}
+              />
+            ))}
         </div>
       </section>
 

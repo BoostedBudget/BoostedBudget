@@ -184,7 +184,6 @@ func TestAdminPrefixOperations_DeclareClerkSecurity(t *testing.T) {
 // must be able to say the same.
 var reviewedUnauthenticatedOperations = map[string]string{
 	"getHealth":                 "liveness probe; returns no user data",
-	"getMetrics":                "Prometheus scrape endpoint; aggregate counters only",
 	"getRegions":                "static region catalogue from config",
 	"getSubscriptionTiers":      "static tier catalogue from config/subscription_tiers.yaml",
 	"getWidgetTypes":            "static dashboard widget catalogue",
@@ -219,7 +218,7 @@ func TestUnauthenticatedOperations_MatchReviewedInventory(t *testing.T) {
 	}
 
 	if len(found) == 0 {
-		t.Fatal("found zero unauthenticated operations — /health and /metrics are unauthenticated, so this " +
+		t.Fatal("found zero unauthenticated operations — /health is unauthenticated, so this " +
 			"derivation has broken and the test is no longer checking anything")
 	}
 

@@ -125,7 +125,7 @@ Neon provides automatic Point-in-Time Recovery (PITR):
 ```dockerfile
 # backend/Dockerfile
 # Stage 1: Build the Go binary
-FROM golang:1.21-alpine AS builder
+FROM golang:1.26.6-alpine AS builder
 
 RUN apk add --no-cache git gcc musl-dev
 
@@ -286,7 +286,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.21'
+        go-version: '1.26.6'
 
     - name: Run backend tests
       working-directory: ./backend

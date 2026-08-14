@@ -18,6 +18,7 @@ import {
   mockCancelDeletion,
 } from '@/test/mocks/user-api'
 import type { RequestDeletionResponse } from '../types'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 function renderWithQuery(ui: React.ReactElement) {
   const queryClient = new QueryClient({
@@ -279,13 +280,92 @@ describe('DeleteAccountSection', () => {
     })
   })
 
-  describe('Cancellation Link Display', () => {
-    it('should generate correct cancellation URL format', () => {
-      const origin = 'http://localhost:3000'
-      const expectedToken = mockSuccessResponse.cancellation_token
-      const expectedUrl = `${origin}/cancel-deletion/${expectedToken}`
-      expect(expectedUrl).toContain('/cancel-deletion/')
-      expect(expectedUrl).toContain(expectedToken)
+  // Issue #1514 (fix round 5): the cancellation token is a BEARER CAPABILITY — the
+  // backend's CancelDeletion endpoint is public and validates the request by the token
+  // alone (backend/internal/huma/operations/deletion.go:79-87), so anyone who obtains it
+  // can cancel a scheduled GDPR erasure. Rendering it as `href` (an attribute — data-ph-mask
+  // cannot cover it) or as link text (a token PostHog session replay would also capture)
+  // exposes that capability to session replay. This is a SECRET/capability exposure, not
+  // PII — a different risk class than the rest of this file's masking work; see the note
+  // added to docs/security/posthog-pii-masking.md.
+  //
+  // The OLD version of this describe block ("Cancellation Link Display") never actually
+  // rendered the deletion-scheduled screen — it just asserted a string template built
+  // inline in the test itself, so it exercised nothing and encoded no assertion about the
+  // real DOM. There was no existing "the URL must be visible" assertion to update.
+  //
+  // Investigation: the backend (backend/internal/services/deletion_service.go's
+  // RequestDeletion) already calls `s.emailService.SendDeletionConfirmation(...)`, which
+  // is a real, fully-implemented SendGrid send (backend/internal/services/email_service.go)
+  // containing the same cancellation link — the frontend's old inline comment ("When
+  // SendGrid is integrated...") was stale; email delivery already exists. So the on-screen
+  // token is a redundant convenience for the CURRENT session, not the only delivery
+  // channel — except that the email send is explicitly best-effort ("Email failure is not
+  // critical"), so a same-session cancel affordance still has real value as a fallback.
+  // The fix: an in-page button that calls cancelAccountDeletion(token) directly — the
+  // token lives only in React state / JS memory and is passed straight to the API client,
+  // never serialized into an attribute or text node.
+  describe('Cancellation (token never rendered)', () => {
+    async function scheduleDeletionAndReachCancelScreen() {
+      renderWithQuery(<DeleteAccountSection />)
+      fireEvent.click(screen.getByRole('button', { name: /delete my account/i }))
+      fireEvent.click(screen.getByRole('checkbox'))
+      fireEvent.click(screen.getByRole('button', { name: /yes, delete my account/i }))
+      await waitFor(() => {
+        expect(screen.getByText(/account deletion scheduled/i)).toBeInTheDocument()
+      })
+    }
+
+    it('never puts the cancellation token into any DOM attribute or text node', async () => {
+      const { container } = renderWithQuery(<DeleteAccountSection />)
+      fireEvent.click(screen.getByRole('button', { name: /delete my account/i }))
+      fireEvent.click(screen.getByRole('checkbox'))
+      fireEvent.click(screen.getByRole('button', { name: /yes, delete my account/i }))
+      await waitFor(() => {
+        expect(screen.getByText(/account deletion scheduled/i)).toBeInTheDocument()
+      })
+
+      const sentinels: PIISentinel[] = [
+        { value: mockSuccessResponse.cancellation_token, fieldDescription: 'cancellation_token (bearer capability, #1514 round 5)' },
+      ]
+      expect(scanForUnmaskedPII(container, sentinels)).toEqual([])
+    })
+
+    it('shows a "Cancel Account Deletion" button that calls cancelAccountDeletion with the in-memory token', async () => {
+      await scheduleDeletionAndReachCancelScreen()
+
+      const cancelBtn = screen.getByRole('button', { name: /cancel account deletion/i })
+      fireEvent.click(cancelBtn)
+
+      await waitFor(() => {
+        expect(mockCancelDeletion).toHaveBeenCalledWith(mockSuccessResponse.cancellation_token)
+      })
+    })
+
+    it('shows a success message after the cancel button succeeds', async () => {
+      await scheduleDeletionAndReachCancelScreen()
+
+      fireEvent.click(screen.getByRole('button', { name: /cancel account deletion/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText(/deletion.*cancel/i)).toBeInTheDocument()
+      })
+    })
+
+    it('shows an error message if the cancel button fails, without leaking the token', async () => {
+      mockCancelDeletion.mockRejectedValueOnce(new Error('Invalid or expired cancellation token'))
+      await scheduleDeletionAndReachCancelScreen()
+
+      fireEvent.click(screen.getByRole('button', { name: /cancel account deletion/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText(/invalid or expired cancellation token/i)).toBeInTheDocument()
+      })
+
+      const sentinels: PIISentinel[] = [
+        { value: mockSuccessResponse.cancellation_token, fieldDescription: 'cancellation_token (bearer capability, #1514 round 5)' },
+      ]
+      expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
     })
   })
 })

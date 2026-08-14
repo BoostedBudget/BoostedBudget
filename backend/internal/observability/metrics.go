@@ -87,6 +87,68 @@ var (
 		Buckets: prometheus.DefBuckets,
 	}, []string{"kind"})
 
+	// InvalidWebhookAttemptsTotal counts webhook deliveries rejected for missing or
+	// cryptographically invalid signatures, by provider/site. Issue #1514: this is the audit
+	// signal that survives now that invalid attempts are no longer persisted into the full
+	// paddle_webhook_events / webhook_events tables (only bounded metadata is recorded — see
+	// repository.InvalidWebhookAttemptRepository).
+	//
+	// Expected label values:
+	//   paddle              - HandlePaddleWebhook rejected an unsigned/invalid delivery
+	//   plaid               - HandlePlaidWebhook rejected an unsigned/invalid delivery
+	//   paddle_worker_guard - SubscriptionWebhookWorker refused to dispatch a signature_valid=false
+	//                         row it was handed (defense-in-depth; should be near-zero in practice)
+	//   paddle_replay_guard - ReplayPaddleWebhook refused to replay a signature_valid=false row
+	//   plaid_worker_guard  - WebhookProcessingWorker refused to dispatch a signature_valid=false
+	//                         Plaid row it was handed (defense-in-depth; should be near-zero)
+	//   plaid_legacy_poller_guard - the legacy WebhookProcessor poller's refuseIfInvalidSignature
+	//                         refused to dispatch a signature_valid=false row (workers/webhook_processor.go).
+	//                         That poller is unwired dead code (production uses the River worker
+	//                         above instead), so this label should be permanently zero in production.
+	InvalidWebhookAttemptsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "invalid_webhook_attempts_total",
+		Help: "Number of webhook deliveries rejected for missing or invalid signature, by provider/site.",
+	}, []string{"provider"})
+
+	// PaddleWebhookRejectionsTotal counts PaddleWebhookService.VerifyWebhook rejections by
+	// reason (issue #1514 fix-round-1 item 2). InvalidWebhookAttemptsTotal above records the
+	// SAME rejections but generically (label "paddle", no reason breakdown) at the handler
+	// layer — that counter alone cannot tell a genuine forged signature apart from a stale/
+	// future timestamp (checkTimestampTolerance) or a malformed header (parseSignature/
+	// parseTimestamp), so a slow-onset host clock-skew incident — every delivery's ts= now
+	// legitimately outside the tolerance window — would look identical to an attack, and
+	// nobody would know to check the clock instead of waiting for an attacker to give up.
+	//
+	// Expected label values:
+	//   invalid_format             - parseSignature/parseTimestamp rejected the header shape
+	//                                or a non-numeric/negative/overflow ts=
+	//   timestamp_out_of_tolerance - a well-formed ts= outside the configured tolerance window
+	//                                (checkTimestampTolerance) — sustained non-zero here, with
+	//                                signature_mismatch flat, is the clock-skew signal: real
+	//                                Paddle deliveries being dropped, not forged ones
+	//   signature_mismatch         - a well-formed, in-window ts= but no h1 candidate matched
+	//                                the calculated HMAC — the "somebody sent a bad signature"
+	//                                case
+	PaddleWebhookRejectionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "paddle_webhook_rejections_total",
+		Help: "Total PaddleWebhookService.VerifyWebhook rejections by reason (invalid_format, timestamp_out_of_tolerance, signature_mismatch). A sustained rate of timestamp_out_of_tolerance with signature_mismatch flat suggests host clock skew silently dropping genuine Paddle deliveries, not an attack.",
+	}, []string{"reason"})
+
+	// RateLimitIdentitySentinelFallbackTotal counts requests that reached the
+	// rate limiter with GateStatusPassed (i.e. CloudflareOnly already verified
+	// the immediate peer and the origin secret) but presented a missing,
+	// duplicated, or malformed Cf-Connecting-Ip header. Issue #1514: rather than
+	// trust an unverifiable value as identity, these requests are keyed to a
+	// single fixed sentinel bucket instead — this metric is the corresponding
+	// observability signal, since that bucket is deliberately coarse (shared,
+	// globally throttled) and should be near-zero in practice. If it starts
+	// climbing, Cloudflare has stopped sending Cf-Connecting-Ip as expected and
+	// needs investigation.
+	RateLimitIdentitySentinelFallbackTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "rate_limit_identity_sentinel_fallback_total",
+		Help: "Number of Cloudflare-gated requests that fell back to the shared rate-limit sentinel bucket due to a missing/duplicated/malformed Cf-Connecting-Ip header.",
+	})
+
 	// DeadLetterQueueSize tracks the current size of the dead letter queue
 	DeadLetterQueueSize = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "dead_letter_queue_size",

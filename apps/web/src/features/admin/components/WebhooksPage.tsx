@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
@@ -331,7 +332,28 @@ export function WebhooksPage() {
           size="compact"
           icon={<Webhook />}
           title={hasActiveFilters ? 'No webhook events match your filters' : 'No webhook events found'}
-          description={hasActiveFilters ? 'Try adjusting your filters.' : undefined}
+          description={
+            hasActiveFilters
+              ? 'Try adjusting your filters.'
+              : // Issue #1514, requirement #5: this page only ever shows deliveries that PASSED
+                // signature verification. A forged/invalid-signature delivery is rejected before
+                // it reaches this table, so an empty list here means "nothing verified arrived" —
+                // never "nothing was attempted." Rejected attempts are recorded separately and
+                // surfaced on the System Health dashboard, which the link below points to; without
+                // this, an operator reading "No webhook events found" during a live forgery flood
+                // could mistake silence here for the absence of an attack.
+                'This only shows webhooks that passed signature verification. Rejected/invalid-signature attempts are recorded separately.'
+          }
+          action={
+            !hasActiveFilters ? (
+              <Link
+                to="/admin/health"
+                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+              >
+                View rejected attempts on System Health
+              </Link>
+            ) : undefined
+          }
           className="py-16"
         />
       ) : (

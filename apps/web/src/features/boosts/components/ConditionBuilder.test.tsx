@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { ConditionBuilder } from './ConditionBuilder'
 import type { BoostConditionLocal } from '../types'
 import type { Budget } from '../../budgets/types'
+import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 const sampleConditions: BoostConditionLocal[] = [
   { field: 'budget.percent_used', operator: 'gte', value: 80 },
@@ -601,5 +602,51 @@ describe('ConditionBuilder', () => {
     const fieldSelect = screen.getByLabelText(/field/i)
     const options = Array.from(fieldSelect.querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value)
     expect(options).toContain('budget_category.allocated')
+  })
+
+  // Issue #1514 (fix round 3): the budget picker's <option> text is the raw budget name,
+  // and formatBudgetCategoryLabel() returns the user-authored savings-goal name for
+  // savings-kind categories — both on the policy's PII list, both rendered as unmasked
+  // <option> TEXT (the value attributes are already opaque ids). <option> cannot contain
+  // a <span>, so the fix is data-ph-mask on the <option> element itself, not a wrapped
+  // child — assert with the widened scanner so it covers text, not just attributes.
+  it('masks the budget name and savings-goal name in the budget/category picker options', () => {
+    const budgetsWithSavingsCategory: Budget[] = [
+      {
+        ...sampleBudgets[0],
+        categories: [
+          ...sampleBudgets[0].categories!,
+          {
+            id: 'cat-savings-1',
+            budget_id: 'budget-1',
+            category_kind: 'savings',
+            savings_goal_name: 'My Vacation Fund',
+            allocated_amount: 100,
+            spent_amount: 0,
+            created_at: '2024-01-01T00:00:00Z',
+            updated_at: '2024-01-01T00:00:00Z',
+            tags: [],
+            match_logic: 'any',
+          },
+        ],
+      },
+    ]
+    const categoryCondition: BoostConditionLocal = {
+      field: 'budget_category.percent_used',
+      operator: 'gte',
+      value: 80,
+      budget_id: 'budget-1',
+    }
+    renderConditionBuilder({
+      conditions: [categoryCondition],
+      triggerEvent: 'budget_updated',
+      budgets: budgetsWithSavingsCategory,
+    })
+
+    const sentinels: PIISentinel[] = [
+      { value: 'Budget One', fieldDescription: 'budget.name in ConditionBuilder budget picker <option>' },
+      { value: 'My Vacation Fund', fieldDescription: 'savings_goal_name in ConditionBuilder category picker <option>' },
+    ]
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 })

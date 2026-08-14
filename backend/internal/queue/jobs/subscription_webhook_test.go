@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -686,6 +687,222 @@ func TestWorker_WebhookNotFound_CancelsJob(t *testing.T) {
 
 	// Should return nil to cancel the job (permanent failure)
 	assert.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWorker_InvalidSignature_RefusesToDispatch verifies Issue #1514 item 4: the worker
+// independently refuses to process a webhook row whose signature was never valid, even if
+// something upstream enqueued it. No subscription mutation must occur.
+//
+// Round-2 fix: must actually cancel the River job via river.JobCancel, not merely return nil.
+// Returning nil is *successful completion* in River v0.43.0 (see river.JobCancel's doc comment:
+// it "cancel[s] the job at the end of execution"), which would misreport a refused, forged
+// webhook as a completed job and emit jobs_completed_total{status="success"} for it. Mirrors
+// TestWebhookProcessingWorker_Work_InvalidSignature_RefusesProcessing (webhook_processing_test.go)
+// — the Plaid worker's equivalent guard.
+func TestWorker_InvalidSignature_RefusesToDispatch(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_created.json")
+	webhook.SignatureValid = false
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.created",
+	}
+	job := createRiverJob(args)
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err, "invalid-signature guard must cancel the job via river.JobCancel, not complete it with nil")
+	var cancelErr *river.JobCancelError
+	require.ErrorAs(t, err, &cancelErr, "error must be a *river.JobCancelError so River records the job as cancelled")
+	mockProfileRepo.AssertNotCalled(t, "UpdatePaddleCustomerID")
+	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWorker_InvalidSignature_MarkFailedError verifies that a transient failure to persist the
+// MarkFailed record (e.g. a DB blip) surfaces as a retryable error rather than being swallowed
+// into a silent, successful-looking nil return. This is the bug fixed by Issue #1514: the old
+// code discarded MarkFailed's error entirely and always returned nil, so a signature-invalid row
+// could be left in a permanently unprocessed state while River recorded the job as a clean
+// success. The security property (the forged row is never dispatched) must still hold — re-fetching
+// on retry still sees SignatureValid=false and hits this same guard again. Mirrors
+// TestWebhookProcessingWorker_Work_InvalidSignature_MarkFailedError (webhook_processing_test.go).
+func TestWorker_InvalidSignature_MarkFailedError(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_created.json")
+	webhook.SignatureValid = false
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.created",
+	}
+	job := createRiverJob(args)
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(errors.New("db unavailable"))
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err, "a MarkFailed failure must not be swallowed into a nil return")
+	var cancelErr *river.JobCancelError
+	require.NotErrorAs(t, err, &cancelErr, "a MarkFailed failure should be retryable, not a cancellation")
+	mockProfileRepo.AssertNotCalled(t, "UpdatePaddleCustomerID")
+	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWorker_InvalidSignature_SkipsAnalytics verifies that a signature_valid=false row must
+// never drive PostHog analytics. Mirrors
+// TestWebhookProcessor_TransactionWebhook_InvalidSignature_SkipsAnalytics (webhook_processor_test.go)
+// — the identical defect fixed on the Plaid poller: WebhookID/EventID/EventType on this row are
+// attacker-derived (the signature never verified them), so emitting them to PostHog as event
+// properties leaks unverified, potentially forged data into analytics. The guard's own metric
+// (InvalidWebhookAttemptsTotal) plus the error log already give the security signal — see this
+// test's sibling in webhook_processing.go's guard (which never called analytics at all) for the
+// precedent this worker is being made consistent with.
+func TestWorker_InvalidSignature_SkipsAnalytics(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockAna := new(mockAnalyticsClient)
+	worker.SetAnalytics(mockAna)
+
+	webhook := loadWebhookFixture(t, "subscription_created.json")
+	webhook.SignatureValid = false
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.created",
+	}
+	job := createRiverJob(args)
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err, "invalid-signature guard must cancel the job via river.JobCancel")
+	mockAna.AssertNotCalled(t, "Capture")
+	mockProfileRepo.AssertNotCalled(t, "UpdatePaddleCustomerID")
+	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWorker_InvalidSignature_MarkFailedError_DoesNotReemitAnalyticsOnRetry verifies that a
+// MarkFailed persistence failure — which makes River retry the whole Work call — does not cause
+// the guard to re-emit an analytics event on every retry. Regression coverage for the case the
+// prior round's fix (return a retryable error instead of nil) introduced: if Capture() ran before
+// the now-fallible MarkFailed call, a stuck MarkFailed would drive a PostHog event on every single
+// attempt for as long as the DB stayed unavailable, repeatedly re-emitting the same
+// attacker-derived job arguments.
+func TestWorker_InvalidSignature_MarkFailedError_DoesNotReemitAnalyticsOnRetry(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockAna := new(mockAnalyticsClient)
+	worker.SetAnalytics(mockAna)
+
+	webhook := loadWebhookFixture(t, "subscription_created.json")
+	webhook.SignatureValid = false
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.created",
+	}
+	job := createRiverJob(args)
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(errors.New("db unavailable"))
+
+	// Simulate two River attempts hitting the same persistently-failing MarkFailed call.
+	err1 := worker.Work(ctx, job)
+	err2 := worker.Work(ctx, job)
+
+	require.Error(t, err1)
+	require.Error(t, err2)
+	mockAna.AssertNotCalled(t, "Capture")
+	mockProfileRepo.AssertNotCalled(t, "UpdatePaddleCustomerID")
+	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// errorLevelLogLines returns only the lines of a slog text-handler buffer emitted at
+// level=ERROR, filtering out unrelated Info/Warn lines (e.g. this worker's unconditional
+// job-start log). Error-level logs are the ones observability/logger.go tees to Sentry
+// (slogsentry.Option{Level: slog.LevelError}), so this is the actual telemetry surface a
+// "does this attacker-controlled value reach Sentry" assertion needs to inspect — Info-level
+// lines never reach Sentry regardless of what fields they carry.
+func errorLevelLogLines(logOutput string) string {
+	var errLines []string
+	for _, line := range strings.Split(logOutput, "\n") {
+		if strings.Contains(line, "level=ERROR") {
+			errLines = append(errLines, line)
+		}
+	}
+	return strings.Join(errLines, "\n")
+}
+
+// TestWorker_InvalidSignature_DoesNotLogRawEventType verifies Issue #1514 round-4 review fix: the
+// guard's error logs must not include args.EventType at all. A prior round justified logging it as
+// "bounded by the switch below" — false on inspection: the switch further down validates
+// webhook.EventType (a value read from the DB row), not args.EventType (what the guard actually
+// logs); SubscriptionWebhookArgs.EventType is an unconstrained string; and the switch never
+// executes on this path anyway — execution returns/cancels out of the guard before ever reaching
+// it. So an attacker-influenced, unvalidated string was reaching error-level logs, which tee to
+// Sentry/OTEL (see observability/logger.go) — exactly what dropping event_id in the previous round
+// was meant to prevent. This pins the chosen fix: drop event_type from the guard's ERROR-level logs
+// entirely, keeping only webhook_id (assigned by our own system via uuid.New() in
+// paddleWebhookRepository.Create, never attacker-supplied).
+//
+// Scoped to error-level lines only (see errorLevelLogLines): the worker's unconditional,
+// pre-signature-check Info-level job-start log also carries event_type and is out of scope here —
+// it never reaches Sentry (Info is below the tee's Error threshold), it fires identically for
+// every job regardless of signature validity, and it is symmetric with the equivalent Plaid
+// worker's own job-start log (webhook_processing.go) — none of which this guard-specific fix
+// touches.
+func TestWorker_InvalidSignature_DoesNotLogRawEventType(t *testing.T) {
+	worker, mockWebhookRepo, _, _, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	var logBuf bytes.Buffer
+	worker.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	webhook := loadWebhookFixture(t, "subscription_created.json")
+	webhook.SignatureValid = false
+
+	// A distinctive, never-legitimate value: if this string leaks into the ERROR-level log output
+	// at all, the guard is still logging the raw, unvalidated args.EventType.
+	const sentinelEventType = "attacker.controlled.sentinel.event.type.should.never.be.logged"
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: sentinelEventType,
+	}
+	job := createRiverJob(args)
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err, "invalid-signature guard must cancel the job via river.JobCancel")
+	errLines := errorLevelLogLines(logBuf.String())
+	assert.NotContains(t, errLines, sentinelEventType, "the guard's ERROR-level logs must never carry the raw, unvalidated event_type")
+	assert.Contains(t, errLines, "test-webhook-id-123", "the guard must still log webhook_id for operator correlation")
 	mockWebhookRepo.AssertExpectations(t)
 }
 

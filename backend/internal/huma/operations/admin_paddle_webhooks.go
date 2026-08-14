@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -12,6 +13,7 @@ import (
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -160,6 +162,16 @@ func (h *AdminHandler) ReplayPaddleWebhook(ctx context.Context, input *ReplayPad
 			return nil, huma.Error404NotFound("webhook not found")
 		}
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get webhook: %w", err))
+	}
+
+	// Issue #1514: refuse to replay a webhook whose signature was never valid — an admin replay
+	// must not be a second path into subscription-mutating logic for a row that HandlePaddleWebhook
+	// itself would now reject outright at ingestion. Defense-in-depth against any row that reached
+	// this table before this fix, or via any other future write path.
+	if !event.SignatureValid {
+		observability.InvalidWebhookAttemptsTotal.WithLabelValues("paddle_replay_guard").Inc()
+		slog.Default().Warn("refused to replay Paddle webhook with invalid signature", "webhook_id", input.ID)
+		return nil, huma.Error400BadRequest("cannot replay a webhook with an invalid or missing signature")
 	}
 
 	if err := h.paddleWebhookRepo.ResetProcessingStatus(ctx, input.ID); err != nil {

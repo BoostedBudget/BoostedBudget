@@ -142,7 +142,15 @@ export function MembersList({ className }: MembersListProps = {}) {
                 (and masked) text, so alt is empty rather than duplicating
                 the display name into an `alt` attribute — PostHog session
                 replay records alt/aria-label/title/placeholder verbatim
-                regardless of visual masking. */}
+                regardless of visual masking.
+
+                `src={member.avatar_url}` (Clerk's `imageUrl`, see
+                clerkAvatarURL() in household_service.go) is NOT treated as
+                PII: Clerk resource URLs/ids are opaque by design, and
+                OAuth-sourced avatars point at the provider's own opaque
+                per-account photo resource — neither embeds the member's
+                name or email as literal text. Same investigation as
+                MobileNav.tsx/UserDropdown.tsx for #1514 fix round 2. */}
             <AvatarImage src={member.avatar_url} alt="" />
             <AvatarFallback>{getInitials(member.display_name)}</AvatarFallback>
           </Avatar>

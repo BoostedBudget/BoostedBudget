@@ -343,7 +343,7 @@ test.describe.skip('Transaction Editing - Authenticated User', () => {
       await expect(page.getByText('Edit Transaction')).toBeVisible()
       // The tag should be visible in the editor
       const tagSection = page.locator('.tag-editor')
-      await expect(tagSection.getByText('Food')).toBeVisible()
+      await expect(tagSection.getByText('Food', { exact: true })).toBeVisible()
     })
 
     test('should show current category on transaction', async ({ page }) => {
@@ -389,7 +389,7 @@ test.describe.skip('Transaction Editing - Authenticated User', () => {
 
       // Assert - Tag should appear in the list
       const tagEditor = page.locator('.tag-editor')
-      await expect(tagEditor.getByText('Shopping')).toBeVisible()
+      await expect(tagEditor.getByText('Shopping', { exact: true })).toBeVisible()
     })
 
     test('should remove a tag from transaction', async ({ page }) => {
@@ -410,7 +410,7 @@ test.describe.skip('Transaction Editing - Authenticated User', () => {
 
       // Assert - Tag should be removed
       const tagEditor = page.locator('.tag-editor')
-      await expect(tagEditor.getByText('Food')).not.toBeVisible()
+      await expect(tagEditor.getByText('Food', { exact: true })).not.toBeVisible()
     })
 
     test('should persist tag changes after save', async ({ page }) => {
@@ -662,7 +662,7 @@ test.describe.skip('Transaction Editing - Authenticated User', () => {
 
       // Assert - New tag should appear in the tag list
       const tagEditor = page.locator('.tag-editor')
-      await expect(tagEditor.getByText('My New Tag')).toBeVisible()
+      await expect(tagEditor.getByText('My New Tag', { exact: true })).toBeVisible()
     })
 
     test('should cancel tag creation and return to dropdown', async ({ page }) => {
