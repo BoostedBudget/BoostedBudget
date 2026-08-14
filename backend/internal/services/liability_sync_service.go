@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -27,6 +28,14 @@ type LiabilitySyncService interface {
 
 	// SetAnalytics sets the PostHog analytics client (setter injection).
 	SetAnalytics(a phclient.Analytics)
+
+	// SetCacheInvalidation wires cache generation bumping (setter injection, matching
+	// TransactionSyncService's / InvestmentSyncService's convention). Issue #1531 Task
+	// 10b-2a-ii: GetNetWorthTrend is a cached read that folds in liability data, so a Plaid
+	// LIABILITIES webhook — routed through ProcessWebhook, which calls SyncLiabilities below —
+	// must bump the synced user's cache generation once those writes commit. Optional: nil is
+	// a safe no-op.
+	SetCacheInvalidation(gens *cache.Generations)
 }
 
 type liabilitySyncService struct {
@@ -39,11 +48,26 @@ type liabilitySyncService struct {
 	mortgageRepo    repository.MortgageLiabilityRepository
 	studentLoanRepo repository.StudentLoanLiabilityRepository
 	plaidService    PlaidService
+	cacheGens       *cache.Generations
 }
 
 // SetAnalytics sets the PostHog analytics client.
 func (s *liabilitySyncService) SetAnalytics(a phclient.Analytics) {
 	s.analytics = a
+}
+
+// SetCacheInvalidation wires cache generation bumping. See the interface method's doc comment.
+func (s *liabilitySyncService) SetCacheInvalidation(gens *cache.Generations) {
+	s.cacheGens = gens
+}
+
+// bumpCacheForUser invalidates userID's cached analytics (e.g. GetNetWorthTrend) after a
+// SyncLiabilities call has committed at least one write. Void by design.
+func (s *liabilitySyncService) bumpCacheForUser(ctx context.Context, userID string) {
+	if s.cacheGens == nil {
+		return
+	}
+	s.cacheGens.Bump(ctx, cache.ScopeUser, userID, "liability_sync")
 }
 
 // NewLiabilitySyncService creates a new LiabilitySyncService.
@@ -138,6 +162,16 @@ func (s *liabilitySyncService) ProcessWebhook(ctx context.Context, webhook *doma
 // each account's liabilities atomically. Since Plaid returns a full snapshot (no delta),
 // each category is fully replaced per account when present in the response.
 func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *domain.LinkedItem) (*domain.LiabilitySyncResult, error) {
+	// Issue #1531 Task 10b-2a-ii: "any commit, then bump" defer — same pattern as
+	// transaction_sync_service.go/investment_sync_service.go. An account whose liabilities were
+	// replaced/cleared before a LATER account in the loop fails must still bump.
+	var cacheBumpNeeded bool
+	defer func() {
+		if cacheBumpNeeded {
+			s.bumpCacheForUser(ctx, linkedItem.UserID)
+		}
+	}()
+
 	accessToken := linkedItem.AccessToken
 
 	resp, err := s.plaidService.LiabilitiesGet(ctx, accessToken)
@@ -214,12 +248,14 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 			if err := s.creditRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, credit); err != nil {
 				return result, fmt.Errorf("failed to replace credit liability for account %s: %w", internalAccountID, err)
 			}
+			cacheBumpNeeded = true
 			result.CreditProcessed++
 			result.AccountsProcessed++
 		} else {
 			if err := s.creditRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, nil); err != nil {
 				return result, fmt.Errorf("failed to clear credit liability for account %s: %w", internalAccountID, err)
 			}
+			cacheBumpNeeded = true
 		}
 
 		// Mortgage
@@ -228,12 +264,14 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 			if err := s.mortgageRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, mortgage); err != nil {
 				return result, fmt.Errorf("failed to replace mortgage liability for account %s: %w", internalAccountID, err)
 			}
+			cacheBumpNeeded = true
 			result.MortgageProcessed++
 			result.AccountsProcessed++
 		} else {
 			if err := s.mortgageRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, nil); err != nil {
 				return result, fmt.Errorf("failed to clear mortgage liability for account %s: %w", internalAccountID, err)
 			}
+			cacheBumpNeeded = true
 		}
 
 		// Student loan
@@ -242,12 +280,14 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 			if err := s.studentLoanRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, student); err != nil {
 				return result, fmt.Errorf("failed to replace student loan liability for account %s: %w", internalAccountID, err)
 			}
+			cacheBumpNeeded = true
 			result.StudentLoansProcessed++
 			result.AccountsProcessed++
 		} else {
 			if err := s.studentLoanRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, nil); err != nil {
 				return result, fmt.Errorf("failed to clear student loan liability for account %s: %w", internalAccountID, err)
 			}
+			cacheBumpNeeded = true
 		}
 	}
 

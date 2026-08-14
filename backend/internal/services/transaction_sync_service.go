@@ -472,6 +472,20 @@ func (s *transactionSyncService) SyncTransactions(
 	// Store Added/Modified transactions, delete Removed transactions
 	// ========================================================================
 
+	// Issue #1531 Task 10b-2a-ii: track whether ANY storage step below actually committed a
+	// write, and bump the cache on the way out (via defer) REGARDLESS of whether a later step
+	// fails. Without this, a sync that stores Added successfully and then fails on Modified
+	// would return an error before ever reaching the single bumpCacheForSync call at the end of
+	// this function's success path — leaving the just-committed Added rows invisible to cached
+	// reads for the full namespace TTL. Bumping is void+idempotent (cache.Generations.Bump), so
+	// an extra bump on top of the always-bump-on-full-success behavior below costs nothing.
+	var cacheBumpNeeded bool
+	defer func() {
+		if cacheBumpNeeded {
+			s.bumpCacheForSync(ctx, linkedItem.UserID)
+		}
+	}()
+
 	// Step 5: Build account maps for transaction mapping (O(1) lookups)
 	// Issue #171: Also builds userAccountMap for stable UserAccountID reference
 	accountMap, userAccountMap, err := s.buildAccountMaps(ctx, linkedItem.ID)
@@ -489,6 +503,7 @@ func (s *transactionSyncService) SyncTransactions(
 			s.logger.Error("failed to process added transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process added transactions: %w", err)
 		}
+		cacheBumpNeeded = true
 	}
 
 	// Step 7: Process Modified transactions (update with user_notes preservation)
@@ -498,6 +513,7 @@ func (s *transactionSyncService) SyncTransactions(
 			s.logger.Error("failed to process modified transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process modified transactions: %w", err)
 		}
+		cacheBumpNeeded = true
 	}
 
 	// Step 8: Process Removed transactions (hard delete)
@@ -506,6 +522,7 @@ func (s *transactionSyncService) SyncTransactions(
 			s.logger.Error("failed to process removed transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process removed transactions: %w", err)
 		}
+		cacheBumpNeeded = true
 	}
 
 	s.logger.Info("transaction storage complete", "item_id", linkedItem.ID)
@@ -567,10 +584,12 @@ func (s *transactionSyncService) SyncTransactions(
 		}
 	}
 
-	// Issue #1531 Task 10b-2: invalidate cache ONCE, here, after everything above has committed —
-	// see bumpCacheForSync's doc comment for why this single call site is sufficient for every
-	// caller of SyncTransactions/ProcessWebhook.
-	s.bumpCacheForSync(ctx, linkedItem.UserID)
+	// Issue #1531 Task 10b-2 / 10b-2a-ii: the deferred bump above fires here on the full-success
+	// path too — set unconditionally so a fully successful sync still bumps even when Added,
+	// Modified, and Removed were ALL empty (matching the original always-bump-on-success
+	// behavior; a no-op sync is still worth invalidating since transfer correlation, savings
+	// progress, and budget sync above may have written even with zero transaction changes).
+	cacheBumpNeeded = true
 
 	return result, nil
 }
