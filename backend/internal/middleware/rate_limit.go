@@ -406,10 +406,17 @@ func tierForRequest(path, key string) domain.RateLimitTier {
 // ran ahead of this middleware in the chain and what it found. If CloudflareOnly is not registered
 // ahead of IPRateLimiter, every request is treated as ungated (RemoteAddr only).
 //
-// A panic anywhere in this handler (including from an injected backend) is recovered, logged, and
-// falls through to next(ec) rather than crashing the connection: IPRateLimiter sits ahead of
-// PanicRecovery and sentryecho in the middleware chain (see cmd/server/main.go), so a panic here
-// would otherwise be caught by nobody.
+// A panic in the rate-limit DECISION logic (identity resolution, tier selection, or an injected
+// backend) is recovered, logged, and treated as "allow" rather than crashing the connection:
+// IPRateLimiter sits ahead of PanicRecovery and sentryecho in the middleware chain (see
+// cmd/server/main.go), so a panic here would otherwise be caught by nobody. That recover is
+// deliberately scoped to ONLY the decision logic (see ipRateLimiterDecide) and does NOT wrap
+// next(ec): if it did, and chain ordering ever regressed so a downstream panic unwound into this
+// recover instead of being caught by PanicRecovery first, next(ec) would be invoked a SECOND time
+// by this recover on top of whatever partial execution the first (panicking) call already did —
+// duplicate handler execution, double writes, double side effects, on a financial application.
+// Scoping the recover to end before next(ec) is called at all makes that failure mode impossible
+// regardless of chain ordering.
 func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 	c := cfg.withDefaults()
 	logger := cfg.Logger
@@ -422,7 +429,7 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 	sentinelStore := newIPLimiterStore(c.IPLimit, c.WindowDuration, c.MaxEntries)
 
 	memBackend := &memoryBackend{regular: regularStore, auth: authStore, sentinel: sentinelStore, window: c.WindowDuration}
-	effective := newFallbackLimiter(cfg.Backend, memBackend, defaultRedisLimiterTimeout, logger)
+	effective := newFallbackLimiter(cfg.Backend, memBackend, defaultRedisLimiterTimeout, logger, cfg.Done)
 
 	// Background cleanup of stale entries. Stops when cfg.Done is closed; a nil cfg.Done blocks
 	// forever in the select, which is identical to today's "never stops" behaviour.
@@ -442,47 +449,61 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 	}()
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(ec echo.Context) (err error) {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.Error("rate limiter panicked; allowing request through",
-						"panic", r, "path", ec.Request().URL.Path)
-					err = next(ec)
-				}
-			}()
-
-			path := ec.Request().URL.Path
-			key := clientIdentity(ec)
-			tier := tierForRequest(path, key)
-
-			backend := RateLimitBackend(effective)
-			if isExemptPath(path) {
-				backend = memBackend
-			}
-
-			decision, dErr := backend.Allow(ec.Request().Context(), tier, key)
-			if dErr != nil {
-				// Neither memoryBackend nor fallbackLimiter (which always resolves through
-				// memoryBackend on primary failure) can return an error in practice. Treat an
-				// unexpected error the same as "allow" — availability over enforcement, same
-				// bias as everywhere else in this file.
-				return next(ec)
-			}
-
-			if !decision.Allowed {
-				observability.RateLimitRejectionsTotal.WithLabelValues(tier.String()).Inc()
-
-				retryAfter := decision.RetryAfter
-				secs := int(retryAfter.Seconds())
-				if secs < 1 {
-					secs = 1
-				}
-				ec.Response().Header().Set("Retry-After", strconv.Itoa(secs))
+		return func(ec echo.Context) error {
+			allowed, retryAfterSecs := ipRateLimiterDecide(ec, effective, memBackend, logger)
+			if !allowed {
+				ec.Response().Header().Set("Retry-After", strconv.Itoa(retryAfterSecs))
 				return echo.NewHTTPError(http.StatusTooManyRequests,
-					"rate limit exceeded, please retry after "+strconv.Itoa(secs)+" seconds")
+					"rate limit exceeded, please retry after "+strconv.Itoa(retryAfterSecs)+" seconds")
 			}
-
 			return next(ec)
 		}
 	}
+}
+
+// ipRateLimiterDecide resolves client identity/tier and asks the appropriate backend whether this
+// request may proceed. It returns whether the request is allowed and, if not, how many whole
+// seconds the client should wait before retrying (always >= 1; meaningless when allowed is true).
+//
+// A panic anywhere in this function (identity resolution, tier selection, or an injected backend)
+// is recovered HERE — scoped to this function only, never to next(ec) — logged, and treated as
+// "allow" (fail open on an internal bug, the same availability bias used everywhere else in this
+// file). See IPRateLimiter's doc comment for why the recover must not extend to next(ec).
+func ipRateLimiterDecide(ec echo.Context, effective *fallbackLimiter, memBackend *memoryBackend, logger *slog.Logger) (allowed bool, retryAfterSecs int) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("rate limiter panicked; allowing request through",
+				"panic", r, "path", ec.Request().URL.Path)
+			allowed = true
+			retryAfterSecs = 0
+		}
+	}()
+
+	path := ec.Request().URL.Path
+	key := clientIdentity(ec)
+	tier := tierForRequest(path, key)
+
+	backend := RateLimitBackend(effective)
+	if isExemptPath(path) {
+		backend = memBackend
+	}
+
+	decision, dErr := backend.Allow(ec.Request().Context(), tier, key)
+	if dErr != nil {
+		// Neither memoryBackend nor fallbackLimiter (which always resolves through memoryBackend
+		// on primary failure) can return an error in practice. Treat an unexpected error the same
+		// as "allow" — availability over enforcement, same bias as everywhere else in this file.
+		return true, 0
+	}
+
+	if !decision.Allowed {
+		observability.RateLimitRejectionsTotal.WithLabelValues(tier.String()).Inc()
+		secs := int(decision.RetryAfter.Seconds())
+		if secs < 1 {
+			secs = 1
+		}
+		return false, secs
+	}
+
+	return true, 0
 }
