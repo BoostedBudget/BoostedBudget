@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -57,6 +58,13 @@ func (m *MockTransactionSyncService) SetSavingsProgressServices(
 
 // SetSavingsDetectionServices satisfies the TransactionSyncService interface (Issue #1300 M18 RG1).
 func (m *MockTransactionSyncService) SetSavingsDetectionServices(_ services.SyncContributionsBasisGoalReader, _ services.SyncProposedContributionUpserter, _ repository.TransactionRepository) {
+}
+
+// SetCacheInvalidation satisfies the TransactionSyncService interface (Issue #1531 Task 10b-2).
+// This test double never calls the real SyncTransactions, so there is nothing to wire — see
+// plaid_sync_cache_invalidation_test.go for the end-to-end test that DOES wire this against a
+// real transactionSyncService instance and a real (fake-Redis-backed) cache.Generations.
+func (m *MockTransactionSyncService) SetCacheInvalidation(_ *cache.Generations, _ services.SyncCacheHouseholdLookup) {
 }
 
 // MockLinkedItemRepository mocks the LinkedItemRepository interface
