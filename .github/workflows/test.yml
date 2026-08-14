@@ -128,6 +128,11 @@ jobs:
     environment: e2e  # Access Clerk secrets from e2e environment
     env:
       UNIQUE_WORKSPACE: workspace-e2e-test-${{ github.run_id }}
+      # #1531 Task 11e (fix round 1): container names unique per run AND per rerun attempt, same
+      # convention as backend-integration-test's PG_CONTAINER, so a killed prior attempt can never
+      # collide with this one.
+      E2E_CACHE_REDIS_CONTAINER: test-e2e-cache-redis-${{ github.run_id }}-${{ github.run_attempt }}
+      E2E_RATELIMIT_REDIS_CONTAINER: test-e2e-ratelimit-redis-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - name: Clean workspace (fix permission issues)
@@ -229,6 +234,100 @@ jobs:
           echo "$HOME/bin" >> $GITHUB_PATH
           $HOME/bin/migrate --version
 
+      # #1531 Task 11e (fix round 1): apps/web/e2e/cache-freshness.auth.spec.ts and
+      # cache-household-visibility.auth.spec.ts both hard-fail (no skip path, by design — a
+      # guard that skips is a guard nobody has watched fail) unless the backend this job starts
+      # reports cache_enabled=true on /api/v1/admin/system/health. Without a real cache Redis
+      # here, this job's `bun run test:e2e` step launches the backend via
+      # playwright.config.ts's webServer with CACHE_REDIS_URL/RATE_LIMIT_REDIS_URL both empty,
+      # cacheInstance falls back to cache.NewNoopCache(), and both new specs would redden this
+      # job's very first run. Two disposable containers, same reap/dynamic-port/health-wait
+      # shape as backend-integration-test's Postgres and Redis containers.
+      - name: Start Redis containers for E2E cache verification (dynamic ports)
+        run: |
+          docker ps -aq --filter "name=test-e2e-cache-redis-${{ github.run_id }}-" \
+            | xargs -r docker rm -f 2>/dev/null || true
+          docker ps -aq --filter "name=test-e2e-ratelimit-redis-${{ github.run_id }}-" \
+            | xargs -r docker rm -f 2>/dev/null || true
+          docker rm -f ${{ env.E2E_CACHE_REDIS_CONTAINER }} 2>/dev/null || true
+          docker rm -f ${{ env.E2E_RATELIMIT_REDIS_CONTAINER }} 2>/dev/null || true
+
+          echo "Pulling Redis image..."
+          for i in 1 2 3; do
+            docker pull redis:7-alpine && break || {
+              echo "Pull attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 10
+            }
+          done
+
+          docker run -d \
+            --name ${{ env.E2E_CACHE_REDIS_CONTAINER }} \
+            -p 6379 \
+            --health-cmd "redis-cli ping" \
+            --health-interval 5s \
+            --health-timeout 3s \
+            --health-retries 10 \
+            redis:7-alpine
+
+          docker run -d \
+            --name ${{ env.E2E_RATELIMIT_REDIS_CONTAINER }} \
+            -p 6379 \
+            --health-cmd "redis-cli ping" \
+            --health-interval 5s \
+            --health-timeout 3s \
+            --health-retries 10 \
+            redis:7-alpine
+
+          sleep 2
+          E2E_CACHE_REDIS_PORT=$(docker port ${{ env.E2E_CACHE_REDIS_CONTAINER }} 6379 | cut -d: -f2)
+          E2E_RATELIMIT_REDIS_PORT=$(docker port ${{ env.E2E_RATELIMIT_REDIS_CONTAINER }} 6379 | cut -d: -f2)
+          echo "E2E cache Redis running on dynamically assigned port: $E2E_CACHE_REDIS_PORT"
+          echo "E2E rate-limit Redis running on dynamically assigned port: $E2E_RATELIMIT_REDIS_PORT"
+
+          # DELIBERATELY the app's OWN config variable names here (CACHE_REDIS_URL /
+          # RATE_LIMIT_REDIS_URL) — the opposite choice from backend-integration-test's
+          # CACHE_REDIS_TEST_URL / REDIS_TEST_URL. The two jobs are not the same shape:
+          # backend-integration-test runs `go test` directly in a process that ALSO loads
+          # config.Load() for plain (non-integration) unit tests on the SAME runner, so the
+          # app's real var names must never appear there — see cachetest/redis.go's own doc
+          # comment. This job instead builds and RUNS the actual backend binary via
+          # playwright.config.ts's webServer, exactly like a real deployment would — there is
+          # no config.Load() unit test sharing this process to leak into, and the backend only
+          # ever picks up CACHE_REDIS_URL/RATE_LIMIT_REDIS_URL from its own environment. Using
+          # the TEST_URL names here would do nothing: cmd/server/main.go reads cfg.CacheRedisURL
+          # (env CACHE_REDIS_URL) and cfg.RateLimitRedisURL (env RATE_LIMIT_REDIS_URL), full
+          # stop. If a future change ever makes this job share a process with unit tests, revisit
+          # this choice — until then, unifying the two jobs' env var names would silently break
+          # this one.
+          echo "CACHE_REDIS_URL=redis://localhost:$E2E_CACHE_REDIS_PORT/0" >> $GITHUB_ENV
+          echo "RATE_LIMIT_REDIS_URL=redis://localhost:$E2E_RATELIMIT_REDIS_PORT/0" >> $GITHUB_ENV
+
+          echo "Waiting for E2E cache Redis to be ready..."
+          for i in {1..30}; do
+            if docker exec ${{ env.E2E_CACHE_REDIS_CONTAINER }} redis-cli ping 2>/dev/null | grep -q PONG; then
+              echo "E2E cache Redis is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "::error::Timeout waiting for E2E cache Redis to start"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "Waiting for E2E rate-limit Redis to be ready..."
+          for i in {1..30}; do
+            if docker exec ${{ env.E2E_RATELIMIT_REDIS_CONTAINER }} redis-cli ping 2>/dev/null | grep -q PONG; then
+              echo "E2E rate-limit Redis is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "::error::Timeout waiting for E2E rate-limit Redis to start"
+              exit 1
+            fi
+            sleep 1
+          done
+
       - name: Run E2E tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         env:
@@ -240,6 +339,16 @@ jobs:
           TEST_CLERK_EMAIL: ${{ secrets.TEST_CLERK_EMAIL }}
           TEST_CLERK_PASSWORD: ${{ secrets.TEST_CLERK_PASSWORD }}
           E2E_CLERK_USER_ID: ${{ secrets.E2E_CLERK_USER_ID }}
+          # #1531 Task 11e (fix round 1): real app config var names — see the "Start Redis
+          # containers for E2E cache verification" step above for why this job (unlike
+          # backend-integration-test) uses them directly. CACHE_ENABLED=true is the top-level
+          # kill switch (config.go: default true, but explicit here so this job's intent is
+          # never accidentally inherited from some other CACHE_ENABLED left in the runner's
+          # environment) — cache.enabled on /api/v1/admin/system/health is false unless BOTH
+          # this is true AND CACHE_REDIS_URL resolves to a working client.
+          CACHE_ENABLED: "true"
+          CACHE_REDIS_URL: ${{ env.CACHE_REDIS_URL }}
+          RATE_LIMIT_REDIS_URL: ${{ env.RATE_LIMIT_REDIS_URL }}
         run: bun run test:e2e
 
       # Issue #1437 (second half): a lost Clerk session must fail CI loudly, not pass
@@ -404,6 +513,12 @@ jobs:
       - name: Report if E2E videos upload failed
         if: steps.upload-playwright-videos.outcome == 'failure'
         run: echo "::warning::E2E videos upload failed (storage quota/network). Test results valid."
+
+      - name: Cleanup E2E Redis containers
+        if: always()
+        run: |
+          docker rm -f ${{ env.E2E_CACHE_REDIS_CONTAINER }} 2>/dev/null || true
+          docker rm -f ${{ env.E2E_RATELIMIT_REDIS_CONTAINER }} 2>/dev/null || true
 
       - name: Final workspace cleanup
         if: always()
