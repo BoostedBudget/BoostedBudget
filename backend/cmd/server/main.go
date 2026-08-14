@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	echomiddleware "github.com/labstack/echo/v4/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/database"
@@ -140,8 +142,11 @@ func main() {
 	// evicting cache write can OOM the limiter's SETs) — config.validate() also hard-errors in
 	// production/staging if the two URLs are ever set to the same value.
 	limiterClient, err := redisclient.New(redisclient.Options{
-		URL:  cfg.RateLimitRedisURL,
-		Name: "limiter",
+		URL: cfg.RateLimitRedisURL,
+		// Issue #1531 Task 10a: was the literal "limiter" — now the shared constant, so a
+		// future rename is a compile error instead of a silent boot-time failure in
+		// cache.NewControl (which fails fast unless client.Name() == cache.LimiterClientName).
+		Name: cache.LimiterClientName,
 	})
 	if err != nil {
 		switch {
@@ -176,6 +181,48 @@ func main() {
 	}
 	// Not deferred here either, for the same reason as limiterClient above — closed explicitly by
 	// the shutdown sequence.
+
+	// Issue #1531 Task 10a: wire Task 9's caching primitives to a real Cache instance.
+	//
+	// Control MUST poll against the LIMITER's no-eviction client, never the cache's own
+	// (eviction-enabled) instance — see cache.NewControl's doc comment for why an evicted "off"
+	// control key would otherwise silently re-enable caching. NewControl fails fast if handed
+	// the wrong client (checked via client.Name() == cache.LimiterClientName, fixed just above).
+	var cacheControl *cache.Control
+	if limiterClient != nil {
+		cacheControl, err = cache.NewControl(limiterClient, cache.AllNamespaces())
+		if err != nil {
+			// Construction only fails on a client-name mismatch — a wiring bug, not a runtime
+			// condition — so this is a hard fail rather than falling back to no-Control.
+			appLogger.Error("Failed to construct cache Control", "error", err)
+			os.Exit(1)
+		}
+	}
+	cacheControlCtx, cacheControlCancel := context.WithCancel(context.Background())
+	if cacheControl != nil {
+		go cacheControl.Run(cacheControlCtx, cache.DefaultControlPollInterval)
+	}
+
+	// cacheEnvDisabled is the parsed form of CACHE_NAMESPACES_DISABLED (comma-separated
+	// namespace names) — resolution order is hardDisabled -> Redis control key -> this env
+	// override -> compiled default (see cache.redisCache.Enabled's doc comment).
+	cacheEnvDisabled := parseCacheNamespacesDisabled(cfg.CacheNamespacesDisabled)
+
+	// Cache-client failure (including CACHE_ENABLED=false) is NEVER fatal — fall back to
+	// cache.NewNoopCache(), which issues zero Redis commands, so every consumer wired below stays
+	// unconditional and nil-free (Task 9/10a brief).
+	var cacheInstance cache.Cache
+	if cfg.CacheEnabled && cacheClient != nil {
+		cacheInstance = cache.NewCache(cache.Options{
+			Client:                cacheClient,
+			Control:               cacheControl,
+			EnvDisabledNamespaces: cacheEnvDisabled,
+		})
+		appLogger.Info("Cache wired to Redis", "control_enabled", cacheControl != nil)
+	} else {
+		cacheInstance = cache.NewNoopCache()
+		appLogger.Info("Cache disabled — using no-op cache", "cache_enabled_config", cfg.CacheEnabled, "cache_client_available", cacheClient != nil)
+	}
 
 	// Redis pool metrics (Issue #1531 Task 2/7): report both clients' local pool state next to
 	// the existing DB pool metrics collector. redisPoolStatsAdapter is the local mirror adapter —
@@ -687,8 +734,14 @@ func main() {
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		ruleApplicationService.SetAnalytics(phClient)
 		// Issue #354: Cash flow analytics and dashboard preferences services
-		analyticsService := services.NewAnalyticsService(analyticsRepo)
-		analyticsService.SetBalanceSnapshotRepo(balanceSnapshotRepo) // wires snapshot repo for GetNetWorthTrend (Issue #1215 PR3)
+		analyticsServiceImpl := services.NewAnalyticsService(analyticsRepo)
+		analyticsServiceImpl.SetBalanceSnapshotRepo(balanceSnapshotRepo) // wires snapshot repo for GetNetWorthTrend (Issue #1215 PR3)
+		// Issue #1531 Task 10a: wrap AFTER SetBalanceSnapshotRepo above — GetNetWorthTrend fans
+		// out via balanceSnapshotRepo INSIDE the service, so wrapping first would permanently
+		// capture a service whose fan-out repo is nil. Decorates the SERVICE, not the repository:
+		// 39+ non-test call sites construct repositories directly over a pgx.Tx, bypassing
+		// anything wired here, and a repository-level decorator would silently miss all of them.
+		analyticsService := services.NewCachedAnalyticsService(analyticsServiceImpl, cacheInstance)
 		// Issue #639: adminUserService is created later after adminService is initialized
 		// Issue #474: Load dashboard layout config for preferences service
 		// This ensures reset-to-default uses YAML config version, not hardcoded version 2
@@ -697,7 +750,14 @@ func main() {
 			appLogger.Error("Failed to load dashboard layout config", "error", err)
 			os.Exit(1)
 		}
-		dashboardPrefsService := services.NewDashboardPreferencesService(dashboardPrefsRepo, dashboardLayoutConfig)
+		dashboardPrefsServiceImpl := services.NewDashboardPreferencesService(dashboardPrefsRepo, dashboardLayoutConfig)
+		// Issue #1531 Task 10a: caches GetPreferences only (namespace dashprefs, 300s TTL);
+		// SavePreferences/ResetToDefault pass through unchanged.
+		dashboardPrefsService := services.NewCachedDashboardPreferencesService(dashboardPrefsServiceImpl, cacheInstance)
+		// Issue #1531 Task 10a: narrow identity cache — resolves clerkUserID -> internal user
+		// UUID ONLY (never the full identity record: email, provider, verification state).
+		// Namespace identity, 600s TTL. Wired into the Clerk middleware below as a fast path.
+		cachedIdentityResolver := services.NewCachedIdentityResolver(identityRepo, cacheInstance)
 		// Issue #28: Budget and savings goal services
 		budgetLogger := appLogger
 		budgetService := services.NewBudgetService(budgetRepo, customCategoryRepo, transactionRepo, budgetLogger)
@@ -1691,6 +1751,9 @@ func main() {
 				WorkerSecret: cfg.MCPWorkerSecret,
 				Verifier:     humamiddleware.NewClerkOAuthVerifier(cfg.ClerkSecretKey),
 			},
+			// Issue #1531 Task 10a: cached scalar-UUID fast path — see cachedIdentityResolver's
+			// construction above.
+			cachedIdentityResolver,
 			profileRepo,
 		)
 		humaAPI.UseMiddleware(humaClerkMiddleware)
@@ -2344,6 +2407,13 @@ func main() {
 			redisMetricsCancel()
 			return nil
 		}},
+		{Name: "cache_control_poller", Fn: func() error {
+			// Issue #1531 Task 10a: stops Control.Run's polling goroutine (if started). Same
+			// ordering rationale as redis_metrics_collector above — it reads the limiter Redis
+			// client, so it must stop before that client closes below.
+			cacheControlCancel()
+			return nil
+		}},
 		{Name: "cache_redis_client", Fn: func() error {
 			if cacheClient == nil {
 				return nil
@@ -2617,6 +2687,23 @@ func boolStatus(configured bool) string {
 		return "configured"
 	}
 	return "not configured"
+}
+
+// parseCacheNamespacesDisabled parses config.CacheNamespacesDisabled (comma-separated namespace
+// names, e.g. "analytics,dashprefs") into the map[cache.Namespace]bool shape cache.Options.
+// EnvDisabledNamespaces expects. Unknown/blank tokens are ignored — an unrecognised namespace has
+// no registry entry and cache.Cache.Enabled already reports it disabled unconditionally, so a typo
+// here fails safe (extra caching never turns on) rather than panicking at boot.
+func parseCacheNamespacesDisabled(raw string) map[cache.Namespace]bool {
+	out := make(map[cache.Namespace]bool)
+	for _, tok := range strings.Split(raw, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		out[cache.Namespace(tok)] = true
+	}
+	return out
 }
 
 // isProductionOrStagingEnvironment reports whether env is one of the two environments where a

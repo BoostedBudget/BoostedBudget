@@ -98,6 +98,13 @@ func namespaces() []Namespace {
 	return out
 }
 
+// AllNamespaces returns every registered Namespace. Task 10a's main.go wiring uses this to build
+// the single Control that polls every namespace's kill-switch key, without hand-maintaining a
+// second list that could silently drift from namespaceRegistry as namespaces are added.
+func AllNamespaces() []Namespace {
+	return namespaces()
+}
+
 // lookupNamespace returns ns's registry entry and whether it is registered at all.
 func lookupNamespace(ns Namespace) (namespaceConfig, bool) {
 	cfg, ok := namespaceRegistry[ns]
