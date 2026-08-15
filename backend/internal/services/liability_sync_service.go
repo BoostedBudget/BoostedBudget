@@ -63,11 +63,19 @@ func (s *liabilitySyncService) SetCacheInvalidation(gens *cache.Generations) {
 
 // bumpCacheForUser invalidates userID's cached analytics (e.g. GetNetWorthTrend) after a
 // SyncLiabilities call has committed at least one write. Void by design.
+//
+// Issue #1531 Blocker 2: detaches from ctx's own cancellation/deadline the same way
+// transaction_sync_service.go's bumpCacheForSync and the HTTP mutation middleware do — ctx here
+// is the River job's context (via ProcessWebhook), and a job timeout/worker-shutdown cancellation
+// landing after SyncLiabilities' writes have committed but before this bump runs must not cancel
+// a bump for a write that already durably happened.
 func (s *liabilitySyncService) bumpCacheForUser(ctx context.Context, userID string) {
 	if s.cacheGens == nil {
 		return
 	}
-	s.cacheGens.Bump(ctx, cache.ScopeUser, userID, "liability_sync")
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+	s.cacheGens.Bump(bumpCtx, cache.ScopeUser, userID, "liability_sync")
 }
 
 // NewLiabilitySyncService creates a new LiabilitySyncService.

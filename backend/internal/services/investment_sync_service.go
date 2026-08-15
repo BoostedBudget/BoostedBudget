@@ -80,11 +80,19 @@ func (s *investmentSyncService) SetCacheInvalidation(gens *cache.Generations) {
 // SyncHoldings/SyncInvestmentTransactions call has committed at least one write. Void by
 // design — cache.Generations.Bump itself logs+counts its own Redis failures — matching every
 // other generation bump in this codebase.
+//
+// Issue #1531 Blocker 2: detaches from ctx's own cancellation/deadline the same way
+// transaction_sync_service.go's bumpCacheForSync and the HTTP mutation middleware do — ctx here
+// is the River job's context (via ProcessWebhook), and a job timeout/worker-shutdown cancellation
+// landing after the sync's writes have committed but before this bump runs must not cancel a
+// bump for a write that already durably happened.
 func (s *investmentSyncService) bumpCacheForUser(ctx context.Context, userID string) {
 	if s.cacheGens == nil {
 		return
 	}
-	s.cacheGens.Bump(ctx, cache.ScopeUser, userID, "investment_sync")
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+	s.cacheGens.Bump(bumpCtx, cache.ScopeUser, userID, "investment_sync")
 }
 
 // NewInvestmentSyncService creates a new InvestmentSyncService.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
@@ -156,6 +157,21 @@ type AccountService interface {
 	// This is needed because of circular dependency: service must be created before
 	// River client, but needs client to enqueue jobs.
 	SetJobQueue(jq queue.JobQueue)
+
+	// SetCacheInvalidation wires cache generation bumping for the cross-user fingerprint-release
+	// path (Issue #1531 Blocker 1). checkFingerprintOwnership's ExpireAccountsByFingerprint call
+	// flips a DIFFERENT user's (the dispossessed owner's) accounts.status from active to expired
+	// — with no user_id predicate, by design, since it must reach rows owned by someone other
+	// than the acting caller. Every cached analytics query filters accounts.status = 'active', so
+	// without an explicit bump here the dispossessed owner's net-worth/cash-flow/spending
+	// aggregates keep serving pre-release numbers until the namespace TTL, even though the acting
+	// user's own HTTP-mutation-middleware bump (for THEIR account link) has already run — that
+	// middleware only ever bumps the ACTOR, never a third party a write happens to touch. Both
+	// parameters are optional (nil = skip that bump), matching every other SetCacheInvalidation
+	// setter in this codebase (transaction_sync_service.go's SyncCacheHouseholdLookup is reused
+	// here directly rather than redefined, since the shape is identical and both live in this
+	// package).
+	SetCacheInvalidation(gens *cache.Generations, hh SyncCacheHouseholdLookup)
 }
 
 // LinkAccountsResult contains the results of linking bank accounts
@@ -176,6 +192,11 @@ type accountService struct {
 	jobQueue       queue.JobQueue            // Issue #658: For auto-sync after linking (can be nil)
 	enc            *appcrypto.FieldEncryptor // Issue #1010: For fingerprint computation (can be nil)
 	logger         *slog.Logger
+
+	// Issue #1531 Blocker 1: cache invalidation for the dispossessed owner on fingerprint release
+	// (both optional; nil = skip that bump entirely).
+	cacheGens      *cache.Generations
+	cacheHousehold SyncCacheHouseholdLookup
 }
 
 // AccountServiceOption is a functional option for configuring AccountService
@@ -258,6 +279,15 @@ func (s *accountService) checkFingerprintOwnership(ctx context.Context, blindIdx
 		if err := s.accountRepo.ExpireAccountsByFingerprint(ctx, blindIdx); err != nil {
 			return fmt.Errorf("failed to expire accounts by fingerprint: %w", err)
 		}
+		// Issue #1531 Blocker 1: ExpireAccountsByFingerprint just flipped a DIFFERENT user's
+		// (ownership.UserID's) accounts from active to expired — the whole point of this method,
+		// since a fingerprint blind index is looked up excluding the ACTING user. Every cached
+		// analytics query filters accounts.status = 'active', so without this bump the
+		// dispossessed owner's net-worth/cash-flow/spending aggregates keep serving pre-release
+		// numbers until the namespace TTL. The HTTP mutation middleware bumps only the actor
+		// (this LinkAccounts caller), never ownership.UserID, so this explicit bump is the only
+		// thing that closes the gap. Called AFTER the write above has committed (commit-then-bump).
+		s.bumpCacheForDispossessedOwner(ctx, ownership.UserID)
 		return nil
 	}
 	return fmt.Errorf("%w: account fingerprint already claimed by another user (item_id=%s, status=%s)",
@@ -1031,6 +1061,51 @@ func (s *accountService) ListActiveByUser(ctx context.Context, userID string) ([
 
 func (s *accountService) SetJobQueue(jq queue.JobQueue) {
 	s.jobQueue = jq
+}
+
+// SetCacheInvalidation wires cache generation bumping for the cross-user fingerprint-release path.
+// See the interface method's doc comment for why this exists. Issue #1531 Blocker 1.
+func (s *accountService) SetCacheInvalidation(gens *cache.Generations, hh SyncCacheHouseholdLookup) {
+	s.cacheGens = gens
+	s.cacheHousehold = hh
+}
+
+// bumpCacheForDispossessedOwner invalidates userID's cached analytics (and, when resolvable,
+// their household's) after checkFingerprintOwnership's ExpireAccountsByFingerprint call has
+// committed. Void by design — cache.Generations.Bump itself logs+counts its own Redis failures —
+// matching every other generation bump in this codebase.
+//
+// Issue #1531 Blocker 2 hygiene: this can run inside an HTTP request (LinkAccounts' caller), so it
+// detaches from ctx's own cancellation/deadline the same way the HTTP mutation middleware and the
+// sync services' bump helpers do — a client disconnecting right after the write above commits
+// must not cancel a bump for a write that already durably happened, even though that write
+// affects a user other than the one whose request this is.
+func (s *accountService) bumpCacheForDispossessedOwner(ctx context.Context, userID string) {
+	if s.cacheGens == nil {
+		return
+	}
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+
+	s.cacheGens.Bump(bumpCtx, cache.ScopeUser, userID, "fingerprint_release")
+
+	if s.cacheHousehold == nil {
+		return
+	}
+	household, _, found, err := s.cacheHousehold.GetHouseholdForUser(bumpCtx, userID)
+	if err != nil {
+		// Void by design: the expiry already committed and the user-scope bump above already
+		// ran; a household lookup failure must never suppress that.
+		if s.logger != nil {
+			s.logger.Error("cache invalidation: household lookup failed after fingerprint release; "+
+				"household-scoped cache may serve stale data until its namespace TTL",
+				"user_id", userID, "error", err)
+		}
+		return
+	}
+	if found && household != nil {
+		s.cacheGens.Bump(bumpCtx, cache.ScopeHousehold, household.ID, "fingerprint_release")
+	}
 }
 
 // enqueueInitialSync enqueues sync jobs for transactions and investments after account linking.

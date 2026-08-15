@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -285,4 +286,67 @@ func TestNoopCache_PurgeUserIsANoOp(t *testing.T) {
 	require.True(t, ok, "NewNoopCache must also implement Purger (nothing to purge, but callers "+
 		"should not need a type switch)")
 	assert.NoError(t, purger.PurgeUser(context.Background(), "u1", "clerk_abc"))
+}
+
+// tombstoneReadErrorClient wraps a real redisclient.Client and returns errInjected (a genuine,
+// non-ErrNotFound Redis error — e.g. a timeout or an open circuit breaker) from Get calls for one
+// specific key only (the tombstone key under test), passing every other key through unmodified.
+// This isolates isTombstoned's read failure from every OTHER Get call GetOrLoad makes (the
+// generation-token read in particular), which a blanket GetErr on the fake would also break.
+type tombstoneReadErrorClient struct {
+	redisclient.Client
+	failKey     string
+	errInjected error
+}
+
+func (c *tombstoneReadErrorClient) Get(ctx context.Context, key string) (string, error) {
+	if key == c.failKey {
+		return "", c.errInjected
+	}
+	return c.Client.Get(ctx, key)
+}
+
+// TestIsTombstoned_GenuineReadErrorFailsClosed is Issue #1531 Blocker 3's regression test:
+// isTombstoned must treat a genuine Redis read error (anything other than the tombstone key
+// genuinely not existing) as "tombstoned" — refusing the write — rather than "not tombstoned",
+// which would fail OPEN in the one flow (the GDPR purge race window) that must fail closed.
+//
+// ADVERSARIAL VALIDATION: reverted isTombstoned to `_, err := c.client.Get(...); return err ==
+// nil` (the pre-fix shape) — this test FAILED (the write landed despite the injected read error).
+// Restored the fix — test PASSED.
+func TestIsTombstoned_GenuineReadErrorFailsClosed(t *testing.T) {
+	fake := redisclient.NewFake("cache")
+	userTag := ScopeTag(ScopeUser, "u1")
+	tombKey := TombstoneKey(userTag)
+
+	wrapped := &tombstoneReadErrorClient{
+		Client:      fake,
+		failKey:     tombKey,
+		errInjected: errors.New("redis: i/o timeout"),
+	}
+	c := NewCache(Options{Client: wrapped})
+	ctx := context.Background()
+
+	// No tombstone was ever actually set — the ONLY thing making this scope look tombstoned is the
+	// injected read error, proving isTombstoned itself (not some other seeded state) drives the
+	// refusal below.
+	val, hit, err := c.GetOrLoad(ctx, testKey("M1"), func(ctx context.Context) ([]byte, error) {
+		return []byte(`{"v":1}`), nil
+	})
+	require.NoError(t, err, "the loader must still run and its value must still be returned to the caller")
+	assert.False(t, hit)
+	assert.JSONEq(t, `{"v":1}`, string(val))
+
+	// The write itself must have been refused (fail-closed): reading back through a client that
+	// does NOT error on the tombstone key must show nothing was cached.
+	plainClient := &tombstoneReadErrorClient{Client: fake, failKey: "not-a-real-key", errInjected: nil}
+	cPlain := NewCache(Options{Client: plainClient})
+	_, hit2, err := cPlain.GetOrLoad(ctx, testKey("M1"), func(ctx context.Context) ([]byte, error) {
+		return []byte(`{"should-not-be-cached":true}`), nil
+	})
+	require.NoError(t, err)
+	assert.False(t, hit2,
+		"a genuine tombstone-read error must fail CLOSED: the SET must have been refused, so this "+
+			"read (through a client with no injected error) must still be a fresh miss, not a hit "+
+			"on data written during the unconfirmed-tombstone window")
 }

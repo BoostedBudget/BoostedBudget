@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
@@ -69,16 +70,16 @@ func (m *mockPlaidServiceForPlaid) LiabilitiesGet(ctx context.Context, accessTok
 
 // mockAccountServiceForPlaid is a mock implementation of services.AccountService
 type mockAccountServiceForPlaid struct {
-	accounts       []domain.Account
-	account        *domain.Account
-	linkResult     *services.LinkAccountsResult
-	getErr         error
-	linkErr        error
-	updateErr      error
-	deleteErr      error
-	disconnectErr  error
-	reorderErr     error
-	capturedOpts   services.AccountFilterOptions
+	accounts      []domain.Account
+	account       *domain.Account
+	linkResult    *services.LinkAccountsResult
+	getErr        error
+	linkErr       error
+	updateErr     error
+	deleteErr     error
+	disconnectErr error
+	reorderErr    error
+	capturedOpts  services.AccountFilterOptions
 }
 
 func (m *mockAccountServiceForPlaid) LinkAccounts(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*services.LinkAccountsResult, error) {
@@ -130,6 +131,10 @@ func (m *mockAccountServiceForPlaid) ListActiveByUser(ctx context.Context, userI
 }
 
 func (m *mockAccountServiceForPlaid) SetJobQueue(jq queue.JobQueue) {
+	// no-op for tests
+}
+
+func (m *mockAccountServiceForPlaid) SetCacheInvalidation(gens *cache.Generations, hh services.SyncCacheHouseholdLookup) {
 	// no-op for tests
 }
 
@@ -452,7 +457,6 @@ func TestGetAccounts_DefaultActiveOnly(t *testing.T) {
 	assert.Empty(t, mockAccount.capturedOpts.UserAccountID, "expected no UserAccountID by default")
 }
 
-
 // TestGetAccounts_UserAccountIDDefaultsToAll tests that when user_account_id is set
 // without an explicit status, StatusFilter defaults to "all" so the caller gets all
 // chain rows (active + replaced) without having to remember to pass status=all (Issue #1109).
@@ -502,6 +506,7 @@ func TestGetAccounts_UserAccountIDExplicitStatusNotOverridden(t *testing.T) {
 	assert.Equal(t, "active", mockAccount.capturedOpts.StatusFilter,
 		"Explicit status should not be overridden even when user_account_id is set")
 }
+
 // TestUpdateAccount_Success tests successful account update.
 
 func TestUpdatePlaidAccount_Success(t *testing.T) {

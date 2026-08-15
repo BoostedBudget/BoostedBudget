@@ -104,6 +104,39 @@ func newTestGenerations() (*cache.Generations, *redisclient.Fake) {
 	return cache.NewGenerations(fake), fake
 }
 
+// ctxCheckingClient wraps redisclient.Fake and, unlike the bare Fake (which ignores its ctx
+// argument entirely — verified by reading fake.go), actually returns ctx.Err() from Get/Set/SetNX
+// when the passed-in context is already done. This is what a REAL go-redis-backed client does
+// (context cancellation aborts in-flight and not-yet-issued commands), and it's the only way a
+// unit test can distinguish "the middleware bumped using a live context" from "the middleware
+// bumped using a context that happened to already be cancelled" — the bare Fake would pass either
+// way, since it never even looks at ctx. Used exclusively by
+// TestCacheInvalidation_BumpsAfterRequestContextCancelled.
+type ctxCheckingClient struct {
+	*redisclient.Fake
+}
+
+func (c *ctxCheckingClient) Get(ctx context.Context, key string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return c.Fake.Get(ctx, key)
+}
+
+func (c *ctxCheckingClient) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.Fake.Set(ctx, key, value, ttl)
+}
+
+func (c *ctxCheckingClient) SetNX(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return c.Fake.SetNX(ctx, key, value, ttl)
+}
+
 // runMiddleware invokes mw with a handler that sets responseStatus (0 means "never call
 // SetStatus", modelling the unwritten/unknown case).
 func runMiddleware(mw func(huma.Context, func(huma.Context)), op *huma.Operation, ctx context.Context, responseStatus int) {
@@ -287,4 +320,46 @@ func TestCacheInvalidation_NilGenerationsIsANoOp(t *testing.T) {
 	fc := &fakeHumaCtx{op: securedOp(http.MethodPost), ctx: ctxWithUser("u1")}
 	mw(fc, func(huma.Context) { called = true })
 	assert.True(t, called, "nil Generations must still call through to the handler")
+}
+
+// TestCacheInvalidation_BumpsAfterRequestContextCancelled is Issue #1531 Blocker 2's regression
+// test. It models a client disconnecting (or a request deadline elapsing) in the narrow window
+// AFTER the handler has already returned (i.e. after any DB commit inside it) but BEFORE this
+// middleware's post-commit bump code runs — cancelling the SAME context object the handler,
+// and therefore this middleware, both received. Before the fix, gens.Bump(reqCtx, ...) inherited
+// that cancellation and the bump was silently lost (cache.Generations.Bump swallows its own
+// errors) — a write had committed with no invalidation, stale until the namespace TTL.
+//
+// ADVERSARIAL VALIDATION: reverted the bumpCtx := context.WithTimeout(context.WithoutCancel(reqCtx),
+// bumpTimeout) call to plain reqCtx (the pre-fix shape) — this test FAILED (before == after: the
+// bump was lost to the cancelled context). Restored the fix — test PASSED.
+func TestCacheInvalidation_BumpsAfterRequestContextCancelled(t *testing.T) {
+	client := &ctxCheckingClient{Fake: redisclient.NewFake("cache")}
+	gens := cache.NewGenerations(client)
+	hh := &fakeHouseholdLookup{household: &domain.Household{ID: "hh1"}, found: true}
+	mw := humamiddleware.NewCacheInvalidationMiddleware(gens, hh, nil)
+
+	beforeUser, err := gens.Get(context.Background(), cache.ScopeUser, "u1")
+	require.NoError(t, err)
+	beforeHH, err := gens.Get(context.Background(), cache.ScopeHousehold, "hh1")
+	require.NoError(t, err)
+
+	reqCtx, cancel := context.WithCancel(ctxWithUser("u1"))
+	fc := &fakeHumaCtx{op: securedOp(http.MethodPost), ctx: reqCtx}
+	mw(fc, func(c huma.Context) {
+		c.SetStatus(http.StatusOK)
+		// Simulate the write having committed, then the client disconnecting (or the request
+		// deadline elapsing) the instant after — before this middleware's own post-next code runs.
+		cancel()
+	})
+
+	afterUser, err := gens.Get(context.Background(), cache.ScopeUser, "u1")
+	require.NoError(t, err)
+	assert.NotEqual(t, beforeUser, afterUser,
+		"the user bump must survive the request context being cancelled after the handler returned")
+
+	afterHH, err := gens.Get(context.Background(), cache.ScopeHousehold, "hh1")
+	require.NoError(t, err)
+	assert.NotEqual(t, beforeHH, afterHH,
+		"the household bump must also survive the cancelled request context")
 }

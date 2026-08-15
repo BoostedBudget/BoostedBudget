@@ -177,6 +177,57 @@ func TestExecuteDeletion_PurgeFailure_EnqueuesDurableRetry(t *testing.T) {
 		mock.Anything)
 }
 
+// TestExecuteDeletion_HouseholdLookupRetriesOnTransientFailure is Issue #1531 Blocker 3's
+// regression test: a household-lookup failure before the cascade used to be treated as "no
+// household" after exactly ONE attempt, with no retry of any kind. This models a transient DB
+// blip — the first two lookup attempts fail, the third (final, within budget) succeeds — and
+// asserts the household's cache generation is still bumped, proving the retry actually ran rather
+// than giving up on the first error.
+//
+// ADVERSARIAL VALIDATION: temporarily reverted lookupHouseholdWithRetry to a single attempt (no
+// loop) — this test FAILED (household generation unchanged: the transient failure was treated as
+// "no household" and never retried). Restored the fix — test PASSED.
+func TestExecuteDeletion_HouseholdLookupRetriesOnTransientFailure(t *testing.T) {
+	service, _, user, _, fake, hhReader, _ := newExecuteDeletionCachePurgeHarness(t)
+
+	hhReader.On("GetHouseholdForUser", mock.Anything, user.ID).
+		Return(nil, false, false, errors.New("transient db blip")).
+		Twice()
+	hhReader.On("GetHouseholdForUser", mock.Anything, user.ID).
+		Return(&domain.Household{ID: "hh-retry"}, false, true, nil).
+		Once()
+
+	hhTag := cache.ScopeTag(cache.ScopeHousehold, "hh-retry")
+	ctx := context.Background()
+	require.NoError(t, fake.Set(ctx, cache.GenerationKey(hhTag), "gen1", 0))
+
+	err := service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
+	require.NoError(t, err)
+
+	newGen, err := fake.Get(ctx, cache.GenerationKey(hhTag))
+	require.NoError(t, err)
+	assert.NotEqual(t, "gen1", newGen,
+		"the household generation must be bumped once the retried lookup succeeds on its final attempt")
+	hhReader.AssertNumberOfCalls(t, "GetHouseholdForUser", 3)
+}
+
+// TestExecuteDeletion_HouseholdLookupExhaustsRetriesStillCompletesDeletion proves the negative and
+// the safety property together: when every retry attempt fails, the deletion must still complete
+// (never abort a GDPR deletion over a cache-invalidation lookup — the pre-existing, deliberate
+// design choice this fix does not reverse), and no household bump can happen since no household ID
+// was ever recovered.
+func TestExecuteDeletion_HouseholdLookupExhaustsRetriesStillCompletesDeletion(t *testing.T) {
+	service, _, user, _, _, hhReader, _ := newExecuteDeletionCachePurgeHarness(t)
+
+	hhReader.On("GetHouseholdForUser", mock.Anything, user.ID).
+		Return(nil, false, false, errors.New("db down")).
+		Times(householdLookupRetryAttempts)
+
+	err := service.ExecuteDeletion(context.Background(), user.ID, repository.DeletionKindRetention)
+	require.NoError(t, err, "exhausting the household-lookup retries must never fail the deletion itself")
+	hhReader.AssertNumberOfCalls(t, "GetHouseholdForUser", householdLookupRetryAttempts)
+}
+
 // TestExecuteDeletion_NilCache_NoPanic — SetCache is never called (mirrors a caller that hasn't
 // wired the cache yet); ExecuteDeletion must proceed unaffected.
 func TestExecuteDeletion_NilCache_NoPanic(t *testing.T) {
