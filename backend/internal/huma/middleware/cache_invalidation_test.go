@@ -202,7 +202,13 @@ func TestCacheInvalidation_PublicRouteIsNeverBumped(t *testing.T) {
 		"a public route must never touch the generation store at all")
 }
 
-func TestCacheInvalidation_GenuineFailureDoesNotBump(t *testing.T) {
+// TestCacheInvalidation_4xxDoesNotBump pins the half of the pre-#1531-L8 behaviour that stays
+// correct: a 4xx (validation, auth, business-rule rejection) is assumed to mean the handler never
+// reached a commit, so skipping the bump is the right call — it costs nothing and saves the work.
+// This is an ASSUMPTION, not a guarantee (see TestCacheInvalidation_5xxBumps below for the case
+// where the equivalent assumption about 5xx turned out to be false), but narrowing it further is
+// out of scope for #1531 L8.
+func TestCacheInvalidation_4xxDoesNotBump(t *testing.T) {
 	gens, _ := newTestGenerations()
 	mw := humamiddleware.NewCacheInvalidationMiddleware(gens, nil, nil)
 
@@ -213,13 +219,33 @@ func TestCacheInvalidation_GenuineFailureDoesNotBump(t *testing.T) {
 
 	after, err := gens.Get(context.Background(), cache.ScopeUser, "u1")
 	require.NoError(t, err)
-	assert.Equal(t, before, after, "a genuine 4xx must not bump — nothing committed")
+	assert.Equal(t, before, after, "a genuine 4xx must not bump — assumed to mean nothing committed")
+}
 
-	// 5xx must not bump either.
-	before2, _ := gens.Get(context.Background(), cache.ScopeUser, "u1")
+// TestCacheInvalidation_5xxBumps is the #1531 L8 regression. This test previously asserted the
+// OPPOSITE — that a 5xx must not bump either — under the name
+// TestCacheInvalidation_GenuineFailureDoesNotBump. That assertion enshrined exactly the defect
+// this fix closes: a handler that COMMITS and then fails on a later step (a post-commit side
+// effect erroring out, surfaced as a 500) changed data with no bump, leaving it stale until the
+// namespace TTL. The package doc comment already recognised this exact class of ambiguity for
+// Status()==0 (unwritten/panicking handler) and chose to bump anyway, on the reasoning that
+// over-invalidating only costs hit rate while under-invalidating serves stale financial data. A
+// 5xx is the same ambiguity — "did the handler commit before it failed?" cannot be answered from
+// the status code alone — so it now gets the same treatment for the same reason.
+func TestCacheInvalidation_5xxBumps(t *testing.T) {
+	gens, _ := newTestGenerations()
+	mw := humamiddleware.NewCacheInvalidationMiddleware(gens, nil, nil)
+
+	before, err := gens.Get(context.Background(), cache.ScopeUser, "u1")
+	require.NoError(t, err)
+
 	runMiddleware(mw, securedOp(http.MethodPost), ctxWithUser("u1"), http.StatusInternalServerError)
-	after2, _ := gens.Get(context.Background(), cache.ScopeUser, "u1")
-	assert.Equal(t, before2, after2, "a genuine 5xx must not bump either")
+
+	after, err := gens.Get(context.Background(), cache.ScopeUser, "u1")
+	require.NoError(t, err)
+	assert.NotEqual(t, before, after,
+		"a 5xx must still bump -- a handler can commit and then fail on a later step, and the "+
+			"status code alone cannot prove otherwise (Issue #1531 L8)")
 }
 
 func TestCacheInvalidation_2xxAnd3xxBothBump(t *testing.T) {
