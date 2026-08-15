@@ -97,6 +97,17 @@ func TestHealthChecks_DbAndRedisUseATTLBetweenFiveAndTenSeconds(t *testing.T) {
 	}
 }
 
+// TestHealthChecks_ClerkUsesA30SecondTTL pins clerkCheckTTL at exactly 30 seconds. Unlike DB and
+// Redis (asserted above as a 5-10s band per issue #1531's stated range), Clerk is deliberately
+// excluded from that band: it's a rate-limited third-party call, so probing it every 5s would burn
+// Clerk's rate-limit budget for no operational benefit (see createClerkCheck's doc comment in
+// health_checks.go). Without this test, nothing pins the 30s value -- a future change tightening it
+// to match DB/Redis's 5s would silently burn Clerk's rate limit and no test would fail.
+func TestHealthChecks_ClerkUsesA30SecondTTL(t *testing.T) {
+	assert.Equal(t, 30*time.Second, clerkCheckTTL,
+		"clerkCheckTTL is a deliberate, documented deviation from issue #1531's 5-10s DB/Redis band -- Clerk is rate-limited third-party, so it must stay at 30s, not be tightened to match DB/Redis")
+}
+
 // TestCreateRedisCheck_ProbesTheRealClient exercises the non-nil-client path against
 // redisclient.Fake, so the "just returns not-configured" path above isn't the only one covered.
 func TestCreateRedisCheck_ProbesTheRealClient(t *testing.T) {
