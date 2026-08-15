@@ -401,10 +401,15 @@ func TestHouseholdService_SetAccountShareVisibility_BumpsOtherMemberAndHousehold
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 
-// TestAdminUserService_UpdateUserTier_BumpsTargetNotActor proves the admin side of the table:
-// the acting ADMIN's own cache generation must NOT be the one that changes (they have no
-// analytics of their own affected by someone else's tier) — the TARGET user's must.
-func TestAdminUserService_UpdateUserTier_BumpsTargetNotActor(t *testing.T) {
+// TestAdminUserService_UpdateUserTier_DoesNotBumpCache pins the CORRECTED behaviour after the
+// Issue #1531 Task 10b-2b revert: an admin tier-override write must NOT bump any cache
+// generation at all. An independent trace of all four cached namespaces (analytics,
+// analytics_rows, dashprefs, identity — entitlement is HardDisabled and can never be enabled)
+// found none of them reference SubscriptionTier/ManualTierOverride/tierConfig, so there is
+// nothing here to invalidate. AdminUserService no longer has any cache-wiring setter at all
+// (removed along with the bump); gens below is constructed independently of the service purely
+// to prove the service has no way to reach it.
+func TestAdminUserService_UpdateUserTier_DoesNotBumpCache(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
 	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
@@ -423,44 +428,25 @@ func TestAdminUserService_UpdateUserTier_BumpsTargetNotActor(t *testing.T) {
 	preTarget, err := gens.Get(ctx, cache.ScopeUser, targetID)
 	require.NoError(t, err)
 
-	service.SetCacheInvalidation(gens)
-
 	_, err = service.UpdateUserTier(ctx, actorID, targetID, tier, reason, nil)
 	require.NoError(t, err)
 
 	postTarget, err := gens.Get(ctx, cache.ScopeUser, targetID)
 	require.NoError(t, err)
-	assert.NotEqual(t, preTarget, postTarget,
-		"the TARGET user's cache generation must change — they are the one whose tier changed")
+	assert.Equal(t, preTarget, postTarget,
+		"the TARGET user's cache generation must NOT change — tier data feeds no cached namespace")
 
 	postActor, err := gens.Get(ctx, cache.ScopeUser, actorID)
 	require.NoError(t, err)
 	assert.Equal(t, preActor, postActor,
-		"the ACTING ADMIN's own cache generation must NOT change from this call — they are not the affected user")
+		"the ACTING ADMIN's own cache generation must NOT change either")
 
 	mockRepo.AssertExpectations(t)
 }
 
-// TestAdminUserService_UpdateUserTier_NoBumpWhenCacheInvalidationNotWired is the regression
-// guard for every EXISTING UpdateUserTier test in this package that never calls
-// SetCacheInvalidation: it must remain a true no-op (nil cacheGens), not a nil-pointer panic.
-func TestAdminUserService_UpdateUserTier_NoBumpWhenCacheInvalidationNotWired(t *testing.T) {
-	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
-
-	ctx := context.Background()
-	mockRepo.On("UpdateUserTier", ctx, "actor", "target", "household_2", "reason", (*time.Time)(nil)).
-		Return(repository.UpdateTierRow{}, nil)
-
-	// Deliberately do NOT call service.SetCacheInvalidation.
-	_, err := service.UpdateUserTier(ctx, "actor", "target", "household_2", "reason", nil)
-	require.NoError(t, err)
-	mockRepo.AssertExpectations(t)
-}
-
-// TestAdminUserService_RemoveUserTierOverride_BumpsTargetNotActor mirrors
-// TestAdminUserService_UpdateUserTier_BumpsTargetNotActor for the removal path.
-func TestAdminUserService_RemoveUserTierOverride_BumpsTargetNotActor(t *testing.T) {
+// TestAdminUserService_RemoveUserTierOverride_DoesNotBumpCache mirrors
+// TestAdminUserService_UpdateUserTier_DoesNotBumpCache for the removal path.
+func TestAdminUserService_RemoveUserTierOverride_DoesNotBumpCache(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
 	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
@@ -483,15 +469,13 @@ func TestAdminUserService_RemoveUserTierOverride_BumpsTargetNotActor(t *testing.
 	preTarget, err := gens.Get(ctx, cache.ScopeUser, targetID)
 	require.NoError(t, err)
 
-	service.SetCacheInvalidation(gens)
-
 	_, err = service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
 	require.NoError(t, err)
 
 	postTarget, err := gens.Get(ctx, cache.ScopeUser, targetID)
 	require.NoError(t, err)
-	assert.NotEqual(t, preTarget, postTarget,
-		"the TARGET user's cache generation must change — their override was just cleared")
+	assert.Equal(t, preTarget, postTarget,
+		"the TARGET user's cache generation must NOT change — their override was cleared, but tier data feeds no cached namespace")
 
 	postActor, err := gens.Get(ctx, cache.ScopeUser, actorID)
 	require.NoError(t, err)
