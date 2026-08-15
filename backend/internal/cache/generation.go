@@ -69,11 +69,7 @@ func (g *Generations) Get(ctx context.Context, kind ScopeKind, scopeID string) (
 	}
 
 	// Lost the race to a concurrent minter: read back whichever token actually won.
-	val, err = g.client.Get(ctx, key)
-	if err != nil {
-		return "", err
-	}
-	return val, nil
+	return g.client.Get(ctx, key)
 }
 
 // Bump invalidates every data key for the given scope by minting and writing a fresh generation
