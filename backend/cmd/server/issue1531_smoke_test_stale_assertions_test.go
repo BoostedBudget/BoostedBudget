@@ -69,15 +69,15 @@ func TestSmokeTestScript_PublicMetricsExpectsUnreachable(t *testing.T) {
 	window := textWindowAfter(t, contents, `"$API_URL/metrics"`, "scripts/smoke-test.sh", 400)
 
 	if regexp.MustCompile(`check_endpoint\s+"\$API_URL/metrics"\s+"200"`).MatchString(window) {
-		t.Errorf(`scripts/smoke-test.sh still treats "200" as the PASS condition for the public $API_URL/metrics `+
-			`probe, but Issue #1514 criterion 18 moved /metrics to an internal-only listener `+
-			`(cmd/server/internal_metrics.go, port 9091) — the public listener never registers it `+
-			`(TestPublicRouteRegistration_MetricsNotServed_HealthUnchanged), so the public probe now 404s `+
-			`(or the port refuses the connection, curl status "000"). The assertion must expect /metrics `+
+		t.Errorf(`scripts/smoke-test.sh still treats "200" as the PASS condition for the public $API_URL/metrics ` +
+			`probe, but Issue #1514 criterion 18 moved /metrics to an internal-only listener ` +
+			`(cmd/server/internal_metrics.go, port 9091) — the public listener never registers it ` +
+			`(TestPublicRouteRegistration_MetricsNotServed_HealthUnchanged), so the public probe now 404s ` +
+			`(or the port refuses the connection, curl status "000"). The assertion must expect /metrics ` +
 			`is NOT publicly reachable, not that it is.`)
 	}
 	if !strings.Contains(window, `"404"`) {
-		t.Errorf(`scripts/smoke-test.sh's $API_URL/metrics check does not appear to accept "404" as a pass `+
+		t.Errorf(`scripts/smoke-test.sh's $API_URL/metrics check does not appear to accept "404" as a pass ` +
 			`condition — the public listener returns 404 for /metrics post-fix (Issue #1514 criterion 18).`)
 	}
 }

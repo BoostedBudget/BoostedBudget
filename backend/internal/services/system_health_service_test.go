@@ -409,6 +409,52 @@ func TestSystemHealthService_CalculateOverallStatus(t *testing.T) {
 			expected: "degraded",
 		},
 		{
+			// Issue #1531 round-2 gap-analysis fix (task GA Part 2), criterion 12: "Redis remains
+			// non-critical — Redis down yields degraded + HTTP 200, never 503." Before this fix,
+			// Redis was never consulted by calculateOverallStatus at all, so this case fell through
+			// to "healthy" — see TestSystemHealth_RedisDownReportsDegradedOverallStatus (renamed
+			// from ...DoesNotChangeOverallStatus) for the full-pipeline version of this same case.
+			name: "degraded - redis down",
+			response: &domain.SystemHealthResponse{
+				Services: domain.ServiceHealthStatuses{
+					Database: domain.DatabaseHealth{Status: "up"},
+					Redis:    domain.RedisHealth{Status: "down"},
+				},
+				JobQueues:       map[string]domain.QueueMetrics{},
+				DeadLetterQueue: domain.DeadLetterMetrics{Count: 0},
+			},
+			expected: "degraded",
+		},
+		{
+			// Same fix, the Clerk half of criterion 12's requirement — the issue's GREEN criterion
+			// is Redis OR Clerk down => degraded.
+			name: "degraded - clerk down",
+			response: &domain.SystemHealthResponse{
+				Services: domain.ServiceHealthStatuses{
+					Database: domain.DatabaseHealth{Status: "up"},
+					Clerk:    domain.ServiceHealth{Status: "down"},
+				},
+				JobQueues:       map[string]domain.QueueMetrics{},
+				DeadLetterQueue: domain.DeadLetterMetrics{Count: 0},
+			},
+			expected: "degraded",
+		},
+		{
+			// Database down must win over Redis/Clerk being merely "degraded" — only Database may
+			// ever produce "unhealthy" (see calculateOverallStatus's doc comment).
+			name: "unhealthy - database down beats redis and clerk down",
+			response: &domain.SystemHealthResponse{
+				Services: domain.ServiceHealthStatuses{
+					Database: domain.DatabaseHealth{Status: "down"},
+					Redis:    domain.RedisHealth{Status: "down"},
+					Clerk:    domain.ServiceHealth{Status: "down"},
+				},
+				JobQueues:       map[string]domain.QueueMetrics{},
+				DeadLetterQueue: domain.DeadLetterMetrics{Count: 0},
+			},
+			expected: "unhealthy",
+		},
+		{
 			name: "healthy - low webhook success rate but low volume",
 			response: &domain.SystemHealthResponse{
 				Services: domain.ServiceHealthStatuses{

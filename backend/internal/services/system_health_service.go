@@ -175,8 +175,10 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		Database: s.checkDatabase(ctx),
 		Clerk:    s.checkClerk(ctx),
 		Plaid:    s.checkPlaid(ctx),
-		// Redis is deliberately NOT consulted by calculateOverallStatus below — see
-		// domain.ServiceHealthStatuses.Redis's doc comment for why (#1531 explicit non-goal).
+		// Redis IS consulted by calculateOverallStatus below (Issue #1531 criterion 12: Redis
+		// down must surface as "degraded") — but only as far as "degraded", never "unhealthy".
+		// See domain.ServiceHealthStatuses.Redis's doc comment and calculateOverallStatus's own
+		// comment for the boundary that must never move.
 		Redis: s.checkRedis(ctx),
 	}
 
@@ -278,7 +280,10 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 	// making it VISIBLE (so the E2E guard can gate on it) is in scope.
 	response.CacheEnabled = s.checkCacheEnabled()
 
-	// Calculate overall status
+	// Calculate overall status. Redis and Clerk detail above is deliberately gathered before
+	// this call so calculateOverallStatus can read Services.Redis/Services.Clerk directly — see
+	// that function's doc comment for the "degraded, never unhealthy" rule Issue #1531 criterion
+	// 12 requires for both.
 	response.Status = s.calculateOverallStatus(response)
 
 	return response, nil
@@ -661,10 +666,37 @@ func (s *systemHealthService) getRejectedWebhookAttemptMetrics(ctx context.Conte
 }
 
 // calculateOverallStatus determines the overall system health status
+//
+// ⚠ Issue #1531 criterion 12: "Redis remains non-critical — Redis down yields degraded + HTTP
+// 200, never 503." Prior to this fix, Redis (and Clerk) were never consulted here at all, so a
+// Redis outage left the admin dashboard's top-line badge reading "healthy" while
+// Services.Redis.Status said "down" lower in the payload — exactly the failure the issue calls
+// out: "/admin/health reporting green regardless of state is worse than no dashboard, because it
+// gets trusted during an incident." TestSystemHealth_RedisDownReportsDegradedOverallStatus pins
+// the fix (renamed from TestSystemHealth_RedisDownDoesNotChangeOverallStatus, which asserted the
+// defect itself and is why four prior review passes never caught this).
+//
+// Two hard boundaries this function must never cross:
+//  1. Redis/Clerk may only ever push the result to "degraded", NEVER "unhealthy"/503. Only
+//     Database may return "unhealthy" (checked first, below). If Redis could 503 this probe, a
+//     Redis blip would cycle every machine via Fly's http_checks — a self-inflicted outage this
+//     branch's Task 6 already closed off on the PUBLIC /health endpoint. Promoting Redis to
+//     critical here would reopen the exact same hazard one level up.
+//  2. This function is never called from the public /health handler — that endpoint
+//     structurally never runs the Redis/Clerk checks at all (see operations.HealthHandler's doc
+//     comment and TestGetHealth_DoesNotRunNonCriticalChecks), so "degraded" can never leak onto
+//     the unauthenticated liveness probe. This change is admin-endpoint (GetSystemHealth) only.
 func (s *systemHealthService) calculateOverallStatus(response *domain.SystemHealthResponse) string {
-	// Unhealthy: Database down
+	// Unhealthy: Database down. This is the ONLY path that may return "unhealthy" — see the
+	// boundary above.
 	if response.Services.Database.Status == "down" {
 		return "unhealthy"
+	}
+
+	// Degraded: Redis or Clerk down (Issue #1531 criterion 12). Never escalated to "unhealthy" —
+	// see this function's doc comment.
+	if response.Services.Redis.Status == "down" || response.Services.Clerk.Status == "down" {
+		return "degraded"
 	}
 
 	// Degraded: High pending jobs or dead letter queue issues
