@@ -151,7 +151,11 @@ run_smoke_tests() {
   check_json_endpoint "${BACKEND_URL}/health" "Health endpoint" "status" || ((failed++))
   echo ""
 
-  check_endpoint "${BACKEND_URL}/metrics" "Metrics endpoint" 200 || ((failed++))
+  # Issue #1514 criterion 18 moved /metrics onto a separate, internal-only listener
+  # (cmd/server/internal_metrics.go, port 9091) — the public listener never registers it
+  # (see TestPublicRouteRegistration_MetricsNotServed_HealthUnchanged), so 404 is the
+  # PASS condition here, not 200. A public 200 would mean that fix regressed.
+  check_endpoint "${BACKEND_URL}/metrics" "Metrics endpoint (expect not publicly reachable)" 404 || ((failed++))
   echo ""
 
   print_section "Frontend Health Checks"
