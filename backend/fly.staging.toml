@@ -16,6 +16,18 @@ kill_timeout = 30
   LOG_LEVEL = "debug"
   ENABLE_METRICS = "true"
 
+  # Issue #1531 Task 8 (gap round 2): divides the per-machine in-memory rate-limit fallback so that
+  # N machines independently falling back to memory-only limiting during a Redis outage don't
+  # multiply the intended fleet-wide budget by N — see rateLimitFallbackLimit's doc comment in
+  # cmd/server/main.go. MUST match this file's own "Intended machine count: N" comment (below, near
+  # [[services]]) — cmd/server/issue1531_fallback_divisor_wiring_test.go enforces that the two agree.
+  # With only 1 machine actually running today, divisor 2 halves the fallback limit (e.g. 50/min
+  # instead of 100/min) rather than doubling it — a deliberate trade-off: during an outage, slightly
+  # tight beats 2x loose, and this only affects the degraded fallback path, never normal operation.
+  # This coupling assumes a STATIC machine count. Autoscaling breaks it in both directions — tracked
+  # as follow-up Issue #1535.
+  RATE_LIMIT_FALLBACK_DIVISOR = "2"
+
   # Plaid configuration (sandbox for staging)
   PLAID_ENV = "sandbox"
 
@@ -46,6 +58,10 @@ kill_timeout = 30
   # - PADDLE_WEBHOOK_SECRET
   # - ENCRYPTION_KEY
   # - POSTHOG_API_KEY (PostHog Cloud US - project 357017)
+  # - SENTRY_DSN (Issue #1531 gap round 2: if unset, Error-level logs — including the rate-limiter
+  #   fallback-activation log, "the metric that actually matters" per Issue #1531 — never reach
+  #   Sentry and nothing pages. main.go logs a startup ERROR when this is unset in
+  #   production/staging; see sentryDSNWarning in cmd/server/sentry_dsn_warning.go)
   # - RATE_LIMIT_REDIS_URL (Issue #1531: Upstash Redis, NO-EVICTION instance — the
   #   fleet-wide rate limiter's correctness depends on every SET succeeding)
   # - CACHE_REDIS_URL (Issue #1531: a DIFFERENT Upstash Redis instance from
