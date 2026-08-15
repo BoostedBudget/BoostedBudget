@@ -414,19 +414,44 @@ func TestAnalyticsCacheParity_HouseholdScope_CrossMemberRequesterIsolation(t *te
 	hhFilters := domain.SpendingFilters{StartDate: periodStart, EndDate: periodEnd, HouseholdScope: hh.scope}
 
 	// Member A reads first (cold): populates the cache entry the current key scheme uses.
+	beforeA := cache.Snapshot()
 	respA, err := cachedSvc.GetSpendingByMerchant(ctx, hh.a.userID, hhFilters, 10)
 	require.NoError(t, err)
+	afterA := cache.Snapshot()
+	assertDelta(t, afterA.Delta(beforeA), cache.NamespaceAnalytics, 0, 1, "A's cold read")
 	require.Len(t, respA.Merchants, 1, "expected the two members' transactions to collapse into one merchant row")
 	assert.Equal(t, "A's Private Label", respA.Merchants[0].MerchantName,
 		"member A must see A's own override on A's own (cold) read")
 
 	// Member B reads the SAME household query immediately after, well within the namespace TTL.
-	// This must be resolved against B's OWN override — not A's cached entry.
+	// This must be resolved against B's OWN override — not A's cached entry. Requester is part of
+	// the cache key (Issue #1531 H1), so this is necessarily a cold miss for B's OWN key, not a
+	// hit on A's entry.
+	beforeB1 := cache.Snapshot()
 	respB, err := cachedSvc.GetSpendingByMerchant(ctx, hh.b.userID, hhFilters, 10)
 	require.NoError(t, err)
+	afterB1 := cache.Snapshot()
+	assertDelta(t, afterB1.Delta(beforeB1), cache.NamespaceAnalytics, 0, 1, "B's cold read")
 	require.Len(t, respB.Merchants, 1, "expected the two members' transactions to collapse into one merchant row")
 	assert.Equal(t, "B's Private Label", respB.Merchants[0].MerchantName,
 		"member B must see B's own override, not member A's cached override — a household-scoped "+
 			"cache key that omits the requester lets B's read collapse onto A's cache entry and "+
 			"serves B another household member's private merchant rename (Issue #1531 H1)")
+
+	// Issue #1531 GA-8: the assertions above prove A and B get DIFFERENT results, but not that
+	// either read was actually SERVED FROM CACHE — a bypassed or permanently-failing cache would
+	// pass every assertion above vacuously (every read would just hit Postgres directly and
+	// naturally see its own override, with cache.ScopeFor/EncodeHouseholdScope never in the loop
+	// at all). Read B's SAME query again, within the same TTL window, and assert this second read
+	// is a genuine cache HIT (not a miss/bypass) that still serves B's own isolated entry — proving
+	// B's read path actually goes through the cache, the same way the parity harness above verifies
+	// warm reads via assertDelta.
+	beforeB2 := cache.Snapshot()
+	respB2, err := cachedSvc.GetSpendingByMerchant(ctx, hh.b.userID, hhFilters, 10)
+	require.NoError(t, err)
+	afterB2 := cache.Snapshot()
+	assertDelta(t, afterB2.Delta(beforeB2), cache.NamespaceAnalytics, 1, 0, "B's warm (cache-hit) read")
+	require.Len(t, respB2.Merchants, 1, "expected the two members' transactions to collapse into one merchant row")
+	assert.Equal(t, "B's Private Label", respB2.Merchants[0].MerchantName,
+		"member B's warm, cache-served read must still return B's own isolated entry, not A's")
 }
