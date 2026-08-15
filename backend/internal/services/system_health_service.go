@@ -337,6 +337,16 @@ func (s *systemHealthService) checkClerk(ctx context.Context) domain.ServiceHeal
 	}
 
 	result := s.healthChecks.Clerk(ctx)
+	// In production the Check is never nil even when CLERK_SECRET_KEY is unset —
+	// createClerkCheckWithURL's PROBE returns an error wrapping health.ErrNotConfigured instead
+	// (see cmd/server/health_checks.go). So the nil-Check branch above is production-unreachable;
+	// this errors.Is check is what actually distinguishes "not configured" from "down" on a real
+	// deployment. Without it, an unconfigured Clerk reads as "down" forever, which
+	// calculateOverallStatus below then escalates to a permanent top-line "degraded" (Issue #1531
+	// L2's failure mode, applied here to Clerk instead of Redis).
+	if errors.Is(result.Err, health.ErrNotConfigured) {
+		return domain.ServiceHealth{Status: "not_configured", LatencyMs: result.Latency.Milliseconds()}
+	}
 	status := "up"
 	if !result.Healthy() {
 		status = "down"
@@ -350,8 +360,11 @@ func (s *systemHealthService) checkClerk(ctx context.Context) domain.ServiceHeal
 // checkRedis derives the admin-only domain.RedisHealth detail from the SHARED memoized Redis
 // health.Check (Issue #1531 Task 7d) — the same Check instance the public /health handler's
 // registry.Redis holds (but never calls). Redis is deliberately never critical here: this method
-// only DESCRIBES Redis's state, and its caller (GetSystemHealth) deliberately excludes the
-// result from calculateOverallStatus. See domain.ServiceHealthStatuses.Redis's doc comment.
+// only DESCRIBES Redis's state. Its caller (GetSystemHealth) feeds the result into
+// calculateOverallStatus, which may only ever move the top-line status to "degraded" for Redis
+// down — see that function's doc comment for the "degraded, never unhealthy" rule Issue #1531
+// criterion 12 requires ("not_configured", produced below, is excluded from that escalation
+// entirely: an intentionally memory-only deployment is not degraded).
 func (s *systemHealthService) checkRedis(ctx context.Context) domain.RedisHealth {
 	if s.healthChecks.Redis == nil {
 		return domain.RedisHealth{Status: "not_configured", Reason: "not_configured"}
@@ -361,6 +374,17 @@ func (s *systemHealthService) checkRedis(ctx context.Context) domain.RedisHealth
 	h := domain.RedisHealth{
 		LatencyMs:     result.Latency.Milliseconds(),
 		ObservedAgoMs: time.Since(result.ObservedAt).Milliseconds(),
+	}
+	if errors.Is(result.Err, health.ErrNotConfigured) {
+		// In production the Check is never nil even when no Redis client is wired —
+		// createRedisCheck's PROBE returns an error wrapping health.ErrNotConfigured instead of
+		// the Check being absent (see cmd/server/health_checks.go). So the nil-Check branch above
+		// is production-unreachable; this is what actually makes "not_configured" reachable on a
+		// real deployment, rather than every unwired Redis permanently reading as "down" and
+		// forcing calculateOverallStatus to "degraded" (Issue #1531 L2).
+		h.Status = "not_configured"
+		h.Reason = "not_configured"
+		return h
 	}
 	if result.Healthy() {
 		h.Status = "up"

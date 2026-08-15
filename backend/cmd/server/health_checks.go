@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -20,14 +19,20 @@ var (
 	// so reaching this in those environments means a real outage. The one behaviour change this
 	// introduces: a bare local `go run` with no DATABASE_URL set now gets a 503 from /health
 	// instead of an unconditional "ok" — an API with no database is not healthy.
-	errDBNotConfigured = errors.New("database: not configured")
+	errDBNotConfigured = fmt.Errorf("database: not configured: %w", health.ErrNotConfigured)
 	// errRedisNotConfigured means no Redis client is wired for this deployment. Redis stays
 	// NON-CRITICAL regardless (see createRedisCheck's doc comment) — this error only ever
 	// surfaces on the admin dashboard, never on the public /health endpoint (Task 6 structurally
 	// prevents GetHealth from ever reading registry.Redis at all).
-	errRedisNotConfigured = errors.New("redis: not configured")
-	// errClerkNotConfigured means CLERK_SECRET_KEY is unset. Same non-critical treatment as Redis.
-	errClerkNotConfigured = errors.New("clerk: not configured (CLERK_SECRET_KEY unset)")
+	//
+	// It wraps health.ErrNotConfigured (via %w) so system_health_service.go's checkRedis can tell
+	// "not wired" apart from "wired but down" via errors.Is — the Check this error travels inside
+	// is never nil in production (see createRedisCheck below), so that distinction can only be
+	// made from the error's identity, not the Check's. See Issue #1531 L2.
+	errRedisNotConfigured = fmt.Errorf("redis: not configured: %w", health.ErrNotConfigured)
+	// errClerkNotConfigured means CLERK_SECRET_KEY is unset. Same non-critical treatment as Redis,
+	// and wraps health.ErrNotConfigured for the same reason (see errRedisNotConfigured above).
+	errClerkNotConfigured = fmt.Errorf("clerk: not configured (CLERK_SECRET_KEY unset): %w", health.ErrNotConfigured)
 )
 
 // dbPinger narrows *pgxpool.Pool to the one method createDBCheck needs, so unit tests can inject

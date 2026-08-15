@@ -37,12 +37,25 @@ package health
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 )
+
+// ErrNotConfigured is the shared sentinel a Check's underlying probe returns
+// when its dependency has no client/credentials wired for this deployment
+// (e.g. no Redis client, no CLERK_SECRET_KEY). It is deliberately distinct
+// from a probe FAILURE: a wired-but-unreachable dependency is "down"; an
+// intentionally-absent one is "not_configured". Consumers that need to tell
+// these apart (see internal/services/system_health_service.go's checkRedis
+// and checkClerk) use errors.Is(result.Err, ErrNotConfigured) rather than
+// relying on the Check itself being nil -- in production every Check in a
+// Registry is non-nil (see cmd/server/health_checks.go's createRedisCheck and
+// createClerkCheck), so a nil-Check check alone can never fire there.
+var ErrNotConfigured = errors.New("dependency not configured")
 
 // Result is the outcome of a single probe invocation.
 type Result struct {
