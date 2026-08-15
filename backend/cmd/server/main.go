@@ -225,6 +225,11 @@ func main() {
 			Client:                cacheClient,
 			Control:               cacheControl,
 			EnvDisabledNamespaces: cacheEnvDisabled,
+			// SingleflightLoadTimeout (Issue #1531 N1): cache.go's default (30s) was justified as
+			// "matches this server's default WriteTimeout" but had no path to a NON-default
+			// SERVER_WRITE_TIMEOUT — passing cfg.WriteTimeout here explicitly makes that
+			// justification actually hold for any configured value, not just the default.
+			SingleflightLoadTimeout: cfg.WriteTimeout,
 		})
 		appLogger.Info("Cache wired to Redis", "control_enabled", cacheControl != nil)
 	} else {

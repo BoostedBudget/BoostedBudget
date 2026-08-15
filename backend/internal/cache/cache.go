@@ -44,16 +44,25 @@ type Options struct {
 	EnvDisabledNamespaces map[Namespace]bool
 	// Now is a clock seam for tests. Nil means time.Now.
 	Now func() time.Time
+	// SingleflightLoadTimeout bounds the detached, shared singleflight execution in GetOrLoad (see
+	// that function's Issue #1531 M4 comment). Default (<=0): singleflightDefaultLoadTimeout
+	// (30s), which matches cmd/server's SERVER_WRITE_TIMEOUT default. Issue #1531 N1: the
+	// justification for this bound — "a load can never legitimately need longer than the server
+	// would allow a response to take anyway" — only holds if this value actually tracks
+	// SERVER_WRITE_TIMEOUT rather than being a second, independently hardcoded 30s that merely
+	// matches it at the default. cmd/server passes cfg.WriteTimeout here explicitly.
+	SingleflightLoadTimeout time.Duration
 }
 
 // redisCache is the production Cache implementation over redisclient.Client.
 type redisCache struct {
-	client      redisclient.Client
-	control     *Control
-	envDisabled map[Namespace]bool
-	now         func() time.Time
-	gens        *Generations
-	sf          singleflight.Group
+	client              redisclient.Client
+	control             *Control
+	envDisabled         map[Namespace]bool
+	now                 func() time.Time
+	gens                *Generations
+	sf                  singleflight.Group
+	singleflightTimeout time.Duration
 }
 
 // sfResult is what one de-duplicated singleflight call returns: the payload bytes and whether they
@@ -63,9 +72,11 @@ type sfResult struct {
 	hit  bool
 }
 
-// singleflightLoadTimeout bounds the detached, shared singleflight execution in GetOrLoad —
-// see the Issue #1531 M4 comment at that call site.
-const singleflightLoadTimeout = 30 * time.Second
+// singleflightDefaultLoadTimeout is Options.SingleflightLoadTimeout's default (<=0) value — see
+// that field's doc comment. It matches cmd/server's SERVER_WRITE_TIMEOUT default
+// (internal/config/config.go), but a caller that sets SingleflightLoadTimeout explicitly (as
+// cmd/server now does, from cfg.WriteTimeout) always wins.
+const singleflightDefaultLoadTimeout = 30 * time.Second
 
 // NewCache returns a production Cache over opts.Client.
 func NewCache(opts Options) Cache {
@@ -73,12 +84,17 @@ func NewCache(opts Options) Cache {
 	if now == nil {
 		now = time.Now
 	}
+	sfTimeout := opts.SingleflightLoadTimeout
+	if sfTimeout <= 0 {
+		sfTimeout = singleflightDefaultLoadTimeout
+	}
 	return &redisCache{
-		client:      opts.Client,
-		control:     opts.Control,
-		envDisabled: opts.EnvDisabledNamespaces,
-		now:         now,
-		gens:        NewGenerations(opts.Client),
+		client:              opts.Client,
+		control:             opts.Control,
+		envDisabled:         opts.EnvDisabledNamespaces,
+		now:                 now,
+		gens:                NewGenerations(opts.Client),
+		singleflightTimeout: sfTimeout,
 	}
 }
 
@@ -141,10 +157,12 @@ func (c *redisCache) GetOrLoad(
 	// cancelled context of its own — a spurious 500 on a request that would have succeeded before
 	// this branch. Detaching also protects against inheriting a shorter caller's deadline: sfCtx
 	// is bounded independently, not by whichever caller's remaining deadline happened to be
-	// shortest. singleflightLoadTimeout (30s) matches this server's default WriteTimeout
-	// (internal/config/config.go) — a load can never legitimately need longer than the server
-	// would allow a response to take anyway.
-	sfCtx, sfCancel := context.WithTimeout(context.WithoutCancel(ctx), singleflightLoadTimeout)
+	// shortest. c.singleflightTimeout (Options.SingleflightLoadTimeout, default
+	// singleflightDefaultLoadTimeout == this server's default WriteTimeout — see Issue #1531 N1)
+	// — a load can never legitimately need longer than the server would allow a response to take
+	// anyway, which is only true if this value actually tracks WriteTimeout rather than being a
+	// second, independently hardcoded number.
+	sfCtx, sfCancel := context.WithTimeout(context.WithoutCancel(ctx), c.singleflightTimeout)
 	defer sfCancel()
 
 	raw, err, shared := c.sf.Do(dataKey, func() (any, error) {
