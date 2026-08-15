@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/redisclient"
 )
 
 // tombstoneTTL bounds how long a purge tombstone blocks new writes into a scope. It MUST be at
@@ -110,9 +112,30 @@ func (c *redisCache) purgeScope(ctx context.Context, tag string) error {
 
 // isTombstoned reports whether tag currently has an active deletion tombstone. Checked by
 // redisCache.set before every write — see that method's doc comment.
+//
+// Issue #1531 Blocker 3: this MUST fail CLOSED, not open. A genuine Redis read error here (a
+// timeout, the circuit breaker being open, a connection drop — anything other than the tombstone
+// key genuinely not existing) used to be treated identically to "no tombstone", which is exactly
+// backwards for the one flow that must refuse a write it cannot positively clear: a write that
+// lands during a GDPR deletion's purge window, while this check could not confirm the tombstone's
+// absence, is the same class of bug the purge/tombstone mechanism exists to prevent (a deleted
+// user's data resurrected past the deletion). This mirrors how Generations.Get already treats a
+// genuine read error on the generation key — propagated as-is, forcing the caller to bypass the
+// cache entirely rather than serve under an unconfirmed generation (see that method's doc
+// comment). Concretely:
+//   - Get succeeds (err == nil): the tombstone key exists — tombstoned, refuse the write.
+//   - Get fails with ErrNotFound: the key genuinely does not exist — not tombstoned, allow the
+//     write.
+//   - Get fails with any OTHER error: unknown state — treated as tombstoned (fail closed), so the
+//     write is refused rather than risking a resurrection this check could not rule out. The cost
+//     is a spuriously-skipped cache write during a Redis blip, which is free; the alternative
+//     (fail open) is a GDPR-relevant data-resurrection risk, which is not.
 func (c *redisCache) isTombstoned(ctx context.Context, tag string) bool {
 	_, err := c.client.Get(ctx, TombstoneKey(tag))
-	return err == nil
+	if err == nil {
+		return true
+	}
+	return !errors.Is(err, redisclient.ErrNotFound)
 }
 
 // PurgeUser on noopCache is a no-op: there is no Redis client to purge, and nothing was ever

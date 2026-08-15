@@ -850,11 +850,25 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// (which genuinely contain this user's transactions, joined across shared household accounts)
 	// would never get orphaned. A lookup failure here is logged and treated as "no household" —
 	// this must never abort a GDPR deletion that has already passed every eligibility check above.
+	// Issue #1531 Blocker 3: this lookup used to be attempted exactly once, and a failure was
+	// logged and silently treated as "no household" — with NO retry of any kind, not even the
+	// durable (River) retry cache_purge_retry.go provides for a purge/bump failure. That durable
+	// retry mechanism genuinely CANNOT cover a failure here, though: DeleteUserCascade (called
+	// right below) deletes this user's household_members row as part of the same cascade, so a
+	// retry job running even a few seconds later — after cascade commits — would look up "does
+	// this user belong to a household" and correctly, uselessly, find nothing; not because the
+	// bump failed, but because the fact it needs (the membership) has legitimately ceased to
+	// exist. This is therefore the ONLY window in which the household ID can still be recovered
+	// at all, which is why the retry lives HERE, bounded and synchronous, rather than as a River
+	// job: it targets the realistic failure mode (a transient DB blip) inside the one window
+	// where success is even possible, rather than manufacturing a "durable" retry that would
+	// always find nothing. See lookupHouseholdWithRetry's own doc comment for the constants.
 	var cachePurgeHouseholdID string
 	if s.householdReader != nil {
-		if household, _, found, hhErr := s.householdReader.GetHouseholdForUser(ctx, userID); hhErr != nil {
-			slog.Default().Error("gdpr deletion: household lookup failed before cascade; the user's "+
-				"household (if any) will not have its cache orphaned", "user_id", userID, "error", hhErr)
+		household, _, found, hhErr := s.lookupHouseholdWithRetry(ctx, userID)
+		if hhErr != nil {
+			slog.Default().Error("gdpr deletion: household lookup failed before cascade after retries; "+
+				"the user's household (if any) will not have its cache orphaned", "user_id", userID, "error", hhErr)
 		} else if found {
 			cachePurgeHouseholdID = household.ID
 		}
@@ -1131,6 +1145,34 @@ func (s *deletionService) SetHouseholdReader(r HouseholdReader) {
 // #1367 — Phase 3.
 func (s *deletionService) SetHouseholdInviteRevoker(r HouseholdInviteRevoker) {
 	s.inviteRevoker = r
+}
+
+// householdLookupRetryAttempts / householdLookupRetryBackoff bound the immediate, synchronous
+// retry ExecuteDeletion performs on the pre-cascade household lookup (Issue #1531 Blocker 3). See
+// that call site's own comment for why a durable (River) retry cannot substitute for this: the
+// membership row this lookup depends on is deleted by DeleteUserCascade moments later, so any
+// retry attempted after that point — durable or not — would always, correctly, find nothing. A
+// short bounded retry targets the realistic failure mode (a transient DB blip) while it can still
+// succeed at all.
+const (
+	householdLookupRetryAttempts = 3
+	householdLookupRetryBackoff  = 50 * time.Millisecond
+)
+
+// lookupHouseholdWithRetry retries s.householdReader.GetHouseholdForUser up to
+// householdLookupRetryAttempts times with a short fixed backoff between attempts, returning the
+// last error if every attempt fails. See the constants' doc comment above for why this exists.
+func (s *deletionService) lookupHouseholdWithRetry(ctx context.Context, userID string) (household *domain.Household, isOwner bool, found bool, err error) {
+	for attempt := 0; attempt < householdLookupRetryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(householdLookupRetryBackoff)
+		}
+		household, isOwner, found, err = s.householdReader.GetHouseholdForUser(ctx, userID)
+		if err == nil {
+			return household, isOwner, found, nil
+		}
+	}
+	return nil, false, false, err
 }
 
 // SetCache wires the GDPR deletion purge — see the DeletionService interface doc comment.

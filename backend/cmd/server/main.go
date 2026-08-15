@@ -141,13 +141,17 @@ func main() {
 	// URL between a noeviction-provisioned limiter instance and a cache is a real hazard (an
 	// evicting cache write can OOM the limiter's SETs) — config.validate() also hard-errors in
 	// production/staging if the two URLs are ever set to the same value.
-	limiterClient, err := redisclient.New(redisclient.Options{
-		URL: cfg.RateLimitRedisURL,
+	// Issue #1531 Blocker 4: cfg.RedisTimeoutMs/RedisPoolSize were validated and documented as
+	// "read by redisclient.Options construction" but never actually passed to either client
+	// below — both constructors sent only URL/Name, silently discarding the configured knobs and
+	// running every deploy on redisclient's hardcoded defaults (200ms read/write timeout, pool
+	// size 10) regardless of what an operator set. Wired through to both clients now, via
+	// newRedisClientOptions, so the config actually does what it claims.
+	limiterClient, err := redisclient.New(newRedisClientOptions(cfg, cfg.RateLimitRedisURL,
 		// Issue #1531 Task 10a: was the literal "limiter" — now the shared constant, so a
 		// future rename is a compile error instead of a silent boot-time failure in
 		// cache.NewControl (which fails fast unless client.Name() == cache.LimiterClientName).
-		Name: cache.LimiterClientName,
-	})
+		cache.LimiterClientName))
 	if err != nil {
 		switch {
 		case errors.Is(err, redisclient.ErrNotConfigured):
@@ -168,10 +172,7 @@ func main() {
 		appLogger.Info("Redis limiter client constructed", "addr", limiterClient.RedactedAddr())
 	}
 
-	cacheClient, err := redisclient.New(redisclient.Options{
-		URL:  cfg.CacheRedisURL,
-		Name: "cache",
-	})
+	cacheClient, err := redisclient.New(newRedisClientOptions(cfg, cfg.CacheRedisURL, "cache"))
 	if err != nil {
 		// Cache-client failure is NEVER fatal (Task 9 brief) — log and continue without a cache.
 		if !errors.Is(err, redisclient.ErrNotConfigured) {
@@ -1253,6 +1254,16 @@ func main() {
 					db,
 					services.WithEncryptor(fieldEncryptor), // Issue #1010: Cross-user fingerprint checks
 				)
+
+				// Issue #1531 Blocker 1: wire cache invalidation for the cross-user fingerprint
+				// release path — checkFingerprintOwnership's ExpireAccountsByFingerprint call
+				// flips a DIFFERENT user's accounts to expired during THIS user's LinkAccounts
+				// call, and the HTTP mutation middleware only ever bumps the acting user, never a
+				// third party a write happens to touch. cacheInstance is never nil (see
+				// cachePurgeRetryWorker's construction below); householdRepo structurally
+				// satisfies services.SyncCacheHouseholdLookup, same as it already does for
+				// transactionSyncService and humamiddleware.HouseholdLookup.
+				accountService.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
 
 				appLogger.Info("Plaid service initialized")
 				appLogger.Info("Account linking service initialized")
@@ -2545,6 +2556,26 @@ func main() {
 // builds this exact chain via httptest and demonstrates the failure mode
 // above when the two calls are (deliberately, temporarily, for that test's
 // RED demonstration only) reordered.
+// newRedisClientOptions builds the redisclient.Options for a Redis client named `name` (either
+// cache.LimiterClientName or "cache") from cfg. Extracted from main() (Issue #1531 Blocker 4) so
+// the actual wiring of cfg.RedisTimeoutMs/RedisPoolSize into the constructed client is unit
+// testable without a real Redis server for the URL/Name/timeout/pool-size fields, and against a
+// real client's rdb.Options() (see redis_options_test.go) for the fields that matter once a real
+// Redis instance is available. Before this helper existed, both call sites in main() passed only
+// URL and Name — cfg.RedisTimeoutMs and cfg.RedisPoolSize were validated and documented ("read by
+// redisclient.Options construction") but silently discarded, so every deploy ran on
+// redisclient's hardcoded defaults regardless of what an operator configured.
+func newRedisClientOptions(cfg *config.Config, url, name string) redisclient.Options {
+	readWriteTimeout := time.Duration(cfg.RedisTimeoutMs) * time.Millisecond
+	return redisclient.Options{
+		URL:          url,
+		Name:         name,
+		ReadTimeout:  readWriteTimeout,
+		WriteTimeout: readWriteTimeout,
+		PoolSize:     cfg.RedisPoolSize,
+	}
+}
+
 // buildRateLimitBackend constructs the fleet-wide Redis-backed rate-limit primary from
 // limiterClient/cfg, or returns nil (memory-only) when limiterClient is nil. Extracted from
 // main() so its SentinelLimit choice — the subject of Issue #1531 fix round 1 — is unit-testable

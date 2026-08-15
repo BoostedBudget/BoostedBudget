@@ -198,13 +198,49 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"it deletes rows that were already unreachable. NamespaceEntitlement is HardDisabled, so " +
 		"the entitlement-expiry write carries no cache impact either way."},
 
-	// --- Unclassified: not confidently reviewed. See task-10b-3-report.md worklist table
-	// (Slice B/C) for the full read on each; out of scope for Task 10b-2a-iii's Slice A. ---
-	"boost_evaluation.go":          {kind: dispositionUnclassified},
-	"budget_period_close_check.go": {kind: dispositionUnclassified},
-	"item_cleanup_check.go":        {kind: dispositionUnclassified},
-	"subscription_webhook.go":      {kind: dispositionUnclassified},
-	"plaid_orphan_retry.go":        {kind: dispositionUnclassified},
+	// --- NoCacheImpact (Issue #1531 final-fixes pass): the remaining 5 unclassified job files,
+	// independently verified — each writes bookkeeping tables only, and each has an
+	// already-classified structural sibling in this same map making the identical argument. ---
+	"boost_evaluation.go": {dispositionNoCacheImpact, "calls BoostExecutionService." +
+		"ProcessEventTrigger, which writes boost_executions/boosts bookkeeping (execution count, " +
+		"last-successful timestamp) only. Grepped repository/analytics_repository.go end to end: " +
+		"neither table is referenced by any cached analytics query (which reads transactions/" +
+		"accounts/budgets), and neither is a cached namespace (analytics, analytics_rows, " +
+		"dashprefs, identity). No cached read anywhere depends on boost execution bookkeeping."},
+	"budget_period_close_check.go": {dispositionNoCacheImpact, "its own writes are " +
+		"BudgetPeriodEventsRepository.InsertMarker/DeleteMarker/HasMarker (period-close idempotency " +
+		"markers) — grepped repository/analytics_repository.go: budget_period_events is never " +
+		"referenced by any cached analytics query. The category-spend writes this worker triggers " +
+		"go through BudgetRepository.UpdateCategorySpentAmount (a still-Unclassified repo method, " +
+		"not independently cleared by this entry — see the package doc comment's file-level-grain " +
+		"caveat, same as retention_cleanup_check.go's own entry above)."},
+	"item_cleanup_check.go": {dispositionNoCacheImpact, "structural sibling of the already-" +
+		"classified item_cleanup.go above (same file-level reasoning, same table): this sweep's " +
+		"own writes (LinkedItemRepository.MarkForCleanup/ClearCleanupSchedule) touch only " +
+		"linked_items bookkeeping columns (cleanup_scheduled_at and friends), never accounts.status " +
+		"— every cached analytics query filters on accounts.status = 'active', never on any " +
+		"linked_items column (confirmed by the same repo-wide grep item_cleanup.go's entry cites). " +
+		"The actual Plaid /item/remove call and any accounts-table effect happen in a SEPARATE, " +
+		"HTTP-middleware-covered path (accountService.DeleteAccount), exactly as item_cleanup.go's " +
+		"entry documents."},
+	"subscription_webhook.go": {dispositionNoCacheImpact, "every individual repository write in " +
+		"this file already has its OWN NoCacheImpact classification elsewhere in this branch's " +
+		"guards: ProfileRepository.ClearPastDueStartedAt/ClearRetentionDates (subscription/" +
+		"retention status — deliberately not cached, see those repo-guard entries and this " +
+		"package's past_due_check.go/paddle_reconciliation.go entries above), PaddleWebhookRepository" +
+		".MarkProcessed/MarkFailed and PaddleTransactionRepository.Create (webhook/billing-history " +
+		"bookkeeping, see those repo-guard entries), and HouseholdRepository.SetOverCapacity/" +
+		"ClearOverCapacity (over-capacity bookkeeping only, see household_over_capacity_check.go's " +
+		"entry above and those repo-guard entries) — no write in this file reaches a table any " +
+		"cached analytics query, dashboard-prefs read, or identity read depends on."},
+	"plaid_orphan_retry.go": {dispositionNoCacheImpact, "structural sibling of the already-" +
+		"classified plaid_orphan_token_purge.go above: both operate exclusively on " +
+		"PlaidOrphanedItemRepository rows, which by definition (Issue #1497 — an \"orphan\" record " +
+		"exists only after its owning user has already been erased) have no live user's cache scope " +
+		"left to invalidate. This job's own writes (RecordRetryFailure, MarkResolved, " +
+		"RecordOperatorResolution) are retry/resolution bookkeeping on those same orphan rows plus " +
+		"sweep-cursor bookkeeping (SweepCursorRepository, already NoCacheImpact in the repo guard) — " +
+		"neither is a cached namespace."},
 }
 
 // listJobFiles returns the basenames of every non-test .go file directly in dir.

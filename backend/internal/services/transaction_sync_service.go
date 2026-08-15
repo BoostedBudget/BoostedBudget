@@ -258,16 +258,33 @@ func (s *transactionSyncService) SetCacheInvalidation(gens *cache.Generations, h
 // therefore WebhookProcessingWorker's TRANSACTIONS route) is a thin wrapper that does not
 // duplicate transaction storage logic, so bumping here, once, covers all of them without a
 // second bump call anywhere else.
+// bumpCacheTimeout bounds the detached post-sync bump work, matching cache_invalidation.go's
+// identical constant and reasoning (Issue #1531 Blocker 2 — see that file's package doc comment).
+const bumpCacheTimeout = 5 * time.Second
+
 func (s *transactionSyncService) bumpCacheForSync(ctx context.Context, userID string) {
 	if s.cacheGens == nil {
 		return
 	}
-	s.cacheGens.Bump(ctx, cache.ScopeUser, userID, "plaid_sync")
+
+	// Issue #1531 Blocker 2: this is called from a defer at the end of SyncTransactions, using
+	// the SAME ctx the whole sync ran under (a River job's context, per plaid_sync.go /
+	// webhook_processing.go). A job timeout or worker shutdown-triggered cancellation landing in
+	// this narrow window — AFTER the sync's DB writes have already committed, but before this
+	// bump runs — would cancel the bump for a write that has already durably happened, exactly
+	// the class of bug Blocker 2 closes in the HTTP mutation middleware. Detach the same way:
+	// context.WithoutCancel + an explicit bounded WithTimeout (WithoutCancel strips the parent
+	// deadline too), matching internal/middleware/rate_limit_fallback.go, internal/health/check.go,
+	// and internal/huma/middleware/cache_invalidation.go.
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+
+	s.cacheGens.Bump(bumpCtx, cache.ScopeUser, userID, "plaid_sync")
 
 	if s.cacheHousehold == nil {
 		return
 	}
-	household, _, found, err := s.cacheHousehold.GetHouseholdForUser(ctx, userID)
+	household, _, found, err := s.cacheHousehold.GetHouseholdForUser(bumpCtx, userID)
 	if err != nil {
 		// Void by design: the sync already committed and the user-scope bump above already ran;
 		// a household lookup failure must never retroactively fail it.
@@ -277,7 +294,7 @@ func (s *transactionSyncService) bumpCacheForSync(ctx context.Context, userID st
 		return
 	}
 	if found && household != nil {
-		s.cacheGens.Bump(ctx, cache.ScopeHousehold, household.ID, "plaid_sync")
+		s.cacheGens.Bump(bumpCtx, cache.ScopeHousehold, household.ID, "plaid_sync")
 	}
 }
 

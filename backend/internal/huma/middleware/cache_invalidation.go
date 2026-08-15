@@ -25,16 +25,37 @@ package middleware
 // TestBumpAfterCommit_NoStaleEntry (internal/cache) for why "commit, then bump" (never the
 // reverse) is the property that makes any of this safe at all — by construction here, the handler
 // (and its commit) always completes before this middleware's code runs, since it runs AFTER next.
+//
+// ⚠ Issue #1531 Blocker 2 — the bump work below runs on context.WithoutCancel(reqCtx), NOT reqCtx
+// itself, exactly like the rate limiter's fallback probe (internal/middleware/rate_limit_fallback.go)
+// and every dependency health check (internal/health/check.go). reqCtx is the INBOUND HTTP
+// request's context: it is cancelled the instant the client disconnects, or expires the instant
+// its deadline (if any) elapses — either of which can land in the narrow window AFTER next(ctx)
+// has already returned (the write has already committed) but BEFORE the bump below runs. Bumping
+// on the request's own context would let a client that hangs up right after a successful write
+// cancel its OWN cache invalidation, leaving stale financial data behind for the household/user
+// scope until the namespace TTL — silently, since Bump swallows its own errors. WithoutCancel
+// detaches from that cancellation/deadline; the explicit WithTimeout that follows re-introduces a
+// bound (WithoutCancel strips the parent deadline too, so without it the bump would have none).
+// See TestCacheInvalidation_BumpsAfterRequestContextCancelled for the regression test.
 import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 )
+
+// bumpTimeout bounds the detached post-commit bump work (user + household) once the request
+// context's own cancellation/deadline has been stripped via context.WithoutCancel. Matches the
+// rate limiter fallback's and health checker's own bounded-probe pattern — WithoutCancel alone
+// would otherwise let a Redis outage hang this goroutine forever with no caller left to time it
+// out (the HTTP response has already been written by this point).
+const bumpTimeout = 5 * time.Second
 
 // HouseholdLookup resolves the household (if any) a user currently belongs to. Satisfied
 // structurally by *repository.householdRepository's GetHouseholdForUser (see main.go wiring).
@@ -93,12 +114,17 @@ func NewCacheInvalidationMiddleware(gens *cache.Generations, hh HouseholdLookup,
 			return
 		}
 
-		gens.Bump(reqCtx, cache.ScopeUser, userID, "http_mutation")
+		// Issue #1531 Blocker 2: detach from the request's own cancellation/deadline before
+		// doing any post-commit work — see the package doc comment above for why.
+		bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(reqCtx), bumpTimeout)
+		defer cancel()
+
+		gens.Bump(bumpCtx, cache.ScopeUser, userID, "http_mutation")
 
 		if hh == nil {
 			return
 		}
-		household, _, found, err := hh.GetHouseholdForUser(reqCtx, userID)
+		household, _, found, err := hh.GetHouseholdForUser(bumpCtx, userID)
 		if err != nil {
 			// Void by design (see cache.Generations.Bump's own doc comment for the same
 			// principle): the write already committed and the user-scope bump above already
@@ -109,7 +135,7 @@ func NewCacheInvalidationMiddleware(gens *cache.Generations, hh HouseholdLookup,
 			return
 		}
 		if found && household != nil {
-			gens.Bump(reqCtx, cache.ScopeHousehold, household.ID, "http_mutation")
+			gens.Bump(bumpCtx, cache.ScopeHousehold, household.ID, "http_mutation")
 		}
 	}
 }

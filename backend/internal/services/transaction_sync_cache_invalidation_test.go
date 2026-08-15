@@ -89,7 +89,7 @@ func newSyncCacheInvalidationHarness(t *testing.T) (
 func TestSyncTransactions_BumpsUserCacheGenerationAfterSuccess(t *testing.T) {
 	service, linkedItem, c, hhReader, _ := newSyncCacheInvalidationHarness(t)
 	ctx := context.Background()
-	hhReader.On("GetHouseholdForUser", ctx, linkedItem.UserID).Return(nil, false, false, nil)
+	hhReader.On("GetHouseholdForUser", mock.Anything, linkedItem.UserID).Return(nil, false, false, nil)
 
 	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
 	require.NoError(t, err)
@@ -113,7 +113,7 @@ func TestSyncTransactions_BumpsHouseholdCacheGenerationWhenResolvable(t *testing
 	service, linkedItem, c, hhReader, _ := newSyncCacheInvalidationHarness(t)
 	ctx := context.Background()
 	household := &domain.Household{ID: "household-cache-inval"}
-	hhReader.On("GetHouseholdForUser", ctx, linkedItem.UserID).Return(household, false, true, nil)
+	hhReader.On("GetHouseholdForUser", mock.Anything, linkedItem.UserID).Return(household, false, true, nil)
 
 	preGen, err := c.Generations().Get(ctx, cache.ScopeHousehold, household.ID)
 	require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestSyncTransactions_BumpsHouseholdCacheGenerationWhenResolvable(t *testing
 func TestSyncTransactions_NoHouseholdBumpWhenUserHasNone(t *testing.T) {
 	service, linkedItem, c, hhReader, _ := newSyncCacheInvalidationHarness(t)
 	ctx := context.Background()
-	hhReader.On("GetHouseholdForUser", ctx, linkedItem.UserID).Return(nil, false, false, nil)
+	hhReader.On("GetHouseholdForUser", mock.Anything, linkedItem.UserID).Return(nil, false, false, nil)
 
 	service.SetCacheInvalidation(c.Generations(), hhReader)
 
@@ -152,7 +152,7 @@ func TestSyncTransactions_NoHouseholdBumpWhenUserHasNone(t *testing.T) {
 func TestSyncTransactions_HouseholdLookupFailureDoesNotFailSync(t *testing.T) {
 	service, linkedItem, c, hhReader, _ := newSyncCacheInvalidationHarness(t)
 	ctx := context.Background()
-	hhReader.On("GetHouseholdForUser", ctx, linkedItem.UserID).Return(nil, false, false, errors.New("redis-adjacent lookup failure"))
+	hhReader.On("GetHouseholdForUser", mock.Anything, linkedItem.UserID).Return(nil, false, false, errors.New("redis-adjacent lookup failure"))
 
 	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
 	require.NoError(t, err)
@@ -235,7 +235,7 @@ func TestSyncTransactions_BumpsOnPartialCommitEvenWhenSyncLaterFails(t *testing.
 	fake := redisclient.NewFake("cache")
 	c := cache.NewCache(cache.Options{Client: fake})
 	hhReader := &mockHouseholdReaderForDeletion{}
-	hhReader.On("GetHouseholdForUser", ctx, linkedItem.UserID).Return(nil, false, false, nil)
+	hhReader.On("GetHouseholdForUser", mock.Anything, linkedItem.UserID).Return(nil, false, false, nil)
 	service.SetCacheInvalidation(c.Generations(), hhReader)
 
 	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
