@@ -45,6 +45,7 @@ package ratelimitstore
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
@@ -159,7 +160,42 @@ func (b *RedisBackend) bucketKey(tier domain.RateLimitTier, key string) string {
 	if tier == domain.RateLimitTierSentinel {
 		return fmt.Sprintf("rl:%s:sentinel", keyVersion)
 	}
-	return fmt.Sprintf("rl:%s:%s:%s", keyVersion, tier.String(), key)
+	return fmt.Sprintf("rl:%s:%s:%s", keyVersion, tier.String(), aggregateIPv6Identity(key))
+}
+
+// aggregateIPv6Identity is the Issue #1531 L4 fix: it bounds Redis key cardinality by aggregating
+// IPv6 identities to their /64 (as Cloudflare's own rate limiter does), so an attacker with one
+// routed /64 -- a single home/mobile allocation in practice -- cannot mint unbounded distinct
+// Redis keys by rotating through /128 addresses within it. This matters specifically because this
+// backend runs on a `noeviction` Redis instance with no cap equivalent to the in-memory store's
+// MaxEntries: unbounded key growth eventually OOMs the instance, every SET starts failing, the
+// breaker trips, and the ENTIRE FLEET silently drops to per-machine limiting — making the cheapest
+// way to disable the fleet-wide limiter the exact traffic pattern it exists to stop.
+//
+// IPv4 must be, and is, completely unaffected — including v4-mapped-in-v6 addresses
+// (::ffff:a.b.c.d). A naive "mask anything that parses as an IP to /64" implementation would take
+// the first 64 bits of a v4-mapped address, which are the SAME fixed prefix
+// (0000:0000:0000:0000:0000:ffff::) for every possible IPv4 address, and collapse every v4-mapped
+// client in the world onto one bucket — addr.Is4() and addr.Is4In6() are both checked, and either
+// one short-circuits back to the identity function entirely unmodified.
+//
+// key values this function cannot parse as an IP (notably identitySentinelFallback's literal
+// string, though the sentinel tier never reaches this function at all — see bucketKey above) pass
+// through unchanged: aggregation is strictly additive risk mitigation, never a source of new
+// collisions for values that were never addresses in the first place.
+func aggregateIPv6Identity(key string) string {
+	addr, err := netip.ParseAddr(key)
+	if err != nil {
+		return key
+	}
+	if addr.Is4() || addr.Is4In6() {
+		return key
+	}
+	if !addr.Is6() {
+		return key
+	}
+	prefix := netip.PrefixFrom(addr, 64)
+	return prefix.Masked().Addr().String()
 }
 
 // emissionAndDVT derives the script's ARGV[1] (emission_interval_us) and ARGV[2] (dvt_us) from

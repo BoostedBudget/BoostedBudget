@@ -256,6 +256,122 @@ func TestRedisBackend_SentinelLimitDefaultsToRegularLimitWhenZero(t *testing.T) 
 	}
 }
 
+// TestRedisBackend_IPv6IdentitiesAggregateToA64BitPrefix is the #1531 L4 regression. The Redis
+// backend runs on a `noeviction` instance: unlike the in-memory store (rate_limit.go's
+// ipLimiterStore), it has no MaxEntries-equivalent cap, and clientIdentity keeps the full /128
+// IPv6 address. An attacker with one routed /64 (a single home/mobile allocation in practice) can
+// send from effectively unlimited distinct /128 addresses, each minting its own permanent Redis
+// key, until memory fills and every SET starts OOMing -- which trips the breaker and silently
+// drops the ENTIRE FLEET to per-machine limiting. Aggregating IPv6 identities to their /64 (as
+// Cloudflare's own rate limiter does) bounds key cardinality to one bucket per routed prefix,
+// matching how these addresses are actually allocated.
+func TestRedisBackend_IPv6IdentitiesAggregateToA64BitPrefix(t *testing.T) {
+	fake := redisclient.NewFake("limiter")
+	fake.RunScriptResult = []any{int64(1), int64(0), int64(9)}
+	b := newTestBackend(fake, ratelimitstore.Options{RegularLimit: 10, Window: time.Minute})
+
+	// Two different /128 addresses within the SAME routed /64.
+	if _, err := b.Allow(context.Background(), domain.RateLimitTierRegular, "2001:db8:1234:5678::1"); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	if _, err := b.Allow(context.Background(), domain.RateLimitTierRegular, "2001:db8:1234:5678:ffff:ffff:ffff:ffff"); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+
+	calls := fake.ScriptCalls()
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 script calls, got %d", len(calls))
+	}
+	key0, key1 := calls[0].Keys[0], calls[1].Keys[0]
+	if key0 != key1 {
+		t.Errorf("two /128 addresses in the same /64 must share one bucket key, got %q and %q", key0, key1)
+	}
+}
+
+// TestRedisBackend_IPv6IdentitiesInDifferentPrefixesGetDifferentBuckets pins the other half of the
+// /64 aggregation: it must not become so coarse that unrelated /64s share a bucket.
+func TestRedisBackend_IPv6IdentitiesInDifferentPrefixesGetDifferentBuckets(t *testing.T) {
+	fake := redisclient.NewFake("limiter")
+	fake.RunScriptResult = []any{int64(1), int64(0), int64(9)}
+	b := newTestBackend(fake, ratelimitstore.Options{RegularLimit: 10, Window: time.Minute})
+
+	if _, err := b.Allow(context.Background(), domain.RateLimitTierRegular, "2001:db8:1111::1"); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	if _, err := b.Allow(context.Background(), domain.RateLimitTierRegular, "2001:db8:2222::1"); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+
+	calls := fake.ScriptCalls()
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 script calls, got %d", len(calls))
+	}
+	key0, key1 := calls[0].Keys[0], calls[1].Keys[0]
+	if key0 == key1 {
+		t.Errorf("two DIFFERENT /64 prefixes must not share a bucket key, both got %q", key0)
+	}
+}
+
+// TestRedisBackend_IPv4IdentitiesAreNeverAggregated is the other required half of L4: a /64 mask
+// must never touch IPv4, including a v4-mapped-in-v6 address (::ffff:a.b.c.d) -- a naive
+// "aggregate everything that parses as an IP to /64" implementation would collapse unrelated IPv4
+// clients whose first 64 bits of the mapped representation happen to match into one bucket. Two
+// different IPv4 addresses (one plain, one v4-mapped-in-v6) must each keep their own, unaggregated
+// key.
+func TestRedisBackend_IPv4IdentitiesAreNeverAggregated(t *testing.T) {
+	fake := redisclient.NewFake("limiter")
+	fake.RunScriptResult = []any{int64(1), int64(0), int64(9)}
+	b := newTestBackend(fake, ratelimitstore.Options{RegularLimit: 10, Window: time.Minute})
+
+	if _, err := b.Allow(context.Background(), domain.RateLimitTierRegular, "203.0.113.1"); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	if _, err := b.Allow(context.Background(), domain.RateLimitTierRegular, "203.0.113.2"); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+
+	calls := fake.ScriptCalls()
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 script calls, got %d", len(calls))
+	}
+
+	if calls[0].Keys[0] != "rl:v1:regular:203.0.113.1" {
+		t.Errorf("plain IPv4 key = %q, want unaggregated rl:v1:regular:203.0.113.1", calls[0].Keys[0])
+	}
+	if calls[0].Keys[0] == calls[1].Keys[0] {
+		t.Errorf("two different plain IPv4 addresses must not share a bucket key, both got %q", calls[0].Keys[0])
+	}
+}
+
+// TestRedisBackend_V4MappedInV6IdentitiesAreNeverAggregated is L4's specific carve-out: a naive
+// "mask anything that parses as an IP to /64" implementation would take the first 64 bits of a
+// v4-mapped-in-v6 address (::ffff:a.b.c.d) — which are the SAME fixed prefix
+// (0000:0000:0000:0000:0000:ffff::) for every possible IPv4 address — and collapse every v4-mapped
+// client in the world onto one bucket. Two different v4-mapped-in-v6 addresses must therefore
+// still get different keys, exactly as their plain-IPv4 counterparts would.
+func TestRedisBackend_V4MappedInV6IdentitiesAreNeverAggregated(t *testing.T) {
+	fake := redisclient.NewFake("limiter")
+	fake.RunScriptResult = []any{int64(1), int64(0), int64(9)}
+	b := newTestBackend(fake, ratelimitstore.Options{RegularLimit: 10, Window: time.Minute})
+
+	if _, err := b.Allow(context.Background(), domain.RateLimitTierRegular, "::ffff:203.0.113.1"); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	if _, err := b.Allow(context.Background(), domain.RateLimitTierRegular, "::ffff:203.0.113.2"); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+
+	calls := fake.ScriptCalls()
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 script calls, got %d", len(calls))
+	}
+	if calls[0].Keys[0] == calls[1].Keys[0] {
+		t.Errorf("two different v4-mapped-in-v6 addresses must not share a bucket key "+
+			"(a naive /64 mask would collapse ALL v4-mapped addresses onto one bucket, since their "+
+			"first 64 bits are always identical) — both got %q", calls[0].Keys[0])
+	}
+}
+
 func TestRedisBackend_Name(t *testing.T) {
 	fake := redisclient.NewFake("limiter")
 	b := newTestBackend(fake, ratelimitstore.Options{RegularLimit: 10, Window: time.Minute})
