@@ -86,6 +86,17 @@ func (s *investmentSyncService) SetCacheInvalidation(gens *cache.Generations) {
 // is the River job's context (via ProcessWebhook), and a job timeout/worker-shutdown cancellation
 // landing after the sync's writes have committed but before this bump runs must not cancel a
 // bump for a write that already durably happened.
+//
+// Issue #1531 M7 — deliberately user-scope ONLY, no household bump: unlike
+// transaction_sync_service.go's bumpCacheForSync and effective_category_refresh.go's
+// bumpCacheForUser (both of which also bump cache.ScopeHousehold), this method does not, because
+// this service never writes balance_snapshots — the table household-scoped GetNetWorthTrend reads
+// via BalanceSnapshotRepository.GetAggregatedHistoryForHousehold. SyncHoldings/
+// SyncInvestmentTransactions write holdings/investment_transactions only; nothing they write is
+// visible to any household-scoped cached query today. If a future change makes this service (or
+// a repository method it calls) write balance_snapshots, this reasoning no longer holds and a
+// household bump must be added here too — see liability_sync_service.go's bumpCacheForUser for
+// the identical decision and reasoning on the liability side.
 func (s *investmentSyncService) bumpCacheForUser(ctx context.Context, userID string) {
 	if s.cacheGens == nil {
 		return
