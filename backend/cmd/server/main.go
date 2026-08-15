@@ -2697,6 +2697,12 @@ func registerCloudflareAndRateLimitMiddlewareWithBackend(e *echo.Echo, cfCIDRRef
 		// intended FLEET-WIDE budget by N — see rateLimitFallbackLimit's doc comment.
 		IPLimit:           rateLimitFallbackLimit(cfg.RateLimitIP, cfg.RateLimitFallbackDivisor),
 		AuthEndpointLimit: rateLimitFallbackLimit(cfg.RateLimitAuth, cfg.RateLimitFallbackDivisor),
+		// ExemptPathLimit (Issue #1531 L3) is deliberately the RAW, UNDIVIDED cfg.RateLimitIP —
+		// /health is the only exempt path, it never uses the Redis-backed primary at all (by
+		// design), and its budget was never fleet-wide to begin with (it's Fly's own
+		// single-machine liveness check), so the fleet-machine-count divisor above must not apply
+		// to it. See RateLimitConfig.ExemptPathLimit's doc comment.
+		ExemptPathLimit:   cfg.RateLimitIP,
 		WindowDuration:    time.Minute,
 		MaxEntries:        cfg.RateLimitMaxEntries,
 		Backend:           backend,
