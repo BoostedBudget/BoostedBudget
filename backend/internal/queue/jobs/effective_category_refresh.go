@@ -11,6 +11,13 @@ import (
 	"github.com/riverqueue/river"
 )
 
+// bumpCacheTimeout bounds the detached post-commit bump work below, matching the same constant
+// name/value used throughout internal/services (e.g. transaction_sync_service.go). River cancels
+// a job's context on shutdown, retry, or timeout — a cancellation landing in the narrow window
+// after this job's write has committed but before the bump runs must not take the bump down with
+// it. Issue #1531 Final fixes.
+const bumpCacheTimeout = 5 * time.Second
+
 // EffectiveCategoryRefreshArgs is the job payload for refreshing effective_category_name
 // for all transactions assigned to a renamed custom category.
 // Issue #1123: Async cascade rename of effective_category_name on custom category update.
@@ -66,11 +73,23 @@ func (w *EffectiveCategoryRefreshWorker) SetCacheInvalidation(gens *cache.Genera
 
 // bumpCacheForUser invalidates userID's cached analytics after this job's rename cascade has
 // committed. Void by design, matching every other generation bump in this codebase.
+//
+// Issue #1531 Final fixes: runs on context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+// rather than the raw job ctx. River cancels a job's context on shutdown, retry, or timeout — if
+// that cancellation lands after UpdateEffectiveCategoryNameByCustomCategoryID has already
+// committed but before this bump runs, the raw ctx would carry the cancellation into
+// cacheGens.Bump, which swallows the resulting error silently: the rename commits, the bump never
+// happens, and cached spending-by-category/merchant and budget-vs-actual analytics (which GROUP
+// BY this exact column) serve stale values until TTL. WithoutCancel alone would leave the bump
+// unbounded (it strips the parent's deadline too), hence the explicit WithTimeout — matching
+// household_service.go's bumpCacheForUser and the sync services' bumpCacheForSync.
 func (w *EffectiveCategoryRefreshWorker) bumpCacheForUser(ctx context.Context, userID string) {
 	if w.cacheGens == nil {
 		return
 	}
-	w.cacheGens.Bump(ctx, cache.ScopeUser, userID, "effective_category_refresh")
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+	w.cacheGens.Bump(bumpCtx, cache.ScopeUser, userID, "effective_category_refresh")
 }
 
 // Work executes the effective category refresh job.

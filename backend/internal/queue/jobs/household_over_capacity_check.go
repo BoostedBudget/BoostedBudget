@@ -206,11 +206,22 @@ func (w *HouseholdOverCapacityCheckWorker) SetCacheInvalidation(gens *cache.Gene
 // bumpCacheForHousehold invalidates householdID's cached household-scoped analytics after a
 // successful auto-offboard has actually removed at least one member. Void by design, matching
 // every other generation bump in this codebase.
+//
+// Issue #1531 Final fixes: runs on context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+// rather than the raw job ctx. River cancels a job's context on shutdown, retry, or timeout — if
+// that cancellation lands after OffboardExcessMembers's removal transaction has already committed
+// but before this bump runs, the raw ctx would carry the cancellation into cacheGens.Bump, which
+// swallows the resulting error silently: the membership removal commits, the bump never happens,
+// and household-scoped cached analytics serve stale values until TTL. WithoutCancel alone would
+// leave the bump unbounded (it strips the parent's deadline too), hence the explicit WithTimeout —
+// matching household_service.go's bumpCacheForHousehold and the sync services' bumpCacheForSync.
 func (w *HouseholdOverCapacityCheckWorker) bumpCacheForHousehold(ctx context.Context, householdID string) {
 	if w.cacheGens == nil {
 		return
 	}
-	w.cacheGens.Bump(ctx, cache.ScopeHousehold, householdID, "household_over_capacity_check")
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+	w.cacheGens.Bump(bumpCtx, cache.ScopeHousehold, householdID, "household_over_capacity_check")
 }
 
 // effectiveTierName returns owner's effective tier name, falling back to the raw SubscriptionTier

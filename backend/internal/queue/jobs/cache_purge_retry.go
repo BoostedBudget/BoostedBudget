@@ -66,8 +66,19 @@ func (w *CachePurgeRetryWorker) Work(ctx context.Context, job *river.Job[CachePu
 	// consistent with every other generation bump in this codebase. A Redis failure there is
 	// logged by Bump itself and counted on cache_bump_failures_total; it does not fail this job,
 	// since the user-scope purge above (the part that CAN fail loudly) already succeeded.
+	//
+	// Issue #1531 Final fixes: runs on context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	// rather than the raw job ctx. This job is itself the durable retry for a bump that already
+	// failed once — if River cancels ITS context (shutdown, retry, timeout) in the narrow window
+	// after PurgeUser above has already succeeded but before this bump runs, the raw ctx would
+	// swallow that cancellation silently and this job would report success with the household bump
+	// never having happened — a second, terminal loss with nothing left to retry it. WithoutCancel
+	// alone would leave the bump unbounded (it strips the parent's deadline too), hence the explicit
+	// WithTimeout — matching every other post-commit bump helper in this codebase.
 	if args.HouseholdID != "" && w.gens != nil {
-		w.gens.Bump(ctx, cache.ScopeHousehold, args.HouseholdID, "gdpr_deletion_retry")
+		bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+		defer cancel()
+		w.gens.Bump(bumpCtx, cache.ScopeHousehold, args.HouseholdID, "gdpr_deletion_retry")
 	}
 
 	return nil
