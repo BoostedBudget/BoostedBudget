@@ -336,3 +336,97 @@ func TestAnalyticsCacheParity_HouseholdScope(t *testing.T) {
 		assertHouseholdInvalidationAndIsolation(t, ctx, hh, inner, cachedSvc, c.Generations(), callHousehold, callPersonal, mutateB)
 	})
 }
+
+// TestAnalyticsCacheParity_HouseholdScope_CrossMemberRequesterIsolation is Issue #1531 H1's
+// regression test. Every case in TestAnalyticsCacheParity_HouseholdScope above issues BOTH the
+// cold and the warm read as the SAME member (A) — member B only ever writes, never reads — which
+// structurally cannot exercise the bug: cache.ScopeFor drops the requesting userID entirely
+// (internal/cache/consumer.go), but getSpendingByMerchantHousehold's SQL binds $1 = the
+// REQUESTING user into merchantSortJoins' merchant_name_overrides joins
+// (internal/repository/merchant_sql_helpers.go), which drive both the merchant display name AND
+// the GROUP BY. Two DIFFERENT members reading the identical household query within the same TTL
+// window must NOT collapse onto one cache entry: whichever member reads second must see their OWN
+// merchant override, not the first reader's.
+//
+// This must fail before the fix: before H1, EncodeHouseholdScope hashes only household ID +
+// member IDs (identical for A and B), so B's read is a cache HIT on the entry A's read populated,
+// and B is served A's private merchant label.
+func TestAnalyticsCacheParity_HouseholdScope_CrossMemberRequesterIsolation(t *testing.T) {
+	pool := connectIntegrationDB(t)
+	redisClient := cachetest.ConnectTestRedis(t)
+	ctx := context.Background()
+
+	c := cache.NewCache(cache.Options{Client: redisClient})
+	hh := newHouseholdPair(t, ctx, pool)
+	analyticsRepo := repository.NewAnalyticsRepository(pool)
+	inner := NewAnalyticsService(analyticsRepo)
+	cachedSvc := NewCachedAnalyticsService(inner, c)
+
+	periodStart := time.Now().UTC().AddDate(0, 0, -14)
+	periodEnd := time.Now().UTC().Add(time.Hour)
+
+	// One merchant, shared by a transaction from EACH member, so the household query's GROUP BY
+	// collapses both members' spend into a single row — isolating the assertion to the merchant
+	// NAME (which the requester-dependent override join resolves) rather than the total (which is
+	// requester-independent and would move for an unrelated reason).
+	merchantID := uuid.New().String()
+	merchantName := "Shared Merchant Co " + merchantID
+	_, err := pool.Exec(ctx, `
+		INSERT INTO merchants (id, name, normalized_name, created_at)
+		VALUES ($1, $2, $3, now())
+	`, merchantID, merchantName, merchantName)
+	require.NoError(t, err, "seed shared merchant")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM merchants WHERE id = $1`, merchantID) //nolint:errcheck
+	})
+
+	seedMerchantTx := func(m *householdMember, amount float64) {
+		id := uuid.New().String()
+		_, err := pool.Exec(ctx, `
+			INSERT INTO transactions (
+				id, user_id, account_id, linked_item_id, source,
+				external_transaction_id, external_transaction_id_blind_idx,
+				amount, date, name, merchant_name, merchant_id, pfc_primary, pfc_detailed,
+				effective_category_name, pending, created_at, updated_at
+			) VALUES (
+				$1, $2, $3, $4, 'plaid', $5, $6,
+				$7, $8::date, $9, $10, $11, $12, $13, $12, false, now(), now()
+			)
+		`, id, m.userID, m.accountID, m.linkedItemID, "ext-"+id, "blind-"+id,
+			amount, time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02"),
+			"Shared Purchase", "Shared Merchant Co", merchantID, "FOOD_AND_DRINK", "FOOD_AND_DRINK_GROCERIES")
+		require.NoError(t, err, "seed merchant transaction for %s", m.userID)
+	}
+	seedMerchantTx(hh.a, 40.00)
+	seedMerchantTx(hh.b, 60.00)
+
+	// Each member privately renames the shared merchant to something only THEY see.
+	insertOverride := func(userID, displayName string) {
+		_, err := pool.Exec(ctx, `
+			INSERT INTO merchant_name_overrides (id, user_id, merchant_id, display_name, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, now(), now())
+		`, uuid.New().String(), userID, merchantID, displayName)
+		require.NoError(t, err, "insert merchant override for %s", userID)
+	}
+	insertOverride(hh.a.userID, "A's Private Label")
+	insertOverride(hh.b.userID, "B's Private Label")
+
+	hhFilters := domain.SpendingFilters{StartDate: periodStart, EndDate: periodEnd, HouseholdScope: hh.scope}
+
+	// Member A reads first (cold): populates the cache entry the current key scheme uses.
+	respA, err := cachedSvc.GetSpendingByMerchant(ctx, hh.a.userID, hhFilters, 10)
+	require.NoError(t, err)
+	require.Len(t, respA.Merchants, 1, "expected the two members' transactions to collapse into one merchant row")
+	assert.Equal(t, "A's Private Label", respA.Merchants[0].MerchantName,
+		"member A must see A's own override on A's own (cold) read")
+
+	// Member B reads the SAME household query immediately after, well within the namespace TTL.
+	// This must be resolved against B's OWN override — not A's cached entry.
+	respB, err := cachedSvc.GetSpendingByMerchant(ctx, hh.b.userID, hhFilters, 10)
+	require.NoError(t, err)
+	require.Len(t, respB.Merchants, 1, "expected the two members' transactions to collapse into one merchant row")
+	assert.Equal(t, "B's Private Label", respB.Merchants[0].MerchantName,
+		"member B must see B's own override, not member A's cached override — a household-scoped "+
+			"cache key that omits the requester lets B's read collapse onto A's cache entry and "+
+			"serves B another household member's private merchant rename (Issue #1531 H1)")
+}
