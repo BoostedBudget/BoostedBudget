@@ -44,14 +44,14 @@ import type {
 } from 'msw';
 
 import type {
-  HealthResponse
+  HealthStatusResponse
 } from '../../models';
 
 
-export const getGetHealthResponseMock = (overrideResponse: Partial<Extract<HealthResponse, object>> = {}): HealthResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), checks: {clerk: {message: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), response_time_ms: faker.number.int(), status: faker.string.alpha({length: {min: 10, max: 20}})}, database: {message: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), response_time_ms: faker.number.int(), status: faker.string.alpha({length: {min: 10, max: 20}})}, redis: {message: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), response_time_ms: faker.number.int(), status: faker.string.alpha({length: {min: 10, max: 20}})}}, status: faker.string.alpha({length: {min: 10, max: 20}}), timestamp: faker.string.alpha({length: {min: 10, max: 20}}), version: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getGetHealthResponseMock = (overrideResponse: Partial<Extract<HealthStatusResponse, object>> = {}): HealthStatusResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), status: faker.helpers.arrayElement(['ok'] as const), ...overrideResponse})
 
 
-export const getGetHealthMockHandler = (overrideResponse?: HealthResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<HealthResponse> | HealthResponse), options?: RequestHandlerOptions) => {
+export const getGetHealthMockHandler = (overrideResponse?: HealthStatusResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<HealthStatusResponse> | HealthStatusResponse), options?: RequestHandlerOptions) => {
   return http.get('*/health', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
 
 

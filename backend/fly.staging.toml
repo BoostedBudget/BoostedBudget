@@ -46,6 +46,13 @@ kill_timeout = 30
   # - PADDLE_WEBHOOK_SECRET
   # - ENCRYPTION_KEY
   # - POSTHOG_API_KEY (PostHog Cloud US - project 357017)
+  # - RATE_LIMIT_REDIS_URL (Issue #1531: Upstash Redis, NO-EVICTION instance — the
+  #   fleet-wide rate limiter's correctness depends on every SET succeeding)
+  # - CACHE_REDIS_URL (Issue #1531: a DIFFERENT Upstash Redis instance from
+  #   RATE_LIMIT_REDIS_URL above — never share one instance between the two, or the
+  #   cache's eviction traffic will OOM the limiter's SETs. Upstash's own eviction
+  #   policy is `optimistic-volatile`, is not configurable, and can evict keys
+  #   without a TTL — see backend/internal/redisclient/client.go's package doc)
 
 [experimental]
   auto_rollback = true
@@ -61,6 +68,15 @@ kill_timeout = 30
   port = 9091
   path = "/metrics"
 
+# Intended machine count: 1 (staging, once this app has any machines at all —
+# `fly machines list` currently returns none for this app). This is a statement of
+# INTENT, not current state. `min_machines_running` below is a FLOOR (the minimum Fly
+# will scale up to keep running), never a ceiling, and it is inert here anyway since
+# auto_stop_machines = false means machines aren't stopped/started based on load in the
+# first place. Multi-machine correctness for the rate limiter (Issue #1531) depends on
+# RATE_LIMIT_REDIS_URL being a real, shared, noeviction Redis instance — NOT on how many
+# machines happen to be running — because each machine's in-memory fallback limiter
+# only sees that machine's own traffic.
 [[services]]
   internal_port = 8080
   protocol = "tcp"

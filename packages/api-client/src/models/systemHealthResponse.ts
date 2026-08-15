@@ -43,6 +43,7 @@ import type { SystemHealthResponseJobQueues } from './systemHealthResponseJobQue
 export interface SystemHealthResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  cache_enabled: boolean;
   dead_letter_queue: DeadLetterMetrics;
   deletion_residue: DeletionResidueMetrics;
   job_backlog: JobBacklogMetrics;

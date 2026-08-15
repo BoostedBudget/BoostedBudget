@@ -30,12 +30,11 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { HealthStatusResponseStatus } from './healthStatusResponseStatus';
 
-export interface ServiceCheck {
-  /** Error message if service is down */
-  message?: string;
-  /** Response time in milliseconds */
-  response_time_ms: number;
-  /** Service status: up or down */
-  status: string;
+export interface HealthStatusResponse {
+  /** A URL to the JSON Schema for this object. */
+  readonly $schema?: string;
+  /** Liveness indicator. Always "ok" when the response is 200. */
+  status: HealthStatusResponseStatus;
 }
