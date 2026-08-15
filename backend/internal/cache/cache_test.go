@@ -321,3 +321,51 @@ func TestSingleflight_OneCallersCancellationDoesNotFailOtherCallers(t *testing.T
 		"caller B must not fail merely because a DIFFERENT concurrent caller (A) sharing the same "+
 			"singleflight key had its own context cancelled — B's own context was never cancelled")
 }
+
+// TestGetOrLoad_SingleflightTimeoutDefaultsToThirtySeconds is the #1531 N1 regression's default
+// path: singleflightLoadTimeout used to be a hardcoded 30s const justified in a comment as
+// "matches this server's default WriteTimeout" -- true only at the DEFAULT (config.go's
+// getEnvAsDuration("SERVER_WRITE_TIMEOUT", 30*time.Second)), but SERVER_WRITE_TIMEOUT is
+// env-configurable and the const could never follow it. With Options.SingleflightLoadTimeout left
+// unset, behaviour must stay exactly what it was: ~30s.
+func TestGetOrLoad_SingleflightTimeoutDefaultsToThirtySeconds(t *testing.T) {
+	fake := redisclient.NewFake("cache")
+	c := NewCache(Options{Client: fake})
+	ctx := context.Background()
+
+	before := time.Now()
+	var gotDeadline time.Time
+	var hadDeadline bool
+	_, _, err := c.GetOrLoad(ctx, testKey("M-timeout-default"), func(ctx context.Context) ([]byte, error) {
+		gotDeadline, hadDeadline = ctx.Deadline()
+		return []byte(`{"v":1}`), nil
+	})
+	require.NoError(t, err)
+	require.True(t, hadDeadline, "the loader's context must carry a deadline")
+	assert.InDelta(t, 30*time.Second, gotDeadline.Sub(before), float64(2*time.Second),
+		"default singleflight timeout must stay ~30s when Options.SingleflightLoadTimeout is unset")
+}
+
+// TestGetOrLoad_SingleflightTimeoutFollowsConfiguredValue is #1531 N1's fix: an operator who
+// raises (or lowers) SERVER_WRITE_TIMEOUT must see the singleflight bound move with it, since the
+// entire justification for bounding the shared load at all is "a load can never legitimately need
+// longer than the server would allow a response to take anyway" -- a claim that is only true if
+// the two values are actually the same number, not two independently-hardcoded ones that happen
+// to match by coincidence at their respective defaults.
+func TestGetOrLoad_SingleflightTimeoutFollowsConfiguredValue(t *testing.T) {
+	fake := redisclient.NewFake("cache")
+	c := NewCache(Options{Client: fake, SingleflightLoadTimeout: 5 * time.Second})
+	ctx := context.Background()
+
+	before := time.Now()
+	var gotDeadline time.Time
+	var hadDeadline bool
+	_, _, err := c.GetOrLoad(ctx, testKey("M-timeout-configured"), func(ctx context.Context) ([]byte, error) {
+		gotDeadline, hadDeadline = ctx.Deadline()
+		return []byte(`{"v":1}`), nil
+	})
+	require.NoError(t, err)
+	require.True(t, hadDeadline, "the loader's context must carry a deadline")
+	assert.InDelta(t, 5*time.Second, gotDeadline.Sub(before), float64(500*time.Millisecond),
+		"a configured SingleflightLoadTimeout must actually govern the loader's context deadline")
+}
