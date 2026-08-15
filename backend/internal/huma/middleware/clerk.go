@@ -338,7 +338,14 @@ func NewClerkMiddleware(
 		go func() {
 			updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			identityRepo.UpdateLastUsed(updateCtx, clerkUserID)
+			// Error deliberately discarded: a best-effort, fire-and-forget timestamp write on a
+			// goroutine with no caller to return to. It must never affect authentication, and
+			// there is nothing actionable to do with a failure. Written as an explicit `_ =` so
+			// the discard reads as intentional rather than an oversight (errcheck flagged the
+			// bare call). Note this column is also why UpdateLastUsed is an explicit
+			// NoCacheImpact entry: no reader on the auth path consumes it, and bumping the
+			// identity generation here would defeat the cache with one write per request.
+			_ = identityRepo.UpdateLastUsed(updateCtx, clerkUserID)
 		}()
 
 		observability.AuthAttempts.WithLabelValues("success").Inc()
