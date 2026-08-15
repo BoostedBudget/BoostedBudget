@@ -52,9 +52,17 @@ func (f *fakeRedisPoolStatsSource) RedisPoolStats() RedisPoolStats {
 	return f.stats[idx]
 }
 
-// Get/Set/Ping are NOT part of RedisPoolStatsSource. They exist purely as tripwires: nothing in
-// StartRedisMetricsCollector holds a concrete *fakeRedisPoolStatsSource (only the interface), so
-// these can never be called — but the counters make that provable rather than merely structural.
+// Get/Set/Ping are NOT part of RedisPoolStatsSource. StartRedisMetricsCollector only ever holds a
+// RedisPoolStatsSource (the interface), which exposes exactly Name()/RedisPoolStats() — there is no
+// way to reach these methods through that interface at all. That means the corresponding assertion
+// in TestStartRedisMetricsCollector_IssuesZeroRedisCommands (commandCalls == 0) is NOT behavioural
+// evidence of anything the test exercises at runtime: commandCalls can only ever be 0, because
+// nothing in the production code path has a reference through which it could call Get/Set/Ping in
+// the first place. The guarantee here is enforced by the Go type system at compile time — which is
+// stronger than a runtime assertion, not weaker — and these methods and their counters exist only
+// so a future reader can see, by their presence, what the interface deliberately excludes. Do not
+// read the commandCalls assertion as proof the collector "chose" not to call these; it never had the
+// option.
 func (f *fakeRedisPoolStatsSource) Get(string) { atomic.AddInt32(&f.commandCalls, 1) }
 func (f *fakeRedisPoolStatsSource) Set(string) { atomic.AddInt32(&f.commandCalls, 1) }
 func (f *fakeRedisPoolStatsSource) Ping()      { atomic.AddInt32(&f.commandCalls, 1) }
@@ -114,6 +122,10 @@ func TestStartRedisMetricsCollector_PublishesPoolGaugesOnTheFirstTickWithoutWait
 	assert.Equal(t, float64(7), testutil.ToFloat64(redisPoolTotalConns.WithLabelValues(client)))
 }
 
+// TestStartRedisMetricsCollector_IssuesZeroRedisCommands is structural, not behavioural: see the
+// doc comment on fakeRedisPoolStatsSource's Get/Set/Ping methods above. commandCalls can only ever
+// be 0 here, because RedisPoolStatsSource's method set makes Get/Set/Ping unreachable at compile
+// time — this test documents that guarantee, it does not exercise it.
 func TestStartRedisMetricsCollector_IssuesZeroRedisCommands(t *testing.T) {
 	client := "test-zero-commands"
 	fake := newFakeRedisPoolStatsSource(client,
