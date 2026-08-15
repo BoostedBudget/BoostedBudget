@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -416,4 +418,57 @@ func TestCacheSet_TOCTOUBetweenTombstoneCheckAndSetIsClosed(t *testing.T) {
 		"a tombstone that lands between the pre-Set check and the Set itself must still be caught: "+
 			"this read (through a client with no injected race) must be a fresh miss, not a hit on "+
 			"data that should have been resurrected-then-rolled-back")
+}
+
+// delAlwaysFails wraps tombstoneAppearsAfterFirstCheckClient's race behaviour (no tombstone on
+// the FIRST Get on tombKey, tombstoned on every subsequent Get) but also fails every Del —
+// simulating M5's corrective rollback Del itself failing against Redis.
+type delAlwaysFails struct {
+	tombstoneAppearsAfterFirstCheckClient
+	delErr error
+}
+
+func (c *delAlwaysFails) Del(_ context.Context, _ ...string) error {
+	return c.delErr
+}
+
+// TestCacheSet_RollbackDelFailureIsLoggedAndCounted is Issue #1531 GA-2's regression test.
+// redisCache.set's M5 rollback (the second isTombstoned check after Set) discarded the
+// corrective Del's error with `_ =`. If a late Set lands after the purge's single SCAN and the
+// rollback Del then fails, the purge has already reported success — a deleted user's cached
+// entry stays readable until TTL (<=600s) with no log, no metric, no retry. This test forces
+// that Del to fail and asserts it is logged at ERROR and counted on the existing
+// cache_errors_total counter (namespace/op/kind), not silently dropped.
+func TestCacheSet_RollbackDelFailureIsLoggedAndCounted(t *testing.T) {
+	fake := redisclient.NewFake("cache")
+	userTag := ScopeTag(ScopeUser, "u1")
+	tombKey := TombstoneKey(userTag)
+
+	delErr := errors.New("redis: connection refused")
+	wrapped := &delAlwaysFails{
+		tombstoneAppearsAfterFirstCheckClient: tombstoneAppearsAfterFirstCheckClient{Client: fake, tombKey: tombKey},
+		delErr:                                delErr,
+	}
+	c := NewCache(Options{Client: wrapped})
+	ctx := context.Background()
+
+	var logBuf strings.Builder
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(prevLogger)
+
+	before := testutil.ToFloat64(cacheErrorsTotal.WithLabelValues(string(NamespaceAnalytics), opSet, errKindRedis))
+
+	_, hit, err := c.GetOrLoad(ctx, testKey("GA2Method"), func(ctx context.Context) ([]byte, error) {
+		return []byte(`{"stale-pre-deletion-data":true}`), nil
+	})
+	require.NoError(t, err, "the loader must still run and its value must still be returned to the immediate caller")
+	assert.False(t, hit)
+
+	after := testutil.ToFloat64(cacheErrorsTotal.WithLabelValues(string(NamespaceAnalytics), opSet, errKindRedis))
+	assert.Equal(t, before+1, after,
+		"a failed rollback Del must increment cache_errors_total — a deleted user's cache entry "+
+			"surviving past the purge with zero observability must not pass silently")
+	assert.Contains(t, logBuf.String(), "rollback",
+		"a failed rollback Del must be logged at ERROR, not discarded with `_ =`")
 }
