@@ -303,11 +303,14 @@ type ServiceHealthStatuses struct {
 	// zero" convention as JobBacklogMetrics/PlaidOrphanedItemMetrics/DeletionResidueMetrics above
 	// (RedisHealth.Status == "not_configured" rather than a bare zero-value "up").
 	//
-	// ⚠ REDIS MUST NEVER FEED calculateOverallStatus. This is an explicit #1531 non-goal: /health
-	// (Fly's liveness probe) already never reads Redis at all (Issue #1531 Task 6), and this field
-	// existing on the ADMIN response must not become a backdoor that couples the same "Redis blip
-	// cycles every machine" hazard into the admin dashboard's status rollup. See
-	// TestSystemHealth_RedisDownDoesNotChangeOverallStatus.
+	// ⚠ Redis DOES feed calculateOverallStatus, but ONLY as far as "degraded", never
+	// "unhealthy"/503 (Issue #1531 criterion 12: "Redis remains non-critical — Redis down yields
+	// degraded + HTTP 200, never 503"). The public /health liveness probe (Fly's http_checks)
+	// still never reads Redis at all (Issue #1531 Task 6) — that boundary is unchanged and is
+	// what actually prevents "a Redis blip cycles every machine": this field existing on the
+	// ADMIN-only response, and only ever downgrading to "degraded", cannot reintroduce that
+	// hazard. See TestSystemHealth_RedisDownReportsDegradedOverallStatus and
+	// calculateOverallStatus's own doc comment for the exact boundary.
 	Redis RedisHealth `json:"redis"`
 }
 

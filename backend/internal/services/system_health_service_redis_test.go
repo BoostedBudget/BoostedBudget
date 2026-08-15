@@ -15,13 +15,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSystemHealth_RedisDownDoesNotChangeOverallStatus is the Issue #1531 Task 7d discrimination
-// test: Redis reporting "down" (or any status at all) must never move
-// calculateOverallStatus's answer. This is a DELIBERATE non-goal — see
-// domain.ServiceHealthStatuses.Redis's doc comment — because /admin/health's overall status
-// rollup feeding an alert must not inherit the exact "Redis blip cycles the fleet" hazard Task 6
-// already closed off on the public liveness probe.
-func TestSystemHealth_RedisDownDoesNotChangeOverallStatus(t *testing.T) {
+// TestSystemHealth_RedisDownReportsDegradedOverallStatus is the Issue #1531 round-2 gap-analysis
+// fix (task GA Part 2) for Issue #1531 criterion 12: "Redis remains non-critical — Redis down
+// yields degraded + HTTP 200, never 503." This test previously asserted the OPPOSITE — that
+// result.Status stayed "healthy" with Redis down — under the name
+// TestSystemHealth_RedisDownDoesNotChangeOverallStatus. That assertion enshrined the exact defect
+// the issue calls out: "/admin/health reporting green regardless of state is worse than no
+// dashboard, because it gets trusted during an incident." Four prior review passes read this test
+// passing and took it as evidence the requirement was met; it was actually pinning the bug.
+//
+// What is still true, and still tested by this file: Redis down must NEVER produce "unhealthy"
+// (only Database can, and only Database is checked before Redis in calculateOverallStatus) — a
+// Redis blip 503ing this probe would cycle every machine via Fly's http_checks, the exact hazard
+// Task 6 closed off on the PUBLIC /health endpoint. This test now asserts the correct middle
+// ground: "down" Redis moves the result to "degraded", not "healthy" (the old, wrong assertion)
+// and not "unhealthy" (which would reopen the Task 6 hazard one level up, on the admin surface).
+func TestSystemHealth_RedisDownReportsDegradedOverallStatus(t *testing.T) {
 	mockHealthRepo := new(MockSystemHealthRepository)
 	mockDeadLetterRepo := new(MockDeadLetterJobRepository)
 	mockPool := new(MockPool)
@@ -62,7 +71,9 @@ func TestSystemHealth_RedisDownDoesNotChangeOverallStatus(t *testing.T) {
 	require.NotNil(t, result)
 
 	assert.Equal(t, "down", result.Services.Redis.Status)
-	assert.Equal(t, "healthy", result.Status, "Redis being down must never change the overall system status")
+	assert.Equal(t, "degraded", result.Status,
+		"Redis being down must surface as degraded (Issue #1531 criterion 12), never healthy — "+
+			"and never unhealthy either, since only Database may 503 this probe")
 }
 
 // TestSystemHealth_RedisReasonIsClassifiedNotRawErrorText pins Issue #1531 Task 7d's tightened
