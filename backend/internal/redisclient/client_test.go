@@ -42,7 +42,7 @@ func TestNew_EmptyURLReturnsErrNotConfigured(t *testing.T) {
 func TestNew_AppliesTightDefaultTimeouts(t *testing.T) {
 	c, err := New(Options{URL: "redis://localhost:6379", Name: "test"})
 	require.NoError(t, err)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	cl, ok := c.(*client)
 	require.True(t, ok)
@@ -65,7 +65,7 @@ func TestNew_AppliesTightDefaultTimeouts(t *testing.T) {
 func TestNew_EnablesContextTimeout(t *testing.T) {
 	c, err := New(Options{URL: "redis://localhost:6379", Name: "test"})
 	require.NoError(t, err)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	cl, ok := c.(*client)
 	require.True(t, ok)
@@ -86,7 +86,7 @@ func TestNew_ExplicitOptionsOverrideDefaults(t *testing.T) {
 		MaxRetries:   3,
 	})
 	require.NoError(t, err)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	cl, ok := c.(*client)
 	require.True(t, ok)
@@ -115,7 +115,7 @@ func TestNew_ExplicitOptionsOverrideDefaults(t *testing.T) {
 func TestClient_NameReturnsConfiguredName(t *testing.T) {
 	c, err := New(Options{URL: "redis://localhost:6379", Name: "cache"})
 	require.NoError(t, err)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	assert.Equal(t, "cache", c.Name())
 }
@@ -123,7 +123,7 @@ func TestClient_NameReturnsConfiguredName(t *testing.T) {
 func TestClient_RedactedAddrIsHostPortOnly(t *testing.T) {
 	c, err := New(Options{URL: "redis://user:hunter2@localhost:6379/0", Name: "test"})
 	require.NoError(t, err)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	addr := c.RedactedAddr()
 

@@ -124,7 +124,7 @@ type scanOrderProbe struct {
 func (p *scanOrderProbe) Scan(ctx context.Context, pattern string) ([]string, error) {
 	p.scanCalls++
 	if p.scanCalls == 1 {
-		_, err := p.Client.Get(ctx, p.tombKey)
+		_, err := p.Get(ctx, p.tombKey)
 		p.tombstoneVisibleAtScan = err == nil
 	}
 	return p.Client.Scan(ctx, pattern)
