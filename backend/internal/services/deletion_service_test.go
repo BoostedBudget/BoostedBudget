@@ -10,8 +10,10 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
@@ -2442,4 +2444,126 @@ func TestExecuteDeletion_PanicDuringCascade_ReleasesClaimThenRePanics(t *testing
 	}, "the panic must still propagate — this proves the claim is released first, not that panics are swallowed")
 
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+}
+
+// mockDeletionCachePurger implements cache.Purger for deletion-service tests. It records the
+// context each PurgeUser call was made with, so tests can assert on Err()/Deadline() at call time
+// (a reference captured only after the call returns would already reflect the *test's* later
+// cleanup, not what the production code actually passed in).
+type mockDeletionCachePurger struct {
+	mock.Mock
+}
+
+func (m *mockDeletionCachePurger) PurgeUser(ctx context.Context, userID, clerkUserID string) error {
+	args := m.Called(ctx, userID, clerkUserID)
+	return args.Error(0)
+}
+
+var _ cache.Purger = (*mockDeletionCachePurger)(nil)
+
+// mockDeletionJobQueue implements queue.JobQueue for deletion-service tests (separate name from
+// mockProfileJobQueue/MockJobQueue elsewhere in this package to avoid collisions).
+type mockDeletionJobQueue struct {
+	mock.Mock
+}
+
+func (m *mockDeletionJobQueue) Enqueue(ctx context.Context, job queue.Job, opts ...queue.EnqueueOption) (*queue.JobResult, error) {
+	args := m.Called(ctx, job)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*queue.JobResult), args.Error(1)
+}
+
+func (m *mockDeletionJobQueue) EnqueueTx(ctx context.Context, tx pgx.Tx, job queue.Job, opts ...queue.EnqueueOption) (*queue.JobResult, error) {
+	args := m.Called(ctx, tx, job)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*queue.JobResult), args.Error(1)
+}
+
+func (m *mockDeletionJobQueue) EnqueueMany(ctx context.Context, jobs []queue.Job, opts ...queue.EnqueueOption) ([]*queue.JobResult, error) {
+	args := m.Called(ctx, jobs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*queue.JobResult), args.Error(1)
+}
+
+func (m *mockDeletionJobQueue) EnqueueManyTx(ctx context.Context, tx pgx.Tx, jobs []queue.Job, opts ...queue.EnqueueOption) ([]*queue.JobResult, error) {
+	args := m.Called(ctx, tx, jobs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*queue.JobResult), args.Error(1)
+}
+
+var _ queue.JobQueue = (*mockDeletionJobQueue)(nil)
+
+// TestPurgeCacheForDeletedUser_PurgeAndRetryEnqueue_SurviveCallerCancellation is Issue #1531 M1's
+// regression test. purgeCacheForDeletedUser is called from a River job's Work method AFTER
+// DeleteUserCascade has already committed — River cancels a job's context on shutdown, retry, or
+// timeout, and that cancellation can land in the narrow window between the commit and this
+// method's own cache cleanup. Before the fix, PurgeUser(ctx, ...) and (on failure)
+// enqueueCachePurgeRetry(ctx, ...) -> jobQueue.Enqueue(ctx, ...) both ran on that same raw,
+// cancelled ctx: PurgeUser would fail with context.Canceled, and the "durable remedy" retry
+// enqueue would ALSO fail with context.Canceled (same cancelled context) — logged and dropped,
+// with no tombstone set and nothing scheduled. The deletion is marked complete while the user's
+// cached PII survives, terminal rather than TTL-bounded.
+//
+// This test cancels the caller's context BEFORE calling purgeCacheForDeletedUser and asserts the
+// contexts actually passed to PurgeUser and jobQueue.Enqueue are NOT the cancelled one (mirroring
+// TestExecuteDeletion_ReleasesClaim_WithIndependentContext_EvenIfCallerContextCancelled above for
+// H4's Release call).
+func TestPurgeCacheForDeletedUser_PurgeAndRetryEnqueue_SurviveCallerCancellation(t *testing.T) {
+	baseCtx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate a River job context cancelled (shutdown/retry/timeout) before cleanup runs
+
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+
+	userID := "user-123"
+	clerkUserID := "user_123"
+	householdID := "" // no household bump in play here — isolate the purge/retry pair
+
+	purger := new(mockDeletionCachePurger)
+	jq := new(mockDeletionJobQueue)
+
+	var purgeCtxErrAtCallTime, enqueueCtxErrAtCallTime error
+	var purgeCalled, enqueueCalled bool
+
+	purger.On("PurgeUser", mock.Anything, userID, clerkUserID).
+		Run(func(args mock.Arguments) {
+			purgeCalled = true
+			purgeCtxErrAtCallTime = args.Get(0).(context.Context).Err()
+		}).
+		Return(errors.New("redis: connection refused")) // force the durable-retry path
+	jq.On("Enqueue", mock.Anything, mock.AnythingOfType("services.cachePurgeRetryJobArgs")).
+		Run(func(args mock.Arguments) {
+			enqueueCalled = true
+			enqueueCtxErrAtCallTime = args.Get(0).(context.Context).Err()
+		}).
+		Return(&queue.JobResult{}, nil)
+
+	service.SetCache(purger, cache.NewGenerations(nil), jq)
+
+	deletionSvc, ok := service.(*deletionService)
+	require.True(t, ok, "test relies on calling the unexported method directly")
+	deletionSvc.purgeCacheForDeletedUser(baseCtx, userID, clerkUserID, householdID)
+
+	require.True(t, purgeCalled, "PurgeUser must still be called even with a cancelled caller context")
+	require.True(t, enqueueCalled, "the durable retry must still be enqueued even with a cancelled caller context")
+	assert.Error(t, baseCtx.Err(), "sanity check: baseCtx really is cancelled")
+	assert.NoError(t, purgeCtxErrAtCallTime,
+		"PurgeUser's context must be independent of the cancelled caller context, or a River "+
+			"cancellation landing here would fail the purge for no reason")
+	assert.NoError(t, enqueueCtxErrAtCallTime,
+		"the durable retry enqueue's context must be independent of the cancelled caller context — "+
+			"otherwise the 'durable remedy' the PurgeUser failure comment relies on is on the SAME "+
+			"cancelled context and fails identically, dropping the cache purge with no tombstone set "+
+			"and nothing scheduled (Issue #1531 M1)")
 }

@@ -1197,23 +1197,28 @@ func (s *deletionService) SetCache(purger cache.Purger, gens *cache.Generations,
 // returns an error, consistent with every other bump call site in this codebase) — the retry job
 // re-attempts it too, for good measure, since it is idempotent.
 //
-// Issue #1531 Final fixes: the household bump runs on context.WithTimeout(context.WithoutCancel(ctx),
-// bumpCacheTimeout) rather than the raw ctx. Both of this method's callers (account_deletion.go,
-// retention_cleanup_check.go) are River jobs — River cancels a job's context on shutdown, retry, or
-// timeout, and a cancellation landing here (after DeleteUserCascade has already committed) would
-// otherwise carry straight into cacheGens.Bump, which swallows the resulting error silently: the
-// deletion is durable, but the household's cache generation never bumps, leaving other members'
-// cached household-scoped analytics stale until TTL. WithoutCancel alone would leave the bump
-// unbounded (it strips the parent's deadline too), hence the explicit WithTimeout — matching
-// household_service.go's bump helpers and the sync services' bumpCacheForSync. PurgeUser above is
-// deliberately left on the raw ctx: a failure there already has its own durable remedy
-// (enqueueCachePurgeRetry), unlike the void-by-design Bump below.
+// Issue #1531 Final fixes / M1: PurgeUser AND enqueueCachePurgeRetry both run on
+// context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout), matching the household bump
+// below. Both of this method's callers (account_deletion.go, retention_cleanup_check.go) are River
+// jobs — River cancels a job's context on shutdown, retry, or timeout, and a cancellation landing
+// here (after DeleteUserCascade has already committed) must not be allowed to take out the cache
+// cleanup with it. This is NOT the household-bump case alone: a previous version of this comment
+// argued PurgeUser could stay on the raw ctx because a failure there "already has its own durable
+// remedy" (the retry enqueue) — but that remedy was ALSO on the same raw, cancellable ctx, so a
+// single River cancellation failed BOTH the purge and its own fallback with context.Canceled,
+// logged and dropped: the deletion completes while the user's cached PII survives, with no
+// tombstone set (that Set used the same context too) and nothing scheduled — terminal, not
+// TTL-bounded, because the tombstone never landed. Detaching both closes that: a genuine Redis
+// failure still triggers the durable retry exactly as designed, but a mere context cancellation no
+// longer masquerades as one.
 func (s *deletionService) purgeCacheForDeletedUser(ctx context.Context, userID, clerkUserID, householdID string) {
 	if s.cachePurger != nil {
-		if err := s.cachePurger.PurgeUser(ctx, userID, clerkUserID); err != nil {
+		purgeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+		defer cancel()
+		if err := s.cachePurger.PurgeUser(purgeCtx, userID, clerkUserID); err != nil {
 			slog.Default().Error("gdpr deletion: cache purge failed; enqueuing durable retry",
 				"user_id", userID, "error", err)
-			s.enqueueCachePurgeRetry(ctx, userID, clerkUserID, householdID)
+			s.enqueueCachePurgeRetry(purgeCtx, userID, clerkUserID, householdID)
 		}
 	}
 	if householdID != "" && s.cacheGens != nil {
