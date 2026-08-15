@@ -101,12 +101,26 @@ func NewCacheInvalidationMiddleware(gens *cache.Generations, hh HouseholdLookup,
 		next(ctx)
 
 		status := ctx.Status()
-		if status != 0 && (status < 200 || status >= 400) {
-			// A genuine, non-zero failure status: nothing committed, nothing to invalidate.
+		if status >= 400 && status < 500 {
+			// A genuine 4xx (validation, auth, business-rule rejection): assumed to mean the
+			// handler never reached a commit, so skipping the bump costs nothing and saves the
+			// work. This is an assumption, not a guarantee -- see the 5xx case below, and the
+			// package doc comment's Status()==0 case, for the class of failure where the
+			// equivalent assumption turned out to be false.
 			return
 		}
-		// status == 0 (UNKNOWN — unwritten or a panicking handler) falls through and bumps
-		// anyway, deliberately: see the package doc comment.
+		// Every other status bumps: 2xx/3xx (a real success), 0/UNKNOWN (unwritten or a
+		// panicking handler — see the package doc comment), and 5xx.
+		//
+		// Issue #1531 L8: 5xx used to be treated the same as 4xx (skip, "nothing committed").
+		// That assumption is false for a handler that COMMITS and then fails on a LATER step — a
+		// post-commit side effect (an audit log write, an event publish, a downstream API call)
+		// erroring out surfaces as a 500 despite the mutation itself having already landed. The
+		// status code alone cannot distinguish "failed before any write" from "wrote, then failed
+		// afterward," which is exactly the ambiguity the Status()==0 case already conceded and
+		// chose to bump through — over-invalidating only costs hit rate, while under-invalidating
+		// serves stale financial data until the namespace TTL. 5xx now gets the same treatment for
+		// the same reason.
 
 		reqCtx := ctx.Context()
 		userID, _ := reqCtx.Value(inputs.UserIDKey).(string)
