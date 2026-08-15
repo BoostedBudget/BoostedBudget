@@ -289,7 +289,14 @@ func main() {
 	// (registerCloudflareAndRateLimitMiddleware — the byte-for-byte-pinned issue1514 ordering
 	// test still calls that 3-arg function directly, which now just delegates here with a nil
 	// backend/done/logger, reproducing its exact prior behaviour).
-	rateLimitBackend := buildRateLimitBackend(limiterClient, cfg)
+	rateLimitBackend, err := buildRateLimitBackend(limiterClient, cfg)
+	if err != nil {
+		// RATE_LIMIT_BACKEND=redis with no working limiter client — a STARTUP failure (we are
+		// still in main()'s initialization, before Echo starts accepting traffic), never a
+		// per-request one. See buildRateLimitBackend's doc comment.
+		appLogger.Error("Failed to build rate-limit backend", "error", err)
+		os.Exit(1)
+	}
 	registerCloudflareAndRateLimitMiddlewareWithBackend(e, cfCIDRRef, cfg, rateLimitBackend, rateLimitDone, appLogger) // 3-4. Cloudflare gate, then per-IP rate limiting (order load-bearing, see helper doc)
 	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                                                        // 5. Panic recovery (formats RFC 9457 response)
 	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                                                           // 6. Sentry panic reporting
@@ -2590,9 +2597,35 @@ func newRedisClientOptions(cfg *config.Config, url, name string) redisclient.Opt
 // limiterClient/cfg, or returns nil (memory-only) when limiterClient is nil. Extracted from
 // main() so its SentinelLimit choice — the subject of Issue #1531 fix round 1 — is unit-testable
 // without a real Redis server.
-func buildRateLimitBackend(limiterClient redisclient.Client, cfg *config.Config) middleware.RateLimitBackend {
+//
+// Issue #1531 Slice B / M2: cfg.RateLimitBackend (RATE_LIMIT_BACKEND) is a documented incident
+// kill switch (docs/architecture/redis-topology.md, "Kill switches") that was validated at
+// config.Load() time but never actually read here — this function used to branch solely on
+// limiterClient == nil, so setting RATE_LIMIT_BACKEND=memory during an incident (e.g. a sick
+// Upstash instance) had zero effect: every request still hit the Redis-backed primary. Now:
+//   - "memory": force in-memory limiting even when limiterClient is non-nil (the incident lever).
+//   - "redis": require a working limiterClient; if one isn't available, return an error so the
+//     CALLER can fail fast at STARTUP — never per-request. This function itself must never fail a
+//     request; it only runs once, during main()'s initialization, before any HTTP traffic is
+//     accepted.
+//   - "auto" (default) or any other/empty value (e.g. a *config.Config built directly by a test
+//     without going through Load(), where the zero value is ""): preserves the original
+//     nil-check-only behaviour.
+func buildRateLimitBackend(limiterClient redisclient.Client, cfg *config.Config) (middleware.RateLimitBackend, error) {
+	switch cfg.RateLimitBackend {
+	case "memory":
+		return nil, nil
+	case "redis":
+		if limiterClient == nil {
+			return nil, fmt.Errorf(
+				"RATE_LIMIT_BACKEND=redis requires a working Redis limiter client, but none is available " +
+					"(RATE_LIMIT_REDIS_URL missing/unreachable) — refusing to start rather than silently " +
+					"falling back to memory-only rate limiting")
+		}
+	}
+
 	if limiterClient == nil {
-		return nil
+		return nil, nil
 	}
 	return ratelimitstore.NewRedisBackend(limiterClient, ratelimitstore.Options{
 		RegularLimit: cfg.RateLimitIP,
@@ -2614,7 +2647,7 @@ func buildRateLimitBackend(limiterClient redisclient.Client, cfg *config.Config)
 		// higher still without a deploy.
 		SentinelLimit: cfg.RateLimitSentinelLimit,
 		Window:        time.Minute,
-	})
+	}), nil
 }
 
 func registerCloudflareAndRateLimitMiddleware(e *echo.Echo, cfCIDRRef *atomic.Pointer[[]netip.Prefix], cfg *config.Config) {
