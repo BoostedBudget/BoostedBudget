@@ -116,11 +116,14 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 if check_endpoint "$API_URL/health" "200"; then
   print_test "pass" "API health endpoint is responding"
 
-  # Validate health response structure
-  if check_json_response "$API_URL/health" ".status" "healthy"; then
-    print_test "pass" "API reports healthy status"
+  # Validate health response structure. Issue #1514 criterion 20 / #1531: the public
+  # /health body is deliberately slim — {"status":"ok"} only, never "healthy" — so an
+  # attacker can't fingerprint the stack or a dependency's internals from an
+  # unauthenticated response. See internal/huma/operations/health.go.
+  if check_json_response "$API_URL/health" ".status" "ok"; then
+    print_test "pass" "API reports ok status"
   else
-    print_test "fail" "API health status is not 'healthy'"
+    print_test "fail" "API health status is not 'ok'"
     exit 1
   fi
 else
@@ -128,11 +131,17 @@ else
   exit 1
 fi
 
-# Test 2: API Metrics Endpoint
-if check_endpoint "$API_URL/metrics" "200"; then
-  print_test "pass" "API metrics endpoint is responding"
+# Test 2: API Metrics Endpoint must NOT be publicly reachable. Issue #1514 criterion 18
+# moved /metrics onto a separate, internal-only listener (cmd/server/internal_metrics.go,
+# port 9091, scraped only from inside the Fly private network) specifically because it was
+# previously reachable from the public internet, unauthenticated. A public 200 here would
+# mean that fix regressed, not that everything is healthy — so 404 (or connection-refused)
+# is the PASS condition, not a failure.
+metrics_status=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL/metrics" --max-time 10 || echo "000")
+if [ "$metrics_status" == "404" ] || [ "$metrics_status" == "000" ]; then
+  print_test "pass" "API metrics endpoint is not publicly reachable (got $metrics_status; non-critical check)"
 else
-  print_test "warn" "API metrics endpoint not responding (non-critical)"
+  print_test "warn" "API metrics endpoint returned $metrics_status (expected 404 or connection-refused — Issue #1514 criterion 18 may have regressed; non-critical)"
 fi
 
 # Test 3: API Version Endpoint (if exists)
