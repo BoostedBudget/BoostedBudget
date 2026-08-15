@@ -11,7 +11,10 @@ package jobs
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -21,6 +24,36 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/redisclient"
 )
+
+// householdGenerationWriteRecorder wraps redisclient.Client and records every key passed to Set,
+// so a test can assert that NO household generation key (rendered as "{h:...}:gen") was ever
+// written — a positive assertion on writes, not a comparison of two back-to-back Gets of an
+// unrelated scope (which are trivially equal with no possible intervening write and would pass
+// even a bug that bumped "" or the wrong household ID).
+type householdGenerationWriteRecorder struct {
+	redisclient.Client
+	mu          sync.Mutex
+	writtenKeys []string
+}
+
+func (r *householdGenerationWriteRecorder) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	r.mu.Lock()
+	r.writtenKeys = append(r.writtenKeys, key)
+	r.mu.Unlock()
+	return r.Client.Set(ctx, key, value, ttl)
+}
+
+func (r *householdGenerationWriteRecorder) householdGenerationKeysWritten() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, k := range r.writtenKeys {
+		if strings.Contains(k, "{h:") && strings.HasSuffix(k, ":gen") {
+			out = append(out, k)
+		}
+	}
+	return out
+}
 
 // fakeEffectiveCategoryHouseholdLookupFound always reports the given household as found for
 // every user — the simplest positive case for this test.
@@ -80,7 +113,16 @@ func TestEffectiveCategoryRefreshWorker_Work_BumpsHouseholdCacheGenerationWhenRe
 }
 
 // TestEffectiveCategoryRefreshWorker_Work_NoHouseholdBumpWhenUserHasNone proves the negative: a
-// user with no household must not spuriously mint/bump some unrelated household scope.
+// user with no household must not spuriously mint/bump ANY household scope.
+//
+// Issue #1531 GA-6: the previous version of this test read cache.ScopeHousehold,
+// "some-unrelated-household"'s generation TWICE, both AFTER Work had already returned, with no
+// possible intervening write between the two Gets — two consecutive Gets of an unrelated,
+// untouched scope are trivially equal regardless of what Work actually did. A bug that bumped ""
+// or the WRONG household ID (any ID other than "some-unrelated-household") would still pass this
+// assertion vacuously. This version instead asserts on writes: a recording client proves no
+// household generation key (any household, not just "some-unrelated-household") was ever
+// Set-called during Work.
 func TestEffectiveCategoryRefreshWorker_Work_NoHouseholdBumpWhenUserHasNone(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -95,7 +137,8 @@ func TestEffectiveCategoryRefreshWorker_Work_NoHouseholdBumpWhenUserHasNone(t *t
 	})
 
 	fakeRedis := redisclient.NewFake("cache")
-	c := cache.NewCache(cache.Options{Client: fakeRedis})
+	recorder := &householdGenerationWriteRecorder{Client: fakeRedis}
+	c := cache.NewCache(cache.Options{Client: recorder})
 	worker.SetCacheInvalidation(c.Generations(), fakeEffectiveCategoryHouseholdLookupNone{})
 
 	job := newTestEffectiveCategoryRefreshJob(EffectiveCategoryRefreshArgs{
@@ -105,9 +148,8 @@ func TestEffectiveCategoryRefreshWorker_Work_NoHouseholdBumpWhenUserHasNone(t *t
 	err := worker.Work(ctx, job)
 	require.NoError(t, err)
 
-	preGen, err := c.Generations().Get(ctx, cache.ScopeHousehold, "some-unrelated-household")
-	require.NoError(t, err)
-	postGen, err := c.Generations().Get(ctx, cache.ScopeHousehold, "some-unrelated-household")
-	require.NoError(t, err)
-	assert.Equal(t, preGen, postGen, "a user with no household must not bump any household scope")
+	assert.Empty(t, recorder.householdGenerationKeysWritten(),
+		"a user with no household must not write ANY household generation key — a bug that bumped "+
+			"\"\" or the wrong household ID must fail this, unlike two back-to-back Gets of an "+
+			"unrelated scope (Issue #1531 GA-6)")
 }
