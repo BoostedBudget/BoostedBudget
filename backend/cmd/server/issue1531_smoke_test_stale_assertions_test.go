@@ -102,20 +102,39 @@ func TestSmokeTestScript_PublicMetricsExpectsUnreachable(t *testing.T) {
 // TestVerifyDeploymentScript_MetricsExpectsUnreachable is verify-deployment.sh's counterpart
 // to TestSmokeTestScript_PublicMetricsExpectsUnreachable above. Lower severity (manual-only
 // script, not invoked by either deploy workflow) but the same stale claim.
+//
+// ⚠ This test deliberately pins a SHAPE ("200 is the only failing outcome"), not a specific
+// expected status code. An earlier version of this fix required exactly 404 and was wrong:
+// BACKEND_URL is the direct *.fly.dev hostname, which bypasses Cloudflare, and #1531 removed
+// /metrics from CloudflareOnly's exemptedPaths (internal/middleware/cloudflare.go now exempts
+// only /health). So a direct request carries no Cloudflare headers and is rejected with 403 by
+// the origin gate BEFORE routing could produce a 404. Through Cloudflare it would be 404;
+// direct it is 403; if the port refuses, curl reports 000. All three mean "not publicly
+// served" — the property that matters. Only 200 means the #1514 fix regressed.
 func TestVerifyDeploymentScript_MetricsExpectsUnreachable(t *testing.T) {
 	contents := readScriptOrFatal(t, "../../../scripts/verify-deployment.sh")
 
-	re := regexp.MustCompile(`check_endpoint\s+"\$\{BACKEND_URL\}/metrics"\s+"[^"]*"\s+(\d+)`)
-	m := re.FindStringSubmatch(contents)
-	if m == nil {
-		t.Fatal("scripts/verify-deployment.sh: could not find the ${BACKEND_URL}/metrics check_endpoint " +
-			"call — has it been rewritten?")
+	window := textWindowAfter(t, contents, `"${BACKEND_URL}/metrics"`, "scripts/verify-deployment.sh", 600)
+
+	// Must branch on 200 as the failing case...
+	if !regexp.MustCompile(`metrics_status"?\s*=\s*"200"`).MatchString(window) {
+		t.Errorf(`scripts/verify-deployment.sh's ${BACKEND_URL}/metrics check does not branch on a 200 ` +
+			`response as the failing outcome. See this test's doc comment for why 200 — not 404 — is the ` +
+			`only status that indicates a regression here.`)
 	}
 
-	if m[1] == "200" {
-		t.Errorf(`scripts/verify-deployment.sh expects ${BACKEND_URL}/metrics to return 200, but Issue ` +
-			`#1514 criterion 18 moved /metrics to an internal-only listener — the public listener never ` +
-			`registers it. The assertion must expect it is NOT publicly reachable (404).`)
+	// ...and must NOT have been re-tightened to demand an exact non-200 code, which would fail
+	// against the 403 that the direct fly.dev hostname actually returns.
+	//
+	// ⚠ Matched against the WHOLE file, not `window`. textWindowAfter starts the window AT the
+	// anchor, so everything before it on the same line — including the `check_endpoint ` call
+	// name itself — is outside the window. Scanning `window` here made this assertion unable to
+	// fail, which is precisely how it was caught: the mutation test for it came back green.
+	if regexp.MustCompile(`check_endpoint\s+"\$\{BACKEND_URL\}/metrics"[^\n]*\s+404`).MatchString(contents) {
+		t.Errorf(`scripts/verify-deployment.sh requires ${BACKEND_URL}/metrics to return exactly 404, but ` +
+			`the direct *.fly.dev hostname bypasses Cloudflare and CloudflareOnly rejects the unexempted ` +
+			`/metrics path with 403 first — so this check would fail against a correctly-configured ` +
+			`deployment. Accept any non-200 instead.`)
 	}
 }
 
