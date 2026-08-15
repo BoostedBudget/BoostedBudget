@@ -1925,10 +1925,6 @@ func main() {
 		// transfer_suggestion_service's user-initiated events are — via gdprClient, not the raw
 		// phClient other admin-triggered-but-operational events use.
 		adminUserService.SetGDPRAnalytics(gdprClient)
-		// Issue #1531 Task 10b-2b: bump the TARGET user's cache scope when an admin sets/clears
-		// their manual tier override — the acting caller is the admin, not the affected user, so
-		// NewCacheInvalidationMiddleware's own bump (on the admin) never covers them.
-		adminUserService.SetCacheInvalidation(cacheInstance.Generations())
 
 		// Issue #640: System health monitoring service
 		systemHealthService := services.NewSystemHealthService(
