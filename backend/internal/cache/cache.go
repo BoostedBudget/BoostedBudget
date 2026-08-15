@@ -62,6 +62,10 @@ type sfResult struct {
 	hit  bool
 }
 
+// singleflightLoadTimeout bounds the detached, shared singleflight execution in GetOrLoad —
+// see the Issue #1531 M4 comment at that call site.
+const singleflightLoadTimeout = 30 * time.Second
+
 // NewCache returns a production Cache over opts.Client.
 func NewCache(opts Options) Cache {
 	now := opts.Now
@@ -125,8 +129,25 @@ func (c *redisCache) GetOrLoad(
 	dataKey := k.DataKey(cfg.SchemaVersion, gen)
 	scopeTag := k.ScopeTag()
 
+	// Issue #1531 M4: the shared singleflight execution runs on a DETACHED context
+	// (context.WithoutCancel(ctx), bounded by singleflightLoadTimeout), never the raw ctx of
+	// whichever caller happened to be first through sf.Do. Only one goroutine's closure actually
+	// runs per in-flight dataKey — every other concurrent caller for the same key just blocks on
+	// its result — so without detaching, that ONE caller's context governs the outcome for ALL of
+	// them: if member A's request is the one that wins the race and A then navigates away
+	// (cancelling A's ctx), the shared loader returns context.Canceled and singleflight hands that
+	// SAME error to member B, a concurrent but otherwise healthy request that never had a
+	// cancelled context of its own — a spurious 500 on a request that would have succeeded before
+	// this branch. Detaching also protects against inheriting a shorter caller's deadline: sfCtx
+	// is bounded independently, not by whichever caller's remaining deadline happened to be
+	// shortest. singleflightLoadTimeout (30s) matches this server's default WriteTimeout
+	// (internal/config/config.go) — a load can never legitimately need longer than the server
+	// would allow a response to take anyway.
+	sfCtx, sfCancel := context.WithTimeout(context.WithoutCancel(ctx), singleflightLoadTimeout)
+	defer sfCancel()
+
 	raw, err, shared := c.sf.Do(dataKey, func() (any, error) {
-		res, lerr := c.getOrLoadOnce(ctx, ns, cfg, dataKey, scopeTag, loader)
+		res, lerr := c.getOrLoadOnce(sfCtx, ns, cfg, dataKey, scopeTag, loader)
 		return res, lerr
 	})
 	if shared {

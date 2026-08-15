@@ -259,3 +259,65 @@ func TestNoopCache_EnabledAlwaysFalse(t *testing.T) {
 	assert.False(t, c.Enabled(NamespaceAnalytics))
 	assert.Nil(t, c.Generations())
 }
+
+// TestSingleflight_OneCallersCancellationDoesNotFailOtherCallers is Issue #1531 M4's regression
+// test. GetOrLoad de-duplicates concurrent callers for the same dataKey via singleflight, but only
+// ONE goroutine's closure actually runs the loader — every other concurrent caller for that key
+// just blocks on the shared result. Before the fix, that closure ran on the FIRST caller's raw
+// ctx: if that caller (A) cancels (e.g. navigates away mid-request), the shared loader observes
+// A's cancellation and singleflight hands that SAME error to every other caller sharing the
+// flight (B) — a spurious failure on a request that never had a cancelled context of its own and
+// would have succeeded before this branch.
+func TestSingleflight_OneCallersCancellationDoesNotFailOtherCallers(t *testing.T) {
+	fake := redisclient.NewFake("cache")
+	c := NewCache(Options{Client: fake})
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	ctxB := context.Background()
+
+	started := make(chan struct{})
+	proceed := make(chan struct{})
+
+	// loader mimics a real loader that respects ctx cancellation (e.g. a DB query bound to ctx):
+	// it blocks until released, then returns whatever the (possibly-cancelled) ctx says.
+	loader := func(ctx context.Context) ([]byte, error) {
+		close(started)
+		<-proceed
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return []byte(`{"v":1}`), nil
+	}
+
+	var wg sync.WaitGroup
+	var errB error
+
+	// A calls first and becomes the singleflight LEADER: its closure is the one that actually
+	// runs the loader. A's own resulting error is not this test's concern (it legitimately
+	// cancelled its own request) — B's is.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, _, _ = c.GetOrLoad(ctxA, testKey("M4"), loader)
+	}()
+	<-started // A is now confirmed blocked inside the shared, in-flight call for this dataKey.
+
+	// B joins the SAME in-flight call for the identical key — it must never invoke loader itself
+	// (singleflight de-dup), only share A's eventual result.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, _, errB = c.GetOrLoad(ctxB, testKey("M4"), loader)
+	}()
+	time.Sleep(20 * time.Millisecond) // let B register as a follower before A's ctx is cancelled
+
+	cancelA() // simulate A navigating away mid-load — B's OWN context (ctxB) is never touched
+	time.Sleep(20 * time.Millisecond)
+	close(proceed) // release the shared loader
+
+	wg.Wait()
+
+	require.NoError(t, errB,
+		"caller B must not fail merely because a DIFFERENT concurrent caller (A) sharing the same "+
+			"singleflight key had its own context cancelled — B's own context was never cancelled")
+}
