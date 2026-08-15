@@ -153,9 +153,26 @@ run_smoke_tests() {
 
   # Issue #1514 criterion 18 moved /metrics onto a separate, internal-only listener
   # (cmd/server/internal_metrics.go, port 9091) — the public listener never registers it
-  # (see TestPublicRouteRegistration_MetricsNotServed_HealthUnchanged), so 404 is the
-  # PASS condition here, not 200. A public 200 would mean that fix regressed.
-  check_endpoint "${BACKEND_URL}/metrics" "Metrics endpoint (expect not publicly reachable)" 404 || ((failed++))
+  # (see TestPublicRouteRegistration_MetricsNotServed_HealthUnchanged). So the only FAILING
+  # outcome here is 200; anything else means it is not publicly served, which is the property
+  # we want.
+  #
+  # ⚠ Do NOT tighten this back to "expect exactly 404". BACKEND_URL is the direct *.fly.dev
+  # hostname (see the URL block at the top of this script), which bypasses Cloudflare — and
+  # #1531 removed /metrics from CloudflareOnly's exemptedPaths (backend/internal/middleware/
+  # cloudflare.go, which now exempts only /health). So a direct request carries no Cloudflare
+  # headers and is rejected with 403 by the origin gate *before* routing could ever produce a
+  # 404. Through Cloudflare it would be 404; direct it is 403. Both are correct; only 200 is not.
+  local metrics_status
+  metrics_status=$(curl -s -o /dev/null -w "%{http_code}" -L "${BACKEND_URL}/metrics" --max-time 10 || echo "000")
+  echo -e "${BLUE}Testing Metrics endpoint (expect NOT publicly reachable)...${NC}"
+  echo -e "  URL: ${BACKEND_URL}/metrics"
+  if [ "$metrics_status" = "200" ]; then
+    echo -e "${RED}✗ /metrics is PUBLICLY REACHABLE (200) — Issue #1514 criterion 18 has regressed${NC}"
+    ((failed++))
+  else
+    echo -e "${GREEN}✓ /metrics is not publicly reachable (returned ${metrics_status})${NC}"
+  fi
   echo ""
 
   print_section "Frontend Health Checks"
