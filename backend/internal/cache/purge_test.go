@@ -350,3 +350,70 @@ func TestIsTombstoned_GenuineReadErrorFailsClosed(t *testing.T) {
 			"read (through a client with no injected error) must still be a fresh miss, not a hit "+
 			"on data written during the unconfirmed-tombstone window")
 }
+
+// tombstoneAppearsAfterFirstCheckClient simulates a GDPR purge's tombstone landing IN BETWEEN a
+// write's pre-Set tombstone check and its Set: the first Get on the tombstone key reports "not
+// tombstoned" (ErrNotFound), every subsequent Get on that key reports tombstoned. This isolates
+// isTombstoned's SECOND (post-Set) call from its FIRST (pre-Set) call, so a test can prove the
+// post-Set recheck — not just the pre-Set check — actually runs and actually undoes the write.
+type tombstoneAppearsAfterFirstCheckClient struct {
+	redisclient.Client
+	tombKey string
+	calls   int
+}
+
+func (c *tombstoneAppearsAfterFirstCheckClient) Get(ctx context.Context, key string) (string, error) {
+	if key == c.tombKey {
+		c.calls++
+		if c.calls == 1 {
+			return "", redisclient.ErrNotFound
+		}
+		return tombstoneValue, nil
+	}
+	return c.Client.Get(ctx, key)
+}
+
+// TestCacheSet_TOCTOUBetweenTombstoneCheckAndSetIsClosed is Issue #1531 M5's regression test.
+// redisCache.set checked isTombstoned, then (non-atomically) called client.Set — reads never
+// check the tombstone at all. A GDPR purge's tombstone+scan+delete can land ANYWHERE around that
+// check/Set pair: if the tombstone is written after the check passes but the purge's SCAN has
+// already run by the time this Set lands, the purge finds nothing to delete at dataKey, and this
+// write survives — resurrecting a deleted user's cached data for up to the namespace TTL, well
+// past the tombstone having been set.
+//
+// This closes the race with a SECOND tombstone check immediately after the Set: any tombstone
+// visible at that point can only have been set no earlier than the purge that owns it, and since
+// tombstoneTTL (900s) safely exceeds every namespace TTL, deleting the just-written key at that
+// point is always safe and always sufficient, regardless of exactly when the purge's SCAN ran
+// relative to this Set.
+func TestCacheSet_TOCTOUBetweenTombstoneCheckAndSetIsClosed(t *testing.T) {
+	fake := redisclient.NewFake("cache")
+	userTag := ScopeTag(ScopeUser, "u1")
+	tombKey := TombstoneKey(userTag)
+
+	wrapped := &tombstoneAppearsAfterFirstCheckClient{Client: fake, tombKey: tombKey}
+	c := NewCache(Options{Client: wrapped})
+	ctx := context.Background()
+
+	// No tombstone existed at the pre-Set check (first Get on tombKey reports ErrNotFound), but by
+	// the time the write actually lands, a purge has landed too (every SUBSEQUENT Get on tombKey
+	// reports tombstoned) — the exact race this test exists to catch.
+	_, hit, err := c.GetOrLoad(ctx, testKey("M5"), func(ctx context.Context) ([]byte, error) {
+		return []byte(`{"stale-pre-deletion-data":true}`), nil
+	})
+	require.NoError(t, err, "the loader must still run and its value must still be returned to the immediate caller")
+	assert.False(t, hit)
+
+	// Read back through a plain client with no injected race — this must be a miss: the racy
+	// write must have been rolled back by the post-Set recheck, not left to survive until TTL.
+	plainClient := &tombstoneAppearsAfterFirstCheckClient{Client: fake, tombKey: "not-a-real-key"}
+	cPlain := NewCache(Options{Client: plainClient})
+	_, hit2, err := cPlain.GetOrLoad(ctx, testKey("M5"), func(ctx context.Context) ([]byte, error) {
+		return []byte(`{"should-not-be-cached":true}`), nil
+	})
+	require.NoError(t, err)
+	assert.False(t, hit2,
+		"a tombstone that lands between the pre-Set check and the Set itself must still be caught: "+
+			"this read (through a client with no injected race) must be a fresh miss, not a hit on "+
+			"data that should have been resurrected-then-rolled-back")
+}

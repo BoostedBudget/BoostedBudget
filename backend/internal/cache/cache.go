@@ -232,6 +232,18 @@ func (c *redisCache) loadAndSet(
 // runs before every write in this package, closing the race where a fill that started before a
 // user's deletion finishes and tries to write stale data back into their scope after the purge
 // has already scanned and deleted it.
+//
+// Issue #1531 M5: the pre-Set check above is NOT atomic with the Set that follows it — a purge's
+// tombstone+scan+delete can land in the gap between them. If the tombstone is written after this
+// method's first check passes but the purge's SCAN has already run by the time the Set below
+// lands, the purge finds nothing at dataKey to delete, and this write survives: a deleted user's
+// cached data resurrected for up to the namespace TTL. A SECOND tombstone check immediately after
+// the Set closes this: any tombstone visible at that point can only have been set no earlier than
+// the purge that owns it, and because tombstoneTTL (900s) safely exceeds every registered
+// namespace TTL, deleting the key this method just wrote is always safe and always sufficient,
+// regardless of exactly when the purge's SCAN ran relative to the Set. This does not require a
+// third check ad infinitum: once the write has been rolled back, there is nothing left for a
+// LATER purge to have missed.
 func (c *redisCache) set(ctx context.Context, ns Namespace, cfg namespaceConfig, dataKey, scopeTag string, val []byte) {
 	if c.isTombstoned(ctx, scopeTag) {
 		cacheRequestsTotal.WithLabelValues(string(ns), resultBypassTombstoned).Inc()
@@ -251,5 +263,12 @@ func (c *redisCache) set(ctx context.Context, ns Namespace, cfg namespaceConfig,
 		cacheErrorsTotal.WithLabelValues(string(ns), opSet, errKindRedis).Inc()
 		return
 	}
+
+	if c.isTombstoned(ctx, scopeTag) {
+		_ = c.client.Del(ctx, dataKey)
+		cacheRequestsTotal.WithLabelValues(string(ns), resultBypassTombstoned).Inc()
+		return
+	}
+
 	cachePayloadBytes.WithLabelValues(string(ns)).Observe(float64(len(val)))
 }
