@@ -184,7 +184,7 @@ func TestBuildRateLimitBackend_SentinelLimitEqualsRegularLimitNotAuthLimit(t *te
 		RateLimitAuth: 10,  // AuthLimit — what SentinelLimit must NOT equal
 	}
 
-	backend, err := buildRateLimitBackend(fake, cfg)
+	backend, err := buildRateLimitBackend(context.Background(), fake, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, backend)
 
