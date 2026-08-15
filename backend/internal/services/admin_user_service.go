@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
@@ -92,6 +93,16 @@ type AdminUserService interface {
 	// Never called in some tests/environments (PostHog unconfigured in local dev/QA) — both
 	// UpdateUserTier and RemoveUserTierOverride must remain no-ops for analytics in that case.
 	SetGDPRAnalytics(a phclient.GDPRAnalytics)
+
+	// SetCacheInvalidation wires cache generation bumping for the TARGET user's cached
+	// analytics after an admin sets/clears their manual tier override. The acting admin is
+	// NOT the affected user here — NewCacheInvalidationMiddleware (Issue #1531 Task 10b-1)
+	// bumps only the ACTING caller (the admin), whose own analytics never change; the user
+	// whose effective tier/entitlement just changed is someone else entirely, and would
+	// otherwise keep serving stale tier-gated analytics until TTL. gens == nil is a true
+	// no-op, matching every other optional wiring setter in this codebase. Issue #1531 Task
+	// 10b-2b.
+	SetCacheInvalidation(gens *cache.Generations)
 }
 
 // UpdateUserTierResult communicates the outcome of setting a user's manual tier override
@@ -122,6 +133,10 @@ type adminUserService struct {
 	retentionMonths int
 	tierConfig      *config.TierConfig
 	gdprAnalytics   phclient.GDPRAnalytics // Optional GDPR-consent-gated analytics client (Issue #1413 Task NB)
+	// cacheGens mints/bumps generation tokens for the TARGET user's cache scope after a tier
+	// override is set/cleared (Issue #1531 Task 10b-2b) — nil when cache invalidation is
+	// disabled/not wired.
+	cacheGens *cache.Generations
 }
 
 // NewAdminUserService creates a new AdminUserService instance.
@@ -150,6 +165,23 @@ func NewAdminUserService(repo repository.AdminUserRepository, adminService Admin
 // admin-triggered events) go through the consent gate.
 func (s *adminUserService) SetGDPRAnalytics(a phclient.GDPRAnalytics) {
 	s.gdprAnalytics = a
+}
+
+// SetCacheInvalidation wires cache generation bumping. See the interface method's doc comment
+// for why this exists and why gens is optional. Issue #1531 Task 10b-2b.
+func (s *adminUserService) SetCacheInvalidation(gens *cache.Generations) {
+	s.cacheGens = gens
+}
+
+// bumpCacheForTargetUser invalidates targetUserID's cached analytics after their tier override
+// changed. Void by design, matching every other generation bump in this codebase: a bump
+// failure must never fail an already-committed write, and cache.Generations.Bump already
+// logs+counts its own failures. Issue #1531 Task 10b-2b.
+func (s *adminUserService) bumpCacheForTargetUser(ctx context.Context, targetUserID string) {
+	if s.cacheGens == nil {
+		return
+	}
+	s.cacheGens.Bump(ctx, cache.ScopeUser, targetUserID, "admin_user_service")
 }
 
 // ListUsers returns a paginated list of users with optional filtering
@@ -416,6 +448,11 @@ func (s *adminUserService) UpdateUserTier(ctx context.Context, actorUserID, user
 		})
 	}
 
+	// Issue #1531 Task 10b-2b: bump the TARGET user's cache scope — their effective
+	// tier/entitlement just changed, but they are not the acting caller, so
+	// NewCacheInvalidationMiddleware's own bump (on actorUserID, the admin) never covers them.
+	s.bumpCacheForTargetUser(ctx, userID)
+
 	return result, nil
 }
 
@@ -477,6 +514,12 @@ func (s *adminUserService) RemoveUserTierOverride(ctx context.Context, actorUser
 			"actor_user_id": actorParam,
 		})
 	}
+
+	// Issue #1531 Task 10b-2b: bump the TARGET user's cache scope — same reasoning as
+	// UpdateUserTier above. Unconditional (not gated on row.Removed): even the idempotent
+	// no-op path re-syncs Clerk metadata as a repair hook, and a bump here is a cheap,
+	// harmless no-op if nothing was actually cached under a stale tier.
+	s.bumpCacheForTargetUser(ctx, targetUserID)
 
 	return RemoveTierOverrideResult{
 		Removed:        row.Removed,

@@ -14,6 +14,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/google/uuid"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -74,6 +75,11 @@ func (m *MockAdminUserService) RemoveUserTierOverride(ctx context.Context, actor
 // (admin_user_service_test.go); stubbed here only to satisfy the services.AdminUserService
 // interface.
 func (m *MockAdminUserService) SetGDPRAnalytics(a phclient.GDPRAnalytics) {}
+
+// SetCacheInvalidation (Issue #1531 Task 10b-2b) is not exercised by these handler-level tests —
+// cache-bump wiring is tested at the service layer (admin_user_service_test.go); stubbed here
+// only to satisfy the services.AdminUserService interface.
+func (m *MockAdminUserService) SetCacheInvalidation(gens *cache.Generations) {}
 
 // MockAdminService is a mock implementation of services.AdminService
 type MockAdminService struct {

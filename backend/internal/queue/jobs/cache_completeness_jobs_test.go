@@ -130,11 +130,15 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"explicitly) rather than a new gap introduced here; flagged, not fixed, to keep this slice " +
 		"bounded — see the report's Concerns section."},
 	"household_over_capacity_check.go": {dispositionBumps, "autoOffboard's call to " +
-		"OffboardExcessMembers removes household members via HouseholdService.removeMemberTx — a " +
-		"helper with no bump of its own and, for this job's call site specifically, no HTTP " +
-		"middleware coverage (OffboardExcessMembers has exactly one caller, this job). NOW bumps " +
-		"ScopeHousehold after a successful auto-offboard that actually removed at least one member " +
-		"— see TestHouseholdOverCapacityCheck_AutoOffboard_BumpsHouseholdCacheGeneration. The " +
+		"OffboardExcessMembers removes household members via HouseholdService.removeMemberTx — for " +
+		"this job's call site specifically, there is no HTTP middleware coverage at all " +
+		"(OffboardExcessMembers has exactly one caller, this job). This job bumps ScopeHousehold " +
+		"after a successful auto-offboard that actually removed at least one member — see " +
+		"TestHouseholdOverCapacityCheck_AutoOffboard_BumpsHouseholdCacheGeneration. UPDATED Task " +
+		"10b-2b: services/household_service.go's OffboardExcessMembers ITSELF now also explicitly " +
+		"bumps every member captured before the LIFO removal loop (owner + every non-owner) plus " +
+		"ScopeHousehold, directly — this job's own bump is now redundant with (not contradicted by) " +
+		"that service-level bump, kept as-is since a second, cheap Redis write is harmless. The " +
 		"OverCapacity-bookkeeping-only branches (SetOverCapacity/ClearOverCapacity/notice markers) " +
 		"do NOT bump — reviewed and found to carry no cache impact of their own, see " +
 		"TestHouseholdOverCapacityCheck_SetOverCapacity_DoesNotBumpHousehold."},

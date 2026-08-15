@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
@@ -94,6 +95,7 @@ func (m *mockHouseholdService) DeclineInvite(ctx context.Context, callerUserID, 
 }
 func (m *mockHouseholdService) SetAnalytics(a phclient.Analytics)                         {}
 func (m *mockHouseholdService) SetMemberProfileResolver(r services.MemberProfileResolver) {}
+func (m *mockHouseholdService) SetCacheInvalidation(gens *cache.Generations)              {}
 
 func (m *mockHouseholdService) ActiveMemberUserIDs(ctx context.Context, householdID string) ([]string, error) {
 	args := m.Called(ctx, householdID)
