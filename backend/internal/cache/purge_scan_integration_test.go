@@ -93,3 +93,55 @@ func TestPurgeUser_RealRedis_ScanCursorPaginationDeletesEveryTargetedKey(t *test
 	assert.ElementsMatch(t, controlKeys, survivingControlKeys,
 		"an unrelated scope's keys must survive PurgeUser untouched")
 }
+
+// TestScan_RealRedis_CursorPaginationActuallyIteratesMultiplePages is Issue #1531 GA-7's
+// regression test. The test above assumes purgeScanKeyCount (2000) forces more than one SCAN
+// cursor page, but COUNT is only a hint — nothing in it actually asserted a page count or a
+// nonzero intermediate cursor, so a real server that happened to satisfy the whole request in one
+// round trip would still pass it. This test drives the SAME cursor-pagination loop
+// redisclient.Client.Scan implements (SCAN cursor MATCH pattern COUNT scanBatchSize, looping until
+// cursor==0) directly against the container's go-redis client, over the identical
+// purgeScanKeyCount-keys-under-one-scope dataset and COUNT hint, and asserts it took more than one
+// page — i.e., the cursor was nonzero at least once before finishing. This proves the
+// cursor-pagination claim itself, independent of the deletion assertions above.
+func TestScan_RealRedis_CursorPaginationActuallyIteratesMultiplePages(t *testing.T) {
+	container := cachetest.StartRedisContainer(t)
+	ctx := context.Background()
+
+	const scanBatchSize = 500 // mirrors internal/redisclient/client.go's scanBatchSize COUNT hint
+	const userID = "purge-scan-cursor-pages-user"
+	userTag := cache.ScopeTag(cache.ScopeUser, userID)
+	pattern := "bb:c:{" + userTag + "}:*"
+
+	for i := 0; i < purgeScanKeyCount; i++ {
+		key := fmt.Sprintf("%s:{%s}:target:%d", "bb:c", userTag, i)
+		require.NoError(t, container.Client.Set(ctx, key, "v", 0).Err())
+	}
+
+	var (
+		cursor     uint64
+		pages      int
+		sawNonzero bool
+		collected  []string
+	)
+	for {
+		batch, next, err := container.Client.Scan(ctx, cursor, pattern, scanBatchSize).Result()
+		require.NoError(t, err)
+		collected = append(collected, batch...)
+		pages++
+		cursor = next
+		if cursor != 0 {
+			sawNonzero = true
+		}
+		if cursor == 0 {
+			break
+		}
+	}
+
+	assert.Greater(t, pages, 1,
+		"SCAN over %d keys with COUNT=%d must take more than one round trip — otherwise the "+
+			"cursor-pagination loop in redisclient.Client.Scan is exercised only on its "+
+			"cursor==0-on-first-call shortcut, never its actual multi-page path", purgeScanKeyCount, scanBatchSize)
+	assert.True(t, sawNonzero, "the cursor must be observed nonzero at least once before the scan completes")
+	assert.Len(t, collected, purgeScanKeyCount, "the multi-page scan must still collect every seeded key")
+}
