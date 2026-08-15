@@ -86,6 +86,13 @@ func main() {
 	})
 	slog.SetDefault(appLogger)
 
+	// Issue #1531 gap round 2: an ERROR-level (not Warn) startup log when SENTRY_DSN is unset in
+	// production/staging — see sentryDSNWarning's doc comment (sentry_dsn_warning.go) for why this
+	// is neither a validate() hard failure nor an in-repo alert-rule file.
+	if msg, attrs, warranted := sentryDSNWarning(cfg.Environment, cfg.SentryDSN); warranted {
+		appLogger.Error(msg, attrs...)
+	}
+
 	// Init PostHog (graceful no-op if API key empty)
 	phClient := phclient.NewClient(cfg.PostHogAPIKey, cfg.PostHogHost, appLogger)
 	if phClient != nil {
