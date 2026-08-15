@@ -25,6 +25,34 @@ type HealthStatusResponse struct {
 	Status string `json:"status" enum:"ok" doc:"Liveness indicator. Always \"ok\" when the response is 200."`
 }
 
+// Schema implements huma.SchemaProvider so HealthStatusResponse is described
+// inline in the OpenAPI response, never registered under
+// #/components/schemas. That matters beyond OpenAPI aesthetics: Huma's
+// SchemaLinkTransformer (installed by huma.DefaultConfig, which
+// internal/huma.NewAPIConfig uses in production -- see cmd/server/main.go:313)
+// only injects a `$schema` field and a `Link: ...; rel="describedBy"` header
+// for responses whose schema is a `#/...` ref. An inline schema has no ref, so
+// the transformer's addSchemaField skips it and neither leak happens. Without
+// this, production emits {"$schema":"https://api.boostedbudget.com/schemas/
+// HealthStatusResponse.json","status":"ok"} on an unauthenticated endpoint --
+// a URL that fingerprints the framework and the Go type name, exactly the
+// disclosure class this handler otherwise guards against. humatest.New(t)'s
+// bare config has no transformer, so tests built on it can't see this; use
+// the production-config harness in health_test.go to verify.
+func (HealthStatusResponse) Schema(_ huma.Registry) *huma.Schema {
+	return &huma.Schema{
+		Type: huma.TypeObject,
+		Properties: map[string]*huma.Schema{
+			"status": {
+				Type:        huma.TypeString,
+				Enum:        []any{"ok"},
+				Description: `Liveness indicator. Always "ok" when the response is 200.`,
+			},
+		},
+		Required: []string{"status"},
+	}
+}
+
 // HealthOutput represents the health check response.
 type HealthOutput struct {
 	Body HealthStatusResponse

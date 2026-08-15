@@ -30,11 +30,13 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { HealthStatusResponseStatus } from './healthStatusResponseStatus';
 
-export interface HealthStatusResponse {
-  /** A URL to the JSON Schema for this object. */
-  readonly $schema?: string;
-  /** Liveness indicator. Always "ok" when the response is 200. */
-  status: HealthStatusResponseStatus;
-}
+/**
+ * Liveness indicator. Always "ok" when the response is 200.
+ */
+export type GetHealth200Status = typeof GetHealth200Status[keyof typeof GetHealth200Status];
+
+
+export const GetHealth200Status = {
+  ok: 'ok',
+} as const;

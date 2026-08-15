@@ -7,17 +7,44 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
 	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	"github.com/maxnussbaum/BoostedBudget/internal/health"
 )
+
+// newProductionAPI builds a Huma API the same way cmd/server/main.go:313 does:
+// echo + humaecho.NewV4 + humaconfig.NewAPIConfig. Unlike humatest.New(t),
+// this installs huma.DefaultConfig's SchemaLinkTransformer, so tests built on
+// this harness observe exactly what production emits on the wire -- including
+// any `$schema` field the transformer injects. See #1531 L1: three prior
+// "exactly one field" tests all passed under humatest.New's bare config while
+// production (built via this exact path) emitted a second field.
+func newProductionAPI() (*echo.Echo, huma.API) {
+	e := echo.New()
+	api := humaecho.NewV4(e, humaconfig.NewAPIConfig("test", "test"))
+	return e, api
+}
+
+// prodGet issues a GET against the production-config echo router built by
+// newProductionAPI, bypassing humatest's non-production config entirely.
+func prodGet(e *echo.Echo, path string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	return rec
+}
 
 // healthyCheck returns a health.Check that always succeeds.
 func healthyCheck() health.Check {
@@ -149,6 +176,31 @@ func TestGetHealth_ResponseBodyHasExactlyOneFieldNamedStatus(t *testing.T) {
 
 	require.Len(t, m, 1, "200 body must have exactly one field; got %v", m)
 	assert.Equal(t, "ok", m["status"])
+}
+
+// TestGetHealth_ResponseBodyHasExactlyOneFieldNamedStatus_ProductionConfig is
+// the #1531 L1 regression: the humatest.New(t)-based test above uses Huma's
+// bare test config, which has no transformers, so it cannot observe
+// huma.DefaultConfig's SchemaLinkTransformer -- the thing that actually runs
+// in production (via humaconfig.NewAPIConfig, built the same way
+// cmd/server/main.go:313 builds it). This test exercises that exact
+// production config, so a `$schema` field leaking back into the OpenAPI
+// registry for HealthStatusResponse fails it immediately.
+func TestGetHealth_ResponseBodyHasExactlyOneFieldNamedStatus_ProductionConfig(t *testing.T) {
+	e, api := newProductionAPI()
+	handler := NewHealthHandler(slog.Default(), health.Registry{DB: healthyCheck()})
+	RegisterHealthRoutes(api, handler)
+
+	resp := prodGet(e, "/health")
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &m))
+
+	require.Len(t, m, 1, "production 200 body must have exactly one field; got %v", m)
+	assert.Equal(t, "ok", m["status"])
+	assert.Empty(t, resp.Header().Get("Link"),
+		"production response must not carry a describedBy Link header either")
 }
 
 func TestGetHealth_DoesNotIncludeVersion(t *testing.T) {

@@ -30,13 +30,9 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetHealth200Status } from './getHealth200Status';
 
-/**
- * Liveness indicator. Always "ok" when the response is 200.
- */
-export type HealthStatusResponseStatus = typeof HealthStatusResponseStatus[keyof typeof HealthStatusResponseStatus];
-
-
-export const HealthStatusResponseStatus = {
-  ok: 'ok',
-} as const;
+export type GetHealth200 = {
+  /** Liveness indicator. Always "ok" when the response is 200. */
+  status: GetHealth200Status;
+};

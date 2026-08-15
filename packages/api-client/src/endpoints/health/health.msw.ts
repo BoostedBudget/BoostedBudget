@@ -44,14 +44,14 @@ import type {
 } from 'msw';
 
 import type {
-  HealthStatusResponse
+  GetHealth200
 } from '../../models';
 
 
-export const getGetHealthResponseMock = (overrideResponse: Partial<Extract<HealthStatusResponse, object>> = {}): HealthStatusResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), status: faker.helpers.arrayElement(['ok'] as const), ...overrideResponse})
+export const getGetHealthResponseMock = (overrideResponse: Partial<Extract<GetHealth200, object>> = {}): GetHealth200 => ({status: faker.helpers.arrayElement(['ok'] as const), ...overrideResponse})
 
 
-export const getGetHealthMockHandler = (overrideResponse?: HealthStatusResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<HealthStatusResponse> | HealthStatusResponse), options?: RequestHandlerOptions) => {
+export const getGetHealthMockHandler = (overrideResponse?: GetHealth200 | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<GetHealth200> | GetHealth200), options?: RequestHandlerOptions) => {
   return http.get('*/health', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
 
 
