@@ -72,6 +72,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // cacheInvalidationExemptions lists types that expose SetCacheInvalidation, ARE constructed in
@@ -138,6 +139,18 @@ func findCacheInvalidationTypes(t *testing.T, root string) map[string]bool {
 		t.Fatalf("walking %s for SetCacheInvalidation methods: %v", root, err)
 	}
 	return types
+}
+
+// upperFirstRune upper-cases the first rune of s, leaving the rest untouched — "accountService"
+// becomes "AccountService". Used to bridge an (often unexported) receiver type name to the
+// exported "New<TypeName>" constructor convention this guard follows.
+func upperFirstRune(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
 }
 
 // receiverTypeName extracts "Foo" from either `Foo` or `*Foo` receiver type expressions.
@@ -270,7 +283,19 @@ func TestCacheInvalidationSetterWiringNoDrift(t *testing.T) {
 	for _, typeName := range sortedTypes {
 		typeName := typeName
 		t.Run(typeName, func(t *testing.T) {
-			ctorName := "New" + typeName
+			// Issue #1531 Slice B / M3: typeName is the receiver identifier VERBATIM. Five of
+			// the seven known SetCacheInvalidation receivers are unexported (accountService,
+			// householdService, transactionSyncService, investmentSyncService,
+			// liabilitySyncService) — "New"+typeName for those produced "NewaccountService" etc.,
+			// which never matches the real constructor (services.NewAccountService), so
+			// mainGoCallsConstructor always returned false and this subtest hit the early
+			// `return` below before asserting anything. Proven by mutation: commenting out
+			// main.go's transactionSyncService.SetCacheInvalidation(...) left all seven subtests
+			// green. Upper-casing the type name's first rune before prefixing matches the actual
+			// New<TypeName> convention (verified against every constructor in
+			// internal/services: NewAccountService, NewHouseholdService,
+			// NewTransactionSyncService, NewInvestmentSyncService, NewLiabilitySyncService).
+			ctorName := "New" + upperFirstRune(typeName)
 
 			if !mainGoCallsConstructor(mainFile, ctorName) {
 				// Not constructed in main.go by the New<TypeName> convention — out of scope.
