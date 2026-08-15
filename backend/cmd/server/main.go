@@ -1239,8 +1239,11 @@ func main() {
 		// transactions.effective_category_name, the field several cached analytics queries
 		// GROUP BY (spending by category/merchant, budget vs actual), with no prior bump.
 		// cacheInstance is never nil (see cachePurgeRetryWorker below); Generations() is
-		// nil-safe when the cache is disabled.
-		effectiveCategoryRefreshWorker.SetCacheInvalidation(cacheInstance.Generations())
+		// nil-safe when the cache is disabled. Issue #1531 M7: also wires householdRepo so the
+		// rename cascade bumps the household scope too, matching transactionSyncService's
+		// SetCacheInvalidation call below — household-scoped spending-by-category/trends GROUP BY
+		// this same effective_category_name column.
+		effectiveCategoryRefreshWorker.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
 		appLogger.Info("Effective category refresh worker created (River)")
 
 		// Create Plaid service and account linking (if configured)

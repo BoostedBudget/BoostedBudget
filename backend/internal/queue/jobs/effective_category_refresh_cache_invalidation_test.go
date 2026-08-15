@@ -37,7 +37,7 @@ func TestEffectiveCategoryRefreshWorker_Work_BumpsUserCacheGenerationAfterSucces
 
 	fakeRedis := redisclient.NewFake("cache")
 	c := cache.NewCache(cache.Options{Client: fakeRedis})
-	worker.SetCacheInvalidation(c.Generations())
+	worker.SetCacheInvalidation(c.Generations(), nil)
 
 	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, userID)
 	require.NoError(t, err)
@@ -79,7 +79,7 @@ func TestEffectiveCategoryRefreshWorker_Work_ZeroRowsUpdated_StillBumps(t *testi
 
 	fakeRedis := redisclient.NewFake("cache")
 	c := cache.NewCache(cache.Options{Client: fakeRedis})
-	worker.SetCacheInvalidation(c.Generations())
+	worker.SetCacheInvalidation(c.Generations(), nil)
 
 	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, userID)
 	require.NoError(t, err)
@@ -116,7 +116,7 @@ func TestEffectiveCategoryRefreshWorker_Work_RepoError_DoesNotBump(t *testing.T)
 
 	fakeRedis := redisclient.NewFake("cache")
 	c := cache.NewCache(cache.Options{Client: fakeRedis})
-	worker.SetCacheInvalidation(c.Generations())
+	worker.SetCacheInvalidation(c.Generations(), nil)
 
 	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, userID)
 	require.NoError(t, err)

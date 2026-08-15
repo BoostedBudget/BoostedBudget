@@ -77,7 +77,7 @@ func TestEffectiveCategoryRefreshWorker_Work_BumpsAfterJobContextCancelled(t *te
 
 	client := &ctxCheckingRedisClient{Fake: redisclient.NewFake("cache")}
 	c := cache.NewCache(cache.Options{Client: client})
-	worker.SetCacheInvalidation(c.Generations())
+	worker.SetCacheInvalidation(c.Generations(), nil)
 
 	preGen, err := c.Generations().Get(context.Background(), cache.ScopeUser, userID)
 	require.NoError(t, err)
