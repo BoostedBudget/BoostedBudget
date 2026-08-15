@@ -76,9 +76,26 @@ func TestSmokeTestScript_PublicMetricsExpectsUnreachable(t *testing.T) {
 			`(or the port refuses the connection, curl status "000"). The assertion must expect /metrics ` +
 			`is NOT publicly reachable, not that it is.`)
 	}
-	if !strings.Contains(window, `"404"`) {
-		t.Errorf(`scripts/smoke-test.sh's $API_URL/metrics check does not appear to accept "404" as a pass ` +
-			`condition — the public listener returns 404 for /metrics post-fix (Issue #1514 criterion 18).`)
+	// The check must FAIL on 200 specifically, and must do so fatally. Deliberately not
+	// asserting that it accepts "404" by name: 403 (Cloudflare), 502, and connection-refused
+	// ("000") all equally mean "the registry is not being served publicly", which is the
+	// property we care about. Enumerating accepted codes would make the script brittle against
+	// edge behaviour without making it any safer. The one unacceptable outcome is 200.
+	if !regexp.MustCompile(`\$metrics_status"?\s*==\s*"200"`).MatchString(window) &&
+		!regexp.MustCompile(`"\$\{?metrics_status\}?"\s*==\s*"200"`).MatchString(window) {
+		t.Errorf(`scripts/smoke-test.sh's $API_URL/metrics check does not appear to branch on a 200 ` +
+			`response. 200 is the ONLY failing outcome here — it means Issue #1514 criterion 18 ` +
+			`regressed and the Prometheus registry (signup counts, transaction volume, full route ` +
+			`inventory) is publicly readable. Every other status means it is not served publicly.`)
+	}
+
+	// ...and it must be fatal, not a warning. The previous "warn" severity was correct when this
+	// check meant "is the metrics endpoint up" (a nicety); it is wrong now that it means "did the
+	// security fix hold". A warning does not fail the deploy workflow.
+	if !strings.Contains(window, `print_test "fail"`) {
+		t.Errorf(`scripts/smoke-test.sh's $API_URL/metrics check does not fail hard on a public 200. ` +
+			`A publicly reachable /metrics is a security regression, not a degraded nicety, so it must ` +
+			`fail the deploy workflow rather than emit a warning nobody reads.`)
 	}
 }
 

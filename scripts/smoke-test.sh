@@ -134,14 +134,23 @@ fi
 # Test 2: API Metrics Endpoint must NOT be publicly reachable. Issue #1514 criterion 18
 # moved /metrics onto a separate, internal-only listener (cmd/server/internal_metrics.go,
 # port 9091, scraped only from inside the Fly private network) specifically because it was
-# previously reachable from the public internet, unauthenticated. A public 200 here would
-# mean that fix regressed, not that everything is healthy — so 404 (or connection-refused)
-# is the PASS condition, not a failure.
+# previously reachable from the public internet, unauthenticated — exposing signup counts,
+# transaction volume, and a complete route inventory to anyone who guessed the hostname.
+#
+# ⚠ The ONLY failing condition is 200. This is deliberately inverted from a liveness check:
+# we are not asking "is metrics up", we are asking "did the security fix hold". Any other
+# response (404, 403 from Cloudflare, 502, connection-refused) means the registry is not
+# being served publicly, which is the property we want — so all of them PASS.
+#
+# ⚠ This is a hard failure, not a warn. Its previous "warn" severity was correct when the
+# check meant "metrics endpoint responding" (a nicety); it is wrong now that the check means
+# "business metrics are not publicly exposed" (a security regression).
 metrics_status=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL/metrics" --max-time 10 || echo "000")
-if [ "$metrics_status" == "404" ] || [ "$metrics_status" == "000" ]; then
-  print_test "pass" "API metrics endpoint is not publicly reachable (got $metrics_status; non-critical check)"
+if [ "$metrics_status" == "200" ]; then
+  print_test "fail" "API /metrics is PUBLICLY REACHABLE (HTTP 200) — Issue #1514 criterion 18 has regressed; the Prometheus registry is exposed unauthenticated"
+  exit 1
 else
-  print_test "warn" "API metrics endpoint returned $metrics_status (expected 404 or connection-refused — Issue #1514 criterion 18 may have regressed; non-critical)"
+  print_test "pass" "API metrics endpoint is not publicly reachable (got $metrics_status)"
 fi
 
 # Test 3: API Version Endpoint (if exists)
