@@ -872,6 +872,13 @@ func main() {
 		// NewDefaultClerkUserGetter reuses the same Clerk SDK plumbing as AdminService
 		// (clerk.SetKey is already called there, well before the server accepts requests).
 		householdService.SetMemberProfileResolver(services.NewClerkMemberProfileResolver(identityRepo, services.NewDefaultClerkUserGetter()))
+		// Issue #1531 Task 10b-2b: bump cache generations for household writes that affect
+		// members OTHER than the acting HTTP caller (a member removed by the owner, a joiner +
+		// existing members on invite acceptance, every member on disband/auto-offboard, and
+		// every member after a share-visibility change) — NewCacheInvalidationMiddleware only
+		// bumps the acting caller. cacheInstance is never nil; Generations() is nil-safe when
+		// the cache is disabled (NewNoopCache), and every bump helper nil-guards on it.
+		householdService.SetCacheInvalidation(cacheInstance.Generations())
 
 		// Issue #1371 — Phase 7 (Task 2): Create household member cleanup check worker.
 		// Unlike retention's worker (gated on DELETION_TOKEN_SECRET, since it calls
@@ -1918,6 +1925,10 @@ func main() {
 		// transfer_suggestion_service's user-initiated events are — via gdprClient, not the raw
 		// phClient other admin-triggered-but-operational events use.
 		adminUserService.SetGDPRAnalytics(gdprClient)
+		// Issue #1531 Task 10b-2b: bump the TARGET user's cache scope when an admin sets/clears
+		// their manual tier override — the acting caller is the admin, not the affected user, so
+		// NewCacheInvalidationMiddleware's own bump (on the admin) never covers them.
+		adminUserService.SetCacheInvalidation(cacheInstance.Generations())
 
 		// Issue #640: System health monitoring service
 		systemHealthService := services.NewSystemHealthService(
