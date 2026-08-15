@@ -109,14 +109,17 @@ func TestGetHealth_BodyNeverContainsCheckErrorText(t *testing.T) {
 			}
 		})
 
-		t.Run(tc.name+"/200 path (check not critical here)", func(t *testing.T) {
-			// Even when the failing check isn't wired in as critical (so the
-			// response is 200), the body contract must still hold: no error
-			// text can appear because no error text is ever known to the 200
-			// path in the first place. This is the companion assertion the
-			// brief calls out as needing to run against BOTH paths.
+		t.Run(tc.name+"/200 path (non-critical check failing)", func(t *testing.T) {
+			// DB (the only CRITICAL check GetHealth reads) is healthy, so this
+			// still resolves to 200. Redis is wired in as a NON-CRITICAL check
+			// that is genuinely FAILING with tc.err -- a real, known error
+			// string is present in the registry this handler holds. The
+			// assertion below is therefore a real one: it proves that error
+			// text never leaks into the public body, guarding against a future
+			// change that starts serializing a component breakdown (including
+			// non-critical ones) into the 200 response.
 			_, api := humatest.New(t)
-			handler := NewHealthHandler(slog.Default(), health.Registry{DB: healthyCheck()})
+			handler := NewHealthHandler(slog.Default(), health.Registry{DB: healthyCheck(), Redis: failingCheck(tc.err)})
 			RegisterHealthRoutes(api, handler)
 
 			resp := api.Get("/health")
