@@ -2567,3 +2567,62 @@ func TestPurgeCacheForDeletedUser_PurgeAndRetryEnqueue_SurviveCallerCancellation
 			"cancelled context and fails identically, dropping the cache purge with no tombstone set "+
 			"and nothing scheduled (Issue #1531 M1)")
 }
+
+// TestPurgeCacheForDeletedUser_RetryStillEnqueued_WhenPurgeExhaustsSharedDeadline is Issue #1531
+// GA-1's regression test. M1 (above) detached purgeCtx/enqueue's ctx from the CALLER's
+// cancellation, but PurgeUser and enqueueCachePurgeRetry still shared ONE 5s
+// (bumpCacheTimeout) budget: purgeCtx itself. Redis SCAN...MATCH iterates the entire keyspace
+// (COUNT is only a hint), so on a populated cache PurgeUser can legitimately consume the whole
+// budget. Before the fix, enqueueCachePurgeRetry(purgeCtx, ...) then runs on an
+// ALREADY-EXPIRED context — the durable retry is dropped exactly like the cancellation case M1
+// closed, just via deadline exhaustion instead of cancellation.
+//
+// This test makes PurgeUser's mock sleep past bumpCacheTimeout (5s) before returning an error,
+// so that by the time enqueueCachePurgeRetry runs, the shared purgeCtx (pre-fix) is already
+// past its deadline. It asserts the retry is enqueued with a context that is NOT already
+// expired.
+func TestPurgeCacheForDeletedUser_RetryStillEnqueued_WhenPurgeExhaustsSharedDeadline(t *testing.T) {
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+
+	userID := "user-123"
+	clerkUserID := "user_123"
+	householdID := ""
+
+	purger := new(mockDeletionCachePurger)
+	jq := new(mockDeletionJobQueue)
+
+	var enqueueCtxErrAtCallTime error
+	var enqueueCalled bool
+
+	purger.On("PurgeUser", mock.Anything, userID, clerkUserID).
+		Run(func(args mock.Arguments) {
+			// Simulate a SCAN over a populated keyspace consuming the entire 5s budget: sleep
+			// past bumpCacheTimeout so purgeCtx's deadline has already elapsed by the time this
+			// returns.
+			time.Sleep(5*time.Second + 200*time.Millisecond)
+		}).
+		Return(errors.New("redis: connection refused"))
+	jq.On("Enqueue", mock.Anything, mock.AnythingOfType("services.cachePurgeRetryJobArgs")).
+		Run(func(args mock.Arguments) {
+			enqueueCalled = true
+			enqueueCtxErrAtCallTime = args.Get(0).(context.Context).Err()
+		}).
+		Return(&queue.JobResult{}, nil)
+
+	service.SetCache(purger, cache.NewGenerations(nil), jq)
+
+	deletionSvc, ok := service.(*deletionService)
+	require.True(t, ok, "test relies on calling the unexported method directly")
+	deletionSvc.purgeCacheForDeletedUser(context.Background(), userID, clerkUserID, householdID)
+
+	require.True(t, enqueueCalled, "the durable retry must still be enqueued even when PurgeUser consumes the whole shared budget")
+	assert.NoError(t, enqueueCtxErrAtCallTime,
+		"the durable retry enqueue must run on its OWN fresh deadline, not the purge's already-"+
+			"exhausted one — otherwise River's Enqueue fails with context.DeadlineExceeded and the "+
+			"retry is dropped exactly like the cancellation case M1 closed, just via deadline "+
+			"exhaustion instead of cancellation (Issue #1531 GA-1)")
+}

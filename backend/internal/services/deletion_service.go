@@ -1197,28 +1197,40 @@ func (s *deletionService) SetCache(purger cache.Purger, gens *cache.Generations,
 // returns an error, consistent with every other bump call site in this codebase) — the retry job
 // re-attempts it too, for good measure, since it is idempotent.
 //
-// Issue #1531 Final fixes / M1: PurgeUser AND enqueueCachePurgeRetry both run on
-// context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout), matching the household bump
-// below. Both of this method's callers (account_deletion.go, retention_cleanup_check.go) are River
-// jobs — River cancels a job's context on shutdown, retry, or timeout, and a cancellation landing
-// here (after DeleteUserCascade has already committed) must not be allowed to take out the cache
-// cleanup with it. This is NOT the household-bump case alone: a previous version of this comment
-// argued PurgeUser could stay on the raw ctx because a failure there "already has its own durable
+// Issue #1531 Final fixes / M1: PurgeUser AND enqueueCachePurgeRetry both run on independently
+// detached contexts, matching the household bump below. Both of this method's callers
+// (account_deletion.go, retention_cleanup_check.go) are River jobs — River cancels a job's
+// context on shutdown, retry, or timeout, and a cancellation landing here (after
+// DeleteUserCascade has already committed) must not be allowed to take out the cache cleanup
+// with it. This is NOT the household-bump case alone: a previous version of this comment argued
+// PurgeUser could stay on the raw ctx because a failure there "already has its own durable
 // remedy" (the retry enqueue) — but that remedy was ALSO on the same raw, cancellable ctx, so a
 // single River cancellation failed BOTH the purge and its own fallback with context.Canceled,
 // logged and dropped: the deletion completes while the user's cached PII survives, with no
 // tombstone set (that Set used the same context too) and nothing scheduled — terminal, not
-// TTL-bounded, because the tombstone never landed. Detaching both closes that: a genuine Redis
-// failure still triggers the durable retry exactly as designed, but a mere context cancellation no
-// longer masquerades as one.
+// TTL-bounded, because the tombstone never landed. Detaching both from the CALLER's cancellation
+// closes that.
+//
+// Issue #1531 GA-1: detaching from cancellation was not enough — PurgeUser and the retry enqueue
+// still shared ONE 5s (bumpCacheTimeout) budget when both ran on the same purgeCtx. Redis
+// SCAN...MATCH iterates the entire keyspace (COUNT is only a hint), so on a populated cache
+// PurgeUser can legitimately consume the whole budget; the retry enqueue then ran on an
+// ALREADY-EXPIRED context and failed with context.DeadlineExceeded — the durable retry dropped
+// via deadline exhaustion instead of cancellation, the same failure mode reappearing through a
+// different door. Each of PurgeUser and enqueueCachePurgeRetry now gets its OWN fresh
+// context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout), so a genuine Redis failure
+// during the purge still triggers the durable retry exactly as designed, with its own full
+// budget to enqueue against.
 func (s *deletionService) purgeCacheForDeletedUser(ctx context.Context, userID, clerkUserID, householdID string) {
 	if s.cachePurger != nil {
-		purgeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
-		defer cancel()
+		purgeCtx, purgeCancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+		defer purgeCancel()
 		if err := s.cachePurger.PurgeUser(purgeCtx, userID, clerkUserID); err != nil {
 			slog.Default().Error("gdpr deletion: cache purge failed; enqueuing durable retry",
 				"user_id", userID, "error", err)
-			s.enqueueCachePurgeRetry(purgeCtx, userID, clerkUserID, householdID)
+			enqueueCtx, enqueueCancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+			defer enqueueCancel()
+			s.enqueueCachePurgeRetry(enqueueCtx, userID, clerkUserID, householdID)
 		}
 	}
 	if householdID != "" && s.cacheGens != nil {
