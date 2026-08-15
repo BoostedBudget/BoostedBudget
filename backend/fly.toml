@@ -23,7 +23,13 @@ kill_timeout = 30
   # [[services]]) — cmd/server/issue1531_fallback_divisor_wiring_test.go enforces that the two agree.
   # With only 1 machine actually running today, divisor 2 halves the fallback limit (e.g. 50/min
   # instead of 100/min) rather than doubling it — a deliberate trade-off: during an outage, slightly
-  # tight beats 2x loose, and this only affects the degraded fallback path, never normal operation.
+  # tight beats 2x loose. This affects the REGULAR-tier fallback budget for ordinary API traffic
+  # only. /health is exempt from this divisor entirely (Issue #1531 L3): it always uses the memory
+  # backend directly regardless of Redis's state, its budget was never fleet-wide to begin with
+  # (it's Fly's own single-machine liveness check), and cmd/server passes it the RAW, undivided
+  # RATE_LIMIT_IP via RateLimitConfig.ExemptPathLimit. An earlier version of this comment claimed
+  # the divisor "only affects the degraded fallback path, never normal operation" — that was false:
+  # before the L3 fix, /health ran at half its configured budget in ALL operation, degraded or not.
   # This coupling assumes a STATIC machine count. Autoscaling breaks it in both directions — tracked
   # as follow-up Issue #1535.
   RATE_LIMIT_FALLBACK_DIVISOR = "2"

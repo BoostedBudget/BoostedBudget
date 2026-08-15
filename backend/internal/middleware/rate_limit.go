@@ -35,6 +35,21 @@ type RateLimitConfig struct {
 	// /webhooks/* and /api/v1/qa/auth/*. Default: 10
 	AuthEndpointLimit int
 
+	// ExemptPathLimit is the budget backing isExemptPath paths (/health) in their OWN dedicated
+	// memory store, entirely separate from IPLimit's regular-tier store. Default (<=0): IPLimit.
+	//
+	// Exempt paths always use the memory backend directly (see isExemptPath's callers), never the
+	// Redis-backed primary — a Redis blip must never threaten Fly's liveness probe. In production,
+	// IPLimit is built from cfg.RateLimitIP DIVIDED by cfg.RateLimitFallbackDivisor (see
+	// cmd/server's rateLimitFallbackLimit): N machines each independently falling back to memory
+	// must not multiply a FLEET-WIDE budget by N. But /health's budget was never fleet-wide to
+	// begin with — it's Fly's own single-machine liveness check — so applying that divisor to it
+	// simply halves its real budget in completely normal operation, no outage required (Issue
+	// #1531 L3). ExemptPathLimit lets the caller pass the UNDIVIDED cfg.RateLimitIP here instead,
+	// giving /health its own capacity independent of both public regular-tier traffic (already true
+	// pre-#1531 via isExemptPath's per-source keying) and the fleet-machine-count divisor.
+	ExemptPathLimit int
+
 	// WindowDuration is the rate limit window. Default: 1 minute
 	WindowDuration time.Duration
 
@@ -74,6 +89,9 @@ func (c *RateLimitConfig) withDefaults() RateLimitConfig {
 	}
 	if cfg.AuthEndpointLimit <= 0 {
 		cfg.AuthEndpointLimit = 10
+	}
+	if cfg.ExemptPathLimit <= 0 {
+		cfg.ExemptPathLimit = cfg.IPLimit
 	}
 	if cfg.WindowDuration <= 0 {
 		cfg.WindowDuration = time.Minute
@@ -328,8 +346,8 @@ func (s *ipLimiterStore) cleanup(maxAge time.Duration) {
 // resulting Retry-After inconsistency against the Redis backend, and why it is left as a
 // documented follow-up rather than unified here.
 type memoryBackend struct {
-	regular, auth, sentinel *ipLimiterStore
-	window                  time.Duration
+	regular, auth, sentinel, exempt *ipLimiterStore
+	window                          time.Duration
 }
 
 // Name identifies this backend for logs/metrics.
@@ -355,6 +373,17 @@ func (m *memoryBackend) Allow(_ context.Context, tier domain.RateLimitTier, key 
 		return domain.RateLimitDecision{Allowed: true}, nil
 	}
 	return domain.RateLimitDecision{Allowed: false, RetryAfter: m.window}, nil
+}
+
+// AllowExempt applies the dedicated exempt-path store (m.exempt), built from
+// RateLimitConfig.ExemptPathLimit — deliberately NOT storeFor's tier-based routing, and therefore
+// never subject to whatever division IPLimit underwent for the regular tier's fallback budget.
+// See Issue #1531 L3 and RateLimitConfig.ExemptPathLimit's doc comment.
+func (m *memoryBackend) AllowExempt(key string) domain.RateLimitDecision {
+	if m.exempt.get(key).Allow() {
+		return domain.RateLimitDecision{Allowed: true}
+	}
+	return domain.RateLimitDecision{Allowed: false, RetryAfter: m.window}
 }
 
 // tierForRequest picks the domain.RateLimitTier for a request, given its path and already-resolved
@@ -427,8 +456,12 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 	regularStore := newIPLimiterStore(c.IPLimit, c.WindowDuration, c.MaxEntries)
 	authStore := newIPLimiterStore(c.AuthEndpointLimit, c.WindowDuration, c.MaxEntries)
 	sentinelStore := newIPLimiterStore(c.IPLimit, c.WindowDuration, c.MaxEntries)
+	// exemptStore backs ONLY isExemptPath paths (/health), built from ExemptPathLimit rather than
+	// IPLimit — see RateLimitConfig.ExemptPathLimit's doc comment for why exempt paths must not
+	// share the regular tier's (possibly fleet-divided) capacity. Issue #1531 L3.
+	exemptStore := newIPLimiterStore(c.ExemptPathLimit, c.WindowDuration, c.MaxEntries)
 
-	memBackend := &memoryBackend{regular: regularStore, auth: authStore, sentinel: sentinelStore, window: c.WindowDuration}
+	memBackend := &memoryBackend{regular: regularStore, auth: authStore, sentinel: sentinelStore, exempt: exemptStore, window: c.WindowDuration}
 	effective := newFallbackLimiter(cfg.Backend, memBackend, defaultRedisLimiterTimeout, logger, cfg.Done)
 
 	// Background cleanup of stale entries. Stops when cfg.Done is closed; a nil cfg.Done blocks
@@ -442,6 +475,7 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 				regularStore.cleanup(c.CleanupInterval * 2)
 				authStore.cleanup(c.CleanupInterval * 2)
 				sentinelStore.cleanup(c.CleanupInterval * 2)
+				exemptStore.cleanup(c.CleanupInterval * 2)
 			case <-cfg.Done:
 				return
 			}
@@ -481,14 +515,27 @@ func ipRateLimiterDecide(ec echo.Context, effective *fallbackLimiter, memBackend
 
 	path := ec.Request().URL.Path
 	key := clientIdentity(ec)
-	tier := tierForRequest(path, key)
 
-	backend := RateLimitBackend(effective)
 	if isExemptPath(path) {
-		backend = memBackend
+		// Exempt paths (/health) get their own dedicated, never-fleet-divided store — see
+		// memoryBackend.AllowExempt and RateLimitConfig.ExemptPathLimit's doc comments (Issue
+		// #1531 L3). This bypasses tierForRequest/RateLimitBackend entirely, not just the
+		// backend-selection override the pre-fix code did: /health was never Auth-tier traffic,
+		// and giving it its own store makes that structural rather than incidental.
+		decision := memBackend.AllowExempt(key)
+		if !decision.Allowed {
+			observability.RateLimitRejectionsTotal.WithLabelValues(domain.RateLimitTierRegular.String()).Inc()
+			secs := int(decision.RetryAfter.Seconds())
+			if secs < 1 {
+				secs = 1
+			}
+			return false, secs
+		}
+		return true, 0
 	}
 
-	decision, dErr := backend.Allow(ec.Request().Context(), tier, key)
+	tier := tierForRequest(path, key)
+	decision, dErr := effective.Allow(ec.Request().Context(), tier, key)
 	if dErr != nil {
 		// Neither memoryBackend nor fallbackLimiter (which always resolves through memoryBackend
 		// on primary failure) can return an error in practice. Treat an unexpected error the same
