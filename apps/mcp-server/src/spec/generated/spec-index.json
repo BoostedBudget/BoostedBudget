@@ -4221,7 +4221,7 @@
       ],
       "manifestClass": "read",
       "excluded": true,
-      "description": "Returns the health status of the API and its dependencies (database, Redis, Clerk)."
+      "description": "Liveness check. Returns 200 with {\"status\":\"ok\"} when critical dependencies are healthy, 503 otherwise. Carries no version, timing, or dependency detail."
     },
     {
       "operationId": "paddle-webhook",
