@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -240,10 +241,17 @@ func (c *redisCache) loadAndSet(
 // cached data resurrected for up to the namespace TTL. A SECOND tombstone check immediately after
 // the Set closes this: any tombstone visible at that point can only have been set no earlier than
 // the purge that owns it, and because tombstoneTTL (900s) safely exceeds every registered
-// namespace TTL, deleting the key this method just wrote is always safe and always sufficient,
-// regardless of exactly when the purge's SCAN ran relative to the Set. This does not require a
-// third check ad infinitum: once the write has been rolled back, there is nothing left for a
-// LATER purge to have missed.
+// namespace TTL, deleting the key this method just wrote is always SAFE (never deletes something
+// a later purge still needed to find) and, when it succeeds, sufficient — regardless of exactly
+// when the purge's SCAN ran relative to the Set. This does not require a third check ad
+// infinitum: once the write has been rolled back, there is nothing left for a LATER purge to
+// have missed.
+//
+// Issue #1531 GA-2: "when it succeeds" is load-bearing — the corrective Del can itself fail
+// against Redis, and this is the ONLY corrective action on this path (there is no further
+// retry). A failed rollback here leaves a deleted user's cached entry readable until the
+// namespace TTL expires, so it is logged at ERROR and counted on cache_errors_total rather than
+// discarded.
 func (c *redisCache) set(ctx context.Context, ns Namespace, cfg namespaceConfig, dataKey, scopeTag string, val []byte) {
 	if c.isTombstoned(ctx, scopeTag) {
 		cacheRequestsTotal.WithLabelValues(string(ns), resultBypassTombstoned).Inc()
@@ -265,7 +273,19 @@ func (c *redisCache) set(ctx context.Context, ns Namespace, cfg namespaceConfig,
 	}
 
 	if c.isTombstoned(ctx, scopeTag) {
-		_ = c.client.Del(ctx, dataKey)
+		if delErr := c.client.Del(ctx, dataKey); delErr != nil {
+			// Issue #1531 GA-2: this Del is the M5 rollback's ONLY corrective action — if it
+			// fails, the write above already landed and there is no further retry on this path.
+			// The purge that raced us has already reported success, so a deleted user's cached
+			// entry now survives, readable, until the namespace TTL expires (<=600s). Bounded by
+			// TTL, so not left to silently drop: logged at ERROR and counted, same as every other
+			// Redis failure in this method.
+			cacheErrorsTotal.WithLabelValues(string(ns), opSet, errKindRedis).Inc()
+			slog.Default().Error("cache: M5 rollback Del failed after a late tombstone was "+
+				"detected post-Set; the just-written key may survive until its namespace TTL "+
+				"expires instead of being purged immediately",
+				"namespace", ns, "error", delErr)
+		}
 		cacheRequestsTotal.WithLabelValues(string(ns), resultBypassTombstoned).Inc()
 		return
 	}
