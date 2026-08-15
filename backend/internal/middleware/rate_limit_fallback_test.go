@@ -318,12 +318,18 @@ func TestFallbackLimiter_ClientDisconnectDoesNotCountAsARedisFailure(t *testing.
 	reqCtx, cancel := context.WithCancel(context.Background())
 	cancel() // the "client" has already disconnected before the limiter even runs
 
+	// Captured BEFORE fl.Allow runs (not two back-to-back reads of the same value with nothing in
+	// between) so this is a real delta assertion: if a client disconnect were mis-recorded as a
+	// Redis outage, this counter would move during the call and the comparison below would catch it.
+	// RedisLimiterFallbackActivationsTotal is a package-level counter shared across every test in
+	// this file, so its absolute value is order-dependent -- only the delta is meaningful here.
+	before := testutil.ToFloat64(observability.RedisLimiterFallbackActivationsTotal)
+
 	decision, err := fl.Allow(reqCtx, domain.RateLimitTierRegular, "k")
 	require.NoError(t, err, "primary must not observe the caller's cancellation, so it must succeed here")
 	assert.True(t, decision.Allowed)
 	assert.Equal(t, 1, primary.callCount())
 
-	before := testutil.ToFloat64(observability.RedisLimiterFallbackActivationsTotal)
 	after := testutil.ToFloat64(observability.RedisLimiterFallbackActivationsTotal)
 	assert.Equal(t, before, after, "a client disconnect must never be recorded as a Redis outage")
 }
