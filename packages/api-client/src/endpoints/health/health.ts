@@ -47,7 +47,7 @@ import type {
 
 import type {
   ErrorModel,
-  HealthStatusResponse
+  GetHealth200
 } from '../../models';
 
 import { customInstance } from '../../client';
@@ -83,7 +83,7 @@ export const getHealth = (
 ) => {
 
 
-      return customInstance<HealthStatusResponse>(
+      return customInstance<GetHealth200>(
       {url: `/health`, method: 'GET', signal
     },
       options);

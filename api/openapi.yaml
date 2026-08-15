@@ -3356,24 +3356,6 @@ components:
         - success
         - message
       type: object
-    HealthStatusResponse:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/HealthStatusResponse.json
-          format: uri
-          readOnly: true
-          type: string
-        status:
-          description: Liveness indicator. Always "ok" when the response is 200.
-          enum:
-            - ok
-          type: string
-      required:
-        - status
-      type: object
     HoldingView:
       additionalProperties: false
       properties:
@@ -14595,7 +14577,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/HealthStatusResponse"
+                properties:
+                  status:
+                    description: Liveness indicator. Always "ok" when the response is 200.
+                    enum:
+                      - ok
+                    type: string
+                required:
+                  - status
+                type: object
           description: OK
         "500":
           content:
