@@ -437,6 +437,69 @@ func TestIPRateLimiter_IPv6FormsCanonicalizeToSameBucket(t *testing.T) {
 		"different textual forms of the same IPv6 address must canonicalize to one bucket")
 }
 
+// TestIPRateLimiter_IdentityByGateStatus is the table-driven identity test for clientIdentity's
+// policy branches. It covers GateStatusBypassEnv explicitly (previously only GateStatusUnknown was
+// named anywhere in this file, even though GateStatusBypassEnv shares the same `default:` case in
+// clientIdentity and is the status CloudflareOnly actually stamps for the dev/local/test/qa bypass
+// paths issue #1531 acceptance criterion 5 requires to keep working) alongside GateStatusUnknown,
+// proving both fall straight through to RemoteAddr with no header consulted at all:
+//   - two requests from the SAME RemoteAddr but with DIFFERENT (spoofed) Cf-Connecting-Ip and
+//     Fly-Client-Ip header values must share one bucket (headers are never read for identity here),
+//   - two requests from DIFFERENT RemoteAddrs carrying the SAME header values must NOT share a
+//     bucket (RemoteAddr, not the header, is the key).
+//
+// Expected to pass on first write: this is converting incidental coverage (GateStatusBypassEnv was
+// only ever exercised implicitly, via sharing a switch case with GateStatusUnknown) into a named
+// regression test, not fixing a bug. Its teeth are demonstrated separately by temporarily pointing
+// the bypass-env branch at a header-derived identity and confirming this test fails (see task-GC
+// report) — not by anything in this file.
+func TestIPRateLimiter_IdentityByGateStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status middleware.GateStatus
+	}{
+		{"GateStatusBypassEnv", middleware.GateStatusBypassEnv},
+		{"GateStatusUnknown", middleware.GateStatusUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Run("same RemoteAddr shares a bucket despite different spoofed headers", func(t *testing.T) {
+				cfg := middleware.RateLimitConfig{IPLimit: 1, WindowDuration: time.Minute}
+				e := newEchoWithGateStatus(cfg, tc.status)
+
+				code1 := doRateLimitedRequest(e, "/test", "10.5.5.5:1000", map[string][]string{
+					"Cf-Connecting-Ip": {"198.51.100.1"},
+					"Fly-Client-Ip":    {"198.51.100.1"},
+				})
+				assert.Equal(t, http.StatusOK, code1, "first request should pass")
+
+				code2 := doRateLimitedRequest(e, "/test", "10.5.5.5:2000", map[string][]string{
+					"Cf-Connecting-Ip": {"198.51.100.2"},
+					"Fly-Client-Ip":    {"198.51.100.2"},
+				})
+				assert.Equal(t, http.StatusTooManyRequests, code2,
+					"same RemoteAddr with different spoofed headers must share one bucket -- headers are never consulted for identity under %s", tc.name)
+			})
+
+			t.Run("different RemoteAddrs with the same header values do not share a bucket", func(t *testing.T) {
+				cfg := middleware.RateLimitConfig{IPLimit: 1, WindowDuration: time.Minute}
+				e := newEchoWithGateStatus(cfg, tc.status)
+
+				headers := map[string][]string{
+					"Cf-Connecting-Ip": {"198.51.100.9"},
+					"Fly-Client-Ip":    {"198.51.100.9"},
+				}
+
+				code1 := doRateLimitedRequest(e, "/test", "10.6.6.6:1000", headers)
+				assert.Equal(t, http.StatusOK, code1, "first peer should pass")
+
+				code2 := doRateLimitedRequest(e, "/test", "10.6.6.7:2000", headers)
+				assert.Equal(t, http.StatusOK, code2,
+					"a different RemoteAddr with the identical header values must get its own bucket, proving identity derives from RemoteAddr under %s", tc.name)
+			})
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Backend seam — Task 5 (Issue #1531)
 // ---------------------------------------------------------------------------
