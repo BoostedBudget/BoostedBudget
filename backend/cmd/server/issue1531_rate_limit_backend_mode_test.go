@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
@@ -24,7 +26,7 @@ func TestBuildRateLimitBackend_ModeMemory_ForcesMemoryEvenWithLiveClient(t *test
 		RateLimitAuth:    10,
 	}
 
-	backend, err := buildRateLimitBackend(fake, cfg)
+	backend, err := buildRateLimitBackend(context.Background(), fake, cfg)
 	require.NoError(t, err)
 	assert.Nil(t, backend, "RATE_LIMIT_BACKEND=memory must force in-memory limiting even though a live Redis limiter client is available")
 }
@@ -36,7 +38,7 @@ func TestBuildRateLimitBackend_ModeRedis_FailsFastAtStartupWhenNoClient(t *testi
 		RateLimitAuth:    10,
 	}
 
-	backend, err := buildRateLimitBackend(nil, cfg)
+	backend, err := buildRateLimitBackend(context.Background(), nil, cfg)
 	require.Error(t, err, "RATE_LIMIT_BACKEND=redis with no Redis limiter client available must fail fast at startup, not silently fall back to memory")
 	assert.Nil(t, backend)
 }
@@ -49,7 +51,7 @@ func TestBuildRateLimitBackend_ModeRedis_UsesRedisWhenClientAvailable(t *testing
 		RateLimitAuth:    10,
 	}
 
-	backend, err := buildRateLimitBackend(fake, cfg)
+	backend, err := buildRateLimitBackend(context.Background(), fake, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, backend)
 	_, ok := backend.(*ratelimitstore.RedisBackend)
@@ -64,15 +66,37 @@ func TestBuildRateLimitBackend_ModeAuto_PreservesNilCheckBehaviour(t *testing.T)
 	}
 
 	// No client available: auto falls back to memory (nil backend), no error.
-	backend, err := buildRateLimitBackend(nil, cfg)
+	backend, err := buildRateLimitBackend(context.Background(), nil, cfg)
 	require.NoError(t, err)
 	assert.Nil(t, backend)
 
 	// Client available: auto selects the Redis-backed backend.
 	fake := redisclient.NewFake("limiter")
-	backend, err = buildRateLimitBackend(fake, cfg)
+	backend, err = buildRateLimitBackend(context.Background(), fake, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, backend)
 	_, ok := backend.(*ratelimitstore.RedisBackend)
 	assert.True(t, ok)
+}
+
+// TestBuildRateLimitBackend_ModeRedis_FailsFastWhenClientUnreachable is Issue #1531 GA-4's
+// regression test. redisclient.New is lazy — it never Pings — and RATE_LIMIT_BACKEND=redis was
+// only ever checked against limiterClient == nil, which is only ever true on a PARSE error. A
+// syntactically valid RATE_LIMIT_REDIS_URL pointing at a dead server produces a non-nil client
+// and boots cleanly, contradicting the documented intent ("requires a working Redis limiter
+// client... RATE_LIMIT_REDIS_URL missing/unreachable") and defeating the whole point of the
+// "redis" mode: an operator forcing Redis to KNOW it took effect.
+func TestBuildRateLimitBackend_ModeRedis_FailsFastWhenClientUnreachable(t *testing.T) {
+	fake := redisclient.NewFake("limiter")
+	fake.PingErr = errors.New("dial tcp: connection refused")
+	cfg := &config.Config{
+		RateLimitBackend: "redis",
+		RateLimitIP:      100,
+		RateLimitAuth:    10,
+	}
+
+	backend, err := buildRateLimitBackend(context.Background(), fake, cfg)
+	require.Error(t, err, "RATE_LIMIT_BACKEND=redis with a client that fails to Ping must fail fast at startup, not boot cleanly against a dead server")
+	assert.Nil(t, backend)
+	assert.Contains(t, err.Error(), "unreachable")
 }

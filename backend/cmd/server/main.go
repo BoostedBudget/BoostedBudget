@@ -289,7 +289,7 @@ func main() {
 	// (registerCloudflareAndRateLimitMiddleware — the byte-for-byte-pinned issue1514 ordering
 	// test still calls that 3-arg function directly, which now just delegates here with a nil
 	// backend/done/logger, reproducing its exact prior behaviour).
-	rateLimitBackend, err := buildRateLimitBackend(limiterClient, cfg)
+	rateLimitBackend, err := buildRateLimitBackend(context.Background(), limiterClient, cfg)
 	if err != nil {
 		// RATE_LIMIT_BACKEND=redis with no working limiter client — a STARTUP failure (we are
 		// still in main()'s initialization, before Echo starts accepting traffic), never a
@@ -2593,6 +2593,10 @@ func newRedisClientOptions(cfg *config.Config, url, name string) redisclient.Opt
 	}
 }
 
+// redisStartupPingTimeout bounds buildRateLimitBackend's "redis" mode Ping — a STARTUP-only
+// check, never on the per-request path.
+const redisStartupPingTimeout = 5 * time.Second
+
 // buildRateLimitBackend constructs the fleet-wide Redis-backed rate-limit primary from
 // limiterClient/cfg, or returns nil (memory-only) when limiterClient is nil. Extracted from
 // main() so its SentinelLimit choice — the subject of Issue #1531 fix round 1 — is unit-testable
@@ -2611,7 +2615,15 @@ func newRedisClientOptions(cfg *config.Config, url, name string) redisclient.Opt
 //   - "auto" (default) or any other/empty value (e.g. a *config.Config built directly by a test
 //     without going through Load(), where the zero value is ""): preserves the original
 //     nil-check-only behaviour.
-func buildRateLimitBackend(limiterClient redisclient.Client, cfg *config.Config) (middleware.RateLimitBackend, error) {
+//
+// Issue #1531 GA-4: redisclient.New is lazy and never Pings, so a limiterClient being non-nil
+// only proves the URL PARSED, not that Redis is reachable. "redis" mode exists so an operator can
+// force Redis during an incident and KNOW it took effect — a syntactically valid but unreachable
+// RATE_LIMIT_REDIS_URL booting cleanly would defeat that and contradict this function's own error
+// text below ("missing/unreachable"). So "redis" mode additionally Pings, bounded by
+// redisStartupPingTimeout, ONCE here at startup — never per-request; "auto" and "memory" do not
+// Ping at all, since neither documents a reachability guarantee.
+func buildRateLimitBackend(ctx context.Context, limiterClient redisclient.Client, cfg *config.Config) (middleware.RateLimitBackend, error) {
 	switch cfg.RateLimitBackend {
 	case "memory":
 		return nil, nil
@@ -2621,6 +2633,14 @@ func buildRateLimitBackend(limiterClient redisclient.Client, cfg *config.Config)
 				"RATE_LIMIT_BACKEND=redis requires a working Redis limiter client, but none is available " +
 					"(RATE_LIMIT_REDIS_URL missing/unreachable) — refusing to start rather than silently " +
 					"falling back to memory-only rate limiting")
+		}
+		pingCtx, cancel := context.WithTimeout(ctx, redisStartupPingTimeout)
+		defer cancel()
+		if err := limiterClient.Ping(pingCtx); err != nil {
+			return nil, fmt.Errorf(
+				"RATE_LIMIT_BACKEND=redis requires a working Redis limiter client, but it failed to "+
+					"respond to a startup Ping (RATE_LIMIT_REDIS_URL missing/unreachable): %w — refusing "+
+					"to start rather than silently falling back to memory-only rate limiting", err)
 		}
 	}
 
