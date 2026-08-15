@@ -28,6 +28,18 @@ package operations
 //   - Added a fake huma.Register call (Method: http.MethodPost, no Security, OperationID
 //     "fakeUnclassifiedMutation") to a scratch file in this package: guard FAILED, reporting the new
 //     operation ID as missing from publicMutationAllowlist. Removed it: guard PASSED.
+//
+// Issue #1531 Slice B / L9 fix (mutation-verified): the doc comment above was already accurate,
+// but the CODE didn't match it — the scan set hasSecurity=true merely because a `Security:` key
+// was present, regardless of its value's length, so `Security: []map[string][]string{}` (empty,
+// present) passed as "covered" even though the middleware's actual gate is
+// `len(ctx.Operation().Security) == 0` (cache_invalidation.go), which treats that identically to
+// no Security field at all. Fixed by resolving the Security value's element count
+// (securityIsNonEmpty) instead of merely checking key presence, and by reporting (rather than
+// silently skipping, via mutatingHTTPMethods[""] == false) any Method/Security expression this
+// AST scan cannot resolve. Verified by temporarily setting a real mutating operation's Security
+// to `[]map[string][]string{}` (tags.go's createTag): guard FAILED, naming createTag specifically.
+// Restored: guard PASSED.
 
 import (
 	"fmt"
@@ -87,9 +99,28 @@ var httpMethodConstants = map[string]string{
 type humaOperationRegistration struct {
 	operationID string
 	method      string // resolved HTTP verb, "" if unresolvable
+	// methodResolved is false when Method is present but this scan could not resolve it to a
+	// known verb (e.g. an expression shape resolveMethodExpr doesn't recognise). Issue #1531
+	// Slice B / L9: the doc comment above claims unresolvable Method expressions are reported,
+	// but the original test folded "" (unresolvable) into "not a mutating method" via
+	// mutatingHTTPMethods[""] == false and silently `continue`d — an operation whose Method this
+	// guard cannot read was indistinguishable from a GET. This field lets the test tell the two
+	// apart and actually report the former instead of skipping it.
+	methodResolved bool
+	// hasSecurity mirrors the middleware's ACTUAL gate (cache_invalidation.go:
+	// len(ctx.Operation().Security) == 0 means "no authenticated actor, don't bump"), not merely
+	// whether a `Security:` key is present in the composite literal. Issue #1531 Slice B / L9:
+	// the original scan set this true just because the key existed, so
+	// `Security: []map[string][]string{}` (present but empty) passed this guard as "covered" while
+	// the middleware itself would treat it identically to no Security field at all and skip the
+	// bump — a false negative this guard could not catch.
 	hasSecurity bool
-	file        string
-	line        int
+	// securityResolved is false when a Security field is present but its value isn't a literal
+	// this scan can measure the length of (e.g. built from a variable/function call) — reported
+	// rather than silently assumed covered.
+	securityResolved bool
+	file             string
+	line             int
 }
 
 // scanHumaRegistrations walks every non-test .go file directly in dir (no recursion — this package
@@ -140,7 +171,16 @@ func scanHumaRegistrations(dir string) ([]humaOperationRegistration, error) {
 				return true
 			}
 
-			reg := humaOperationRegistration{file: name, line: fset.Position(call.Pos()).Line}
+			// securityResolved defaults to true: an operation with NO Security key at all is a
+			// fully-resolved "no security" (hasSecurity's zero value, false, is already correct
+			// for that case) — only a Security key present with an unresolvable value should
+			// flip this to false. See the "Security" case below and securityIsNonEmpty's doc
+			// comment.
+			reg := humaOperationRegistration{
+				file:             name,
+				line:             fset.Position(call.Pos()).Line,
+				securityResolved: true,
+			}
 			for _, elt := range lit.Elts {
 				kv, ok := elt.(*ast.KeyValueExpr)
 				if !ok {
@@ -156,9 +196,9 @@ func scanHumaRegistrations(dir string) ([]humaOperationRegistration, error) {
 						reg.operationID = strings.Trim(bl.Value, `"`)
 					}
 				case "Method":
-					reg.method = resolveMethodExpr(kv.Value)
+					reg.method, reg.methodResolved = resolveMethodExpr(kv.Value)
 				case "Security":
-					reg.hasSecurity = true
+					reg.hasSecurity, reg.securityResolved = securityIsNonEmpty(kv.Value)
 				}
 			}
 			out = append(out, reg)
@@ -170,22 +210,38 @@ func scanHumaRegistrations(dir string) ([]humaOperationRegistration, error) {
 
 // resolveMethodExpr resolves a huma.Operation.Method value written either as a raw string literal
 // ("POST", used by paddle_checkout.go and paddle_webhook.go) or as an http.MethodX selector (used
-// everywhere else in this package). Anything else resolves to "" (unresolvable), which the guard
-// then reports rather than silently skips.
-func resolveMethodExpr(expr ast.Expr) string {
+// everywhere else in this package). Returns ("", false) when the expression shape isn't one of
+// those two forms — the caller is responsible for REPORTING that (Issue #1531 Slice B / L9),
+// rather than silently treating it the same as a resolved non-mutating verb.
+func resolveMethodExpr(expr ast.Expr) (string, bool) {
 	switch v := expr.(type) {
 	case *ast.BasicLit:
 		if v.Kind == token.STRING {
-			return strings.Trim(v.Value, `"`)
+			return strings.Trim(v.Value, `"`), true
 		}
 	case *ast.SelectorExpr:
 		if ident, ok := v.X.(*ast.Ident); ok && ident.Name == "http" {
 			if verb, ok := httpMethodConstants[v.Sel.Name]; ok {
-				return verb
+				return verb, true
 			}
 		}
 	}
-	return ""
+	return "", false
+}
+
+// securityIsNonEmpty reports whether a huma.Operation.Security field's value is a non-empty
+// slice literal, mirroring the middleware's ACTUAL gate (cache_invalidation.go:
+// len(ctx.Operation().Security) == 0) rather than merely "the Security key was present in the
+// composite literal" (Issue #1531 Slice B / L9 — the original scan's mistake). Returns
+// (nonEmpty, resolved): resolved is false when expr isn't a composite literal this scan can count
+// the elements of (e.g. built from a variable), and the caller reports that rather than assuming
+// coverage either way.
+func securityIsNonEmpty(expr ast.Expr) (nonEmpty bool, resolved bool) {
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return false, false
+	}
+	return len(lit.Elts) > 0, true
 }
 
 // TestEveryMutatingHumaOperationIsCoveredByMiddleware is completeness guard #3 (see the package
@@ -202,7 +258,26 @@ func TestEveryMutatingHumaOperationIsCoveredByMiddleware(t *testing.T) {
 
 	var uncovered []string
 	for _, r := range regs {
+		// Issue #1531 Slice B / L9: a Method this scan could not resolve is NOT the same as a
+		// resolved non-mutating verb (GET/HEAD/OPTIONS) — the original code folded both into
+		// "skip" via mutatingHTTPMethods[""] == false, silently passing an operation whose Method
+		// it never actually read. Report it instead of skipping it.
+		if !r.methodResolved {
+			uncovered = append(uncovered, fmt.Sprintf("%s (%s:%d): Method expression could not be "+
+				"resolved by this AST scan — cannot determine whether this operation is mutating",
+				r.operationID, r.file, r.line))
+			continue
+		}
 		if !mutatingHTTPMethods[r.method] {
+			continue
+		}
+		// Likewise, a Security field present but not resolvable to a literal this scan can count
+		// is reported rather than silently treated as "covered" (the failure mode this guard is
+		// meant to close: an unresolved/empty Security value passing as if it were non-empty).
+		if !r.securityResolved {
+			uncovered = append(uncovered, fmt.Sprintf("%s (%s:%d): Security expression could not be "+
+				"resolved by this AST scan — cannot determine whether this mutating operation is "+
+				"actually covered by NewCacheInvalidationMiddleware", r.operationID, r.file, r.line))
 			continue
 		}
 		if r.hasSecurity {
@@ -210,8 +285,9 @@ func TestEveryMutatingHumaOperationIsCoveredByMiddleware(t *testing.T) {
 		}
 		reason, ok := publicMutationAllowlist[r.operationID]
 		if !ok {
-			uncovered = append(uncovered, fmt.Sprintf("%s (%s:%d, method=%s): no Security field and "+
-				"not in publicMutationAllowlist", r.operationID, r.file, r.line, r.method))
+			uncovered = append(uncovered, fmt.Sprintf("%s (%s:%d, method=%s): no Security field (or "+
+				"an empty one — the middleware gates on len(Security) == 0, same as an absent field) "+
+				"and not in publicMutationAllowlist", r.operationID, r.file, r.line, r.method))
 			continue
 		}
 		if strings.TrimSpace(reason) == "" {
