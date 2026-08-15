@@ -87,7 +87,12 @@ type Config struct {
 	CacheRedisURL string // env: CACHE_REDIS_URL, default: ""
 
 	// RedisTimeoutMs and RedisPoolSize are read by Task 9's redisclient.Options construction for
-	// both the limiter and cache clients.
+	// both the limiter and cache clients. RedisTimeoutMs is ALSO wired (Issue #1531 L7) into
+	// middleware.RateLimitConfig.PrimaryTimeout — the fleet-wide rate limiter's own per-call
+	// budget for the Redis-backed primary, previously a hardcoded, unconfigurable 50ms with no
+	// path to this field at all. Both consumers must read the SAME value so raising
+	// REDIS_TIMEOUT_MS during a latency incident actually changes the limiter's breaker behaviour,
+	// not just the underlying client's read/write timeouts.
 	RedisTimeoutMs int // env: REDIS_TIMEOUT_MS, default: 200
 	RedisPoolSize  int // env: REDIS_POOL_SIZE, default: 10
 

@@ -80,6 +80,19 @@ type RateLimitConfig struct {
 	// Logger receives fallback-activation/recovery log lines (see fallbackLimiter). OPTIONAL: nil
 	// uses slog.Default().
 	Logger *slog.Logger
+
+	// PrimaryTimeout bounds how long a single Allow call waits on Backend before treating it as
+	// failed and falling back to memory (see fallbackLimiter's doc comment). Default (<=0):
+	// defaultRedisLimiterTimeout (50ms).
+	//
+	// Issue #1531 L7: this used to be the unconditional, uncustomizable defaultRedisLimiterTimeout
+	// constant, with no RateLimitConfig field feeding it at all -- so cfg.RedisTimeoutMs
+	// (REDIS_TIMEOUT_MS), which DOES reach the go-redis client's own read/write timeouts (see
+	// cmd/server's newRedisClientOptions), had no way to reach this budget too. Raising
+	// REDIS_TIMEOUT_MS during a real latency incident changed nothing about the limiter's 50ms
+	// cutoff, which kept tripping the circuit breaker regardless of the "operative knob" an
+	// operator had just turned. main.go now passes cfg.RedisTimeoutMs here explicitly.
+	PrimaryTimeout time.Duration
 }
 
 func (c *RateLimitConfig) withDefaults() RateLimitConfig {
@@ -101,6 +114,9 @@ func (c *RateLimitConfig) withDefaults() RateLimitConfig {
 	}
 	if cfg.MaxEntries <= 0 {
 		cfg.MaxEntries = 20000
+	}
+	if cfg.PrimaryTimeout <= 0 {
+		cfg.PrimaryTimeout = defaultRedisLimiterTimeout
 	}
 	return cfg
 }
@@ -462,7 +478,7 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 	exemptStore := newIPLimiterStore(c.ExemptPathLimit, c.WindowDuration, c.MaxEntries)
 
 	memBackend := &memoryBackend{regular: regularStore, auth: authStore, sentinel: sentinelStore, exempt: exemptStore, window: c.WindowDuration}
-	effective := newFallbackLimiter(cfg.Backend, memBackend, defaultRedisLimiterTimeout, logger, cfg.Done)
+	effective := newFallbackLimiter(cfg.Backend, memBackend, c.PrimaryTimeout, logger, cfg.Done)
 
 	// Background cleanup of stale entries. Stops when cfg.Done is closed; a nil cfg.Done blocks
 	// forever in the select, which is identical to today's "never stops" behaviour.

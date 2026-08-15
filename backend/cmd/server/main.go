@@ -2702,7 +2702,15 @@ func registerCloudflareAndRateLimitMiddlewareWithBackend(e *echo.Echo, cfCIDRRef
 		// design), and its budget was never fleet-wide to begin with (it's Fly's own
 		// single-machine liveness check), so the fleet-machine-count divisor above must not apply
 		// to it. See RateLimitConfig.ExemptPathLimit's doc comment.
-		ExemptPathLimit:   cfg.RateLimitIP,
+		ExemptPathLimit: cfg.RateLimitIP,
+		// PrimaryTimeout (Issue #1531 L7): cfg.RedisTimeoutMs already reaches the go-redis
+		// CLIENT's own read/write timeouts (see newRedisClientOptions) but, before this fix, had
+		// no path to the LIMITER's per-call budget — that was a hardcoded, uncustomizable 50ms
+		// (middleware.defaultRedisLimiterTimeout). Raising REDIS_TIMEOUT_MS during a real latency
+		// incident changed nothing about the limiter's own cutoff, which kept tripping the
+		// circuit breaker regardless. Wiring the same config value through here makes
+		// REDIS_TIMEOUT_MS the operative knob it was already documented (config.go) as being.
+		PrimaryTimeout:    time.Duration(cfg.RedisTimeoutMs) * time.Millisecond,
 		WindowDuration:    time.Minute,
 		MaxEntries:        cfg.RateLimitMaxEntries,
 		Backend:           backend,

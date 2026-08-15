@@ -538,6 +538,77 @@ func (panickingBackend) Allow(context.Context, domain.RateLimitTier, string) (do
 	panic("primary backend must never be called on this path")
 }
 
+// slowButHealthyBackend answers after a fixed delay, respecting ctx cancellation (like a real
+// go-redis EVAL call does), and always returns a distinguishing decision (Allowed: false) so a
+// test can tell the primary actually answered rather than the memory fallback (which always
+// allows an under-budget request) taking over.
+type slowButHealthyBackend struct{ delay time.Duration }
+
+func (slowButHealthyBackend) Name() string { return "slow-redis" }
+func (b slowButHealthyBackend) Allow(ctx context.Context, _ domain.RateLimitTier, _ string) (domain.RateLimitDecision, error) {
+	select {
+	case <-time.After(b.delay):
+		return domain.RateLimitDecision{Allowed: false, RetryAfter: time.Second}, nil
+	case <-ctx.Done():
+		return domain.RateLimitDecision{}, ctx.Err()
+	}
+}
+
+// TestIPRateLimiter_PrimaryTimeoutIsConfigurable is the #1531 L7 regression. IPRateLimiter used to
+// bound every primary-backend call with the package-private defaultRedisLimiterTimeout constant
+// (50ms), completely independent of RateLimitConfig -- so nothing a caller passed in could ever
+// change it. cmd/server/main.go separately reads cfg.RedisTimeoutMs (REDIS_TIMEOUT_MS, default
+// 200ms) and wires it into the go-redis CLIENT's read/write timeouts only; raising
+// REDIS_TIMEOUT_MS during a real latency incident changed nothing about the LIMITER's own 50ms
+// budget, which kept tripping the circuit breaker regardless.
+//
+// This test drives the real IPRateLimiter middleware (not fallbackLimiter directly, which was
+// already correctly parameterized -- the bug was one layer up, in what IPRateLimiter passed it)
+// with a primary that takes 80ms to answer: strictly slower than the OLD hardcoded 50ms, strictly
+// faster than a 200ms budget. With PrimaryTimeout left unset (defaults to the pre-fix 50ms), the
+// 80ms primary must still time out and fall back to memory (200 OK, since memory allows). With
+// PrimaryTimeout explicitly raised to 200ms (what main.go's fix wires cfg.RedisTimeoutMs into),
+// the SAME 80ms primary must now be waited for and its own (rejecting) decision honored.
+func TestIPRateLimiter_PrimaryTimeoutIsConfigurable(t *testing.T) {
+	primaryDelay := 80 * time.Millisecond
+
+	t.Run("default timeout (unset) still times out an 80ms primary", func(t *testing.T) {
+		cfg := middleware.RateLimitConfig{
+			IPLimit:        100,
+			WindowDuration: time.Minute,
+			Backend:        slowButHealthyBackend{delay: primaryDelay},
+		}
+		e := newEchoWithIPLimiter(cfg)
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.RemoteAddr = "198.51.100.40:1"
+		rr := httptest.NewRecorder()
+		e.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code,
+			"an 80ms primary must still be timed out under the default (pre-fix 50ms) budget, "+
+				"falling back to memory (which allows)")
+	})
+
+	t.Run("PrimaryTimeout=200ms lets the 80ms primary answer for real", func(t *testing.T) {
+		cfg := middleware.RateLimitConfig{
+			IPLimit:        100,
+			WindowDuration: time.Minute,
+			Backend:        slowButHealthyBackend{delay: primaryDelay},
+			PrimaryTimeout: 200 * time.Millisecond,
+		}
+		e := newEchoWithIPLimiter(cfg)
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.RemoteAddr = "198.51.100.41:1"
+		rr := httptest.NewRecorder()
+		e.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusTooManyRequests, rr.Code,
+			"raising PrimaryTimeout to 200ms must let the 80ms primary's own (rejecting) decision "+
+				"govern, proving RateLimitConfig.PrimaryTimeout is actually read rather than the "+
+				"hardcoded default always winning")
+	})
+}
+
 // TestIPRateLimiter_DefaultsToTheInMemoryBackendWhenNoneIsInjected pins backward compatibility:
 // a RateLimitConfig with no Backend set (the zero value, which is what every pre-#1531 call site
 // and test already constructs) must behave exactly as it did before this task.
