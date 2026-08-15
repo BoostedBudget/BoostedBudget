@@ -184,13 +184,14 @@ func TestBuildRateLimitBackend_SentinelLimitEqualsRegularLimitNotAuthLimit(t *te
 		RateLimitAuth: 10,  // AuthLimit — what SentinelLimit must NOT equal
 	}
 
-	backend := buildRateLimitBackend(fake, cfg)
+	backend, err := buildRateLimitBackend(fake, cfg)
+	require.NoError(t, err)
 	require.NotNil(t, backend)
 
 	redisBackend, ok := backend.(*ratelimitstore.RedisBackend)
 	require.True(t, ok, "buildRateLimitBackend must return a *ratelimitstore.RedisBackend when given a non-nil client")
 
-	_, err := redisBackend.Allow(context.Background(), domain.RateLimitTierSentinel, "")
+	_, err = redisBackend.Allow(context.Background(), domain.RateLimitTierSentinel, "")
 	require.NoError(t, err)
 
 	calls := fake.ScriptCalls()
