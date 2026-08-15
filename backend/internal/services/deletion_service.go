@@ -1196,6 +1196,18 @@ func (s *deletionService) SetCache(purger cache.Purger, gens *cache.Generations,
 // with an un-purged cache. The household bump is void by design (cache.Generations.Bump never
 // returns an error, consistent with every other bump call site in this codebase) — the retry job
 // re-attempts it too, for good measure, since it is idempotent.
+//
+// Issue #1531 Final fixes: the household bump runs on context.WithTimeout(context.WithoutCancel(ctx),
+// bumpCacheTimeout) rather than the raw ctx. Both of this method's callers (account_deletion.go,
+// retention_cleanup_check.go) are River jobs — River cancels a job's context on shutdown, retry, or
+// timeout, and a cancellation landing here (after DeleteUserCascade has already committed) would
+// otherwise carry straight into cacheGens.Bump, which swallows the resulting error silently: the
+// deletion is durable, but the household's cache generation never bumps, leaving other members'
+// cached household-scoped analytics stale until TTL. WithoutCancel alone would leave the bump
+// unbounded (it strips the parent's deadline too), hence the explicit WithTimeout — matching
+// household_service.go's bump helpers and the sync services' bumpCacheForSync. PurgeUser above is
+// deliberately left on the raw ctx: a failure there already has its own durable remedy
+// (enqueueCachePurgeRetry), unlike the void-by-design Bump below.
 func (s *deletionService) purgeCacheForDeletedUser(ctx context.Context, userID, clerkUserID, householdID string) {
 	if s.cachePurger != nil {
 		if err := s.cachePurger.PurgeUser(ctx, userID, clerkUserID); err != nil {
@@ -1205,7 +1217,9 @@ func (s *deletionService) purgeCacheForDeletedUser(ctx context.Context, userID, 
 		}
 	}
 	if householdID != "" && s.cacheGens != nil {
-		s.cacheGens.Bump(ctx, cache.ScopeHousehold, householdID, "gdpr_deletion")
+		bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+		defer cancel()
+		s.cacheGens.Bump(bumpCtx, cache.ScopeHousehold, householdID, "gdpr_deletion")
 	}
 }
 
