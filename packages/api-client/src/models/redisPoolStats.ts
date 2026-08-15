@@ -30,13 +30,19 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { ServiceCheck } from './serviceCheck';
 
-export interface HealthChecks {
-  /** Clerk authentication service status */
-  clerk: ServiceCheck;
-  /** Database connection status */
-  database: ServiceCheck;
-  /** Redis cache status */
-  redis: ServiceCheck;
+export interface RedisPoolStats {
+  /** @minimum 0 */
+  hits: number;
+  /** @minimum 0 */
+  idle_conns: number;
+  /** @minimum 0 */
+  misses: number;
+  pool_size: number;
+  /** @minimum 0 */
+  stale_conns: number;
+  /** @minimum 0 */
+  timeouts: number;
+  /** @minimum 0 */
+  total_conns: number;
 }

@@ -47,7 +47,7 @@ import type {
 
 import type {
   ErrorModel,
-  HealthResponse
+  HealthStatusResponse
 } from '../../models';
 
 import { customInstance } from '../../client';
@@ -74,7 +74,7 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
 };
 
 /**
- * Returns the health status of the API and its dependencies (database, Redis, Clerk).
+ * Liveness check. Returns 200 with {"status":"ok"} when critical dependencies are healthy, 503 otherwise. Carries no version, timing, or dependency detail.
  * @summary Health check
  */
 export const getHealth = (
@@ -83,7 +83,7 @@ export const getHealth = (
 ) => {
 
 
-      return customInstance<HealthResponse>(
+      return customInstance<HealthStatusResponse>(
       {url: `/health`, method: 'GET', signal
     },
       options);

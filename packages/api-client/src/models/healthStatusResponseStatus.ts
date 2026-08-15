@@ -30,17 +30,13 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { HealthChecks } from './healthChecks';
 
-export interface HealthResponse {
-  /** A URL to the JSON Schema for this object. */
-  readonly $schema?: string;
-  /** Individual service health checks */
-  checks: HealthChecks;
-  /** Overall system health status: healthy, degraded, or unhealthy */
-  status: string;
-  /** ISO 8601 timestamp of the health check */
-  timestamp: string;
-  /** API version */
-  version: string;
-}
+/**
+ * Liveness indicator. Always "ok" when the response is 200.
+ */
+export type HealthStatusResponseStatus = typeof HealthStatusResponseStatus[keyof typeof HealthStatusResponseStatus];
+
+
+export const HealthStatusResponseStatus = {
+  ok: 'ok',
+} as const;

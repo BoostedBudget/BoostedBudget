@@ -235,8 +235,6 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "redis"
         update-types: ["version-update:semver-major"]
-      - dependency-name: "rabbitmq"
-        update-types: ["version-update:semver-major"]
     groups:
       docker-services:
         patterns:
