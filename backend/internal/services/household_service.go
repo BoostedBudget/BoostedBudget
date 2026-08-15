@@ -366,12 +366,23 @@ func (s *householdService) SetCacheInvalidation(gens *cache.Generations) {
 // every other generation bump in this codebase (cache.Generations.Bump itself, the HTTP
 // mutation middleware, transaction_sync_service.go's bumpCacheForSync): a bump failure must
 // never fail an already-committed write, and Bump already logs+counts its own failures.
-// Issue #1531 Task 10b-2b.
+//
+// Issue #1531 Final fixes: runs on context.WithoutCancel(ctx) plus a bounded WithTimeout,
+// matching account_service.go's bumpCacheForDispossessedOwner, the HTTP mutation middleware,
+// and the sync services' post-commit bump helpers. RemoveMember/AcceptInvite/ForceDisband/
+// OffboardExcessMembers (and SetAccountShareVisibility, which shares these helpers) all call
+// this AFTER their own write has committed — these are exactly the cross-user paths (Task
+// 10b-2b) where a dropped bump invalidates a *non-actor's* cache, invisibly to the person who
+// triggered the write, so a client disconnect or job cancellation landing in that window must
+// not cancel it. WithoutCancel alone would leave the bump unbounded (it strips the parent's
+// deadline too), hence the explicit WithTimeout. Issue #1531 Task 10b-2b.
 func (s *householdService) bumpCacheForUser(ctx context.Context, userID string) {
 	if s.cacheGens == nil {
 		return
 	}
-	s.cacheGens.Bump(ctx, cache.ScopeUser, userID, "household_service")
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+	s.cacheGens.Bump(bumpCtx, cache.ScopeUser, userID, "household_service")
 }
 
 // bumpCacheForUsers invalidates every user in userIDs. Callers pass a member list CAPTURED
@@ -385,12 +396,15 @@ func (s *householdService) bumpCacheForUsers(ctx context.Context, userIDs []stri
 	}
 }
 
-// bumpCacheForHousehold invalidates the household-scoped cache. Issue #1531 Task 10b-2b.
+// bumpCacheForHousehold invalidates the household-scoped cache. Detaches from ctx the same way
+// bumpCacheForUser does and for the same reason — see that doc comment. Issue #1531 Task 10b-2b.
 func (s *householdService) bumpCacheForHousehold(ctx context.Context, householdID string) {
 	if s.cacheGens == nil {
 		return
 	}
-	s.cacheGens.Bump(ctx, cache.ScopeHousehold, householdID, "household_service")
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+	s.cacheGens.Bump(bumpCtx, cache.ScopeHousehold, householdID, "household_service")
 }
 
 // bumpCacheForCurrentMembers re-lists householdID's currently-active members (via
@@ -399,19 +413,26 @@ func (s *householdService) bumpCacheForHousehold(ctx context.Context, householdI
 // when cacheGens is nil — this guard runs FIRST, before the extra ListMembers round-trip, so
 // cache-disabled callers never pay for (or risk logging spurious errors from) a query whose
 // result would only be discarded. A lookup failure is logged and swallowed, never propagated:
-// the caller's write already committed. Issue #1531 Task 10b-2b.
+// the caller's write already committed.
+//
+// Issue #1531 Final fixes: the ListMembers lookup itself, not just the resulting bumps, runs on
+// a detached context.WithoutCancel(ctx) + WithTimeout — otherwise a cancelled caller ctx fails
+// the lookup FIRST, before bumpCacheForUsers/bumpCacheForUser get a chance to detach anything,
+// and the bumps never happen at all. Issue #1531 Task 10b-2b.
 func (s *householdService) bumpCacheForCurrentMembers(ctx context.Context, householdID string) {
 	if s.cacheGens == nil {
 		return
 	}
-	members, err := s.householdRepo.ListMembers(ctx, householdID)
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+	members, err := s.householdRepo.ListMembers(bumpCtx, householdID)
 	if err != nil {
 		slog.Default().Error("cache invalidation: post-write member list lookup failed; "+
 			"some members' household-scoped cache may serve stale data until TTL",
 			"household_id", householdID, "error", err)
 		return
 	}
-	s.bumpCacheForUsers(ctx, memberUserIDs(members))
+	s.bumpCacheForUsers(bumpCtx, memberUserIDs(members))
 }
 
 // ─── Household CRUD ───────────────────────────────────────────────────────────
