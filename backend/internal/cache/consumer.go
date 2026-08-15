@@ -43,20 +43,37 @@ func (k Key) Enc(enc func(e *ArgEncoder)) Key {
 
 // EncodeHouseholdScope writes hh's fields into e: a presence bool first (nil means personal scope
 // — a completely different query from a populated household scope, so this must never collide
-// with the non-nil encoding), then HouseholdID and MemberUserIDs when non-nil.
+// with the non-nil encoding), then HouseholdID, MemberUserIDs, and requesterID when non-nil.
 //
 // MemberUserIDs is deliberately part of the hash even though HouseholdScope's own doc comment
 // says it is pre-validated/resolved server-side: encoding it here means a household membership
 // change changes the hash of every household-scoped cache key immediately, even before Task 10b's
 // generation-bump invalidation lands — a free second safety net against a stale membership list
 // being served to a household that just changed.
-func EncodeHouseholdScope(e *ArgEncoder, hh *domain.HouseholdScope) {
+//
+// requesterID (Issue #1531 H1): cache.ScopeFor collapses every member of a household onto the
+// SAME Scope{Kind: ScopeHousehold, ID: hh.HouseholdID} — by design, so that any one member's write
+// can bump every member's cached household aggregate (see ScopeFor's doc comment). But several of
+// this package's household-scoped repository queries are NOT symmetric across members: they bind
+// the REQUESTING user's ID into per-user joins that drive the result — e.g.
+// getSpendingByMerchantHousehold's merchantSortJoins (merchant_name_overrides.user_id = $1 =
+// requester), and buildSpendingFilter's custom-category ownership subquery. Without requesterID in
+// the ARG HASH, two different members issuing the identical household query within the same TTL
+// window collapse onto ONE cache entry, and whichever reads second is served the FIRST reader's
+// requester-dependent result — a cross-member financial-data leak (private merchant renames/merges,
+// custom-category filters). Keeping requesterID out of the SCOPE TAG (only the arg hash changes)
+// is deliberate: the scope tag is what makes one member's write bump every member's entries, and
+// moving the requester into it would break that fan-out, trading a leak for staleness instead.
+// Accepted cost: household cache entries become per-member, lowering hit rate on these endpoints —
+// correctness over hit rate.
+func EncodeHouseholdScope(e *ArgEncoder, requesterID string, hh *domain.HouseholdScope) {
 	e.Bool(hh != nil)
 	if hh == nil {
 		return
 	}
 	e.String(hh.HouseholdID)
 	e.StringSetSorted(hh.MemberUserIDs)
+	e.String(requesterID)
 }
 
 // EncodeSpendingFilters writes every field of f into e, in struct-declaration order.
@@ -74,7 +91,7 @@ func EncodeHouseholdScope(e *ArgEncoder, hh *domain.HouseholdScope) {
 //
 // This function is what TestSpendingFiltersEncoder_CoversEveryStructField and
 // TestEveryEncodedField_MutationChangesHash hold to account — see cache_consumer_test.go.
-func EncodeSpendingFilters(e *ArgEncoder, f domain.SpendingFilters) {
+func EncodeSpendingFilters(e *ArgEncoder, requesterID string, f domain.SpendingFilters) {
 	e.Time(f.StartDate)
 	e.Time(f.EndDate)
 	e.StringSetSorted(f.AccountTypes)
@@ -82,17 +99,17 @@ func EncodeSpendingFilters(e *ArgEncoder, f domain.SpendingFilters) {
 	e.String(f.Category)
 	e.StringSetSorted(f.CustomCategoryIDs)
 	e.Bool(f.RollUpChildren)
-	EncodeHouseholdScope(e, f.HouseholdScope)
+	EncodeHouseholdScope(e, requesterID, f.HouseholdScope)
 }
 
 // EncodeCashFlowFilters writes every field of f into e, in struct-declaration order. Same
 // AccountTypes nil-vs-empty note as EncodeSpendingFilters applies here (see
 // analytics_repository.go lines 175-180, 240-245, 326-331 — all `len(filters.AccountTypes) > 0`).
-func EncodeCashFlowFilters(e *ArgEncoder, f domain.CashFlowFilters) {
+func EncodeCashFlowFilters(e *ArgEncoder, requesterID string, f domain.CashFlowFilters) {
 	e.Time(f.StartDate)
 	e.Time(f.EndDate)
 	e.StringSetSorted(f.AccountTypes)
 	e.Bool(f.IncludeTransfers)
 	e.String(f.Grouping)
-	EncodeHouseholdScope(e, f.HouseholdScope)
+	EncodeHouseholdScope(e, requesterID, f.HouseholdScope)
 }

@@ -31,21 +31,21 @@ func TestKeyEnc_SetsArgHash(t *testing.T) {
 // hashSpendingFilters/hashCashFlowFilters/hashHouseholdScope are tiny local helpers so the
 // coverage/mutation tests below can assert on the encoder's actual output without going through
 // a full Key.
-func hashSpendingFilters(f domain.SpendingFilters) string {
+func hashSpendingFilters(requesterID string, f domain.SpendingFilters) string {
 	e := NewArgEncoder()
-	EncodeSpendingFilters(e, f)
+	EncodeSpendingFilters(e, requesterID, f)
 	return e.Hash()
 }
 
-func hashCashFlowFilters(f domain.CashFlowFilters) string {
+func hashCashFlowFilters(requesterID string, f domain.CashFlowFilters) string {
 	e := NewArgEncoder()
-	EncodeCashFlowFilters(e, f)
+	EncodeCashFlowFilters(e, requesterID, f)
 	return e.Hash()
 }
 
-func hashHouseholdScope(hh *domain.HouseholdScope) string {
+func hashHouseholdScope(requesterID string, hh *domain.HouseholdScope) string {
 	e := NewArgEncoder()
-	EncodeHouseholdScope(e, hh)
+	EncodeHouseholdScope(e, requesterID, hh)
 	return e.Hash()
 }
 
@@ -136,7 +136,7 @@ func baseCashFlowFilters() domain.CashFlowFilters {
 func TestEveryEncodedField_MutationChangesHash(t *testing.T) {
 	t.Run("SpendingFilters", func(t *testing.T) {
 		base := baseSpendingFilters()
-		baseHash := hashSpendingFilters(base)
+		baseHash := hashSpendingFilters("requester-1", base)
 
 		mutations := map[string]func(*domain.SpendingFilters){
 			"StartDate":         func(f *domain.SpendingFilters) { f.StartDate = f.StartDate.Add(time.Hour) },
@@ -154,14 +154,24 @@ func TestEveryEncodedField_MutationChangesHash(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				mutated := baseSpendingFilters()
 				mutate(&mutated)
-				assert.NotEqual(t, baseHash, hashSpendingFilters(mutated), "mutating field %q did not change the hash", name)
+				assert.NotEqual(t, baseHash, hashSpendingFilters("requester-1", mutated), "mutating field %q did not change the hash", name)
 			})
 		}
+
+		// Issue #1531 H1: the REQUESTER ID must also be part of the hash when a household scope is
+		// present — this is the regression coverage for the cross-member cache leak (see
+		// household_scope_cache_parity_integration_test.go's
+		// TestAnalyticsCacheParity_HouseholdScope_CrossMemberRequesterIsolation for the end-to-end
+		// proof against real household-scoped SQL).
+		t.Run("RequesterID", func(t *testing.T) {
+			assert.NotEqual(t, baseHash, hashSpendingFilters("requester-2", base),
+				"changing the requesting userID must change the hash for a household-scoped query")
+		})
 	})
 
 	t.Run("CashFlowFilters", func(t *testing.T) {
 		base := baseCashFlowFilters()
-		baseHash := hashCashFlowFilters(base)
+		baseHash := hashCashFlowFilters("requester-1", base)
 
 		mutations := map[string]func(*domain.CashFlowFilters){
 			"StartDate":        func(f *domain.CashFlowFilters) { f.StartDate = f.StartDate.Add(time.Hour) },
@@ -177,14 +187,19 @@ func TestEveryEncodedField_MutationChangesHash(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				mutated := baseCashFlowFilters()
 				mutate(&mutated)
-				assert.NotEqual(t, baseHash, hashCashFlowFilters(mutated), "mutating field %q did not change the hash", name)
+				assert.NotEqual(t, baseHash, hashCashFlowFilters("requester-1", mutated), "mutating field %q did not change the hash", name)
 			})
 		}
+
+		t.Run("RequesterID", func(t *testing.T) {
+			assert.NotEqual(t, baseHash, hashCashFlowFilters("requester-2", base),
+				"changing the requesting userID must change the hash for a household-scoped query")
+		})
 	})
 
 	t.Run("HouseholdScope", func(t *testing.T) {
 		base := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"u1"}}
-		baseHash := hashHouseholdScope(base)
+		baseHash := hashHouseholdScope("requester-1", base)
 
 		mutations := map[string]func() *domain.HouseholdScope{
 			"HouseholdID": func() *domain.HouseholdScope {
@@ -196,12 +211,28 @@ func TestEveryEncodedField_MutationChangesHash(t *testing.T) {
 		}
 		for name, build := range mutations {
 			t.Run(name, func(t *testing.T) {
-				assert.NotEqual(t, baseHash, hashHouseholdScope(build()), "mutating field %q did not change the hash", name)
+				assert.NotEqual(t, baseHash, hashHouseholdScope("requester-1", build()), "mutating field %q did not change the hash", name)
 			})
 		}
 
 		t.Run("NilVsNonNil", func(t *testing.T) {
-			assert.NotEqual(t, baseHash, hashHouseholdScope(nil))
+			assert.NotEqual(t, baseHash, hashHouseholdScope("requester-1", nil))
+		})
+
+		// Issue #1531 H1's core regression coverage at the encoder level: two DIFFERENT requesters
+		// reading the identical household scope must hash differently, even though hh itself
+		// (HouseholdID + MemberUserIDs) is byte-identical for both.
+		t.Run("RequesterID", func(t *testing.T) {
+			assert.NotEqual(t, baseHash, hashHouseholdScope("requester-2", base),
+				"changing the requesting userID must change the hash even though the household scope itself is unchanged")
+		})
+
+		// A nil household scope (personal mode) must hash identically regardless of requester —
+		// the requester is folded in only inside the hh != nil branch. Personal-scope cache keys
+		// already carry the requester via cache.ScopeFor's ScopeID, so this would be a redundant
+		// (and behavior-changing) hash bump for every non-household call site.
+		t.Run("RequesterID_IrrelevantWhenPersonal", func(t *testing.T) {
+			assert.Equal(t, hashHouseholdScope("requester-1", nil), hashHouseholdScope("requester-2", nil))
 		})
 	})
 }
@@ -211,5 +242,5 @@ func TestEveryEncodedField_MutationChangesHash(t *testing.T) {
 func TestEncodeHouseholdScope_MemberOrderAndDuplicatesDoNotMatter(t *testing.T) {
 	a := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"u1", "u2"}}
 	b := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"u2", "u1", "u2"}}
-	assert.Equal(t, hashHouseholdScope(a), hashHouseholdScope(b))
+	assert.Equal(t, hashHouseholdScope("requester-1", a), hashHouseholdScope("requester-1", b))
 }

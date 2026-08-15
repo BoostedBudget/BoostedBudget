@@ -58,7 +58,7 @@ func NewCachedAnalyticsService(inner AnalyticsService, c cache.Cache) AnalyticsS
 
 func (s *cachedAnalyticsService) GetCashFlowSummary(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowSummaryResponse, error) {
 	k := cache.NewKey(cache.NamespaceAnalytics, cache.ScopeFor(userID, filters.HouseholdScope), methodGetCashFlowSummary).
-		Enc(func(e *cache.ArgEncoder) { cache.EncodeCashFlowFilters(e, filters) })
+		Enc(func(e *cache.ArgEncoder) { cache.EncodeCashFlowFilters(e, userID, filters) })
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.CashFlowSummaryResponse, error) {
 		return s.inner.GetCashFlowSummary(ctx, userID, filters)
 	})
@@ -66,7 +66,7 @@ func (s *cachedAnalyticsService) GetCashFlowSummary(ctx context.Context, userID 
 
 func (s *cachedAnalyticsService) GetCashFlowHistory(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowHistoryResponse, error) {
 	k := cache.NewKey(cache.NamespaceAnalytics, cache.ScopeFor(userID, filters.HouseholdScope), methodGetCashFlowHistory).
-		Enc(func(e *cache.ArgEncoder) { cache.EncodeCashFlowFilters(e, filters) })
+		Enc(func(e *cache.ArgEncoder) { cache.EncodeCashFlowFilters(e, userID, filters) })
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.CashFlowHistoryResponse, error) {
 		return s.inner.GetCashFlowHistory(ctx, userID, filters)
 	})
@@ -74,7 +74,7 @@ func (s *cachedAnalyticsService) GetCashFlowHistory(ctx context.Context, userID 
 
 func (s *cachedAnalyticsService) GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.SpendingByCategoryResponse, error) {
 	k := cache.NewKey(cache.NamespaceAnalytics, cache.ScopeFor(userID, filters.HouseholdScope), methodGetSpendingByCategory).
-		Enc(func(e *cache.ArgEncoder) { cache.EncodeSpendingFilters(e, filters) })
+		Enc(func(e *cache.ArgEncoder) { cache.EncodeSpendingFilters(e, userID, filters) })
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.SpendingByCategoryResponse, error) {
 		return s.inner.GetSpendingByCategory(ctx, userID, filters)
 	})
@@ -83,7 +83,7 @@ func (s *cachedAnalyticsService) GetSpendingByCategory(ctx context.Context, user
 func (s *cachedAnalyticsService) GetSpendingByMerchant(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) (*domain.SpendingByMerchantResponse, error) {
 	k := cache.NewKey(cache.NamespaceAnalytics, cache.ScopeFor(userID, filters.HouseholdScope), methodGetSpendingByMerchant).
 		Enc(func(e *cache.ArgEncoder) {
-			cache.EncodeSpendingFilters(e, filters)
+			cache.EncodeSpendingFilters(e, userID, filters)
 			e.Int(limit)
 		})
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.SpendingByMerchantResponse, error) {
@@ -93,7 +93,7 @@ func (s *cachedAnalyticsService) GetSpendingByMerchant(ctx context.Context, user
 
 func (s *cachedAnalyticsService) GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.SpendingTrendsResponse, error) {
 	k := cache.NewKey(cache.NamespaceAnalytics, cache.ScopeFor(userID, filters.HouseholdScope), methodGetSpendingTrends).
-		Enc(func(e *cache.ArgEncoder) { cache.EncodeSpendingFilters(e, filters) })
+		Enc(func(e *cache.ArgEncoder) { cache.EncodeSpendingFilters(e, userID, filters) })
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.SpendingTrendsResponse, error) {
 		return s.inner.GetSpendingTrends(ctx, userID, filters)
 	})
@@ -126,7 +126,7 @@ func (s *cachedAnalyticsService) GetTopExpense(ctx context.Context, userID strin
 
 func (s *cachedAnalyticsService) GetAverageMonthlySpend(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendResponse, error) {
 	k := cache.NewKey(cache.NamespaceAnalytics, cache.ScopeFor(userID, filters.HouseholdScope), methodGetAverageMonthlySpend).
-		Enc(func(e *cache.ArgEncoder) { cache.EncodeSpendingFilters(e, filters) })
+		Enc(func(e *cache.ArgEncoder) { cache.EncodeSpendingFilters(e, userID, filters) })
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.AverageMonthlySpendResponse, error) {
 		return s.inner.GetAverageMonthlySpend(ctx, userID, filters)
 	})
@@ -147,7 +147,7 @@ func (s *cachedAnalyticsService) GetSavingsRateForPeriod(ctx context.Context, us
 		Enc(func(e *cache.ArgEncoder) {
 			e.Time(startDate)
 			e.Time(endDate)
-			cache.EncodeHouseholdScope(e, scope)
+			cache.EncodeHouseholdScope(e, userID, scope)
 		})
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.SavingsRateResponse, error) {
 		return s.inner.GetSavingsRateForPeriod(ctx, userID, startDate, endDate, scope)
@@ -161,7 +161,7 @@ func (s *cachedAnalyticsService) GetMonthOverMonthSpendingChange(ctx context.Con
 			e.Int(months)
 			e.StringSetSorted(accountTypes)
 			e.Bool(includeTransfers)
-			cache.EncodeHouseholdScope(e, scope)
+			cache.EncodeHouseholdScope(e, userID, scope)
 		})
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.MonthOverMonthResponse, error) {
 		return s.inner.GetMonthOverMonthSpendingChange(ctx, userID, category, months, accountTypes, includeTransfers, scope)
@@ -169,9 +169,21 @@ func (s *cachedAnalyticsService) GetMonthOverMonthSpendingChange(ctx context.Con
 }
 
 func (s *cachedAnalyticsService) GetLargestTransactionsForPeriod(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) (*domain.LargestTransactionsResponse, error) {
-	k := cache.NewKey(cache.NamespaceAnalyticsRows, cache.ScopeFor(userID, filters.HouseholdScope), methodGetLargestTransactionsForPeriod).
+	// Issue #1531 H1 "latent third case": the repository method behind this has NO household
+	// branch — it filters t.user_id = $1 unconditionally — so this is always personal data,
+	// regardless of what filters.HouseholdScope carries. Keying the cache SCOPE on
+	// ScopeFor(userID, filters.HouseholdScope) would (a) let a household generation bump
+	// invalidate what is actually one user's private data for no reason, and worse (b) mean this
+	// entry sits under the h:<householdID> scope tag, which cache.Purger.PurgeUser does NOT
+	// immediately purge on GDPR deletion (only u:<userID>/k:<clerkID> are) — a compliance gap for
+	// data that is, in truth, entirely this user's own. ScopeFor(userID, nil) keys it correctly as
+	// personal. Unreachable via the API today only because rejectHouseholdScope
+	// (internal/huma/operations/analytics.go) blocks HouseholdScope from reaching this method —
+	// fixed now rather than left latent. The ARG HASH still runs the full EncodeSpendingFilters
+	// (including HouseholdScope) for defense-in-depth if that guard is ever removed.
+	k := cache.NewKey(cache.NamespaceAnalyticsRows, cache.ScopeFor(userID, nil), methodGetLargestTransactionsForPeriod).
 		Enc(func(e *cache.ArgEncoder) {
-			cache.EncodeSpendingFilters(e, filters)
+			cache.EncodeSpendingFilters(e, userID, filters)
 			e.Int(limit)
 		})
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.LargestTransactionsResponse, error) {
@@ -180,10 +192,13 @@ func (s *cachedAnalyticsService) GetLargestTransactionsForPeriod(ctx context.Con
 }
 
 func (s *cachedAnalyticsService) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) (*domain.CategoryBreakdownForMerchantResponse, error) {
-	k := cache.NewKey(cache.NamespaceAnalyticsRows, cache.ScopeFor(userID, filters.HouseholdScope), methodGetCategoryBreakdownForMerchant).
+	// Issue #1531 H1 "latent third case" — same reasoning as GetLargestTransactionsForPeriod
+	// above: the repository method behind this has no household branch either, so this is always
+	// personal data and must be keyed (and GDPR-purgeable) as such.
+	k := cache.NewKey(cache.NamespaceAnalyticsRows, cache.ScopeFor(userID, nil), methodGetCategoryBreakdownForMerchant).
 		Enc(func(e *cache.ArgEncoder) {
 			e.String(merchantID)
-			cache.EncodeSpendingFilters(e, filters)
+			cache.EncodeSpendingFilters(e, userID, filters)
 		})
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.CategoryBreakdownForMerchantResponse, error) {
 		return s.inner.GetCategoryBreakdownForMerchant(ctx, userID, merchantID, filters)
@@ -192,7 +207,7 @@ func (s *cachedAnalyticsService) GetCategoryBreakdownForMerchant(ctx context.Con
 
 func (s *cachedAnalyticsService) GetIncomeSourceBreakdown(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.IncomeSourceBreakdownResponse, error) {
 	k := cache.NewKey(cache.NamespaceAnalytics, cache.ScopeFor(userID, filters.HouseholdScope), methodGetIncomeSourceBreakdown).
-		Enc(func(e *cache.ArgEncoder) { cache.EncodeSpendingFilters(e, filters) })
+		Enc(func(e *cache.ArgEncoder) { cache.EncodeSpendingFilters(e, userID, filters) })
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.IncomeSourceBreakdownResponse, error) {
 		return s.inner.GetIncomeSourceBreakdown(ctx, userID, filters)
 	})
@@ -214,7 +229,7 @@ func (s *cachedAnalyticsService) GetNetWorthTrend(ctx context.Context, userID st
 	k := cache.NewKey(cache.NamespaceAnalytics, cache.ScopeFor(userID, scope), methodGetNetWorthTrend).
 		Enc(func(e *cache.ArgEncoder) {
 			e.String(grouping)
-			cache.EncodeHouseholdScope(e, scope)
+			cache.EncodeHouseholdScope(e, userID, scope)
 		})
 	return cache.GetOrLoad(ctx, s.c, k, func(ctx context.Context) (*domain.NetWorthTrendResponse, error) {
 		return s.inner.GetNetWorthTrend(ctx, userID, grouping, scope)
