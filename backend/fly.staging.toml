@@ -68,12 +68,17 @@ kill_timeout = 30
   port = 9091
   path = "/metrics"
 
-# Intended machine count: 1 (staging, once this app has any machines at all —
+# Intended machine count: 2 (staging, once this app has any machines at all —
 # `fly machines list` currently returns none for this app). This is a statement of
 # INTENT, not current state. `min_machines_running` below is a FLOOR (the minimum Fly
 # will scale up to keep running), never a ceiling, and it is inert here anyway since
 # auto_stop_machines = false means machines aren't stopped/started based on load in the
-# first place. Multi-machine correctness for the rate limiter (Issue #1531) depends on
+# first place. Nothing in this file caps machine count at 1. Deliberately matches
+# production's intended count of 2 (not 1): with two staging machines, staging genuinely
+# exercises the multi-machine code path the Redis-backed limiter exists to fix — a
+# shared-budget regression (two machines each enforcing their own in-memory limit, giving
+# ~2x the configured budget) would surface here rather than first appearing in
+# production. Multi-machine correctness for the rate limiter (Issue #1531) depends on
 # RATE_LIMIT_REDIS_URL being a real, shared, noeviction Redis instance — NOT on how many
 # machines happen to be running — because each machine's in-memory fallback limiter
 # only sees that machine's own traffic.
