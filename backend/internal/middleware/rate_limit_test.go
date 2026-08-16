@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -744,9 +743,17 @@ func TestIPRateLimiter_ExemptPathsNeverTouchThePrimaryBackend(t *testing.T) {
 
 // TestIPRateLimiter_CleanupGoroutineStopsWhenDoneIsClosed proves the cleanup goroutine leak fix:
 // closing cfg.Done must cause the background goroutine to exit.
+//
+// Scoped to the goroutine under test via a channel this test owns and closes from
+// SetCleanupGoroutineStoppedHookForTest's callback, rather than the process-global
+// runtime.NumGoroutine() the previous version of this test used — that count includes every
+// goroutine in the test binary (other tests', the runtime's own), making it order-dependent and
+// flaky under `-race` or when run alongside other tests, regardless of whether THIS goroutine
+// actually stopped.
 func TestIPRateLimiter_CleanupGoroutineStopsWhenDoneIsClosed(t *testing.T) {
-	runtime.GC()
-	before := runtime.NumGoroutine()
+	stopped := make(chan struct{})
+	middleware.SetCleanupGoroutineStoppedHookForTest(func() { close(stopped) })
+	defer middleware.SetCleanupGoroutineStoppedHookForTest(nil)
 
 	done := make(chan struct{})
 	close(done) // already closed before IPRateLimiter's goroutine even starts
@@ -754,15 +761,11 @@ func TestIPRateLimiter_CleanupGoroutineStopsWhenDoneIsClosed(t *testing.T) {
 	cfg := middleware.RateLimitConfig{IPLimit: 5, WindowDuration: time.Minute, CleanupInterval: time.Hour, Done: done}
 	_ = middleware.IPRateLimiter(cfg)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		runtime.GC()
-		if runtime.NumGoroutine() <= before {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup goroutine did not stop after Done was closed")
 	}
-	t.Fatalf("cleanup goroutine did not stop after Done was closed: goroutines before=%d, now=%d", before, runtime.NumGoroutine())
 }
 
 // TestIPRateLimiter_BackendPanicDoesNotPanicTheRequest proves the handler-level defer recover():
