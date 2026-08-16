@@ -286,9 +286,10 @@ func TestIPRateLimiter_SpoofedCFConnectingIPIgnoredWithoutGate(t *testing.T) {
 }
 
 // TestIPRateLimiter_ExemptPathMissingHeaderNotRejected covers the first trap
-// called out in the issue: Fly's own health/metrics probes hit exempt paths
-// without any Fly-Client-Ip header (no Cloudflare hop in front of them locally),
-// and must not be rejected for that.
+// called out in the issue: Fly's own health probes hit exempt paths (/health,
+// /health/ — /metrics was removed from exemptedPaths in #1531) without any
+// Fly-Client-Ip header (no Cloudflare hop in front of them locally), and must
+// not be rejected for that.
 func TestIPRateLimiter_ExemptPathMissingHeaderNotRejected(t *testing.T) {
 	cfg := middleware.RateLimitConfig{IPLimit: 5, WindowDuration: time.Minute}
 	e := newEchoWithGateStatus(cfg, middleware.GateStatusExemptPath)

@@ -1276,9 +1276,12 @@ func (s *deletionService) bumpCacheForAffectedOwners(ctx context.Context, ownerI
 		// household-scoped analytics read (cache/consumer.go's Scope selection prefers household
 		// over user whenever one exists) would otherwise keep serving the same stale value under a
 		// DIFFERENT key than the one just bumped above. No retry here (unlike
-		// lookupHouseholdWithRetry before the cascade): that retry exists because its lookup window
-		// closes forever once the cascade runs; this lookup has no such closing window; a later
-		// scheduled run, or the TTL, recovers just as well as a synchronous retry would.
+		// lookupHouseholdWithRetry before the cascade): a failed lookup is logged and skipped, and
+		// recovery is TTL-only — nothing re-attempts this bump. That is acceptable (unlike the
+		// pre-cascade case) because this owner's own household_members row is untouched by this
+		// deletion, so a later read of the SAME lookup would succeed; the risk is bounded purely by
+		// the cache namespace's TTL, consistent with how the other void bumps in this file are
+		// documented.
 		if s.householdReader != nil {
 			hhCtx, hhCancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
 			household, _, found, hhErr := s.householdReader.GetHouseholdForUser(hhCtx, ownerID)

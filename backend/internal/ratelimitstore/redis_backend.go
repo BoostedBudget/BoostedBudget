@@ -161,7 +161,7 @@ func (b *RedisBackend) limitFor(tier domain.RateLimitTier) int {
 }
 
 // bucketKey builds the Redis key for tier/key. The sentinel tier gets a dedicated, identity-free
-// key ("rl:v1:sentinel") rather than a per-identity key under the regular namespace, so it is
+// key ("rl:v2:sentinel") rather than a per-identity key under the regular namespace, so it is
 // greppable in the Upstash console during the exact incident it exists to signal, and so it can be
 // given its own limit later without touching key parsing.
 func (b *RedisBackend) bucketKey(tier domain.RateLimitTier, key string) string {
