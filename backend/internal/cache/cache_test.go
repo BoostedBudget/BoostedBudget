@@ -369,3 +369,37 @@ func TestGetOrLoad_SingleflightTimeoutFollowsConfiguredValue(t *testing.T) {
 	assert.InDelta(t, 5*time.Second, gotDeadline.Sub(before), float64(500*time.Millisecond),
 		"a configured SingleflightLoadTimeout must actually govern the loader's context deadline")
 }
+
+// TestGetOrLoad_SingleflightTimeoutFloorsAtThirtySecondsWhenWriteTimeoutIsZero is round-6 finding
+// P5's regression test: SERVER_WRITE_TIMEOUT=0 means "no write timeout" (unbounded) at the
+// net/http layer, and cmd/server passes cfg.WriteTimeout straight through as
+// Options.SingleflightLoadTimeout — so an operator setting SERVER_WRITE_TIMEOUT=0 is exactly the
+// case where "this bound tracks WriteTimeout" (see the field's OLD doc comment) stopped being
+// true: 0 cannot mean "unbounded" here without singleflight being able to hang every concurrent
+// caller sharing a dataKey forever on one stuck loader. The deliberate choice (documented on
+// Options.SingleflightLoadTimeout) is to floor at singleflightDefaultLoadTimeout (30s) instead of
+// going unbounded — this test pins that choice so a future change cannot silently flip it either
+// way without a test failing.
+func TestGetOrLoad_SingleflightTimeoutFloorsAtThirtySecondsWhenWriteTimeoutIsZero(t *testing.T) {
+	fake := redisclient.NewFake("cache")
+	// SingleflightLoadTimeout: 0 mirrors cmd/server passing cfg.WriteTimeout when an operator has
+	// set SERVER_WRITE_TIMEOUT=0 — the Go zero value is indistinguishable from "explicitly zero"
+	// at this type, which is exactly why the floor must apply unconditionally to any <= 0 value.
+	c := NewCache(Options{Client: fake, SingleflightLoadTimeout: 0})
+	ctx := context.Background()
+
+	before := time.Now()
+	var gotDeadline time.Time
+	var hadDeadline bool
+	_, _, err := c.GetOrLoad(ctx, testKey("M-timeout-write-timeout-zero"), func(ctx context.Context) ([]byte, error) {
+		gotDeadline, hadDeadline = ctx.Deadline()
+		return []byte(`{"v":1}`), nil
+	})
+	require.NoError(t, err)
+	require.True(t, hadDeadline,
+		"SERVER_WRITE_TIMEOUT=0 must NOT make the shared singleflight load unbounded — a stuck "+
+			"loader would then hang every concurrent caller sharing this dataKey forever")
+	assert.InDelta(t, 30*time.Second, gotDeadline.Sub(before), float64(2*time.Second),
+		"WriteTimeout<=0 (including an explicit 0, meaning unbounded at the HTTP layer) must floor "+
+			"at singleflightDefaultLoadTimeout (30s), not go unbounded")
+}
