@@ -753,6 +753,37 @@ func TestConfig_RedisTimeoutMsNonPositive_FallsBackToDefault(t *testing.T) {
 	})
 }
 
+// TestConfig_RedisTimeoutMsOverflow_FallsBackToDefault is #1531 G3 (Codex-verified): P4 rejected
+// non-positive REDIS_TIMEOUT_MS, but getEnvAsPositiveInt accepts ANY positive int — including one
+// large enough that time.Duration(ms) * time.Millisecond overflows int64 and wraps negative.
+// REDIS_TIMEOUT_MS=9223372036855 does exactly that: main.go's two consumers
+// (time.Duration(cfg.RedisTimeoutMs) * time.Millisecond) each see a negative Duration and fall
+// back to THEIR OWN separate default (redisclient.Options's 200ms vs
+// middleware.RateLimitConfig's 50ms) — the identical P4 divergence, reached through a different
+// door. Bounding RedisTimeoutMs at Load() (a few seconds is already far beyond any sane limiter
+// budget) closes the class rather than this one instance.
+func TestConfig_RedisTimeoutMsOverflow_FallsBackToDefault(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("REDIS_POOL_SIZE", "")
+	t.Setenv("REDIS_TIMEOUT_MS", "9223372036855")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, 200, cfg.RedisTimeoutMs,
+		"an absurdly large REDIS_TIMEOUT_MS that would overflow time.Duration(ms)*time.Millisecond "+
+			"must fall back to the documented default, not reach consumers as a wrapped-negative "+
+			"duration that each independently reinterprets")
+
+	// Confirm the overflow claim itself, so this test doesn't just pin an arbitrary cap: the raw
+	// env value really does wrap negative once converted the same way main.go converts it (a
+	// runtime int64 multiply, via a variable so the compiler doesn't reject the constant
+	// expression as an overflow at compile time — main.go's cfg.RedisTimeoutMs is a runtime int
+	// too).
+	rawMs := int64(9223372036855)
+	overflowed := time.Duration(rawMs) * time.Millisecond
+	require.Negative(t, overflowed, "test setup: REDIS_TIMEOUT_MS fixture must actually overflow")
+}
+
 // TestConfig_RabbitMQURLIsGone is a compile-time-only assertion for issue #1531 Task 8:
 // Config.RabbitMQURL no longer exists — zero consumers, no `amqp` import anywhere in the Go tree
 // (River, Postgres-backed, is the queue). There is nothing to assert about its absence at runtime
