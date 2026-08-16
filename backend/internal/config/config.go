@@ -25,13 +25,24 @@ const PaddleWebhookTimestampToleranceMaxSeconds = 300
 // retention window out to years for what is meant to be a short-lived operational audit signal.
 const InvalidWebhookAttemptRetentionMaxDays = 365
 
-// RedisTimeoutMsMax is the upper bound accepted for REDIS_TIMEOUT_MS (issue #1531 G3). A few
-// seconds is already far beyond any sane limiter or cache-client budget; the real purpose of the
-// cap is to keep time.Duration(cfg.RedisTimeoutMs) * time.Millisecond (main.go, both the Redis
-// client and the rate limiter's PrimaryTimeout) from overflowing int64 and wrapping negative —
-// which would silently reproduce the P4 divergence (each consumer's own <=0 check falling back to
-// a DIFFERENT default) through an absurd-but-reachable input rather than a non-positive one.
-const RedisTimeoutMsMax = 10000
+// RedisTimeoutMsMax is the upper bound accepted for REDIS_TIMEOUT_MS.
+//
+// #1531 slice H5 (reverses G3's choice, made two commits earlier in this branch): G3 set this to
+// 10000 purely to stop time.Duration(cfg.RedisTimeoutMs) * time.Millisecond (main.go, both the
+// Redis client and the rate limiter's PrimaryTimeout) from overflowing int64 and wrapping
+// negative — which would silently reproduce the P4 divergence (each consumer's own <=0 check
+// falling back to a DIFFERENT default) through an absurd-but-reachable input rather than a
+// non-positive one. That closes the overflow, but 10000 (10s) is not a sane ceiling for what this
+// value actually feeds: cfg.RedisTimeoutMs is ALSO wired into the rate limiter's PrimaryTimeout
+// (main.go), which BLOCKS the request path at middleware position 4
+// (rate_limit_fallback.go's Allow) before falling back. redisclient/client.go's own package doc
+// says a 1s DialTimeout delay at that exact position is already "a latency cliff" with "a real
+// risk of tripping Fly's 5s health check, cycling machines, and causing a self-inflicted outage"
+// — a 10s ceiling permitted double that, on every request, not just a cold dial. 2000ms keeps a
+// 2.5x margin under Fly's 5s health check (matching the DialTimeout rationale above) while still
+// being far beyond any sane limiter or cache-client budget, so the overflow protection G3 added is
+// unaffected.
+const RedisTimeoutMsMax = 2000
 
 // Config holds application configuration
 type Config struct {
@@ -116,7 +127,9 @@ type Config struct {
 	// (both consumers, main.go) overflows int64 and wraps negative for a value like
 	// 9223372036855, and each consumer's own <=0 check then falls back to ITS OWN default exactly
 	// as in the P4 case. Loaded via getEnvAsBoundedPositiveInt with an upper bound
-	// (redisTimeoutMsMax) far beyond any sane limiter budget, so no reachable value can overflow.
+	// (RedisTimeoutMsMax) that closes the overflow class; see that constant's own doc comment
+	// (#1531 slice H5) for why the bound is also small enough to matter for the request path, not
+	// just large enough to avoid overflow.
 	RedisTimeoutMs int // env: REDIS_TIMEOUT_MS, default: 200
 	RedisPoolSize  int // env: REDIS_POOL_SIZE, default: 10
 
