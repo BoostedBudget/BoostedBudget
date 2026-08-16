@@ -24,7 +24,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/health"
 )
 
-// newProductionAPI builds a Huma API the same way cmd/server/main.go:313 does:
+// newProductionAPI builds a Huma API the same way cmd/server/main.go:324 does:
 // echo + humaecho.NewV4 + humaconfig.NewAPIConfig. Unlike humatest.New(t),
 // this installs huma.DefaultConfig's SchemaLinkTransformer, so tests built on
 // this harness observe exactly what production emits on the wire -- including
@@ -189,7 +189,7 @@ func TestGetHealth_ResponseBodyHasExactlyOneFieldNamedStatus(t *testing.T) {
 // bare test config, which has no transformers, so it cannot observe
 // huma.DefaultConfig's SchemaLinkTransformer -- the thing that actually runs
 // in production (via humaconfig.NewAPIConfig, built the same way
-// cmd/server/main.go:313 builds it). This test exercises that exact
+// cmd/server/main.go:324 builds it). This test exercises that exact
 // production config, so a `$schema` field leaking back into the OpenAPI
 // registry for HealthStatusResponse fails it immediately.
 func TestGetHealth_ResponseBodyHasExactlyOneFieldNamedStatus_ProductionConfig(t *testing.T) {

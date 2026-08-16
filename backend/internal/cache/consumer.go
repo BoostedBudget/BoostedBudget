@@ -90,7 +90,7 @@ func EncodeHouseholdScope(e *ArgEncoder, requesterID string, hh *domain.Househol
 // exception future maintainers would have to relearn.
 //
 // This function is what TestSpendingFiltersEncoder_CoversEveryStructField and
-// TestEveryEncodedField_MutationChangesHash hold to account — see cache_consumer_test.go.
+// TestEveryEncodedField_MutationChangesHash hold to account — see consumer_test.go.
 func EncodeSpendingFilters(e *ArgEncoder, requesterID string, f domain.SpendingFilters) {
 	e.Time(f.StartDate)
 	e.Time(f.EndDate)

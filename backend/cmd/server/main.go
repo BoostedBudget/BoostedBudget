@@ -2587,9 +2587,10 @@ func main() {
 // newRedisClientOptions builds the redisclient.Options for a Redis client named `name` (either
 // cache.LimiterClientName or "cache") from cfg. Extracted from main() (Issue #1531 Blocker 4) so
 // the actual wiring of cfg.RedisTimeoutMs/RedisPoolSize into the constructed client is unit
-// testable without a real Redis server for the URL/Name/timeout/pool-size fields, and against a
-// real client's rdb.Options() (see redis_options_test.go) for the fields that matter once a real
-// Redis instance is available. Before this helper existed, both call sites in main() passed only
+// testable without a real Redis server for the URL/Name/timeout/pool-size fields (see
+// issue1531_redis_config_wiring_test.go), and against a real client's rdb.Options() (see
+// redisclient/client_test.go's TestNew_ExplicitOptionsOverrideDefaults) for the fields that matter
+// once a real Redis instance is available. Before this helper existed, both call sites in main() passed only
 // URL and Name — cfg.RedisTimeoutMs and cfg.RedisPoolSize were validated and documented ("read by
 // redisclient.Options construction") but silently discarded, so every deploy ran on
 // redisclient's hardcoded defaults regardless of what an operator configured.
