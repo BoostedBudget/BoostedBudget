@@ -563,15 +563,24 @@ func (b slowButHealthyBackend) Allow(ctx context.Context, _ domain.RateLimitTier
 //
 // This test drives the real IPRateLimiter middleware (not fallbackLimiter directly, which was
 // already correctly parameterized -- the bug was one layer up, in what IPRateLimiter passed it)
-// with a primary that takes 80ms to answer: strictly slower than the OLD hardcoded 50ms, strictly
-// faster than a 200ms budget. With PrimaryTimeout left unset (defaults to the pre-fix 50ms), the
-// 80ms primary must still time out and fall back to memory (200 OK, since memory allows). With
-// PrimaryTimeout explicitly raised to 200ms (what main.go's fix wires cfg.RedisTimeoutMs into),
-// the SAME 80ms primary must now be waited for and its own (rejecting) decision honored.
+// with a primary that takes 150ms to answer: strictly slower than the OLD hardcoded 50ms, strictly
+// faster than a 500ms budget. With PrimaryTimeout left unset (defaults to the pre-fix 50ms), the
+// 150ms primary must still time out and fall back to memory (200 OK, since memory allows). With
+// PrimaryTimeout explicitly raised to 500ms (what main.go's fix wires cfg.RedisTimeoutMs into,
+// exaggerated well past the real 200ms default here purely for test margin), the SAME 150ms
+// primary must now be waited for and its own (rejecting) decision honored.
+//
+// Round-6 finding P7: the original 50/80/200ms ladder left only a 30ms margin on the low side
+// (80-50ms) — under a >30ms CI scheduler stall, the 80ms primary could plausibly still be
+// running when the 50ms timeout should have already fired (or vice versa), flipping the
+// assertion for a reason that has nothing to do with whether REDIS_TIMEOUT_MS reaches the
+// limiter, which is the actual thing under test. Widened to 50/150/500ms: 100ms of margin below
+// (150-50) and 350ms above (500-150) — only the timing tolerance changed, not what either subtest
+// asserts.
 func TestIPRateLimiter_PrimaryTimeoutIsConfigurable(t *testing.T) {
-	primaryDelay := 80 * time.Millisecond
+	primaryDelay := 150 * time.Millisecond
 
-	t.Run("default timeout (unset) still times out an 80ms primary", func(t *testing.T) {
+	t.Run("default timeout (unset) still times out a 150ms primary", func(t *testing.T) {
 		cfg := middleware.RateLimitConfig{
 			IPLimit:        100,
 			WindowDuration: time.Minute,
@@ -584,16 +593,16 @@ func TestIPRateLimiter_PrimaryTimeoutIsConfigurable(t *testing.T) {
 		e.ServeHTTP(rr, req)
 
 		assert.Equal(t, http.StatusOK, rr.Code,
-			"an 80ms primary must still be timed out under the default (pre-fix 50ms) budget, "+
+			"a 150ms primary must still be timed out under the default (pre-fix 50ms) budget, "+
 				"falling back to memory (which allows)")
 	})
 
-	t.Run("PrimaryTimeout=200ms lets the 80ms primary answer for real", func(t *testing.T) {
+	t.Run("PrimaryTimeout=500ms lets the 150ms primary answer for real", func(t *testing.T) {
 		cfg := middleware.RateLimitConfig{
 			IPLimit:        100,
 			WindowDuration: time.Minute,
 			Backend:        slowButHealthyBackend{delay: primaryDelay},
-			PrimaryTimeout: 200 * time.Millisecond,
+			PrimaryTimeout: 500 * time.Millisecond,
 		}
 		e := newEchoWithIPLimiter(cfg)
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -602,7 +611,7 @@ func TestIPRateLimiter_PrimaryTimeoutIsConfigurable(t *testing.T) {
 		e.ServeHTTP(rr, req)
 
 		assert.Equal(t, http.StatusTooManyRequests, rr.Code,
-			"raising PrimaryTimeout to 200ms must let the 80ms primary's own (rejecting) decision "+
+			"raising PrimaryTimeout to 500ms must let the 150ms primary's own (rejecting) decision "+
 				"govern, proving RateLimitConfig.PrimaryTimeout is actually read rather than the "+
 				"hardcoded default always winning")
 	})
