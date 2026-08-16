@@ -151,16 +151,30 @@ func TestWiring_ApiRequestsAreStillRateLimitedWithRedisDown(t *testing.T) {
 	srv := httptest.NewServer(e)
 	defer srv.Close()
 
-	var lastStatus int
+	// Asserting only request #5 is 429 cannot distinguish the in-memory fallback actually rate
+	// limiting from a limiter that failed CLOSED and rejects everything regardless of count — both
+	// would make request #5 429. Recording every status and asserting the first RateLimitIP (2)
+	// requests were ALLOWED, in addition to a later one being rejected, rules out fail-closed (which
+	// would reject #1 and #2 too) and fail-open (which would never reject at all).
+	statuses := make([]int, 5)
 	for i := 0; i < 5; i++ {
 		resp, err := srv.Client().Get(srv.URL + "/")
 		require.NoError(t, err)
-		lastStatus = resp.StatusCode
+		statuses[i] = resp.StatusCode
 		resp.Body.Close()
 	}
 
-	assert.Equal(t, http.StatusTooManyRequests, lastStatus,
-		"requests must still be rate limited (via the in-memory fallback) even though the Redis-backed primary always errors")
+	require.Equal(t, http.StatusOK, statuses[0],
+		"the first request must be allowed by the in-memory fallback (RateLimitIP=2) -- if it were "+
+			"429 the limiter has failed CLOSED (rejecting everything) rather than genuinely falling "+
+			"back to in-memory limiting")
+	require.Equal(t, http.StatusOK, statuses[1],
+		"the second request must be allowed by the in-memory fallback (RateLimitIP=2), the same "+
+			"reason as the first")
+	assert.Equal(t, http.StatusTooManyRequests, statuses[4],
+		"requests must still be rate limited (via the in-memory fallback) even though the "+
+			"Redis-backed primary always errors -- if this were 200 the limiter has failed OPEN "+
+			"(allowing everything)")
 }
 
 // TestBuildRateLimitBackend_SentinelLimitEqualsRegularLimitNotAuthLimit is the fix-round-1
