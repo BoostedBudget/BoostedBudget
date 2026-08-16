@@ -25,6 +25,14 @@ const PaddleWebhookTimestampToleranceMaxSeconds = 300
 // retention window out to years for what is meant to be a short-lived operational audit signal.
 const InvalidWebhookAttemptRetentionMaxDays = 365
 
+// RedisTimeoutMsMax is the upper bound accepted for REDIS_TIMEOUT_MS (issue #1531 G3). A few
+// seconds is already far beyond any sane limiter or cache-client budget; the real purpose of the
+// cap is to keep time.Duration(cfg.RedisTimeoutMs) * time.Millisecond (main.go, both the Redis
+// client and the rate limiter's PrimaryTimeout) from overflowing int64 and wrapping negative —
+// which would silently reproduce the P4 divergence (each consumer's own <=0 check falling back to
+// a DIFFERENT default) through an absurd-but-reachable input rather than a non-positive one.
+const RedisTimeoutMsMax = 10000
+
 // Config holds application configuration
 type Config struct {
 	// Server
@@ -102,6 +110,13 @@ type Config struct {
 	// two different effective timeouts from the one setting this field's doc comment says both
 	// consumers "must read the SAME value" from. Clamping here, once, keeps that promise for every
 	// reachable value instead of relying on the two fallbacks to agree by coincidence.
+	//
+	// #1531 G3: getEnvAsPositiveInt alone still let an absurdly large value reach the same
+	// divergence through a different door — time.Duration(cfg.RedisTimeoutMs) * time.Millisecond
+	// (both consumers, main.go) overflows int64 and wraps negative for a value like
+	// 9223372036855, and each consumer's own <=0 check then falls back to ITS OWN default exactly
+	// as in the P4 case. Loaded via getEnvAsBoundedPositiveInt with an upper bound
+	// (redisTimeoutMsMax) far beyond any sane limiter budget, so no reachable value can overflow.
 	RedisTimeoutMs int // env: REDIS_TIMEOUT_MS, default: 200
 	RedisPoolSize  int // env: REDIS_POOL_SIZE, default: 10
 
@@ -260,7 +275,7 @@ func Load() (*Config, error) {
 		// doc comment above for why the default is now "" rather than localhost)
 		RateLimitRedisURL: getEnv("RATE_LIMIT_REDIS_URL", ""),
 		CacheRedisURL:     getEnv("CACHE_REDIS_URL", ""),
-		RedisTimeoutMs:    getEnvAsPositiveInt("REDIS_TIMEOUT_MS", 200),
+		RedisTimeoutMs:    getEnvAsBoundedPositiveInt("REDIS_TIMEOUT_MS", 200, RedisTimeoutMsMax),
 		RedisPoolSize:     getEnvAsInt("REDIS_POOL_SIZE", 10),
 
 		// Rate-limit backend selection and tuning (issue #1531 Task 8)
