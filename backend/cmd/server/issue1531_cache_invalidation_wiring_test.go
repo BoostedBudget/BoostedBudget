@@ -340,13 +340,54 @@ func TestCacheInvalidationSetterWiringNoDrift(t *testing.T) {
 	}
 }
 
+// exemptionsWithEmptyReasons returns the (sorted) subset of exemptions' keys whose reason is
+// blank or whitespace-only. Extracted from TestCacheInvalidationExemptionsHaveReasons so the
+// "empty reason is rejected" property can be exercised against a synthetic map — the real
+// cacheInvalidationExemptions is (correctly) empty today, which makes a loop directly over it a
+// zero-iteration, decorative check.
+func exemptionsWithEmptyReasons(exemptions map[string]string) []string {
+	var bad []string
+	for typeName, reason := range exemptions {
+		if strings.TrimSpace(reason) == "" {
+			bad = append(bad, typeName)
+		}
+	}
+	sort.Strings(bad)
+	return bad
+}
+
 // TestCacheInvalidationExemptionsHaveReasons guards the exemption map itself: an exemption with
 // an empty reason is indistinguishable from "nobody looked", the same failure mode the Task
 // 10b-3 cache-completeness guards' dispositionNoCacheImpact{reason} enforce.
+//
+// cacheInvalidationExemptions has zero entries at time of writing (all five known
+// SetCacheInvalidation types are wired), so this loop never executes today — see
+// TestExemptionsWithEmptyReasons_DetectsBlankReason below for the test that actually proves the
+// validation logic can fail.
 func TestCacheInvalidationExemptionsHaveReasons(t *testing.T) {
-	for typeName, reason := range cacheInvalidationExemptions {
-		if strings.TrimSpace(reason) == "" {
-			t.Errorf("cacheInvalidationExemptions[%q] has an empty reason", typeName)
+	for _, typeName := range exemptionsWithEmptyReasons(cacheInvalidationExemptions) {
+		t.Errorf("cacheInvalidationExemptions[%q] has an empty reason", typeName)
+	}
+}
+
+// TestExemptionsWithEmptyReasons_DetectsBlankReason drives exemptionsWithEmptyReasons against a
+// synthetic map containing a non-empty reason, an empty reason, and a whitespace-only reason, so
+// the check that TestCacheInvalidationExemptionsHaveReasons relies on is provably able to fail —
+// independent of whether the real, production cacheInvalidationExemptions map currently has any
+// entries at all.
+func TestExemptionsWithEmptyReasons_DetectsBlankReason(t *testing.T) {
+	got := exemptionsWithEmptyReasons(map[string]string{
+		"GoodType": "deliberately not wired, see issue #1234",
+		"BadType":  "",
+		"AlsoBad":  "   ",
+	})
+	want := []string{"AlsoBad", "BadType"}
+	if len(got) != len(want) {
+		t.Fatalf("exemptionsWithEmptyReasons() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("exemptionsWithEmptyReasons() = %v, want %v", got, want)
 		}
 	}
 }
