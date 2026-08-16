@@ -248,12 +248,18 @@ test.describe('Household-scope cache freshness and visibility revocation (#1531)
       const householdAfterRemoval = await inviteeClient.get(
         `/api/v1/analytics/cash-flow-summary?start_date=${START_DATE}&end_date=${END_DATE}&scope=household`
       )
+      // Tightened to exactly 404, matching the comment's claim above: ResolveScope maps
+      // domain.ErrHouseholdNotFound to http.StatusNotFound specifically (see
+      // internal/huma/errors/mapper.go), not merely "some non-2xx". Any other status (401, 403,
+      // 500, ...) would mean the request failed for a DIFFERENT reason than the one this test is
+      // meant to prove — a stale generation, an auth bug, or a server error would all pass a bare
+      // `.ok() === false` check just as easily as the intended revocation would.
       expect(
-        householdAfterRemoval.ok(),
-        `Removed member's household-scope request unexpectedly succeeded ` +
-          `(${householdAfterRemoval.status()}): ${await householdAfterRemoval.text()} — household ` +
+        householdAfterRemoval.status(),
+        `Removed member's household-scope request did not return 404 ` +
+          `(got ${householdAfterRemoval.status()}): ${await householdAfterRemoval.text()} — household ` +
           'visibility was not revoked immediately upon removal.'
-      ).toBe(false)
+      ).toBe(404)
       inviteeUserId = undefined // already removed; skip the finally block's removeMemberAsOwner
     } finally {
       // Best-effort teardown, mirroring household-share-exclusion/household-invite's
