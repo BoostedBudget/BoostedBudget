@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -782,6 +783,49 @@ func TestConfig_RedisTimeoutMsOverflow_FallsBackToDefault(t *testing.T) {
 	rawMs := int64(9223372036855)
 	overflowed := time.Duration(rawMs) * time.Millisecond
 	require.Negative(t, overflowed, "test setup: REDIS_TIMEOUT_MS fixture must actually overflow")
+}
+
+// TestConfig_RedisTimeoutMsMax_IsLoweredForTheRequestPath is Issue #1531 slice H5. G3 set
+// RedisTimeoutMsMax to 10000 purely to stop the int64 overflow above; it never asked whether 10s
+// is a SANE ceiling for what this value actually feeds. It is not: cfg.RedisTimeoutMs is the rate
+// limiter's PRIMARY_TIMEOUT (main.go:2724, middleware.RateLimitConfig.PrimaryTimeout), which
+// BLOCKS the request path at middleware position 4 (rate_limit_fallback.go's Allow) before falling
+// back. redisclient/client.go's own package doc says a 1s DialTimeout delay at that position is "a
+// latency cliff" with "a real risk of tripping Fly's 5s health check, cycling machines, and causing
+// a self-inflicted outage" — a 10s ceiling permits double that, on every single request, not just a
+// cold dial. This reverses G3's magnitude choice (made two commits earlier in this branch) while
+// keeping G3's actual purpose (no int64 overflow) intact — the fix is a smaller sane bound, not
+// removing the bound.
+//
+// The two cases below pin the boundary VALUE, not just "is bounded at all": G3's own
+// TestConfig_RedisTimeoutMsOverflow_FallsBackToDefault only exercises 9223372036855, an input so
+// extreme it would fall back to the default at ANY ceiling from 1 to 2^63-1 — it cannot
+// distinguish a 10000ms cap from a 2000ms one. Asserting the exact-max value is accepted and
+// max+1 is rejected makes a future regression that quietly raises the ceiling back toward 10s fail
+// this test, not just the overflow case.
+func TestConfig_RedisTimeoutMsMax_IsLoweredForTheRequestPath(t *testing.T) {
+	require.LessOrEqual(t, RedisTimeoutMsMax, 2000, "H5: the ceiling must stay well under Fly's 5s health-check timeout at middleware position 4")
+	require.Greater(t, RedisTimeoutMsMax, 0)
+
+	t.Run("exactly the ceiling is accepted", func(t *testing.T) {
+		t.Setenv("ENVIRONMENT", "development")
+		t.Setenv("REDIS_POOL_SIZE", "")
+		t.Setenv("REDIS_TIMEOUT_MS", strconv.Itoa(RedisTimeoutMsMax))
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, RedisTimeoutMsMax, cfg.RedisTimeoutMs, "a value exactly at the ceiling must be accepted, not treated as out of range")
+	})
+
+	t.Run("one above the ceiling falls back to default", func(t *testing.T) {
+		t.Setenv("ENVIRONMENT", "development")
+		t.Setenv("REDIS_POOL_SIZE", "")
+		t.Setenv("REDIS_TIMEOUT_MS", strconv.Itoa(RedisTimeoutMsMax+1))
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, 200, cfg.RedisTimeoutMs, "one millisecond over the ceiling must fall back to the documented default, not be silently accepted")
+	})
 }
 
 // TestConfig_RabbitMQURLIsGone is a compile-time-only assertion for issue #1531 Task 8:
