@@ -14,6 +14,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/redisclient"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
@@ -39,6 +40,15 @@ type MockProfileRepositoryForDeletion struct {
 	// UncleanedLinkedItemCountCalls counts the calls, so a test can pin that the Plaid-less branch
 	// actually consulted the count rather than reaching its conclusion some other way.
 	UncleanedLinkedItemCountCalls int
+
+	// DeleteUserCascadeAffectedOwnerIDs is DeleteUserCascade's third return value (GDPR round-6
+	// finding P1) — field-driven for the same reason as UncleanedLinkedItemCount above: every
+	// pre-existing `.On("DeleteUserCascade", ...).Return(bool, error)` two-value expectation in this
+	// file predates the third return value, and a testify `.Return()` call with the wrong arity
+	// panics rather than defaulting. The zero value is nil — "no cross-user owner was affected" —
+	// exactly the behaviour every pre-existing test was written against. A test that cares about the
+	// new fix sets this before calling ExecuteDeletion.
+	DeleteUserCascadeAffectedOwnerIDs []string
 
 	// AuthorisedFn answers DeletionStillAuthorised — ExecuteDeletion's use-time re-verification of
 	// the authorisation it was claimed under. Field-driven for the same reason as
@@ -173,9 +183,9 @@ func (m *MockProfileRepositoryForDeletion) hasExpectationFor(method string) bool
 	return false
 }
 
-func (m *MockProfileRepositoryForDeletion) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
+func (m *MockProfileRepositoryForDeletion) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, []string, error) {
 	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
-	return args.Bool(0), args.Error(1)
+	return args.Bool(0), m.DeleteUserCascadeAffectedOwnerIDs, args.Error(1)
 }
 
 // CountUncleanedLinkedItems — Issue #1494. See the struct's field comments for why this is
@@ -683,6 +693,59 @@ func TestExecuteDeletion_CascadesAllData(t *testing.T) {
 	// deletion. The durable single-row property is asserted where it can actually be observed, in
 	// TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion.
 	mockAudit.AssertNotCalled(t, "Log", ctx, "user.deleted", "user", user.ID)
+}
+
+// TestExecuteDeletion_BumpsCrossUserAffectedOwnersCache is GDPR round-6 finding P1's regression
+// test at the service layer: DeleteUserCascade's dangling cross-user custom-category-override
+// clear rewrites an OTHER, surviving user's transaction row — purgeCacheForDeletedUser only ever
+// bumps the DELETED user's own scopes (see its own doc comment), so without a separate bump keyed
+// on the SURVIVING owner, that owner's warm analytics cache keeps serving the erased user's
+// now-stale custom category name until the cache namespace's TTL elapses.
+//
+// This drives ExecuteDeletion with a REAL cache.Generations backed by a fake Redis (never a mock
+// of the bump call itself — matching account_service_cache_invalidation_test.go's own reasoning:
+// a regression that silently no-ops the bump must fail this test, not just skip an assertion
+// against a spy) and asserts the OTHER user's ScopeUser generation token actually changed.
+func TestExecuteDeletion_BumpsCrossUserAffectedOwnersCache(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+
+	user := &domain.User{
+		ID:          "user-123",
+		ClerkUserID: "user_123",
+		Email:       "test@example.com",
+		IsDeleted:   false,
+	}
+	otherUserID := "other-user-456"
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
+	mockRepo.DeleteUserCascadeAffectedOwnerIDs = []string{otherUserID}
+	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+
+	fake := redisclient.NewFake("cache")
+	gens := cache.NewGenerations(fake)
+	service.SetCache(nil, gens, nil)
+
+	preGen, err := gens.Get(ctx, cache.ScopeUser, otherUserID)
+	require.NoError(t, err)
+
+	err = service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
+	require.NoError(t, err)
+
+	postGen, err := gens.Get(ctx, cache.ScopeUser, otherUserID)
+	require.NoError(t, err)
+	assert.NotEqual(t, preGen, postGen,
+		"P1: deleting user-123 rewrote otherUserID's transaction row (the cross-user dangling "+
+			"override clear), so otherUserID's OWN cache generation must be bumped — otherwise their "+
+			"warm analytics cache keeps serving user-123's just-erased custom category name")
 }
 
 // TestExecuteDeletion_DeletesClerkUser verifies Clerk deletion

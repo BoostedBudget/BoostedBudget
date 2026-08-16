@@ -117,7 +117,7 @@ func TestPlaidCleanupService_Integration_TerminalFailure_UnblocksErasureAndPrese
 
 	// 3. The erasure still waits out the cooling-off window. This is the step that makes the retry in
 	//    part 5 possible at all.
-	deleted, err := profileRepo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := profileRepo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	require.False(t, deleted, "a verdict reached seconds ago must not unblock an irreversible erasure")
 
@@ -140,7 +140,7 @@ func TestPlaidCleanupService_Integration_TerminalFailure_UnblocksErasureAndPrese
 		item.ID)
 	require.NoError(t, err)
 
-	deleted, err = profileRepo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err = profileRepo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	require.True(t, deleted, "#1494: the erasure must eventually complete")
 
@@ -219,7 +219,7 @@ func TestPlaidCleanupService_Integration_TerminalFailure_ConfigFixInsideTheWindo
 	// Day 1: misconfigured. The verdict is recorded and the erasure is refused — nothing irreversible
 	// has happened.
 	require.ErrorIs(t, svc.RemoveAllUserItems(ctx, user.ID, alwaysEligible), ErrPlaidRemovalUnrecoverable)
-	deleted, err := profileRepo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := profileRepo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	require.False(t, deleted)
 
@@ -239,7 +239,7 @@ func TestPlaidCleanupService_Integration_TerminalFailure_ConfigFixInsideTheWindo
 
 	// The erasure now completes on the strength of the REMOVAL, and leaves nothing for an operator to
 	// chase.
-	deleted, err = profileRepo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err = profileRepo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	require.True(t, deleted)
 
