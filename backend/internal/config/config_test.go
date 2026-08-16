@@ -720,6 +720,39 @@ func TestConfig_RedisTimeoutMsAndPoolSizeDefaults(t *testing.T) {
 	assert.Equal(t, 10, cfg.RedisPoolSize)
 }
 
+// TestConfig_RedisTimeoutMsNonPositive_FallsBackToDefault is GDPR/rate-limit round-6 finding P4:
+// REDIS_TIMEOUT_MS=0 (or negative) used to reach newRedisClientOptions as a literal 0/negative
+// time.Duration, which redisclient.Options's own <= 0 check silently upgrades to ITS 200ms
+// default — while middleware.RateLimitConfig.PrimaryTimeout (fed the SAME cfg.RedisTimeoutMs
+// value) falls back to defaultRedisLimiterTimeout, 50ms, on its own separate <= 0 check. One env
+// var, set to 0, therefore produced two DIFFERENT effective timeouts (200ms vs 50ms) instead of
+// the single, coherent value this field's own doc comment promises ("Both consumers must read the
+// SAME value"). Fixed by rejecting non-positive REDIS_TIMEOUT_MS at Load() itself — the same
+// getEnvAsPositiveInt convention RATE_LIMIT_MAX_ENTRIES already uses — so 0/negative now falls
+// back to the documented default (200) before either consumer ever sees it, and the two consumers
+// stay in agreement for every reachable value.
+func TestConfig_RedisTimeoutMsNonPositive_FallsBackToDefault(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("REDIS_POOL_SIZE", "")
+
+	t.Run("zero", func(t *testing.T) {
+		t.Setenv("REDIS_TIMEOUT_MS", "0")
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, 200, cfg.RedisTimeoutMs,
+			"REDIS_TIMEOUT_MS=0 must fall back to the documented default, not reach consumers as a "+
+				"literal 0 that each independently reinterprets")
+	})
+
+	t.Run("negative", func(t *testing.T) {
+		t.Setenv("REDIS_TIMEOUT_MS", "-50")
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, 200, cfg.RedisTimeoutMs,
+			"a negative REDIS_TIMEOUT_MS must fall back to the documented default the same way 0 does")
+	})
+}
+
 // TestConfig_RabbitMQURLIsGone is a compile-time-only assertion for issue #1531 Task 8:
 // Config.RabbitMQURL no longer exists — zero consumers, no `amqp` import anywhere in the Go tree
 // (River, Postgres-backed, is the queue). There is nothing to assert about its absence at runtime
