@@ -68,7 +68,12 @@ func TestSmokeTestScript_PublicMetricsExpectsUnreachable(t *testing.T) {
 
 	window := textWindowAfter(t, contents, `"$API_URL/metrics"`, "scripts/smoke-test.sh", 400)
 
-	if regexp.MustCompile(`check_endpoint\s+"\$API_URL/metrics"\s+"200"`).MatchString(window) {
+	// ⚠ Matched against the WHOLE file, not `window`. textWindowAfter starts the window AT
+	// the anchor (`"$API_URL/metrics"`), so everything before it on the same line — including
+	// the `check_endpoint ` call name itself — is outside the window and this regex could
+	// never match. This is the identical defect fixed in
+	// TestVerifyDeploymentScript_MetricsExpectsUnreachable below; it was never applied here.
+	if regexp.MustCompile(`check_endpoint\s+"\$API_URL/metrics"\s+"200"`).MatchString(contents) {
 		t.Errorf(`scripts/smoke-test.sh still treats "200" as the PASS condition for the public $API_URL/metrics ` +
 			`probe, but Issue #1514 criterion 18 moved /metrics to an internal-only listener ` +
 			`(cmd/server/internal_metrics.go, port 9091) — the public listener never registers it ` +
