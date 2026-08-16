@@ -93,6 +93,15 @@ type Config struct {
 	// path to this field at all. Both consumers must read the SAME value so raising
 	// REDIS_TIMEOUT_MS during a latency incident actually changes the limiter's breaker behaviour,
 	// not just the underlying client's read/write timeouts.
+	//
+	// Round-6 finding P4: loaded via getEnvAsPositiveInt, not getEnvAsInt — a non-positive value
+	// (0 or negative) falls back to the 200ms default at Load() time, rather than reaching the two
+	// consumers above as a literal 0/negative that each independently reinterprets:
+	// redisclient.Options's own <=0 check upgrades it to ITS 200ms default, while
+	// middleware.RateLimitConfig's own <=0 check falls back to defaultRedisLimiterTimeout (50ms) —
+	// two different effective timeouts from the one setting this field's doc comment says both
+	// consumers "must read the SAME value" from. Clamping here, once, keeps that promise for every
+	// reachable value instead of relying on the two fallbacks to agree by coincidence.
 	RedisTimeoutMs int // env: REDIS_TIMEOUT_MS, default: 200
 	RedisPoolSize  int // env: REDIS_POOL_SIZE, default: 10
 
@@ -251,7 +260,7 @@ func Load() (*Config, error) {
 		// doc comment above for why the default is now "" rather than localhost)
 		RateLimitRedisURL: getEnv("RATE_LIMIT_REDIS_URL", ""),
 		CacheRedisURL:     getEnv("CACHE_REDIS_URL", ""),
-		RedisTimeoutMs:    getEnvAsInt("REDIS_TIMEOUT_MS", 200),
+		RedisTimeoutMs:    getEnvAsPositiveInt("REDIS_TIMEOUT_MS", 200),
 		RedisPoolSize:     getEnvAsInt("REDIS_POOL_SIZE", 10),
 
 		// Rate-limit backend selection and tuning (issue #1531 Task 8)
