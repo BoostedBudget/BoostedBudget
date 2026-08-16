@@ -120,11 +120,17 @@ var forbiddenSubstrings = []string{
 func TestGetHealth_BodyNeverContainsCheckErrorText(t *testing.T) {
 	for _, tc := range realisticDependencyErrors {
 		t.Run(tc.name+"/503 path", func(t *testing.T) {
-			_, api := humatest.New(t)
+			// Built under newProductionAPI(), not humatest.New(t): this is the marquee leak
+			// regression test for criterion 23, and a bare humatest config cannot observe
+			// anything the real production pipeline (SchemaLinkTransformer et al.) adds to the
+			// 503 body -- the same L1 gap already closed for the 200 path, applied here too. See
+			// TestGetHealth_503BodyShapeUnderProductionConfig below for the shape (not just
+			// content) this now exposes.
+			e, api := newProductionAPI()
 			handler := NewHealthHandler(slog.Default(), health.Registry{DB: failingCheck(tc.err)})
 			RegisterHealthRoutes(api, handler)
 
-			resp := api.Get("/health")
+			resp := prodGet(e, "/health")
 
 			require.Equal(t, http.StatusServiceUnavailable, resp.Code)
 			body := resp.Body.String()
@@ -201,6 +207,57 @@ func TestGetHealth_ResponseBodyHasExactlyOneFieldNamedStatus_ProductionConfig(t 
 	assert.Equal(t, "ok", m["status"])
 	assert.Empty(t, resp.Header().Get("Link"),
 		"production response must not carry a describedBy Link header either")
+}
+
+// TestGetHealth_503BodyShapeUnderProductionConfig pins the 503 body's field SHAPE, not just its
+// content, under the real production Huma config (#1531 L1's gap, applied to the 503 path: see
+// TestGetHealth_BodyNeverContainsCheckErrorText's "/503 path" subtest, which checks content but
+// previously ran under humatest.New(t)'s bare config).
+//
+// ⚠ FOUND BY THIS SLICE, NOT FIXED HERE (scope): unlike the 200 body (HealthStatusResponse, which
+// has its own Schema() override specifically to defeat SchemaLinkTransformer -- see that type's
+// doc comment), huma.Error503ServiceUnavailable returns Huma's generic, un-overridden ErrorModel.
+// Under the real production config this DOES pick up a `$schema` field and a `Link:
+// .../schemas/ErrorModel.json; rel="describedBy"` header -- confirmed by running this exact test
+// against the current code before writing the assertions below. That is a real gap in the same
+// class L1 closed on the 200 path (a frameworkfingerprinting field on an unauthenticated,
+// internet-reachable endpoint), but it is NOT specific to /health: huma.Error503ServiceUnavailable
+// (and the sibling Error4xx/5xx helpers) are used by every erroring operation in this API, so
+// fixing it here would mean either overriding Huma's global ErrorModel schema (a blast radius far
+// outside this slice's scope) or giving /health its own bespoke error body type (a bigger, separate
+// change). This test therefore pins the CURRENT shape as a known, tracked gap rather than silently
+// asserting it away — see the field list below and file a follow-up issue for the fix.
+func TestGetHealth_503BodyShapeUnderProductionConfig(t *testing.T) {
+	e, api := newProductionAPI()
+	handler := NewHealthHandler(slog.Default(), health.Registry{DB: failingCheck(errors.New("boom"))})
+	RegisterHealthRoutes(api, handler)
+
+	resp := prodGet(e, "/health")
+	require.Equal(t, http.StatusServiceUnavailable, resp.Code)
+
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &m))
+
+	gotFields := make([]string, 0, len(m))
+	for k := range m {
+		gotFields = append(gotFields, k)
+	}
+	assert.ElementsMatch(t, []string{"title", "status", "detail", "$schema"}, gotFields,
+		"503 body's field shape has changed under the real production config -- if this now has "+
+			"FEWER fields (no more $schema), TestGetHealth_503BodyShapeUnderProductionConfig's "+
+			"known-gap comment above is stale and should be updated/removed; if it has MORE "+
+			"fields, that is a new leak and must not be accepted silently. got %v", m)
+	assert.Equal(t, "Service Unavailable", m["title"])
+	assert.Equal(t, float64(http.StatusServiceUnavailable), m["status"])
+	assert.Equal(t, "service unavailable", m["detail"],
+		"the underlying dependency error text must never reach this field -- only the fixed, "+
+			"generic string GetHealth passes to huma.Error503ServiceUnavailable")
+	assert.NotContains(t, m["detail"], "boom", "the injected dependency error text leaked into detail")
+
+	link := resp.Header().Get("Link")
+	assert.NotEmpty(t, link,
+		"expected the known describedBy Link header (see this test's doc comment); if this is "+
+			"now empty, the known gap has been fixed and the comment above should be updated")
 }
 
 func TestGetHealth_DoesNotIncludeVersion(t *testing.T) {
