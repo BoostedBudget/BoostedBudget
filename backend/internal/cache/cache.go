@@ -45,12 +45,23 @@ type Options struct {
 	// Now is a clock seam for tests. Nil means time.Now.
 	Now func() time.Time
 	// SingleflightLoadTimeout bounds the detached, shared singleflight execution in GetOrLoad (see
-	// that function's Issue #1531 M4 comment). Default (<=0): singleflightDefaultLoadTimeout
-	// (30s), which matches cmd/server's SERVER_WRITE_TIMEOUT default. Issue #1531 N1: the
-	// justification for this bound — "a load can never legitimately need longer than the server
-	// would allow a response to take anyway" — only holds if this value actually tracks
-	// SERVER_WRITE_TIMEOUT rather than being a second, independently hardcoded 30s that merely
-	// matches it at the default. cmd/server passes cfg.WriteTimeout here explicitly.
+	// that function's Issue #1531 M4 comment). Any value > 0 is used exactly as given, with no
+	// ceiling — cmd/server passes cfg.WriteTimeout here explicitly (Issue #1531 N1), so raising
+	// SERVER_WRITE_TIMEOUT genuinely raises this bound too, keeping the justification below true
+	// for any configured positive value.
+	//
+	// A value <= 0 — including an UNSET Options.SingleflightLoadTimeout (the Go zero value) and an
+	// explicit SERVER_WRITE_TIMEOUT=0 (which net/http treats as "no write timeout", i.e.
+	// unbounded) — ALWAYS falls back to singleflightDefaultLoadTimeout (30s). Round-6 finding P5:
+	// this is a deliberate choice, not an oversight the way the comment used to read. The bound's
+	// justification — "a load can never legitimately need longer than the server would allow a
+	// response to take anyway" — genuinely breaks down at WriteTimeout=0, because "unbounded" is
+	// not a number this field can track. Going unbounded here too was rejected: singleflight means
+	// every concurrent caller sharing a dataKey blocks on ONE goroutine's result, so an unbounded
+	// timeout would let a single stuck loader (a wedged Redis connection, a slow origin call) hang
+	// every caller for that key forever, with no way out — a strictly worse failure mode than a
+	// bounded 30s wait that then surfaces as an ordinary timeout error. The 30s floor is preferred
+	// even though it can no longer be described as "tracking WriteTimeout" in that one case.
 	SingleflightLoadTimeout time.Duration
 }
 
@@ -72,10 +83,12 @@ type sfResult struct {
 	hit  bool
 }
 
-// singleflightDefaultLoadTimeout is Options.SingleflightLoadTimeout's default (<=0) value — see
-// that field's doc comment. It matches cmd/server's SERVER_WRITE_TIMEOUT default
-// (internal/config/config.go), but a caller that sets SingleflightLoadTimeout explicitly (as
-// cmd/server now does, from cfg.WriteTimeout) always wins.
+// singleflightDefaultLoadTimeout is Options.SingleflightLoadTimeout's fallback for any value <= 0
+// — see that field's doc comment for why this is an intentional floor (never unbounded), not
+// merely a default that a configured positive value overrides. It matches cmd/server's
+// SERVER_WRITE_TIMEOUT default (internal/config/config.go) at THAT default, but a caller that sets
+// SingleflightLoadTimeout to a positive value (as cmd/server now does, from cfg.WriteTimeout)
+// always wins with that exact value, uncapped.
 const singleflightDefaultLoadTimeout = 30 * time.Second
 
 // NewCache returns a production Cache over opts.Client.
@@ -160,8 +173,10 @@ func (c *redisCache) GetOrLoad(
 	// shortest. c.singleflightTimeout (Options.SingleflightLoadTimeout, default
 	// singleflightDefaultLoadTimeout == this server's default WriteTimeout — see Issue #1531 N1)
 	// — a load can never legitimately need longer than the server would allow a response to take
-	// anyway, which is only true if this value actually tracks WriteTimeout rather than being a
-	// second, independently hardcoded number.
+	// anyway, which holds for any positive SERVER_WRITE_TIMEOUT (this value tracks it exactly, no
+	// cap) but NOT at WriteTimeout=0 ("unbounded" at the HTTP layer): see
+	// Options.SingleflightLoadTimeout's doc comment (round-6 finding P5) for why this stays
+	// floored at 30s there instead of also going unbounded.
 	sfCtx, sfCancel := context.WithTimeout(context.WithoutCancel(ctx), c.singleflightTimeout)
 	defer sfCancel()
 

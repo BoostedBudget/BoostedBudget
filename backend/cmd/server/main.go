@@ -228,7 +228,13 @@ func main() {
 			// SingleflightLoadTimeout (Issue #1531 N1): cache.go's default (30s) was justified as
 			// "matches this server's default WriteTimeout" but had no path to a NON-default
 			// SERVER_WRITE_TIMEOUT — passing cfg.WriteTimeout here explicitly makes that
-			// justification actually hold for any configured value, not just the default.
+			// justification actually hold for any configured POSITIVE value, not just the default.
+			// Round-6 finding P5: SERVER_WRITE_TIMEOUT=0 is the one value where it still does not
+			// hold — net/http treats WriteTimeout=0 as "no write timeout" (unbounded), but
+			// cache.Options.SingleflightLoadTimeout treats any value <= 0 as "use the 30s floor",
+			// deliberately, not unbounded — see that field's doc comment for why an unbounded
+			// singleflight wait was rejected (a single stuck loader would hang every concurrent
+			// caller sharing its key forever, which is worse than a bounded timeout error).
 			SingleflightLoadTimeout: cfg.WriteTimeout,
 		})
 		appLogger.Info("Cache wired to Redis", "control_enabled", cacheControl != nil)
