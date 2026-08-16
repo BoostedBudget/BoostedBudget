@@ -706,14 +706,21 @@ func TestExecuteDeletion_CascadesAllData(t *testing.T) {
 // of the bump call itself — matching account_service_cache_invalidation_test.go's own reasoning:
 // a regression that silently no-ops the bump must fail this test, not just skip an assertion
 // against a spy) and asserts the OTHER user's ScopeUser generation token actually changed.
+//
+// #1531 G1: also wires a HouseholdReader that resolves the affected owner to a household, and
+// asserts that household's ScopeHousehold generation is bumped too — bumpCacheForAffectedOwners'
+// household branch (deletion_service.go's household-bump loop) previously had zero test coverage;
+// only the ScopeUser path above ever ran.
 func TestExecuteDeletion_BumpsCrossUserAffectedOwnersCache(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
 	mockClerk := new(MockClerkService)
 	mockAudit := new(MockAuditLogger)
+	hhReader := &mockHouseholdReaderForDeletion{}
 
 	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetHouseholdReader(hhReader)
 
 	user := &domain.User{
 		ID:          "user-123",
@@ -722,6 +729,7 @@ func TestExecuteDeletion_BumpsCrossUserAffectedOwnersCache(t *testing.T) {
 		IsDeleted:   false,
 	}
 	otherUserID := "other-user-456"
+	otherHousehold := &domain.Household{ID: "hh-affected-owner", OwnerUserID: otherUserID}
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
@@ -729,12 +737,18 @@ func TestExecuteDeletion_BumpsCrossUserAffectedOwnersCache(t *testing.T) {
 	mockRepo.DeleteUserCascadeAffectedOwnerIDs = []string{otherUserID}
 	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	hhReader.On("GetHouseholdForUser", mock.Anything, otherUserID).Return(otherHousehold, false, true, nil)
+	// The deleted user's OWN household lookup (purgeCacheForDeletedUser's pre-cascade capture,
+	// unrelated to G1's affected-owner bump) — user-123 has no household of its own in this test.
+	hhReader.On("GetHouseholdForUser", mock.Anything, user.ID).Return(nil, false, false, nil)
 
 	fake := redisclient.NewFake("cache")
 	gens := cache.NewGenerations(fake)
 	service.SetCache(nil, gens, nil)
 
 	preGen, err := gens.Get(ctx, cache.ScopeUser, otherUserID)
+	require.NoError(t, err)
+	preHHGen, err := gens.Get(ctx, cache.ScopeHousehold, otherHousehold.ID)
 	require.NoError(t, err)
 
 	err = service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
@@ -746,6 +760,15 @@ func TestExecuteDeletion_BumpsCrossUserAffectedOwnersCache(t *testing.T) {
 		"P1: deleting user-123 rewrote otherUserID's transaction row (the cross-user dangling "+
 			"override clear), so otherUserID's OWN cache generation must be bumped — otherwise their "+
 			"warm analytics cache keeps serving user-123's just-erased custom category name")
+
+	postHHGen, err := gens.Get(ctx, cache.ScopeHousehold, otherHousehold.ID)
+	require.NoError(t, err)
+	assert.NotEqual(t, preHHGen, postHHGen,
+		"G1: otherUserID belongs to a household, so bumpCacheForAffectedOwners must also bump "+
+			"that household's ScopeHousehold generation — a household-scoped analytics read "+
+			"(cache/consumer.go's Scope selection prefers household over user) would otherwise keep "+
+			"serving user-123's just-erased custom category name under a DIFFERENT key than the "+
+			"one just bumped above")
 }
 
 // TestExecuteDeletion_DeletesClerkUser verifies Clerk deletion
