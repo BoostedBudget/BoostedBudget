@@ -1026,6 +1026,115 @@ func TestDeleteUserCascade_Integration_OtherUsersTransactionOverridesTargetsCate
 	assert.Equal(t, 1, otherTxnCount, "the OTHER user's transaction row itself must survive — only the dangling override is cleared")
 }
 
+// TestDeleteUserCascade_Integration_OwnBudgetAndRuleCategoryReferences_NoOtherOwnerAffected is
+// Issue #1531 slice H4: making explicit, and testing, the argument that budget_categories.
+// custom_category_id (CASCADE) and categorization_rules.target_custom_category_id (SET NULL) do
+// NOT need the same affectedOwnerIDs tracking the RESTRICT case above needs.
+//
+// Unlike custom_category_override_id (on transactions, no ownership trigger), Issue #1540
+// (budget_service.go, categorization_rule_service.go) guarantees every budget_categories.
+// custom_category_id and categorization_rules.target_custom_category_id was written by the SAME
+// user who owns the referenced custom_categories row. So when target's own custom_categories row
+// cascades away as part of this same DELETE FROM users, the CASCADE/SET NULL it triggers can only
+// ever reach target's OWN budget_categories/categorization_rules rows — which are themselves
+// cascading away in this same statement (via budgets.user_id / categorization_rules.user_id, both
+// CASCADE from users) regardless of what happens to the category. No other owner is ever in the
+// blast radius, so affectedOwnerIDs must stay empty even though this cascade genuinely fires.
+func TestDeleteUserCascade_Integration_OwnBudgetAndRuleCategoryReferences_NoOtherOwnerAffected(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	target := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "h4-target-"+suffix, nil, nil, nil)
+	other := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "h4-other-"+suffix, nil, nil, nil)
+
+	// target: a custom category referenced by target's OWN budget_categories and
+	// categorization_rules rows — exactly what #1540's ownership check now enforces is the only
+	// reachable shape.
+	var targetCategoryID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO custom_categories (user_id, name) VALUES ($1, 'Target Own Cat') RETURNING id`, target.ID,
+	).Scan(&targetCategoryID))
+
+	var targetBudgetID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO budgets (user_id, name, period, start_date, amount, series_id)
+		VALUES ($1, 'H4 Budget', 'monthly', CURRENT_DATE, 100, gen_random_uuid()) RETURNING id`,
+		target.ID,
+	).Scan(&targetBudgetID))
+
+	var targetBudgetCategoryID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO budget_categories (budget_id, allocated_amount, category_kind, custom_category_id)
+		VALUES ($1, 50, 'custom', $2) RETURNING id`, targetBudgetID, targetCategoryID,
+	).Scan(&targetBudgetCategoryID))
+
+	var targetRuleID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO categorization_rules (user_id, name, target_kind, target_custom_category_id)
+		VALUES ($1, 'H4 Rule', 'custom', $2) RETURNING id`, target.ID, targetCategoryID,
+	).Scan(&targetRuleID))
+
+	// other: entirely unrelated own custom category/budget/rule, seeded so a bug that DID leak
+	// across owners would have something to corrupt.
+	var otherCategoryID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO custom_categories (user_id, name) VALUES ($1, 'Other Own Cat') RETURNING id`, other.ID,
+	).Scan(&otherCategoryID))
+
+	var otherBudgetID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO budgets (user_id, name, period, start_date, amount, series_id)
+		VALUES ($1, 'H4 Other Budget', 'monthly', CURRENT_DATE, 100, gen_random_uuid()) RETURNING id`,
+		other.ID,
+	).Scan(&otherBudgetID))
+
+	var otherBudgetCategoryID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO budget_categories (budget_id, allocated_amount, category_kind, custom_category_id)
+		VALUES ($1, 50, 'custom', $2) RETURNING id`, otherBudgetID, otherCategoryID,
+	).Scan(&otherBudgetCategoryID))
+
+	var otherRuleID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO categorization_rules (user_id, name, target_kind, target_custom_category_id)
+		VALUES ($1, 'H4 Other Rule', 'custom', $2) RETURNING id`, other.ID, otherCategoryID,
+	).Scan(&otherRuleID))
+
+	deleted, affectedOwnerIDs, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
+	require.NoError(t, err)
+	require.True(t, deleted)
+
+	// The argument under test: this cascade genuinely removed target's own budget_categories row
+	// and nulled target's own categorization_rules row (asserted below), yet affectedOwnerIDs is
+	// empty — no OTHER owner was ever reachable, so the RESTRICT-only tracking mechanism doesn't
+	// need extending to these two FKs.
+	assert.Empty(t, affectedOwnerIDs, "H4: a CASCADE/SET NULL reachable only through the deleting user's own rows must not report any affected owner")
+
+	assertUserRowGone(t, ctx, pool, target.ID)
+	assertUserRowExists(t, ctx, pool, other.ID)
+
+	var targetBudgetCategoryCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM budget_categories WHERE id = $1", targetBudgetCategoryID).Scan(&targetBudgetCategoryCount))
+	assert.Equal(t, 0, targetBudgetCategoryCount, "target's own budget_categories row must cascade away with target's budget")
+
+	var targetRuleCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM categorization_rules WHERE id = $1", targetRuleID).Scan(&targetRuleCount))
+	assert.Equal(t, 0, targetRuleCount, "target's own categorization_rules row must cascade away via categorization_rules.user_id")
+
+	// other's rows must be completely untouched — same category_kind, same shape, different owner.
+	var otherBudgetCategoryCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM budget_categories WHERE id = $1 AND custom_category_id = $2", otherBudgetCategoryID, otherCategoryID).Scan(&otherBudgetCategoryCount))
+	assert.Equal(t, 1, otherBudgetCategoryCount, "other's own budget_categories row and its custom_category_id must survive target's deletion untouched")
+
+	var otherRuleCategoryID *string
+	require.NoError(t, pool.QueryRow(ctx, "SELECT target_custom_category_id FROM categorization_rules WHERE id = $1", otherRuleID).Scan(&otherRuleCategoryID))
+	require.NotNil(t, otherRuleCategoryID, "other's own categorization_rules row must keep its target_custom_category_id — it must never have been nulled by target's deletion")
+	assert.Equal(t, otherCategoryID, *otherRuleCategoryID)
+}
+
 // TestDeleteUserCascade_Integration_CrossUserNoActionReferences_StillDeletes is round-3's Finding 4
 // (Codex review, coordinator's #1440 follow-up brief): four columns are ON DELETE NO ACTION (the
 // default for a bare REFERENCES clause with no explicit ON DELETE) and can legally hold a CROSS-USER

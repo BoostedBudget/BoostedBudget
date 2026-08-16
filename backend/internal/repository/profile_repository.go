@@ -1423,6 +1423,24 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// value is not PII, which is true and irrelevant, because it is not the rewritten value that
 	// leaks; it is the OLD one, still sitting in that owner's warm analytics cache. Populated only
 	// on the success path; every guard-abort and error return above leaves it nil.
+	//
+	// Why budget_categories.custom_category_id (CASCADE) and categorization_rules.
+	// target_custom_category_id (SET NULL) do NOT need the same tracking (Issue #1531 slice H4):
+	// this user's own custom_categories rows cascade away later in this same DELETE FROM users
+	// statement, which would trigger those two FKs for any OTHER user's budget_categories/
+	// categorization_rules row that references one — exactly the shape of leak this comment
+	// documents for the RESTRICT case above. Issue #1540 (budget_service.go,
+	// categorization_rule_service.go) closed that at write time: a budget_categories or
+	// categorization_rules row can now only ever reference a custom_categories row owned by the
+	// SAME user, so the CASCADE/SET NULL this DELETE triggers can only ever touch the DELETED
+	// user's own rows — which are cascading away in this same statement regardless (budgets.user_id
+	// and categorization_rules.user_id both CASCADE from users), and whose cache is purged by
+	// purgeCacheForDeletedUser, not this affectedOwnerIDs mechanism. custom_category_override_id
+	// needed the mechanism above ONLY because it lives on transactions, a table with NO trigger
+	// enforcing same-user ownership against custom_categories (unlike custom_categories.parent_id's
+	// own two-level trigger) — that gap is exactly what #1440's RESTRICT-clearing UPDATE above
+	// works around. This argument holds only if no cross-user row pre-dates #1540; see #1531 slice
+	// H3 for that audit.
 	var affectedOwnerIDs []string
 
 	// Issue #1440 round-3 Finding 7 (Codex review, coordinator's #1440 follow-up brief): lock any
