@@ -12,10 +12,17 @@ import (
 
 // Issue #1531 Task 10b — "commit, THEN bump" is load-bearing everywhere a generation bump follows
 // a write (the HTTP mutation middleware, every explicit bump call site in Layer 2). These two
-// tests pin WHY, using nothing but this package's own primitives: bumping BEFORE the write's
-// effect is visible to a concurrent reader lets that reader repopulate the NEW generation with the
-// PRE-write value — a permanently stale cache entry until the namespace TTL, not merely a brief
-// staleness window.
+// tests demonstrate WHY that ordering matters, using nothing but this package's own primitives
+// (a local fakeSourceOfTruth and this package's own Cache/Generations) — bumping BEFORE the
+// write's effect is visible to a concurrent reader lets that reader repopulate the NEW generation
+// with the PRE-write value, a permanently stale cache entry until the namespace TTL, not merely a
+// brief staleness window.
+//
+// ⚠ Scope: these two tests exercise the ordering property in isolation, over a local fake. They
+// do NOT drive any production call site (the HTTP mutation middleware, Layer 2's explicit bumps),
+// so they cannot detect a real call site that gets the order wrong — that is each call site's own
+// tests' job. What these two prove is that the property itself is real and worth enforcing
+// everywhere else.
 
 // fakeSourceOfTruth simulates the durable store the loader reads from — a write "commits" by
 // calling Update; readers see whatever Update last set.
@@ -70,6 +77,12 @@ func TestBumpBeforeCommit_ProducesPermanentStaleEntry(t *testing.T) {
 // then the generation is bumped. Any read that raced during the write lands on the OLD (now
 // orphaned) generation and is irrelevant; every read after the bump uses the new generation and
 // gets the fresh value.
+//
+// The intermediate read below (after the commit but before the bump) is load-bearing, not
+// decorative: without it, this test cannot actually distinguish commit-then-bump from
+// bump-then-commit — a single read after both steps land on "B" either way when nothing reads in
+// between. Asserting the intermediate read still sees the STALE "A" (because the bump hasn't
+// happened yet) is what makes reordering the two calls actually flip this test's final assertion.
 func TestBumpAfterCommit_NoStaleEntry(t *testing.T) {
 	fake := redisclient.NewFake("cache")
 	c := NewCache(Options{Client: fake})
@@ -84,6 +97,16 @@ func TestBumpAfterCommit_NoStaleEntry(t *testing.T) {
 
 	// CORRECT ORDER: the write commits first...
 	db.Update("B")
+
+	// A read here, before the bump, still hits the G1 cache entry and sees the stale "A" — this
+	// is expected and harmless (the same reader will see fresh data on its next request, once the
+	// bump below has happened). It also pins that the ordering under test is real: it is this
+	// read's outcome that would flip to "B" (wrongly, one generation early) if the calls below
+	// were reordered to bump-then-commit.
+	got, _, err = c.GetOrLoad(ctx, testKey("M"), load)
+	require.NoError(t, err)
+	require.Equal(t, `"A"`, string(got))
+
 	// ...THEN the generation is bumped.
 	c.Generations().Bump(ctx, ScopeUser, "u1", "test")
 
