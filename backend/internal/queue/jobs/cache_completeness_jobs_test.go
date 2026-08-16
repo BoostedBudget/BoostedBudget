@@ -9,10 +9,13 @@ package jobs
 //     service method already reviewed and bumping, e.g. plaid_sync.go → SyncTransactions).
 //   - dispositionNoCacheImpact{reason} — reviewed and found to touch no cached namespace
 //     (analytics, analytics_rows, dashprefs, identity). Reason is mandatory and non-empty.
-//   - dispositionUnclassified{} — not yet reviewed to a confident conclusion. This disposition
-//     FAILS the completeness check on its own (see below) precisely so a wrong guess can never be
-//     recorded as a pass — see task-10b-3-report.md for the full worklist these produce and why
-//     they are gated behind t.Skip rather than pretend-classified.
+//   - dispositionUnclassified{} — not yet reviewed to a confident conclusion. An EXISTING entry of
+//     this kind SKIPS the completeness check (t.Skipf), naming every such file, rather than
+//     failing it — the backlog of reclassifying them is #1537's job, not this guard's. What DOES
+//     still fail (t.Errorf) is a job file with NO entry in jobFileDispositions at all — i.e. a
+//     newly-added file this guard has never seen — so a wrong guess is never silently recorded as
+//     a pass, even though an already-acknowledged unclassified one does not block CI. See
+//     task-10b-3-report.md for the full worklist these produce.
 //
 // WHAT THIS DOES NOT PROVE (read this before trusting a green run):
 //   - This guard is FILE-LEVEL, not statement-level or even function-level. A file already

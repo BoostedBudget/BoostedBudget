@@ -11,9 +11,13 @@ package repository
 //     non-GET Huma operation, so NewCacheInvalidationMiddleware bumps unconditionally after it.
 //   - dispositionNoCacheImpact{detail}          — reviewed; touches no cached namespace (analytics,
 //     analytics_rows, dashprefs, identity). detail is mandatory and non-empty.
-//   - dispositionUnclassified{}                 — not yet confidently reviewed. FAILS the
-//     completeness check on its own, precisely so a wrong guess is never recorded as a pass. See
-//     task-10b-3-report.md for the full worklist these entries produce (138 originally; 129 remain after Task 10b-2a-iii reclassified 9) — that table, not this
+//   - dispositionUnclassified{}                 — not yet confidently reviewed. An EXISTING entry
+//     of this kind SKIPS the completeness check (t.Skipf), naming every such method, rather than
+//     failing it — the backlog of reclassifying them is #1537's job, not this guard's. What DOES
+//     still fail (t.Errorf) is a mutating method with NO entry in repoMethodDispositions at all —
+//     i.e. a newly-added write this guard has never seen — so a wrong guess is never silently
+//     recorded as a pass, even though an already-acknowledged unclassified one does not block CI.
+//     See task-10b-3-report.md for the full worklist these entries produce (138 originally; 129 remain after Task 10b-2a-iii reclassified 9) — that table, not this
 //     guard, is the actual deliverable of this task.
 //
 // WHAT THIS DOES NOT PROVE (read this before trusting a green — or even a loudly-skipped — run):
