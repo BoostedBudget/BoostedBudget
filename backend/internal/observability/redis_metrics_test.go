@@ -257,36 +257,11 @@ func TestStartRedisMetricsCollector_LabelsEachClientSeparately(t *testing.T) {
 	assert.Equal(t, float64(22), testutil.ToFloat64(redisPoolTotalConns.WithLabelValues(cacheClient)))
 }
 
-func TestRateLimitRejections_HasBoundedTierLabels(t *testing.T) {
-	for _, tier := range []string{"regular", "auth", "sentinel"} {
-		RateLimitRejectionsTotal.WithLabelValues(tier).Inc()
-	}
-
-	reg := prometheus.NewRegistry()
-	require.NoError(t, reg.Register(RateLimitRejectionsTotal))
-	families, err := reg.Gather()
-	require.NoError(t, err)
-	require.Len(t, families, 1)
-
-	seen := map[string]bool{}
-	for _, m := range families[0].GetMetric() {
-		for _, l := range m.GetLabel() {
-			if l.GetName() == "tier" {
-				seen[l.GetValue()] = true
-			}
-		}
-	}
-	for tier := range seen {
-		assert.Contains(t, []string{"regular", "auth", "sentinel"}, tier,
-			"ratelimit_rejections_total tier label must stay within the bounded set")
-	}
-	assert.ElementsMatch(t, []string{"regular", "auth", "sentinel"}, keysOf(seen))
-}
-
-func keysOf(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
-}
+// NOTE: a bounded-tier-labels test for ratelimit_rejections_total used to live here
+// (TestRateLimitRejections_HasBoundedTierLabels). It was self-referential: it wrote
+// {regular, auth, sentinel} into the counter itself, then asserted the observed set equalled
+// exactly those three — production could emit tier="wat" and it would stay green, since it only
+// ever observed what it had just written. The genuine version, which drives real rejections
+// through the actual HTTP middleware and inspects what PRODUCTION code emitted, is
+// TestRateLimitRejections_OnlyEmitsBoundedTierLabelsFromProductionCode in
+// internal/middleware/rate_limit_test.go. Removed as a pure duplicate rather than fixed in place.
