@@ -462,6 +462,12 @@ func tierForRequest(path, key string) domain.RateLimitTier {
 // duplicate handler execution, double writes, double side effects, on a financial application.
 // Scoping the recover to end before next(ec) is called at all makes that failure mode impossible
 // regardless of chain ordering.
+// cleanupGoroutineStopped, when non-nil, is called immediately before IPRateLimiter's background
+// cleanup goroutine returns after cfg.Done fires. Always nil in production. Wired only from tests,
+// via SetCleanupGoroutineStoppedHookForTest in export_test.go (compiled for tests only) — see that
+// function's doc comment for why this exists instead of counting goroutines.
+var cleanupGoroutineStopped func()
+
 func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 	c := cfg.withDefaults()
 	logger := cfg.Logger
@@ -493,6 +499,13 @@ func IPRateLimiter(cfg RateLimitConfig) echo.MiddlewareFunc {
 				sentinelStore.cleanup(c.CleanupInterval * 2)
 				exemptStore.cleanup(c.CleanupInterval * 2)
 			case <-cfg.Done:
+				// cleanupGoroutineStopped is nil in production (see its doc comment) — this is a
+				// no-op there. It exists solely so a test can observe THIS specific goroutine's
+				// exit via a channel it owns, instead of the process-global runtime.NumGoroutine(),
+				// which is shared with every other test in the binary and flaky under -race/parallel.
+				if cleanupGoroutineStopped != nil {
+					cleanupGoroutineStopped()
+				}
 				return
 			}
 		}
