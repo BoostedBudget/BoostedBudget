@@ -201,8 +201,9 @@ func remoteAddrIdentity(r *http.Request) string {
 //     observability.RateLimitIdentitySentinelFallbackTotal so the anomaly is
 //     observable rather than silent.
 //   - GateStatusExemptPath: CloudflareOnly did not validate anything for this
-//     request (e.g. /health, /metrics — see cloudflare.go's exemptedPaths), so
-//     no header on it has been verified. Fly-Client-Ip is used when present:
+//     request (e.g. /health, /health/ — see cloudflare.go's exemptedPaths; /metrics
+//     was removed from exemptedPaths in #1531), so no header on it has been
+//     verified. Fly-Client-Ip is used when present:
 //     CloudflareOnly's own Layer 1 check already depends on Fly-Client-Ip being
 //     set by Fly's edge from the real TCP connection rather than by the HTTP
 //     client (cloudflare.go:98-113) — this is an assumption inherited from
