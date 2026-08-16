@@ -779,25 +779,36 @@ func TestIPRateLimiter_BackendPanicDoesNotPanicTheRequest(t *testing.T) {
 }
 
 // TestIPRateLimiter_RetryAfterIsNeverZeroOrNegative proves the middleware itself guards against a
-// misbehaving backend that returns a zero (or negative) RetryAfter on denial — which would invite
-// an immediate retry storm.
+// misbehaving backend that returns a zero OR a negative RetryAfter on denial — either would
+// invite an immediate retry storm (a negative Retry-After header is nonsensical to a client, and
+// some HTTP clients treat it the same as "retry immediately", same as zero).
 func TestIPRateLimiter_RetryAfterIsNeverZeroOrNegative(t *testing.T) {
-	backend := &fakeBackend{name: "buggy", allowFunc: func(context.Context, domain.RateLimitTier, string) (domain.RateLimitDecision, error) {
-		return domain.RateLimitDecision{Allowed: false, RetryAfter: 0}, nil
-	}}
-	cfg := middleware.RateLimitConfig{IPLimit: 100, WindowDuration: time.Minute, Backend: backend}
-	e := newEchoWithIPLimiter(cfg)
+	for _, tc := range []struct {
+		name       string
+		retryAfter time.Duration
+	}{
+		{"zero", 0},
+		{"negative", -5 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &fakeBackend{name: "buggy", allowFunc: func(context.Context, domain.RateLimitTier, string) (domain.RateLimitDecision, error) {
+				return domain.RateLimitDecision{Allowed: false, RetryAfter: tc.retryAfter}, nil
+			}}
+			cfg := middleware.RateLimitConfig{IPLimit: 100, WindowDuration: time.Minute, Backend: backend}
+			e := newEchoWithIPLimiter(cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.RemoteAddr = "198.51.100.50:1"
-	rr := httptest.NewRecorder()
-	e.ServeHTTP(rr, req)
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req.RemoteAddr = "198.51.100.50:1"
+			rr := httptest.NewRecorder()
+			e.ServeHTTP(rr, req)
 
-	require.Equal(t, http.StatusTooManyRequests, rr.Code)
-	retryAfter := rr.Header().Get("Retry-After")
-	require.NotEmpty(t, retryAfter)
-	assert.NotEqual(t, "0", retryAfter)
-	assert.NotContains(t, retryAfter, "-")
+			require.Equal(t, http.StatusTooManyRequests, rr.Code)
+			retryAfter := rr.Header().Get("Retry-After")
+			require.NotEmpty(t, retryAfter)
+			assert.NotEqual(t, "0", retryAfter)
+			assert.NotContains(t, retryAfter, "-")
+		})
+	}
 }
 
 // TestRateLimitRejections_OnlyEmitsBoundedTierLabelsFromProductionCode is the REAL enforcement
