@@ -31,8 +31,8 @@ func TestRedisBackend_KeyNamingIncludesVersionAndTier(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("expected 2 script calls, got %d", len(calls))
 	}
-	wantRegular := "rl:v1:regular:1.2.3.4"
-	wantAuth := "rl:v1:auth:1.2.3.4"
+	wantRegular := "rl:v2:regular:1.2.3.4"
+	wantAuth := "rl:v2:auth:1.2.3.4"
 	if got := calls[0].Keys; len(got) != 1 || got[0] != wantRegular {
 		t.Errorf("regular key = %v, want [%s]", got, wantRegular)
 	}
@@ -54,7 +54,7 @@ func TestRedisBackend_SentinelIdentityGetsItsOwnDedicatedKeyWithoutTheIdentitySu
 	if len(calls) != 1 {
 		t.Fatalf("expected 1 script call, got %d", len(calls))
 	}
-	want := "rl:v1:sentinel"
+	want := "rl:v2:sentinel"
 	if got := calls[0].Keys; len(got) != 1 || got[0] != want {
 		t.Errorf("sentinel key = %v, want [%s]", got, want)
 	}
@@ -335,8 +335,8 @@ func TestRedisBackend_IPv4IdentitiesAreNeverAggregated(t *testing.T) {
 		t.Fatalf("expected 2 script calls, got %d", len(calls))
 	}
 
-	if calls[0].Keys[0] != "rl:v1:regular:203.0.113.1" {
-		t.Errorf("plain IPv4 key = %q, want unaggregated rl:v1:regular:203.0.113.1", calls[0].Keys[0])
+	if calls[0].Keys[0] != "rl:v2:regular:203.0.113.1" {
+		t.Errorf("plain IPv4 key = %q, want unaggregated rl:v2:regular:203.0.113.1", calls[0].Keys[0])
 	}
 	if calls[0].Keys[0] == calls[1].Keys[0] {
 		t.Errorf("two different plain IPv4 addresses must not share a bucket key, both got %q", calls[0].Keys[0])

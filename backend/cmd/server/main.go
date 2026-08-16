@@ -2662,7 +2662,7 @@ func buildRateLimitBackend(ctx context.Context, limiterClient redisclient.Client
 		// "fall back to RegularLimit" (see TestRedisBackend_SentinelLimitDefaultsToRegularLimitWhenZero),
 		// so passing an explicit zero here preserves that fix-round-1 behaviour exactly; it is NOT
 		// a regression to "wire the field explicitly" as fix round 1's comment anticipated. The
-		// sentinel bucket ("rl:v1:sentinel") is used whenever a Cloudflare-gated request's
+		// sentinel bucket ("rl:v2:sentinel") is used whenever a Cloudflare-gated request's
 		// Cf-Connecting-Ip is missing, duplicated, or malformed — and under Redis it is ONE
 		// fleet-wide key, not per-machine. A Cloudflare header anomaly (Managed Transform change,
 		// config drift, a CF incident) collapses ALL affected traffic into that single bucket:
