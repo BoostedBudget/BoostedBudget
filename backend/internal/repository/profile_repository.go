@@ -245,12 +245,21 @@ type ProfileRepository interface {
 	// snapshot taken outside it) that narrows how an item could reach this check un-cleaned in
 	// the first place.
 	//
-	// Returns (true, nil) if the cascade ran and the user was deleted. Returns (false, nil) — a
-	// NORMAL, EXPECTED outcome, NOT an error — when either guard fails: an admin granted/extended
-	// a comp, the user cancelled their own deletion request, or un-cleaned Plaid items remain.
-	// The caller MUST release its work claim (never Complete) on a (false, nil) result and let
-	// the next scheduled run re-evaluate from scratch — it must NOT treat this as an error.
-	DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error)
+	// Returns (true, affectedOwnerIDs, nil) if the cascade ran and the user was deleted.
+	// affectedOwnerIDs is the deduplicated set of OTHER (surviving) users whose transactions rows
+	// this cascade rewrote in place — currently, the dangling cross-user custom-category-override
+	// clear (see that UPDATE's own comment, GDPR round-6 finding P1). The caller MUST bump each
+	// affected owner's cache scope AFTER this call returns (true, ...) — never before, since the
+	// erasure this slice describes is only durable once this method has returned — or that owner's
+	// warm analytics cache keeps serving the just-deleted user's data (e.g. their chosen custom
+	// category name) until the cache namespace's TTL elapses.
+	//
+	// Returns (false, nil, nil) — a NORMAL, EXPECTED outcome, NOT an error — when either guard
+	// fails: an admin granted/extended a comp, the user cancelled their own deletion request, or
+	// un-cleaned Plaid items remain. The caller MUST release its work claim (never Complete) on a
+	// (false, nil, nil) result and let the next scheduled run re-evaluate from scratch — it must
+	// NOT treat this as an error.
+	DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, []string, error)
 
 	// RecordDeletionResidue writes the durable, queryable record that an account deletion performed
 	// an IRREVERSIBLE EXTERNAL EFFECT and then did not complete — so the user still exists, and
@@ -1400,13 +1409,21 @@ func (r *profileRepository) GetUsersScheduledForDeletionPage(ctx context.Context
 // below), then issue one real `DELETE FROM users`, and let the schema's foreign keys do the
 // erasure — the single source of truth for which tables are user-scoped, incapable of silently
 // drifting out of sync with the Go code the way the five explicit DELETEs did.
-func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
+func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, []string, error) {
 	// Start a transaction for atomicity
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	// affectedOwnerIDs collects, deduplicated, every OTHER user whose row this transaction mutates
+	// below (currently: the dangling-cross-user-category-override clear). See that UPDATE's own
+	// comment for why this exists: the comment right above it — correctly — argues the REWRITTEN
+	// value is not PII, which is true and irrelevant, because it is not the rewritten value that
+	// leaks; it is the OLD one, still sitting in that owner's warm analytics cache. Populated only
+	// on the success path; every guard-abort and error return above leaves it nil.
+	var affectedOwnerIDs []string
 
 	// Issue #1440 round-3 Finding 7 (Codex review, coordinator's #1440 follow-up brief): lock any
 	// household this user owns BEFORE locking the user row below, matching household_service.go's
@@ -1445,7 +1462,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	var lockedHouseholdID *string
 	err = tx.QueryRow(ctx, `SELECT id FROM households WHERE owner_user_id = $1 FOR NO KEY UPDATE`, userID).Scan(&lockedHouseholdID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return false, fmt.Errorf("DeleteUserCascade: lock owned household: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: lock owned household: %w", err)
 	}
 
 	// Issue #1413 round-4 Critical finding C1: re-verify eligibility INSIDE this transaction,
@@ -1483,13 +1500,13 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		)
 	`, userID, expectedDeletionRequestedAt).Scan(&stillEligible)
 	if err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: eligibility re-check: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: eligibility re-check: %w", err)
 	}
 	if !stillEligible {
 		// Legitimate, expected abort — NOT an error. The deferred tx.Rollback(ctx) above discards
 		// everything; the caller must release its work claim and let the next scheduled run
 		// re-evaluate from scratch.
-		return false, nil
+		return false, nil, nil
 	}
 
 	// Issue #1413 round-4 Critical finding C2: refuse to delete the local linked_items rows (the
@@ -1507,13 +1524,13 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	var uncleanedItemsExist bool
 	err = tx.QueryRow(ctx, `SELECT `+uncleanedLinkedItemExistsClause, userID).Scan(&uncleanedItemsExist)
 	if err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: un-cleaned Plaid item check: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: un-cleaned Plaid item check: %w", err)
 	}
 	if uncleanedItemsExist {
 		// Legitimate, expected abort — NOT an error. Preferring to abort and retry over silently
 		// orphaning a live Plaid token: an undeleted user is recoverable, an orphaned Plaid item
 		// is not.
-		return false, nil
+		return false, nil, nil
 	}
 
 	// Issue #1440 Critical finding (Codex review): re-verify the household-owner guard INSIDE this
@@ -1552,11 +1569,11 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	var householdOwnerBlocksDeletion bool
 	err = tx.QueryRow(ctx, `SELECT `+householdOwnerBlocksDeletionClause, userID).Scan(&householdOwnerBlocksDeletion)
 	if err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: household owner guard check: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: household owner guard check: %w", err)
 	}
 	if householdOwnerBlocksDeletion {
 		observability.HouseholdOwnerDeletionBlockedTotal.Inc()
-		return false, domain.ErrHouseholdHasActiveMembers
+		return false, nil, domain.ErrHouseholdHasActiveMembers
 	}
 
 	// Issue #1440 Finding 2 (Codex review): clear any DANGLING cross-user override BEFORE the hard
@@ -1603,13 +1620,45 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// what effective_pfc_primary's generated-column CASE will independently compute for the same row
 	// now that category_override_kind is NULL (ELSE pfc_primary branch) — the two columns stay in
 	// agreement, not just individually non-PII.
-	_, err = tx.Exec(ctx, `
+	//
+	// GDPR round-6 finding P1: everything above is about the NEW value this UPDATE writes, and it is
+	// right that the new value (pfc_primary, the transaction's own underlying category) is not PII.
+	// But the row this UPDATE touches can belong to a DIFFERENT, surviving user — the whole point of
+	// "cross-user dangling override" — and that surviving owner's warm analytics cache (keyed on
+	// THEIR user/household scope, not the deleted user's) may already hold the OLD
+	// effective_category_name: the deleted user's custom category NAME, which the docstring above
+	// this method's cache-purge call site (purgeCacheForDeletedUser) never bumps, because it only
+	// knows about the deleted user, their Clerk ID, and their own household. Without a bump keyed on
+	// the SURVIVING owner, that owner's cache keeps serving the just-erased user's chosen category
+	// name for up to the analytics namespace's TTL. RETURNING user_id below hands the caller the
+	// exact set of rows this statement rewrote, so it can bump precisely those owners' cache scopes
+	// AFTER this transaction commits (never inside it — a cache bump is not part of the erasure and
+	// must not be able to roll it back or delay it).
+	rows, err := tx.Query(ctx, `
 		UPDATE transactions
 		SET custom_category_override_id = NULL, category_override_kind = NULL, effective_category_name = pfc_primary
 		WHERE custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1)
+		RETURNING user_id
 	`, userID)
 	if err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: clear dangling custom category overrides: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: clear dangling custom category overrides: %w", err)
+	}
+	seenOwner := map[string]bool{userID: true} // the deleted user's own cache is purged separately; never re-bump it here
+	for rows.Next() {
+		var ownerID string
+		if scanErr := rows.Scan(&ownerID); scanErr != nil {
+			rows.Close()
+			return false, nil, fmt.Errorf("DeleteUserCascade: scan dangling custom category override owner: %w", scanErr)
+		}
+		if !seenOwner[ownerID] {
+			seenOwner[ownerID] = true
+			affectedOwnerIDs = append(affectedOwnerIDs, ownerID)
+		}
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return false, nil, fmt.Errorf("DeleteUserCascade: iterate dangling custom category override owners: %w", rowsErr)
 	}
 
 	// Issue #1440 round-3 Finding 4 (Codex review): null out four ON DELETE NO ACTION references
@@ -1642,25 +1691,25 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		UPDATE accounts SET replaced_by_id = NULL
 		WHERE replaced_by_id IN (SELECT id FROM accounts WHERE user_id = $1)
 	`, userID); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: clear dangling accounts.replaced_by_id references: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: clear dangling accounts.replaced_by_id references: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE linked_items SET replaced_by_id = NULL
 		WHERE replaced_by_id IN (SELECT id FROM linked_items WHERE user_id = $1)
 	`, userID); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: clear dangling linked_items.replaced_by_id references: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: clear dangling linked_items.replaced_by_id references: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE accounts SET user_account_id = NULL
 		WHERE user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $1)
 	`, userID); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: clear dangling accounts.user_account_id references: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: clear dangling accounts.user_account_id references: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE transactions SET user_account_id = NULL
 		WHERE user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $1)
 	`, userID); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: clear dangling transactions.user_account_id references: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: clear dangling transactions.user_account_id references: %w", err)
 	}
 
 	// Redact audit-log PII BEFORE the hard delete below. audit_logs.user_id (the ACTING admin —
@@ -1685,7 +1734,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// widening a lock window here would risk.
 	_, err = tx.Exec(ctx, `UPDATE audit_logs SET changes = NULL WHERE resource_id = $1 OR user_id = $1`, userID)
 	if err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: redact audit log PII: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: redact audit log PII: %w", err)
 	}
 
 	// ROUND 15, TIER A: RETRACT THIS USER'S DELETION-RESIDUE RECORDS. This is the other half of
@@ -1718,7 +1767,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	if _, err = tx.Exec(ctx,
 		`DELETE FROM audit_logs WHERE resource_id = $1 AND action LIKE $2`,
 		userID, deletionResidueActionPrefix+"%"); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: retract deletion-residue records: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: retract deletion-residue records: %w", err)
 	}
 
 	// Issue #1494: PRESERVE THE OBLIGATION BEFORE DESTROYING ITS ONLY RECORD.
@@ -1792,7 +1841,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		WHERE user_id = $1 AND plaid_removed_at IS NULL
 		ON CONFLICT (linked_item_id) DO NOTHING
 	`, userID, time.Now().UTC().Add(domain.OrphanedItemTokenRetention)); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: preserve orphaned Plaid item records: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: preserve orphaned Plaid item records: %w", err)
 	}
 
 	// Hard-delete the user row. 37 foreign keys into users are ON DELETE CASCADE and 2 are ON
@@ -1844,13 +1893,13 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	//     user's own `users` row or their independently-owned data, so no guard is needed for them.
 	ct, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
 	if err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: delete user: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: delete user: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
 		// Unreachable in practice — the eligibility recheck above already confirmed this row
 		// exists, under a FOR UPDATE lock held for the remainder of this transaction. Defensive,
 		// not an expected outcome.
-		return false, nil
+		return false, nil, nil
 	}
 
 	// Issue #1440 Finding 3 (Codex review): erase the three tables that carry a user_id (or
@@ -1945,13 +1994,13 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// deliberately not made. The residual is therefore recorded rather than closed. The same note is
 	// written from the other side at DeadLetterService.Retry.
 	if _, err = tx.Exec(ctx, `DELETE FROM dead_letter_jobs WHERE user_id = $1`, userID); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: erase dead_letter_jobs: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: erase dead_letter_jobs: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM idempotency_keys WHERE user_id = $1`, userID); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: erase idempotency_keys: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: erase idempotency_keys: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM mcp_audit_log WHERE actor_user_id = $1`, userID); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: erase mcp_audit_log: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: erase mcp_audit_log: %w", err)
 	}
 
 	// Issue #1507: THE TERMINAL AUDIT ENTRY, WRITTEN IN THE TRANSACTION IT DESCRIBES.
@@ -2032,15 +2081,15 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// true ONLY while the actor is NULL: see LogInTx's #1506 warning, which is where a future
 	// implementer adding an actor will trip over it.
 	if err = r.auditLog.LogInTx(ctx, tx, "user.deleted", "user", userID); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: record the terminal audit entry: %w", err)
+		return false, nil, fmt.Errorf("DeleteUserCascade: record the terminal audit entry: %w", err)
 	}
 
 	// Commit the transaction
 	if err = tx.Commit(ctx); err != nil {
-		return false, err
+		return false, nil, err
 	}
 
-	return true, nil
+	return true, affectedOwnerIDs, nil
 }
 
 // CountUncleanedLinkedItems implements ProfileRepository.CountUncleanedLinkedItems — see that

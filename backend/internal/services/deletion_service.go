@@ -874,7 +874,7 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 		}
 	}
 
-	deleted, err := s.profileRepo.DeleteUserCascade(ctx, userID, user.DeletionRequestedAt)
+	deleted, affectedOwnerIDs, err := s.profileRepo.DeleteUserCascade(ctx, userID, user.DeletionRequestedAt)
 	if err != nil {
 		releaseClaim(err.Error())
 		// Round 12 finding AB-1: the THIRD way a user survives a run whose Paddle cancel already
@@ -976,6 +976,15 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// purgeCacheForDeletedUser's doc comment for the full design (why u:/k: are deleted outright
 	// while the household scope is only bumped, and the durable-retry-on-failure behaviour).
 	s.purgeCacheForDeletedUser(ctx, userID, user.ClerkUserID, cachePurgeHouseholdID)
+
+	// GDPR round-6 finding P1: DeleteUserCascade's dangling cross-user custom-category-override
+	// clear rewrites OTHER (surviving) users' transactions rows in place — purgeCacheForDeletedUser
+	// above only ever bumps the DELETED user's own scopes, so without this, a surviving owner's warm
+	// analytics cache keeps serving the just-erased user's custom category name until the cache
+	// namespace's TTL elapses. §commit-then-bump: this runs only after DeleteUserCascade has
+	// returned true (already committed above), and bumpCacheForAffectedOwners is void by design —
+	// a bump failure here must never fail a deletion that has already committed.
+	s.bumpCacheForAffectedOwners(ctx, affectedOwnerIDs)
 
 	// Mark the claim durably complete. A false ok (with no error) means our lease was
 	// reclaimed by another worker while we were doing the work above — i.e. the external
@@ -1237,6 +1246,55 @@ func (s *deletionService) purgeCacheForDeletedUser(ctx context.Context, userID, 
 		bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
 		defer cancel()
 		s.cacheGens.Bump(bumpCtx, cache.ScopeHousehold, householdID, "gdpr_deletion")
+	}
+}
+
+// bumpCacheForAffectedOwners bumps the cache generation for every OTHER (surviving) user whose
+// transactions rows DeleteUserCascade's dangling cross-user custom-category-override clear
+// rewrote in place — see that UPDATE's own comment and DeleteUserCascade's doc comment (GDPR
+// round-6 finding P1) for the mechanism: the comment above the SQL argues (correctly) that the
+// value it WRITES is not PII, but the value each affected owner's warm cache still HOLDS is the
+// pre-rewrite one — the just-deleted user's own custom category name — until this bump lands.
+//
+// Called only from ExecuteDeletion, after DeleteUserCascade has returned true (i.e. already
+// committed) — §commit-then-bump: a bump must never run before the erasure it is invalidating a
+// cache for is itself durable. Like purgeCacheForDeletedUser, this is void by design and must
+// never fail, retry, or delay a deletion that has already succeeded: a missed bump only widens the
+// cache's own staleness window (bounded by the namespace TTL, or closed early by the owner's own
+// next write), never leaves an erasure incomplete.
+func (s *deletionService) bumpCacheForAffectedOwners(ctx context.Context, ownerIDs []string) {
+	if s.cacheGens == nil || len(ownerIDs) == 0 {
+		return
+	}
+	for _, ownerID := range ownerIDs {
+		bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+		s.cacheGens.Bump(bumpCtx, cache.ScopeUser, ownerID, "gdpr_deletion_cross_user_override_clear")
+		cancel()
+
+		// Best-effort: also bump the owner's household, if they belong to one, matching what
+		// purgeCacheForDeletedUser already does for the DELETED user's own household — a
+		// household-scoped analytics read (cache/consumer.go's Scope selection prefers household
+		// over user whenever one exists) would otherwise keep serving the same stale value under a
+		// DIFFERENT key than the one just bumped above. No retry here (unlike
+		// lookupHouseholdWithRetry before the cascade): that retry exists because its lookup window
+		// closes forever once the cascade runs; this lookup has no such closing window; a later
+		// scheduled run, or the TTL, recovers just as well as a synchronous retry would.
+		if s.householdReader != nil {
+			hhCtx, hhCancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+			household, _, found, hhErr := s.householdReader.GetHouseholdForUser(hhCtx, ownerID)
+			hhCancel()
+			if hhErr != nil {
+				slog.Default().Error("gdpr deletion: household lookup failed while bumping a cross-user "+
+					"affected owner's cache; only their user-scoped cache was bumped",
+					"owner_user_id", ownerID, "error", hhErr)
+				continue
+			}
+			if found {
+				hhBumpCtx, hhBumpCancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+				s.cacheGens.Bump(hhBumpCtx, cache.ScopeHousehold, household.ID, "gdpr_deletion_cross_user_override_clear")
+				hhBumpCancel()
+			}
+		}
 	}
 }
 
