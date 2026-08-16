@@ -37,8 +37,9 @@ const (
 	// GateStatusBypassEnv means the request skipped CloudflareOnly entirely because
 	// bypassEnvironments[env] is true (development/local/test/qa).
 	GateStatusBypassEnv
-	// GateStatusExemptPath means the request hit an exemptedPaths route (/health,
-	// /metrics) and skipped CloudflareOnly's IP/secret checks. Unlike
+	// GateStatusExemptPath means the request hit an exemptedPaths route (/health and
+	// /health/ — /metrics was removed from exemptedPaths in #1531; see that map's own
+	// doc comment for why) and skipped CloudflareOnly's IP/secret checks. Unlike
 	// GateStatusPassed, no header on this request has been validated.
 	GateStatusExemptPath
 	// GateStatusPassed means the request's immediate peer was verified to be in
