@@ -29,7 +29,7 @@ type HealthStatusResponse struct {
 // inline in the OpenAPI response, never registered under
 // #/components/schemas. That matters beyond OpenAPI aesthetics: Huma's
 // SchemaLinkTransformer (installed by huma.DefaultConfig, which
-// internal/huma.NewAPIConfig uses in production -- see cmd/server/main.go:313)
+// internal/huma.NewAPIConfig uses in production -- see cmd/server/main.go:324)
 // only injects a `$schema` field and a `Link: ...; rel="describedBy"` header
 // for responses whose schema is a `#/...` ref. An inline schema has no ref, so
 // the transformer's addSchemaField skips it and neither leak happens. Without

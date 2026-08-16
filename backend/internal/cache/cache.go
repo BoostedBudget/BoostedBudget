@@ -25,7 +25,7 @@ type Cache interface {
 	// hooks to call Bump. Returns nil for a disabled/noop cache.
 	Generations() *Generations
 	// Enabled reports whether ns is currently enabled, per the resolution order documented on
-	// Control: hardDisabled constant -> Redis control key -> env var -> compiled default.
+	// Control: HardDisabled field -> Redis control key -> env var -> compiled default.
 	Enabled(ns Namespace) bool
 }
 
@@ -113,7 +113,7 @@ func NewCache(opts Options) Cache {
 
 func (c *redisCache) Generations() *Generations { return c.gens }
 
-// Enabled resolves ns's enablement in order: hardDisabled constant (always wins) -> Redis control
+// Enabled resolves ns's enablement in order: HardDisabled field (always wins) -> Redis control
 // key (if ever observed) -> env var -> compiled default. An unregistered namespace is always
 // disabled — there is no config for it to read.
 func (c *redisCache) Enabled(ns Namespace) bool {

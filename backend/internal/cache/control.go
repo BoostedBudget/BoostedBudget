@@ -36,7 +36,7 @@ type controlSnapshot struct {
 // emergency kill switch would silently re-enable caching. Wiring which client to pass here is
 // Task 10's job (this package only builds Control); Task 9 just enforces the contract in tests.
 //
-// Resolution order (see cache.go's Enabled): hardDisabled constant -> Redis control key -> env var
+// Resolution order (see cache.go's Enabled): HardDisabled field -> Redis control key -> env var
 // -> compiled default. Once a namespace has been OBSERVED as "off", a later missing value resolves
 // to "off", not back to the default — see Poll's merge logic below. A poll FAILURE (the MGET call
 // itself erroring) keeps the last snapshot untouched: fail-static, not fail-open-to-default.

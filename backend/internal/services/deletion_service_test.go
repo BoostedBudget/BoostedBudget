@@ -183,12 +183,14 @@ func (m *MockProfileRepositoryForDeletion) hasExpectationFor(method string) bool
 	return false
 }
 
-// #1531 G5: m.Called above is still programmed with the pre-existing two-value
+// #1531 G5: m.Called below is still programmed with the pre-existing two-value
 // `.On(...).Return(bool, error)` shape — the third return (affected owner IDs) comes back through
 // the DeleteUserCascadeAffectedOwnerIDs side-channel field instead, per that field's own doc
 // comment. Benign today, but it is an arity foot-gun for a future edit: a caller who "helpfully"
 // updates a test to `.Return(true, []string{...}, nil)` will compile fine and panic at test run
-// time (testify's args.Bool(0)/args.Error(1) below index into a 2-value Arguments, not 3). Do not
+// time — not from an out-of-range index (a three-value `.Return(...)` produces a valid 3-element
+// Arguments), but because args.Error(1) below would then receive the []string at index 1 and
+// panic on the failed type assertion to error, not a bool/error pair shifted by one. Do not
 // restructure this mock to close that gap — every pre-existing expectation in this file predates
 // the third return value; this comment is the guard instead.
 func (m *MockProfileRepositoryForDeletion) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, []string, error) {
