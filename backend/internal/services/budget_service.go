@@ -184,6 +184,30 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		}
 	}
 
+	// Issue #1540: reject a "custom" category referencing another user's custom_categories
+	// row before persisting anything — the same IDOR protection the loop above gives
+	// SavingsGoalID. GetNamesByIDs is already user-scoped (custom_category_repository.go);
+	// any requested ID absent from the returned map is not owned by the caller.
+	var customCategoryIDs []string
+	for _, catReq := range req.Categories {
+		if catReq.CustomCategoryID != nil {
+			customCategoryIDs = append(customCategoryIDs, *catReq.CustomCategoryID)
+		}
+	}
+	if len(customCategoryIDs) > 0 {
+		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, customCategoryIDs)
+		if err != nil {
+			return nil, err
+		}
+		for _, catReq := range req.Categories {
+			if catReq.CustomCategoryID != nil {
+				if _, ok := names[*catReq.CustomCategoryID]; !ok {
+					return nil, domain.ErrCategoryNotFound
+				}
+			}
+		}
+	}
+
 	// R5-2: validate every category before persisting (matches AddCategory / UpdateCategory behaviour).
 	// R5-3: build all categories in memory first so CreateWithCategories can persist them atomically.
 	var categories []*domain.BudgetCategory
@@ -531,6 +555,18 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		}
 		if _, err := s.goalOwnershipChecker.GetByIDForUser(ctx, *req.SavingsGoalID, userID); err != nil {
 			return nil, err
+		}
+	}
+
+	// IDOR check for custom categories: verify the category belongs to the user (Issue #1540).
+	// Mirrors the savings-goal check above and CreateBudget's batched version.
+	if req.CustomCategoryID != nil {
+		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, []string{*req.CustomCategoryID})
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := names[*req.CustomCategoryID]; !ok {
+			return nil, domain.ErrCategoryNotFound
 		}
 	}
 
