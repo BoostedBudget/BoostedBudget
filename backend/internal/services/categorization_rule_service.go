@@ -81,6 +81,19 @@ func (s *categorizationRuleService) enrichCustomCategoryDisplay(ctx context.Cont
 
 // CreateRule creates a new categorization rule (unlimited rules for all tiers).
 func (s *categorizationRuleService) CreateRule(ctx context.Context, userID string, req *domain.CreateCategorizationRuleRequest) (*domain.CategorizationRule, error) {
+	// IDOR check: reject a target_custom_category_id belonging to another user before
+	// persisting (Issue #1540). GetNamesByIDs is already user-scoped; an ID absent from
+	// the result isn't owned by the caller.
+	if req.TargetCustomCategoryID != nil {
+		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, []string{*req.TargetCustomCategoryID})
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := names[*req.TargetCustomCategoryID]; !ok {
+			return nil, domain.ErrCategoryNotFound
+		}
+	}
+
 	// Create the rule
 	rule := &domain.CategorizationRule{
 		UserID:                 userID,
@@ -200,6 +213,14 @@ func (s *categorizationRuleService) UpdateRule(ctx context.Context, userID, rule
 		rule.TargetPFCDetailed = req.TargetPFCDetailed
 	}
 	if req.TargetCustomCategoryID != nil {
+		// IDOR check: reject a target_custom_category_id belonging to another user (Issue #1540).
+		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, []string{*req.TargetCustomCategoryID})
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := names[*req.TargetCustomCategoryID]; !ok {
+			return nil, domain.ErrCategoryNotFound
+		}
 		rule.TargetCustomCategoryID = req.TargetCustomCategoryID
 	}
 	if req.TargetTags != nil {
