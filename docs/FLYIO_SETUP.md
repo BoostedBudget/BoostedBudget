@@ -561,7 +561,12 @@ curl -s -o /dev/null -w "Status: %{http_code}\n" \
 #    readable by anyone who guesses the hostname.
 curl -s -o /dev/null -w "Status: %{http_code}\n" \
   https://staging-boostedbudget-api.fly.dev/metrics
-# Expected: 404 (any non-200 is acceptable — the point is that it is not served publicly)
+# Expected: 403 — hitting fly.dev directly skips Cloudflare, so CloudflareOnly's origin
+# gate rejects the request before routing ever gets a chance to 404 (/metrics was removed
+# from exemptedPaths; see internal/middleware/cloudflare.go). Any non-200 is acceptable —
+# the point is that it is not served publicly — but 403 is what you should actually see
+# here. (Through Cloudflare, at the api.boostedbudget.com hostname above, the same request
+# gets a 404 instead, because the gate passes and routing is what rejects it.)
 #
 # Confirm the scrape still WORKS, separately — "not public" and "not collected" look the
 # same from out here. Check that samples are still arriving in fly-metrics.net.

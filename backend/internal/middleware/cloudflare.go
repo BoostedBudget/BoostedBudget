@@ -137,7 +137,9 @@ func StartCIDRRefresherFrom(ctx context.Context, interval time.Duration, ref *at
 
 // CloudflareOnly enforces dual-layer protection: (1) Fly-Client-IP must be in Cloudflare ranges,
 // (2) X-Origin-Secret header must match originSecret (constant-time).
-// Bypassed in development/local/test and for /health, /metrics paths.
+// Bypassed in development/local/test/qa environments (see bypassEnvironments) and for /health,
+// /health/ paths (see exemptedPaths). /metrics was removed from exemptedPaths in #1531 — see that
+// var's doc comment for why.
 func CloudflareOnly(ref *atomic.Pointer[[]netip.Prefix], originSecret string, env string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
