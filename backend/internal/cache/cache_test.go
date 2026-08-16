@@ -322,13 +322,31 @@ func TestSingleflight_OneCallersCancellationDoesNotFailOtherCallers(t *testing.T
 			"singleflight key had its own context cancelled — B's own context was never cancelled")
 }
 
-// TestGetOrLoad_SingleflightTimeoutDefaultsToThirtySeconds is the #1531 N1 regression's default
-// path: singleflightLoadTimeout used to be a hardcoded 30s const justified in a comment as
-// "matches this server's default WriteTimeout" -- true only at the DEFAULT (config.go's
-// getEnvAsDuration("SERVER_WRITE_TIMEOUT", 30*time.Second)), but SERVER_WRITE_TIMEOUT is
-// env-configurable and the const could never follow it. With Options.SingleflightLoadTimeout left
-// unset, behaviour must stay exactly what it was: ~30s.
-func TestGetOrLoad_SingleflightTimeoutDefaultsToThirtySeconds(t *testing.T) {
+// TestGetOrLoad_SingleflightTimeoutFloorsAtThirtySecondsWhenUnsetOrExplicitZero merges what were
+// two separate tests (#1531 G4 — Codex found them redundant: both passed the identical Go value,
+// the zero value of time.Duration, to Options.SingleflightLoadTimeout and asserted the same ~30s
+// outcome, since "left unset" and "explicitly set to 0" are literally indistinguishable at this
+// type). Two distinct STORIES motivated the original two tests, both still true and worth keeping
+// in one place:
+//
+//   - #1531 N1's regression: singleflightLoadTimeout used to be a hardcoded 30s const justified as
+//     "matches this server's default WriteTimeout" — true only at the DEFAULT (config.go's
+//     getEnvAsDuration("SERVER_WRITE_TIMEOUT", 30*time.Second)), but SERVER_WRITE_TIMEOUT is
+//     env-configurable and the const could never follow it. A caller that never sets
+//     Options.SingleflightLoadTimeout at all must still get ~30s.
+//   - Round-6 finding P5: SERVER_WRITE_TIMEOUT=0 means "no write timeout" (unbounded) at the
+//     net/http layer, and cmd/server passes cfg.WriteTimeout straight through as
+//     Options.SingleflightLoadTimeout — so an operator setting SERVER_WRITE_TIMEOUT=0 is exactly
+//     the case where "this bound tracks WriteTimeout" stopped being true: 0 cannot mean
+//     "unbounded" here without singleflight being able to hang every concurrent caller sharing a
+//     dataKey forever on one stuck loader. The deliberate choice (documented on
+//     Options.SingleflightLoadTimeout) is to floor at singleflightDefaultLoadTimeout (30s) instead
+//     of going unbounded.
+//
+// Both stories are pinned by asserting the SAME behaviour for the SAME zero value — that is the
+// point: the fix (and this test) do not distinguish "never configured" from "explicitly disabled",
+// because the type cannot either.
+func TestGetOrLoad_SingleflightTimeoutFloorsAtThirtySecondsWhenUnsetOrExplicitZero(t *testing.T) {
 	fake := redisclient.NewFake("cache")
 	c := NewCache(Options{Client: fake})
 	ctx := context.Background()
@@ -341,9 +359,14 @@ func TestGetOrLoad_SingleflightTimeoutDefaultsToThirtySeconds(t *testing.T) {
 		return []byte(`{"v":1}`), nil
 	})
 	require.NoError(t, err)
-	require.True(t, hadDeadline, "the loader's context must carry a deadline")
+	require.True(t, hadDeadline,
+		"the loader's context must carry a deadline — including when SingleflightLoadTimeout is "+
+			"left unset (N1's default path) or is an explicit SERVER_WRITE_TIMEOUT=0 passed through "+
+			"as 0 (P5's floor): neither may make the shared singleflight load unbounded, since a "+
+			"stuck loader would then hang every concurrent caller sharing this dataKey forever")
 	assert.InDelta(t, 30*time.Second, gotDeadline.Sub(before), float64(2*time.Second),
-		"default singleflight timeout must stay ~30s when Options.SingleflightLoadTimeout is unset")
+		"SingleflightLoadTimeout<=0 (unset, or an explicit 0) must floor at "+
+			"singleflightDefaultLoadTimeout (30s), not go unbounded")
 }
 
 // TestGetOrLoad_SingleflightTimeoutFollowsConfiguredValue is #1531 N1's fix: an operator who
@@ -370,36 +393,3 @@ func TestGetOrLoad_SingleflightTimeoutFollowsConfiguredValue(t *testing.T) {
 		"a configured SingleflightLoadTimeout must actually govern the loader's context deadline")
 }
 
-// TestGetOrLoad_SingleflightTimeoutFloorsAtThirtySecondsWhenWriteTimeoutIsZero is round-6 finding
-// P5's regression test: SERVER_WRITE_TIMEOUT=0 means "no write timeout" (unbounded) at the
-// net/http layer, and cmd/server passes cfg.WriteTimeout straight through as
-// Options.SingleflightLoadTimeout — so an operator setting SERVER_WRITE_TIMEOUT=0 is exactly the
-// case where "this bound tracks WriteTimeout" (see the field's OLD doc comment) stopped being
-// true: 0 cannot mean "unbounded" here without singleflight being able to hang every concurrent
-// caller sharing a dataKey forever on one stuck loader. The deliberate choice (documented on
-// Options.SingleflightLoadTimeout) is to floor at singleflightDefaultLoadTimeout (30s) instead of
-// going unbounded — this test pins that choice so a future change cannot silently flip it either
-// way without a test failing.
-func TestGetOrLoad_SingleflightTimeoutFloorsAtThirtySecondsWhenWriteTimeoutIsZero(t *testing.T) {
-	fake := redisclient.NewFake("cache")
-	// SingleflightLoadTimeout: 0 mirrors cmd/server passing cfg.WriteTimeout when an operator has
-	// set SERVER_WRITE_TIMEOUT=0 — the Go zero value is indistinguishable from "explicitly zero"
-	// at this type, which is exactly why the floor must apply unconditionally to any <= 0 value.
-	c := NewCache(Options{Client: fake, SingleflightLoadTimeout: 0})
-	ctx := context.Background()
-
-	before := time.Now()
-	var gotDeadline time.Time
-	var hadDeadline bool
-	_, _, err := c.GetOrLoad(ctx, testKey("M-timeout-write-timeout-zero"), func(ctx context.Context) ([]byte, error) {
-		gotDeadline, hadDeadline = ctx.Deadline()
-		return []byte(`{"v":1}`), nil
-	})
-	require.NoError(t, err)
-	require.True(t, hadDeadline,
-		"SERVER_WRITE_TIMEOUT=0 must NOT make the shared singleflight load unbounded — a stuck "+
-			"loader would then hang every concurrent caller sharing this dataKey forever")
-	assert.InDelta(t, 30*time.Second, gotDeadline.Sub(before), float64(2*time.Second),
-		"WriteTimeout<=0 (including an explicit 0, meaning unbounded at the HTTP layer) must floor "+
-			"at singleflightDefaultLoadTimeout (30s), not go unbounded")
-}
