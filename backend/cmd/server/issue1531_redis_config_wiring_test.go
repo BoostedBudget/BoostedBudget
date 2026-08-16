@@ -23,10 +23,14 @@ package main
 // PASSED again.
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 )
@@ -48,18 +52,107 @@ func TestNewRedisClientOptions_WiresConfiguredTimeoutAndPoolSize(t *testing.T) {
 	assert.Equal(t, 17, opts.PoolSize, "REDIS_POOL_SIZE must reach Options.PoolSize")
 }
 
-func TestNewRedisClientOptions_UsedForBothLimiterAndCacheNames(t *testing.T) {
-	cfg := &config.Config{RedisTimeoutMs: 200, RedisPoolSize: 10}
+// redisClientCallSite is one `redisclient.New(newRedisClientOptions(cfg, <urlExpr>, <nameExpr>))`
+// call site found in main.go, with urlExpr/nameExpr rendered back to source text so the test can
+// compare against what main.go actually wrote, not a value this test invented.
+type redisClientCallSite struct {
+	urlExpr, nameExpr string
+}
 
-	limiterOpts := newRedisClientOptions(cfg, "redis://limiter.invalid:6379", "limiter")
-	cacheOpts := newRedisClientOptions(cfg, "redis://cache.invalid:6379", "cache")
+// scanRedisClientNewCallSites walks main.go's AST (this package's own file, found via go/build's
+// caller-independent approach of just parsing "main.go" in the current directory — this test
+// package's directory IS cmd/server) and returns one entry per
+// `redisclient.New(newRedisClientOptions(cfg, url, name))` call site found, in source order.
+func scanRedisClientNewCallSites(t *testing.T) []redisClientCallSite {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	require.NoError(t, err, "parsing main.go")
 
-	assert.Equal(t, "limiter", limiterOpts.Name)
-	assert.Equal(t, "redis://limiter.invalid:6379", limiterOpts.URL)
-	assert.Equal(t, "cache", cacheOpts.Name)
-	assert.Equal(t, "redis://cache.invalid:6379", cacheOpts.URL)
-	// Both share the same timeout/pool-size knobs — there is only one REDIS_TIMEOUT_MS /
-	// REDIS_POOL_SIZE pair in config, applied to both clients (see config.go's doc comment).
-	assert.Equal(t, limiterOpts.ReadTimeout, cacheOpts.ReadTimeout)
-	assert.Equal(t, limiterOpts.PoolSize, cacheOpts.PoolSize)
+	var sites []redisClientCallSite
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "New" {
+			return true
+		}
+		pkgIdent, ok := sel.X.(*ast.Ident)
+		if !ok || pkgIdent.Name != "redisclient" {
+			return true
+		}
+		if len(call.Args) != 1 {
+			return true
+		}
+		inner, ok := call.Args[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		innerIdent, ok := inner.Fun.(*ast.Ident)
+		if !ok || innerIdent.Name != "newRedisClientOptions" || len(inner.Args) != 3 {
+			return true
+		}
+		sites = append(sites, redisClientCallSite{
+			urlExpr:  exprString(inner.Args[1]),
+			nameExpr: exprString(inner.Args[2]),
+		})
+		return true
+	})
+	return sites
+}
+
+// exprString renders simple expressions (identifiers, selectors, string literals) back to their
+// source form, which is all the shapes newRedisClientOptions' url/name arguments actually take in
+// main.go today (cfg.RateLimitRedisURL, "cache", cache.LimiterClientName).
+func exprString(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.Ident:
+		return v.Name
+	case *ast.SelectorExpr:
+		return exprString(v.X) + "." + v.Sel.Name
+	case *ast.BasicLit:
+		return v.Value
+	default:
+		return "<unrecognized expr>"
+	}
+}
+
+// TestMainGo_WiresDistinctRedisClientOptionsForLimiterAndCache is the real-wiring counterpart D9
+// asked for: TestNewRedisClientOptions_WiresConfiguredTimeoutAndPoolSize above proves the
+// config->Options mapping is correct in isolation, but nothing previously verified that main.go's
+// OWN two call sites actually invoke newRedisClientOptions with the limiter/cache config fields —
+// as opposed to, say, both call sites accidentally passing cfg.RateLimitRedisURL (a copy-paste
+// that would silently point the cache client at the rate-limiter's Redis instance, or vice versa).
+// Calling newRedisClientOptions twice with values this test invents (the old shape) cannot catch
+// that: it would pass identically whether or not main.go's real call sites are correct or swapped.
+func TestMainGo_WiresDistinctRedisClientOptionsForLimiterAndCache(t *testing.T) {
+	sites := scanRedisClientNewCallSites(t)
+	require.Len(t, sites, 2, "expected exactly 2 redisclient.New(newRedisClientOptions(...)) call "+
+		"sites in main.go (limiter client, cache client) — found a different count; main.go's Redis "+
+		"client wiring shape has changed and this guard needs to be updated to match")
+
+	byURL := map[string]redisClientCallSite{}
+	for _, s := range sites {
+		byURL[s.urlExpr] = s
+	}
+
+	limiterSite, ok := byURL["cfg.RateLimitRedisURL"]
+	require.True(t, ok, "no redisclient.New(newRedisClientOptions(cfg, cfg.RateLimitRedisURL, ...)) "+
+		"call site found in main.go — found URL expressions: %v", sites)
+	assert.Equal(t, "cache.LimiterClientName", limiterSite.nameExpr,
+		"the limiter client's redisclient.New call must name it via cache.LimiterClientName "+
+			"(== \"limiter\"), not a literal that could drift from cache.NewControl's own check")
+
+	cacheSite, ok := byURL["cfg.CacheRedisURL"]
+	require.True(t, ok, "no redisclient.New(newRedisClientOptions(cfg, cfg.CacheRedisURL, ...)) "+
+		"call site found in main.go — found URL expressions: %v", sites)
+	assert.Equal(t, `"cache"`, cacheSite.nameExpr,
+		"the cache client's redisclient.New call must be named \"cache\"")
+
+	assert.NotEqual(t, limiterSite.urlExpr, cacheSite.urlExpr,
+		"the limiter and cache clients must be wired to DIFFERENT config URL fields — if both "+
+			"call sites used the same field, one client would silently point at the wrong Redis "+
+			"instance")
 }
