@@ -178,7 +178,7 @@ func TestWiring_ApiRequestsAreStillRateLimitedWithRedisDown(t *testing.T) {
 }
 
 // TestBuildRateLimitBackend_SentinelLimitEqualsRegularLimitNotAuthLimit is the fix-round-1
-// regression guard for Issue #1531 Task 7: the sentinel bucket ("rl:v1:sentinel") is used
+// regression guard for Issue #1531 Task 7: the sentinel bucket ("rl:v2:sentinel") is used
 // whenever a Cloudflare-gated request's Cf-Connecting-Ip is missing, duplicated, or malformed —
 // and under Redis it is ONE fleet-wide key, not per-machine. Wiring it to cfg.RateLimitAuth (the
 // stricter, per-identity auth-endpoint limit) would mean a Cloudflare header anomaly collapses

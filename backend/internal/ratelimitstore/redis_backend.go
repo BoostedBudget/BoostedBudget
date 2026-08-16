@@ -97,7 +97,15 @@ var gcraScript = redis.NewScript(gcraScriptSource)
 // versions of this code simultaneously for minutes; sharing a key across two meanings during that
 // window (e.g. a limit change, or a units change) is a real bug, not a theoretical one. Bump it
 // whenever the script's ARGV semantics or the key's stored value's meaning changes.
-const keyVersion = "v1"
+//
+// GDPR/GCRA round-6 finding P2: bumped v1 -> v2 here. L4 (IPv6 /64 aggregation) changed exactly
+// what this contract says to watch for — `rl:v1:regular:2001:db8::` used to denote ONE address and
+// now denotes a whole /64 — without bumping the version. During a rolling deploy this would
+// fragment the shared budget across old (/128) and new (/64) writers, and a client whose address
+// IS the /64 base would silently inherit the aggregated meaning. Low severity pre-launch (zero
+// production machines, and the fragmentation is transient), but the constant's own contract says
+// to bump it, and that contract exists because someone already thought through rolling deploys.
+const keyVersion = "v2"
 
 // Options configures a RedisBackend.
 type Options struct {

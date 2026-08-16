@@ -255,7 +255,7 @@ func TestRedisBackendIntegration_EveryWriteLeavesATTLOnTheKey(t *testing.T) {
 	b := ratelimitstore.NewRedisBackend(client, ratelimitstore.Options{RegularLimit: 5, Window: time.Minute})
 	id := testIdentity(t)
 	ctx := context.Background()
-	key := fmt.Sprintf("rl:v1:regular:%s", id)
+	key := fmt.Sprintf("rl:v2:regular:%s", id)
 
 	// Create path: first Allow call for this identity.
 	if d, err := b.Allow(ctx, domain.RateLimitTierRegular, id); err != nil || !d.Allowed {
@@ -290,7 +290,7 @@ func TestRedisBackendIntegration_KeyDisappearsAfterTheBucketDrains(t *testing.T)
 	b := ratelimitstore.NewRedisBackend(client, ratelimitstore.Options{RegularLimit: 2, Window: window})
 	id := testIdentity(t)
 	ctx := context.Background()
-	key := fmt.Sprintf("rl:v1:regular:%s", id)
+	key := fmt.Sprintf("rl:v2:regular:%s", id)
 
 	if d, err := b.Allow(ctx, domain.RateLimitTierRegular, id); err != nil || !d.Allowed {
 		t.Fatalf("Allow: allowed=%v err=%v", d.Allowed, err)
