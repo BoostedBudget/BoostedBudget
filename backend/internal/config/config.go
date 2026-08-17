@@ -36,12 +36,13 @@ const InvalidWebhookAttemptRetentionMaxDays = 365
 // value actually feeds: cfg.RedisTimeoutMs is ALSO wired into the rate limiter's PrimaryTimeout
 // (main.go), which BLOCKS the request path at middleware position 4
 // (rate_limit_fallback.go's Allow) before falling back. redisclient/client.go's own package doc
-// says a 1s DialTimeout delay at that exact position is already "a latency cliff" with "a real
-// risk of tripping Fly's 5s health check, cycling machines, and causing a self-inflicted outage"
-// — a 10s ceiling permitted double that, on every request, not just a cold dial. 2000ms keeps a
-// 2.5x margin under Fly's 5s health check (matching the DialTimeout rationale above) while still
-// being far beyond any sane limiter or cache-client budget, so the overflow protection G3 added is
-// unaffected.
+// says a 1s DialTimeout delay at that exact position is already "a latency cliff" — a 10s ceiling
+// permitted ten times that, on every request, not just a cold dial. (This is a request-path
+// latency argument only: /health itself never waits on Redis — it is served from its own
+// dedicated memory limiter store, entirely bypassing the Redis-backed primary; see
+// middleware/rate_limit.go's ExemptPathLimit doc comment. Fly's 5s health-check probe is
+// therefore not at risk from this value either way.) 2000ms is far beyond any sane limiter or
+// cache-client budget on the request path, so the overflow protection G3 added is unaffected.
 const RedisTimeoutMsMax = 2000
 
 // Config holds application configuration

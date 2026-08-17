@@ -1107,10 +1107,10 @@ func TestDeleteUserCascade_Integration_OwnBudgetAndRuleCategoryReferences_NoOthe
 	require.NoError(t, err)
 	require.True(t, deleted)
 
-	// The argument under test: this cascade genuinely removed target's own budget_categories row
-	// and nulled target's own categorization_rules row (asserted below), yet affectedOwnerIDs is
-	// empty — no OTHER owner was ever reachable, so the RESTRICT-only tracking mechanism doesn't
-	// need extending to these two FKs.
+	// The argument under test: this cascade genuinely removed both target's own budget_categories
+	// row and target's own categorization_rules row (asserted below — both gone via CASCADE on
+	// user_id, not nulled), yet affectedOwnerIDs is empty — no OTHER owner was ever reachable, so
+	// the RESTRICT-only tracking mechanism doesn't need extending to these two FKs.
 	assert.Empty(t, affectedOwnerIDs, "H4: a CASCADE/SET NULL reachable only through the deleting user's own rows must not report any affected owner")
 
 	assertUserRowGone(t, ctx, pool, target.ID)
