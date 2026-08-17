@@ -195,6 +195,14 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		}
 	}
 	if len(customCategoryIDs) > 0 {
+		if s.customCategoryRepo == nil {
+			// #1531: fail closed — every path that calls CreateBudget with a custom_category_id
+			// must wire this repo (HTTP path at service construction; MCP path via the
+			// tx-scoped repository.NewCustomCategoryRepository(tx) in budget.go). A nil repo
+			// here indicates a mis-wired path; reject rather than nil-dereference (prior
+			// behaviour) or silently skip the ownership check (would reopen the #1540 IDOR).
+			return nil, fmt.Errorf("custom category repository not configured: cannot validate custom_category_id")
+		}
 		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, customCategoryIDs)
 		if err != nil {
 			return nil, err
