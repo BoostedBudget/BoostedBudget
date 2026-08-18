@@ -8,12 +8,13 @@
 #   3. Runs database migrations
 #   4. Always rebuilds backend binary (prevents stale-binary/schema mismatches)
 #   5. Runs Playwright tests
-#   6. Cleans up PostgreSQL container on exit
+#   6. Cleans up PostgreSQL and any managed Redis containers on exit (including startup failures and
+#      INT/TERM/HUP; cleanup failure turns an otherwise-green run red)
 #
 # Environment variables:
 #   E2E_SKIP_POSTGRES=true  - Skip PostgreSQL setup (runs without database)
 
-set -e
+set -Eeuo pipefail
 
 # Get script directory for relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,6 +22,100 @@ BACKEND_DIR="${SCRIPT_DIR}/../../../backend"
 
 # Source postgres helper functions
 source "${SCRIPT_DIR}/e2e-postgres.sh"
+
+# Redis is part of a full local E2E run now: cache-freshness and distributed-rate-limit specs must
+# not silently run against the no-op/memory fallbacks. Set E2E_START_REDIS=false only when a caller
+# deliberately wants the historical fallback mode. Any explicitly supplied URL wins, so CI and
+# shared environments can provision their own instances. The cache and limiter are always separate
+# containers.
+E2E_REDIS_IMAGE="${E2E_REDIS_IMAGE:-redis:7-alpine}"
+E2E_CACHE_REDIS_CONTAINER=""
+E2E_RATELIMIT_REDIS_CONTAINER=""
+E2E_CLEANUP_DONE=0
+
+_generate_redis_container_name() {
+  local role="$1"
+  local run_id="${GITHUB_RUN_ID:-}"
+  if [ -n "$run_id" ]; then
+    echo "e2e-${role}-redis-${run_id}-${GITHUB_RUN_ATTEMPT:-1}"
+  else
+    echo "e2e-${role}-redis-$$-$(date +%s)"
+  fi
+}
+
+start_redis_instance() {
+  local role="$1"
+  local policy="$2"
+  local container
+  local port
+
+  container=$(_generate_redis_container_name "$role")
+  # Register ownership before docker run. Docker can create the named container and still return
+  # non-zero (for example, after a daemon-side startup failure); the EXIT trap must be able to
+  # remove that exact name in every partial-start path.
+  if [ "$role" = "cache" ]; then
+    E2E_CACHE_REDIS_CONTAINER="$container"
+  else
+    E2E_RATELIMIT_REDIS_CONTAINER="$container"
+  fi
+  echo "🔴 Starting Redis ${role} container: ${container} (${policy})..."
+  docker rm -f "$container" >/dev/null 2>&1 || true
+
+  if ! docker run -d \
+    --name "$container" \
+    -p 127.0.0.1::6379 \
+    --memory=256m \
+    "$E2E_REDIS_IMAGE" \
+    redis-server --maxmemory-policy "$policy" >/dev/null; then
+    echo "❌ Failed to start Redis ${role} container: ${container}"
+    return 1
+  fi
+
+  port="$(docker port "$container" 6379/tcp 2>/dev/null | sed -n 's/.*://p' | head -1 || true)"
+  if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+    echo "❌ Could not determine the dynamically assigned port for Redis ${role} (${container})"
+    return 1
+  fi
+  for _ in $(seq 1 30); do
+    if docker exec "$container" redis-cli ping 2>/dev/null | grep -q PONG; then
+      echo "   ✅ Redis ${role} ready on port ${port}"
+      if [ "$role" = "cache" ]; then
+        export CACHE_REDIS_URL="redis://127.0.0.1:${port}/0"
+        export CACHE_ENABLED="${CACHE_ENABLED:-true}"
+      else
+        export RATE_LIMIT_REDIS_URL="redis://127.0.0.1:${port}/0"
+      fi
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "❌ Redis ${role} failed to become ready"
+  docker logs "$container" 2>/dev/null || true
+  return 1
+}
+
+stop_redis_instance() {
+  local container="$1"
+  [ -z "$container" ] && return 0
+  local existing
+  existing="$(docker ps -aq --filter "name=^${container}$" 2>/dev/null || true)"
+  [ -z "$existing" ] && return 0
+  echo "🛑 Stopping Redis container: ${container}"
+  if ! docker rm -f "$container" >/dev/null 2>&1; then
+    echo "⚠️  Docker could not remove Redis container ${container}; retrying once"
+    sleep 1
+    if ! docker rm -f "$container" >/dev/null 2>&1; then
+      echo "❌ Redis container cleanup failed: ${container}"
+      return 1
+    fi
+  fi
+
+  if docker ps -aq --filter "name=^${container}$" 2>/dev/null | grep -q .; then
+    echo "❌ Redis container still exists after cleanup: ${container}"
+    return 1
+  fi
+}
 
 # Background health monitor — logs if PostgreSQL dies mid-run so failures have clear evidence
 monitor_postgres() {
@@ -43,14 +138,42 @@ monitor_postgres() {
 
 # Cleanup function - called on exit (success or failure)
 cleanup() {
+  local test_status=$?
+  local cleanup_status=0
+
+  # EXIT can be reached through an explicit failure, a signal trap, or normal completion. Make
+  # cleanup idempotent so a signal followed by EXIT cannot race or double-remove resources.
+  if [ "$E2E_CLEANUP_DONE" -eq 1 ]; then
+    return "$test_status"
+  fi
+  E2E_CLEANUP_DONE=1
+  trap - EXIT INT TERM HUP
+
   kill "${MONITOR_PID:-}" 2>/dev/null || true
+  wait "${MONITOR_PID:-}" 2>/dev/null || true
   echo ""
   echo "🧹 Cleaning up..."
-  stop_postgres
+  stop_redis_instance "$E2E_CACHE_REDIS_CONTAINER" || cleanup_status=1
+  stop_redis_instance "$E2E_RATELIMIT_REDIS_CONTAINER" || cleanup_status=1
+  stop_postgres || cleanup_status=1
+
+  if [ "$cleanup_status" -ne 0 ]; then
+    echo "❌ One or more E2E resources could not be de-provisioned."
+    # Never hide the original test/startup failure. A clean test run becomes a failure if cleanup
+    # itself failed, so CI cannot report green while leaving a container behind.
+    [ "$test_status" -eq 0 ] && test_status=1
+  else
+    echo "✅ E2E resources de-provisioned"
+  fi
+
+  return "$test_status"
 }
 
 # Set up trap for cleanup on exit
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 echo "🔍 Finding available ports for E2E tests..."
 PORTS_OUTPUT=$(node "${SCRIPT_DIR}/find-available-ports.js")
@@ -78,7 +201,9 @@ check_port_free() {
   local port="$1"
   local label="$2"
   local pid
-  pid=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -1)
+  # lsof returns 1 when no process is listening; with pipefail enabled that must be an expected
+  # empty result, not a fatal startup error.
+  pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
   if [ -n "$pid" ]; then
     echo ""
     echo "❌ Port $port ($label) is already in use by PID $pid:"
@@ -147,6 +272,23 @@ else
   else
     echo ""
     echo "   Continuing without database (Docker not available)"
+  fi
+fi
+
+# A local cache/rate-limit Redis pair is the default. This is the local equivalent of the two Redis
+# services provisioned by CI. Explicit CACHE_REDIS_URL/RATE_LIMIT_REDIS_URL values are respected
+# and only missing instances are started. If either managed instance fails, the EXIT trap rolls back
+# every managed Redis and PostgreSQL container from this run.
+if [ "${E2E_START_REDIS:-true}" = "true" ]; then
+  if { [ -z "${CACHE_REDIS_URL:-}" ] || [ -z "${RATE_LIMIT_REDIS_URL:-}" ]; } && ! check_docker; then
+    echo "❌ E2E_START_REDIS=true requires a running Docker daemon"
+    exit 1
+  fi
+  if [ -z "${CACHE_REDIS_URL:-}" ]; then
+    start_redis_instance "cache" "allkeys-lru" || exit $?
+  fi
+  if [ -z "${RATE_LIMIT_REDIS_URL:-}" ]; then
+    start_redis_instance "ratelimit" "noeviction" || exit $?
   fi
 fi
 
