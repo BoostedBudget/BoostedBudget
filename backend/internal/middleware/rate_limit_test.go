@@ -1,19 +1,43 @@
 package middleware_test
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
+	dto "github.com/prometheus/client_model/go"
+
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// prometheusGatherRateLimitRejections gathers the current sample set for the
+// ratelimit_rejections_total metric family from the default (process-wide) Prometheus registry,
+// returning each individual metric so callers can inspect its labels.
+func prometheusGatherRateLimitRejections(t *testing.T) ([]*dto.Metric, error) {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range families {
+		if f.GetName() == "ratelimit_rejections_total" {
+			return f.GetMetric(), nil
+		}
+	}
+	return nil, nil
+}
 
 func newEchoWithIPLimiter(cfg middleware.RateLimitConfig) *echo.Echo {
 	e := echo.New()
@@ -262,9 +286,10 @@ func TestIPRateLimiter_SpoofedCFConnectingIPIgnoredWithoutGate(t *testing.T) {
 }
 
 // TestIPRateLimiter_ExemptPathMissingHeaderNotRejected covers the first trap
-// called out in the issue: Fly's own health/metrics probes hit exempt paths
-// without any Fly-Client-Ip header (no Cloudflare hop in front of them locally),
-// and must not be rejected for that.
+// called out in the issue: Fly's own health probes hit exempt paths (/health,
+// /health/ — /metrics was removed from exemptedPaths in #1531) without any
+// Fly-Client-Ip header (no Cloudflare hop in front of them locally), and must
+// not be rejected for that.
 func TestIPRateLimiter_ExemptPathMissingHeaderNotRejected(t *testing.T) {
 	cfg := middleware.RateLimitConfig{IPLimit: 5, WindowDuration: time.Minute}
 	e := newEchoWithGateStatus(cfg, middleware.GateStatusExemptPath)
@@ -410,4 +435,432 @@ func TestIPRateLimiter_IPv6FormsCanonicalizeToSameBucket(t *testing.T) {
 	code2 := doRateLimitedRequest(e, "/test", "[2001:0db8:0000:0000:0000:0000:0000:0001]:2000", nil)
 	assert.Equal(t, http.StatusTooManyRequests, code2,
 		"different textual forms of the same IPv6 address must canonicalize to one bucket")
+}
+
+// TestIPRateLimiter_IdentityByGateStatus is the table-driven identity test for clientIdentity's
+// policy branches. It covers GateStatusBypassEnv explicitly (previously only GateStatusUnknown was
+// named anywhere in this file, even though GateStatusBypassEnv shares the same `default:` case in
+// clientIdentity and is the status CloudflareOnly actually stamps for the dev/local/test/qa bypass
+// paths issue #1531 acceptance criterion 5 requires to keep working) alongside GateStatusUnknown,
+// proving both fall straight through to RemoteAddr with no header consulted at all:
+//   - two requests from the SAME RemoteAddr but with DIFFERENT (spoofed) Cf-Connecting-Ip and
+//     Fly-Client-Ip header values must share one bucket (headers are never read for identity here),
+//   - two requests from DIFFERENT RemoteAddrs carrying the SAME header values must NOT share a
+//     bucket (RemoteAddr, not the header, is the key).
+//
+// Expected to pass on first write: this is converting incidental coverage (GateStatusBypassEnv was
+// only ever exercised implicitly, via sharing a switch case with GateStatusUnknown) into a named
+// regression test, not fixing a bug. Its teeth are demonstrated separately by temporarily pointing
+// the bypass-env branch at a header-derived identity and confirming this test fails (see task-GC
+// report) — not by anything in this file.
+func TestIPRateLimiter_IdentityByGateStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status middleware.GateStatus
+	}{
+		{"GateStatusBypassEnv", middleware.GateStatusBypassEnv},
+		{"GateStatusUnknown", middleware.GateStatusUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Run("same RemoteAddr shares a bucket despite different spoofed headers", func(t *testing.T) {
+				cfg := middleware.RateLimitConfig{IPLimit: 1, WindowDuration: time.Minute}
+				e := newEchoWithGateStatus(cfg, tc.status)
+
+				code1 := doRateLimitedRequest(e, "/test", "10.5.5.5:1000", map[string][]string{
+					"Cf-Connecting-Ip": {"198.51.100.1"},
+					"Fly-Client-Ip":    {"198.51.100.1"},
+				})
+				assert.Equal(t, http.StatusOK, code1, "first request should pass")
+
+				code2 := doRateLimitedRequest(e, "/test", "10.5.5.5:2000", map[string][]string{
+					"Cf-Connecting-Ip": {"198.51.100.2"},
+					"Fly-Client-Ip":    {"198.51.100.2"},
+				})
+				assert.Equal(t, http.StatusTooManyRequests, code2,
+					"same RemoteAddr with different spoofed headers must share one bucket -- headers are never consulted for identity under %s", tc.name)
+			})
+
+			t.Run("different RemoteAddrs with the same header values do not share a bucket", func(t *testing.T) {
+				cfg := middleware.RateLimitConfig{IPLimit: 1, WindowDuration: time.Minute}
+				e := newEchoWithGateStatus(cfg, tc.status)
+
+				headers := map[string][]string{
+					"Cf-Connecting-Ip": {"198.51.100.9"},
+					"Fly-Client-Ip":    {"198.51.100.9"},
+				}
+
+				code1 := doRateLimitedRequest(e, "/test", "10.6.6.6:1000", headers)
+				assert.Equal(t, http.StatusOK, code1, "first peer should pass")
+
+				code2 := doRateLimitedRequest(e, "/test", "10.6.6.7:2000", headers)
+				assert.Equal(t, http.StatusOK, code2,
+					"a different RemoteAddr with the identical header values must get its own bucket, proving identity derives from RemoteAddr under %s", tc.name)
+			})
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Backend seam — Task 5 (Issue #1531)
+// ---------------------------------------------------------------------------
+
+// fakeBackend is a minimal test double implementing middleware.RateLimitBackend from outside the
+// package (as a real caller — e.g. main.go wiring the Redis backend — would).
+type fakeBackend struct {
+	name      string
+	allowFunc func(ctx context.Context, tier domain.RateLimitTier, key string) (domain.RateLimitDecision, error)
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *fakeBackend) Name() string { return f.name }
+
+func (f *fakeBackend) Allow(ctx context.Context, tier domain.RateLimitTier, key string) (domain.RateLimitDecision, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+	return f.allowFunc(ctx, tier, key)
+}
+
+func (f *fakeBackend) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+// panickingBackend panics the instant Allow is called — proves a code path never touches it at
+// all, rather than merely "wasn't observed to run".
+type panickingBackend struct{}
+
+func (panickingBackend) Name() string { return "panic" }
+func (panickingBackend) Allow(context.Context, domain.RateLimitTier, string) (domain.RateLimitDecision, error) {
+	panic("primary backend must never be called on this path")
+}
+
+// slowButHealthyBackend answers after a fixed delay, respecting ctx cancellation (like a real
+// go-redis EVAL call does), and always returns a distinguishing decision (Allowed: false) so a
+// test can tell the primary actually answered rather than the memory fallback (which always
+// allows an under-budget request) taking over.
+type slowButHealthyBackend struct{ delay time.Duration }
+
+func (slowButHealthyBackend) Name() string { return "slow-redis" }
+func (b slowButHealthyBackend) Allow(ctx context.Context, _ domain.RateLimitTier, _ string) (domain.RateLimitDecision, error) {
+	select {
+	case <-time.After(b.delay):
+		return domain.RateLimitDecision{Allowed: false, RetryAfter: time.Second}, nil
+	case <-ctx.Done():
+		return domain.RateLimitDecision{}, ctx.Err()
+	}
+}
+
+// TestIPRateLimiter_PrimaryTimeoutIsConfigurable is the #1531 L7 regression. IPRateLimiter used to
+// bound every primary-backend call with the package-private defaultRedisLimiterTimeout constant
+// (50ms), completely independent of RateLimitConfig -- so nothing a caller passed in could ever
+// change it. cmd/server/main.go separately reads cfg.RedisTimeoutMs (REDIS_TIMEOUT_MS, default
+// 200ms) and wires it into the go-redis CLIENT's read/write timeouts only; raising
+// REDIS_TIMEOUT_MS during a real latency incident changed nothing about the LIMITER's own 50ms
+// budget, which kept tripping the circuit breaker regardless.
+//
+// This test drives the real IPRateLimiter middleware (not fallbackLimiter directly, which was
+// already correctly parameterized -- the bug was one layer up, in what IPRateLimiter passed it)
+// with a primary that takes 150ms to answer: strictly slower than the OLD hardcoded 50ms, strictly
+// faster than a 500ms budget. With PrimaryTimeout left unset (defaults to the pre-fix 50ms), the
+// 150ms primary must still time out and fall back to memory (200 OK, since memory allows). With
+// PrimaryTimeout explicitly raised to 500ms (what main.go's fix wires cfg.RedisTimeoutMs into,
+// exaggerated well past the real 200ms default here purely for test margin), the SAME 150ms
+// primary must now be waited for and its own (rejecting) decision honored.
+//
+// Round-6 finding P7: the original 50/80/200ms ladder left only a 30ms margin on the low side
+// (80-50ms) — under a >30ms CI scheduler stall, the 80ms primary could plausibly still be
+// running when the 50ms timeout should have already fired (or vice versa), flipping the
+// assertion for a reason that has nothing to do with whether REDIS_TIMEOUT_MS reaches the
+// limiter, which is the actual thing under test. Widened to 50/150/500ms: 100ms of margin below
+// (150-50) and 350ms above (500-150) — only the timing tolerance changed, not what either subtest
+// asserts.
+func TestIPRateLimiter_PrimaryTimeoutIsConfigurable(t *testing.T) {
+	primaryDelay := 150 * time.Millisecond
+
+	t.Run("default timeout (unset) still times out a 150ms primary", func(t *testing.T) {
+		cfg := middleware.RateLimitConfig{
+			IPLimit:        100,
+			WindowDuration: time.Minute,
+			Backend:        slowButHealthyBackend{delay: primaryDelay},
+		}
+		e := newEchoWithIPLimiter(cfg)
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.RemoteAddr = "198.51.100.40:1"
+		rr := httptest.NewRecorder()
+		e.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code,
+			"a 150ms primary must still be timed out under the default (pre-fix 50ms) budget, "+
+				"falling back to memory (which allows)")
+	})
+
+	t.Run("PrimaryTimeout=500ms lets the 150ms primary answer for real", func(t *testing.T) {
+		cfg := middleware.RateLimitConfig{
+			IPLimit:        100,
+			WindowDuration: time.Minute,
+			Backend:        slowButHealthyBackend{delay: primaryDelay},
+			PrimaryTimeout: 500 * time.Millisecond,
+		}
+		e := newEchoWithIPLimiter(cfg)
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.RemoteAddr = "198.51.100.41:1"
+		rr := httptest.NewRecorder()
+		e.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusTooManyRequests, rr.Code,
+			"raising PrimaryTimeout to 500ms must let the 150ms primary's own (rejecting) decision "+
+				"govern, proving RateLimitConfig.PrimaryTimeout is actually read rather than the "+
+				"hardcoded default always winning")
+	})
+}
+
+// TestIPRateLimiter_DefaultsToTheInMemoryBackendWhenNoneIsInjected pins backward compatibility:
+// a RateLimitConfig with no Backend set (the zero value, which is what every pre-#1531 call site
+// and test already constructs) must behave exactly as it did before this task.
+func TestIPRateLimiter_DefaultsToTheInMemoryBackendWhenNoneIsInjected(t *testing.T) {
+	cfg := middleware.RateLimitConfig{IPLimit: 2, WindowDuration: time.Minute}
+	require.Nil(t, cfg.Backend, "zero-value RateLimitConfig.Backend must be nil")
+	e := newEchoWithIPLimiter(cfg)
+
+	assert.Equal(t, http.StatusOK, makeRequest(e, "192.0.2.10"))
+	assert.Equal(t, http.StatusOK, makeRequest(e, "192.0.2.10"))
+	assert.Equal(t, http.StatusTooManyRequests, makeRequest(e, "192.0.2.10"))
+}
+
+// TestIPRateLimiter_UsesTheInjectedBackend proves a configured Backend is actually consulted (not
+// just accepted and ignored): an injected backend that always denies must produce 429s even on
+// the very first request, which the in-memory backend alone would never do at this limit.
+func TestIPRateLimiter_UsesTheInjectedBackend(t *testing.T) {
+	backend := &fakeBackend{name: "redis", allowFunc: func(context.Context, domain.RateLimitTier, string) (domain.RateLimitDecision, error) {
+		return domain.RateLimitDecision{Allowed: false, RetryAfter: 42 * time.Second}, nil
+	}}
+	cfg := middleware.RateLimitConfig{IPLimit: 100, WindowDuration: time.Minute, Backend: backend}
+	e := newEchoWithIPLimiter(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.RemoteAddr = "192.0.2.11:1000"
+	rr := httptest.NewRecorder()
+	e.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusTooManyRequests, rr.Code)
+	assert.Equal(t, "42", rr.Header().Get("Retry-After"))
+	assert.GreaterOrEqual(t, backend.callCount(), 1)
+}
+
+// TestIPRateLimiter_RejectionIncrementsRejectionCounterWithTierLabel drives a rejection on each of
+// the three tiers and asserts observability.RateLimitRejectionsTotal{tier=...} increments by
+// exactly one each time.
+func TestIPRateLimiter_RejectionIncrementsRejectionCounterWithTierLabel(t *testing.T) {
+	t.Run("regular", func(t *testing.T) {
+		cfg := middleware.RateLimitConfig{IPLimit: 1, WindowDuration: time.Minute}
+		e := newEchoWithGateStatus(cfg, middleware.GateStatusUnknown)
+		before := testutil.ToFloat64(observability.RateLimitRejectionsTotal.WithLabelValues("regular"))
+
+		doRateLimitedRequest(e, "/test", "198.51.100.20:1", nil)
+		code := doRateLimitedRequest(e, "/test", "198.51.100.20:2", nil)
+		require.Equal(t, http.StatusTooManyRequests, code)
+
+		after := testutil.ToFloat64(observability.RateLimitRejectionsTotal.WithLabelValues("regular"))
+		assert.Equal(t, before+1, after)
+	})
+
+	t.Run("auth", func(t *testing.T) {
+		cfg := middleware.RateLimitConfig{IPLimit: 100, AuthEndpointLimit: 1, WindowDuration: time.Minute}
+		e := newEchoWithGateStatus(cfg, middleware.GateStatusUnknown)
+		before := testutil.ToFloat64(observability.RateLimitRejectionsTotal.WithLabelValues("auth"))
+
+		doRateLimitedRequest(e, "/webhooks/plaid", "198.51.100.21:1", nil)
+		code := doRateLimitedRequest(e, "/webhooks/plaid", "198.51.100.21:2", nil)
+		require.Equal(t, http.StatusTooManyRequests, code)
+
+		after := testutil.ToFloat64(observability.RateLimitRejectionsTotal.WithLabelValues("auth"))
+		assert.Equal(t, before+1, after)
+	})
+
+	t.Run("sentinel", func(t *testing.T) {
+		cfg := middleware.RateLimitConfig{IPLimit: 1, WindowDuration: time.Minute}
+		e := newEchoWithGateStatus(cfg, middleware.GateStatusPassed)
+		before := testutil.ToFloat64(observability.RateLimitRejectionsTotal.WithLabelValues("sentinel"))
+
+		// No Cf-Connecting-Ip header at all -> falls back to the sentinel bucket (see clientIdentity).
+		doRateLimitedRequest(e, "/test", "198.51.100.22:1", nil)
+		code := doRateLimitedRequest(e, "/test", "198.51.100.23:2", nil)
+		require.Equal(t, http.StatusTooManyRequests, code)
+
+		after := testutil.ToFloat64(observability.RateLimitRejectionsTotal.WithLabelValues("sentinel"))
+		assert.Equal(t, before+1, after)
+	})
+}
+
+// panicCapturingHandler is a minimal slog.Handler that records whether any record was ever
+// handled, used below to detect a panic that IPRateLimiter's own defer recover() caught and
+// logged -- which would otherwise make a purely panic-based "the primary must never be called"
+// proof pass by accident (the handler-level recover legitimately swallows and logs the panic
+// regardless of WHY the primary was invoked, so response code alone cannot distinguish "never
+// called" from "called, panicked, and recovered").
+type panicCapturingHandler struct {
+	mu      sync.Mutex
+	handled bool
+}
+
+func (h *panicCapturingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *panicCapturingHandler) Handle(context.Context, slog.Record) error {
+	h.mu.Lock()
+	h.handled = true
+	h.mu.Unlock()
+	return nil
+}
+func (h *panicCapturingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *panicCapturingHandler) WithGroup(string) slog.Handler      { return h }
+func (h *panicCapturingHandler) sawAnyRecord() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.handled
+}
+
+// TestIPRateLimiter_ExemptPathsNeverTouchThePrimaryBackend is the required discrimination test:
+// the injected primary PANICS the instant Allow is called. Response code 200 alone is NOT proof
+// here, because IPRateLimiter's own defer recover() legitimately catches and logs any panic
+// (including one from the primary) and falls through to next(ec) regardless -- so a 200 would be
+// returned whether or not the exempt-path bypass actually ran. This test additionally asserts NO
+// log record was ever emitted through the injected logger, which the recover() path always
+// produces when it fires. Only both together prove the primary was never called at all.
+func TestIPRateLimiter_ExemptPathsNeverTouchThePrimaryBackend(t *testing.T) {
+	capture := &panicCapturingHandler{}
+	cfg := middleware.RateLimitConfig{
+		IPLimit:        100,
+		WindowDuration: time.Minute,
+		Backend:        panickingBackend{},
+		Logger:         slog.New(capture),
+	}
+	e := echo.New()
+	e.Use(middleware.IPRateLimiter(cfg))
+	e.GET("/health", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.RemoteAddr = "198.51.100.30:1"
+	rr := httptest.NewRecorder()
+	e.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code, "GET /health must succeed")
+	assert.False(t, capture.sawAnyRecord(),
+		"no log record (including a recovered-panic record) may have been emitted — any record proves the panicking primary was actually invoked")
+}
+
+// TestIPRateLimiter_CleanupGoroutineStopsWhenDoneIsClosed proves the cleanup goroutine leak fix:
+// closing cfg.Done must cause the background goroutine to exit.
+//
+// Scoped to the goroutine under test via a channel this test owns and closes from
+// SetCleanupGoroutineStoppedHookForTest's callback, rather than the process-global
+// runtime.NumGoroutine() the previous version of this test used — that count includes every
+// goroutine in the test binary (other tests', the runtime's own), making it order-dependent and
+// flaky under `-race` or when run alongside other tests, regardless of whether THIS goroutine
+// actually stopped.
+func TestIPRateLimiter_CleanupGoroutineStopsWhenDoneIsClosed(t *testing.T) {
+	stopped := make(chan struct{})
+	middleware.SetCleanupGoroutineStoppedHookForTest(func() { close(stopped) })
+	defer middleware.SetCleanupGoroutineStoppedHookForTest(nil)
+
+	done := make(chan struct{})
+	close(done) // already closed before IPRateLimiter's goroutine even starts
+
+	cfg := middleware.RateLimitConfig{IPLimit: 5, WindowDuration: time.Minute, CleanupInterval: time.Hour, Done: done}
+	_ = middleware.IPRateLimiter(cfg)
+
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup goroutine did not stop after Done was closed")
+	}
+}
+
+// TestIPRateLimiter_BackendPanicDoesNotPanicTheRequest proves the handler-level defer recover():
+// a panicking primary backend must not crash the connection or the test process — it is caught,
+// logged, and the request falls through to next(ec).
+func TestIPRateLimiter_BackendPanicDoesNotPanicTheRequest(t *testing.T) {
+	cfg := middleware.RateLimitConfig{IPLimit: 100, WindowDuration: time.Minute, Backend: panickingBackend{}}
+	e := newEchoWithIPLimiter(cfg)
+
+	require.NotPanics(t, func() {
+		code := makeRequest(e, "198.51.100.40")
+		assert.Equal(t, http.StatusOK, code, "a panicking backend must fail open (request falls through to next) rather than crash the connection")
+	})
+}
+
+// TestIPRateLimiter_RetryAfterIsNeverZeroOrNegative proves the middleware itself guards against a
+// misbehaving backend that returns a zero OR a negative RetryAfter on denial — either would
+// invite an immediate retry storm (a negative Retry-After header is nonsensical to a client, and
+// some HTTP clients treat it the same as "retry immediately", same as zero).
+func TestIPRateLimiter_RetryAfterIsNeverZeroOrNegative(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		retryAfter time.Duration
+	}{
+		{"zero", 0},
+		{"negative", -5 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &fakeBackend{name: "buggy", allowFunc: func(context.Context, domain.RateLimitTier, string) (domain.RateLimitDecision, error) {
+				return domain.RateLimitDecision{Allowed: false, RetryAfter: tc.retryAfter}, nil
+			}}
+			cfg := middleware.RateLimitConfig{IPLimit: 100, WindowDuration: time.Minute, Backend: backend}
+			e := newEchoWithIPLimiter(cfg)
+
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req.RemoteAddr = "198.51.100.50:1"
+			rr := httptest.NewRecorder()
+			e.ServeHTTP(rr, req)
+
+			require.Equal(t, http.StatusTooManyRequests, rr.Code)
+			retryAfter := rr.Header().Get("Retry-After")
+			require.NotEmpty(t, retryAfter)
+			assert.NotEqual(t, "0", retryAfter)
+			assert.NotContains(t, retryAfter, "-")
+		})
+	}
+}
+
+// TestRateLimitRejections_OnlyEmitsBoundedTierLabelsFromProductionCode is the REAL enforcement
+// test called for by Task 2's review carry-forward: it drives real rejections across all three
+// tiers through the actual HTTP middleware (not by writing to the counter directly, which would be
+// self-fulfilling) and then inspects every label value the metric family has ever published,
+// asserting each one is in the small fixed set {regular, auth, sentinel}.
+func TestRateLimitRejections_OnlyEmitsBoundedTierLabelsFromProductionCode(t *testing.T) {
+	// Regular tier.
+	regCfg := middleware.RateLimitConfig{IPLimit: 1, WindowDuration: time.Minute}
+	regE := newEchoWithGateStatus(regCfg, middleware.GateStatusUnknown)
+	doRateLimitedRequest(regE, "/test", "203.0.113.10:1", nil)
+	doRateLimitedRequest(regE, "/test", "203.0.113.10:2", nil)
+
+	// Auth tier.
+	authCfg := middleware.RateLimitConfig{IPLimit: 100, AuthEndpointLimit: 1, WindowDuration: time.Minute}
+	authE := newEchoWithGateStatus(authCfg, middleware.GateStatusUnknown)
+	doRateLimitedRequest(authE, "/webhooks/plaid", "203.0.113.11:1", nil)
+	doRateLimitedRequest(authE, "/webhooks/plaid", "203.0.113.11:2", nil)
+
+	// Sentinel tier.
+	sentinelCfg := middleware.RateLimitConfig{IPLimit: 1, WindowDuration: time.Minute}
+	sentinelE := newEchoWithGateStatus(sentinelCfg, middleware.GateStatusPassed)
+	doRateLimitedRequest(sentinelE, "/test", "203.0.113.12:1", nil)
+	doRateLimitedRequest(sentinelE, "/test", "203.0.113.13:2", nil)
+
+	metrics, err := prometheusGatherRateLimitRejections(t)
+	require.NoError(t, err)
+
+	allowed := map[string]bool{"regular": true, "auth": true, "sentinel": true}
+	seen := 0
+	for _, m := range metrics {
+		for _, label := range m.GetLabel() {
+			if label.GetName() != "tier" {
+				continue
+			}
+			seen++
+			assert.True(t, allowed[label.GetValue()], "production code emitted an unbounded/unexpected tier label value: %q", label.GetValue())
+		}
+	}
+	assert.Greater(t, seen, 0, "test must have actually observed at least one tier label, or this assertion is vacuous")
 }

@@ -85,7 +85,7 @@ func TestDeleteUserCascade_Integration_LockOrderMatchesAcceptInvite_NoDeadlockWi
 	}
 	done := make(chan deleteResult, 1)
 	go func() {
-		deleted, callErr := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
+		deleted, _, callErr := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
 		done <- deleteResult{deleted, callErr}
 	}()
 

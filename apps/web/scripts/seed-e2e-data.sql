@@ -429,6 +429,27 @@ BEGIN
      'MEDICAL', 'MEDICAL_PHARMACIES_AND_SUPPLEMENTS', 'in store', false,
      '["health"]'::jsonb, 'plaid');
 
+    -- #1531 Task 11e finding: effective_category_name (migration 000073, Issue #1123) is an
+    -- APP-MAINTAINED column, not a generated one (unlike effective_pfc_primary/
+    -- effective_pfc_detailed, which ARE `GENERATED ALWAYS AS ... STORED` and so are populated
+    -- automatically on INSERT regardless of how the row was written). Real application writes
+    -- (TransactionRepository.UpdateCategory, the Plaid sync path) always set it explicitly; this
+    -- raw SQL INSERT above never has, leaving it NULL on every seeded transaction. Any consumer
+    -- that reads it — GetSpendingByCategory, GetSpendingTrends (see
+    -- backend/internal/repository/analytics_repository.go's effectiveCategoryDisplayExpr) — scans
+    -- it into a non-nullable *string and 500s with "cannot scan NULL into *string" the first time
+    -- anything queries real (non-mocked) analytics against this seed data. Backfill it here with
+    -- the EXACT same CASE expression migration 000073's own one-time backfill uses, scoped to
+    -- this user's rows so re-running this script against already-seeded data stays idempotent.
+    UPDATE transactions
+    SET effective_category_name = CASE
+        WHEN category_override_kind = 'custom' THEN
+            (SELECT name FROM custom_categories WHERE id = custom_category_override_id AND user_id = transactions.user_id)
+        WHEN category_override_kind = 'pfc' THEN pfc_primary_override
+        ELSE pfc_primary
+    END
+    WHERE user_id = v_user_id;
+
     -- =============================================================================
     -- Step 5: Create user tags
     -- =============================================================================

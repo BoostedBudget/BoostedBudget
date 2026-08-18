@@ -255,10 +255,17 @@ flyctl deploy
 # Health check
 curl https://api.boostedbudget.com/health
 
-# Expected response:
-# {"status":"healthy","timestamp":"2025-10-18T..."}
+# Expected response — exactly one field, deliberately (issue #1531 criterion 20):
+# {"status":"ok"}
+#
+# No version, no component breakdown, no error text: this is an unauthenticated,
+# Cloudflare-exempt endpoint, so anything it says is public. Component detail lives on
+# the admin-gated /api/v1/admin/system/health instead.
 
-# Metrics endpoint
+# Metrics endpoint — must NOT be publicly reachable (expect 404).
+# Issue #1514 moved /metrics onto an internal-only listener (port 9091), scraped by Fly
+# over the private 6PN network. A 200 here means that fix regressed and the Prometheus
+# registry — signup counts, transaction volume, full route inventory — is public.
 curl https://api.boostedbudget.com/metrics
 ```
 
@@ -449,7 +456,13 @@ The backend API is protected by `CloudflareOnly` middleware (`backend/internal/m
 1. **IP validation** — `Fly-Client-IP` (set by Fly.io's proxy edge, not forgeable by clients) must be within Cloudflare's published CIDR ranges
 2. **Shared origin secret** — `X-Origin-Secret` header (injected by a Cloudflare Transform Rule) must match `CF_ORIGIN_SECRET` env var, validated with `subtle.ConstantTimeCompare`
 
-Exempted paths (not gated by Cloudflare — reached directly from Fly.io infrastructure): `/health`, `/metrics`.
+Exempted path (not gated by Cloudflare — reached directly from Fly.io infrastructure): `/health`.
+Fly's own `http_checks` hit it every 30s from inside Fly's network with no Cloudflare headers at
+all, so the exemption is load-bearing: removing it would fail every machine's health check and
+cause Fly to cycle the app.
+
+`/metrics` was previously exempt here too. Issue #1514 moved it onto a separate internal-only
+listener (port 9091), so it is no longer served on the public listener and needs no exemption.
 
 ### Generate and Set the Origin Secret
 
@@ -490,7 +503,7 @@ For each API hostname (`api.boostedbudget.com` and `staging-api.boostedbudget.co
    - Score threshold: **Medium (≥40)**
    - Action: **Log** → change to **Block** after 1 week without false positives
 
-> ⚠️ Do **not** enable plain Bot Fight Mode for these hostnames. It can challenge legitimate mobile and API traffic and cannot be bypassed with WAF rules. If on Business/Enterprise and using Super Bot Fight Mode, create a skip rule for `/api/`, `/webhooks/`, `/health`, and `/metrics` paths.
+> ⚠️ Do **not** enable plain Bot Fight Mode for these hostnames. It can challenge legitimate mobile and API traffic and cannot be bypassed with WAF rules. If on Business/Enterprise and using Super Bot Fight Mode, create a skip rule for `/api/`, `/webhooks/`, and `/health` paths. (`/metrics` no longer needs one — issue #1514 moved it off the public listener entirely, so no Cloudflare traffic reaches it.)
 
 ### Cloudflare Rate Limiting Rules
 
@@ -541,10 +554,22 @@ curl -s -o /dev/null -w "Status: %{http_code}\n" \
   https://staging-boostedbudget-api.fly.dev/health
 # Expected: 200
 
-# 4. Metrics via fly.dev must return 200 (exempted, scraped by Fly.io)
+# 4. Metrics via fly.dev must NOT be publicly reachable (issue #1514 criterion 18).
+#    It moved to an internal-only listener on port 9091, scraped by Fly over 6PN.
+#    ⚠ A 200 here is a security regression, not a healthy result: it would mean the
+#    Prometheus registry (signup counts, transaction volume, full route inventory) is
+#    readable by anyone who guesses the hostname.
 curl -s -o /dev/null -w "Status: %{http_code}\n" \
   https://staging-boostedbudget-api.fly.dev/metrics
-# Expected: 200
+# Expected: 403 — hitting fly.dev directly skips Cloudflare, so CloudflareOnly's origin
+# gate rejects the request before routing ever gets a chance to 404 (/metrics was removed
+# from exemptedPaths; see internal/middleware/cloudflare.go). Any non-200 is acceptable —
+# the point is that it is not served publicly — but 403 is what you should actually see
+# here. (Through Cloudflare, at the api.boostedbudget.com hostname above, the same request
+# gets a 404 instead, because the gate passes and routing is what rejects it.)
+#
+# Confirm the scrape still WORKS, separately — "not public" and "not collected" look the
+# same from out here. Check that samples are still arriving in fly-metrics.net.
 
 # 5. Spoofed CF-Connecting-IP (original naive approach) must still return 403
 curl -s -o /dev/null -w "Status: %{http_code}\n" \

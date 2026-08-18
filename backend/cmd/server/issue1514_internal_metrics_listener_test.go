@@ -14,6 +14,7 @@ package main
 // main.go's source.
 
 import (
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humaecho"
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	"github.com/maxnussbaum/BoostedBudget/internal/health"
 	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
 )
@@ -97,12 +99,14 @@ func TestPublicRouteRegistration_MetricsNotServed_HealthUnchanged(t *testing.T) 
 	e := echo.New()
 	api := humaecho.NewV4(e, humaconfig.NewAPIConfig(cfg.Version, cfg.Environment))
 
-	healthHandler := operations.NewHealthHandler(
-		createDBCheck(),
-		createRedisCheck(),
-		createClerkCheck(),
-		cfg.Version,
-	)
+	// Issue #1531 Task 7c: createDBCheck(nil) now correctly 503s (a nil pool is an ERROR, not a
+	// healthy no-op — see that function's doc comment), so a healthy fake pinger is used here
+	// instead of nil: this test's job is to pin /health's behaviour is unchanged by the
+	// metrics-listener split, not to re-exercise Task 7's nil-pool handling (see
+	// health_checks_test.go for that).
+	healthHandler := operations.NewHealthHandler(slog.Default(), health.Registry{
+		DB: createDBCheck(alwaysHealthyPinger{}),
+	})
 	operations.RegisterHealthRoutes(api, healthHandler)
 
 	// Sanity check that this is genuinely the public API's config and not a stand-in: on

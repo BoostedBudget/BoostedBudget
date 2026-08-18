@@ -32,10 +32,12 @@
  */
 import type { DatabaseHealth } from './databaseHealth';
 import type { PlaidHealth } from './plaidHealth';
+import type { RedisHealth } from './redisHealth';
 import type { ServiceHealth } from './serviceHealth';
 
 export interface ServiceHealthStatuses {
   clerk: ServiceHealth;
   database: DatabaseHealth;
   plaid: PlaidHealth;
+  redis: RedisHealth;
 }

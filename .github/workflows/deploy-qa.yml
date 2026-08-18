@@ -529,11 +529,10 @@ jobs:
           POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD_QA }}
           DATABASE_URL=postgresql://qauser:${{ secrets.POSTGRES_PASSWORD_QA }}@localhost:5433/boostedbudget_qa?sslmode=disable
 
-          # Redis (QA)
-          REDIS_URL=redis://localhost:6380/0
-
-          # RabbitMQ (QA)
-          RABBITMQ_URL=amqp://guest:guest@localhost:5673/
+          # Redis (QA) — Issue #1531: two SEPARATE instances, never shared (see
+          # docker-compose.qa.yml's redis-ratelimit/redis-cache comments).
+          RATE_LIMIT_REDIS_URL=redis://localhost:6380/0
+          CACHE_REDIS_URL=redis://localhost:6381/0
 
           # Clerk Authentication
           CLERK_SECRET_KEY=${{ secrets.CLERK_SECRET_KEY }}
@@ -711,7 +710,6 @@ jobs:
           echo "**Access (Local Network):**" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend: https://localhost:3000" >> $GITHUB_STEP_SUMMARY
           echo "- Backend API: http://localhost:8080" >> $GITHUB_STEP_SUMMARY
-          echo "- RabbitMQ UI: http://localhost:15673" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Access (Tailscale VPN):**" >> $GITHUB_STEP_SUMMARY
           echo "- Update with your Tailscale hostname after setup" >> $GITHUB_STEP_SUMMARY

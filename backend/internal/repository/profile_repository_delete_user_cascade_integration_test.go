@@ -171,7 +171,7 @@ func TestDeleteUserCascade_Integration_RetentionResubscribedAfterClaim_NotDelete
 	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "active", &startedAt, nil, &subID))
 	require.NoError(t, repo.ClearRetentionDates(ctx, user.ID))
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err, "an aborted cascade is a normal outcome, not an error")
 	assert.False(t, deleted, "a resubscription landing after the claim but before the cascade must abort the deletion")
 
@@ -190,7 +190,7 @@ func TestDeleteUserCascade_Integration_OrdinaryEligibleUser_Deletes(t *testing.T
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	user := createDeleteCascadeFixtureUser(t, ctx, pool, repo, suffix, nil, nil, nil)
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	assert.True(t, deleted, "an ordinary eligible user must still be deleted")
 
@@ -224,7 +224,7 @@ func TestDeleteUserCascade_Integration_CompGrantedAfterClaim_NotDeleted(t *testi
 		tier, overrideEndsAt, user.ID)
 	require.NoError(t, err)
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err, "an aborted cascade is a normal outcome, not an error")
 	assert.False(t, deleted, "a comp granted after the claim but before the cascade must abort the deletion")
 
@@ -264,7 +264,7 @@ func TestDeleteUserCascade_Integration_DeletionCancelledAfterClaim_NotDeleted(t 
 	// DeleteUserCascade is called with the STALE expected value ClaimForDeletion observed
 	// (user.DeletionRequestedAt, captured before the cancellation) — exactly what ExecuteDeletion
 	// would pass, since it never re-reads deletion_requested_at between the claim and the cascade.
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err, "an aborted cascade is a normal outcome, not an error")
 	assert.False(t, deleted, "a deletion request cancelled after the claim but before the cascade must abort the deletion — this is the C1 data-loss scenario")
 
@@ -295,7 +295,7 @@ func TestDeleteUserCascade_Integration_OwnGDPRRequestStillOutstanding_DeletedDes
 	require.True(t, claimed, "a user's own outstanding GDPR deletion request must beat a live admin comp at claim time")
 
 	// Nothing changes deletion_requested_at between the claim and the cascade in this scenario.
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	assert.True(t, deleted, "a user's own outstanding GDPR deletion request must still beat a live comp inside the cascade guard too")
 
@@ -327,7 +327,7 @@ func TestDeleteUserCascade_Integration_UncleanedPlaidItemRemains_NotDeleted(t *t
 	require.NoError(t, linkedItemRepo.Create(ctx, item))
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE id = $1", item.ID) })
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err, "an aborted cascade is a normal outcome, not an error")
 	assert.False(t, deleted, "the cascade must not run while an un-cleaned Plaid item remains")
 
@@ -400,7 +400,7 @@ func TestDeleteUserCascade_Integration_NullStatusLinkedItemRemains_NotDeleted(t 
 	`, user.ID, itemID)
 	require.NoError(t, err)
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err, "an aborted cascade is a normal outcome, not an error")
 	assert.False(t, deleted, "a NULL-status linked item must count as un-cleaned and block the cascade")
 
@@ -465,7 +465,7 @@ func TestDeleteUserCascade_Integration_ReplacedStatusLinkedItemWithNoPlaidRemova
 	require.True(t, stampIsNull, "fixture precondition: a re-link must not have recorded a Plaid removal, "+
 		"or this test cannot exercise the guard it exists to pin")
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err, "an aborted cascade is a normal outcome, not an error")
 	assert.False(t, deleted, "a 'replaced' item whose Plaid /item/remove never happened is STILL LIVE and "+
 		"STILL BILLING, so it must block the cascade — completing the erasure would orphan a billable "+
@@ -526,7 +526,7 @@ func TestDeleteUserCascade_Integration_ReplacedStatusLinkedItemAfterPlaidRemoval
 	require.Equal(t, "replaced", status, "the re-link chain must survive the stamp — overwriting 'replaced' "+
 		"would destroy replaced_at/replaced_by_id, which is why a second column exists at all")
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	assert.True(t, deleted, "once Plaid removal IS recorded, a 'replaced' item must not block the cascade — "+
 		"otherwise tightening C2 would deadlock every re-linked user's GDPR erasure")
@@ -561,7 +561,7 @@ func TestDeleteUserCascade_Integration_AllItemsDisconnected_Deletes(t *testing.T
 		`UPDATE linked_items SET status = 'disconnected', plaid_removed_at = NOW() WHERE id = $1`, item.ID)
 	require.NoError(t, err)
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	assert.True(t, deleted, "the cascade must proceed once every linked item is already disconnected")
 
@@ -609,7 +609,7 @@ func TestDeleteUserCascade_Integration_RedactsAuditLogPII(t *testing.T) {
 		RETURNING id
 	`, admin.ID, target.ID).Scan(&subjectRowID))
 
-	deleted, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
 	require.NoError(t, err)
 	require.True(t, deleted)
 
@@ -663,7 +663,7 @@ func TestDeleteUserCascade_Integration_HouseholdOwnerWithActiveNonOwnerMember_No
 
 	// Retention-triggered path: no ClaimForDeletion, no deletion_requested_at — DeleteUserCascade
 	// called directly, exactly as deleteExpiredAccounts (retention_cleanup_check.go) does.
-	deleted, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
 	require.Error(t, err, "an owner with an active non-owner member must NOT be silently skipped (false, nil) — it must be a genuine, loud error so it is retried and eventually visible (DLQ / logs), not silently dropped forever")
 	assert.ErrorIs(t, err, domain.ErrHouseholdHasActiveMembers)
 	assert.False(t, deleted)
@@ -716,7 +716,7 @@ func TestDeleteUserCascade_Integration_HouseholdOwnerWithOrphanedMemberEntitleme
 		beneficiary.ID, householdID, owner.ID,
 	).Scan(&entitlementID))
 
-	deleted, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, domain.ErrHouseholdHasActiveMembers)
 	assert.False(t, deleted)
@@ -755,7 +755,7 @@ func TestDeleteUserCascade_Integration_HouseholdOwnerSoleActiveMemberSelfPayer_D
 		VALUES ($1, 'household', 'premium', 'active', $2, $3)`,
 		owner.ID, householdID, owner.ID)
 
-	deleted, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
 	require.NoError(t, err)
 	assert.True(t, deleted, "a genuinely sole household owner (no other member, no other beneficiary) must still be deletable")
 
@@ -813,7 +813,7 @@ func TestDeleteUserCascade_Integration_HouseholdOwnerWithClosedFormerMemberEntit
 		VALUES ($1, 'household', 'premium', 'cancelled', $2, $3, NOW() - INTERVAL '30 days', NOW() - INTERVAL '1 hour')`,
 		formerMember.ID, householdID, owner.ID)
 
-	deleted, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
 	require.NoError(t, err, "a CLOSED (effective_until in the past) former-member entitlement must not block the owner's deletion forever")
 	assert.True(t, deleted)
 
@@ -879,7 +879,7 @@ func TestDeleteUserCascade_Integration_HouseholdOwnerNoOwnMembershipRow_ActiveNo
 		`INSERT INTO household_members (household_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')`,
 		householdID, member.ID)
 
-	deleted, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
 	require.Error(t, err, "an owner with an active non-owner member must NOT be deletable even when the owner's own household_members row is missing — COUNT(*) > 1 silently depends on that row existing")
 	assert.ErrorIs(t, err, domain.ErrHouseholdHasActiveMembers)
 	assert.False(t, deleted)
@@ -932,7 +932,7 @@ func TestDeleteUserCascade_Integration_NestedCustomCategoriesAndOwnTransactionOv
 		VALUES ($1, 'manual', 12.34, CURRENT_DATE, 'Test Txn', 'custom', $2)`,
 		user.ID, childCategoryID)
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err, "a user's own nested categories and own transaction override must not block their own deletion")
 	assert.True(t, deleted)
 
@@ -997,9 +997,17 @@ func TestDeleteUserCascade_Integration_OtherUsersTransactionOverridesTargetsCate
 		other.ID, categoryID,
 	).Scan(&otherTxnID))
 
-	deleted, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
+	deleted, affectedOwnerIDs, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
 	require.NoError(t, err, "a stray cross-user override on target's category must not abort the deletion")
 	assert.True(t, deleted)
+
+	// GDPR round-6 finding P1: the deleted target's cache purge (purgeCacheForDeletedUser) never
+	// knows about `other` — the caller must be told which OTHER user's rows this cascade rewrote so
+	// it can bump THEIR cache too, or `other`'s warm analytics cache keeps serving `target`'s
+	// just-erased custom category name (effective_category_name, asserted above) until the cache
+	// namespace's TTL elapses.
+	assert.Equal(t, []string{other.ID}, affectedOwnerIDs,
+		"P1: DeleteUserCascade must report the OTHER user whose transaction row it just rewrote, so the caller can bump that user's cache — not just the deleted target's")
 
 	assertUserRowGone(t, ctx, pool, target.ID)
 	assertUserRowExists(t, ctx, pool, other.ID)
@@ -1016,6 +1024,115 @@ func TestDeleteUserCascade_Integration_OtherUsersTransactionOverridesTargetsCate
 	var otherTxnCount int
 	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM transactions WHERE id = $1", otherTxnID).Scan(&otherTxnCount))
 	assert.Equal(t, 1, otherTxnCount, "the OTHER user's transaction row itself must survive — only the dangling override is cleared")
+}
+
+// TestDeleteUserCascade_Integration_OwnBudgetAndRuleCategoryReferences_NoOtherOwnerAffected is
+// Issue #1531 slice H4: making explicit, and testing, the argument that budget_categories.
+// custom_category_id (CASCADE) and categorization_rules.target_custom_category_id (SET NULL) do
+// NOT need the same affectedOwnerIDs tracking the RESTRICT case above needs.
+//
+// Unlike custom_category_override_id (on transactions, no ownership trigger), Issue #1540
+// (budget_service.go, categorization_rule_service.go) guarantees every budget_categories.
+// custom_category_id and categorization_rules.target_custom_category_id was written by the SAME
+// user who owns the referenced custom_categories row. So when target's own custom_categories row
+// cascades away as part of this same DELETE FROM users, the CASCADE/SET NULL it triggers can only
+// ever reach target's OWN budget_categories/categorization_rules rows — which are themselves
+// cascading away in this same statement (via budgets.user_id / categorization_rules.user_id, both
+// CASCADE from users) regardless of what happens to the category. No other owner is ever in the
+// blast radius, so affectedOwnerIDs must stay empty even though this cascade genuinely fires.
+func TestDeleteUserCascade_Integration_OwnBudgetAndRuleCategoryReferences_NoOtherOwnerAffected(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	target := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "h4-target-"+suffix, nil, nil, nil)
+	other := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "h4-other-"+suffix, nil, nil, nil)
+
+	// target: a custom category referenced by target's OWN budget_categories and
+	// categorization_rules rows — exactly what #1540's ownership check now enforces is the only
+	// reachable shape.
+	var targetCategoryID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO custom_categories (user_id, name) VALUES ($1, 'Target Own Cat') RETURNING id`, target.ID,
+	).Scan(&targetCategoryID))
+
+	var targetBudgetID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO budgets (user_id, name, period, start_date, amount, series_id)
+		VALUES ($1, 'H4 Budget', 'monthly', CURRENT_DATE, 100, gen_random_uuid()) RETURNING id`,
+		target.ID,
+	).Scan(&targetBudgetID))
+
+	var targetBudgetCategoryID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO budget_categories (budget_id, allocated_amount, category_kind, custom_category_id)
+		VALUES ($1, 50, 'custom', $2) RETURNING id`, targetBudgetID, targetCategoryID,
+	).Scan(&targetBudgetCategoryID))
+
+	var targetRuleID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO categorization_rules (user_id, name, target_kind, target_custom_category_id)
+		VALUES ($1, 'H4 Rule', 'custom', $2) RETURNING id`, target.ID, targetCategoryID,
+	).Scan(&targetRuleID))
+
+	// other: entirely unrelated own custom category/budget/rule, seeded so a bug that DID leak
+	// across owners would have something to corrupt.
+	var otherCategoryID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO custom_categories (user_id, name) VALUES ($1, 'Other Own Cat') RETURNING id`, other.ID,
+	).Scan(&otherCategoryID))
+
+	var otherBudgetID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO budgets (user_id, name, period, start_date, amount, series_id)
+		VALUES ($1, 'H4 Other Budget', 'monthly', CURRENT_DATE, 100, gen_random_uuid()) RETURNING id`,
+		other.ID,
+	).Scan(&otherBudgetID))
+
+	var otherBudgetCategoryID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO budget_categories (budget_id, allocated_amount, category_kind, custom_category_id)
+		VALUES ($1, 50, 'custom', $2) RETURNING id`, otherBudgetID, otherCategoryID,
+	).Scan(&otherBudgetCategoryID))
+
+	var otherRuleID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO categorization_rules (user_id, name, target_kind, target_custom_category_id)
+		VALUES ($1, 'H4 Other Rule', 'custom', $2) RETURNING id`, other.ID, otherCategoryID,
+	).Scan(&otherRuleID))
+
+	deleted, affectedOwnerIDs, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
+	require.NoError(t, err)
+	require.True(t, deleted)
+
+	// The argument under test: this cascade genuinely removed both target's own budget_categories
+	// row and target's own categorization_rules row (asserted below — both gone via CASCADE on
+	// user_id, not nulled), yet affectedOwnerIDs is empty — no OTHER owner was ever reachable, so
+	// the RESTRICT-only tracking mechanism doesn't need extending to these two FKs.
+	assert.Empty(t, affectedOwnerIDs, "H4: a CASCADE/SET NULL reachable only through the deleting user's own rows must not report any affected owner")
+
+	assertUserRowGone(t, ctx, pool, target.ID)
+	assertUserRowExists(t, ctx, pool, other.ID)
+
+	var targetBudgetCategoryCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM budget_categories WHERE id = $1", targetBudgetCategoryID).Scan(&targetBudgetCategoryCount))
+	assert.Equal(t, 0, targetBudgetCategoryCount, "target's own budget_categories row must cascade away with target's budget")
+
+	var targetRuleCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM categorization_rules WHERE id = $1", targetRuleID).Scan(&targetRuleCount))
+	assert.Equal(t, 0, targetRuleCount, "target's own categorization_rules row must cascade away via categorization_rules.user_id")
+
+	// other's rows must be completely untouched — same category_kind, same shape, different owner.
+	var otherBudgetCategoryCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM budget_categories WHERE id = $1 AND custom_category_id = $2", otherBudgetCategoryID, otherCategoryID).Scan(&otherBudgetCategoryCount))
+	assert.Equal(t, 1, otherBudgetCategoryCount, "other's own budget_categories row and its custom_category_id must survive target's deletion untouched")
+
+	var otherRuleCategoryID *string
+	require.NoError(t, pool.QueryRow(ctx, "SELECT target_custom_category_id FROM categorization_rules WHERE id = $1", otherRuleID).Scan(&otherRuleCategoryID))
+	require.NotNil(t, otherRuleCategoryID, "other's own categorization_rules row must keep its target_custom_category_id — it must never have been nulled by target's deletion")
+	assert.Equal(t, otherCategoryID, *otherRuleCategoryID)
 }
 
 // TestDeleteUserCascade_Integration_CrossUserNoActionReferences_StillDeletes is round-3's Finding 4
@@ -1111,7 +1228,7 @@ func TestDeleteUserCascade_Integration_CrossUserNoActionReferences_StillDeletes(
 		other.ID, userAccountTargetID,
 	).Scan(&txnOtherID))
 
-	deleted, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
 	require.NoError(t, err, "cross-user NO ACTION references to the target's own about-to-cascade rows must not abort the deletion")
 	assert.True(t, deleted)
 
@@ -1200,7 +1317,7 @@ func TestDeleteUserCascade_Integration_NonFKUserScopedTablesAreCleaned(t *testin
 	).Scan(&otherAuditID))
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM mcp_audit_log WHERE actor_user_id IN ($1, $2)", target.ID, other.ID) })
 
-	deleted, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
 	require.NoError(t, err)
 	assert.True(t, deleted)
 
@@ -1665,7 +1782,7 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 	}
 
 	// --- Run the cascade. ---
-	deleted, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
 	require.NoError(t, err)
 	require.True(t, deleted, "sanity check: an ordinary eligible target with no blockers must be deleted")
 

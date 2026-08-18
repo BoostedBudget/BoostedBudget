@@ -108,7 +108,7 @@ func TestDeleteUserCascade_Integration_AuditWriteFailureAbortsTheWholeCascade(t 
 
 	installAuditInsertPoison(t, ctx, pool, user.ID, suffix)
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 
 	require.Error(t, err, "a refused audit write must be reported, not swallowed — the trail is the point")
 	assert.False(t, deleted, "a cascade that could not record itself must not report success")
@@ -147,7 +147,7 @@ func TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion
 		_, _ = pool.Exec(context.Background(), `DELETE FROM audit_logs WHERE resource_id = $1`, user.ID)
 	})
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	require.True(t, deleted, "sanity: an ordinary eligible user is still deleted")
 
@@ -194,7 +194,7 @@ func TestDeleteUserCascade_Integration_AuditEntrySurvivesItsSubjectsHardDeletion
 		_, _ = pool.Exec(context.Background(), `DELETE FROM audit_logs WHERE resource_id = $1`, user.ID)
 	})
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	require.True(t, deleted)
 

@@ -10,8 +10,11 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/redisclient"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
@@ -37,6 +40,15 @@ type MockProfileRepositoryForDeletion struct {
 	// UncleanedLinkedItemCountCalls counts the calls, so a test can pin that the Plaid-less branch
 	// actually consulted the count rather than reaching its conclusion some other way.
 	UncleanedLinkedItemCountCalls int
+
+	// DeleteUserCascadeAffectedOwnerIDs is DeleteUserCascade's third return value (GDPR round-6
+	// finding P1) — field-driven for the same reason as UncleanedLinkedItemCount above: every
+	// pre-existing `.On("DeleteUserCascade", ...).Return(bool, error)` two-value expectation in this
+	// file predates the third return value, and a testify `.Return()` call with the wrong arity
+	// panics rather than defaulting. The zero value is nil — "no cross-user owner was affected" —
+	// exactly the behaviour every pre-existing test was written against. A test that cares about the
+	// new fix sets this before calling ExecuteDeletion.
+	DeleteUserCascadeAffectedOwnerIDs []string
 
 	// AuthorisedFn answers DeletionStillAuthorised — ExecuteDeletion's use-time re-verification of
 	// the authorisation it was claimed under. Field-driven for the same reason as
@@ -171,9 +183,19 @@ func (m *MockProfileRepositoryForDeletion) hasExpectationFor(method string) bool
 	return false
 }
 
-func (m *MockProfileRepositoryForDeletion) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
+// #1531 G5: m.Called below is still programmed with the pre-existing two-value
+// `.On(...).Return(bool, error)` shape — the third return (affected owner IDs) comes back through
+// the DeleteUserCascadeAffectedOwnerIDs side-channel field instead, per that field's own doc
+// comment. Benign today, but it is an arity foot-gun for a future edit: a caller who "helpfully"
+// updates a test to `.Return(true, []string{...}, nil)` will compile fine and panic at test run
+// time — not from an out-of-range index (a three-value `.Return(...)` produces a valid 3-element
+// Arguments), but because args.Error(1) below would then receive the []string at index 1 and
+// panic on the failed type assertion to error, not a bool/error pair shifted by one. Do not
+// restructure this mock to close that gap — every pre-existing expectation in this file predates
+// the third return value; this comment is the guard instead.
+func (m *MockProfileRepositoryForDeletion) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, []string, error) {
 	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
-	return args.Bool(0), args.Error(1)
+	return args.Bool(0), m.DeleteUserCascadeAffectedOwnerIDs, args.Error(1)
 }
 
 // CountUncleanedLinkedItems — Issue #1494. See the struct's field comments for why this is
@@ -681,6 +703,82 @@ func TestExecuteDeletion_CascadesAllData(t *testing.T) {
 	// deletion. The durable single-row property is asserted where it can actually be observed, in
 	// TestDeleteUserCascade_Integration_AuditEntryIsWrittenExactlyOncePerDeletion.
 	mockAudit.AssertNotCalled(t, "Log", ctx, "user.deleted", "user", user.ID)
+}
+
+// TestExecuteDeletion_BumpsCrossUserAffectedOwnersCache is GDPR round-6 finding P1's regression
+// test at the service layer: DeleteUserCascade's dangling cross-user custom-category-override
+// clear rewrites an OTHER, surviving user's transaction row — purgeCacheForDeletedUser only ever
+// bumps the DELETED user's own scopes (see its own doc comment), so without a separate bump keyed
+// on the SURVIVING owner, that owner's warm analytics cache keeps serving the erased user's
+// now-stale custom category name until the cache namespace's TTL elapses.
+//
+// This drives ExecuteDeletion with a REAL cache.Generations backed by a fake Redis (never a mock
+// of the bump call itself — matching account_service_cache_invalidation_test.go's own reasoning:
+// a regression that silently no-ops the bump must fail this test, not just skip an assertion
+// against a spy) and asserts the OTHER user's ScopeUser generation token actually changed.
+//
+// #1531 G1: also wires a HouseholdReader that resolves the affected owner to a household, and
+// asserts that household's ScopeHousehold generation is bumped too — bumpCacheForAffectedOwners'
+// household branch (deletion_service.go's household-bump loop) previously had zero test coverage;
+// only the ScopeUser path above ever ran.
+func TestExecuteDeletion_BumpsCrossUserAffectedOwnersCache(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	hhReader := &mockHouseholdReaderForDeletion{}
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetHouseholdReader(hhReader)
+
+	user := &domain.User{
+		ID:          "user-123",
+		ClerkUserID: "user_123",
+		Email:       "test@example.com",
+		IsDeleted:   false,
+	}
+	otherUserID := "other-user-456"
+	otherHousehold := &domain.Household{ID: "hh-affected-owner", OwnerUserID: otherUserID}
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
+	mockRepo.DeleteUserCascadeAffectedOwnerIDs = []string{otherUserID}
+	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	hhReader.On("GetHouseholdForUser", mock.Anything, otherUserID).Return(otherHousehold, false, true, nil)
+	// The deleted user's OWN household lookup (purgeCacheForDeletedUser's pre-cascade capture,
+	// unrelated to G1's affected-owner bump) — user-123 has no household of its own in this test.
+	hhReader.On("GetHouseholdForUser", mock.Anything, user.ID).Return(nil, false, false, nil)
+
+	fake := redisclient.NewFake("cache")
+	gens := cache.NewGenerations(fake)
+	service.SetCache(nil, gens, nil)
+
+	preGen, err := gens.Get(ctx, cache.ScopeUser, otherUserID)
+	require.NoError(t, err)
+	preHHGen, err := gens.Get(ctx, cache.ScopeHousehold, otherHousehold.ID)
+	require.NoError(t, err)
+
+	err = service.ExecuteDeletion(ctx, user.ID, repository.DeletionKindRetention)
+	require.NoError(t, err)
+
+	postGen, err := gens.Get(ctx, cache.ScopeUser, otherUserID)
+	require.NoError(t, err)
+	assert.NotEqual(t, preGen, postGen,
+		"P1: deleting user-123 rewrote otherUserID's transaction row (the cross-user dangling "+
+			"override clear), so otherUserID's OWN cache generation must be bumped — otherwise their "+
+			"warm analytics cache keeps serving user-123's just-erased custom category name")
+
+	postHHGen, err := gens.Get(ctx, cache.ScopeHousehold, otherHousehold.ID)
+	require.NoError(t, err)
+	assert.NotEqual(t, preHHGen, postHHGen,
+		"G1: otherUserID belongs to a household, so bumpCacheForAffectedOwners must also bump "+
+			"that household's ScopeHousehold generation — a household-scoped analytics read "+
+			"(cache/consumer.go's Scope selection prefers household over user) would otherwise keep "+
+			"serving user-123's just-erased custom category name under a DIFFERENT key than the "+
+			"one just bumped above")
 }
 
 // TestExecuteDeletion_DeletesClerkUser verifies Clerk deletion
@@ -2442,4 +2540,185 @@ func TestExecuteDeletion_PanicDuringCascade_ReleasesClaimThenRePanics(t *testing
 	}, "the panic must still propagate — this proves the claim is released first, not that panics are swallowed")
 
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+}
+
+// mockDeletionCachePurger implements cache.Purger for deletion-service tests. It records the
+// context each PurgeUser call was made with, so tests can assert on Err()/Deadline() at call time
+// (a reference captured only after the call returns would already reflect the *test's* later
+// cleanup, not what the production code actually passed in).
+type mockDeletionCachePurger struct {
+	mock.Mock
+}
+
+func (m *mockDeletionCachePurger) PurgeUser(ctx context.Context, userID, clerkUserID string) error {
+	args := m.Called(ctx, userID, clerkUserID)
+	return args.Error(0)
+}
+
+var _ cache.Purger = (*mockDeletionCachePurger)(nil)
+
+// mockDeletionJobQueue implements queue.JobQueue for deletion-service tests (separate name from
+// mockProfileJobQueue/MockJobQueue elsewhere in this package to avoid collisions).
+type mockDeletionJobQueue struct {
+	mock.Mock
+}
+
+func (m *mockDeletionJobQueue) Enqueue(ctx context.Context, job queue.Job, opts ...queue.EnqueueOption) (*queue.JobResult, error) {
+	args := m.Called(ctx, job)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*queue.JobResult), args.Error(1)
+}
+
+func (m *mockDeletionJobQueue) EnqueueTx(ctx context.Context, tx pgx.Tx, job queue.Job, opts ...queue.EnqueueOption) (*queue.JobResult, error) {
+	args := m.Called(ctx, tx, job)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*queue.JobResult), args.Error(1)
+}
+
+func (m *mockDeletionJobQueue) EnqueueMany(ctx context.Context, jobs []queue.Job, opts ...queue.EnqueueOption) ([]*queue.JobResult, error) {
+	args := m.Called(ctx, jobs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*queue.JobResult), args.Error(1)
+}
+
+func (m *mockDeletionJobQueue) EnqueueManyTx(ctx context.Context, tx pgx.Tx, jobs []queue.Job, opts ...queue.EnqueueOption) ([]*queue.JobResult, error) {
+	args := m.Called(ctx, tx, jobs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*queue.JobResult), args.Error(1)
+}
+
+var _ queue.JobQueue = (*mockDeletionJobQueue)(nil)
+
+// TestPurgeCacheForDeletedUser_PurgeAndRetryEnqueue_SurviveCallerCancellation is Issue #1531 M1's
+// regression test. purgeCacheForDeletedUser is called from a River job's Work method AFTER
+// DeleteUserCascade has already committed — River cancels a job's context on shutdown, retry, or
+// timeout, and that cancellation can land in the narrow window between the commit and this
+// method's own cache cleanup. Before the fix, PurgeUser(ctx, ...) and (on failure)
+// enqueueCachePurgeRetry(ctx, ...) -> jobQueue.Enqueue(ctx, ...) both ran on that same raw,
+// cancelled ctx: PurgeUser would fail with context.Canceled, and the "durable remedy" retry
+// enqueue would ALSO fail with context.Canceled (same cancelled context) — logged and dropped,
+// with no tombstone set and nothing scheduled. The deletion is marked complete while the user's
+// cached PII survives, terminal rather than TTL-bounded.
+//
+// This test cancels the caller's context BEFORE calling purgeCacheForDeletedUser and asserts the
+// contexts actually passed to PurgeUser and jobQueue.Enqueue are NOT the cancelled one (mirroring
+// TestExecuteDeletion_ReleasesClaim_WithIndependentContext_EvenIfCallerContextCancelled above for
+// H4's Release call).
+func TestPurgeCacheForDeletedUser_PurgeAndRetryEnqueue_SurviveCallerCancellation(t *testing.T) {
+	baseCtx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate a River job context cancelled (shutdown/retry/timeout) before cleanup runs
+
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+
+	userID := "user-123"
+	clerkUserID := "user_123"
+	householdID := "" // no household bump in play here — isolate the purge/retry pair
+
+	purger := new(mockDeletionCachePurger)
+	jq := new(mockDeletionJobQueue)
+
+	var purgeCtxErrAtCallTime, enqueueCtxErrAtCallTime error
+	var purgeCalled, enqueueCalled bool
+
+	purger.On("PurgeUser", mock.Anything, userID, clerkUserID).
+		Run(func(args mock.Arguments) {
+			purgeCalled = true
+			purgeCtxErrAtCallTime = args.Get(0).(context.Context).Err()
+		}).
+		Return(errors.New("redis: connection refused")) // force the durable-retry path
+	jq.On("Enqueue", mock.Anything, mock.AnythingOfType("services.cachePurgeRetryJobArgs")).
+		Run(func(args mock.Arguments) {
+			enqueueCalled = true
+			enqueueCtxErrAtCallTime = args.Get(0).(context.Context).Err()
+		}).
+		Return(&queue.JobResult{}, nil)
+
+	service.SetCache(purger, cache.NewGenerations(nil), jq)
+
+	deletionSvc, ok := service.(*deletionService)
+	require.True(t, ok, "test relies on calling the unexported method directly")
+	deletionSvc.purgeCacheForDeletedUser(baseCtx, userID, clerkUserID, householdID)
+
+	require.True(t, purgeCalled, "PurgeUser must still be called even with a cancelled caller context")
+	require.True(t, enqueueCalled, "the durable retry must still be enqueued even with a cancelled caller context")
+	assert.Error(t, baseCtx.Err(), "sanity check: baseCtx really is cancelled")
+	assert.NoError(t, purgeCtxErrAtCallTime,
+		"PurgeUser's context must be independent of the cancelled caller context, or a River "+
+			"cancellation landing here would fail the purge for no reason")
+	assert.NoError(t, enqueueCtxErrAtCallTime,
+		"the durable retry enqueue's context must be independent of the cancelled caller context — "+
+			"otherwise the 'durable remedy' the PurgeUser failure comment relies on is on the SAME "+
+			"cancelled context and fails identically, dropping the cache purge with no tombstone set "+
+			"and nothing scheduled (Issue #1531 M1)")
+}
+
+// TestPurgeCacheForDeletedUser_RetryStillEnqueued_WhenPurgeExhaustsSharedDeadline is Issue #1531
+// GA-1's regression test. M1 (above) detached purgeCtx/enqueue's ctx from the CALLER's
+// cancellation, but PurgeUser and enqueueCachePurgeRetry still shared ONE 5s
+// (bumpCacheTimeout) budget: purgeCtx itself. Redis SCAN...MATCH iterates the entire keyspace
+// (COUNT is only a hint), so on a populated cache PurgeUser can legitimately consume the whole
+// budget. Before the fix, enqueueCachePurgeRetry(purgeCtx, ...) then runs on an
+// ALREADY-EXPIRED context — the durable retry is dropped exactly like the cancellation case M1
+// closed, just via deadline exhaustion instead of cancellation.
+//
+// This test makes PurgeUser's mock sleep past bumpCacheTimeout (5s) before returning an error,
+// so that by the time enqueueCachePurgeRetry runs, the shared purgeCtx (pre-fix) is already
+// past its deadline. It asserts the retry is enqueued with a context that is NOT already
+// expired.
+func TestPurgeCacheForDeletedUser_RetryStillEnqueued_WhenPurgeExhaustsSharedDeadline(t *testing.T) {
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+
+	userID := "user-123"
+	clerkUserID := "user_123"
+	householdID := ""
+
+	purger := new(mockDeletionCachePurger)
+	jq := new(mockDeletionJobQueue)
+
+	var enqueueCtxErrAtCallTime error
+	var enqueueCalled bool
+
+	purger.On("PurgeUser", mock.Anything, userID, clerkUserID).
+		Run(func(args mock.Arguments) {
+			// Simulate a SCAN over a populated keyspace consuming the entire 5s budget: sleep
+			// past bumpCacheTimeout so purgeCtx's deadline has already elapsed by the time this
+			// returns.
+			time.Sleep(5*time.Second + 200*time.Millisecond)
+		}).
+		Return(errors.New("redis: connection refused"))
+	jq.On("Enqueue", mock.Anything, mock.AnythingOfType("services.cachePurgeRetryJobArgs")).
+		Run(func(args mock.Arguments) {
+			enqueueCalled = true
+			enqueueCtxErrAtCallTime = args.Get(0).(context.Context).Err()
+		}).
+		Return(&queue.JobResult{}, nil)
+
+	service.SetCache(purger, cache.NewGenerations(nil), jq)
+
+	deletionSvc, ok := service.(*deletionService)
+	require.True(t, ok, "test relies on calling the unexported method directly")
+	deletionSvc.purgeCacheForDeletedUser(context.Background(), userID, clerkUserID, householdID)
+
+	require.True(t, enqueueCalled, "the durable retry must still be enqueued even when PurgeUser consumes the whole shared budget")
+	assert.NoError(t, enqueueCtxErrAtCallTime,
+		"the durable retry enqueue must run on its OWN fresh deadline, not the purge's already-"+
+			"exhausted one — otherwise River's Enqueue fails with context.DeadlineExceeded and the "+
+			"retry is dropped exactly like the cancellation case M1 closed, just via deadline "+
+			"exhaustion instead of cancellation (Issue #1531 GA-1)")
 }

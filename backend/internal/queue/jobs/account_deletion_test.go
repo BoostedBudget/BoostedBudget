@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -65,6 +66,11 @@ func (m *MockDeletionService) SetWorkClaimsRepo(repo repository.WorkClaimsReposi
 
 func (m *MockDeletionService) SetAnalytics(a phclient.Analytics) {
 	m.Called(a)
+}
+
+// SetCache (Issue #1531 Task 10b) is not exercised by these account-deletion job tests; stubbed to
+// satisfy the expanded interface.
+func (m *MockDeletionService) SetCache(purger cache.Purger, gens *cache.Generations, jq queue.JobQueue) {
 }
 
 func newTestAccountDeletionJob(args AccountDeletionArgs) *river.Job[AccountDeletionArgs] {

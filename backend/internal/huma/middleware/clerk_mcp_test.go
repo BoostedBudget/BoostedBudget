@@ -42,7 +42,7 @@ func setupMCPTestServer(
 	mw := humamiddleware.NewClerkMiddleware("sk_test_secret", repo, svc, nil, &humamiddleware.MCPAuthConfig{
 		WorkerSecret: workerSecret,
 		Verifier:     verifier,
-	})
+	}, nil)
 	api.UseMiddleware(mw)
 
 	huma.Register(api, huma.Operation{

@@ -14,6 +14,7 @@ import (
 
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/jackc/pgx/v5"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -265,6 +266,18 @@ type HouseholdService interface {
 	// SetMemberProfileResolver wires optional (nil-safe) Clerk name/avatar enrichment for
 	// ListMembers. #1367 — Phase 3 Round 2 (GT-3).
 	SetMemberProfileResolver(r MemberProfileResolver)
+
+	// SetCacheInvalidation wires cache generation bumping for household writes that affect
+	// users OTHER than the acting HTTP caller: a member removed by the owner, a joiner (and
+	// the rest of the household) on invite acceptance, every member of a disbanded household,
+	// and every member after an owner offboards excess seats. NewCacheInvalidationMiddleware
+	// (Issue #1531 Task 10b-1) only bumps the ACTING user's (and their household's) generation
+	// — it has no way to know a write also touches OTHER users' own cached analytics. This
+	// closes that gap for every HouseholdService write path. gens == nil is a true no-op,
+	// matching every other optional wiring setter in this codebase (SetAnalytics,
+	// SetMemberProfileResolver, transaction_sync_service.go's SetCacheInvalidation). Issue
+	// #1531 Task 10b-2b.
+	SetCacheInvalidation(gens *cache.Generations)
 }
 
 type householdService struct {
@@ -280,6 +293,11 @@ type householdService struct {
 	enc             *appcrypto.FieldEncryptor
 	analytics       phclient.Analytics
 	memberProfiles  MemberProfileResolver
+
+	// cacheGens mints/bumps generation tokens for household writes that affect users OTHER
+	// than the acting HTTP caller (Issue #1531 Task 10b-2b) — nil when cache invalidation is
+	// disabled/not wired; every bump helper below nil-guards on it.
+	cacheGens *cache.Generations
 
 	// acceptInviteAfterOwnerCheckHook is a test-only synchronization seam (see the call site
 	// in AcceptInvite for why it exists). Always nil in production.
@@ -336,6 +354,85 @@ func (s *householdService) capture(userID, event string) {
 // for ListMembers. #1367 — Phase 3 Round 2 (GT-3).
 func (s *householdService) SetMemberProfileResolver(r MemberProfileResolver) {
 	s.memberProfiles = r
+}
+
+// SetCacheInvalidation wires cache generation bumping. See the interface method's doc comment
+// for why this exists and why gens is optional. Issue #1531 Task 10b-2b.
+func (s *householdService) SetCacheInvalidation(gens *cache.Generations) {
+	s.cacheGens = gens
+}
+
+// bumpCacheForUser invalidates a single user's cached analytics. Void by design, matching
+// every other generation bump in this codebase (cache.Generations.Bump itself, the HTTP
+// mutation middleware, transaction_sync_service.go's bumpCacheForSync): a bump failure must
+// never fail an already-committed write, and Bump already logs+counts its own failures.
+//
+// Issue #1531 Final fixes: runs on context.WithoutCancel(ctx) plus a bounded WithTimeout,
+// matching account_service.go's bumpCacheForDispossessedOwner, the HTTP mutation middleware,
+// and the sync services' post-commit bump helpers. RemoveMember/AcceptInvite/ForceDisband/
+// OffboardExcessMembers (and SetAccountShareVisibility, which shares these helpers) all call
+// this AFTER their own write has committed — these are exactly the cross-user paths (Task
+// 10b-2b) where a dropped bump invalidates a *non-actor's* cache, invisibly to the person who
+// triggered the write, so a client disconnect or job cancellation landing in that window must
+// not cancel it. WithoutCancel alone would leave the bump unbounded (it strips the parent's
+// deadline too), hence the explicit WithTimeout. Issue #1531 Task 10b-2b.
+func (s *householdService) bumpCacheForUser(ctx context.Context, userID string) {
+	if s.cacheGens == nil {
+		return
+	}
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+	s.cacheGens.Bump(bumpCtx, cache.ScopeUser, userID, "household_service")
+}
+
+// bumpCacheForUsers invalidates every user in userIDs. Callers pass a member list CAPTURED
+// BEFORE the mutation when the mutation removes members (RemoveMember, OffboardExcessMembers,
+// ForceDisband) — after a removal/disband commits, the membership rows are gone and there is
+// no way to enumerate who to invalidate (mirrors Task 10b-1's identical precedent in the
+// deletion path). Issue #1531 Task 10b-2b.
+func (s *householdService) bumpCacheForUsers(ctx context.Context, userIDs []string) {
+	for _, id := range userIDs {
+		s.bumpCacheForUser(ctx, id)
+	}
+}
+
+// bumpCacheForHousehold invalidates the household-scoped cache. Detaches from ctx the same way
+// bumpCacheForUser does and for the same reason — see that doc comment. Issue #1531 Task 10b-2b.
+func (s *householdService) bumpCacheForHousehold(ctx context.Context, householdID string) {
+	if s.cacheGens == nil {
+		return
+	}
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+	s.cacheGens.Bump(bumpCtx, cache.ScopeHousehold, householdID, "household_service")
+}
+
+// bumpCacheForCurrentMembers re-lists householdID's currently-active members (via
+// s.householdRepo — the plain, POOL-bound field, NEVER a tx-scoped instance; always called
+// AFTER the caller's own transaction has committed) and bumps every one of them. A true no-op
+// when cacheGens is nil — this guard runs FIRST, before the extra ListMembers round-trip, so
+// cache-disabled callers never pay for (or risk logging spurious errors from) a query whose
+// result would only be discarded. A lookup failure is logged and swallowed, never propagated:
+// the caller's write already committed.
+//
+// Issue #1531 Final fixes: the ListMembers lookup itself, not just the resulting bumps, runs on
+// a detached context.WithoutCancel(ctx) + WithTimeout — otherwise a cancelled caller ctx fails
+// the lookup FIRST, before bumpCacheForUsers/bumpCacheForUser get a chance to detach anything,
+// and the bumps never happen at all. Issue #1531 Task 10b-2b.
+func (s *householdService) bumpCacheForCurrentMembers(ctx context.Context, householdID string) {
+	if s.cacheGens == nil {
+		return
+	}
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+	members, err := s.householdRepo.ListMembers(bumpCtx, householdID)
+	if err != nil {
+		slog.Default().Error("cache invalidation: post-write member list lookup failed; "+
+			"some members' household-scoped cache may serve stale data until TTL",
+			"household_id", householdID, "error", err)
+		return
+	}
+	s.bumpCacheForUsers(bumpCtx, memberUserIDs(members))
 }
 
 // ─── Household CRUD ───────────────────────────────────────────────────────────
@@ -591,10 +688,33 @@ func (s *householdService) RemoveMember(ctx context.Context, actorUserID, target
 	} else {
 		s.capture(actorUserID, phclient.EventHouseholdMemberRemoved)
 	}
+	// Issue #1531 Task 10b-2b: bump the household scope, the actor, the just-removed target,
+	// and every remaining member. Deliberately queried via s.householdRepo — the plain,
+	// POOL-bound field, never the tx-scoped hhRepo local above — and only AFTER commit: this
+	// keeps the read out of the transaction entirely (no new query for pgxmock/tx-based tests
+	// to expect on the success path, and none at all on the auth-failure paths above, which
+	// return before ever reaching this point). A post-commit ListMembers naturally excludes
+	// targetUserID (already status='removed' by the just-committed write), so it is bumped
+	// explicitly alongside actorUserID; both are harmless, cheap no-ops even when actorUserID
+	// == targetUserID (self-leave) or when either is already present in the remaining list.
+	s.bumpCacheForHousehold(ctx, household.ID)
+	s.bumpCacheForUser(ctx, actorUserID)
+	s.bumpCacheForUser(ctx, targetUserID)
+	s.bumpCacheForCurrentMembers(ctx, household.ID)
 	if email != nil {
 		s.sendRemovalEmails(ctx, []QueuedRemovalEmail{*email})
 	}
 	return nil
+}
+
+// memberUserIDs projects a []domain.HouseholdMember to its UserID column, for cache-bump
+// helpers that only need the ID list. Issue #1531 Task 10b-2b.
+func memberUserIDs(members []domain.HouseholdMember) []string {
+	ids := make([]string, len(members))
+	for i, m := range members {
+		ids[i] = m.UserID
+	}
+	return ids
 }
 
 // removeMemberTx contains the actual soft-remove + expire-entitlement + revoke-shares
@@ -837,6 +957,15 @@ func (s *householdService) OffboardExcessMembers(ctx context.Context, householdI
 	for range queued {
 		s.capture(household.OwnerUserID, phclient.EventHouseholdMemberAutoOffboarded)
 	}
+	// Issue #1531 Task 10b-2b: bump every member captured BEFORE the LIFO removal loop above
+	// (owner + every non-owner, including whoever just got offboarded) plus the household
+	// scope itself. This runs unconditionally (even when queued is empty, i.e. this call was
+	// a no-op) — bumpCacheForUsers/bumpCacheForHousehold are cheap no-ops when cacheGens is
+	// nil, and bumping a household that had nothing removed is harmless. This closes the gap
+	// left by the job-level bump in queue/jobs/household_over_capacity_check.go, which only
+	// bumps ScopeHousehold — never the individually offboarded members' own ScopeUser.
+	s.bumpCacheForHousehold(ctx, household.ID)
+	s.bumpCacheForUsers(ctx, memberUserIDs(members))
 	s.sendRemovalEmails(ctx, queued)
 	return queued, nil
 }
@@ -966,6 +1095,14 @@ func (s *householdService) ForceDisband(ctx context.Context, ownerUserID string)
 		return nil, cerr
 	}
 	s.capture(ownerUserID, phclient.EventHouseholdForceDisbanded)
+	// Issue #1531 Task 10b-2b: bump EVERY member of the just-disbanded household — owner
+	// included, since the household row (and their entitlement) is gone too — captured from
+	// `members` (fetched before the removal loop above; the household_members rows are gone
+	// now that the transaction committed). Household scope is bumped too, even though the row
+	// itself is deleted, purely for hygiene/consistency with every other mutation path; it is
+	// a cheap no-op either way.
+	s.bumpCacheForHousehold(ctx, household.ID)
+	s.bumpCacheForUsers(ctx, memberUserIDs(members))
 	// Round 4 Gap Analysis fix: the household row (and its cascaded household_members
 	// rows) is already gone by this point — mark every queued email as disbanded so
 	// sendRemovalEmails sends the corrected copy (no future-cleanup reference) instead of
@@ -1381,6 +1518,20 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	}
 
 	s.capture(callerUserID, phclient.EventHouseholdInviteAccepted)
+	// Issue #1531 Task 10b-2b: bump the joiner, the owner, the household, and every existing
+	// member — the joiner's own household context just appeared, and every existing member's
+	// household-scoped analytics (e.g. combined spending) now include the new joiner's data.
+	// Queried via s.householdRepo (the plain, POOL-bound field, never the tx-scoped hhRepo
+	// local above) and only AFTER commit — read-your-writes still holds (this is a separate
+	// connection reading already-committed data), and keeping this out of the transaction
+	// means no new query for any validation-failure path above (which all return before
+	// reaching this point) to unexpectedly trip on. callerUserID/ownerUserID are also bumped
+	// explicitly in case either is ever absent from the list (e.g. a future read-model
+	// change) — a redundant bump is harmless, a missed one is not.
+	s.bumpCacheForHousehold(ctx, inv.HouseholdID)
+	s.bumpCacheForUser(ctx, callerUserID)
+	s.bumpCacheForUser(ctx, ownerUserID)
+	s.bumpCacheForCurrentMembers(ctx, inv.HouseholdID)
 	return &HouseholdAcceptResult{
 		Member:    *member,
 		Household: domain.Household{ID: inv.HouseholdID, OwnerUserID: ownerUserID},

@@ -37,8 +37,9 @@ const (
 	// GateStatusBypassEnv means the request skipped CloudflareOnly entirely because
 	// bypassEnvironments[env] is true (development/local/test/qa).
 	GateStatusBypassEnv
-	// GateStatusExemptPath means the request hit an exemptedPaths route (/health,
-	// /metrics) and skipped CloudflareOnly's IP/secret checks. Unlike
+	// GateStatusExemptPath means the request hit an exemptedPaths route (/health and
+	// /health/ — /metrics was removed from exemptedPaths in #1531; see that map's own
+	// doc comment for why) and skipped CloudflareOnly's IP/secret checks. Unlike
 	// GateStatusPassed, no header on this request has been validated.
 	GateStatusExemptPath
 	// GateStatusPassed means the request's immediate peer was verified to be in
@@ -64,13 +65,28 @@ func GateStatusFrom(c echo.Context) GateStatus {
 	return s
 }
 
-// exemptedPaths bypass CloudflareOnly checks. Includes trailing-slash variants
-// because some health checkers and monitoring probes append a trailing slash.
+// exemptedPaths bypass BOTH CloudflareOnly's origin checks and (see IPRateLimiter in
+// rate_limit.go) the rate limiter's primary backend. It is a single shared list, read only
+// through isExemptPath, so the two call sites cannot drift apart — issue #1531 asked for this
+// explicitly. Includes trailing-slash variants because some health checkers and monitoring probes
+// append a trailing slash.
+//
+// ⚠ /metrics and /metrics/ are deliberately NOT here (they were before #1531). Since #1514,
+// /metrics is served only on the internal listener (cmd/server/internal_metrics.go) and is not
+// registered on the public Echo instance at all — leaving it "exempt" here would be a latent
+// fail-open trap if anyone ever re-registers that route publicly: it would bypass both the
+// Cloudflare gate and (transitively) the primary rate-limit backend with no code change to this
+// file at all.
 var exemptedPaths = map[string]bool{
-	"/health":   true,
-	"/health/":  true,
-	"/metrics":  true,
-	"/metrics/": true,
+	"/health":  true,
+	"/health/": true,
+}
+
+// isExemptPath reports whether path bypasses CloudflareOnly's origin checks and the rate
+// limiter's primary backend. See the exemptedPaths doc comment for why this is the one place both
+// callers read from.
+func isExemptPath(path string) bool {
+	return exemptedPaths[path]
 }
 
 // bypassEnvironments skip Cloudflare checks (development/local/test/qa).
@@ -122,7 +138,9 @@ func StartCIDRRefresherFrom(ctx context.Context, interval time.Duration, ref *at
 
 // CloudflareOnly enforces dual-layer protection: (1) Fly-Client-IP must be in Cloudflare ranges,
 // (2) X-Origin-Secret header must match originSecret (constant-time).
-// Bypassed in development/local/test and for /health, /metrics paths.
+// Bypassed in development/local/test/qa environments (see bypassEnvironments) and for /health,
+// /health/ paths (see exemptedPaths). /metrics was removed from exemptedPaths in #1531 — see that
+// var's doc comment for why.
 func CloudflareOnly(ref *atomic.Pointer[[]netip.Prefix], originSecret string, env string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -132,8 +150,8 @@ func CloudflareOnly(ref *atomic.Pointer[[]netip.Prefix], originSecret string, en
 				return next(c)
 			}
 
-			// Bypass exempted paths (/health, /metrics).
-			if exemptedPaths[c.Request().URL.Path] {
+			// Bypass exempted paths (/health).
+			if isExemptPath(c.Request().URL.Path) {
 				SetGateStatus(c, GateStatusExemptPath)
 				return next(c)
 			}
