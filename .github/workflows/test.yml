@@ -245,10 +245,14 @@ jobs:
       # shape as backend-integration-test's Postgres and Redis containers.
       - name: Start Redis containers for E2E cache verification (dynamic ports)
         run: |
-          docker ps -aq --filter "name=test-e2e-cache-redis-${{ github.run_id }}-" \
-            | xargs -r docker rm -f 2>/dev/null || true
-          docker ps -aq --filter "name=test-e2e-ratelimit-redis-${{ github.run_id }}-" \
-            | xargs -r docker rm -f 2>/dev/null || true
+          cache_orphans=$(docker ps -aq --filter "name=test-e2e-cache-redis-${{ github.run_id }}-" 2>/dev/null || true)
+          if [ -n "$cache_orphans" ]; then
+            while IFS= read -r container; do [ -z "$container" ] || docker rm -f "$container" 2>/dev/null || true; done <<< "$cache_orphans"
+          fi
+          ratelimit_orphans=$(docker ps -aq --filter "name=test-e2e-ratelimit-redis-${{ github.run_id }}-" 2>/dev/null || true)
+          if [ -n "$ratelimit_orphans" ]; then
+            while IFS= read -r container; do [ -z "$container" ] || docker rm -f "$container" 2>/dev/null || true; done <<< "$ratelimit_orphans"
+          fi
           docker rm -f ${{ env.E2E_CACHE_REDIS_CONTAINER }} 2>/dev/null || true
           docker rm -f ${{ env.E2E_RATELIMIT_REDIS_CONTAINER }} 2>/dev/null || true
 
@@ -517,8 +521,31 @@ jobs:
       - name: Cleanup E2E Redis containers
         if: always()
         run: |
-          docker rm -f ${{ env.E2E_CACHE_REDIS_CONTAINER }} 2>/dev/null || true
-          docker rm -f ${{ env.E2E_RATELIMIT_REDIS_CONTAINER }} 2>/dev/null || true
+          cleanup_status=0
+          cleanup_container() {
+            local name="$1"
+            local existing
+            existing=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null || true)
+            [ -n "$existing" ] || return 0
+            for attempt in 1 2; do
+              if docker rm -f "$name" >/dev/null 2>&1; then
+                break
+              fi
+              if [ "$attempt" -eq 2 ]; then
+                echo "::error::Failed to remove E2E Redis container $name"
+                return 1
+              fi
+              sleep 1
+            done
+            remaining=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null || true)
+            if [ -n "$remaining" ]; then
+              echo "::error::E2E Redis container still exists after cleanup: $name"
+              return 1
+            fi
+          }
+          cleanup_container "${{ env.E2E_CACHE_REDIS_CONTAINER }}" || cleanup_status=1
+          cleanup_container "${{ env.E2E_RATELIMIT_REDIS_CONTAINER }}" || cleanup_status=1
+          if [ "$cleanup_status" -ne 0 ]; then exit 1; fi
 
       - name: Final workspace cleanup
         if: always()
@@ -1193,8 +1220,10 @@ jobs:
           # The container name is unique per run_id+run_attempt, so a hard-killed prior
           # attempt leaves its container behind with a different suffix. Filter by run_id
           # prefix so we never touch a concurrent other-PR container.
-          docker ps -aq --filter "name=test-postgres-integ-${{ github.run_id }}-" \
-            | xargs -r docker rm -f 2>/dev/null || true
+          postgres_orphans=$(docker ps -aq --filter "name=test-postgres-integ-${{ github.run_id }}-" 2>/dev/null || true)
+          if [ -n "$postgres_orphans" ]; then
+            while IFS= read -r container; do [ -z "$container" ] || docker rm -f "$container" 2>/dev/null || true; done <<< "$postgres_orphans"
+          fi
           # Also reap the exact name in case a prior step already set the container.
           docker rm -f ${{ env.PG_CONTAINER }} 2>/dev/null || true
 
@@ -1249,10 +1278,14 @@ jobs:
           # same reap-orphans / dynamic-host-port / health-wait shape, same rationale.
           # Two independent containers (see the CACHE_REDIS_CONTAINER / RATELIMIT_REDIS_CONTAINER
           # env comment above for why two, not one).
-          docker ps -aq --filter "name=test-redis-cache-integ-${{ github.run_id }}-" \
-            | xargs -r docker rm -f 2>/dev/null || true
-          docker ps -aq --filter "name=test-redis-ratelimit-integ-${{ github.run_id }}-" \
-            | xargs -r docker rm -f 2>/dev/null || true
+          cache_orphans=$(docker ps -aq --filter "name=test-redis-cache-integ-${{ github.run_id }}-" 2>/dev/null || true)
+          if [ -n "$cache_orphans" ]; then
+            while IFS= read -r container; do [ -z "$container" ] || docker rm -f "$container" 2>/dev/null || true; done <<< "$cache_orphans"
+          fi
+          ratelimit_orphans=$(docker ps -aq --filter "name=test-redis-ratelimit-integ-${{ github.run_id }}-" 2>/dev/null || true)
+          if [ -n "$ratelimit_orphans" ]; then
+            while IFS= read -r container; do [ -z "$container" ] || docker rm -f "$container" 2>/dev/null || true; done <<< "$ratelimit_orphans"
+          fi
           docker rm -f ${{ env.CACHE_REDIS_CONTAINER }} 2>/dev/null || true
           docker rm -f ${{ env.RATELIMIT_REDIS_CONTAINER }} 2>/dev/null || true
 
@@ -1430,13 +1463,45 @@ jobs:
 
       - name: Cleanup PostgreSQL container
         if: always()
-        run: docker rm -f ${{ env.PG_CONTAINER }} 2>/dev/null || true
+        run: |
+          cleanup_status=0
+          existing=$(docker ps -aq --filter "name=^${{ env.PG_CONTAINER }}$" 2>/dev/null || true)
+          if [ -z "$existing" ]; then exit 0; fi
+          for attempt in 1 2; do
+            if docker rm -f "${{ env.PG_CONTAINER }}" >/dev/null 2>&1; then break; fi
+            if [ "$attempt" -eq 2 ]; then cleanup_status=1; fi
+            [ "$attempt" -eq 2 ] || sleep 1
+          done
+          remaining=$(docker ps -aq --filter "name=^${{ env.PG_CONTAINER }}$" 2>/dev/null || true)
+          if [ -n "$remaining" ]; then cleanup_status=1; fi
+          if [ "$cleanup_status" -ne 0 ]; then
+            echo "::error::PostgreSQL container cleanup failed or container remains: ${{ env.PG_CONTAINER }}"
+            exit 1
+          fi
 
       - name: Cleanup Redis containers
         if: always()
         run: |
-          docker rm -f ${{ env.CACHE_REDIS_CONTAINER }} 2>/dev/null || true
-          docker rm -f ${{ env.RATELIMIT_REDIS_CONTAINER }} 2>/dev/null || true
+          cleanup_status=0
+          cleanup_container() {
+            local name="$1"
+            local existing
+            existing=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null || true)
+            [ -n "$existing" ] || return 0
+            for attempt in 1 2; do
+              if docker rm -f "$name" >/dev/null 2>&1; then break; fi
+              if [ "$attempt" -eq 2 ]; then return 1; fi
+              sleep 1
+            done
+            remaining=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null || true)
+            [ -z "$remaining" ] || return 1
+          }
+          cleanup_container "${{ env.CACHE_REDIS_CONTAINER }}" || cleanup_status=1
+          cleanup_container "${{ env.RATELIMIT_REDIS_CONTAINER }}" || cleanup_status=1
+          if [ "$cleanup_status" -ne 0 ]; then
+            echo "::error::One or more integration Redis containers could not be de-provisioned"
+            exit 1
+          fi
 
       - name: Final workspace cleanup
         if: always()

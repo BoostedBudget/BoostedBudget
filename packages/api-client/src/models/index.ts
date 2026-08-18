@@ -168,6 +168,8 @@ export * from './getFinancialSummaryParams';
 export * from './getFinancialSummaryScope';
 export * from './getHealth200';
 export * from './getHealth200Status';
+export * from './getHealth503';
+export * from './getHealth503Status';
 export * from './getHoldingsOutputBody';
 export * from './getHoldingsParams';
 export * from './getIncomeSourceBreakdownParams';

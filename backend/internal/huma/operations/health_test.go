@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	"github.com/maxnussbaum/BoostedBudget/internal/health"
+	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 )
 
 // newProductionAPI builds a Huma API the same way cmd/server/main.go:324 does:
@@ -87,6 +87,7 @@ func TestGetHealth_Returns503WhenACriticalCheckFails(t *testing.T) {
 	resp := api.Get("/health")
 
 	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
+	assert.JSONEq(t, `{"status":"unavailable"}`, resp.Body.String())
 }
 
 // realisticDependencyErrors are actual-shaped error strings pgx, go-redis, and
@@ -209,24 +210,9 @@ func TestGetHealth_ResponseBodyHasExactlyOneFieldNamedStatus_ProductionConfig(t 
 		"production response must not carry a describedBy Link header either")
 }
 
-// TestGetHealth_503BodyShapeUnderProductionConfig pins the 503 body's field SHAPE, not just its
-// content, under the real production Huma config (#1531 L1's gap, applied to the 503 path: see
-// TestGetHealth_BodyNeverContainsCheckErrorText's "/503 path" subtest, which checks content but
-// previously ran under humatest.New(t)'s bare config).
-//
-// ⚠ FOUND BY THIS SLICE, NOT FIXED HERE (scope): unlike the 200 body (HealthStatusResponse, which
-// has its own Schema() override specifically to defeat SchemaLinkTransformer -- see that type's
-// doc comment), huma.Error503ServiceUnavailable returns Huma's generic, un-overridden ErrorModel.
-// Under the real production config this DOES pick up a `$schema` field and a `Link:
-// .../schemas/ErrorModel.json; rel="describedBy"` header -- confirmed by running this exact test
-// against the current code before writing the assertions below. That is a real gap in the same
-// class L1 closed on the 200 path (a frameworkfingerprinting field on an unauthenticated,
-// internet-reachable endpoint), but it is NOT specific to /health: huma.Error503ServiceUnavailable
-// (and the sibling Error4xx/5xx helpers) are used by every erroring operation in this API, so
-// fixing it here would mean either overriding Huma's global ErrorModel schema (a blast radius far
-// outside this slice's scope) or giving /health its own bespoke error body type (a bigger, separate
-// change). This test therefore pins the CURRENT shape as a known, tracked gap rather than silently
-// asserting it away — see the field list below and file a follow-up issue for the fix.
+// TestGetHealth_503BodyShapeUnderProductionConfig pins the 503 body's field shape under the real
+// production Huma config. The public health endpoint has its own response contract even though
+// other operations continue to use Huma's global ErrorModel.
 func TestGetHealth_503BodyShapeUnderProductionConfig(t *testing.T) {
 	e, api := newProductionAPI()
 	handler := NewHealthHandler(slog.Default(), health.Registry{DB: failingCheck(errors.New("boom"))})
@@ -238,26 +224,9 @@ func TestGetHealth_503BodyShapeUnderProductionConfig(t *testing.T) {
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &m))
 
-	gotFields := make([]string, 0, len(m))
-	for k := range m {
-		gotFields = append(gotFields, k)
-	}
-	assert.ElementsMatch(t, []string{"title", "status", "detail", "$schema"}, gotFields,
-		"503 body's field shape has changed under the real production config -- if this now has "+
-			"FEWER fields (no more $schema), TestGetHealth_503BodyShapeUnderProductionConfig's "+
-			"known-gap comment above is stale and should be updated/removed; if it has MORE "+
-			"fields, that is a new leak and must not be accepted silently. got %v", m)
-	assert.Equal(t, "Service Unavailable", m["title"])
-	assert.Equal(t, float64(http.StatusServiceUnavailable), m["status"])
-	assert.Equal(t, "service unavailable", m["detail"],
-		"the underlying dependency error text must never reach this field -- only the fixed, "+
-			"generic string GetHealth passes to huma.Error503ServiceUnavailable")
-	assert.NotContains(t, m["detail"], "boom", "the injected dependency error text leaked into detail")
-
-	link := resp.Header().Get("Link")
-	assert.NotEmpty(t, link,
-		"expected the known describedBy Link header (see this test's doc comment); if this is "+
-			"now empty, the known gap has been fixed and the comment above should be updated")
+	assert.Equal(t, map[string]any{"status": "unavailable"}, m)
+	assert.Empty(t, resp.Header().Get("Link"),
+		"the public health response must not carry a describedBy Link header")
 }
 
 func TestGetHealth_DoesNotIncludeVersion(t *testing.T) {
@@ -353,6 +322,29 @@ func TestHealthOperation_Declares503InTheOpenApiSpec(t *testing.T) {
 	op := api.OpenAPI().Paths["/health"].Get
 	require.NotNil(t, op)
 	require.NotNil(t, op.Responses)
-	_, ok := op.Responses["503"]
-	assert.True(t, ok, "the OpenAPI spec must declare a 503 response for /health")
+	response, ok := op.Responses["503"]
+	require.True(t, ok, "the OpenAPI spec must declare a 503 response for /health")
+	require.NotNil(t, response)
+	require.NotNil(t, response.Content)
+
+	jsonResponse, ok := response.Content["application/json"]
+	require.True(t, ok, "the /health 503 response must use application/json")
+	require.NotNil(t, jsonResponse.Schema)
+	assert.Empty(t, jsonResponse.Schema.Ref, "the /health 503 schema must be inline")
+	assert.Equal(t, huma.TypeObject, jsonResponse.Schema.Type)
+	assert.Equal(t, false, jsonResponse.Schema.AdditionalProperties,
+		"the public /health 503 schema must reject undocumented fields")
+	assert.Equal(t, []string{"status"}, jsonResponse.Schema.Required)
+	statusSchema := jsonResponse.Schema.Properties["status"]
+	require.NotNil(t, statusSchema)
+	assert.Equal(t, []any{"unavailable"}, statusSchema.Enum)
+	assert.NotContains(t, response.Content, "application/problem+json")
+
+	internalServerError, ok := op.Responses["500"]
+	require.True(t, ok, "the OpenAPI spec must preserve a generic 500 response for /health")
+	require.NotNil(t, internalServerError)
+	problemJSON, ok := internalServerError.Content["application/problem+json"]
+	require.True(t, ok, "the generic /health 500 response must use application/problem+json")
+	require.NotNil(t, problemJSON.Schema)
+	assert.Equal(t, "#/components/schemas/ErrorModel", problemJSON.Schema.Ref)
 }

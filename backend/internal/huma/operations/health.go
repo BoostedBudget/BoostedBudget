@@ -25,6 +25,31 @@ type HealthStatusResponse struct {
 	Status string `json:"status" enum:"ok" doc:"Liveness indicator. Always \"ok\" when the response is 200."`
 }
 
+const (
+	healthStatusOK          = "ok"
+	healthStatusUnavailable = "unavailable"
+)
+
+func healthStatusSchema(status string) *huma.Schema {
+	description := `Liveness indicator. Always "ok" when the response is 200.`
+	if status == healthStatusUnavailable {
+		description = `Liveness indicator. "unavailable" when a critical dependency is unhealthy.`
+	}
+
+	return &huma.Schema{
+		Type:                 huma.TypeObject,
+		AdditionalProperties: false,
+		Properties: map[string]*huma.Schema{
+			"status": {
+				Type:        huma.TypeString,
+				Enum:        []any{status},
+				Description: description,
+			},
+		},
+		Required: []string{"status"},
+	}
+}
+
 // Schema implements huma.SchemaProvider so HealthStatusResponse is described
 // inline in the OpenAPI response, never registered under
 // #/components/schemas. That matters beyond OpenAPI aesthetics: Huma's
@@ -40,22 +65,15 @@ type HealthStatusResponse struct {
 // bare config has no transformer, so tests built on it can't see this; use
 // the production-config harness in health_test.go to verify.
 func (HealthStatusResponse) Schema(_ huma.Registry) *huma.Schema {
-	return &huma.Schema{
-		Type: huma.TypeObject,
-		Properties: map[string]*huma.Schema{
-			"status": {
-				Type:        huma.TypeString,
-				Enum:        []any{"ok"},
-				Description: `Liveness indicator. Always "ok" when the response is 200.`,
-			},
-		},
-		Required: []string{"status"},
-	}
+	return healthStatusSchema(healthStatusOK)
 }
 
 // HealthOutput represents the health check response.
 type HealthOutput struct {
-	Body HealthStatusResponse
+	// Status is interpreted by Huma as the HTTP response status and is not
+	// serialized into the response body.
+	Status int
+	Body   HealthStatusResponse
 }
 
 // HealthHandler handles health check requests.
@@ -100,15 +118,14 @@ func (h *HealthHandler) GetHealth(ctx context.Context, input *HealthInput) (*Hea
 		result := h.registry.DB(ctx)
 		if !result.Healthy() {
 			h.logger.ErrorContext(ctx, "critical health check failed", "error", result.Err)
-			// Never pass err (or anything derived from it) as a variadic here:
-			// huma.Error503ServiceUnavailable appends its variadic args into the
-			// response's `errors` array, which would reintroduce the exact leak
-			// this handler exists to close. The detail is already logged above.
-			return nil, huma.Error503ServiceUnavailable("service unavailable")
+			return &HealthOutput{
+				Status: http.StatusServiceUnavailable,
+				Body:   HealthStatusResponse{Status: healthStatusUnavailable},
+			}, nil
 		}
 	}
 
-	return &HealthOutput{Body: HealthStatusResponse{Status: "ok"}}, nil
+	return &HealthOutput{Status: http.StatusOK, Body: HealthStatusResponse{Status: healthStatusOK}}, nil
 }
 
 // RegisterHealthRoutes registers health check routes with the Huma API.
@@ -120,6 +137,16 @@ func RegisterHealthRoutes(api huma.API, handler *HealthHandler) {
 		Summary:     "Health check",
 		Description: "Liveness check. Returns 200 with {\"status\":\"ok\"} when critical dependencies are healthy, 503 otherwise. Carries no version, timing, or dependency detail.",
 		Tags:        []string{"Health"},
-		Errors:      []int{http.StatusServiceUnavailable},
+		Responses: map[string]*huma.Response{
+			"503": {
+				Description: http.StatusText(http.StatusServiceUnavailable),
+				Content: map[string]*huma.MediaType{
+					"application/json": {
+						Schema: healthStatusSchema(healthStatusUnavailable),
+					},
+				},
+			},
+		},
+		Errors: []int{http.StatusInternalServerError},
 	}, handler.GetHealth)
 }
