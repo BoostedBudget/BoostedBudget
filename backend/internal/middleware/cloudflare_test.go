@@ -213,11 +213,19 @@ func TestCloudflareOnly_HealthCheckBypassed(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 }
 
-func TestCloudflareOnly_MetricsBypassed(t *testing.T) {
+// TestCloudflareOnly_MetricsIsNoLongerBypassed pins the #1531 behaviour change: /metrics used to
+// be exempt from CloudflareOnly, but since #1514 it is served only on the internal listener
+// (cmd/server/internal_metrics.go) and is never registered on this public Echo instance at all.
+// Leaving it "exempt" here would have been a latent fail-open trap if anyone ever re-registered
+// that route publicly — it would have bypassed the Cloudflare gate with no code change to this
+// file. This test (and its trailing-slash sibling below) replaces
+// TestCloudflareOnly_MetricsBypassed / TestCloudflareOnly_MetricsTrailingSlashBypassed, which
+// asserted the OLD (now-removed) exemption and would otherwise fail against the new behaviour.
+func TestCloudflareOnly_MetricsIsNoLongerBypassed(t *testing.T) {
 	e := setupCloudflareEcho(testCIDRs, testSecret, "staging")
-	// /metrics must be accessible without CF headers (Fly.io metrics scraper).
+	// /metrics must now be rejected without valid CF headers, exactly like any other path.
 	code := doRequest(e, "/metrics", nil)
-	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, http.StatusForbidden, code)
 }
 
 // ---------------------------------------------------------------------------
@@ -381,10 +389,12 @@ func TestCloudflareOnly_HealthCheckTrailingSlashBypassed(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 }
 
-func TestCloudflareOnly_MetricsTrailingSlashBypassed(t *testing.T) {
+// TestCloudflareOnly_MetricsTrailingSlashIsNoLongerBypassed is the trailing-slash sibling of
+// TestCloudflareOnly_MetricsIsNoLongerBypassed above — see that test's comment for why.
+func TestCloudflareOnly_MetricsTrailingSlashIsNoLongerBypassed(t *testing.T) {
 	e := setupCloudflareEcho(testCIDRs, testSecret, "staging")
 	code := doRequest(e, "/metrics/", nil)
-	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, http.StatusForbidden, code)
 }
 
 // ---------------------------------------------------------------------------

@@ -30,13 +30,13 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { ServiceCheck } from './serviceCheck';
 
-export interface HealthChecks {
-  /** Clerk authentication service status */
-  clerk: ServiceCheck;
-  /** Database connection status */
-  database: ServiceCheck;
-  /** Redis cache status */
-  redis: ServiceCheck;
-}
+/**
+ * Liveness indicator. "unavailable" when a critical dependency is unhealthy.
+ */
+export type GetHealth503Status = typeof GetHealth503Status[keyof typeof GetHealth503Status];
+
+
+export const GetHealth503Status = {
+  unavailable: 'unavailable',
+} as const;

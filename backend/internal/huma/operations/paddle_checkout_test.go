@@ -155,8 +155,8 @@ func (m *mockProfileRepo) RecordDeletionResidue(ctx context.Context, userID stri
 	return args.Error(0)
 }
 
-func (m *mockProfileRepo) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
-	return true, nil
+func (m *mockProfileRepo) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, []string, error) {
+	return true, nil, nil
 }
 
 // CountUncleanedLinkedItems — Issue #1494. Only DeletionService's Plaid-less branch calls this;

@@ -2,11 +2,16 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/health"
+	"github.com/maxnussbaum/BoostedBudget/internal/redisclient"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -68,6 +73,49 @@ type systemHealthService struct {
 	// #1514 requirement #5). Optional/nil-safe: an unwired repo reports "unavailable", never a
 	// confident zero — same convention as plaidOrphanRepo above.
 	invalidWebhookAttemptRepo InvalidWebhookAttemptStatsReader
+	// healthChecks holds the SHARED memoized Clerk/Redis Check instances (Issue #1531 Task 7d) —
+	// the same instances cmd/server hands to the public /health handler, so an admin page load
+	// reuses whatever the liveness probe already paid for instead of re-probing. Zero value
+	// (both Checks nil) reports "not_configured" for both, matching every other optional
+	// collaborator in this service.
+	healthChecks SharedHealthChecks
+	// cacheStatus backs SystemHealthResponse.CacheEnabled (Issue #1531 Task 11e). Optional/nil-safe:
+	// an unwired cacheStatus reports "disabled" — see CacheStatusReader's doc comment for why that
+	// is not ambiguous the way the other optional collaborators' Available flags are.
+	cacheStatus CacheStatusReader
+}
+
+// CacheStatusReader is the ONE verb the health derivation needs from cache.Cache — matches the
+// narrow-interface convention this file already uses for PlaidOrphanedItemLister and
+// InvalidWebhookAttemptStatsReader. Issue #1531 Task 11e: added so the E2E cache-parity/fail-safe
+// suite can assert against a live signal that caching is actually active before running, rather
+// than trusting cfg.CacheEnabled alone — cache.Cache.Enabled already folds in the hard-disabled
+// constant, the Redis control key, the env-disabled list, and the compiled default (see
+// cache.Control's doc comment), and a disabled/unwired cache's Enabled always returns false (see
+// cache.NewNoopCache), so there is no separate "unavailable" state to track here.
+type CacheStatusReader interface {
+	Enabled(ns cache.Namespace) bool
+}
+
+// SharedHealthChecks bundles the memoized health.Check instances (internal/health) that
+// SystemHealthService reuses rather than re-probing, plus an optional way to read the limiter
+// Redis client's local pool stats for the /admin/health Redis detail. See internal/health's
+// package doc comment for why sharing one Check instance across consumers matters most during an
+// outage — an admin page load must not fire a second Redis PING (or Clerk call) that the public
+// liveness probe already paid for a moment earlier.
+type SharedHealthChecks struct {
+	// Clerk is the same Check the public /health handler's registry.Clerk holds (though that
+	// handler never calls it — see operations.HealthHandler's doc comment). Nil means Clerk is
+	// not configured for this deployment.
+	Clerk health.Check
+	// Redis is the same Check the public /health handler's registry.Redis holds (also never
+	// called there). Nil means no Redis client is wired for this deployment.
+	Redis health.Check
+	// RedisPoolStats optionally reports the limiter Redis client's local connection-pool state.
+	// Nil when no Redis client is wired — checkRedis skips populating RedisHealth.PoolStats
+	// entirely rather than reporting a zero-valued snapshot that would look like an idle-but-live
+	// pool.
+	RedisPoolStats func() redisclient.PoolStats
 }
 
 // PlaidOrphanedItemLister is the ONE verb the health derivation needs from
@@ -99,6 +147,8 @@ func NewSystemHealthService(
 	jobHealthRepo repository.JobHealthRepository,
 	plaidOrphanRepo PlaidOrphanedItemLister,
 	invalidWebhookAttemptRepo InvalidWebhookAttemptStatsReader,
+	healthChecks SharedHealthChecks,
+	cacheStatus CacheStatusReader,
 ) SystemHealthService {
 	return &systemHealthService{
 		healthRepo:                healthRepo,
@@ -108,6 +158,8 @@ func NewSystemHealthService(
 		jobHealthRepo:             jobHealthRepo,
 		plaidOrphanRepo:           plaidOrphanRepo,
 		invalidWebhookAttemptRepo: invalidWebhookAttemptRepo,
+		healthChecks:              healthChecks,
+		cacheStatus:               cacheStatus,
 	}
 }
 
@@ -123,6 +175,11 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		Database: s.checkDatabase(ctx),
 		Clerk:    s.checkClerk(ctx),
 		Plaid:    s.checkPlaid(ctx),
+		// Redis IS consulted by calculateOverallStatus below (Issue #1531 criterion 12: Redis
+		// down must surface as "degraded") — but only as far as "degraded", never "unhealthy".
+		// See domain.ServiceHealthStatuses.Redis's doc comment and calculateOverallStatus's own
+		// comment for the boundary that must never move.
+		Redis: s.checkRedis(ctx),
 	}
 
 	// Get queue metrics for all queues
@@ -217,10 +274,29 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		response.RejectedWebhookAttempts24h = rejectedWebhookMetrics
 	}
 
-	// Calculate overall status
+	// Cache status (Issue #1531 Task 11e) — deliberately NOT fed into calculateOverallStatus below,
+	// matching every gauge above added after the original health check set: whether a disabled
+	// cache should degrade overall health is a product decision this task never asked for, only
+	// making it VISIBLE (so the E2E guard can gate on it) is in scope.
+	response.CacheEnabled = s.checkCacheEnabled()
+
+	// Calculate overall status. Redis and Clerk detail above is deliberately gathered before
+	// this call so calculateOverallStatus can read Services.Redis/Services.Clerk directly — see
+	// that function's doc comment for the "degraded, never unhealthy" rule Issue #1531 criterion
+	// 12 requires for both.
 	response.Status = s.calculateOverallStatus(response)
 
 	return response, nil
+}
+
+// checkCacheEnabled reports whether the analytics-namespace cache is currently active, or false
+// when no CacheStatusReader is wired. See CacheStatusReader's doc comment for why nil and
+// "wired but disabled" are the same reportable state here.
+func (s *systemHealthService) checkCacheEnabled() bool {
+	if s.cacheStatus == nil {
+		return false
+	}
+	return s.cacheStatus.Enabled(cache.NamespaceAnalytics)
 }
 
 // checkDatabase checks database health and connection pool metrics
@@ -251,12 +327,113 @@ func (s *systemHealthService) checkDatabase(ctx context.Context) domain.Database
 	}
 }
 
-// checkClerk checks Clerk service status (placeholder)
+// checkClerk reports Clerk service status via the SHARED memoized Clerk health.Check (Issue
+// #1531 Task 7d) — the same Check instance the public /health handler's registry.Clerk holds,
+// so an admin page load never fires a second api.clerk.com/v1/jwks call beyond whatever the
+// liveness probe already paid for within the check's TTL.
 func (s *systemHealthService) checkClerk(ctx context.Context) domain.ServiceHealth {
-	// Placeholder - Clerk is considered up if configured
+	if s.healthChecks.Clerk == nil {
+		return domain.ServiceHealth{Status: "not_configured"}
+	}
+
+	result := s.healthChecks.Clerk(ctx)
+	// In production the Check is never nil even when CLERK_SECRET_KEY is unset —
+	// createClerkCheckWithURL's PROBE returns an error wrapping health.ErrNotConfigured instead
+	// (see cmd/server/health_checks.go). So the nil-Check branch above is production-unreachable;
+	// this errors.Is check is what actually distinguishes "not configured" from "down" on a real
+	// deployment. Without it, an unconfigured Clerk reads as "down" forever, which
+	// calculateOverallStatus below then escalates to a permanent top-line "degraded" (Issue #1531
+	// L2's failure mode, applied here to Clerk instead of Redis).
+	if errors.Is(result.Err, health.ErrNotConfigured) {
+		return domain.ServiceHealth{Status: "not_configured", LatencyMs: result.Latency.Milliseconds()}
+	}
+	status := "up"
+	if !result.Healthy() {
+		status = "down"
+	}
 	return domain.ServiceHealth{
-		Status:    "up",
-		LatencyMs: 0,
+		Status:    status,
+		LatencyMs: result.Latency.Milliseconds(),
+	}
+}
+
+// checkRedis derives the admin-only domain.RedisHealth detail from the SHARED memoized Redis
+// health.Check (Issue #1531 Task 7d) — the same Check instance the public /health handler's
+// registry.Redis holds (but never calls). Redis is deliberately never critical here: this method
+// only DESCRIBES Redis's state. Its caller (GetSystemHealth) feeds the result into
+// calculateOverallStatus, which may only ever move the top-line status to "degraded" for Redis
+// down — see that function's doc comment for the "degraded, never unhealthy" rule Issue #1531
+// criterion 12 requires ("not_configured", produced below, is excluded from that escalation
+// entirely: an intentionally memory-only deployment is not degraded).
+func (s *systemHealthService) checkRedis(ctx context.Context) domain.RedisHealth {
+	if s.healthChecks.Redis == nil {
+		return domain.RedisHealth{Status: "not_configured", Reason: "not_configured"}
+	}
+
+	result := s.healthChecks.Redis(ctx)
+	h := domain.RedisHealth{
+		LatencyMs:     result.Latency.Milliseconds(),
+		ObservedAgoMs: time.Since(result.ObservedAt).Milliseconds(),
+	}
+	if errors.Is(result.Err, health.ErrNotConfigured) {
+		// In production the Check is never nil even when no Redis client is wired —
+		// createRedisCheck's PROBE returns an error wrapping health.ErrNotConfigured instead of
+		// the Check being absent (see cmd/server/health_checks.go). So the nil-Check branch above
+		// is production-unreachable; this is what actually makes "not_configured" reachable on a
+		// real deployment, rather than every unwired Redis permanently reading as "down" and
+		// forcing calculateOverallStatus to "degraded" (Issue #1531 L2).
+		h.Status = "not_configured"
+		h.Reason = "not_configured"
+		return h
+	}
+	if result.Healthy() {
+		h.Status = "up"
+	} else {
+		h.Status = "down"
+		h.Reason = classifyRedisError(result.Err)
+	}
+
+	if s.healthChecks.RedisPoolStats != nil {
+		stats := s.healthChecks.RedisPoolStats()
+		h.PoolStats = &domain.RedisPoolStats{
+			Hits:       stats.Hits,
+			Misses:     stats.Misses,
+			Timeouts:   stats.Timeouts,
+			TotalConns: stats.TotalConns,
+			IdleConns:  stats.IdleConns,
+			StaleConns: stats.StaleConns,
+			PoolSize:   stats.PoolSize,
+		}
+	}
+
+	return h
+}
+
+// classifyRedisError maps a Redis health-check error into a SANITIZED CLASSIFICATION —
+// "timeout", "connection_refused", "auth_failed", or "unknown" — and NEVER returns the raw error
+// text. See domain.RedisHealth.Reason's doc comment for why: admin screens get screenshotted
+// into support tickets and pasted into Slack, and the full error (host:port, Upstash endpoint
+// names, credentials-adjacent detail) is already in slog/Sentry, findable by request ID.
+func classifyRedisError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, redisclient.ErrBreakerOpen) {
+		return "timeout"
+	}
+
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "i/o timeout") || strings.Contains(msg, "deadline exceeded"):
+		return "timeout"
+	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "no route to host") ||
+		strings.Contains(msg, "network is unreachable") || strings.Contains(msg, "no such host"):
+		return "connection_refused"
+	case strings.Contains(msg, "noauth") || strings.Contains(msg, "wrongpass") ||
+		strings.Contains(msg, "invalid password") || strings.Contains(msg, "authentication"):
+		return "auth_failed"
+	default:
+		return "unknown"
 	}
 }
 
@@ -513,10 +690,37 @@ func (s *systemHealthService) getRejectedWebhookAttemptMetrics(ctx context.Conte
 }
 
 // calculateOverallStatus determines the overall system health status
+//
+// ⚠ Issue #1531 criterion 12: "Redis remains non-critical — Redis down yields degraded + HTTP
+// 200, never 503." Prior to this fix, Redis (and Clerk) were never consulted here at all, so a
+// Redis outage left the admin dashboard's top-line badge reading "healthy" while
+// Services.Redis.Status said "down" lower in the payload — exactly the failure the issue calls
+// out: "/admin/health reporting green regardless of state is worse than no dashboard, because it
+// gets trusted during an incident." TestSystemHealth_RedisDownReportsDegradedOverallStatus pins
+// the fix (renamed from TestSystemHealth_RedisDownDoesNotChangeOverallStatus, which asserted the
+// defect itself and is why four prior review passes never caught this).
+//
+// Two hard boundaries this function must never cross:
+//  1. Redis/Clerk may only ever push the result to "degraded", NEVER "unhealthy"/503. Only
+//     Database may return "unhealthy" (checked first, below). If Redis could 503 this probe, a
+//     Redis blip would cycle every machine via Fly's http_checks — a self-inflicted outage this
+//     branch's Task 6 already closed off on the PUBLIC /health endpoint. Promoting Redis to
+//     critical here would reopen the exact same hazard one level up.
+//  2. This function is never called from the public /health handler — that endpoint
+//     structurally never runs the Redis/Clerk checks at all (see operations.HealthHandler's doc
+//     comment and TestGetHealth_DoesNotRunNonCriticalChecks), so "degraded" can never leak onto
+//     the unauthenticated liveness probe. This change is admin-endpoint (GetSystemHealth) only.
 func (s *systemHealthService) calculateOverallStatus(response *domain.SystemHealthResponse) string {
-	// Unhealthy: Database down
+	// Unhealthy: Database down. This is the ONLY path that may return "unhealthy" — see the
+	// boundary above.
 	if response.Services.Database.Status == "down" {
 		return "unhealthy"
+	}
+
+	// Degraded: Redis or Clerk down (Issue #1531 criterion 12). Never escalated to "unhealthy" —
+	// see this function's doc comment.
+	if response.Services.Redis.Status == "down" || response.Services.Clerk.Status == "down" {
+		return "degraded"
 	}
 
 	// Degraded: High pending jobs or dead letter queue issues

@@ -47,6 +47,20 @@ type SystemHealthResponse struct {
 	// restores. See RejectedWebhookAttemptMetrics for what it counts and, critically, what it does
 	// NOT count.
 	RejectedWebhookAttempts24h RejectedWebhookAttemptMetrics `json:"rejected_webhook_attempts_24h"`
+	// CacheEnabled reports whether the analytics-namespace cache (cache.NamespaceAnalytics) is
+	// currently active for this deployment — Issue #1531 Task 11e. It is false whenever
+	// CACHE_ENABLED=false, no cache Redis client could be constructed at startup, the namespace is
+	// disabled via CACHE_NAMESPACES_DISABLED, or a live Redis control-key override has disabled it
+	// — it is the exact same cache.Cache.Enabled call CachedAnalyticsService's own reads use to
+	// decide whether to consult Redis at all, so this can never claim "enabled" while real reads
+	// are silently bypassing the cache.
+	//
+	// This field exists specifically so the E2E cache-parity/fail-safe suite
+	// (apps/web/e2e/cache-*.auth.spec.ts) can gate on a live signal before running, rather than
+	// trusting compiled config or the DB/queue metrics above — the public /health endpoint
+	// deliberately no longer exposes any component breakdown (Task 6's security fix), so this is
+	// the only place left for that guard to check.
+	CacheEnabled bool `json:"cache_enabled"`
 }
 
 // RejectedWebhookAttemptMetrics is the read side of repository.InvalidWebhookAttemptRepository —
@@ -284,6 +298,61 @@ type ServiceHealthStatuses struct {
 	Database DatabaseHealth `json:"database"`
 	Clerk    ServiceHealth  `json:"clerk"`
 	Plaid    PlaidHealth    `json:"plaid"`
+	// Redis is the admin-only detail view of the shared Redis health check (Issue #1531 Task 7d).
+	// It follows the same "unwired optional collaborator reports unavailable, never a confident
+	// zero" convention as JobBacklogMetrics/PlaidOrphanedItemMetrics/DeletionResidueMetrics above
+	// (RedisHealth.Status == "not_configured" rather than a bare zero-value "up").
+	//
+	// ⚠ Redis DOES feed calculateOverallStatus, but ONLY as far as "degraded", never
+	// "unhealthy"/503 (Issue #1531 criterion 12: "Redis remains non-critical — Redis down yields
+	// degraded + HTTP 200, never 503"). The public /health liveness probe (Fly's http_checks)
+	// still never reads Redis at all (Issue #1531 Task 6) — that boundary is unchanged and is
+	// what actually prevents "a Redis blip cycles every machine": this field existing on the
+	// ADMIN-only response, and only ever downgrading to "degraded", cannot reintroduce that
+	// hazard. See TestSystemHealth_RedisDownReportsDegradedOverallStatus and
+	// calculateOverallStatus's own doc comment for the exact boundary.
+	Redis RedisHealth `json:"redis"`
+}
+
+// RedisHealth is the admin-only detail view of the shared, memoized Redis health.Check (Issue
+// #1531 Task 7d) — reusing the SAME Check instance the public /health handler holds (but never
+// calls), so an admin page load costs zero extra Redis PINGs beyond whatever the liveness probe
+// already paid for.
+type RedisHealth struct {
+	// Status is "up", "down", or "not_configured" (no Redis client wired for this deployment).
+	Status string `json:"status"`
+	// Reason is a SANITIZED CLASSIFICATION — one of "timeout", "connection_refused",
+	// "auth_failed", "not_configured", "unknown", or "" (Status == "up") — and is NEVER the raw
+	// error text. Admin screens get screenshotted into support tickets and pasted into Slack; the
+	// full error (host:port, Upstash endpoint names) is already in slog/Sentry, findable by
+	// request ID. This deliberately tightens what issue #1531 permits.
+	Reason string `json:"reason,omitempty"`
+	// LatencyMs is the PROBE's latency (health.Result.Latency), not the time it took to read a
+	// cached Result.
+	LatencyMs int64 `json:"latency_ms"`
+	// ObservedAgoMs is how long ago (in ms) the memoized probe that produced this Result actually
+	// ran (health.Result.ObservedAt) — an admin page load can be reading a Result that is up to
+	// the check's TTL old, and this makes that staleness honest instead of implied.
+	ObservedAgoMs int64 `json:"observed_ago_ms"`
+	// PoolStats is the limiter Redis client's local connection-pool snapshot, or nil when no
+	// Redis client is wired for this deployment. Reads local pool state only — no extra Redis
+	// command is ever dispatched to populate this (see observability.RedisPoolStatsSource's doc
+	// comment for the same discipline on the Prometheus side).
+	PoolStats *RedisPoolStats `json:"pool_stats,omitempty"`
+}
+
+// RedisPoolStats mirrors redisclient.PoolStats / observability.RedisPoolStats for the
+// /admin/health wire response. Its own copy, per this codebase's established mirroring
+// convention (see observability.RedisPoolStats's doc comment) — this domain package must never
+// import internal/redisclient just to describe a wire shape.
+type RedisPoolStats struct {
+	Hits       uint32 `json:"hits"`       // cumulative since client construction
+	Misses     uint32 `json:"misses"`     // cumulative since client construction
+	Timeouts   uint32 `json:"timeouts"`   // cumulative since client construction
+	TotalConns uint32 `json:"total_conns"`
+	IdleConns  uint32 `json:"idle_conns"`
+	StaleConns uint32 `json:"stale_conns"`
+	PoolSize   int    `json:"pool_size"` // configured
 }
 
 // DatabaseHealth represents database connection pool health

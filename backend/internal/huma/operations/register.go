@@ -28,7 +28,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Create handlers with nil dependencies
 	// These handlers won't be called - they're just needed for type signatures
-	healthHandler := &HealthHandler{Version: "1.0.0"}
+	healthHandler := &HealthHandler{}
 	subscriptionTiersHandler := NewSubscriptionTiersHandler(minimalTierConfig)
 	regionsHandler := NewRegionsHandler(minimalRegionConfig)
 	tagHandler := &TagHandler{}

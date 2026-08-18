@@ -47,31 +47,50 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis Cache
-  redis:
+  # Redis — Rate Limiter (Issue #1531)
+  #
+  # Two SEPARATE Redis instances below, never one shared instance. This one backs
+  # RATE_LIMIT_REDIS_URL and is provisioned --maxmemory-policy noeviction: the limiter's
+  # correctness depends on every SET it issues succeeding. If this instance were shared
+  # with the cache instance, the cache filling memory would make the limiter's own SETs
+  # fail with "OOM command not allowed when used memory > 'maxmemory'" — a permanent
+  # limiter fallback to in-memory, per-machine limiting, with a cause that looks nothing
+  # like its symptom. See backend/internal/redisclient/client.go's package doc
+  # ("Two clients, never share one") for the full rationale.
+  redis-ratelimit:
     image: redis:7-alpine
-    container_name: boostedbudget-redis
+    container_name: boostedbudget-redis-ratelimit
+    command: redis-server --maxmemory-policy noeviction
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - redis_ratelimit_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # RabbitMQ Message Queue
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    container_name: boostedbudget-rabbitmq
+  # Redis — Cache (Issue #1531)
+  #
+  # Backs CACHE_REDIS_URL. Given an eviction policy so it can fill up under normal use
+  # without ever touching the limiter's budget (see redis-ratelimit above). Production
+  # (Upstash) actually runs `optimistic-volatile`, which is Upstash-specific and not
+  # expressible by open-source Redis's --maxmemory-policy — `allkeys-lru` here is a
+  # deliberate local approximation (closest open-source shape: evicts under memory
+  # pressure without requiring TTLs on every key), not an attempt to match production
+  # exactly. Because Upstash's real eviction can drop non-TTL keys at any time, cache
+  # generations are minted as random tokens rather than incrementing counters.
+  redis-cache:
+    image: redis:7-alpine
+    container_name: boostedbudget-redis-cache
+    command: redis-server --maxmemory-policy allkeys-lru
     ports:
-      - "5672:5672"   # AMQP
-      - "15672:15672" # Management UI
+      - "6380:6379"
     volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
+      - redis_cache_data:/data
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -90,8 +109,9 @@ services:
       VERSION: "0.1.0"
       PRIMARY_REGION: "iad"
       DATABASE_URL: "postgres://devuser:devpass@postgres:5432/boostedbudget?sslmode=disable"
-      REDIS_URL: "redis://redis:6379"
-      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      RATE_LIMIT_REDIS_URL: "redis://redis-ratelimit:6379"
+      CACHE_REDIS_URL: "redis://redis-cache:6379"
+      CACHE_ENABLED: "true"
       CLERK_SECRET_KEY: "${CLERK_SECRET_KEY}"
       PLAID_CLIENT_ID: "${PLAID_CLIENT_ID}"
       PLAID_SECRET: "${PLAID_SECRET}"
@@ -101,9 +121,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      redis-ratelimit:
         condition: service_healthy
-      rabbitmq:
+      redis-cache:
         condition: service_healthy
     volumes:
       - ./backend:/app
@@ -135,5 +155,5 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
-  rabbitmq_data:
+  redis_ratelimit_data:
+  redis_cache_data:

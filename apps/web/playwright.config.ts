@@ -210,7 +210,17 @@ export default defineConfig({
       //   with no direct signal that rate limiting was the cause. This is a test-only
       //   override (only reaches this backend process, started fresh per E2E run) — it does
       //   not touch the production default of 100.
-      command: `cd ../../backend && PORT=${backendPort} ENVIRONMENT=qa DATABASE_URL="${databaseUrl}" CLERK_SECRET_KEY="${process.env.CLERK_SECRET_KEY || ''}" CLERK_PUBLISHABLE_KEY="${process.env.CLERK_PUBLISHABLE_KEY || ''}" RATE_LIMIT_IP=100000 ./bin/server`,
+      // - CACHE_ENABLED / CACHE_REDIS_URL / RATE_LIMIT_REDIS_URL (#1531 Task 11e): passed
+      //   through from this Node process's own env, empty by default (matching prior
+      //   behaviour — CACHE_ENABLED="" resolves to config.go's default of true via
+      //   getEnvBool, and an empty CACHE_REDIS_URL leaves cacheInstance a no-op cache, exactly
+      //   as before this task). apps/web/e2e/cache-freshness.auth.spec.ts and
+      //   cache-household-visibility.auth.spec.ts read `cache_enabled` off
+      //   /api/v1/admin/system/health and hard-fail (no skip path) if it isn't true — CI's
+      //   e2e-test job (.github/workflows/test.yml) now provisions real Redis containers and
+      //   sets these three vars so that guard's precondition genuinely holds there; locally,
+      //   set them yourself (see run-e2e-tests skill) to exercise the same path.
+      command: `cd ../../backend && PORT=${backendPort} ENVIRONMENT=qa DATABASE_URL="${databaseUrl}" CLERK_SECRET_KEY="${process.env.CLERK_SECRET_KEY || ''}" CLERK_PUBLISHABLE_KEY="${process.env.CLERK_PUBLISHABLE_KEY || ''}" RATE_LIMIT_IP=100000 CACHE_ENABLED="${process.env.CACHE_ENABLED || ''}" CACHE_REDIS_URL="${process.env.CACHE_REDIS_URL || ''}" RATE_LIMIT_REDIS_URL="${process.env.RATE_LIMIT_REDIS_URL || ''}" ./bin/server`,
       url: `http://localhost:${backendPort}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,

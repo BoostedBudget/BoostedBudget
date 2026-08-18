@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
-	"os/signal"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -19,10 +19,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	echomiddleware "github.com/labstack/echo/v4/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/health"
 	humaconfig "github.com/maxnussbaum/BoostedBudget/internal/huma"
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
@@ -32,6 +34,8 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
 	riverqueue "github.com/maxnussbaum/BoostedBudget/internal/queue/river"
+	"github.com/maxnussbaum/BoostedBudget/internal/ratelimitstore"
+	"github.com/maxnussbaum/BoostedBudget/internal/redisclient"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
@@ -82,6 +86,13 @@ func main() {
 	})
 	slog.SetDefault(appLogger)
 
+	// Issue #1531 gap round 2: an ERROR-level (not Warn) startup log when SENTRY_DSN is unset in
+	// production/staging — see sentryDSNWarning's doc comment (sentry_dsn_warning.go) for why this
+	// is neither a validate() hard failure nor an in-repo alert-rule file.
+	if msg, attrs, warranted := sentryDSNWarning(cfg.Environment, cfg.SentryDSN); warranted {
+		appLogger.Error(msg, attrs...)
+	}
+
 	// Init PostHog (graceful no-op if API key empty)
 	phClient := phclient.NewClient(cfg.PostHogAPIKey, cfg.PostHogHost, appLogger)
 	if phClient != nil {
@@ -126,6 +137,136 @@ func main() {
 		appLogger.Warn("Running without database (set DATABASE_URL to enable)")
 	}
 
+	// Issue #1531 Task 7c/7d: construct the two Redis clients — limiter (fleet-wide rate
+	// limiting, wired below) and cache (Task 9, out of scope here).
+	//
+	// Task 8: cfg.RateLimitRedisURL (RATE_LIMIT_REDIS_URL) replaces the old generic cfg.RedisURL
+	// (REDIS_URL) — the rename exists so there is no generic "the Redis URL" left for a future
+	// change to point the cache at. The two clients below use TWO SEPARATE config fields
+	// (RateLimitRedisURL / CacheRedisURL) precisely so they can never be pointed at the same
+	// instance by accident: internal/redisclient's package doc comment explains why sharing one
+	// URL between a noeviction-provisioned limiter instance and a cache is a real hazard (an
+	// evicting cache write can OOM the limiter's SETs) — config.validate() also hard-errors in
+	// production/staging if the two URLs are ever set to the same value.
+	// Issue #1531 Blocker 4: cfg.RedisTimeoutMs/RedisPoolSize were validated and documented as
+	// "read by redisclient.Options construction" but never actually passed to either client
+	// below — both constructors sent only URL/Name, silently discarding the configured knobs and
+	// running every deploy on redisclient's hardcoded defaults (200ms read/write timeout, pool
+	// size 10) regardless of what an operator set. Wired through to both clients now, via
+	// newRedisClientOptions, so the config actually does what it claims.
+	limiterClient, err := redisclient.New(newRedisClientOptions(cfg, cfg.RateLimitRedisURL,
+		// Issue #1531 Task 10a: was the literal "limiter" — now the shared constant, so a
+		// future rename is a compile error instead of a silent boot-time failure in
+		// cache.NewControl (which fails fast unless client.Name() == cache.LimiterClientName).
+		cache.LimiterClientName))
+	if err != nil {
+		switch {
+		case errors.Is(err, redisclient.ErrNotConfigured):
+			appLogger.Warn("Redis limiter client not configured — rate limiting runs memory-only (per-machine limits)")
+			limiterClient = nil
+		case isProductionOrStagingEnvironment(cfg.Environment):
+			appLogger.Error("Failed to construct Redis limiter client", "error", err)
+			os.Exit(1)
+		default:
+			appLogger.Warn("Redis limiter client failed to construct — continuing memory-only", "error", err)
+			limiterClient = nil
+		}
+	} else {
+		// NOT deferred here: closed explicitly, LAST, by the shutdown sequence below (Issue
+		// #1531 Task 7b) — a bare `defer` would close it at the same instant as everything else
+		// in this function's defer stack, undoing the deliberate "Redis closes after HTTP has
+		// drained" ordering.
+		appLogger.Info("Redis limiter client constructed", "addr", limiterClient.RedactedAddr())
+	}
+
+	cacheClient, err := redisclient.New(newRedisClientOptions(cfg, cfg.CacheRedisURL, "cache"))
+	if err != nil {
+		// Cache-client failure is NEVER fatal (Task 9 brief) — log and continue without a cache.
+		if !errors.Is(err, redisclient.ErrNotConfigured) {
+			appLogger.Warn("Redis cache client failed to construct — continuing without a cache", "error", err)
+		}
+		cacheClient = nil
+	}
+	// Not deferred here either, for the same reason as limiterClient above — closed explicitly by
+	// the shutdown sequence.
+
+	// Issue #1531 Task 10a: wire Task 9's caching primitives to a real Cache instance.
+	//
+	// Control MUST poll against the LIMITER's no-eviction client, never the cache's own
+	// (eviction-enabled) instance — see cache.NewControl's doc comment for why an evicted "off"
+	// control key would otherwise silently re-enable caching. NewControl fails fast if handed
+	// the wrong client (checked via client.Name() == cache.LimiterClientName, fixed just above).
+	var cacheControl *cache.Control
+	if limiterClient != nil {
+		cacheControl, err = cache.NewControl(limiterClient, cache.AllNamespaces())
+		if err != nil {
+			// Construction only fails on a client-name mismatch — a wiring bug, not a runtime
+			// condition — so this is a hard fail rather than falling back to no-Control.
+			appLogger.Error("Failed to construct cache Control", "error", err)
+			os.Exit(1)
+		}
+	}
+	cacheControlCtx, cacheControlCancel := context.WithCancel(context.Background())
+	if cacheControl != nil {
+		go cacheControl.Run(cacheControlCtx, cache.DefaultControlPollInterval)
+	}
+
+	// cacheEnvDisabled is the parsed form of CACHE_NAMESPACES_DISABLED (comma-separated
+	// namespace names) — resolution order is hardDisabled -> Redis control key -> this env
+	// override -> compiled default (see cache.redisCache.Enabled's doc comment).
+	cacheEnvDisabled := parseCacheNamespacesDisabled(cfg.CacheNamespacesDisabled)
+
+	// Cache-client failure (including CACHE_ENABLED=false) is NEVER fatal — fall back to
+	// cache.NewNoopCache(), which issues zero Redis commands, so every consumer wired below stays
+	// unconditional and nil-free (Task 9/10a brief).
+	var cacheInstance cache.Cache
+	if cfg.CacheEnabled && cacheClient != nil {
+		cacheInstance = cache.NewCache(cache.Options{
+			Client:                cacheClient,
+			Control:               cacheControl,
+			EnvDisabledNamespaces: cacheEnvDisabled,
+			// SingleflightLoadTimeout (Issue #1531 N1): cache.go's default (30s) was justified as
+			// "matches this server's default WriteTimeout" but had no path to a NON-default
+			// SERVER_WRITE_TIMEOUT — passing cfg.WriteTimeout here explicitly makes that
+			// justification actually hold for any configured POSITIVE value, not just the default.
+			// Round-6 finding P5: SERVER_WRITE_TIMEOUT=0 is the one value where it still does not
+			// hold — net/http treats WriteTimeout=0 as "no write timeout" (unbounded), but
+			// cache.Options.SingleflightLoadTimeout treats any value <= 0 as "use the 30s floor",
+			// deliberately, not unbounded — see that field's doc comment for why an unbounded
+			// singleflight wait was rejected (a single stuck loader would hang every concurrent
+			// caller sharing its key forever, which is worse than a bounded timeout error).
+			SingleflightLoadTimeout: cfg.WriteTimeout,
+		})
+		appLogger.Info("Cache wired to Redis", "control_enabled", cacheControl != nil)
+	} else {
+		cacheInstance = cache.NewNoopCache()
+		appLogger.Info("Cache disabled — using no-op cache", "cache_enabled_config", cfg.CacheEnabled, "cache_client_available", cacheClient != nil)
+	}
+
+	// Redis pool metrics (Issue #1531 Task 2/7): report both clients' local pool state next to
+	// the existing DB pool metrics collector. redisPoolStatsAdapter is the local mirror adapter —
+	// see its doc comment for why internal/observability never imports internal/redisclient.
+	//
+	// Fix round 1: given its own cancellable context (rather than context.Background(),
+	// uncancellable) so shutdownSequence below can stop this goroutine — ordered, per the brief,
+	// after the HTTP/River drain and before the Redis clients close.
+	redisMetricsCtx, redisMetricsCancel := context.WithCancel(context.Background())
+	var redisMetricsSources []observability.RedisPoolStatsSource
+	if limiterClient != nil {
+		redisMetricsSources = append(redisMetricsSources, redisPoolStatsAdapter{limiterClient})
+	}
+	if cacheClient != nil {
+		redisMetricsSources = append(redisMetricsSources, redisPoolStatsAdapter{cacheClient})
+	}
+	if len(redisMetricsSources) > 0 {
+		observability.StartRedisMetricsCollector(redisMetricsCtx, redisMetricsSources...)
+	}
+
+	// Issue #1531 Task 7b: the rate-limit middleware's background cleanup goroutine (and the
+	// fallback limiter's accumulateActiveSecondsWhileDegraded goroutine) stop when this channel
+	// closes — see shutdown ordering below. Closed exactly once, well after HTTP has drained.
+	rateLimitDone := make(chan struct{})
+
 	// Validate CORS configuration before starting (fail-fast for production misconfiguration)
 	if err := middleware.ValidateCORSConfig(cfg.CORSAllowedOrigins, cfg.Environment); err != nil {
 		appLogger.Error("CORS configuration error", "error", err)
@@ -152,16 +293,29 @@ func main() {
 	go middleware.StartCIDRRefresher(cfCtx, 24*time.Hour, cfCIDRRef)
 
 	// Middleware (order matters!)
-	e.Use(middleware.RequestID())                                                          // 1. Generate request IDs first
-	e.Use(middleware.SecurityHeaders(cfg.Environment))                                     // 2. Security hardening headers
-	registerCloudflareAndRateLimitMiddleware(e, cfCIDRRef, cfg)                            // 3-4. Cloudflare gate, then per-IP rate limiting (order load-bearing, see helper doc)
-	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                            // 5. Panic recovery (formats RFC 9457 response)
-	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                               // 6. Sentry panic reporting
-	e.Use(otelecho.Middleware("boostedbudget-api"))                                        // 7. OTEL tracing
-	e.Use(middleware.StructuredLogging(appLogger))                                         // 8. slog-based HTTP logging
-	e.Use(middleware.MetricsMiddleware())                                                  // 9. Prometheus metrics
-	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                       // 10. Request body size limit
-	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins))) // 10. CORS handling with configured origins
+	e.Use(middleware.RequestID())                      // 1. Generate request IDs first
+	e.Use(middleware.SecurityHeaders(cfg.Environment)) // 2. Security hardening headers
+	// Issue #1531 Task 7: the fleet-wide Redis-backed primary (nil-safe: memory-only when
+	// limiterClient is nil), wired via the same ordering-critical helper
+	// (registerCloudflareAndRateLimitMiddleware — the byte-for-byte-pinned issue1514 ordering
+	// test still calls that 3-arg function directly, which now just delegates here with a nil
+	// backend/done/logger, reproducing its exact prior behaviour).
+	rateLimitBackend, err := buildRateLimitBackend(context.Background(), limiterClient, cfg)
+	if err != nil {
+		// RATE_LIMIT_BACKEND=redis with no working limiter client — a STARTUP failure (we are
+		// still in main()'s initialization, before Echo starts accepting traffic), never a
+		// per-request one. See buildRateLimitBackend's doc comment.
+		appLogger.Error("Failed to build rate-limit backend", "error", err)
+		os.Exit(1)
+	}
+	registerCloudflareAndRateLimitMiddlewareWithBackend(e, cfCIDRRef, cfg, rateLimitBackend, rateLimitDone, appLogger) // 3-4. Cloudflare gate, then per-IP rate limiting (order load-bearing, see helper doc)
+	e.Use(middleware.PanicRecovery(appLogger, cfg.Environment))                                                        // 5. Panic recovery (formats RFC 9457 response)
+	e.Use(sentryecho.New(sentryecho.Options{Repanic: true}))                                                           // 6. Sentry panic reporting
+	e.Use(otelecho.Middleware("boostedbudget-api"))                                                                    // 7. OTEL tracing
+	e.Use(middleware.StructuredLogging(appLogger))                                                                     // 8. slog-based HTTP logging
+	e.Use(middleware.MetricsMiddleware())                                                                              // 9. Prometheus metrics
+	e.Use(echomiddleware.BodyLimit(cfg.MaxBodySize))                                                                   // 10. Request body size limit
+	e.Use(echomiddleware.CORSWithConfig(middleware.GetCORSConfig(cfg.CORSAllowedOrigins)))                             // 10. CORS handling with configured origins
 
 	// Initialize Huma API wrapping Echo for OpenAPI generation
 	// Huma provides automatic OpenAPI 3.1 spec generation from Go code
@@ -170,14 +324,43 @@ func main() {
 	humaAPI := humaecho.NewV4(e, humaconfig.NewAPIConfig(cfg.Version, cfg.Environment))
 	appLogger.Info("Huma API initialized - OpenAPI at /openapi.json, Docs at /docs")
 
-	// Health check handler (no auth required) - Huma operation
-	healthHandler := operations.NewHealthHandler(
-		createDBCheck(),
-		createRedisCheck(),
-		createClerkCheck(),
-		cfg.Version,
-	)
+	// Health check handler (no auth required) - Huma operation.
+	//
+	// Issue #1531 Task 7c: the full health.Registry, built ONCE and shared with the admin
+	// system-health service below (via sharedHealthChecks) so an admin page load reuses whatever
+	// this liveness probe already paid for instead of re-probing Redis/Clerk. Task 6's structural
+	// guarantee still holds unmodified: operations.HealthHandler.GetHealth only ever reads
+	// registry.DB — registry.Redis/registry.Clerk are populated here but inert on this path (see
+	// that handler's doc comment, and TestWiring_HealthProbeSucceedsAndIsFastWithRedisCompletelyDown).
+	//
+	// dbPingerArg guards against the classic typed-nil-interface footgun: db is a possibly-nil
+	// *pgxpool.Pool, and boxing a nil *pgxpool.Pool directly into the dbPinger interface would
+	// produce a NON-nil interface value (wrong type descriptor, nil underlying pointer) that
+	// createDBCheck's `pool == nil` check cannot catch — it would panic on the first pool.Ping.
+	var dbPingerArg dbPinger
+	if db != nil {
+		dbPingerArg = db
+	}
+	registry := health.Registry{
+		DB:    createDBCheck(dbPingerArg),
+		Redis: createRedisCheck(limiterClient),
+		Clerk: createClerkCheck(cfg.ClerkSecretKey, http.DefaultClient),
+	}
+	healthHandler := operations.NewHealthHandler(appLogger, registry)
 	operations.RegisterHealthRoutes(humaAPI, healthHandler)
+
+	// Issue #1531 Task 7d: shared with services.NewSystemHealthService below (once db/Clerk are
+	// available) so the admin dashboard's Redis/Clerk detail reuses these SAME Check instances
+	// rather than re-probing. RedisPoolStats is left nil when there is no limiter client — see
+	// services.SharedHealthChecks's doc comment for why that must skip PoolStats entirely rather
+	// than report a zero-valued (falsely "idle but live") snapshot.
+	sharedHealthChecks := services.SharedHealthChecks{
+		Clerk: registry.Clerk,
+		Redis: registry.Redis,
+	}
+	if limiterClient != nil {
+		sharedHealthChecks.RedisPoolStats = limiterClient.PoolStats
+	}
 
 	// Metrics endpoint (Prometheus format) — internal-only listener, NOT the public Huma
 	// API (humaAPI/e) above. Issue #1514: /metrics exposes River queue depth, Plaid error
@@ -577,8 +760,14 @@ func main() {
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		ruleApplicationService.SetAnalytics(phClient)
 		// Issue #354: Cash flow analytics and dashboard preferences services
-		analyticsService := services.NewAnalyticsService(analyticsRepo)
-		analyticsService.SetBalanceSnapshotRepo(balanceSnapshotRepo) // wires snapshot repo for GetNetWorthTrend (Issue #1215 PR3)
+		analyticsServiceImpl := services.NewAnalyticsService(analyticsRepo)
+		analyticsServiceImpl.SetBalanceSnapshotRepo(balanceSnapshotRepo) // wires snapshot repo for GetNetWorthTrend (Issue #1215 PR3)
+		// Issue #1531 Task 10a: wrap AFTER SetBalanceSnapshotRepo above — GetNetWorthTrend fans
+		// out via balanceSnapshotRepo INSIDE the service, so wrapping first would permanently
+		// capture a service whose fan-out repo is nil. Decorates the SERVICE, not the repository:
+		// 39+ non-test call sites construct repositories directly over a pgx.Tx, bypassing
+		// anything wired here, and a repository-level decorator would silently miss all of them.
+		analyticsService := services.NewCachedAnalyticsService(analyticsServiceImpl, cacheInstance)
 		// Issue #639: adminUserService is created later after adminService is initialized
 		// Issue #474: Load dashboard layout config for preferences service
 		// This ensures reset-to-default uses YAML config version, not hardcoded version 2
@@ -587,7 +776,14 @@ func main() {
 			appLogger.Error("Failed to load dashboard layout config", "error", err)
 			os.Exit(1)
 		}
-		dashboardPrefsService := services.NewDashboardPreferencesService(dashboardPrefsRepo, dashboardLayoutConfig)
+		dashboardPrefsServiceImpl := services.NewDashboardPreferencesService(dashboardPrefsRepo, dashboardLayoutConfig)
+		// Issue #1531 Task 10a: caches GetPreferences only (namespace dashprefs, 300s TTL);
+		// SavePreferences/ResetToDefault pass through unchanged.
+		dashboardPrefsService := services.NewCachedDashboardPreferencesService(dashboardPrefsServiceImpl, cacheInstance)
+		// Issue #1531 Task 10a: narrow identity cache — resolves clerkUserID -> internal user
+		// UUID ONLY (never the full identity record: email, provider, verification state).
+		// Namespace identity, 600s TTL. Wired into the Clerk middleware below as a fast path.
+		cachedIdentityResolver := services.NewCachedIdentityResolver(identityRepo, cacheInstance)
 		// Issue #28: Budget and savings goal services
 		budgetLogger := appLogger
 		budgetService := services.NewBudgetService(budgetRepo, customCategoryRepo, transactionRepo, budgetLogger)
@@ -702,6 +898,13 @@ func main() {
 		// NewDefaultClerkUserGetter reuses the same Clerk SDK plumbing as AdminService
 		// (clerk.SetKey is already called there, well before the server accepts requests).
 		householdService.SetMemberProfileResolver(services.NewClerkMemberProfileResolver(identityRepo, services.NewDefaultClerkUserGetter()))
+		// Issue #1531 Task 10b-2b: bump cache generations for household writes that affect
+		// members OTHER than the acting HTTP caller (a member removed by the owner, a joiner +
+		// existing members on invite acceptance, every member on disband/auto-offboard, and
+		// every member after a share-visibility change) — NewCacheInvalidationMiddleware only
+		// bumps the acting caller. cacheInstance is never nil; Generations() is nil-safe when
+		// the cache is disabled (NewNoopCache), and every bump helper nil-guards on it.
+		householdService.SetCacheInvalidation(cacheInstance.Generations())
 
 		// Issue #1371 — Phase 7 (Task 2): Create household member cleanup check worker.
 		// Unlike retention's worker (gated on DELETION_TOKEN_SECRET, since it calls
@@ -726,6 +929,13 @@ func main() {
 			TierConfig:   tierConfig,
 			Logger:       appLogger,
 		})
+		// Issue #1531 Task 10b-2a-iii: wire cache invalidation so an auto-offboard (this
+		// worker's ONLY caller of HouseholdService.OffboardExcessMembers — a job, never an
+		// HTTP request, so NewCacheInvalidationMiddleware never runs for it) bumps the
+		// household's cache generation once membership actually changes. cacheInstance is
+		// never nil (see cachePurgeRetryWorker below); Generations() is nil-safe when the
+		// cache is disabled (NewNoopCache), and bumpCacheForHousehold nil-guards on it.
+		householdOverCapacityCheckWorker.SetCacheInvalidation(cacheInstance.Generations())
 		appLogger.Info("Household over-capacity check worker created (River)")
 
 		// Create deletion services (if token secret configured)
@@ -1043,6 +1253,15 @@ func main() {
 			TransactionRepo: transactionRepo,
 			Logger:          appLogger,
 		})
+		// Issue #1531 Task 10b-2a-iii: wire cache invalidation — this job rewrites
+		// transactions.effective_category_name, the field several cached analytics queries
+		// GROUP BY (spending by category/merchant, budget vs actual), with no prior bump.
+		// cacheInstance is never nil (see cachePurgeRetryWorker below); Generations() is
+		// nil-safe when the cache is disabled. Issue #1531 M7: also wires householdRepo so the
+		// rename cascade bumps the household scope too, matching transactionSyncService's
+		// SetCacheInvalidation call below — household-scoped spending-by-category/trends GROUP BY
+		// this same effective_category_name column.
+		effectiveCategoryRefreshWorker.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
 		appLogger.Info("Effective category refresh worker created (River)")
 
 		// Create Plaid service and account linking (if configured)
@@ -1063,6 +1282,16 @@ func main() {
 					db,
 					services.WithEncryptor(fieldEncryptor), // Issue #1010: Cross-user fingerprint checks
 				)
+
+				// Issue #1531 Blocker 1: wire cache invalidation for the cross-user fingerprint
+				// release path — checkFingerprintOwnership's ExpireAccountsByFingerprint call
+				// flips a DIFFERENT user's accounts to expired during THIS user's LinkAccounts
+				// call, and the HTTP mutation middleware only ever bumps the acting user, never a
+				// third party a write happens to touch. cacheInstance is never nil (see
+				// cachePurgeRetryWorker's construction below); householdRepo structurally
+				// satisfies services.SyncCacheHouseholdLookup, same as it already does for
+				// transactionSyncService and humamiddleware.HouseholdLookup.
+				accountService.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
 
 				appLogger.Info("Plaid service initialized")
 				appLogger.Info("Account linking service initialized")
@@ -1131,6 +1360,15 @@ func main() {
 					merchantRepo, // Issue #1163: Merchant batch-upsert
 					appLogger,
 				)
+
+				// Issue #1531 Task 10b-2: wire cache invalidation so a Plaid sync (which never
+				// passes through the HTTP mutation middleware — it runs from a River job)
+				// still bumps the synced user's (and their household's) cache generation once,
+				// at the end of SyncTransactions. cacheInstance is never nil (see the Task 10b
+				// comment at cachePurgeRetryWorker's construction below); householdRepo
+				// structurally satisfies services.SyncCacheHouseholdLookup, same as it already
+				// does for humamiddleware.HouseholdLookup.
+				transactionSyncService.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
 
 				// Issue #972: Initialize TransferCorrelationService and wire into sync pipeline (B4)
 				transferCorrelationService := services.NewTransferCorrelationService(
@@ -1201,6 +1439,13 @@ func main() {
 				if phClient != nil {
 					investmentSyncService.SetAnalytics(phClient)
 				}
+				// Issue #1531 Task 10b-2a-ii: wire cache invalidation so a HOLDINGS/
+				// INVESTMENTS_TRANSACTIONS webhook (routed through ProcessWebhook, which is also
+				// what InvestmentHoldingsSyncWorker/InvestmentTransactionsSyncWorker call) bumps
+				// the synced user's cache generation — GetNetWorthTrend folds in holdings and
+				// investment-transaction data. Scope is user-only (no household lookup), matching
+				// the brief's table. cacheInstance is never nil (see cachePurgeRetryWorker below).
+				investmentSyncService.SetCacheInvalidation(cacheInstance.Generations())
 
 				// Issue #910: Initialize LiabilitySyncService for credit, mortgage, student loan liabilities
 				liabilitySyncService := services.NewLiabilitySyncService(
@@ -1217,6 +1462,10 @@ func main() {
 				if phClient != nil {
 					liabilitySyncService.SetAnalytics(phClient)
 				}
+				// Issue #1531 Task 10b-2a-ii: wire cache invalidation so a LIABILITIES webhook
+				// (routed through ProcessWebhook, which calls SyncLiabilities below) bumps the
+				// synced user's cache generation — GetNetWorthTrend folds in liability data.
+				liabilitySyncService.SetCacheInvalidation(cacheInstance.Generations())
 
 				// Create WebhookProcessingWorker with all dependencies
 				// Issue #659: InvestmentSyncSvc added for HOLDINGS and INVESTMENTS_TRANSACTIONS routing
@@ -1391,6 +1640,15 @@ func main() {
 				river.AddWorker(riverWorkers, emailChangePropagationWorker)
 				appLogger.Info("Email change propagation worker registered with River")
 			}
+
+			// Issue #1531 Task 10b: durable retry for a failed GDPR-deletion cache purge (see
+			// deletion_service.go's purgeCacheForDeletedUser / enqueueCachePurgeRetry). Always
+			// registered — cacheInstance is never nil (it defaults to cache.NewNoopCache(), whose
+			// Purger implementation is a no-op), so this worker is always constructible and simply
+			// does nothing when the cache is disabled.
+			cachePurgeRetryWorker := jobs.NewCachePurgeRetryWorker(cacheInstance.(cache.Purger), cacheInstance.Generations(), appLogger)
+			river.AddWorker(riverWorkers, cachePurgeRetryWorker)
+			appLogger.Info("Cache purge retry worker registered with River")
 			if accountDeletionWorker != nil {
 				river.AddWorker(riverWorkers, accountDeletionWorker)
 				appLogger.Info("Account deletion worker registered with River")
@@ -1540,6 +1798,28 @@ func main() {
 				// Issue #1123: Wire job queue for async effective_category_name refresh
 				customCategoryService.SetJobQueue(jobQueue)
 				appLogger.Info("Custom category service connected to job queue for rename cascade")
+
+				// Issue #1531 Task 10b: GDPR deletion cache purge. Wired here (not alongside
+				// deletionService's other Set* calls above) because it needs jobQueue for the
+				// durable-retry enqueue, and jobQueue isn't constructed until riverClient succeeds,
+				// just above. cacheInstance.(cache.Purger) always succeeds: both NewCache's
+				// production type and NewNoopCache's disabled-cache type implement Purger (the
+				// latter as a no-op) — see cache.Purger's doc comment.
+				//
+				// #1531 Task 11e: deletionService itself CAN be nil here — it is only assigned when
+				// cfg.DeletionTokenSecret != "" (see the `if cfg.DeletionTokenSecret != ""` gate
+				// far above) — and this call was previously unconditional, so every deployment
+				// without DELETION_TOKEN_SECRET configured (every local/E2E run before this fix,
+				// confirmed via `bun run test:e2e` panicking at server startup with a nil-pointer
+				// dereference on this exact line) crashed the process before it ever bound a port.
+				// Every other caller of deletionService in this file (see e.g. the
+				// `paddleService != nil && deletionService != nil` and
+				// `if deletionService != nil { deletionService.SetPlaidCleanupService(...) }` guards
+				// above) already nil-checks it; this call simply never got one.
+				if deletionService != nil {
+					deletionService.SetCache(cacheInstance.(cache.Purger), cacheInstance.Generations(), jobQueue)
+					appLogger.Info("Deletion service connected to cache purge + job queue for GDPR retry")
+				}
 			}
 		}
 
@@ -1581,6 +1861,9 @@ func main() {
 				WorkerSecret: cfg.MCPWorkerSecret,
 				Verifier:     humamiddleware.NewClerkOAuthVerifier(cfg.ClerkSecretKey),
 			},
+			// Issue #1531 Task 10a: cached scalar-UUID fast path — see cachedIdentityResolver's
+			// construction above.
+			cachedIdentityResolver,
 			profileRepo,
 		)
 		humaAPI.UseMiddleware(humaClerkMiddleware)
@@ -1590,6 +1873,15 @@ func main() {
 		// #1367 — Phase 3: household-aware — a covered member's own stale read-only status no longer locks them out.
 		humaAPI.UseMiddleware(humamiddleware.NewReadOnlyMiddleware(householdEntitlementService))
 		appLogger.Info("Huma read-only enforcement middleware applied")
+
+		// Issue #1531 Task 10b: cache-invalidation middleware. MUST register after both the Clerk
+		// middleware (so inputs.UserIDKey is populated) and NewReadOnlyMiddleware (so a request the
+		// read-only gate blocked with 403/503 never reaches this middleware and never bumps —
+		// nothing committed). cacheInstance.Generations() is nil for a disabled/noop cache (Task 9's
+		// NewNoopCache), which the middleware treats as a pure pass-through — see its own doc
+		// comment. householdRepo satisfies humamiddleware.HouseholdLookup structurally.
+		humaAPI.UseMiddleware(humamiddleware.NewCacheInvalidationMiddleware(cacheInstance.Generations(), householdRepo, appLogger))
+		appLogger.Info("Cache invalidation middleware applied")
 
 		// Load admin email config and create AdminService (Issue #309)
 		//
@@ -1694,6 +1986,16 @@ func main() {
 			// (services.InvalidWebhookAttemptStatsReader) to GetStats24h alone, same discipline
 			// as plaidOrphanedItemRepo above.
 			invalidWebhookAttemptRepo,
+			// Issue #1531 Task 7d: the SAME shared, memoized Clerk/Redis Check instances the
+			// public /health handler's registry holds, plus the limiter client's pool-stats
+			// reader — so /admin/health's Redis detail costs zero extra PINGs beyond what the
+			// liveness probe already paid for. See services.SharedHealthChecks's doc comment.
+			sharedHealthChecks,
+			// Issue #1531 Task 11e: cacheInstance satisfies services.CacheStatusReader structurally
+			// (its Enabled(ns) method) — never nil (defaults to cache.NewNoopCache(), whose Enabled
+			// always reports false), so /admin/health's cache_enabled field has a live signal to
+			// report regardless of whether caching is actually turned on for this deployment.
+			cacheInstance,
 		)
 
 		// Issue #633: Dead letter queue admin service.
@@ -2145,63 +2447,113 @@ func main() {
 		}
 	}()
 
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt)
-	<-quit
+	// Issue #1531 Task 7a: waitForShutdownSignal registers BOTH SIGINT and SIGTERM — Fly's
+	// kill_signal is SIGTERM (see fly.toml/fly.staging.toml), and before this fix the whole
+	// graceful-shutdown sequence below had never once run in production; every deploy hard-killed
+	// in-flight requests and River jobs. See waitForShutdownSignal's doc comment.
+	waitForShutdownSignal()
 
 	appLogger.Info("Shutting down server...")
 
-	// Issue #37: Stop rule scheduler manager first (graceful shutdown)
-	if boostSchedulerManager != nil {
-		appLogger.Info("Stopping rule scheduler manager...")
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := boostSchedulerManager.Stop(stopCtx); err != nil {
-			appLogger.Warn("Error stopping rule scheduler", "error", err)
-		}
-		stopCancel()
-		appLogger.Info("Rule scheduler manager stopped")
-	}
-
-	// Issue #573: Stop River queue runner gracefully
-	if riverRunner != nil {
-		appLogger.Info("Stopping River queue runner...")
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := riverRunner.Stop(stopCtx); err != nil {
-			appLogger.Warn("Error stopping River queue", "error", err)
-			// Try force stop if graceful stop fails
-			if err := riverRunner.StopAndCancel(stopCtx); err != nil {
-				appLogger.Warn("Error force stopping River queue", "error", err)
-			}
-		}
-		stopCancel()
-		appLogger.Info("River queue runner stopped")
-	}
-
-	// Stop Cloudflare CIDR refresher goroutine
-	cfCancel()
-
-	// Stop background workers (if running)
-	if workerCancel != nil {
-		appLogger.Info("Stopping background workers...")
-		workerCancel()
-	}
-
-	// Shutdown HTTP server(s)
+	// Issue #1531 Task 7b: shutdownSequence runs these IN THIS EXACT ORDER and continues past any
+	// failing step, aggregating errors — see shutdownSequence's doc comment for the full
+	// rationale. Required order:
+	//   1. Drain HTTP (public listener, then the internal metrics listener).
+	//   2. Stop/drain River, the boost scheduler, and their launch context — Redis-touching
+	//      background work must finish BEFORE the Redis clients close.
+	//   3. Cancel the Cloudflare CIDR refresher and close the rate-limit Done channel (stops the
+	//      rate limiter's cleanup goroutine and Task 5's accumulateActiveSecondsWhileDegraded).
+	//   4. Close the cache Redis client, then the limiter Redis client, LAST.
+	// ⚠ Closing Redis before HTTP has drained gives every in-flight request a pool-closed error →
+	// limiter fallback → a fallback-activation Sentry event on every single deploy, training
+	// everyone to ignore the single most important alert in this whole change.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Issue #1514: shut down the internal metrics listener alongside the public one so
-	// neither leaks a bound port or an unclosed goroutine on exit. internalMetricsEcho is
-	// nil when ENABLE_METRICS=false (listener was never started above).
-	if internalMetricsEcho != nil {
-		if err := internalMetricsEcho.Shutdown(ctx); err != nil {
-			appLogger.Error("Internal metrics listener forced to shutdown", "error", err)
-		}
+	steps := []namedShutdownStep{
+		{Name: "http", Fn: func() error {
+			return e.Shutdown(ctx)
+		}},
+		{Name: "internal_metrics_listener", Fn: func() error {
+			// Issue #1514: shut down the internal metrics listener alongside the public one so
+			// neither leaks a bound port or an unclosed goroutine on exit. Nil when
+			// ENABLE_METRICS=false (listener was never started above).
+			if internalMetricsEcho == nil {
+				return nil
+			}
+			return internalMetricsEcho.Shutdown(ctx)
+		}},
+		{Name: "boost_scheduler", Fn: func() error {
+			// Issue #37: Stop rule scheduler manager (graceful shutdown).
+			if boostSchedulerManager == nil {
+				return nil
+			}
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stopCancel()
+			return boostSchedulerManager.Stop(stopCtx)
+		}},
+		{Name: "river", Fn: func() error {
+			// Issue #573: Stop River queue runner gracefully.
+			if riverRunner == nil {
+				return nil
+			}
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stopCancel()
+			if err := riverRunner.Stop(stopCtx); err != nil {
+				// Try force stop if graceful stop fails.
+				if cancelErr := riverRunner.StopAndCancel(stopCtx); cancelErr != nil {
+					return fmt.Errorf("graceful stop: %w; force stop: %v", err, cancelErr)
+				}
+				return nil
+			}
+			return nil
+		}},
+		{Name: "worker_ctx_cancel", Fn: func() error {
+			if workerCancel != nil {
+				workerCancel()
+			}
+			return nil
+		}},
+		{Name: "cf_cidr_refresher", Fn: func() error {
+			cfCancel()
+			return nil
+		}},
+		{Name: "rate_limit_done", Fn: func() error {
+			// Issue #1531 Task 5/7b: stops IPRateLimiter's cleanup goroutine and the fallback
+			// limiter's accumulateActiveSecondsWhileDegraded goroutine.
+			close(rateLimitDone)
+			return nil
+		}},
+		{Name: "redis_metrics_collector", Fn: func() error {
+			// Fix round 1 (Issue #1531 Task 7 review): stops
+			// observability.StartRedisMetricsCollector's goroutine. Ordered here — after HTTP/River
+			// have drained, before the Redis clients close below — per the brief's step 3.
+			redisMetricsCancel()
+			return nil
+		}},
+		{Name: "cache_control_poller", Fn: func() error {
+			// Issue #1531 Task 10a: stops Control.Run's polling goroutine (if started). Same
+			// ordering rationale as redis_metrics_collector above — it reads the limiter Redis
+			// client, so it must stop before that client closes below.
+			cacheControlCancel()
+			return nil
+		}},
+		{Name: "cache_redis_client", Fn: func() error {
+			if cacheClient == nil {
+				return nil
+			}
+			return cacheClient.Close()
+		}},
+		{Name: "limiter_redis_client", Fn: func() error {
+			if limiterClient == nil {
+				return nil
+			}
+			return limiterClient.Close()
+		}},
 	}
 
-	if err := e.Shutdown(ctx); err != nil {
-		appLogger.Error("Server forced to shutdown", "error", err)
+	if err := shutdownSequence(steps); err != nil {
+		appLogger.Error("Server forced to shutdown with errors", "error", err)
 		os.Exit(1)
 	}
 
@@ -2232,14 +2584,207 @@ func main() {
 // builds this exact chain via httptest and demonstrates the failure mode
 // above when the two calls are (deliberately, temporarily, for that test's
 // RED demonstration only) reordered.
+// newRedisClientOptions builds the redisclient.Options for a Redis client named `name` (either
+// cache.LimiterClientName or "cache") from cfg. Extracted from main() (Issue #1531 Blocker 4) so
+// the actual wiring of cfg.RedisTimeoutMs/RedisPoolSize into the constructed client is unit
+// testable without a real Redis server for the URL/Name/timeout/pool-size fields (see
+// issue1531_redis_config_wiring_test.go), and against a real client's rdb.Options() (see
+// redisclient/client_test.go's TestNew_ExplicitOptionsOverrideDefaults) for the fields that matter
+// once a real Redis instance is available. Before this helper existed, both call sites in main() passed only
+// URL and Name — cfg.RedisTimeoutMs and cfg.RedisPoolSize were validated and documented ("read by
+// redisclient.Options construction") but silently discarded, so every deploy ran on
+// redisclient's hardcoded defaults regardless of what an operator configured.
+func newRedisClientOptions(cfg *config.Config, url, name string) redisclient.Options {
+	readWriteTimeout := time.Duration(cfg.RedisTimeoutMs) * time.Millisecond
+	return redisclient.Options{
+		URL:          url,
+		Name:         name,
+		ReadTimeout:  readWriteTimeout,
+		WriteTimeout: readWriteTimeout,
+		PoolSize:     cfg.RedisPoolSize,
+	}
+}
+
+// redisStartupPingTimeout bounds buildRateLimitBackend's "redis" mode Ping — a STARTUP-only
+// check, never on the per-request path.
+const redisStartupPingTimeout = 5 * time.Second
+
+// buildRateLimitBackend constructs the fleet-wide Redis-backed rate-limit primary from
+// limiterClient/cfg, or returns nil (memory-only) when limiterClient is nil. Extracted from
+// main() so its SentinelLimit choice — the subject of Issue #1531 fix round 1 — is unit-testable
+// without a real Redis server.
+//
+// Issue #1531 Slice B / M2: cfg.RateLimitBackend (RATE_LIMIT_BACKEND) is a documented incident
+// kill switch (docs/architecture/redis-topology.md, "Kill switches") that was validated at
+// config.Load() time but never actually read here — this function used to branch solely on
+// limiterClient == nil, so setting RATE_LIMIT_BACKEND=memory during an incident (e.g. a sick
+// Upstash instance) had zero effect: every request still hit the Redis-backed primary. Now:
+//   - "memory": force in-memory limiting even when limiterClient is non-nil (the incident lever).
+//   - "redis": require a working limiterClient; if one isn't available, return an error so the
+//     CALLER can fail fast at STARTUP — never per-request. This function itself must never fail a
+//     request; it only runs once, during main()'s initialization, before any HTTP traffic is
+//     accepted.
+//   - "auto" (default) or any other/empty value (e.g. a *config.Config built directly by a test
+//     without going through Load(), where the zero value is ""): preserves the original
+//     nil-check-only behaviour.
+//
+// Issue #1531 GA-4: redisclient.New is lazy and never Pings, so a limiterClient being non-nil
+// only proves the URL PARSED, not that Redis is reachable. "redis" mode exists so an operator can
+// force Redis during an incident and KNOW it took effect — a syntactically valid but unreachable
+// RATE_LIMIT_REDIS_URL booting cleanly would defeat that and contradict this function's own error
+// text below ("missing/unreachable"). So "redis" mode additionally Pings, bounded by
+// redisStartupPingTimeout, ONCE here at startup — never per-request; "auto" and "memory" do not
+// Ping at all, since neither documents a reachability guarantee.
+func buildRateLimitBackend(ctx context.Context, limiterClient redisclient.Client, cfg *config.Config) (middleware.RateLimitBackend, error) {
+	switch cfg.RateLimitBackend {
+	case "memory":
+		return nil, nil
+	case "redis":
+		if limiterClient == nil {
+			return nil, fmt.Errorf(
+				"RATE_LIMIT_BACKEND=redis requires a working Redis limiter client, but none is available " +
+					"(RATE_LIMIT_REDIS_URL missing/unreachable) — refusing to start rather than silently " +
+					"falling back to memory-only rate limiting")
+		}
+		pingCtx, cancel := context.WithTimeout(ctx, redisStartupPingTimeout)
+		defer cancel()
+		if err := limiterClient.Ping(pingCtx); err != nil {
+			return nil, fmt.Errorf(
+				"RATE_LIMIT_BACKEND=redis requires a working Redis limiter client, but it failed to "+
+					"respond to a startup Ping (RATE_LIMIT_REDIS_URL missing/unreachable): %w — refusing "+
+					"to start rather than silently falling back to memory-only rate limiting", err)
+		}
+	}
+
+	if limiterClient == nil {
+		return nil, nil
+	}
+	return ratelimitstore.NewRedisBackend(limiterClient, ratelimitstore.Options{
+		RegularLimit: cfg.RateLimitIP,
+		AuthLimit:    cfg.RateLimitAuth,
+		// SentinelLimit is now wired explicitly from cfg.RateLimitSentinelLimit
+		// (RATE_LIMIT_SENTINEL_LIMIT, Task 8) so an operator can raise the sentinel bucket's
+		// limit during a live incident without a deploy. Zero (the default) still means "use
+		// RegularLimit, not AuthLimit" — Options.withDefaults treats any <=0 SentinelLimit as
+		// "fall back to RegularLimit" (see TestRedisBackend_SentinelLimitDefaultsToRegularLimitWhenZero),
+		// so passing an explicit zero here preserves that fix-round-1 behaviour exactly; it is NOT
+		// a regression to "wire the field explicitly" as fix round 1's comment anticipated. The
+		// sentinel bucket ("rl:v2:sentinel") is used whenever a Cloudflare-gated request's
+		// Cf-Connecting-Ip is missing, duplicated, or malformed — and under Redis it is ONE
+		// fleet-wide key, not per-machine. A Cloudflare header anomaly (Managed Transform change,
+		// config drift, a CF incident) collapses ALL affected traffic into that single bucket:
+		// capping it at the auth limit would mean the entire fleet falls over to ~10 req/min in
+		// precisely the incident where the API most needs to keep serving. RegularLimit (the
+		// zero-value default) is the correct floor; RATE_LIMIT_SENTINEL_LIMIT lets it be raised
+		// higher still without a deploy.
+		SentinelLimit: cfg.RateLimitSentinelLimit,
+		Window:        time.Minute,
+	}), nil
+}
+
 func registerCloudflareAndRateLimitMiddleware(e *echo.Echo, cfCIDRRef *atomic.Pointer[[]netip.Prefix], cfg *config.Config) {
+	// Delegates to the Task 7 variant with a nil backend/done/logger — RateLimitConfig treats all
+	// three as OPTIONAL (nil Backend: memory-only; nil Done: cleanup goroutine never stops; nil
+	// Logger: slog.Default()), so this reproduces this function's exact pre-#1531 behaviour byte
+	// for byte. issue1514_rate_limit_ordering_test.go calls this 3-arg function directly and is
+	// pinned unmodified — do not add parameters to IT; extend
+	// registerCloudflareAndRateLimitMiddlewareWithBackend instead.
+	registerCloudflareAndRateLimitMiddlewareWithBackend(e, cfCIDRRef, cfg, nil, nil, nil)
+}
+
+// registerCloudflareAndRateLimitMiddlewareWithBackend is registerCloudflareAndRateLimitMiddleware
+// plus the Issue #1531 Task 5/7 wiring: an optional fleet-wide RateLimitBackend, an optional Done
+// channel that stops the rate limiter's background goroutines on shutdown, and an optional
+// *slog.Logger for fallback-activation/recovery logging. The Cloudflare-before-rate-limiter
+// ordering — the entire reason this helper exists rather than two adjacent e.Use(...) calls at
+// the call site — is identical to the 3-arg function above; see its doc comment for why that
+// order is load-bearing.
+func registerCloudflareAndRateLimitMiddlewareWithBackend(e *echo.Echo, cfCIDRRef *atomic.Pointer[[]netip.Prefix], cfg *config.Config, backend middleware.RateLimitBackend, done <-chan struct{}, logger *slog.Logger) {
 	e.Use(middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment)) // Cloudflare-only enforcement: blocks direct *.fly.dev access
 	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                       // Per-IP rate limiting
-		IPLimit:           cfg.RateLimitIP,
-		AuthEndpointLimit: cfg.RateLimitAuth,
+		// IPLimit/AuthEndpointLimit here feed ONLY the in-memory fallback store (memoryBackend) —
+		// the Redis-backed primary gets its own RegularLimit/AuthLimit via buildRateLimitBackend
+		// above, unaffected by this division. cfg.RateLimitFallbackDivisor (Task 8) divides these
+		// so N machines independently falling back to memory-only limiting do not multiply the
+		// intended FLEET-WIDE budget by N — see rateLimitFallbackLimit's doc comment.
+		IPLimit:           rateLimitFallbackLimit(cfg.RateLimitIP, cfg.RateLimitFallbackDivisor),
+		AuthEndpointLimit: rateLimitFallbackLimit(cfg.RateLimitAuth, cfg.RateLimitFallbackDivisor),
+		// ExemptPathLimit (Issue #1531 L3) is deliberately the RAW, UNDIVIDED cfg.RateLimitIP —
+		// /health is the only exempt path, it never uses the Redis-backed primary at all (by
+		// design), and its budget was never fleet-wide to begin with (it's Fly's own
+		// single-machine liveness check), so the fleet-machine-count divisor above must not apply
+		// to it. See RateLimitConfig.ExemptPathLimit's doc comment.
+		ExemptPathLimit: cfg.RateLimitIP,
+		// PrimaryTimeout (Issue #1531 L7): cfg.RedisTimeoutMs already reaches the go-redis
+		// CLIENT's own read/write timeouts (see newRedisClientOptions) but, before this fix, had
+		// no path to the LIMITER's per-call budget — that was a hardcoded, uncustomizable 50ms
+		// (middleware.defaultRedisLimiterTimeout). Raising REDIS_TIMEOUT_MS during a real latency
+		// incident changed nothing about the limiter's own cutoff, which kept tripping the
+		// circuit breaker regardless. Wiring the same config value through here makes
+		// REDIS_TIMEOUT_MS the operative knob it was already documented (config.go) as being.
+		PrimaryTimeout:    time.Duration(cfg.RedisTimeoutMs) * time.Millisecond,
 		WindowDuration:    time.Minute,
 		MaxEntries:        cfg.RateLimitMaxEntries,
+		Backend:           backend,
+		Done:              done,
+		Logger:            logger,
 	}))
+}
+
+// rateLimitFallbackLimit divides limit by divisor for the in-memory rate-limit fallback (see
+// registerCloudflareAndRateLimitMiddlewareWithBackend). Issue #1531 Task 8: when the fleet-wide
+// Redis-backed primary is unavailable, every machine falls back independently to its own
+// in-memory limiter — N machines each enforcing the FULL fleet-wide limit multiplies the intended
+// budget by N. Dividing the per-machine fallback limit by (an operator-tunable estimate of) fleet
+// size keeps the aggregate closer to the intended budget during an outage.
+//
+// divisor <= 0 is treated as 1 (no division — today's behaviour, and the config default), rather
+// than panicking or dividing by zero.
+//
+// limit <= 0 passes through UNCHANGED — deliberately NOT floored to 1 here (fix round 1).
+// middleware.RateLimitConfig.withDefaults() is the ONE place that owns the "IPLimit/
+// AuthEndpointLimit <= 0 means fall back to the built-in default (100/10)" contract. A
+// misconfigured RATE_LIMIT_IP=0 or RATE_LIMIT_AUTH=0 must keep self-healing through that single
+// defaulting path. Flooring a non-positive limit to 1 here — this function's first version did —
+// pre-empts withDefaults() and turns a self-correcting misconfiguration (silently falls back to
+// 100 req/min) into a near-total lockout (1 req/min): a real behaviour regression, caught in fix
+// round 1, not a pre-existing gap. Only a genuinely positive limit is divided and floored at 1
+// (so a divisor larger than the limit degrades to "1 request per window", never to "0 requests" —
+// which would silently disable the fallback limiter, letting every request through unenforced).
+func rateLimitFallbackLimit(limit, divisor int) int {
+	if limit <= 0 {
+		return limit
+	}
+	if divisor <= 0 {
+		divisor = 1
+	}
+	result := limit / divisor
+	if result < 1 {
+		result = 1
+	}
+	return result
+}
+
+// redisPoolStatsAdapter adapts redisclient.Client to observability.RedisPoolStatsSource — a
+// LOCAL mirror interface (see that type's doc comment) so internal/observability never imports
+// internal/redisclient. Reads local pool state only; dispatches no Redis command.
+type redisPoolStatsAdapter struct {
+	client redisclient.Client
+}
+
+func (a redisPoolStatsAdapter) Name() string { return a.client.Name() }
+
+func (a redisPoolStatsAdapter) RedisPoolStats() observability.RedisPoolStats {
+	s := a.client.PoolStats()
+	return observability.RedisPoolStats{
+		Hits:       s.Hits,
+		Misses:     s.Misses,
+		Timeouts:   s.Timeouts,
+		TotalConns: s.TotalConns,
+		IdleConns:  s.IdleConns,
+		StaleConns: s.StaleConns,
+		PoolSize:   s.PoolSize,
+	}
 }
 
 // dbPoolAdapter adapts *pgxpool.Pool to services.DatabasePool interface (Issue #640)
@@ -2256,36 +2801,6 @@ func (a *dbPoolAdapter) GetStats() services.PoolStats {
 		MaxConns:          s.MaxConns(),
 		ConstructingConns: s.ConstructingConns(),
 		TotalConns:        s.TotalConns(),
-	}
-}
-
-// createDBCheck creates a database health check function
-// TODO: Replace with real database connection check
-func createDBCheck() func() error {
-	return func() error {
-		// For now, always return healthy
-		// Will be replaced with actual DB ping when we add database
-		return nil
-	}
-}
-
-// createRedisCheck creates a Redis health check function
-// TODO: Replace with real Redis connection check
-func createRedisCheck() func() error {
-	return func() error {
-		// For now, always return healthy
-		// Will be replaced with actual Redis ping when we add Redis
-		return nil
-	}
-}
-
-// createClerkCheck creates a Clerk health check function
-// TODO: Replace with real Clerk connection check
-func createClerkCheck() func() error {
-	return func() error {
-		// For now, always return healthy
-		// Will be replaced with actual Clerk endpoint check when we add Clerk
-		return nil
 	}
 }
 
@@ -2377,6 +2892,35 @@ func boolStatus(configured bool) string {
 		return "configured"
 	}
 	return "not configured"
+}
+
+// parseCacheNamespacesDisabled parses config.CacheNamespacesDisabled (comma-separated namespace
+// names, e.g. "analytics,dashprefs") into the map[cache.Namespace]bool shape cache.Options.
+// EnvDisabledNamespaces expects. Unknown/blank tokens are ignored — an unrecognised namespace has
+// no registry entry and cache.Cache.Enabled already reports it disabled unconditionally, so a typo
+// here fails safe (extra caching never turns on) rather than panicking at boot.
+func parseCacheNamespacesDisabled(raw string) map[cache.Namespace]bool {
+	out := make(map[cache.Namespace]bool)
+	for _, tok := range strings.Split(raw, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		out[cache.Namespace(tok)] = true
+	}
+	return out
+}
+
+// isProductionOrStagingEnvironment reports whether env is one of the two environments where a
+// Redis limiter-client construction FAILURE (as opposed to ErrNotConfigured) should be fatal
+// (Issue #1531 Task 7c). Deliberately NOT an inline `cfg.Environment == "production" ||
+// cfg.Environment == "staging"` comparison at the call site: qa_auth_bypass_wiring_test.go's
+// TestQAAuthBypassRegistrationUsesTheTestedGate scans main.go's source for the raw string
+// `cfg.Environment == "staging"` anywhere in the file (not just near QA-bypass gating) — see that
+// test's doc comment on why an inline environment comparison is the exact anti-pattern #1432
+// B2-1 closed.
+func isProductionOrStagingEnvironment(env string) bool {
+	return env == "production" || env == "staging"
 }
 
 // convertRegionConfig maps config.RegionConfig to domain.RegionInfo map for InitRegionRegistry.

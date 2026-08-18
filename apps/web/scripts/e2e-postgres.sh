@@ -276,15 +276,35 @@ run_migrations() {
 # Safe to call multiple times (idempotent)
 # Also cleans up any orphaned containers to prevent resource leaks
 stop_postgres() {
+  local cleanup_status=0
+
   if [ -n "$E2E_POSTGRES_CONTAINER" ]; then
+    local existing
+    existing="$(docker ps -aq --filter "name=^${E2E_POSTGRES_CONTAINER}$" 2>/dev/null || true)"
+    if [ -z "$existing" ]; then
+      E2E_POSTGRES_CONTAINER=""
+      return 0
+    fi
     echo "🛑 Stopping PostgreSQL container: $E2E_POSTGRES_CONTAINER"
-    docker stop "$E2E_POSTGRES_CONTAINER" 2>/dev/null || true
-    docker rm -f "$E2E_POSTGRES_CONTAINER" 2>/dev/null || true
+    if ! docker rm -f "$E2E_POSTGRES_CONTAINER" 2>/dev/null; then
+      echo "⚠️  Docker could not remove PostgreSQL container ${E2E_POSTGRES_CONTAINER}; retrying once"
+      sleep 1
+      if ! docker rm -f "$E2E_POSTGRES_CONTAINER" 2>/dev/null; then
+        echo "❌ PostgreSQL container cleanup failed: ${E2E_POSTGRES_CONTAINER}"
+        cleanup_status=1
+      fi
+    fi
+
+    if docker ps -aq --filter "name=^${E2E_POSTGRES_CONTAINER}$" 2>/dev/null | grep -q .; then
+      echo "❌ PostgreSQL container still exists after cleanup: ${E2E_POSTGRES_CONTAINER}"
+      cleanup_status=1
+    fi
     E2E_POSTGRES_CONTAINER=""
   fi
 
-  # Also clean up any orphaned containers (from crashed runs, parallel executions, etc.)
-  cleanup_orphan_containers
+  # Orphan cleanup remains a startup concern. Keeping it out of the EXIT path means a failed run
+  # only de-provisions the container it owns; it cannot broad-delete a concurrent local run's DB.
+  return "$cleanup_status"
 }
 
 # Build DATABASE_URL from port
