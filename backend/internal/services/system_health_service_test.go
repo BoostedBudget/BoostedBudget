@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/health"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -170,6 +171,12 @@ func TestSystemHealthService_GetSystemHealth_Success(t *testing.T) {
 		deadLetterRepo: mockDeadLetterRepo,
 		pool:           mockPool,
 		plaidEnv:       "sandbox",
+		// Issue #1531 Task 7d: checkClerk now reads the shared memoized Check instead of an
+		// unconditional "up" placeholder. This test simulates an entirely healthy system, so wire
+		// a Check that reports healthy, matching the pre-#1531 placeholder's assertion below.
+		healthChecks: SharedHealthChecks{
+			Clerk: func(ctx context.Context) health.Result { return health.Result{} },
+		},
 	}
 
 	ctx := context.Background()
@@ -400,6 +407,52 @@ func TestSystemHealthService_CalculateOverallStatus(t *testing.T) {
 				},
 			},
 			expected: "degraded",
+		},
+		{
+			// Issue #1531 round-2 gap-analysis fix (task GA Part 2), criterion 12: "Redis remains
+			// non-critical — Redis down yields degraded + HTTP 200, never 503." Before this fix,
+			// Redis was never consulted by calculateOverallStatus at all, so this case fell through
+			// to "healthy" — see TestSystemHealth_RedisDownReportsDegradedOverallStatus (renamed
+			// from ...DoesNotChangeOverallStatus) for the full-pipeline version of this same case.
+			name: "degraded - redis down",
+			response: &domain.SystemHealthResponse{
+				Services: domain.ServiceHealthStatuses{
+					Database: domain.DatabaseHealth{Status: "up"},
+					Redis:    domain.RedisHealth{Status: "down"},
+				},
+				JobQueues:       map[string]domain.QueueMetrics{},
+				DeadLetterQueue: domain.DeadLetterMetrics{Count: 0},
+			},
+			expected: "degraded",
+		},
+		{
+			// Same fix, the Clerk half of criterion 12's requirement — the issue's GREEN criterion
+			// is Redis OR Clerk down => degraded.
+			name: "degraded - clerk down",
+			response: &domain.SystemHealthResponse{
+				Services: domain.ServiceHealthStatuses{
+					Database: domain.DatabaseHealth{Status: "up"},
+					Clerk:    domain.ServiceHealth{Status: "down"},
+				},
+				JobQueues:       map[string]domain.QueueMetrics{},
+				DeadLetterQueue: domain.DeadLetterMetrics{Count: 0},
+			},
+			expected: "degraded",
+		},
+		{
+			// Database down must win over Redis/Clerk being merely "degraded" — only Database may
+			// ever produce "unhealthy" (see calculateOverallStatus's doc comment).
+			name: "unhealthy - database down beats redis and clerk down",
+			response: &domain.SystemHealthResponse{
+				Services: domain.ServiceHealthStatuses{
+					Database: domain.DatabaseHealth{Status: "down"},
+					Redis:    domain.RedisHealth{Status: "down"},
+					Clerk:    domain.ServiceHealth{Status: "down"},
+				},
+				JobQueues:       map[string]domain.QueueMetrics{},
+				DeadLetterQueue: domain.DeadLetterMetrics{Count: 0},
+			},
+			expected: "unhealthy",
 		},
 		{
 			name: "healthy - low webhook success rate but low volume",

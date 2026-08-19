@@ -205,7 +205,12 @@ func (h *BudgetHandler) CreateBudget(ctx context.Context, input *CreateBudgetInp
 		// transaction (Issue #1300 plan flag B). MCP-created budgets pick up savings categories
 		// on the next sync via BackfillManagedCategories.
 		txBudgetRepo := repository.NewBudgetRepository(tx)
-		txBudgetService := services.NewBudgetService(txBudgetRepo, nil, nil, slog.Default())
+		// #1531: wire a real, tx-scoped CustomCategoryRepository (was nil) so the #1540
+		// custom-category ownership guard (budget_service.go GetNamesByIDs call) runs inside
+		// the same transaction as the write, exactly like goalOwnershipChecker below. Passing
+		// nil here left the guard nil-dereferencing on the MCP path — see R5-1 note above.
+		txCustomCategoryRepo := repository.NewCustomCategoryRepository(tx)
+		txBudgetService := services.NewBudgetService(txBudgetRepo, txCustomCategoryRepo, nil, slog.Default())
 		// R5-1: wire the ownership checker so the per-category savings-goal IDOR guard
 		// (R4-3) runs on the MCP path. Without this call, goalOwnershipChecker is nil
 		// and the service degrades to a WARN-log no-op — silently allowing cross-user

@@ -89,6 +89,15 @@ func (s *householdService) SetAccountShareVisibility(ctx context.Context, caller
 	} else {
 		s.capture(callerUserID, phclient.EventHouseholdAccountShared)
 	}
+	// Issue #1531 Task 10b-2b: a share visibility change alters what OTHER household members
+	// see in their own combined/shared-account analytics, not just the caller's — the HTTP
+	// mutation middleware (Task 10b-1) only bumps the acting caller (and household scope),
+	// never the other members this write actually affects. Queried via s.householdRepo (the
+	// plain, POOL-bound field, never the tx-scoped hhRepo local above) and only AFTER commit,
+	// so no new query needs to be expected inside the transaction (including on any
+	// validation-failure path above, which all return before reaching this point).
+	s.bumpCacheForHousehold(ctx, household.ID)
+	s.bumpCacheForCurrentMembers(ctx, household.ID)
 	return share, nil
 }
 

@@ -9,9 +9,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
@@ -60,6 +62,11 @@ func (m *mockDeletionService) SetWorkClaimsRepo(repo repository.WorkClaimsReposi
 
 func (m *mockDeletionService) SetAnalytics(a phclient.Analytics) {
 	// No-op for mock
+}
+
+// SetCache (Issue #1531 Task 10b) is not exercised by these deletion-operation tests; stubbed to
+// satisfy the expanded interface.
+func (m *mockDeletionService) SetCache(purger cache.Purger, gens *cache.Generations, jq queue.JobQueue) {
 }
 
 // TestRequestDeletion_Success tests successful deletion request.

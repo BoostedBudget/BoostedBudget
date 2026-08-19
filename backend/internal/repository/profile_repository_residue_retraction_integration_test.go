@@ -141,7 +141,7 @@ func TestDeleteUserCascade_Integration_ResidueRecordsAreRetractedByACompletedDel
 		user.ID)
 	require.NoError(t, err)
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	require.True(t, deleted, "sanity: an ordinary eligible user is still deleted")
 
@@ -183,7 +183,7 @@ func TestDeleteUserCascade_Integration_ResidueRecordsSurviveARefusedCascade(t *t
 
 	// The user cancelled: the observed occurrence no longer matches the row.
 	stale := requestedAt.Add(-time.Hour)
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, &stale)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, &stale)
 	require.NoError(t, err, "a refusal is a normal, expected outcome — not an error")
 	require.False(t, deleted)
 

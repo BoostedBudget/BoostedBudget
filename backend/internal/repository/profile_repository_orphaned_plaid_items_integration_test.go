@@ -147,7 +147,7 @@ func TestDeleteUserCascade_Integration_OrphanTerminallyFailedItemUnblocksAndIsPr
 	require.Empty(t, readOrphanRecords(t, ctx, pool, enc, item.ID),
 		"the orphan record is written by the cascade, not by the failure — while the row lives, the row IS the record")
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	assert.True(t, deleted,
 		"#1494: an Item whose removal can never succeed must no longer block this user's GDPR erasure forever")
@@ -226,7 +226,7 @@ func TestDeleteUserCascade_Integration_OrphanUnresolvedItemStillBlocksAndWritesN
 		_, _ = pool.Exec(ctx, "DELETE FROM plaid_orphaned_items WHERE linked_item_id = $1", item.ID)
 	})
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err, "an aborted cascade is a normal outcome, not an error")
 	assert.False(t, deleted, "neither fact recorded means work is still owed and still possible — keep blocking")
 	assertUserRowExists(t, ctx, pool, user.ID)
@@ -268,7 +268,7 @@ func TestDeleteUserCascade_Integration_OrphanFreshTerminalVerdictStillBlocks(t *
 	})
 	require.NoError(t, linkedItemRepo.MarkPlaidRemovalFailed(ctx, []string{item.ID}, "INVALID_ACCESS_TOKEN"))
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err, "waiting out the window is a normal outcome, not an error")
 	assert.False(t, deleted,
 		"a verdict reached moments ago has not been OBSERVED to persist — an environment misconfiguration "+
@@ -279,13 +279,13 @@ func TestDeleteUserCascade_Integration_OrphanFreshTerminalVerdictStillBlocks(t *
 
 	// One more day inside the window still blocks — the boundary is the window, not "any elapsed time".
 	ageTerminalVerdict(t, ctx, pool, item.ID, 6*24*time.Hour)
-	deleted, err = repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err = repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	assert.False(t, deleted, "6 days is inside the 7-day window")
 
 	// Past it, the same row goes through — proving the block was the window and nothing else.
 	ageTerminalVerdict(t, ctx, pool, item.ID, 2*24*time.Hour)
-	deleted, err = repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err = repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	assert.True(t, deleted, "once the verdict has held for longer than the window, the erasure may complete")
 	assert.Len(t, readOrphanRecords(t, ctx, pool, enc, item.ID), 1)
@@ -318,7 +318,7 @@ func TestDeleteUserCascade_Integration_OrphanProvedRemovedItemWritesNothing(t *t
 	})
 	require.NoError(t, linkedItemRepo.MarkPlaidRemoved(ctx, []string{item.ID}))
 
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	require.True(t, deleted, "a proved-removed item has never blocked the cascade and must not start now")
 	assert.Empty(t, readOrphanRecords(t, ctx, pool, enc, item.ID),
@@ -380,7 +380,7 @@ func TestDeleteUserCascade_Integration_OrphanRecordInsertFailure_AbortsTheWholeC
 		_, _ = pool.Exec(ctx, "DROP FUNCTION IF EXISTS x2_block_orphan_insert()")
 	})
 
-	deleted, cascadeErr := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, cascadeErr := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.Error(t, cascadeErr,
 		"a failure to preserve the obligation must be a real error, not a warning the cascade continues past")
 	assert.Contains(t, cascadeErr.Error(), "preserve orphaned Plaid item records")
@@ -582,7 +582,7 @@ func TestDeleteUserCascade_Integration_OrphanRetainsTheAccessTokenWithADeadline(
 	ageTerminalVerdict(t, ctx, pool, item.ID, terminalVerdictAgeBeyondCoolingOff)
 
 	before := time.Now().UTC()
-	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	deleted, _, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
 	require.NoError(t, err)
 	require.True(t, deleted)
 

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // TestIPLimiterStore_CapacityNeverExceeded drives thousands of unique IPv4 and
@@ -105,4 +107,41 @@ func TestIPLimiterStore_LRUOrderMaintainedAcrossInterleavedAccess(t *testing.T) 
 	assertHas("a", true)
 	assertHas("d", true)
 	assertHas("e", true)
+}
+
+// TestTierForRequest_NeverProducesAnUnmappedTier is the REAL enforcement test called for by Task
+// 4's review carry-forward: internal/ratelimitstore.RedisBackend.limitFor silently maps any
+// out-of-range domain.RateLimitTier to RegularLimit via a default branch, so it is load-bearing
+// that middleware never hands it anything but one of the three named tiers. This is not
+// self-fulfilling (unlike a test that only checks values it wrote itself): it drives
+// tierForRequest — the ONLY function in this package that selects a tier for a live request —
+// across a spread of realistic and adversarial (path, key) combinations and asserts the result's
+// String() is always one of exactly regular/auth/sentinel, never "unknown" (which is what an
+// out-of-range domain.RateLimitTier would render as — see domain.RateLimitTier.String()).
+func TestTierForRequest_NeverProducesAnUnmappedTier(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		key  string
+	}{
+		{"ordinary API path", "/api/v1/accounts", "203.0.113.1"},
+		{"webhook path", "/webhooks/plaid", "203.0.113.1"},
+		{"qa auth path", "/api/v1/qa/auth/login", "203.0.113.1"},
+		{"sentinel key on an ordinary path", "/api/v1/accounts", identitySentinelFallback},
+		{"sentinel key on a webhook path", "/webhooks/plaid", identitySentinelFallback},
+		{"sentinel key on a qa auth path", "/api/v1/qa/auth/login", identitySentinelFallback},
+		{"empty path and key", "", ""},
+		{"root path", "/", "10.0.0.1"},
+		{"path that merely contains webhooks", "/api/v1/mywebhooks/stuff", "10.0.0.1"},
+		{"health path", "/health", "10.0.0.1"},
+	}
+
+	allowed := map[string]bool{"regular": true, "auth": true, "sentinel": true}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tier := tierForRequest(tc.path, tc.key)
+			assert.True(t, allowed[tier.String()],
+				"tierForRequest(%q, %q) = %q, which ratelimitstore.RedisBackend.limitFor would silently fall back to RegularLimit for", tc.path, tc.key, tier.String())
+		})
+	}
 }

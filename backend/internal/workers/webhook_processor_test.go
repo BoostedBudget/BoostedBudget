@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -47,6 +48,12 @@ func (m *MockTransactionSyncServiceForWorker) SetSavingsProgressServices(_ servi
 
 // SetSavingsDetectionServices satisfies the TransactionSyncService interface (Issue #1300 M18 RG1).
 func (m *MockTransactionSyncServiceForWorker) SetSavingsDetectionServices(_ services.SyncContributionsBasisGoalReader, _ services.SyncProposedContributionUpserter, _ repository.TransactionRepository) {
+}
+
+// SetCacheInvalidation satisfies the TransactionSyncService interface (Issue #1531 Task 10b-2).
+// This test double never calls SyncTransactions/ProcessWebhook for real, so there is nothing to
+// wire — the no-op mirrors SetSavingsDetectionServices above.
+func (m *MockTransactionSyncServiceForWorker) SetCacheInvalidation(_ *cache.Generations, _ services.SyncCacheHouseholdLookup) {
 }
 
 // MockItemErrorServiceForWorker for testing

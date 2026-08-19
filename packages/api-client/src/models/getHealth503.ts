@@ -30,17 +30,9 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { HealthChecks } from './healthChecks';
+import type { GetHealth503Status } from './getHealth503Status';
 
-export interface HealthResponse {
-  /** A URL to the JSON Schema for this object. */
-  readonly $schema?: string;
-  /** Individual service health checks */
-  checks: HealthChecks;
-  /** Overall system health status: healthy, degraded, or unhealthy */
-  status: string;
-  /** ISO 8601 timestamp of the health check */
-  timestamp: string;
-  /** API version */
-  version: string;
-}
+export type GetHealth503 = {
+  /** Liveness indicator. "unavailable" when a critical dependency is unhealthy. */
+  status: GetHealth503Status;
+};

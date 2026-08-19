@@ -149,6 +149,76 @@ var (
 		Help: "Number of Cloudflare-gated requests that fell back to the shared rate-limit sentinel bucket due to a missing/duplicated/malformed Cf-Connecting-Ip header.",
 	})
 
+	// RedisLimiterFallbackActivationsTotal is Issue #1531's critical rate-limiter signal: the
+	// limiter has silently reverted from the shared Redis-backed bucket to per-machine, in-process
+	// buckets — meaning rate limits are no longer enforced consistently across replicas. Incremented
+	// EDGE-TRIGGERED (once per outage, not once per request) by a later task (#1531 Task 5); this
+	// task only declares the metric.
+	//
+	// ⚠ THIS REPO HAS NO ALERT-RULE FILE (see PlaidOrphanedItemsByAdminState in this file for the
+	// same statement and reason), so the alerting intent lives here:
+	//
+	//	# The limiter has silently reverted to per-machine buckets.
+	//	increase(redis_limiter_fallback_activations_total[10m]) > 0
+	//	# Still degraded right now — survives the counter reset a restart causes.
+	//	redis_limiter_backend_degraded == 1
+	//	  for: 5m
+	//	# The publisher stopped reporting. Unknown is not "not degraded".
+	//	absent(redis_limiter_backend_degraded)
+	//	  for: 1h
+	//
+	// ⚠ ISSUE #1531 ITSELF SPECIFIES THE RULE `redis_limiter_fallback_activations_total > 0`. THAT
+	// RULE IS WRONG, and is deliberately NOT used above: this metric is a monotonic Counter, so after
+	// the first fallback in a process's lifetime the rule is permanently true and the alert can never
+	// clear. The corrected rule above uses increase() over a window instead, so it fires on each new
+	// activation and then resolves — and pairs it with RedisLimiterBackendDegraded's == 1 rule for
+	// "is it happening right now", which a monotonic counter alone cannot answer.
+	RedisLimiterFallbackActivationsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "redis_limiter_fallback_activations_total",
+		Help: "Total number of times the Redis-backed rate limiter fell back to per-machine in-process buckets, incremented once per outage (edge-triggered, not per-request). Monotonic — alert on increase(...[10m]) > 0, NOT on > 0 (which would never clear after the first occurrence).",
+	})
+
+	// RedisLimiterBackendDegraded is 1 while the rate limiter is currently running on the
+	// per-machine fallback described above, 0 while the shared Redis-backed limiter is healthy.
+	//
+	// ⚠ AN UnmeasuredGauge (see above): absent until a later task's publisher has actually reported
+	// a reading, rather than asserting "not degraded" (0) from process start with nothing having
+	// looked. See the rules on RedisLimiterFallbackActivationsTotal above for how this gauge and that
+	// counter are meant to be read together.
+	RedisLimiterBackendDegraded = UnmeasuredGauge(prometheus.GaugeOpts{
+		Name: "redis_limiter_backend_degraded",
+		Help: "1 while the rate limiter is currently running on the per-machine fallback (Redis backend considered down), 0 while healthy. Absent until the publisher has reported a reading, so alert on absence too — unknown is not \"not degraded\".",
+	})
+
+	// RedisLimiterFallbackActiveSeconds accumulates the total number of seconds spent degraded, so
+	// an operator can answer "how long has this outage lasted in total" rather than only "how many
+	// times has it happened" (RedisLimiterFallbackActivationsTotal above answers the latter).
+	RedisLimiterFallbackActiveSeconds = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "redis_limiter_fallback_active_seconds",
+		Help: "Cumulative seconds spent with the rate limiter degraded to its per-machine fallback. Monotonic — read with rate()/increase() to see ongoing degradation, or as a running total for cumulative outage duration.",
+	})
+
+	// RateLimitRejectionsTotal counts requests rejected by the rate limiter, by tier.
+	//
+	// ⚠ LABEL HYGIENE, NON-NEGOTIABLE: "tier" is one of a small fixed set — regular | auth |
+	// sentinel — and must never become a cache key, IP address, Redis URL, or raw error string.
+	RateLimitRejectionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ratelimit_rejections_total",
+		Help: "Total number of requests rejected by the rate limiter, by tier (regular, auth, sentinel).",
+	}, []string{"tier"})
+
+	// RedisCommandErrorsTotal counts Redis command errors, by client and command.
+	//
+	// ⚠ LABEL HYGIENE, NON-NEGOTIABLE: "client" is one of {limiter, cache}; "op" must come from a
+	// small fixed set of command names (e.g. get, set, incr, eval, ping) — never a cache key, IP
+	// address, Redis URL, or raw error string, all of which are unbounded-cardinality hazards this
+	// codebase avoids everywhere else (see AccountsReplacedFiltered's "family" label above for the
+	// same bounded-set discipline).
+	RedisCommandErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "redis_command_errors_total",
+		Help: "Total number of Redis command errors, by client (limiter, cache) and op (a small fixed set of command names). Never labelled with a cache key, IP address, Redis URL, or raw error string.",
+	}, []string{"client", "op"})
+
 	// DeadLetterQueueSize tracks the current size of the dead letter queue
 	DeadLetterQueueSize = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "dead_letter_queue_size",

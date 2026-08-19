@@ -295,7 +295,8 @@ chmod +x ./scripts/deploy-qa.sh
   Verifying Restart Policies
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✓ boostedbudget-db-qa: unless-stopped
-✓ boostedbudget-redis-qa: unless-stopped
+✓ boostedbudget-redis-ratelimit-qa: unless-stopped
+✓ boostedbudget-redis-cache-qa: unless-stopped
 ...
 ✓ All containers have correct restart policies
 
@@ -317,19 +318,23 @@ docker-compose -f docker-compose.qa.yml ps
 
 Expected output:
 ```
-NAME                           STATUS                   PORTS
-boostedbudget-api-qa      Up (healthy)             0.0.0.0:8080->8080/tcp
-boostedbudget-db-qa       Up (healthy)             0.0.0.0:5433->5432/tcp
-boostedbudget-redis-qa    Up (healthy)             0.0.0.0:6380->6379/tcp
-boostedbudget-rabbitmq-qa Up (healthy)             0.0.0.0:5673->5672/tcp, 0.0.0.0:15673->15672/tcp
-boostedbudget-web-qa      Up                       0.0.0.0:3000->3000/tcp
+NAME                              STATUS                   PORTS
+boostedbudget-api-qa         Up (healthy)             0.0.0.0:8080->8080/tcp
+boostedbudget-db-qa          Up (healthy)             0.0.0.0:5433->5432/tcp
+boostedbudget-redis-ratelimit-qa  Up (healthy)             127.0.0.1:6380->6379/tcp
+boostedbudget-redis-cache-qa      Up (healthy)             127.0.0.1:6381->6379/tcp
+boostedbudget-web-qa          Up                       0.0.0.0:3000->3000/tcp
 ```
+
+Issue #1531 removed the RabbitMQ service (River-over-Postgres is the job queue) and
+split the single Redis service into two — see `docs/architecture/redis-topology.md` for
+why the rate-limiter and cache instances must stay separate.
 
 ### 4.2 Verify Restart Policies
 
 ```bash
 # Check restart policies for all containers
-docker inspect boostedbudget-db-qa boostedbudget-redis-qa boostedbudget-rabbitmq-qa boostedbudget-api-qa boostedbudget-web-qa \
+docker inspect boostedbudget-db-qa boostedbudget-redis-ratelimit-qa boostedbudget-redis-cache-qa boostedbudget-api-qa boostedbudget-web-qa \
   | grep -A 5 "RestartPolicy"
 ```
 
@@ -420,8 +425,9 @@ Watch GitHub Actions:
 
 - **Frontend**: http://localhost:3000
 - **Backend API**: http://localhost:8080
-- **RabbitMQ UI**: http://localhost:15673 (guest/guest)
 - **Database**: `postgresql://qauser:password@localhost:5433/boostedbudget_qa`
+- **Redis (rate limiter)**: `127.0.0.1:6380` (loopback-only, no auth)
+- **Redis (cache)**: `127.0.0.1:6381` (loopback-only, no auth)
 
 ### Remote Access (Tailscale VPN)
 
@@ -434,7 +440,6 @@ HOSTNAME=mac-mini.tailnet-name.ts.net  # Replace with your actual hostname
 # Access qa environment
 Frontend:    http://$HOSTNAME:3000
 Backend API: http://$HOSTNAME:8080
-RabbitMQ UI: http://$HOSTNAME:15673
 ```
 
 ### Viewing Logs
