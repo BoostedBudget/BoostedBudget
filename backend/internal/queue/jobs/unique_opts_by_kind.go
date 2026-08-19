@@ -131,6 +131,11 @@ var uniqueOptsByKind = map[string]func() *queue.UniqueOpts{
 	"boost_evaluation":           noUniqueness,
 	"subscription_webhook":       noUniqueness,
 	"notification_email":         noUniqueness,
+	// cache_purge_retry (Issue #1531 Task 10b): enqueued by deletion_service.go on a purge/bump
+	// failure via a locally-mirrored args struct (services cannot import jobs — see
+	// cache_purge_retry.go). No uniqueness: each failure should always enqueue its own retry, and a
+	// dead-letter replay must reproduce that.
+	"cache_purge_retry": noUniqueness,
 }
 
 // noUniqueness is the explicit entry for a kind that is registered and has no uniqueness options, as

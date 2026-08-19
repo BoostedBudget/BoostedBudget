@@ -66,9 +66,9 @@ func setupSubStatusProbeServer(t *testing.T, reader humamiddleware.SubscriptionS
 
 	var mw func(huma.Context, func(huma.Context))
 	if reader != nil {
-		mw = humamiddleware.NewClerkMiddleware("sk_test_secret", repo, &mockRegistrationService{}, nil, mcpAuth, reader)
+		mw = humamiddleware.NewClerkMiddleware("sk_test_secret", repo, &mockRegistrationService{}, nil, mcpAuth, nil, reader)
 	} else {
-		mw = humamiddleware.NewClerkMiddleware("sk_test_secret", repo, &mockRegistrationService{}, nil, mcpAuth)
+		mw = humamiddleware.NewClerkMiddleware("sk_test_secret", repo, &mockRegistrationService{}, nil, mcpAuth, nil)
 	}
 	api.UseMiddleware(mw)
 
@@ -197,7 +197,7 @@ func TestClerkAndReadOnlyMiddleware_CompedUser_POST_Allowed(t *testing.T) {
 	router := chi.NewRouter()
 	api := humachi.New(router, huma.DefaultConfig("Test API", "1.0.0"))
 
-	clerkMW := humamiddleware.NewClerkMiddleware("sk_test_secret", repo, &mockRegistrationService{}, nil, mcpAuth, reader)
+	clerkMW := humamiddleware.NewClerkMiddleware("sk_test_secret", repo, &mockRegistrationService{}, nil, mcpAuth, nil, reader)
 	api.UseMiddleware(clerkMW)
 	// nil household checker mirrors setupReadOnlyTestAPI's non-household-aware variant.
 	api.UseMiddleware(humamiddleware.NewReadOnlyMiddleware(nil))

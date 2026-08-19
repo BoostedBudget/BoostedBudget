@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/merchant"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -75,6 +76,27 @@ type TransactionSyncService interface {
 		proposedUpserter SyncProposedContributionUpserter,
 		inflowRepo repository.TransactionRepository,
 	)
+
+	// SetCacheInvalidation wires cache generation bumping so a successful SyncTransactions call
+	// invalidates the synced user's (and, when resolvable, their household's) cached analytics.
+	// Issue #1531 Task 10b-2: River jobs (PlaidSyncWorker, WebhookProcessingWorker) never went
+	// through the HTTP mutation middleware, so a bank sync left every cached spending aggregate
+	// serving pre-sync numbers until its namespace TTL — this closes that gap. Both parameters are
+	// optional (nil = skip that bump entirely); this mirrors every other optional wiring setter in
+	// this file (SetTransferCorrelationService et al.) so existing callers/tests that don't call
+	// this setter are unaffected — see SyncTransactions' final bumpCacheForSync call, which is a
+	// true no-op when cacheGens is nil.
+	SetCacheInvalidation(gens *cache.Generations, hh SyncCacheHouseholdLookup)
+}
+
+// SyncCacheHouseholdLookup resolves the household (if any) a synced user belongs to, so
+// bumpCacheForSync can also invalidate the household's cache scope. Same method shape as
+// internal/huma/middleware.HouseholdLookup and internal/services.deletionService's HouseholdReader
+// — redefined locally (not imported) because services must not depend on the huma layer, and
+// because a narrower, purpose-scoped interface here documents exactly what this file needs.
+// Satisfied structurally by *repository.householdRepository's GetHouseholdForUser.
+type SyncCacheHouseholdLookup interface {
+	GetHouseholdForUser(ctx context.Context, userID string) (household *domain.Household, isOwner bool, found bool, err error)
 }
 
 // =============================================================================
@@ -119,25 +141,28 @@ type transactionSyncService struct {
 	webhookRepo               repository.WebhookRepository
 	linkedItemRepo            repository.LinkedItemRepository
 	transactionRepo           repository.TransactionRepository
-	accountRepo               repository.AccountRepository          // Issue #261: For account mapping (Plaid account_id -> internal UUID)
-	profileRepo               repository.ProfileRepository          // For fetching user subscription tier (historical depth)
-	balanceSnapshotRepo       repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
-	merchantRepo              repository.MerchantRepo               // Issue #1163: Batch-upsert merchants before CreateBatch
-	normalize                 func(string) string                   // Issue #957: merchant name normalizer
+	accountRepo               repository.AccountRepository         // Issue #261: For account mapping (Plaid account_id -> internal UUID)
+	profileRepo               repository.ProfileRepository         // For fetching user subscription tier (historical depth)
+	balanceSnapshotRepo       repository.BalanceSnapshotRepository // Issue #353: For storing balance snapshots
+	merchantRepo              repository.MerchantRepo              // Issue #1163: Batch-upsert merchants before CreateBatch
+	normalize                 func(string) string                  // Issue #957: merchant name normalizer
 	plaidService              PlaidService
-	subscriptionService       *SubscriptionService          // For tier-based historical depth limit
-	ruleApplicationService    RuleApplicationService        // Issue #346: Apply categorization rules to new transactions
-	budgetSyncService         BudgetSyncService             // Issue #494: Sync budget amounts after transaction sync
-	transactionMonitorService TransactionMonitorService     // Issue #36: Auto-detect completed transfer suggestions
-	transferCorrelationSvc    TransferCorrelationService    // Issue #972: Correlate inflows against pending transfer suggestions
+	subscriptionService       *SubscriptionService       // For tier-based historical depth limit
+	ruleApplicationService    RuleApplicationService     // Issue #346: Apply categorization rules to new transactions
+	budgetSyncService         BudgetSyncService          // Issue #494: Sync budget amounts after transaction sync
+	transactionMonitorService TransactionMonitorService  // Issue #36: Auto-detect completed transfer suggestions
+	transferCorrelationSvc    TransferCorrelationService // Issue #972: Correlate inflows against pending transfer suggestions
 	// Issue #1300 G2: savings progress wiring (all optional; nil = skip)
-	savingsContribCleaner      SyncContributionCleaner          // cleans managed contrib rows before txn removal
-	savingsProgressUpdater     SyncGoalProgressUpdater          // recomputes goal progress after sync
-	savingsCategoryBackfill    SyncManagedCategoryBackfiller    // backfills missing savings categories
+	savingsContribCleaner   SyncContributionCleaner       // cleans managed contrib rows before txn removal
+	savingsProgressUpdater  SyncGoalProgressUpdater       // recomputes goal progress after sync
+	savingsCategoryBackfill SyncManagedCategoryBackfiller // backfills missing savings categories
 	// Issue #1300 M18: proposed contribution detection (D6 source-b)
-	savingsGoalReader          SyncContributionsBasisGoalReader // fetches contributions-basis goals
-	savingsProposedUpserter    SyncProposedContributionUpserter // upserts proposed rows from detected inflows
-	savingsInflowRepo          repository.TransactionRepository  // shared — GetInflowTransactionsForAccount
+	savingsGoalReader       SyncContributionsBasisGoalReader // fetches contributions-basis goals
+	savingsProposedUpserter SyncProposedContributionUpserter // upserts proposed rows from detected inflows
+	savingsInflowRepo       repository.TransactionRepository // shared — GetInflowTransactionsForAccount
+	// Issue #1531 Task 10b-2: cache invalidation wiring (both optional; nil = skip)
+	cacheGens      *cache.Generations       // mints/bumps generation tokens; nil when cache disabled/not wired
+	cacheHousehold SyncCacheHouseholdLookup // resolves a synced user's household; nil = user-scope bump only
 }
 
 // NewTransactionSyncService creates a new TransactionSyncService instance
@@ -151,9 +176,9 @@ func NewTransactionSyncService(
 	plaidService PlaidService,
 	subscriptionService *SubscriptionService,
 	ruleApplicationService RuleApplicationService,
-	budgetSyncService BudgetSyncService,               // Issue #494: Sync budget amounts
+	budgetSyncService BudgetSyncService, // Issue #494: Sync budget amounts
 	transactionMonitorService TransactionMonitorService, // Issue #36: Auto-detect completed transfers
-	merchantRepo repository.MerchantRepo,              // Issue #1163: Merchant batch-upsert
+	merchantRepo repository.MerchantRepo, // Issue #1163: Merchant batch-upsert
 	logger *slog.Logger,
 ) TransactionSyncService {
 	if logger == nil {
@@ -206,6 +231,71 @@ func (s *transactionSyncService) SetSavingsDetectionServices(
 	s.savingsGoalReader = goalReader
 	s.savingsProposedUpserter = proposedUpserter
 	s.savingsInflowRepo = inflowRepo
+}
+
+// SetCacheInvalidation wires cache generation bumping. See the interface method's doc comment
+// for why this exists and why both parameters are optional. Issue #1531 Task 10b-2.
+func (s *transactionSyncService) SetCacheInvalidation(gens *cache.Generations, hh SyncCacheHouseholdLookup) {
+	s.cacheGens = gens
+	s.cacheHousehold = hh
+}
+
+// bumpCacheForSync invalidates userID's cached analytics (and, when resolvable, their
+// household's) after a SyncTransactions call has fully committed. Called ONCE, at the very end
+// of SyncTransactions' success path — never per page/batch, since a bump's cost is a single
+// Redis write regardless of how much data changed, and bumping per page would multiply that
+// cost by transaction volume for no correctness gain (a single bump after all pages/storage have
+// committed already invalidates everything written during this sync).
+//
+// Void by design, matching every other generation bump in this codebase (cache.Generations.Bump
+// itself, the HTTP mutation middleware, the GDPR deletion purge): a bump failure must NEVER fail
+// an already-committed sync. cache.Generations.Bump already logs+counts its own Redis failures;
+// this method additionally logs (but does not fail on) a household LOOKUP failure, since that
+// failure happens in this method, not inside Bump.
+//
+// This is the single call site that closes Issue #1531 Task 10b-2's stale-data gap: every
+// caller of SyncTransactions (PlaidSyncWorker.Work, TransactionSyncService.ProcessWebhook — and
+// therefore WebhookProcessingWorker's TRANSACTIONS route) is a thin wrapper that does not
+// duplicate transaction storage logic, so bumping here, once, covers all of them without a
+// second bump call anywhere else.
+// bumpCacheTimeout bounds the detached post-sync bump work, matching cache_invalidation.go's
+// identical constant and reasoning (Issue #1531 Blocker 2 — see that file's package doc comment).
+const bumpCacheTimeout = 5 * time.Second
+
+func (s *transactionSyncService) bumpCacheForSync(ctx context.Context, userID string) {
+	if s.cacheGens == nil {
+		return
+	}
+
+	// Issue #1531 Blocker 2: this is called from a defer at the end of SyncTransactions, using
+	// the SAME ctx the whole sync ran under (a River job's context, per plaid_sync.go /
+	// webhook_processing.go). A job timeout or worker shutdown-triggered cancellation landing in
+	// this narrow window — AFTER the sync's DB writes have already committed, but before this
+	// bump runs — would cancel the bump for a write that has already durably happened, exactly
+	// the class of bug Blocker 2 closes in the HTTP mutation middleware. Detach the same way:
+	// context.WithoutCancel + an explicit bounded WithTimeout (WithoutCancel strips the parent
+	// deadline too), matching internal/middleware/rate_limit_fallback.go, internal/health/check.go,
+	// and internal/huma/middleware/cache_invalidation.go.
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+
+	s.cacheGens.Bump(bumpCtx, cache.ScopeUser, userID, "plaid_sync")
+
+	if s.cacheHousehold == nil {
+		return
+	}
+	household, _, found, err := s.cacheHousehold.GetHouseholdForUser(bumpCtx, userID)
+	if err != nil {
+		// Void by design: the sync already committed and the user-scope bump above already ran;
+		// a household lookup failure must never retroactively fail it.
+		s.logger.Error("cache invalidation: household lookup failed after transaction sync; "+
+			"household-scoped cache may serve stale data until its namespace TTL",
+			"user_id", userID, "error", err)
+		return
+	}
+	if found && household != nil {
+		s.cacheGens.Bump(bumpCtx, cache.ScopeHousehold, household.ID, "plaid_sync")
+	}
 }
 
 // ProcessWebhook processes a single TRANSACTIONS webhook event
@@ -399,6 +489,20 @@ func (s *transactionSyncService) SyncTransactions(
 	// Store Added/Modified transactions, delete Removed transactions
 	// ========================================================================
 
+	// Issue #1531 Task 10b-2a-ii: track whether ANY storage step below actually committed a
+	// write, and bump the cache on the way out (via defer) REGARDLESS of whether a later step
+	// fails. Without this, a sync that stores Added successfully and then fails on Modified
+	// would return an error before ever reaching the single bumpCacheForSync call at the end of
+	// this function's success path — leaving the just-committed Added rows invisible to cached
+	// reads for the full namespace TTL. Bumping is void+idempotent (cache.Generations.Bump), so
+	// an extra bump on top of the always-bump-on-full-success behavior below costs nothing.
+	var cacheBumpNeeded bool
+	defer func() {
+		if cacheBumpNeeded {
+			s.bumpCacheForSync(ctx, linkedItem.UserID)
+		}
+	}()
+
 	// Step 5: Build account maps for transaction mapping (O(1) lookups)
 	// Issue #171: Also builds userAccountMap for stable UserAccountID reference
 	accountMap, userAccountMap, err := s.buildAccountMaps(ctx, linkedItem.ID)
@@ -416,6 +520,7 @@ func (s *transactionSyncService) SyncTransactions(
 			s.logger.Error("failed to process added transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process added transactions: %w", err)
 		}
+		cacheBumpNeeded = true
 	}
 
 	// Step 7: Process Modified transactions (update with user_notes preservation)
@@ -425,6 +530,7 @@ func (s *transactionSyncService) SyncTransactions(
 			s.logger.Error("failed to process modified transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process modified transactions: %w", err)
 		}
+		cacheBumpNeeded = true
 	}
 
 	// Step 8: Process Removed transactions (hard delete)
@@ -433,6 +539,7 @@ func (s *transactionSyncService) SyncTransactions(
 			s.logger.Error("failed to process removed transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process removed transactions: %w", err)
 		}
+		cacheBumpNeeded = true
 	}
 
 	s.logger.Info("transaction storage complete", "item_id", linkedItem.ID)
@@ -493,6 +600,13 @@ func (s *transactionSyncService) SyncTransactions(
 			// non-fatal: don't fail the sync if correlation errors
 		}
 	}
+
+	// Issue #1531 Task 10b-2 / 10b-2a-ii: the deferred bump above fires here on the full-success
+	// path too — set unconditionally so a fully successful sync still bumps even when Added,
+	// Modified, and Removed were ALL empty (matching the original always-bump-on-success
+	// behavior; a no-op sync is still worth invalidating since transfer correlation, savings
+	// progress, and budget sync above may have written even with zero transaction changes).
+	cacheBumpNeeded = true
 
 	return result, nil
 }
@@ -709,10 +823,10 @@ func (s *transactionSyncService) processAddedTransactions(
 // CRITICAL: Preserves user_notes field from existing transaction.
 //
 // Process:
-//   1. Map Plaid transaction to domain.Transaction
-//   2. Fetch existing transaction by external_transaction_id
-//   3. Preserve user_notes from existing transaction
-//   4. Call Update with new data + preserved user_notes + existing ID
+//  1. Map Plaid transaction to domain.Transaction
+//  2. Fetch existing transaction by external_transaction_id
+//  3. Preserve user_notes from existing transaction
+//  4. Call Update with new data + preserved user_notes + existing ID
 //
 // Graceful error handling:
 //   - Skips transactions with unmapped accounts (logs warning)
@@ -1042,4 +1156,3 @@ func (s *transactionSyncService) createBalanceSnapshot(
 
 	return snapshot
 }
-

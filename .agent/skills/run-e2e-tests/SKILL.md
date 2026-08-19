@@ -10,15 +10,22 @@ description: "Run E2E tests locally for BoostedBudget. Use when testing frontend
 Run all E2E tests (one-liner with output logging):
 ```bash
 cd apps/web
-set -a && source .env.e2e && set +a && mv cert.pem cert.pem.bak 2>/dev/null; mv key.pem key.pem.bak 2>/dev/null; bash scripts/run-e2e-with-ports.sh 2>&1 | tee e2e-output.log; mv cert.pem.bak cert.pem 2>/dev/null; mv key.pem.bak key.pem 2>/dev/null
+set -a && source .env.e2e && set +a && mv cert.pem cert.pem.bak 2>/dev/null; mv key.pem key.pem.bak 2>/dev/null; set -o pipefail; E2E_START_REDIS=true CACHE_ENABLED=true bash scripts/run-e2e-with-ports.sh 2>&1 | tee e2e-output.log; run_status=${PIPESTATUS[0]}; mv cert.pem.bak cert.pem 2>/dev/null; mv key.pem.bak key.pem 2>/dev/null; exit "$run_status"
 ```
 
 This command:
 1. Sources environment variables from `.env.e2e`
 2. Temporarily moves SSL certificates (prevents HTTPS/HTTP mismatch)
-3. Runs the E2E test script
-4. Tees output to `e2e-output.log` for later analysis
-5. Restores SSL certificates
+3. Starts separate disposable Redis 7 cache (`allkeys-lru`) and rate-limit (`noeviction`) containers
+4. Runs the E2E test script
+5. Tees output to `e2e-output.log` for later analysis
+6. Restores SSL certificates and removes the temporary containers
+
+Provisioning is all-or-nothing for resources owned by this run: if either Redis instance, the
+database, migrations, or Playwright fails, an exit/signal trap removes every managed container
+before returning. Cleanup is idempotent, retries a failed Docker removal once, and turns a cleanup
+failure into a non-zero result instead of reporting a green run with leaked infrastructure. An
+explicit `CACHE_REDIS_URL` or `RATE_LIMIT_REDIS_URL` is caller-owned and is never removed.
 
 **Note:** The `e2e-output.log` file is useful for parsing test results after a long run.
 
@@ -27,13 +34,16 @@ This command:
 cd apps/web
 set -a && source .env.e2e && set +a
 mv cert.pem cert.pem.bak 2>/dev/null; mv key.pem key.pem.bak 2>/dev/null
-bash scripts/run-e2e-with-ports.sh
+E2E_START_REDIS=true CACHE_ENABLED=true bash scripts/run-e2e-with-ports.sh
 mv cert.pem.bak cert.pem 2>/dev/null; mv key.pem.bak key.pem 2>/dev/null
 ```
 
 ## Prerequisites
 
 1. **Docker** running (for PostgreSQL container)
+   - Cache-sensitive E2E uses Docker for two disposable Redis 7 containers. The runner starts them
+     by default; set `E2E_START_REDIS=false` only to deliberately use the historical fallback mode.
+     Existing `CACHE_REDIS_URL` and `RATE_LIMIT_REDIS_URL` values are respected and never destroyed.
 2. **Frontend dependencies** installed (`pnpm install`)
 3. **Backend binary** exists (`../backend/bin/server`) - auto-built if missing
 4. **Clerk credentials** in `apps/web/.env.e2e`:
@@ -81,13 +91,16 @@ bash scripts/run-e2e-with-ports.sh --project=chromium-no-auth
 
 1. Finds available ports (frontend 30000-34900, backend 35000-39900, postgres 40000-44900)
 2. Starts PostgreSQL container (if Docker available)
-3. Runs database migrations via the **golang-migrate** CLI (`run_migrations` in
+3. Unless `E2E_START_REDIS=false`, starts separate Redis 7 cache and rate-limit containers. The cache
+   uses `allkeys-lru`; the limiter uses `noeviction`, matching the production topology's safety
+   distinction. Both are removed by the idempotent exit/signal trap, including partial startup.
+4. Runs database migrations via the **golang-migrate** CLI (`run_migrations` in
    `apps/web/scripts/e2e-postgres.sh`)
-4. Seeds test data (accounts, transactions, tags) for E2E user
-5. Builds backend binary (if missing)
-6. Starts frontend (Vite) and backend servers
-7. Runs Playwright tests
-8. Cleans up PostgreSQL container on exit
+5. Seeds test data (accounts, transactions, tags) for E2E user
+6. Builds backend binary (if missing)
+7. Starts frontend (Vite) and backend servers
+8. Runs Playwright tests
+9. Cleans up PostgreSQL and any managed Redis containers on exit
 
 ## Test Data Seeding
 
@@ -145,7 +158,8 @@ Test user credentials are stored in `.env.e2e`:
 
 ## E2E Test Notes
 
-- **With Docker**: Script auto-starts PostgreSQL container, runs migrations, passes DATABASE_URL to backend
+- **With Docker**: Script auto-starts PostgreSQL and, by default, the two separate Redis instances,
+  runs migrations, and passes all URLs to the backend. Set `E2E_START_REDIS=false` to opt out.
 - **Without Docker**: Backend runs in degraded mode (use `E2E_SKIP_POSTGRES=true` to skip explicitly)
 - **Backend auto-build**: Script builds `backend/bin/server` if missing
 - **Requires the golang-migrate CLI**: Install via `brew install golang-migrate` (macOS) or from

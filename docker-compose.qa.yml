@@ -48,9 +48,16 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis Cache (QA)
-  redis:
+  # Redis — Rate Limiter (QA) (Issue #1531)
+  #
+  # Two SEPARATE Redis instances, never one shared instance — see docker-compose.yml's
+  # redis-ratelimit/redis-cache comments for the full noeviction-vs-eviction rationale
+  # (a shared instance's cache traffic can OOM the limiter's SETs, producing a permanent
+  # limiter fallback with a misleading cause). This one backs RATE_LIMIT_REDIS_URL and is
+  # provisioned --maxmemory-policy noeviction.
+  redis-ratelimit:
     image: redis:7-alpine
+    command: redis-server --maxmemory-policy noeviction
     pull_policy: always  # Always pull latest patches
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
@@ -59,28 +66,31 @@ services:
       # host itself is not acceptable.
       - "127.0.0.1:6380:6379"  # Different port to avoid conflict with dev
     volumes:
-      - redis_qa_data:/data
+      - redis_ratelimit_qa_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # RabbitMQ Message Queue (QA)
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
+  # Redis — Cache (QA) (Issue #1531)
+  #
+  # Backs CACHE_REDIS_URL. `allkeys-lru` is a deliberate local approximation of Upstash's
+  # production `optimistic-volatile` policy, which is Upstash-specific and not
+  # expressible by open-source Redis's --maxmemory-policy — see docker-compose.yml's
+  # redis-cache comment for the full rationale.
+  redis-cache:
+    image: redis:7-alpine
+    command: redis-server --maxmemory-policy allkeys-lru
     pull_policy: always  # Always pull latest patches
     restart: unless-stopped  # Auto-restart on Mac Mini boot
     ports:
-      # #1514: loopback-only — the management UI has no TLS and RabbitMQ here uses the
-      # default guest:guest credentials (out of scope to change per the issue), so it
-      # must not be reachable from anywhere but the host.
-      - "127.0.0.1:5673:5672"   # AMQP - different port
-      - "127.0.0.1:15673:15672" # Management UI - different port
+      # #1514: loopback-only — see Postgres port comment above for rationale.
+      - "127.0.0.1:6381:6379"  # Different port from dev AND from the QA ratelimit instance
     volumes:
-      - rabbitmq_qa_data:/var/lib/rabbitmq
+      - redis_cache_qa_data:/data
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -100,8 +110,9 @@ services:
       VERSION: "${VERSION:-qa-dev}"
       PRIMARY_REGION: "${PRIMARY_REGION:-iad}"
       DATABASE_URL: "postgres://${POSTGRES_USER:-qauser}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (no default permitted)}@postgres:5432/boostedbudget_qa?sslmode=disable"
-      REDIS_URL: "redis://redis:6379"
-      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      RATE_LIMIT_REDIS_URL: "redis://redis-ratelimit:6379"
+      CACHE_REDIS_URL: "redis://redis-cache:6379"
+      CACHE_ENABLED: "true"
       CLERK_SECRET_KEY: "${CLERK_SECRET_KEY}"
       PLAID_CLIENT_ID: "${PLAID_CLIENT_ID}"
       PLAID_SECRET: "${PLAID_SECRET}"
@@ -118,9 +129,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      redis-ratelimit:
         condition: service_healthy
-      rabbitmq:
+      redis-cache:
         condition: service_healthy
     # Issue #472: Config is baked into Docker image - no volume mount needed
     # The previous mount shadowed the baked-in config after CI workspace cleanup
@@ -163,5 +174,5 @@ services:
 
 volumes:
   postgres_qa_data:
-  redis_qa_data:
-  rabbitmq_qa_data:
+  redis_ratelimit_qa_data:
+  redis_cache_qa_data:

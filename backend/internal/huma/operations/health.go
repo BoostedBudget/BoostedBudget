@@ -3,133 +3,129 @@ package operations
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/maxnussbaum/BoostedBudget/internal/health"
 )
 
 // HealthInput represents the input for the health check endpoint.
 // This endpoint requires no parameters.
 type HealthInput struct{}
 
+// HealthStatusResponse is the entire public /health response body. It is
+// deliberately minimal: this endpoint is unauthenticated and reachable
+// directly from the public internet (Fly's own http_checks hit it with no
+// Cloudflare headers in front), so it must never carry anything an attacker
+// could use to fingerprint the stack or observe a dependency's internals —
+// no version, no timestamps, no per-check breakdown, no error text. See
+// issue #1531 Task 6 for the incident this replaces.
+type HealthStatusResponse struct {
+	Status string `json:"status" enum:"ok" doc:"Liveness indicator. Always \"ok\" when the response is 200."`
+}
+
+const (
+	healthStatusOK          = "ok"
+	healthStatusUnavailable = "unavailable"
+)
+
+func healthStatusSchema(status string) *huma.Schema {
+	description := `Liveness indicator. Always "ok" when the response is 200.`
+	if status == healthStatusUnavailable {
+		description = `Liveness indicator. "unavailable" when a critical dependency is unhealthy.`
+	}
+
+	return &huma.Schema{
+		Type:                 huma.TypeObject,
+		AdditionalProperties: false,
+		Properties: map[string]*huma.Schema{
+			"status": {
+				Type:        huma.TypeString,
+				Enum:        []any{status},
+				Description: description,
+			},
+		},
+		Required: []string{"status"},
+	}
+}
+
+// Schema implements huma.SchemaProvider so HealthStatusResponse is described
+// inline in the OpenAPI response, never registered under
+// #/components/schemas. That matters beyond OpenAPI aesthetics: Huma's
+// SchemaLinkTransformer (installed by huma.DefaultConfig, which
+// internal/huma.NewAPIConfig uses in production -- see cmd/server/main.go:324)
+// only injects a `$schema` field and a `Link: ...; rel="describedBy"` header
+// for responses whose schema is a `#/...` ref. An inline schema has no ref, so
+// the transformer's addSchemaField skips it and neither leak happens. Without
+// this, production emits {"$schema":"https://api.boostedbudget.com/schemas/
+// HealthStatusResponse.json","status":"ok"} on an unauthenticated endpoint --
+// a URL that fingerprints the framework and the Go type name, exactly the
+// disclosure class this handler otherwise guards against. humatest.New(t)'s
+// bare config has no transformer, so tests built on it can't see this; use
+// the production-config harness in health_test.go to verify.
+func (HealthStatusResponse) Schema(_ huma.Registry) *huma.Schema {
+	return healthStatusSchema(healthStatusOK)
+}
+
 // HealthOutput represents the health check response.
 type HealthOutput struct {
-	Body HealthResponse
-}
-
-// HealthResponse represents the health check response body.
-type HealthResponse struct {
-	Status    string       `json:"status" doc:"Overall system health status: healthy, degraded, or unhealthy"`
-	Version   string       `json:"version" doc:"API version"`
-	Timestamp string       `json:"timestamp" doc:"ISO 8601 timestamp of the health check"`
-	Checks    HealthChecks `json:"checks" doc:"Individual service health checks"`
-}
-
-// HealthChecks represents individual service health checks.
-type HealthChecks struct {
-	Database *ServiceCheck `json:"database" doc:"Database connection status"`
-	Redis    *ServiceCheck `json:"redis" doc:"Redis cache status"`
-	Clerk    *ServiceCheck `json:"clerk" doc:"Clerk authentication service status"`
-}
-
-// ServiceCheck represents the health status of a single service.
-type ServiceCheck struct {
-	Status         string `json:"status" doc:"Service status: up or down"`
-	Message        string `json:"message,omitempty" doc:"Error message if service is down"`
-	ResponseTimeMs int64  `json:"response_time_ms" doc:"Response time in milliseconds"`
-}
-
-// HealthError is a custom error that carries the health response for 503 cases.
-type HealthError struct {
-	StatusCode int
-	Response   HealthResponse
-}
-
-// Error implements the error interface.
-func (e *HealthError) Error() string {
-	return "system unhealthy"
-}
-
-// GetStatus returns the HTTP status code.
-func (e *HealthError) GetStatus() int {
-	return e.StatusCode
+	// Status is interpreted by Huma as the HTTP response status and is not
+	// serialized into the response body.
+	Status int
+	Body   HealthStatusResponse
 }
 
 // HealthHandler handles health check requests.
+//
+// GetHealth only ever reads registry.DB. That is a deliberate, structural
+// choice, not a runtime filter: registry.Redis and registry.Clerk are never
+// referenced anywhere in this file. Issue #1531 requires that Redis being
+// down must never flip this endpoint away from 200, and the safest way to
+// guarantee that on an unauthenticated, internet-reachable path is to make it
+// impossible for the code to invoke those probes at all — not to invoke them
+// and then discard the result. An unauthenticated caller gets zero ability to
+// trigger extra probes against dependencies that can't change the response
+// anyway (see TestGetHealth_DoesNotRunNonCriticalChecks).
 type HealthHandler struct {
-	DBCheck    func() error
-	RedisCheck func() error
-	ClerkCheck func() error
-	Version    string
+	registry health.Registry
+	logger   *slog.Logger
 }
 
-// NewHealthHandler creates a new health handler with the given dependencies.
-func NewHealthHandler(dbCheck, redisCheck, clerkCheck func() error, version string) *HealthHandler {
+// NewHealthHandler creates a new health handler. Only registry.DB is
+// consulted by GetHealth; registry.Redis/registry.Clerk may be populated (the
+// same Registry is shared with the admin health endpoint, see internal/health)
+// but are inert here. A nil logger falls back to slog.Default().
+func NewHealthHandler(logger *slog.Logger, registry health.Registry) *HealthHandler {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &HealthHandler{
-		DBCheck:    dbCheck,
-		RedisCheck: redisCheck,
-		ClerkCheck: clerkCheck,
-		Version:    version,
+		registry: registry,
+		logger:   logger,
 	}
 }
 
 // GetHealth handles GET /health requests.
+//
+// Full failure detail (the underlying error, which for pgx/go-redis/Clerk
+// clients can carry host:port, DSN fragments, or Upstash endpoint names) is
+// logged server-side at Error level, never placed in the response body. The
+// observability tee (see internal/observability/logger.go) forwards Error
+// level logs to Sentry, so the detail is relocated rather than discarded.
 func (h *HealthHandler) GetHealth(ctx context.Context, input *HealthInput) (*HealthOutput, error) {
-	// Check database
-	dbCheck := h.performCheck(h.DBCheck)
-
-	// Check Redis
-	redisCheck := h.performCheck(h.RedisCheck)
-
-	// Check Clerk
-	clerkCheck := h.performCheck(h.ClerkCheck)
-
-	response := HealthResponse{
-		Version:   h.Version,
-		Timestamp: time.Now().Format(time.RFC3339),
-		Checks: HealthChecks{
-			Database: dbCheck,
-			Redis:    redisCheck,
-			Clerk:    clerkCheck,
-		},
-	}
-
-	// Determine overall status
-	// Database is critical - if down, system is unhealthy
-	if dbCheck.Status == "down" {
-		response.Status = "unhealthy"
-		return nil, huma.Error503ServiceUnavailable("System unhealthy: database connection failed")
-	}
-
-	// Redis and Clerk are non-critical - if down, system is degraded
-	if redisCheck.Status == "down" || clerkCheck.Status == "down" {
-		response.Status = "degraded"
-	} else {
-		response.Status = "healthy"
-	}
-
-	return &HealthOutput{Body: response}, nil
-}
-
-// performCheck executes a health check function and returns the ServiceCheck result.
-func (h *HealthHandler) performCheck(checkFunc func() error) *ServiceCheck {
-	start := time.Now()
-	err := checkFunc()
-	responseTime := time.Since(start).Milliseconds()
-
-	if err != nil {
-		return &ServiceCheck{
-			Status:         "down",
-			Message:        err.Error(),
-			ResponseTimeMs: responseTime,
+	if h.registry.DB != nil {
+		result := h.registry.DB(ctx)
+		if !result.Healthy() {
+			h.logger.ErrorContext(ctx, "critical health check failed", "error", result.Err)
+			return &HealthOutput{
+				Status: http.StatusServiceUnavailable,
+				Body:   HealthStatusResponse{Status: healthStatusUnavailable},
+			}, nil
 		}
 	}
 
-	return &ServiceCheck{
-		Status:         "up",
-		ResponseTimeMs: responseTime,
-	}
+	return &HealthOutput{Status: http.StatusOK, Body: HealthStatusResponse{Status: healthStatusOK}}, nil
 }
 
 // RegisterHealthRoutes registers health check routes with the Huma API.
@@ -139,7 +135,18 @@ func RegisterHealthRoutes(api huma.API, handler *HealthHandler) {
 		Method:      http.MethodGet,
 		Path:        "/health",
 		Summary:     "Health check",
-		Description: "Returns the health status of the API and its dependencies (database, Redis, Clerk).",
+		Description: "Liveness check. Returns 200 with {\"status\":\"ok\"} when critical dependencies are healthy, 503 otherwise. Carries no version, timing, or dependency detail.",
 		Tags:        []string{"Health"},
+		Responses: map[string]*huma.Response{
+			"503": {
+				Description: http.StatusText(http.StatusServiceUnavailable),
+				Content: map[string]*huma.MediaType{
+					"application/json": {
+						Schema: healthStatusSchema(healthStatusUnavailable),
+					},
+				},
+			},
+		},
+		Errors: []int{http.StatusInternalServerError},
 	}, handler.GetHealth)
 }

@@ -595,3 +595,75 @@ func TestCategorizationRuleService_GetEnabledRules_PopulatesTargetCustomCategory
 	mockRepo.AssertExpectations(t)
 	mockCategoryRepo.AssertExpectations(t)
 }
+
+// =============================================================================
+// Issue #1540: target_custom_category_id ownership validation (IDOR)
+// =============================================================================
+
+// TestCategorizationRuleService_CreateRule_RejectsCrossUserCustomCategory verifies that
+// CreateRule rejects a target_custom_category_id belonging to another user before persisting.
+func TestCategorizationRuleService_CreateRule_RejectsCrossUserCustomCategory(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCategorizationRuleService(mockRepo, mockCategoryRepo)
+	ctx := context.Background()
+	userID := "user-123"
+	otherUsersCategoryID := "other-user-category-id"
+
+	req := createTestRuleRequest()
+	req.TargetKind = ptrStr("custom")
+	req.TargetPFCPrimary = nil
+	req.TargetCustomCategoryID = &otherUsersCategoryID
+
+	// GetNamesByIDs is user-scoped; a category owned by someone else is absent from the map.
+	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
+		Return(map[string]string{}, nil)
+
+	rule, err := service.CreateRule(ctx, userID, req)
+
+	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
+	assert.Nil(t, rule)
+	mockRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestCategorizationRuleService_UpdateRule_RejectsCrossUserCustomCategory mirrors the
+// CreateRule case for UpdateRule.
+func TestCategorizationRuleService_UpdateRule_RejectsCrossUserCustomCategory(t *testing.T) {
+	mockRepo := new(mockRuleRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	service := NewCategorizationRuleService(mockRepo, mockCategoryRepo)
+	ctx := context.Background()
+	userID := "user-123"
+	ruleID := "rule-123"
+	otherUsersCategoryID := "other-user-category-id"
+
+	existingRule := &domain.CategorizationRule{
+		ID:               ruleID,
+		UserID:           userID,
+		Name:             "Old Name",
+		Enabled:          true,
+		Priority:         5,
+		Conditions:       []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "test"}},
+		ConditionLogic:   "AND",
+		TargetKind:       ptrStr("pfc"),
+		TargetPFCPrimary: ptrStr("FOOD_AND_DRINK"),
+		TagBehavior:      "add",
+		Source:           "manual",
+	}
+
+	mockRepo.On("GetByID", ctx, ruleID).Return(existingRule, nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
+		Return(map[string]string{}, nil)
+
+	req := &domain.UpdateCategorizationRuleRequest{
+		TargetCustomCategoryID: &otherUsersCategoryID,
+	}
+
+	rule, err := service.UpdateRule(ctx, userID, ruleID, req)
+
+	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
+	assert.Nil(t, rule)
+	mockRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
+	mockCategoryRepo.AssertExpectations(t)
+}

@@ -43,10 +43,10 @@ import (
 // mandatory there, since the retraction being asserted lives inside it.
 type residueCascadeStub struct {
 	repository.ProfileRepository
-	cascade func() (bool, error)
+	cascade func() (bool, []string, error)
 }
 
-func (r *residueCascadeStub) DeleteUserCascade(ctx context.Context, userID string, expected *time.Time) (bool, error) {
+func (r *residueCascadeStub) DeleteUserCascade(ctx context.Context, userID string, expected *time.Time) (bool, []string, error) {
 	if r.cascade == nil {
 		return r.ProfileRepository.DeleteUserCascade(ctx, userID, expected)
 	}
@@ -63,7 +63,7 @@ type residueFixture struct {
 	userID string
 }
 
-func newResidueFixture(t *testing.T, label, subscriptionStatus string, cascade func() (bool, error)) *residueFixture {
+func newResidueFixture(t *testing.T, label, subscriptionStatus string, cascade func() (bool, []string, error)) *residueFixture {
 	t.Helper()
 	f := setupHouseholdServiceIntegration(t)
 	ctx := context.Background()
@@ -133,7 +133,7 @@ func (r *residueFixture) residueActions(t *testing.T) []string {
 // the residue mechanism keyed entirely off the subscription cancel, so this run produced an Info log
 // and nothing else, forever.
 func TestExecuteDeletion_Integration_ResidueArchiveWithoutCancel_IsRecorded(t *testing.T) {
-	r := newResidueFixture(t, "residue-archive", "cancelled", func() (bool, error) { return false, nil })
+	r := newResidueFixture(t, "residue-archive", "cancelled", func() (bool, []string, error) { return false, nil, nil })
 
 	require.NoError(t, r.svc.ExecuteDeletion(context.Background(), r.userID, repository.DeletionKindUserRequested),
 		"a cascade that refuses is a normal outcome, not an error")
@@ -154,7 +154,7 @@ func TestExecuteDeletion_Integration_ResidueArchiveWithoutCancel_IsRecorded(t *t
 // classifier altogether adds the ..._cascade_failed action, which is asserted absent: the classifier
 // is kept, doing the one job it was designed for.
 func TestExecuteDeletion_Integration_ResidueTransientCascadeError_IsRecorded(t *testing.T) {
-	r := newResidueFixture(t, "residue-transient", "active", func() (bool, error) { return false, wrapPgError("40P01") })
+	r := newResidueFixture(t, "residue-transient", "active", func() (bool, []string, error) { return false, nil, wrapPgError("40P01") })
 
 	require.Error(t, r.svc.ExecuteDeletion(context.Background(), r.userID, repository.DeletionKindUserRequested))
 
@@ -180,7 +180,7 @@ func TestExecuteDeletion_Integration_ResidueTransientCascadeError_IsRecorded(t *
 // TestExecuteDeletion_CascadeFailsWithNoSubscriptionCancelled_RecordsTheArchiveResidue, and the
 // boundary — a recognised-transient failure records no stuck row at all — by its sibling above.
 func TestExecuteDeletion_Integration_ResiduePersistentCascadeError_AlsoRecordsTheStuckKind(t *testing.T) {
-	r := newResidueFixture(t, "residue-persistent", "active", func() (bool, error) { return false, wrapPgError("42501") })
+	r := newResidueFixture(t, "residue-persistent", "active", func() (bool, []string, error) { return false, nil, wrapPgError("42501") })
 
 	require.Error(t, r.svc.ExecuteDeletion(context.Background(), r.userID, repository.DeletionKindUserRequested))
 

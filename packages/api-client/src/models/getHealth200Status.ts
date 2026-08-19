@@ -31,11 +31,12 @@
  * OpenAPI spec version: 1.0.0
  */
 
-export interface ServiceCheck {
-  /** Error message if service is down */
-  message?: string;
-  /** Response time in milliseconds */
-  response_time_ms: number;
-  /** Service status: up or down */
-  status: string;
-}
+/**
+ * Liveness indicator. Always "ok" when the response is 200.
+ */
+export type GetHealth200Status = typeof GetHealth200Status[keyof typeof GetHealth200Status];
+
+
+export const GetHealth200Status = {
+  ok: 'ok',
+} as const;

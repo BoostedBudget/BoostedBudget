@@ -205,6 +205,13 @@ func (v *clerkOAuthVerifier) VerifyAccessToken(ctx context.Context, token string
 //   - registrationService: Service for auto-registering new users
 //   - logger: structured logger (nil → slog.Default())
 //   - mcpAuth: MCP service-to-service auth config (nil → JWT-only)
+//   - idResolver: optional cached fast path for resolving clerkUserID -> internal user UUID
+//     (Issue #1531 Task 10a). nil disables the fast path — every request falls through to
+//     identityRepo.GetByClerkID directly, exactly as before this parameter existed. When
+//     non-nil, a successful resolution skips the (uncached) full-identity repository call
+//     entirely; a resolver error OTHER than repository.ErrIdentityNotFound fails the request
+//     the same way an identityRepo error always has. ErrIdentityNotFound falls through to the
+//     existing identityRepo-driven auto-registration flow unchanged.
 //   - profileRepo: Repository for reading the effective subscription status (nil = skip status check)
 //
 // The middleware stores: user_id, clerk_user_id, claims (JWT path only),
@@ -216,6 +223,7 @@ func NewClerkMiddleware(
 	registrationService services.RegistrationService,
 	logger *slog.Logger,
 	mcpAuth *MCPAuthConfig,
+	idResolver services.InternalUserIDResolver,
 	profileRepo ...SubscriptionStatusReader,
 ) func(ctx huma.Context, next func(huma.Context)) {
 	if logger == nil {
@@ -235,56 +243,79 @@ func NewClerkMiddleware(
 	// continues the chain. Shared by the JWT path and the MCP-origin path.
 	// claims is nil for the MCP path (OAuth token, not a session JWT).
 	attach := func(ctx huma.Context, next func(huma.Context), clerkUserID string, claims *clerk.SessionClaims) {
-		identity, err := identityRepo.GetByClerkID(ctx.Context(), clerkUserID)
-		if err != nil {
-			if err == repository.ErrIdentityNotFound {
-				// Auto-register new user
-				email := ""
-				if claims != nil {
-					email = auth.ExtractEmailFromClaims(claims)
-				}
-				// FALLBACK: fetch email from Clerk API when not present in claims
-				// (always the case on the MCP path, which has no session claims).
-				if email == "" {
-					var fetchErr error
-					email, fetchErr = auth.FetchEmailFromClerkAPI(ctx.Context(), clerkUserID)
-					if fetchErr != nil {
-						logger.Error("failed to fetch email from Clerk API", "clerk_user_id", clerkUserID, "error", fetchErr)
-						writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to retrieve user email")
-						return
-					}
-				}
-
-				emailVerified := true // Clerk verifies emails
-
-				_, err = registrationService.RegisterUser(ctx.Context(), clerkUserID, email, emailVerified)
-				if err != nil {
-					logger.Error("failed to register user", "clerk_user_id", clerkUserID, "error", err)
-					writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to create user account")
-					return
-				}
-				observability.AuthRegistrations.Inc()
-
-				identity, err = identityRepo.GetByClerkID(ctx.Context(), clerkUserID)
-				if err != nil {
-					logger.Error("failed to get identity after registration", "clerk_user_id", clerkUserID, "error", err)
-					writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to complete registration")
-					return
-				}
-			} else {
-				logger.Error("identity lookup error", "clerk_user_id", clerkUserID, "error", err)
+		// Issue #1531 Task 10a: try the cached scalar-UUID fast path first, when configured. A
+		// hit sets userID and skips the (uncached, full-identity, decrypts email)
+		// identityRepo.GetByClerkID call below entirely. A miss (ErrIdentityNotFound) falls
+		// through to the unchanged identityRepo-driven lookup/registration flow; any other
+		// resolver error is treated exactly like an identityRepo error always has been.
+		var userID string
+		if idResolver != nil {
+			resolvedID, resolveErr := idResolver.ResolveInternalUserID(ctx.Context(), clerkUserID)
+			switch {
+			case resolveErr == nil:
+				userID = resolvedID.String()
+			case errors.Is(resolveErr, repository.ErrIdentityNotFound):
+				// Fall through to the identityRepo-driven flow below, unchanged.
+			default:
+				logger.Error("identity lookup error", "clerk_user_id", clerkUserID, "error", resolveErr)
 				writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to authenticate user")
 				return
 			}
 		}
 
+		if userID == "" {
+			identity, err := identityRepo.GetByClerkID(ctx.Context(), clerkUserID)
+			if err != nil {
+				if err == repository.ErrIdentityNotFound {
+					// Auto-register new user
+					email := ""
+					if claims != nil {
+						email = auth.ExtractEmailFromClaims(claims)
+					}
+					// FALLBACK: fetch email from Clerk API when not present in claims
+					// (always the case on the MCP path, which has no session claims).
+					if email == "" {
+						var fetchErr error
+						email, fetchErr = auth.FetchEmailFromClerkAPI(ctx.Context(), clerkUserID)
+						if fetchErr != nil {
+							logger.Error("failed to fetch email from Clerk API", "clerk_user_id", clerkUserID, "error", fetchErr)
+							writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to retrieve user email")
+							return
+						}
+					}
+
+					emailVerified := true // Clerk verifies emails
+
+					_, err = registrationService.RegisterUser(ctx.Context(), clerkUserID, email, emailVerified)
+					if err != nil {
+						logger.Error("failed to register user", "clerk_user_id", clerkUserID, "error", err)
+						writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to create user account")
+						return
+					}
+					observability.AuthRegistrations.Inc()
+
+					identity, err = identityRepo.GetByClerkID(ctx.Context(), clerkUserID)
+					if err != nil {
+						logger.Error("failed to get identity after registration", "clerk_user_id", clerkUserID, "error", err)
+						writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to complete registration")
+						return
+					}
+				} else {
+					logger.Error("identity lookup error", "clerk_user_id", clerkUserID, "error", err)
+					writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to authenticate user")
+					return
+				}
+			}
+			userID = identity.UserID
+		}
+
 		// Store user info in context for resolvers
-		newCtx := context.WithValue(ctx.Context(), inputs.UserIDKey, identity.UserID)
+		newCtx := context.WithValue(ctx.Context(), inputs.UserIDKey, userID)
 		newCtx = context.WithValue(newCtx, inputs.ClerkUserIDKey, clerkUserID)
 		if claims != nil {
 			newCtx = context.WithValue(newCtx, inputs.ClerkClaimsKey, claims)
 		}
-		newCtx = observability.WithUserID(newCtx, identity.UserID)
+		newCtx = observability.WithUserID(newCtx, userID)
 
 		// #930: Store the EFFECTIVE subscription status for read-only enforcement middleware.
 		// Applies to BOTH paths so MCP writes cannot bypass read-only enforcement.
@@ -295,10 +326,10 @@ func NewClerkMiddleware(
 		// open when the status key is absent AND unresolved was never set — the latter is
 		// the "no status reader configured" case, which must keep passing through.
 		if subStatusRepo != nil {
-			if subStatus, subErr := subStatusRepo.GetEffectiveSubscriptionStatusByUserID(newCtx, identity.UserID); subErr == nil {
+			if subStatus, subErr := subStatusRepo.GetEffectiveSubscriptionStatusByUserID(newCtx, userID); subErr == nil {
 				newCtx = context.WithValue(newCtx, inputs.EffectiveSubscriptionStatusKey, subStatus)
 			} else {
-				logger.Warn("failed to fetch subscription status", "user_id", identity.UserID, "error", subErr)
+				logger.Warn("failed to fetch subscription status", "user_id", userID, "error", subErr)
 				newCtx = context.WithValue(newCtx, inputs.SubscriptionStatusUnresolvedKey, true)
 			}
 		}
@@ -307,7 +338,14 @@ func NewClerkMiddleware(
 		go func() {
 			updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			identityRepo.UpdateLastUsed(updateCtx, clerkUserID)
+			// Error deliberately discarded: a best-effort, fire-and-forget timestamp write on a
+			// goroutine with no caller to return to. It must never affect authentication, and
+			// there is nothing actionable to do with a failure. Written as an explicit `_ =` so
+			// the discard reads as intentional rather than an oversight (errcheck flagged the
+			// bare call). Note this column is also why UpdateLastUsed is an explicit
+			// NoCacheImpact entry: no reader on the auth path consumes it, and bumping the
+			// identity generation here would defeat the cache with one write per request.
+			_ = identityRepo.UpdateLastUsed(updateCtx, clerkUserID)
 		}()
 
 		observability.AuthAttempts.WithLabelValues("success").Inc()

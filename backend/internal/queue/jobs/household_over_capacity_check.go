@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
@@ -157,6 +158,9 @@ type HouseholdOverCapacityCheckWorker struct {
 	emailService HouseholdOverCapacityEmailService
 	tierConfig   *config.TierConfig
 	logger       *slog.Logger
+	// cacheGens is optional (nil = cache invalidation disabled/not wired); see
+	// SetCacheInvalidation. Issue #1531 Task 10b-2a-iii.
+	cacheGens *cache.Generations
 }
 
 // HouseholdOverCapacityCheckWorkerDeps contains the dependencies for
@@ -184,6 +188,40 @@ func NewHouseholdOverCapacityCheckWorker(deps HouseholdOverCapacityCheckWorkerDe
 		tierConfig:   deps.TierConfig,
 		logger:       logger,
 	}
+}
+
+// SetCacheInvalidation wires cache generation bumping (setter injection, matching this
+// codebase's established convention). Issue #1531 Task 10b-2a-iii: autoOffboard's call to
+// OffboardExcessMembers removes household members (via HouseholdService.removeMemberTx —
+// the SAME helper the HTTP-covered removeHouseholdMember operation and ForceDisband use), but
+// OffboardExcessMembers has exactly one caller — this job — so nothing bumped the household's
+// cache generation after an auto-offboard actually removed members. This worker's own
+// SetOverCapacity/ClearOverCapacity/notice-marker writes carry no cache impact of their own
+// (see task-10b-2a-iii-report.md); only the member-removal path below needs this. Optional: nil
+// is a safe no-op.
+func (w *HouseholdOverCapacityCheckWorker) SetCacheInvalidation(gens *cache.Generations) {
+	w.cacheGens = gens
+}
+
+// bumpCacheForHousehold invalidates householdID's cached household-scoped analytics after a
+// successful auto-offboard has actually removed at least one member. Void by design, matching
+// every other generation bump in this codebase.
+//
+// Issue #1531 Final fixes: runs on context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+// rather than the raw job ctx. River cancels a job's context on shutdown, retry, or timeout — if
+// that cancellation lands after OffboardExcessMembers's removal transaction has already committed
+// but before this bump runs, the raw ctx would carry the cancellation into cacheGens.Bump, which
+// swallows the resulting error silently: the membership removal commits, the bump never happens,
+// and household-scoped cached analytics serve stale values until TTL. WithoutCancel alone would
+// leave the bump unbounded (it strips the parent's deadline too), hence the explicit WithTimeout —
+// matching household_service.go's bumpCacheForHousehold and the sync services' bumpCacheForSync.
+func (w *HouseholdOverCapacityCheckWorker) bumpCacheForHousehold(ctx context.Context, householdID string) {
+	if w.cacheGens == nil {
+		return
+	}
+	bumpCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bumpCacheTimeout)
+	defer cancel()
+	w.cacheGens.Bump(bumpCtx, cache.ScopeHousehold, householdID, "household_over_capacity_check")
 }
 
 // effectiveTierName returns owner's effective tier name, falling back to the raw SubscriptionTier
@@ -509,6 +547,17 @@ func (w *HouseholdOverCapacityCheckWorker) autoOffboard(ctx context.Context, job
 	}
 	if err != nil {
 		return fmt.Errorf("failed to auto-offboard excess members for household %s: %w", h.ID, err)
+	}
+	// Issue #1531 Task 10b-2a-iii: bump ONLY here — reached exclusively when
+	// OffboardExcessMembers returned (queue, nil), meaning its own removeMemberTx calls
+	// already committed inside that method's transaction. len(queued) > 0 gates a bump on an
+	// actual removal happening — a zero-excess call (queued empty, e.g. the seat count
+	// resolved itself before this transaction) commits nothing membership-shaped, so there is
+	// nothing to invalidate. This bump does not depend on the clear below succeeding: the
+	// membership change already committed regardless of whether the bookkeeping clear that
+	// follows does.
+	if len(queued) > 0 {
+		w.bumpCacheForHousehold(ctx, h.ID)
 	}
 	if err := w.repo.ClearOverCapacityIfAnchorMatches(ctx, h.ID, *h.OverCapacitySince); err != nil {
 		return fmt.Errorf("failed to clear over-capacity after auto-offboard for household %s: %w", h.ID, err)

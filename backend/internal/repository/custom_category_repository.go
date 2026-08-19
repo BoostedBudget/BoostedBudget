@@ -514,6 +514,37 @@ func (r *customCategoryRepository) GetCategoryUsage(ctx context.Context, userID,
 
 // DeleteWithReassignment deletes a custom category and reassigns its references in
 // one transaction (Issue #1203).
+//
+// # FK-action design note (Issue #1540 / #1531 slice H2)
+//
+// Three tables reference custom_categories(id), each with a different ON DELETE action:
+//   - transactions.custom_category_override_id: RESTRICT (checked at :157-159)
+//   - budget_categories.custom_category_id: CASCADE (step 5 below, "cascade via FK")
+//   - categorization_rules.target_custom_category_id: SET NULL (migration 000065:327-329)
+//
+// Before Issue #1540's fix (services/budget_service.go, services/categorization_rule_service.go),
+// a caller could plant another user's custom_category_id/target_custom_category_id on their own
+// budget_categories/categorization_rules row. Deleting that category then reached across users:
+// CASCADE silently deleted the other user's budget row, and SET NULL corrupted the other user's
+// rule (see step 3 below — the FK only nulls target_custom_category_id, leaving target_kind
+// stale, exactly the invalid state step 3 exists to prevent).
+//
+// #1540 closes the cross-user reference at write time, so every custom_category_id/
+// target_custom_category_id in these tables is now guaranteed to belong to the same user as the
+// row it's on. Post-fix, a cascade/set-null triggered by this function can only ever touch the
+// deleting user's own rows — which is the normal, expected behavior of deleting your own data,
+// not a defect. We deliberately did NOT change CASCADE to RESTRICT for "consistency": doing so
+// would make deleting a custom category fail whenever it's used in a budget, which is a UX
+// regression for the common case, not a security fix. The three actions differ because the three
+// tables have three different recovery stories (block vs. cascade vs. app-repaired), not because
+// of an oversight — RESTRICT protects a value the UI treats as load-bearing (the active override),
+// while CASCADE/SET NULL clean up dependent rows the way a delete of your own data should.
+//
+// This function (steps 2-3) is the reason SET NULL alone is insufficient: target_kind,
+// target_pfc_primary, and target_pfc_detailed must be cleared alongside target_custom_category_id
+// to keep a rule valid, a multi-column invariant the foreign key cannot express. That is why the
+// ordinary deletion path clears all four columns together under WHERE user_id = $1, rather than
+// relying on the FK's SET NULL to do it.
 func (r *customCategoryRepository) DeleteWithReassignment(ctx context.Context, userID, categoryID string) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {

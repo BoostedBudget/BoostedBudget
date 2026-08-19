@@ -1995,3 +1995,78 @@ func TestBudgetService_CreateBudget_SavingsCategory_IDOR(t *testing.T) {
 		mockChecker.AssertExpectations(t)
 	})
 }
+
+// =============================================================================
+// Issue #1540: custom_category_id ownership validation (IDOR)
+// =============================================================================
+
+// TestBudgetService_CreateBudget_RejectsCrossUserCustomCategory verifies that CreateBudget
+// rejects a "custom" category referencing another user's custom_categories row before
+// persisting anything — the same IDOR protection CreateBudget already gives SavingsGoalID.
+func TestBudgetService_CreateBudget_RejectsCrossUserCustomCategory(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	otherUsersCategoryID := "other-user-category-id"
+
+	req := createTestCreateBudgetRequest()
+	req.Categories = []domain.CreateBudgetCategoryRequest{
+		{
+			CategoryKind:     "custom",
+			CustomCategoryID: &otherUsersCategoryID,
+			AllocatedAmount:  100.00,
+		},
+	}
+
+	// GetNamesByIDs is user-scoped; a category owned by someone else is simply absent
+	// from the returned map.
+	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
+		Return(map[string]string{}, nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
+	assert.Nil(t, budget)
+	mockBudgetRepo.AssertNotCalled(t, "CreateWithCategories", mock.Anything, mock.Anything, mock.Anything)
+	mockCategoryRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_AddCategory_RejectsCrossUserCustomCategory mirrors the CreateBudget
+// case for the single-category AddCategory path.
+func TestBudgetService_AddCategory_RejectsCrossUserCustomCategory(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+	otherUsersCategoryID := "other-user-category-id"
+
+	existingBudget := createTestBudgetForService(userID)
+
+	req := &domain.CreateBudgetCategoryRequest{
+		CategoryKind:     "custom",
+		CustomCategoryID: &otherUsersCategoryID,
+		AllocatedAmount:  50.00,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
+		Return(map[string]string{}, nil)
+
+	category, err := service.AddCategory(ctx, userID, budgetID, req)
+
+	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
+	assert.Nil(t, category)
+	mockBudgetRepo.AssertNotCalled(t, "CreateCategory")
+	mockBudgetRepo.AssertExpectations(t)
+	mockCategoryRepo.AssertExpectations(t)
+}
