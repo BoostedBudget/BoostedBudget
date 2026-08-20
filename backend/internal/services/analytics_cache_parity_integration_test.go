@@ -559,7 +559,10 @@ func runParityCase(
 		assertDelta(t, afterWarm.Delta(beforeWarm), ns, 1, 0, tc.Name+": warm read")
 	}
 
-	// Step 5: mutate the underlying data, then run the production invalidation hook.
+	// Step 5: mutate the underlying data, then bump the generation. The bump comes from tc.Bump —
+	// a TEST-authored closure (bumpPersonal), NOT the production invalidation hook; see the Bump
+	// field's doc comment. So steps 5-7 prove "if something bumps, the cached read reflects the
+	// mutation", not "the production path bumps".
 	tc.Mutate(t, ctx, pool)
 	if gens != nil {
 		tc.Bump(ctx, gens)

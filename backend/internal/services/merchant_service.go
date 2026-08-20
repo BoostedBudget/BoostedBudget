@@ -177,8 +177,9 @@ func (s *MerchantService) ClearOverride(ctx context.Context, userID, merchantID 
 
 // BulkSetOverrides validates and applies multiple overrides atomically.
 // All entries are validated before any are persisted; invalid entries fail the entire call.
-// Entries are partitioned into display-only (via BulkUpsert) and merge-bearing (via BulkApply)
-// with display_name threaded atomically into merge operations (G27: no staging write).
+// Entries are partitioned into display-only and merge-bearing, but both legs commit through a
+// single BulkApply call (the exported BulkUpsert was deleted in #1565), with display_name threaded
+// atomically into merge operations (G27: no staging write).
 func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, reqs []SetOverrideRequest) ([]domain.MerchantNameOverride, error) {
 	if len(reqs) == 0 {
 		return []domain.MerchantNameOverride{}, nil
