@@ -93,17 +93,23 @@ echo "Test 3: the EFFECTIVE per-test timeout the runner uses exceeds bun's 5s de
 #   3. its exit code covered 6400 tests, so any unrelated failure made this guard claim the timeout
 #      was broken. A guard that cries wolf gets worked around.
 # Now: read the value the runner actually passes, assert it is above bun's default, and prove it
-# works on the probe ALONE, outside src/, with cleanup guaranteed by a trap.
+# works on the probe ALONE, outside src/, with cleanup on any trappable signal (SIGKILL excepted — see the trap).
 # Read the value from the INVOCATION, not from anywhere in the file. The first version grepped the
 # whole script and matched the explanatory comment above the command — so with the flag deleted from
 # `bun test` it still reported "the runner passes --timeout 30000". Caught by the axis-1 mutation.
 # awk extracts the `bun test` continuation block (a run of lines ending in backslash) and stops at the
 # first line that does not, so only real command text is searched.
-# Comments are stripped BEFORE searching, and the command may be indented or env-prefixed. Codex
-# found both holes: a trailing `# --timeout 30000` on the command's last line satisfied the old
-# version, and `^bun test` missed `  bun test` or `env bun test`.
-configured=$(awk '/(^|[[:space:]])bun[[:space:]]+test([[:space:]]|$)/{f=1} f{sub(/#.*/, ""); print; if ($0 !~ /\\[[:space:]]*$/) exit}' \
-    "$WEB_DIR/scripts/test-regular.sh" \
+# Comments are stripped FIRST, then the command is matched — order matters and an earlier version of
+# this comment described it backwards. Codex found that: the match ran before the strip, so a comment
+# line merely mentioning `bun test --timeout 30000` could start the block scan at the wrong place.
+# The match also tolerates indentation and an `env` prefix, which `^bun test` did not.
+#
+# LIMIT, stated rather than left to be discovered: `sub(/#.*/, "")` is a comment stripper, not a shell
+# parser. A `${VAR#pattern}` expansion inside the command block would be mangled. None exists in
+# test-regular.sh today, and mangling can only ever REMOVE a match (it cannot fabricate a
+# `--timeout N`), so the failure direction is a false alarm, never a false pass.
+configured=$(sed 's/#.*//' "$WEB_DIR/scripts/test-regular.sh" \
+    | awk '/(^|[[:space:]])bun[[:space:]]+test([[:space:]]|$)/{f=1} f{print; if ($0 !~ /\\[[:space:]]*$/) exit}' \
     | grep -oE -- "--timeout[[:space:]]+[0-9]+" | head -1 | grep -oE "[0-9]+")
 if [ -z "${configured:-}" ]; then
     bad "scripts/test-regular.sh passes no --timeout, so the suite runs at bun's 5s default"
@@ -123,7 +129,13 @@ else
         # "no residue on any signal bash can handle" — SIGKILL is still unhandleable, so this is
         # not literally guaranteed, and the earlier comment claiming it was is corrected here.
         tmp=""
-        trap 'if [ -n "${tmp:-}" ]; then rm -rf "$tmp"; fi' EXIT INT TERM
+        # EXIT cleans up; INT/TERM clean up AND exit non-zero. Cleaning up without exiting was a real
+        # defect (Codex): bash resumes after a trap handler, so a Ctrl-C mid-probe would tidy the temp
+        # dir and then fall through to the success check below and report a pass.
+        cleanup_probe() { if [ -n "${tmp:-}" ]; then rm -rf "$tmp"; fi; }
+        trap cleanup_probe EXIT
+        trap 'cleanup_probe; exit 130' INT
+        trap 'cleanup_probe; exit 143' TERM
         tmp=$(mktemp -d)
         cat > "$tmp/effective_timeout_probe.test.ts" <<'PROBE'
 import { test, expect } from 'bun:test'
