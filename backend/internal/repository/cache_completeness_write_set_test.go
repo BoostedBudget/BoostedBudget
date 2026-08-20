@@ -54,11 +54,44 @@ var cachedReadRepoFiles = []string{
 	"user_identity_repository.go",
 }
 
+// deleteCascadeReachesCachedTables maps a table to the cached-read tables that a DELETE on it also
+// writes, THROUGH FOREIGN-KEY CASCADES — rows the statement never names.
+//
+// ⚠ THIS EXISTS BECAUSE THE TEXT-ONLY DERIVATION WAS UNSOUND. An adversarial audit of the
+// pre-existing dispositions caught it: LinkedItemRepository.Delete's SQL mentions only
+// linked_items, but `accounts` has ON DELETE CASCADE and `transactions` has ON DELETE SET NULL
+// against linked_items(id) — so that one statement writes two cached-read tables invisibly. Every
+// DELETE-shaped write set derived from statement text alone was therefore under-reported, in the
+// dangerous direction: an under-reported write set looks disjoint and yields a false NoCacheImpact.
+//
+// Recursion follows CASCADE only. SET NULL / SET DEFAULT update the child row rather than deleting
+// it, so the chain stops there — the child is written, but its own children are untouched.
+//
+// Derived from pg_constraint against a real migrated database, then pinned here so the unit test
+// stays hermetic. TestDeleteCascadeMapMatchesLiveSchema (integration build tag) recomputes it from
+// the live catalogue and fails on drift, so a new FK or a changed ON DELETE action cannot silently
+// invalidate a derived disposition. Do not hand-edit: regenerate it.
+var deleteCascadeReachesCachedTables = map[string][]string{
+	"accounts":          {"balance_snapshots", "budget_categories", "transactions"},
+	"budgets":           {"budget_categories"},
+	"custom_categories": {"budget_categories"},
+	"households":        {"household_account_shares"},
+	"linked_items":      {"accounts", "balance_snapshots", "budget_categories", "transactions"},
+	"merchants":         {"merchant_name_overrides"},
+	"savings_goals":     {"budget_categories"},
+	"user_accounts":     {"balance_snapshots", "household_account_shares"},
+	"users": {"accounts", "balance_snapshots", "budget_categories", "budgets", "custom_categories",
+		"household_account_shares", "merchant_name_overrides", "transactions", "user_accounts",
+		"user_dashboard_preferences", "user_identities"},
+}
+
 var (
 	reCreateTable = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([a-z_][a-z0-9_]*)"?`)
 	reRenameTable = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+"?([a-z_][a-z0-9_]*)"?\s+RENAME\s+TO\s+"?([a-z_][a-z0-9_]*)"?`)
 	reFromJoin    = regexp.MustCompile(`(?i)\b(?:FROM|JOIN)\s+"?([a-z_][a-z0-9_]*)"?`)
 	reWriteTarget = regexp.MustCompile(`(?i)\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|MERGE\s+INTO)\s+"?([a-z_][a-z0-9_]*)"?`)
+	// Separate from reWriteTarget because only a DELETE (or TRUNCATE) triggers ON DELETE actions.
+	reDeleteTarget = regexp.MustCompile(`(?i)\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+"?([a-z_][a-z0-9_]*)"?`)
 	// Row-locking clauses are NORMALISED AWAY rather than used to skip a statement: a
 	// package-level const can legitimately hold `WITH x AS (SELECT ... FOR UPDATE) UPDATE users ...`
 	// (see admin_user_repository.go's updateUserTierQuery), so skipping on "FOR UPDATE" would
@@ -256,10 +289,20 @@ func writeTablesFor(bodies map[funcKey]string, frags map[string]string, schema m
 
 	resolved := false
 	harvest := func(text string) {
-		for _, m := range reWriteTarget.FindAllStringSubmatch(normalizeSQL(text), -1) {
+		norm := normalizeSQL(text)
+		for _, m := range reWriteTarget.FindAllStringSubmatch(norm, -1) {
 			n := strings.ToLower(m[1])
 			if schema[n] {
 				tables[n] = true
+				resolved = true
+			}
+		}
+		// A DELETE also writes every table reachable from it by an ON DELETE action — rows the
+		// statement never names. Omitting this under-reports DELETE write sets, the direction that
+		// manufactures a false NoCacheImpact.
+		for _, m := range reDeleteTarget.FindAllStringSubmatch(norm, -1) {
+			for _, child := range deleteCascadeReachesCachedTables[strings.ToLower(m[1])] {
+				tables[child] = true
 				resolved = true
 			}
 		}
