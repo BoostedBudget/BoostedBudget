@@ -263,8 +263,8 @@ type MockAccountRepository struct {
 	mock.Mock
 }
 
-func (m *MockAccountRepository) CreateBatch(ctx context.Context, accounts []domain.Account) error {
-	args := m.Called(ctx, accounts)
+func (m *MockAccountRepository) CreateBatch(ctx context.Context, userID string, accounts []domain.Account) error {
+	args := m.Called(ctx, userID, accounts)
 	return args.Error(0)
 }
 
@@ -689,7 +689,7 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	})).Return(nil)
 
 	// Mock account batch creation
-	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.MatchedBy(func(accounts []domain.Account) bool {
 		return len(accounts) == 2 && // Linking 2 new accounts
 			accounts[0].UserID == userID
 	})).Return(nil)
@@ -1614,7 +1614,7 @@ func TestDeleteAccount_HidesUserAccountWhenLastAccount(t *testing.T) {
 	// No remaining active accounts for this user_account
 	mockAccountRepo.On("GetByUserAccountAndStatus", ctx, userAccountID, string(domain.AccountStatusActive)).
 		Return([]domain.Account{}, nil)
-	mockUserAccountSvc.On("SetHidden", ctx, userAccountID, true).Return(nil)
+	mockUserAccountSvc.On("SetHidden", ctx, userAccountID, userID, true).Return(nil)
 
 	err := svc.DeleteAccount(ctx, accountID, userID)
 
@@ -1676,7 +1676,7 @@ func TestDeleteAccount_DoesNotHideWhenOtherAccountsRemain(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 	mockJobQueue.AssertExpectations(t)
 	// SetHidden must NOT be called when other accounts remain
-	mockUserAccountSvc.AssertNotCalled(t, "SetHidden", mock.Anything, mock.Anything, mock.Anything)
+	mockUserAccountSvc.AssertNotCalled(t, "SetHidden", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestDeleteAccount_SkipsHidingWhenUserAccountSvcNil tests that the hiding logic is skipped
@@ -1774,7 +1774,7 @@ func TestDeleteAccount_SkipsHidingWhenUserAccountIDNil(t *testing.T) {
 	require.NoError(t, err, "DeleteAccount should succeed even when UserAccountID is nil")
 	mockAccountRepo.AssertExpectations(t)
 	// SetHidden and GetByUserAccountAndStatus should NOT be called
-	mockUserAccountSvc.AssertNotCalled(t, "SetHidden", mock.Anything, mock.Anything, mock.Anything)
+	mockUserAccountSvc.AssertNotCalled(t, "SetHidden", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockAccountRepo.AssertNotCalled(t, "GetByUserAccountAndStatus", mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -2588,8 +2588,8 @@ func (m *MockUserAccountService) UpdateCustomization(ctx context.Context, id, us
 	return args.Get(0).(*domain.UserAccount), args.Error(1)
 }
 
-func (m *MockUserAccountService) SetHidden(ctx context.Context, userAccountID string, hidden bool) error {
-	args := m.Called(ctx, userAccountID, hidden)
+func (m *MockUserAccountService) SetHidden(ctx context.Context, userAccountID, userID string, hidden bool) error {
+	args := m.Called(ctx, userAccountID, userID, hidden)
 	return args.Error(0)
 }
 
@@ -2867,7 +2867,7 @@ func TestAccountService_LinkAccounts_Relink_SetsUserAccountID(t *testing.T) {
 	userID := uuid.New().String()
 
 	// Mock: CreateBatch called with accounts that have user_account_id set
-	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.MatchedBy(func(accounts []domain.Account) bool {
 		if len(accounts) != 1 {
 			return false
 		}
@@ -2883,7 +2883,7 @@ func TestAccountService_LinkAccounts_Relink_SetsUserAccountID(t *testing.T) {
 			Name:          "Chase Checking",
 		},
 	}
-	err := mockAccountRepo.CreateBatch(ctx, accounts)
+	err := mockAccountRepo.CreateBatch(ctx, userID, accounts)
 
 	// Assert
 	require.NoError(t, err)
@@ -2980,7 +2980,7 @@ func TestAccountService_LinkAccounts_MultipleAccounts_AllLinked(t *testing.T) {
 	userAccountID3 := uuid.New().String()
 
 	// Mock: CreateBatch called with 3 accounts
-	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.MatchedBy(func(accounts []domain.Account) bool {
 		return len(accounts) == 3
 	})).Return(nil)
 
@@ -2990,7 +2990,7 @@ func TestAccountService_LinkAccounts_MultipleAccounts_AllLinked(t *testing.T) {
 		{LinkedItemID: linkedItemID, UserID: userID, UserAccountID: &userAccountID2, Name: "Savings"},
 		{LinkedItemID: linkedItemID, UserID: userID, UserAccountID: &userAccountID3, Name: "Credit Card"},
 	}
-	err := mockAccountRepo.CreateBatch(ctx, accounts)
+	err := mockAccountRepo.CreateBatch(ctx, userID, accounts)
 
 	// Assert
 	require.NoError(t, err)
@@ -3546,7 +3546,7 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 		Return(&domain.UserAccount{ID: userAccountID}, nil)
 
 	// Step 10: CreateBatch — verify accounts have user_account_id set
-	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.MatchedBy(func(accounts []domain.Account) bool {
 		return len(accounts) == 1 &&
 			accounts[0].UserAccountID != nil &&
 			*accounts[0].UserAccountID == userAccountID
@@ -3657,7 +3657,7 @@ func TestLinkAccounts_Integration_ActiveTakesPrecedence(t *testing.T) {
 	maskPtr := &mask
 	mockUserAccountSvc.On("MatchOrCreate", ctx, userID, institutionID, maskPtr, "Chase Savings", "depository", "savings").
 		Return(&domain.UserAccount{ID: userAccountID}, nil)
-	mockAccountRepo.On("CreateBatch", ctx, mock.Anything).Return(nil)
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	svc := NewAccountService(
 		mockPlaidSvc,
@@ -3741,7 +3741,7 @@ func TestLinkAccounts_Integration_FreshLink_NoExistingItem(t *testing.T) {
 		Return(&domain.UserAccount{ID: userAccountID}, nil)
 
 	// CreateBatch
-	mockAccountRepo.On("CreateBatch", ctx, mock.Anything).Return(nil)
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	svc := NewAccountService(
 		mockPlaidSvc,
@@ -3833,7 +3833,7 @@ func TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates(t *testing.
 
 	// Assert: no items or accounts were created
 	mockLinkedItemRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
-	mockAccountRepo.AssertNotCalled(t, "CreateBatch", mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "CreateBatch", mock.Anything, mock.Anything, mock.Anything)
 
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)
@@ -3944,7 +3944,7 @@ func TestLinkAccounts_FingerprintCheck_BlocksAnotherUserActiveItem(t *testing.T)
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, repository.ErrAccountOwnedByAnotherUser)
 
-	mockAccountRepo.AssertNotCalled(t, "CreateBatch", mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "CreateBatch", mock.Anything, mock.Anything, mock.Anything)
 	mockLinkedItemRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 
 	mockAccountRepo.AssertExpectations(t)
@@ -4025,7 +4025,7 @@ func TestLinkAccounts_FingerprintCheck_BlocksTTLNotExpired(t *testing.T) {
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, repository.ErrAccountOwnedByAnotherUser)
 
-	mockAccountRepo.AssertNotCalled(t, "CreateBatch", mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "CreateBatch", mock.Anything, mock.Anything, mock.Anything)
 	mockAccountRepo.AssertExpectations(t)
 }
 
@@ -4104,7 +4104,7 @@ func TestLinkAccounts_FingerprintCheck_AllowsAfterTTLExpiry(t *testing.T) {
 		args.Get(1).(*domain.LinkedItem).ID = newItemID
 	}).Return(nil)
 
-	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.MatchedBy(func(accounts []domain.Account) bool {
 		return len(accounts) == 1 && accounts[0].UserID == userID
 	})).Return(nil)
 
@@ -4187,7 +4187,7 @@ func TestLinkAccounts_FingerprintCheck_AllowsSameUser(t *testing.T) {
 		args.Get(1).(*domain.LinkedItem).ID = newItemID
 	}).Return(nil)
 
-	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.MatchedBy(func(accounts []domain.Account) bool {
 		return len(accounts) == 1
 	})).Return(nil)
 
@@ -4268,7 +4268,7 @@ func TestLinkAccounts_FingerprintCheck_RaceConditionHandled(t *testing.T) {
 		}).Return(nil)
 
 	// CreateBatch hits UNIQUE constraint violation (race condition)
-	mockAccountRepo.On("CreateBatch", ctx, mock.Anything).
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.Anything).
 		Return(repository.ErrAccountOwnedByAnotherUser)
 
 	svc := NewAccountService(
@@ -4349,7 +4349,7 @@ func TestLinkAccounts_FingerprintCheck_NilMaskAndSubtypeUseSentinels(t *testing.
 		args.Get(1).(*domain.LinkedItem).ID = newItemID
 	}).Return(nil)
 
-	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.MatchedBy(func(accounts []domain.Account) bool {
 		return len(accounts) == 1
 	})).Return(nil)
 

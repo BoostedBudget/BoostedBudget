@@ -60,13 +60,13 @@ func (m *MockUserAccountRepository) Update(ctx context.Context, userAccount *dom
 	return args.Error(0)
 }
 
-func (m *MockUserAccountRepository) UpdatePrimaryTypeAndSubtype(ctx context.Context, id, primaryType, primarySubtype string) error {
-	args := m.Called(ctx, id, primaryType, primarySubtype)
+func (m *MockUserAccountRepository) UpdatePrimaryTypeAndSubtype(ctx context.Context, id, userID, primaryType, primarySubtype string) error {
+	args := m.Called(ctx, id, userID, primaryType, primarySubtype)
 	return args.Error(0)
 }
 
-func (m *MockUserAccountRepository) UpdateHidden(ctx context.Context, id string, hidden bool) error {
-	args := m.Called(ctx, id, hidden)
+func (m *MockUserAccountRepository) UpdateHidden(ctx context.Context, id, userID string, hidden bool) error {
+	args := m.Called(ctx, id, userID, hidden)
 	return args.Error(0)
 }
 
@@ -120,7 +120,7 @@ func TestUserAccountService_MatchOrCreate_ExistingMatch(t *testing.T) {
 	assert.Equal(t, "#FF0000", *result.CustomColor)  // Customization preserved
 	mockRepo.AssertExpectations(t)
 	mockRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
-	mockRepo.AssertNotCalled(t, "UpdatePrimaryTypeAndSubtype", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "UpdatePrimaryTypeAndSubtype", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestUserAccountService_MatchOrCreate_NoMatch_CreatesNew tests that a new user account
@@ -187,7 +187,7 @@ func TestUserAccountService_MatchOrCreate_UpdatesTypeOnMatch(t *testing.T) {
 	newSubtype := "credit card"
 
 	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
-	mockRepo.On("UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, newType, newSubtype).Return(nil)
+	mockRepo.On("UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, existingUA.UserID, newType, newSubtype).Return(nil)
 
 	// Execute
 	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "Account", newType, newSubtype)
@@ -196,7 +196,7 @@ func TestUserAccountService_MatchOrCreate_UpdatesTypeOnMatch(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	mockRepo.AssertExpectations(t)
-	mockRepo.AssertCalled(t, "UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, newType, newSubtype)
+	mockRepo.AssertCalled(t, "UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, existingUA.UserID, newType, newSubtype)
 }
 
 // TestUserAccountService_MatchOrCreate_NoUpdateWhenTypeSame tests that UpdatePrimaryTypeAndSubtype
@@ -230,7 +230,7 @@ func TestUserAccountService_MatchOrCreate_NoUpdateWhenTypeSame(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	mockRepo.AssertExpectations(t)
-	mockRepo.AssertNotCalled(t, "UpdatePrimaryTypeAndSubtype", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "UpdatePrimaryTypeAndSubtype", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestUserAccountService_MatchOrCreate_PreservesCustomizations tests that user customizations
@@ -307,7 +307,7 @@ func TestUserAccountService_MatchOrCreate_UnhidesHiddenUserAccount(t *testing.T)
 
 	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
 	// UpdateHidden must be called to un-hide the account
-	mockRepo.On("UpdateHidden", ctx, existingUA.ID, false).Return(nil)
+	mockRepo.On("UpdateHidden", ctx, existingUA.ID, existingUA.UserID, false).Return(nil)
 
 	// Execute
 	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, accountName, accountType, accountSubtype)
@@ -353,7 +353,7 @@ func TestUserAccountService_MatchOrCreate_DoesNotCallUpdateHiddenWhenNotHidden(t
 	assert.NotNil(t, result)
 	assert.False(t, result.IsHidden)
 	mockRepo.AssertExpectations(t)
-	mockRepo.AssertNotCalled(t, "UpdateHidden", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "UpdateHidden", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestUserAccountService_MatchOrCreate_UpdateHiddenError_StillReturnsAccountHidden tests
@@ -379,7 +379,7 @@ func TestUserAccountService_MatchOrCreate_UpdateHiddenError_StillReturnsAccountH
 	}
 
 	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(existingUA, nil)
-	mockRepo.On("UpdateHidden", ctx, existingUA.ID, false).Return(assert.AnError)
+	mockRepo.On("UpdateHidden", ctx, existingUA.ID, existingUA.UserID, false).Return(assert.AnError)
 
 	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "BoA Checking", "depository", "checking")
 
@@ -631,8 +631,8 @@ func TestMatchOrCreate_DuplicateError_RunsNormalization(t *testing.T) {
 		Return(repository.ErrDuplicateUserAccount)
 	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).
 		Return(existingUA, nil).Once()
-	mockRepo.On("UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, newType, newSubtype).Return(nil)
-	mockRepo.On("UpdateHidden", ctx, existingUA.ID, false).Return(nil)
+	mockRepo.On("UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, existingUA.UserID, newType, newSubtype).Return(nil)
+	mockRepo.On("UpdateHidden", ctx, existingUA.ID, existingUA.UserID, false).Return(nil)
 
 	// Execute
 	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "BoA", newType, newSubtype)
@@ -642,8 +642,8 @@ func TestMatchOrCreate_DuplicateError_RunsNormalization(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.False(t, result.IsHidden, "re-found row should be un-hidden")
 	mockRepo.AssertExpectations(t)
-	mockRepo.AssertCalled(t, "UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, newType, newSubtype)
-	mockRepo.AssertCalled(t, "UpdateHidden", ctx, existingUA.ID, false)
+	mockRepo.AssertCalled(t, "UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, existingUA.UserID, newType, newSubtype)
+	mockRepo.AssertCalled(t, "UpdateHidden", ctx, existingUA.ID, existingUA.UserID, false)
 }
 
 // =============================================================================

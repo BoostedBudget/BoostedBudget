@@ -251,3 +251,45 @@ func TestMerchantOverride_Delete_DBError(t *testing.T) {
 	require.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestMerchantOverride_BulkApply_CrossTenantDisplayOnly_Rejected verifies BulkApply refuses a
+// displayOnly element whose UserID differs from the actor, and refuses it BEFORE opening a
+// transaction (#1566). bulkUpsertTx writes each row's own o.UserID, so the actor argument
+// constrains nothing on its own.
+func TestMerchantOverride_BulkApply_CrossTenantDisplayOnly_Rejected(t *testing.T) {
+	mock, repo := setupOverrideMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	victimID := uuid.New().String()
+	name := "Renamed"
+
+	// No mock expectations are registered: any DB call at all is a failure.
+	_, err := repo.BulkApply(ctx, actorID, []domain.MerchantNameOverride{
+		{UserID: actorID, MerchantID: uuid.New().String(), DisplayName: &name},
+		{UserID: victimID, MerchantID: uuid.New().String(), DisplayName: &name},
+	}, nil)
+
+	require.ErrorIs(t, err, ErrOverrideTenantMismatch)
+	assert.Contains(t, err.Error(), victimID, "error must name the offending user_id")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestMerchantOverride_BulkApply_EmptyElementUserID_Rejected verifies a blank UserID is not
+// treated as "inherit the actor" — a zero value is exactly how a mixed-tenant slice sneaks in.
+func TestMerchantOverride_BulkApply_EmptyElementUserID_Rejected(t *testing.T) {
+	mock, repo := setupOverrideMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	name := "Renamed"
+
+	_, err := repo.BulkApply(ctx, actorID, []domain.MerchantNameOverride{
+		{MerchantID: uuid.New().String(), DisplayName: &name},
+	}, nil)
+
+	require.ErrorIs(t, err, ErrOverrideTenantMismatch)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

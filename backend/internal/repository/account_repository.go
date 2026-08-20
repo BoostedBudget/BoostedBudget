@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -17,6 +18,10 @@ var (
 	ErrAccountNotFound          = errors.New("account not found")
 	ErrDuplicateAccount         = errors.New("account already exists for this user")
 	ErrAccountOwnedByAnotherUser = errors.New("one or more accounts are already linked by another user")
+
+	// ErrAccountBatchTenantMismatch is returned when a batch write is handed a row whose UserID
+	// is not the acting user. See CreateBatch (issue #1566).
+	ErrAccountBatchTenantMismatch = errors.New("account batch contains a row belonging to another user")
 )
 
 // FingerprintOwnership holds information about who owns a fingerprint and the state of their linked item.
@@ -38,8 +43,10 @@ type AccountFilterOptions struct {
 
 // AccountRepository defines the interface for account data access
 type AccountRepository interface {
-	// CreateBatch creates multiple accounts in a single transaction
-	CreateBatch(ctx context.Context, accounts []domain.Account) error
+	// CreateBatch creates multiple accounts in a single transaction for a single tenant.
+	// Every element's UserID must equal userID; a mismatch returns
+	// ErrAccountBatchTenantMismatch and writes nothing (issue #1566).
+	CreateBatch(ctx context.Context, userID string, accounts []domain.Account) error
 
 	// GetByLinkedItemID retrieves all accounts for a specific linked item
 	GetByLinkedItemID(ctx context.Context, linkedItemID string) ([]domain.Account, error)
@@ -231,10 +238,32 @@ func (r *accountRepository) decryptAccountPIIFields(a *domain.Account) error {
 	return nil
 }
 
-// CreateBatch creates multiple accounts in a single transaction
-func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.Account) error {
+// assertSingleTenantAccounts fails if any element of accounts is owned by someone other than
+// userID. An empty element UserID is a mismatch too: a zero value is exactly how a
+// mixed-tenant slice slips in, and treating it as "inherit the actor" would paper over the bug.
+func assertSingleTenantAccounts(userID string, accounts []domain.Account) error {
+	for i := range accounts {
+		if accounts[i].UserID != userID {
+			return fmt.Errorf("CreateBatch: %w: element %d has user_id %q, expected %q",
+				ErrAccountBatchTenantMismatch, i, accounts[i].UserID, userID)
+		}
+	}
+	return nil
+}
+
+// CreateBatch creates multiple accounts in a single transaction, all owned by userID.
+//
+// #1566: the batch is single-tenant BY ASSERTION, not by convention. `accounts` is joined by
+// every analytics query, so a row inserted for a non-actor user is visible to cached reads of a
+// user the cache-invalidation middleware never bumps. A mixed-tenant slice is refused loudly
+// (ErrAccountBatchTenantMismatch) before any statement runs — never silently skipped.
+func (r *accountRepository) CreateBatch(ctx context.Context, userID string, accounts []domain.Account) error {
 	if len(accounts) == 0 {
 		return nil
+	}
+
+	if err := assertSingleTenantAccounts(userID, accounts); err != nil {
+		return err
 	}
 
 	tx, err := r.db.Begin(ctx)

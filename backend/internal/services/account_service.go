@@ -551,7 +551,7 @@ func (s *accountService) LinkAccounts(
 	}
 
 	// Step 6b: Create accounts in batch
-	if err := s.accountRepo.CreateBatch(ctx, accounts); err != nil {
+	if err := s.accountRepo.CreateBatch(ctx, user.ID, accounts); err != nil {
 		// TODO: Consider rollback mechanism if account creation fails
 		// For now, the linked_item → accounts CASCADE DELETE will clean up on item deletion
 		return nil, fmt.Errorf("failed to create accounts: %w", err)
@@ -817,7 +817,7 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 				)
 			}
 		} else if len(remaining) == 0 {
-			if hideErr := s.userAccountSvc.SetHidden(ctx, *account.UserAccountID, true); hideErr != nil {
+			if hideErr := s.userAccountSvc.SetHidden(ctx, *account.UserAccountID, userID, true); hideErr != nil {
 				if s.logger != nil {
 					s.logger.Warn("failed to hide user_account after last account deletion",
 						"user_account_id", *account.UserAccountID,

@@ -41,7 +41,7 @@ import (
 func createAccountNullCurrencyFixtureAccount(t *testing.T, ctx context.Context, repo AccountRepository, acct *domain.Account) {
 	t.Helper()
 	batch := []domain.Account{*acct}
-	require.NoError(t, repo.CreateBatch(ctx, batch))
+	require.NoError(t, repo.CreateBatch(ctx, batch[0].UserID, batch))
 	acct.ID = batch[0].ID
 }
 

@@ -34,9 +34,10 @@ type UserAccountService interface {
 	// Returns the updated UserAccount.
 	UpdateCustomization(ctx context.Context, id, userID string, req *domain.UpdateUserAccountRequest) (*domain.UserAccount, error)
 
-	// SetHidden updates the is_hidden flag on a UserAccount.
+	// SetHidden updates the is_hidden flag on a UserAccount, scoped to its owner.
 	// Used by DeleteAccount to hide the UserAccount when its last active account is deleted.
-	SetHidden(ctx context.Context, userAccountID string, hidden bool) error
+	// Returns repository.ErrUserAccountNotFound if userID does not own userAccountID (#1566).
+	SetHidden(ctx context.Context, userAccountID, userID string, hidden bool) error
 }
 
 // userAccountService implements UserAccountService
@@ -113,7 +114,7 @@ func (s *userAccountService) normalizeExistingUserAccount(
 	existingType := derefPtr(existing.PrimaryType)
 	existingSubtype := derefPtr(existing.PrimarySubtype)
 	if existingType != accountType || existingSubtype != accountSubtype {
-		err := s.repo.UpdatePrimaryTypeAndSubtype(ctx, existing.ID, accountType, accountSubtype)
+		err := s.repo.UpdatePrimaryTypeAndSubtype(ctx, existing.ID, existing.UserID, accountType, accountSubtype)
 		if err != nil {
 			// Non-fatal: log and continue (customizations preserved)
 			// In production, would log warning here
@@ -123,7 +124,7 @@ func (s *userAccountService) normalizeExistingUserAccount(
 	// Un-hide if previously hidden (re-link after account deletion).
 	// Only update in-memory state on success to keep DB and caller in sync.
 	if existing.IsHidden {
-		if err := s.repo.UpdateHidden(ctx, existing.ID, false); err != nil {
+		if err := s.repo.UpdateHidden(ctx, existing.ID, existing.UserID, false); err != nil {
 			// Non-fatal: log and continue (TODO: add logger to userAccountService)
 			_ = err
 		} else {
@@ -229,9 +230,9 @@ func (s *userAccountService) UpdateCustomization(
 	return existing, nil
 }
 
-// SetHidden updates the is_hidden flag on a UserAccount.
-func (s *userAccountService) SetHidden(ctx context.Context, userAccountID string, hidden bool) error {
-	return s.repo.UpdateHidden(ctx, userAccountID, hidden)
+// SetHidden updates the is_hidden flag on a UserAccount, scoped to its owner (#1566).
+func (s *userAccountService) SetHidden(ctx context.Context, userAccountID, userID string, hidden bool) error {
+	return s.repo.UpdateHidden(ctx, userAccountID, userID, hidden)
 }
 
 // strPtrIfNotEmpty returns a pointer to s if s is not empty, otherwise nil
