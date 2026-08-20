@@ -691,17 +691,41 @@ var (
 	}, []string{"action"})
 
 	// AccountsReplacedFiltered counts query executions that exclude replaced accounts or
-	// resolve a re-link chain (Issue #1109). The "family" label groups call sites by domain
-	// so we can confirm every filter path is exercised after a staging deploy.
+	// resolve a re-link chain (Issue #1109). The "family" label groups call sites by domain.
 	//
-	// Expected families:
-	//   accounts_list      - GetAccountsWithInstitutionFiltered (active-only path)
-	//   balance_summary    - GetBalanceSummary, GetAccountTypes
-	//   dashboard_history  - GetLatestByUserID, GetAggregatedHistory
-	//   transaction_match  - MonitorForMatches chain resolution
-	//   automation         - rule execution chain resolution, savings goal creation
-	//   investments        - holdings/investment_transactions active filter
-	//   liabilities        - liability repositories active filter
+	// Scope, precisely: this metric confirms that the *instrumented* call sites listed below
+	// are exercised after a staging deploy. It is NOT a completeness signal for the codebase's
+	// re-link/active filtering — most filter paths carry no counter at all. Concretely,
+	// account_repository.go contains 9 `status = 'active'` predicates but only 1
+	// WithLabelValues call (accounts_list, in GetAccountsWithInstitutionFiltered): the other 8,
+	// GetByUserID among them, filter silently. So "family X saw zero increments" means that
+	// listed call site did not run; it does not mean no filtering happened in that domain.
+	//
+	// The guard test TestAccountsReplacedFilteredFamiliesMatchCallSites parses the list
+	// below out of this comment and keeps it in sync with the WithLabelValues call sites in
+	// both directions, so edit the list only alongside the code.
+	//
+	// Emitted families (each has at least one WithLabelValues call site):
+	//   accounts_list                - GetAccountsWithInstitutionFiltered (active-only path)
+	//   dashboard_history            - GetLatestByUserID, GetAggregatedHistory
+	//   automation                   - rule execution chain resolution, savings goal creation
+	//   investments                  - holdings/investment_transactions active filter
+	//   investments_with_securities  - GetByUserIDWithSecurities (holdings + securities join)
+	//   investments_keyset           - keyset-paginated investment transaction listing
+	//   liabilities                  - liability repositories active filter
+	//
+	// Removed families, and why (Issue #1567):
+	//   transaction_match  - named transactionMonitorService.MonitorForMatches, which is a
+	//                        documented no-op stub (`return nil`, transaction_monitor_service.go)
+	//                        since Issue #972 moved correlation to TransferCorrelationService.
+	//                        It is still wired into transaction_sync_service.go, so the call
+	//                        happens — but it resolves no chain and could never emit.
+	//   balance_summary    - named dashboardService.GetBalanceSummary / GetAccountTypes, which
+	//                        do no filtering themselves; they delegate to
+	//                        balanceSnapshotRepo.GetLatestByUserID (already counted as
+	//                        dashboard_history) and accountRepo.GetByUserID (uncounted, see
+	//                        the 1-of-9 note above). Every filter it would have described is
+	//                        already attributed to another family or to none.
 	//
 	// Retired family: "analytics". Issue #1561 removed the last accounts.status predicate
 	// from analytics_repository.go, so its 22 increments counted executions that excluded
