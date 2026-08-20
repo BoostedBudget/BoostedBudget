@@ -9,13 +9,12 @@ package jobs
 //     service method already reviewed and bumping, e.g. plaid_sync.go → SyncTransactions).
 //   - dispositionNoCacheImpact{reason} — reviewed and found to touch no cached namespace
 //     (analytics, analytics_rows, dashprefs, identity). Reason is mandatory and non-empty.
-//   - dispositionUnclassified{} — not yet reviewed to a confident conclusion. An EXISTING entry of
-//     this kind SKIPS the completeness check (t.Skipf), naming every such file, rather than
-//     failing it — the backlog of reclassifying them is #1537's job, not this guard's. What DOES
-//     still fail (t.Errorf) is a job file with NO entry in jobFileDispositions at all — i.e. a
-//     newly-added file this guard has never seen — so a wrong guess is never silently recorded as
-//     a pass, even though an already-acknowledged unclassified one does not block CI. See
-//     task-10b-3-report.md for the full worklist these produce.
+//
+// There is no "unclassified" kind: issue #1537 removed it here as well as from the repository
+// guard, once this map had none left. The enum value is GONE, so the category cannot be expressed
+// and a new job file must be dispositioned rather than acknowledged-and-skipped. The previously
+// cited "task-10b-3-report.md" does not exist in the repository and never has, in any commit; the
+// durable documentation is docs/architecture/cache-invalidation-dispositions.md.
 //
 // WHAT THIS DOES NOT PROVE (read this before trusting a green run):
 //   - This guard is FILE-LEVEL, not statement-level or even function-level. A file already
@@ -46,7 +45,6 @@ type jobDispositionKind int
 const (
 	dispositionBumps jobDispositionKind = iota
 	dispositionNoCacheImpact
-	dispositionUnclassified
 )
 
 type jobFileDisposition struct {
@@ -275,7 +273,6 @@ func TestEveryJobFileDeclaresCacheInvalidationDisposition(t *testing.T) {
 	}
 
 	var missing []string
-	var unclassified []string
 	for _, f := range files {
 		d, ok := jobFileDispositions[f]
 		if !ok {
@@ -288,8 +285,10 @@ func TestEveryJobFileDeclaresCacheInvalidationDisposition(t *testing.T) {
 				t.Errorf("jobFileDispositions[%q] has an empty detail — a bare entry defeats the "+
 					"point of this guard", f)
 			}
-		case dispositionUnclassified:
-			unclassified = append(unclassified, f)
+		default:
+			// Unreachable today. Present so a newly added kind cannot slip through unvalidated.
+			t.Errorf("jobFileDispositions[%q] has disposition kind %d, which this guard does not know "+
+				"how to validate — teach it, do not leave the kind unchecked", f, int(d.kind))
 		}
 	}
 
@@ -298,9 +297,4 @@ func TestEveryJobFileDeclaresCacheInvalidationDisposition(t *testing.T) {
 			len(missing), strings.Join(missing, ", "))
 	}
 
-	if len(unclassified) > 0 {
-		t.Skipf("TODO #1531: %d job file(s) remain dispositionUnclassified{} pending review — "+
-			"see the worklist table in task-10b-3-report.md (Task 10b-3): %s",
-			len(unclassified), strings.Join(unclassified, ", "))
-	}
 }
