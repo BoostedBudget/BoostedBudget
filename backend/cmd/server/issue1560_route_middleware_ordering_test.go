@@ -63,12 +63,9 @@ var earlyRouteExemptions = map[string]string{
 var (
 	// requestScopedMiddlewares are the middlewares whose protection a secured route depends on.
 	// Every one must be registered before any such route, so the guard anchors on the last.
-	requestScopedMiddlewares = []*regexp.Regexp{
-		regexp.MustCompile(`UseMiddleware\(\s*humaClerkMiddleware`),
-		regexp.MustCompile(`UseMiddleware\(\s*humamiddleware\.NewReadOnlyMiddleware`),
-		regexp.MustCompile(`UseMiddleware\(\s*humamiddleware\.NewCacheInvalidationMiddleware`),
-	}
-	reRouteCallOpen  = regexp.MustCompile(`operations\.(Register[A-Za-z]+Routes)\(`)
+	// The middleware markers and the route-call scan now live in route_registration_scan_test.go,
+	// on go/ast. Only the mutating-method matcher is still a regex, and it matches a method name
+	// already extracted from an AST node.
 	reMutatingMethod = regexp.MustCompile(`^(POST|PUT|PATCH|DELETE)$`)
 )
 
@@ -81,85 +78,42 @@ var requiredLateRouteGroups = map[string][]string{
 	"RegisterDeletionRoutes": {"/api/v1/user/delete", "/api/v1/user/delete/cancel/{token}"},
 }
 
-// routeCall is one operations.Register*Routes(...) call found in main.go.
-type routeCall struct {
-	group string
-	api   string // the first argument: humaAPI, internalHumaAPI, or something unresolved
-	line  int
-}
-
-// findRouteCalls scans src for operations.Register*Routes(...) calls, reading forward to the
-// matching close paren so a call split across lines is still seen (Codex review, Medium
-// finding 2 — the original single-line regex missed those). The first argument is captured
-// rather than matched, so a call on a DIFFERENT api value surfaces as a distinct api string
-// instead of silently vanishing from the scan.
-func findRouteCalls(src string) []routeCall {
-	var out []routeCall
-	for _, m := range reRouteCallOpen.FindAllStringSubmatchIndex(src, -1) {
-		group := src[m[2]:m[3]]
-		depth, i := 1, m[1]
-		for ; i < len(src) && depth > 0; i++ {
-			switch src[i] {
-			case '(':
-				depth++
-			case ')':
-				depth--
-			}
-		}
-		firstArg := strings.TrimSpace(src[m[1] : i-1])
-		if c := strings.IndexByte(firstArg, ','); c >= 0 {
-			firstArg = strings.TrimSpace(firstArg[:c])
-		}
-		out = append(out, routeCall{
-			group: group,
-			api:   firstArg,
-			line:  strings.Count(src[:m[0]], "\n") + 1,
-		})
-	}
-	return out
-}
-
 func TestMutatingRoutesRegisteredAfterMiddlewareChain(t *testing.T) {
 	raw, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatalf("read main.go: %v", err)
 	}
-	src := string(raw)
-	lines := strings.Split(src, "\n")
 
-	// Anchor = the LAST request-scoped middleware registration. Every one must be located; a
-	// middleware this guard cannot find is a guard looking at the wrong thing.
-	anchor := 0
-	for _, re := range requestScopedMiddlewares {
-		found := 0
-		for i, l := range lines {
-			if re.MatchString(l) {
-				found = i + 1
-				break
-			}
-		}
-		if found == 0 {
-			t.Fatalf("could not locate a UseMiddleware call matching %s in main.go — this guard is "+
-				"looking for the wrong thing, or that middleware was removed; a silently unanchored "+
-				"ordering check is worse than no check", re)
-		}
-		if found > anchor {
-			anchor = found
-		}
+	// AST, not text. A commented-out registration is not a call, and a comment naming a middleware
+	// cannot move the anchor. Both holes were verified against this guard before the rewrite; see
+	// route_registration_scan_test.go for the evidence and the remaining lexical-order limit.
+	scan, err := scanGoSource("main.go", string(raw))
+	if err != nil {
+		t.Fatalf("scan main.go: %v", err)
+	}
+	if missing := scan.missingMiddleware(); len(missing) > 0 {
+		t.Fatalf("could not locate UseMiddleware call(s) for %v in main.go — this guard is looking "+
+			"for the wrong thing, or that middleware was removed; a silently unanchored ordering "+
+			"check is worse than no check", missing)
+	}
+	anchor := scan.anchor
+
+	if len(scan.bareRegisters) > 0 {
+		t.Errorf("%d bare huma.Register(...) call(s) in main.go (line(s) %v). This ordering guard "+
+			"tracks Register*Routes groups, so a directly-registered operation is invisible to it — "+
+			"register it through a Register*Routes function, or teach this guard to resolve it.",
+			len(scan.bareRegisters), scan.bareRegisters)
 	}
 
-	// G11 (gap analysis): findRouteCalls only recognises operations.Register*Routes(...). Two shapes
-	// escape it, and both are invisible today only by convention rather than by construction:
-	//   (a) a bare huma.Register(humaAPI, ...) written directly in cmd/server, and
-	//   (b) a Register*Routes call living in some other cmd/server file instead of main.go.
-	// Either would register a route this ordering check never sees, which is exactly how #1560
-	// happened — a route nobody was looking at. Fail on both rather than rely on style holding.
-	if bare := regexp.MustCompile(`huma\.Register\(\s*humaAPI\b`).FindAllStringIndex(src, -1); len(bare) > 0 {
-		t.Errorf("%d bare huma.Register(humaAPI, ...) call(s) in main.go. This ordering guard only "+
-			"tracks operations.Register*Routes groups, so a directly-registered operation is invisible "+
-			"to it — register it through a Register*Routes function, or teach this guard to resolve it.",
-			len(bare))
+	// Lexical order cannot see execution order, so the shape is refused rather than trusted: a
+	// registration inside a helper runs wherever the helper is CALLED, which may be before the
+	// middleware even though the helper body sits after it in the file.
+	for _, c := range scan.outsideMain {
+		t.Errorf("%s is called at main.go:%d, outside func main(). This guard compares SOURCE line "+
+			"order, so a registration reached through a helper could execute before the middleware "+
+			"chain while appearing after it — register it directly in main().", c.group, c.line)
 	}
+
 	otherFiles, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("read cmd/server dir: %v", err)
@@ -173,16 +127,20 @@ func TestMutatingRoutesRegisteredAfterMiddlewareChain(t *testing.T) {
 		if rerr != nil {
 			t.Fatalf("read %s: %v", n, rerr)
 		}
-		if reRouteCallOpen.MatchString(string(b)) {
-			t.Errorf("%s registers routes with operations.Register*Routes, but this guard only reads "+
-				"main.go — its line-ordering comparison is meaningless across files. Move the "+
-				"registration into main.go or extend the guard to span cmd/server.", n)
+		other, serr := scanGoSource(n, string(b))
+		if serr != nil {
+			t.Fatalf("scan %s: %v", n, serr)
+		}
+		if len(other.calls)+len(other.outsideMain) > 0 {
+			t.Errorf("%s registers routes with Register*Routes, but this guard only orders main.go — "+
+				"its line comparison is meaningless across files. Move the registration into main.go "+
+				"or extend the guard to span cmd/server.", n)
 		}
 	}
 
-	calls := findRouteCalls(src)
+	calls := scan.calls
 	if len(calls) == 0 {
-		t.Fatal("scanned zero operations.Register*Routes(...) calls in main.go — the guard is " +
+		t.Fatal("scanned zero Register*Routes(...) calls in main.go — the guard is " +
 			"broken, not the wiring")
 	}
 
@@ -229,7 +187,7 @@ func TestMutatingRoutesRegisteredAfterMiddlewareChain(t *testing.T) {
 
 	// (2) Required groups must actually be registered, exactly once, after the anchor.
 	for group, wantPaths := range requiredLateRouteGroups {
-		var seen []routeCall
+		var seen []routeRegistration
 		for _, c := range calls {
 			if c.group == group && c.api == "humaAPI" {
 				seen = append(seen, c)
