@@ -266,11 +266,13 @@ func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Con
 // Pre-existing, unchanged-by-this-fix assumption: current_balance always comes from the
 // selected balance_snapshots row directly (never wrong), but account_type comes from
 // whichever `accounts` row the LEFT JOIN matches by user_account_id — not specifically
-// bs.account_id. This is only ambiguous if two 'active' accounts rows ever shared one
-// user_account_id, which the Plaid re-link handler guarantees never happens (no DB
-// constraint enforces it — see migration 000033). The trailing `a.id` ORDER BY tiebreak
-// keeps that (should-be-impossible) case deterministic rather than fanning out and
-// double-summing balances, as the pre-#1378 query did.
+// bs.account_id. The ORDER BY prefers the ACTIVE chain member's type and falls back to any
+// member's type when the whole chain has been expired or replaced; the choice is only
+// ambiguous if two 'active' accounts rows ever shared one user_account_id, which the Plaid
+// re-link handler guarantees never happens (no DB constraint enforces it — see migration
+// 000033). The trailing `a.id` ORDER BY tiebreak keeps that (should-be-impossible) case
+// deterministic rather than fanning out and double-summing balances, as the pre-#1378
+// query did.
 func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
 
@@ -283,21 +285,32 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 		        a.type AS account_type
 		    FROM balance_snapshots bs
 		    JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
-		    -- #1561 CORRECTION: this status filter is NOT the history filter #1561 removed from the
-		    -- analytics joins, and must NOT be removed again. Snapshots are already selected by
-		    -- bs.user_account_id, so every member of a re-link chain contributes its snapshots
-		    -- regardless of status — no history is dropped here. This join exists solely to supply
-		    -- a.type for the per-type grouping, and it matches EVERY chain member sharing that
-		    -- user_account_id. Without the filter, DISTINCT ON breaks the tie on a.id (an arbitrary
-		    -- UUID) and can attribute the balance to a REPLACED member's type — and with an
-		    -- accountTypes filter applied, drop it from the result entirely. The ACTIVE row's type is
-		    -- the authoritative one. Pinned by
-		    -- TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType.
-		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id AND a.status = 'active'
+		    -- This join exists solely to supply a.type for the per-type grouping; the balance itself
+		    -- always comes from the balance_snapshots row. It matches EVERY member of a re-link chain
+		    -- sharing that user_account_id, so type selection has to be an explicit PREFERENCE, not a
+		    -- filter:
+		    --
+		    --   * #1561 removed AND a.status = 'active' from the household ANALYTICS joins, correctly
+		    --     — there it was dropping pre-relink history. Applying the same removal here was wrong
+		    --     (restored in 58920ae3): with no preference, DISTINCT ON breaks the tie on a.id (an
+		    --     arbitrary UUID) and can attribute the balance to a REPLACED member's type.
+		    --   * But expressing that preference as a JOIN predicate was ALSO wrong. When no active row
+		    --     shares the user_account_id — exactly what ExpireAccountsByFingerprint leaves behind
+		    --     for a whole fingerprint — the LEFT JOIN yields a NULL a.type, which lands in the ''
+		    --     bucket and, because NULL never satisfies = ANY, is dropped outright by the
+		    --     accountTypes filter. Personal scope keeps those snapshots (it reads the type from the
+		    --     snapshot's own account row), so household history silently disagreed with it.
+		    --
+		    -- So the join is unfiltered and the ORDER BY prefers an active row, falling back to any
+		    -- chain member's type when none is active. Both properties are pinned:
+		    -- TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType (active wins) and
+		    -- TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory (fallback).
+		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id
 		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $5::date
 		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.fingerprint,
-		             bs.snapshot_at DESC, bs.id DESC, a.id
+		             bs.snapshot_at DESC, bs.id DESC,
+		             (a.status = 'active') DESC NULLS LAST, a.id
 		)
 		SELECT snapshot_date,
 		       COALESCE(account_type, '') AS account_type,

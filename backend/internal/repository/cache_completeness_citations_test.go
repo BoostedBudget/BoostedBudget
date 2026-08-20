@@ -23,9 +23,25 @@ package repository
 //     worked around.
 //
 // WHAT IS DELIBERATELY NOT ENFORCED:
-//   - Semantic line-number checking. Refs are written approximately ("~:339"), there are hundreds
-//     of them, and the audit showed a checker would not have caught the real drifts anyway while
-//     generating constant churn.
+//   - Semantic line-number checking BEYOND range. Refs are often written approximately ("~:339"),
+//     there are hundreds of them, and asserting that a cited line contains a particular construct
+//     generates churn on every unrelated edit above it.
+//
+//     ⚠ But the surrounding claim here was FALSIFIED and has been narrowed. It used to say a line
+//     checker "would not have caught the real drifts anyway". It would have caught these, all found
+//     in one later audit of this very branch: three citations to
+//     internal/repository/budget_repository.go at lines 1194, 1208 and 1212, in a file that
+//     #1565's deletions shortened to 1137 lines, and eleven main.go citations left pointing at a comment fragment,
+//     at `DB: db,` and at `})` after this branch moved main.go by ~30 lines.
+//
+//     So an IN-RANGE check is now enforced (TestExactCitationsAreInRange below) for exact
+//     `file.go:NNN` refs — cheap, zero false positives, and it catches precisely the class that
+//     actually occurred. Approximate `~:NNN` refs are exempt by the `~` convention: it means
+//     "about here", and holding it to an exact standard is what would generate the churn.
+//
+//     The main.go line numbers were not re-anchored but REMOVED: the ordering they were cited for
+//     is proved mechanically by TestMutatingRoutesRegisteredAfterMiddlewareChain, so the number
+//     carried no information a guard did not already carry, and only drifted.
 //   - Cycle detection as a gate. Of the four suspected cycles, three carried independent evidence
 //     on both sides; a detector would have failed them wrongly. The at-least-one-citation rule
 //     catches the genuinely vacuous case instead.
@@ -479,4 +495,86 @@ func keysOf(m map[string]registeredOperation) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// TestExactCitationsAreInRange checks that every EXACT `file.go:NNN` citation points at a line the
+// file actually has.
+//
+// It exists because the "a line checker would not have caught the real drifts" claim above turned
+// out to be wrong. One audit of this branch found fourteen stale refs: three into
+// budget_repository.go past its new end (#1565's deletions shortened it by ~70 lines) and eleven
+// main.go refs left pointing at a comment fragment, at `DB: db,` and at `})`.
+//
+// Scope is deliberately narrow — in-range only, and only for refs written EXACTLY. It does not
+// assert the line contains any particular construct: many citations legitimately point at the doc
+// comment ABOVE a function, and pinning content would fire on every unrelated edit. Refs written
+// `~:NNN` are exempt, because `~` already declares them approximate.
+func TestExactCitationsAreInRange(t *testing.T) {
+	// (?<!~) is unavailable in Go's regexp, so the tilde is captured and rejected in code.
+	re := regexp.MustCompile(`(~?)\b((?:[a-z0-9_]+/)*[a-z0-9_]+\.go):(\d+)\b`)
+
+	type ref struct {
+		path string
+		line int
+	}
+	seen := map[ref]int{}
+	for _, file := range []string{
+		"cache_completeness_repo_test.go",
+		"cache_completeness_write_set_test.go",
+		"cache_completeness_citations_test.go",
+	} {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		for _, m := range re.FindAllStringSubmatch(string(b), -1) {
+			if m[1] == "~" {
+				continue // approximate by convention
+			}
+			n, err := strconv.Atoi(m[3])
+			if err != nil {
+				continue
+			}
+			seen[ref{m[2], n}]++
+		}
+	}
+
+	// Fail closed: no refs found means the extraction broke, not that the prose is clean.
+	if len(seen) < 50 {
+		t.Fatalf("extracted only %d exact file:line citations — expected well over a hundred; the "+
+			"extraction is broken and a pass here would be meaningless", len(seen))
+	}
+
+	var stale []string
+	for r, count := range seen {
+		resolved := ""
+		for _, root := range citationSearchRoots {
+			c := filepath.Join(root, r.path)
+			if _, err := os.Stat(c); err == nil {
+				resolved = c
+				break
+			}
+		}
+		if resolved == "" {
+			// Bare-basename shorthand is resolved (and enforced) by TestDispositionCitationsResolve;
+			// this test only judges line numbers for paths it can locate unambiguously.
+			continue
+		}
+		b, err := os.ReadFile(resolved)
+		if err != nil {
+			continue
+		}
+		if n := len(strings.Split(string(b), "\n")); r.line > n {
+			stale = append(stale, r.path+":"+strconv.Itoa(r.line)+" (cited "+strconv.Itoa(count)+
+				"x) — file has only "+strconv.Itoa(n)+" lines")
+		}
+	}
+
+	if len(stale) > 0 {
+		sort.Strings(stale)
+		t.Errorf("%d citation(s) point past the end of the file they name. A line number that cannot "+
+			"be opened is worse than none: it reads as evidence. Re-anchor it, write it as ~:NNN if "+
+			"it is approximate, or drop the number if a guard already proves the point:\n  - %s",
+			len(stale), strings.Join(stale, "\n  - "))
+	}
 }

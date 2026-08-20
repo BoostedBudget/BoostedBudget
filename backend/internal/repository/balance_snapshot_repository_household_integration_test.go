@@ -466,3 +466,56 @@ func TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType(t *t
 				"and only the active row's type is authoritative. Got ByType=%v", r.ByType)
 	}
 }
+
+// TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory encodes the
+// adversarial-review claim about the counterpart of the 58920ae3 case: when NO active row shares
+// the snapshot's user_account_id — exactly the state AccountRepository.ExpireAccountsByFingerprint
+// leaves behind for a whole fingerprint — the `AND a.status = 'active'` join predicate yields a
+// NULL account_type, and `WHERE account_type = ANY($6)` then discards the row, because NULL never
+// satisfies `= ANY`. The snapshots exist, personal scope still reports them (it takes the type from
+// the snapshot's own account row), but type-filtered household history silently loses them.
+func TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ua := insertTestUserAccount(t, pool, owner)
+	li := insertTestLinkedItem(t, pool, owner)
+
+	// The only accounts row for this user_account_id is 'depository' and has been EXPIRED, as
+	// ExpireAccountsByFingerprint does to every active row sharing a fingerprint.
+	acctID := insertTestAccount(t, pool, li, owner, ua)
+	_, err := pool.Exec(ctx, `UPDATE accounts SET status = 'expired' WHERE id = $1`, acctID)
+	require.NoError(t, err, "expire the only chain member")
+
+	now := time.Now().UTC()
+	insertHouseholdShare(t, pool, hh, ua, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+	insertBalanceSnapshot(t, pool, owner, acctID, ua, 700, now.AddDate(0, 0, -1))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+
+	unfiltered, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, now.AddDate(0, 0, -7), now, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, unfiltered, "the expired chain's snapshots must still appear with no type filter")
+	foundTyped := false
+	for _, p := range unfiltered {
+		if p.ByType["depository"] == 700 {
+			foundTyped = true
+		}
+	}
+	assert.True(t, foundTyped,
+		"with no active row on the chain, the type must still be resolved from the expired member — "+
+			"an empty/absent type bucket means account_type came back NULL. Got %v", unfiltered)
+
+	filtered, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, now.AddDate(0, 0, -7), now, []string{"depository"})
+	require.NoError(t, err)
+	var total float64
+	for _, p := range filtered {
+		total += p.TotalBalance
+	}
+	assert.InDelta(t, 700, total, 0.01,
+		"a depository filter must still match the expired-only chain; NULL account_type fails "+
+			"`= ANY` and drops the history entirely. Got %v", filtered)
+}
