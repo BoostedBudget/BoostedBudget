@@ -53,13 +53,17 @@ var (
 	// Unfalsifiable pointers. "the report"/"task brief" named artifacts that never existed.
 	// Deferral markers: the entry leans on evidence recorded elsewhere rather than stating its own.
 	reDeferral     = regexp.MustCompile(`(?i)\b(see (also )?(the )?[a-z]|same (as|reasoning)|mirrors\b|covered by\b|per the\b|as documented in\b|sibling\b|supersedes\b)`)
-	reVaguePointer = regexp.MustCompile(`(?i)\b(see the report\b|the report's\b|task brief\b|see below\b|TODO\b|FIXME\b)`)
+	reVaguePointer = regexp.MustCompile(`(?i)\b(see the report\b|the report's\b|in report\b|flagged in report\b|per the report\b|task brief\b|see below\b|TODO\b|FIXME\b)`)
 )
 
 // citationSearchRoots are the directories a cited path may be relative to. Details are written
 // relative to internal/ ("services/x.go") or to the module root ("cmd/server/main.go"), and
 // sometimes as a bare basename.
-var citationSearchRoots = []string{".", "..", "../..", "../../.."}
+// Details are written relative to internal/ ("services/x.go"), to internal/huma/
+// ("operations/budget.go", "inputs/mcp_context.go"), or to the module root ("cmd/server/main.go"),
+// and sometimes as a bare basename. All of those are established shorthand in this file, so all
+// resolve; what does NOT resolve is a path with directory segments that match nothing.
+var citationSearchRoots = []string{".", "..", "../..", "../../..", "../huma"}
 
 func resolveCitedPath(t *testing.T, cited string) bool {
 	t.Helper()
@@ -68,12 +72,20 @@ func resolveCitedPath(t *testing.T, cited string) bool {
 			return true
 		}
 	}
-	// Bare basename, or a path whose leading segments were elided: search the module tree.
+	// A citation WITH directory segments must resolve exactly. An earlier version fell back to
+	// searching the tree for any file with the same basename, so "bogus/path/README.md" passed as
+	// long as SOME README.md existed — validating the wrong artifact is worse than not validating
+	// (Codex review, #7). A BARE filename ("account_service.go") is still resolved by tree search:
+	// that shorthand is used throughout these details, it is unambiguous in this codebase, and
+	// rejecting it outright flagged 63 legitimate citations.
+	if strings.ContainsRune(cited, '/') {
+		return false
+	}
 	base := filepath.Base(cited)
 	found := false
 	_ = filepath.WalkDir("../..", func(path string, d os.DirEntry, err error) error {
 		if err != nil || found || d == nil {
-			return nil //nolint:nilerr // a walk error must not fail the citation
+			return nil //nolint:nilerr // a walk error must not silently fail the citation
 		}
 		if !d.IsDir() && d.Name() == base {
 			found = true

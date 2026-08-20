@@ -618,6 +618,31 @@ func TestCachedReadRepoFileListHasNotDrifted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read services dir: %v", err)
 	}
+	// Pinned GetOrLoad call-site counts, per cached service. The filename check below cannot see a
+	// NEW cached read added INSIDE an existing file — which is the likelier drift, and the one that
+	// silently invalidates every derived entry writing a newly-read table (Codex review, HIGH #2).
+	// A cached read can also enter through dependency injection rather than a new import: that is
+	// exactly how balance_snapshots joins the read set, via analyticsService.SetBalanceSnapshotRepo.
+	wantGetOrLoadCounts := map[string]int{
+		"analytics_service_cached.go":             17,
+		"dashboard_preferences_service_cached.go": 1,
+		"identity_resolver_cached.go":             1,
+	}
+	for name, want := range wantGetOrLoadCounts {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Errorf("cannot read cached service %s: %v", name, err)
+			continue
+		}
+		if got := strings.Count(string(b), "cache.GetOrLoad("); got != want {
+			t.Errorf("%s has %d cache.GetOrLoad call site(s), pinned at %d. A cached read was added or "+
+				"removed. Re-derive expectedCachedReadTables and cachedReadRepoFiles, then re-check every "+
+				"dispositionDerivedNoCacheImpact entry: a newly cached read can turn a previously "+
+				"disjoint write into an overlapping one, and the derivation would not notice.",
+				name, got, want)
+		}
+	}
+
 	knownCachedServices := map[string]bool{
 		"analytics_service_cached.go":             true,
 		"dashboard_preferences_service_cached.go": true,
