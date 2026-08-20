@@ -306,56 +306,54 @@ func scanOperationsInSource(raw string) map[string]registeredOperation {
 	reSecurity := regexp.MustCompile(`Security:\s*\[\]map\[string\]\[\]string\{`)
 
 	out := map[string]registeredOperation{}
-	{
-		src := maskLineComments(raw)
-		for _, loc := range reOpen.FindAllStringIndex(src, -1) {
-			i := loc[1] - 1
-			depth, j := 1, i+1
-			for ; j < len(src) && depth > 0; j++ {
-				switch src[j] {
-				case '{':
-					depth++
-				case '}':
-					depth--
-				}
+	src := maskLineComments(raw)
+	for _, loc := range reOpen.FindAllStringIndex(src, -1) {
+		i := loc[1] - 1
+		depth, j := 1, i+1
+		for ; j < len(src) && depth > 0; j++ {
+			switch src[j] {
+			case '{':
+				depth++
+			case '}':
+				depth--
 			}
-			body := src[i:j]
-			id := reID.FindStringSubmatch(body)
-			if id == nil {
-				continue
-			}
-			op := registeredOperation{}
-			if m := rePath.FindStringSubmatch(body); m != nil {
-				op.path = m[1]
-			}
-			if m := reMethod.FindStringSubmatch(body); m != nil {
-				op.method = strings.ToUpper(m[1] + m[2])
-			}
-			// Security must be read BRACE-BALANCED, not to end-of-line. Go's `.` does not span
-			// newlines, and this codebase routinely writes
-			//     Security: []map[string][]string{
-			//         {"bearerAuth": {}},
-			//     },
-			// so a line-scoped capture reads empty and reports a secured operation as unsecured.
-			// That false positive fired on updateUserAccount while this was being written — the same
-			// regex-versus-brace-balanced trap that truncated the operation scan above.
-			if loc := reSecurity.FindStringIndex(body); loc != nil {
-				k := loc[1] - 1
-				d2, e2 := 1, k+1
-				for ; e2 < len(body) && d2 > 0; e2++ {
-					switch body[e2] {
-					case '{':
-						d2++
-					case '}':
-						d2--
-					}
-				}
-				// Comments are already masked out of `src`, so this brace test cannot be
-				// fooled by a `{` in a comment.
-				op.secured = strings.Contains(body[k+1:e2-1], "{")
-			}
-			out[id[1]] = op
 		}
+		body := src[i:j]
+		id := reID.FindStringSubmatch(body)
+		if id == nil {
+			continue
+		}
+		op := registeredOperation{}
+		if m := rePath.FindStringSubmatch(body); m != nil {
+			op.path = m[1]
+		}
+		if m := reMethod.FindStringSubmatch(body); m != nil {
+			op.method = strings.ToUpper(m[1] + m[2])
+		}
+		// Security must be read BRACE-BALANCED, not to end-of-line. Go's `.` does not span
+		// newlines, and this codebase routinely writes
+		//     Security: []map[string][]string{
+		//         {"bearerAuth": {}},
+		//     },
+		// so a line-scoped capture reads empty and reports a secured operation as unsecured.
+		// That false positive fired on updateUserAccount while this was being written — the same
+		// regex-versus-brace-balanced trap that truncated the operation scan above.
+		if loc := reSecurity.FindStringIndex(body); loc != nil {
+			k := loc[1] - 1
+			d2, e2 := 1, k+1
+			for ; e2 < len(body) && d2 > 0; e2++ {
+				switch body[e2] {
+				case '{':
+					d2++
+				case '}':
+					d2--
+				}
+			}
+			// Comments are already masked out of `src`, so this brace test cannot be
+			// fooled by a `{` in a comment.
+			op.secured = strings.Contains(body[k+1:e2-1], "{")
+		}
+		out[id[1]] = op
 	}
 	return out
 }
