@@ -29,7 +29,8 @@ package jobs
 //     structural guarantee — there is no mechanism stopping someone from adding a genuine cache-
 //     relevant write to a file already marked NoCacheImpact without ever re-deriving the claim.
 //
-// ADVERSARIAL VALIDATION (recorded 2026-08-14, see task-10b-3-report.md for the transcript):
+// ADVERSARIAL VALIDATION (recorded 2026-08-14; the cited task-10b-3-report.md was never
+// committed and does not exist in any commit — see docs/architecture/cache-invalidation-dispositions.md):
 //   - Added a scratch file `zzz_fake_guard_probe.go` (a real, non-test .go file with a Kind()
 //     method, mimicking a genuine job file) to this directory: guard FAILED, reporting the new
 //     filename as missing from jobFileDispositions. Removed it: guard PASSED.
@@ -116,7 +117,7 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"tier override on the user's profile (a subscription-tier field) — the same deliberately- " +
 		"uncached bucket. MEDIUM CONFIDENCE: flagged in the report for controller confirmation."},
 
-	// --- Bumps (Task 10b-2a-iii — see task-10b-2a-iii-report.md for full RED->GREEN evidence
+	// --- Bumps (Task 10b-2a-iii; that report was never committed — see the docs file above
 	// on each). ---
 	"effective_category_refresh.go": {dispositionBumps, "rewrites " +
 		"transactions.effective_category_name (the field several cached analytics queries GROUP " +
@@ -168,9 +169,10 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"accounts WHERE linked_item_id = $1) guard confirms accounts are removed through a SEPARATE " +
 		"path (accountService.DeleteAccount, called only from the secured, HTTP-middleware-covered " +
 		"DELETE /accounts/{id} operation) before this job's Delete can ever succeed. So this job's " +
-		"own writes never change what any cached analytics query returns; the task-10b-3-report.md " +
-		"worklist's original 'no bump observed' framing was correct that no bump exists, but wrong " +
-		"that one is needed."},
+		"own writes never change what any cached analytics query returns. (An earlier version of this " +
+		"entry cited a task-10b-3-report.md worklist, which was never committed and does not exist in " +
+		"any commit; its original 'no bump observed' framing was right that no bump exists and wrong " +
+		"that one is needed.)"},
 	"savings_stats_worker.go": {dispositionNoCacheImpact, "writes SavingsImpactRepository." +
 		"WriteSnapshot (a GLOBAL k-anonymity-gated aggregate row), which is read ONLY by " +
 		"GetSavingsImpactAggregate/GetSavingsImpactMe (huma/operations/savings_impact.go) via " +
