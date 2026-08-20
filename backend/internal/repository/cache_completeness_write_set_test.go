@@ -100,9 +100,18 @@ var (
 	reLineComm = regexp.MustCompile(`(?m)//[^\n]*`)
 	reCTEName  = regexp.MustCompile(`(?i)(?:WITH|,)\s+"?([a-z_][a-z0-9_]*)"?\s+AS\s*\(`)
 	// Fragment matching: used by packageSQLFragments and fragmentsUsedIn.
+	//
+	// These three deliberately use INTERPRETED string literals with doubled backslashes, not raw
+	// strings. staticcheck's S1007 suggests a raw string here, but it cannot apply: these patterns
+	// must match a BACKTICK (they find Go raw-string SQL constants), and a Go raw string cannot
+	// contain a backtick. Satisfying the linter would mean concatenating "`" fragments around raw
+	// parts, which is strictly less readable than the doubled escapes.
+	//nolint:staticcheck // S1007: pattern must match a backtick, impossible inside a raw string.
 	reSingle = regexp.MustCompile("(?m)^(?:const|var)\\s+(\\w+)\\s*=\\s*`([^`]*)`")
-	reBlock  = regexp.MustCompile("(?ms)^(?:const|var)\\s*\\(\\n(.*?)^\\)")
-	reInner  = regexp.MustCompile("(?m)^\\t(\\w+)\\s*=\\s*`([^`]*)`")
+	//nolint:staticcheck // S1007: see reSingle above.
+	reBlock = regexp.MustCompile("(?ms)^(?:const|var)\\s*\\(\\n(.*?)^\\)")
+	//nolint:staticcheck // S1007: pattern must match a backtick, impossible inside a raw string.
+	reInner = regexp.MustCompile("(?m)^\\t(\\w+)\\s*=\\s*`([^`]*)`")
 	// Called delegation: followed in writeTablesFor.
 	reCall       = regexp.MustCompile(`\b(?:[a-z]\w*\.)?([a-z]\w*)\s*\(`)
 	reMethodCall = regexp.MustCompile(`\.([A-Z]\w*)\s*\(`)

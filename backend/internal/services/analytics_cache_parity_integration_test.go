@@ -61,7 +61,19 @@ type parityCase struct {
 	// returns a DIFFERENT value. Step 6 of the harness body asserts this — a Mutate that doesn't
 	// actually move the aggregate is a test-authoring bug, not a passing case.
 	Mutate func(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
-	// Bump is the production invalidation hook: mint a fresh generation token for this case's
+	// Bump mints a fresh generation token for this case's scope.
+	//
+	// ⚠ It is NOT "the production invalidation hook", as this comment previously claimed — it is
+	// supplied by the test (see bumpPersonal below). That is correct for THIS harness, whose job is
+	// proving a cached read equals uncached ground truth; supplying the bump isolates the read path
+	// from the question of who triggers it. But it means these cases cannot detect a production path
+	// that forgets to bump. That property is covered elsewhere: 24 tests across 8 files in this
+	// package drive real service methods with a real cache.Generations and assert the generation
+	// moved (e.g. account_service_cache_invalidation_test.go,
+	// household_cache_invalidation_test.go, transaction_sync_cache_invalidation_test.go), and
+	// cmd/server/deletion_route_middleware_integration_test.go covers the HTTP-middleware side.
+	//
+	// Original note: mint a fresh generation token for this case's
 	// scope. Every case in this slice is personal-scope (household scope is Task 11c/d), so this
 	// is the same closure shape everywhere, but kept as a per-case field because a future
 	// household-scope table will need a different scope per case.
