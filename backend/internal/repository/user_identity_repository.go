@@ -100,6 +100,25 @@ func (r *userIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID s
 		       created_at, updated_at, last_used_at
 		FROM user_identities
 		WHERE clerk_user_id_blind_idx = $1
+		-- #1566: several rows can share one blind index. clerk_user_id is UNIQUE, but that
+		-- constraint sits on the CIPHERTEXT, and production encryption is AES-GCM with a random
+		-- nonce, so two rows for the same logical Clerk ID store different ciphertexts and the
+		-- constraint cannot see the duplicate — while the blind index, a deterministic HMAC, is
+		-- identical. Multi-provider identities are the designed case for this
+		-- (unique_user_provider: "one identity per provider per user").
+		--
+		-- Without this ORDER BY, QueryRow returned whichever row Postgres handed back first. Every
+		-- consumer reads only UserID today, and those rows share a user_id, so nothing was
+		-- misresolved — but Provider, Email, IsPrimary and ID were arbitrary, and
+		-- identity_resolver_cached memoises the result.
+		--
+		-- NOT fixed with a UNIQUE index on the blind index, which is what #1566 proposed: that
+		-- would forbid the multi-provider rows above. The invariant that matters is cross-row
+		-- ("all rows sharing a blind index belong to one user"), which a single-column unique
+		-- index cannot express, and which unique_users_clerk_id_blind on users already
+		-- guarantees by blocking the only reachable creation path.
+		ORDER BY is_primary DESC, created_at ASC, id ASC
+		LIMIT 1
 	`
 
 	var identity domain.UserIdentity
