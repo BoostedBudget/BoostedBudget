@@ -368,7 +368,7 @@ var repoMethodDispositions = map[string]repoMethodDisposition{
 // is exactly the unverifiable shape #1537 set out to remove.
 //
 // Kept as a parallel map rather than a third struct field deliberately: adding a field would force
-// all ~194 positional entry literals to be rewritten, burying the substantive changes in a
+// all 197 positional entry literals to be rewritten, burying the substantive changes in a
 // mechanical diff. The sync requirement above gives the same guarantee.
 //
 // Registration ORDER is not re-checked per entry — cmd/server's
