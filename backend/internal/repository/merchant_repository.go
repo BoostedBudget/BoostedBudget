@@ -9,7 +9,7 @@ import (
 // MerchantRepo defines the interface for merchant data access.
 // A minimal interface enables mocking in service tests.
 type MerchantRepo interface {
-	// GetOrCreateMerchantsWithNormalize is like GetOrCreateMerchants but also sets
+	// GetOrCreateMerchantsWithNormalize get-or-inserts merchants and also sets
 	// normalized_name when creating new rows. The normalize func is provided by the
 	// caller to avoid import cycles between the repository and merchant normalization packages.
 	GetOrCreateMerchantsWithNormalize(ctx context.Context, names []string, normalize func(string) string) (map[string]string, error)

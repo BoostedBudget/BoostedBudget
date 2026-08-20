@@ -19,14 +19,6 @@ type mockMerchantRepo struct {
 	mock.Mock
 }
 
-func (m *mockMerchantRepo) GetOrCreateMerchants(ctx context.Context, names []string) (map[string]string, error) {
-	args := m.Called(ctx, names)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(map[string]string), args.Error(1)
-}
-
 func (m *mockMerchantRepo) GetOrCreateMerchantsWithNormalize(ctx context.Context, names []string, normalize func(string) string) (map[string]string, error) {
 	args := m.Called(ctx, names, normalize)
 	if args.Get(0) == nil {

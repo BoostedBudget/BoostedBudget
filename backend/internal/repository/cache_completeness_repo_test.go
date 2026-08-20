@@ -79,9 +79,10 @@ package repository
 // as a decision to make. This guard therefore ADDS:
 //   Replace|Decrement|Add|Adjust|Restore|Expire|Reset|Confirm|Reject|Archive|Complete|Reserve|
 //   Write|Save|Record|Merge
-// plus two structural exceptions: a name starting with "Bulk" (BulkUpsert, BulkApply — the verb
+// plus two structural exceptions: a name starting with "Bulk" (BulkApply, BulkSetOverrides — the verb
 // they bulk-apply is buried after the prefix) and a name containing "OrCreate" (GetOrCreate,
-// GetOrCreateMerchants — get-or-insert idioms whose insert half a verb-prefix check would miss
+// GetOrCreateMerchantsWithNormalize — get-or-insert idioms whose insert half a verb-prefix check
+//     would miss (this cited the bare GetOrCreateMerchants until #1565 deleted it)
 // entirely, since the name starts with "Get").
 //
 // ADVERSARIAL VALIDATION (recorded 2026-08-14; the cited task-10b-3-report.md was never

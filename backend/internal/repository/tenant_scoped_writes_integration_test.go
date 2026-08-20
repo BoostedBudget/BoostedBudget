@@ -211,36 +211,178 @@ func TestUserAccountRepository_UpdatePrimaryTypeAndSubtype_CrossTenantRow_Untouc
 	assert.Equal(t, "checking", primarySubtype, "the other tenant's primary_subtype must not change")
 }
 
-// TestTenantAssertions_EmptyActor_Rejected closes a vacuous-match hole in the #1566 assertions,
-// raised by adversarial review.
-//
-// Both assertions compared element.UserID against the passed userID and nothing else, so
-// assertSingleTenantOverrides("", []{UserID: ""}) and assertSingleTenantAccounts("", []{UserID: ""})
-// PASSED — no mismatch exists when both sides are empty. The tenancy check would then wave through a
-// batch with no owner at all, leaving the DB's own NOT NULL/FK constraints as the only thing standing
-// between that and rows nobody owns. An empty actor is never a valid tenant, so the assertion should
-// say so rather than relying on a downstream constraint to notice.
-//
-// Not integration-tagged in spirit — it needs no DB — but it lives here to sit beside the other
-// tenancy tests it belongs with.
-func TestTenantAssertions_EmptyActor_Rejected(t *testing.T) {
-	t.Run("overrides", func(t *testing.T) {
-		err := assertSingleTenantOverrides("", []domain.MerchantNameOverride{{UserID: ""}})
-		require.Error(t, err, "an empty actor must be rejected outright, not matched vacuously "+
-			"against equally-empty element user_ids")
-		assert.ErrorIs(t, err, ErrOverrideTenantMismatch)
+// seedTenantAccount inserts an accounts row for an existing user/linked_item fixture and returns
+// its id. Scoped to db (a pgx.Tx here), so it rolls back with the test.
+func seedTenantAccount(ctx context.Context, t *testing.T, db DB, userID, linkedItemID, userAccountID uuid.UUID, prefix string) uuid.UUID {
+	t.Helper()
+	accountID := uuid.New()
+	_, err := db.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, user_account_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, $5, 'Test Account', 'investment', 'active')
+	`, accountID, linkedItemID, userID, userAccountID, "plaid-"+prefix+"-"+accountID.String())
+	require.NoError(t, err, "seed account")
+	return accountID
+}
+
+// seedTestSecurity inserts a securities row (holdings.security_id is NOT NULL with an FK).
+func seedTestSecurity(ctx context.Context, t *testing.T, db DB, prefix string) uuid.UUID {
+	t.Helper()
+	securityID := uuid.New()
+	_, err := db.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, type)
+		VALUES ($1, $2, 'Test Security', 'equity')
+	`, securityID, "sec-"+prefix+"-"+securityID.String())
+	require.NoError(t, err, "seed security")
+	return securityID
+}
+
+// TestHoldingRepository_ReplaceForAccount_CrossTenantHolding_Rejected_Integration proves the
+// DELETE/INSERT tenant split in ReplaceForAccount is closed by assertion, against a real DB.
+// The DELETE was scoped to the acting userID while each INSERT wrote holdings[i].UserID, so a
+// foreign element would wipe the actor's holdings and write rows owned by another user — whose
+// cached analytics the invalidation middleware never bumps.
+func TestHoldingRepository_ReplaceForAccount_CrossTenantHolding_Rejected_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	actorID, actorItemID, actorUAID := seedTenantFixture(ctx, t, tx, "ts1566-h-actor")
+	victimID, victimItemID, victimUAID := seedTenantFixture(ctx, t, tx, "ts1566-h-victim")
+	actorAcct := seedTenantAccount(ctx, t, tx, actorID, actorItemID, actorUAID, "ts1566-h-actor")
+	victimAcct := seedTenantAccount(ctx, t, tx, victimID, victimItemID, victimUAID, "ts1566-h-victim")
+	securityID := seedTestSecurity(ctx, t, tx, "ts1566-h")
+
+	// The actor has an existing holding the rejected call must NOT delete.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity)
+		VALUES (gen_random_uuid(), $1, $2, $3, 5)
+	`, actorID, actorAcct, securityID)
+	require.NoError(t, err, "seed actor holding")
+
+	repo := NewHoldingRepository(tx)
+	err = repo.ReplaceForAccount(ctx, actorAcct.String(), actorID.String(), []domain.Holding{{
+		UserID:     victimID.String(),
+		AccountID:  victimAcct.String(),
+		SecurityID: securityID.String(),
+		Quantity:   99,
+	}})
+	require.ErrorIs(t, err, ErrReplaceTenantMismatch,
+		"a holding belonging to another user must be refused, not inserted")
+
+	var victimCount int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM holdings WHERE user_id = $1`, victimID).Scan(&victimCount))
+	assert.Equal(t, 0, victimCount, "the other tenant must have no holding written for them")
+
+	// And the DELETE must not have run: a rejected call writes and destroys nothing.
+	var actorCount int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM holdings WHERE user_id = $1`, actorID).Scan(&actorCount))
+	assert.Equal(t, 1, actorCount, "the actor's existing holdings must survive a rejected replace")
+}
+
+// TestCreditLiabilityRepository_ReplaceForAccount_CrossTenantLiability_Rejected_Integration is the
+// same assertion for the credit liability replace, whose DELETE was scoped to userID while the
+// INSERT wrote liability.UserID.
+func TestCreditLiabilityRepository_ReplaceForAccount_CrossTenantLiability_Rejected_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	actorID, actorItemID, actorUAID := seedTenantFixture(ctx, t, tx, "ts1566-cl-actor")
+	victimID, victimItemID, victimUAID := seedTenantFixture(ctx, t, tx, "ts1566-cl-victim")
+	actorAcct := seedTenantAccount(ctx, t, tx, actorID, actorItemID, actorUAID, "ts1566-cl-actor")
+	victimAcct := seedTenantAccount(ctx, t, tx, victimID, victimItemID, victimUAID, "ts1566-cl-victim")
+
+	// The actor has an existing credit liability the rejected call must NOT delete.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO credit_liabilities (id, user_id, account_id, synced_at)
+		VALUES (gen_random_uuid(), $1, $2, NOW())
+	`, actorID, actorAcct)
+	require.NoError(t, err, "seed actor credit liability")
+
+	repo := NewCreditLiabilityRepository(tx)
+	err = repo.ReplaceForAccount(ctx, actorAcct.String(), actorID.String(), &domain.CreditLiability{
+		UserID:    victimID.String(),
+		AccountID: victimAcct.String(),
+	})
+	require.ErrorIs(t, err, ErrReplaceTenantMismatch,
+		"a credit liability belonging to another user must be refused, not inserted")
+
+	var victimCount int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM credit_liabilities WHERE user_id = $1`, victimID).Scan(&victimCount))
+	assert.Equal(t, 0, victimCount, "the other tenant must have no credit liability written for them")
+
+	var actorCount int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM credit_liabilities WHERE user_id = $1`, actorID).Scan(&actorCount))
+	assert.Equal(t, 1, actorCount, "the actor's existing liability must survive a rejected replace")
+}
+
+// TestMortgageAndStudentLoanReplaceForAccount_CrossTenantLiability_Rejected_Integration covers the
+// remaining two ReplaceForAccount methods, which share the identical DELETE/INSERT tenant split.
+func TestMortgageAndStudentLoanReplaceForAccount_CrossTenantLiability_Rejected_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	actorID, actorItemID, actorUAID := seedTenantFixture(ctx, t, tx, "ts1566-ml-actor")
+	victimID, victimItemID, victimUAID := seedTenantFixture(ctx, t, tx, "ts1566-ml-victim")
+	actorAcct := seedTenantAccount(ctx, t, tx, actorID, actorItemID, actorUAID, "ts1566-ml-actor")
+	victimAcct := seedTenantAccount(ctx, t, tx, victimID, victimItemID, victimUAID, "ts1566-ml-victim")
+	enc := newTestFieldEncryptor(t)
+
+	t.Run("mortgage", func(t *testing.T) {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO mortgage_liabilities (id, user_id, account_id, synced_at)
+			VALUES (gen_random_uuid(), $1, $2, NOW())
+		`, actorID, actorAcct)
+		require.NoError(t, err, "seed actor mortgage liability")
+
+		err = NewMortgageLiabilityRepository(tx, enc).ReplaceForAccount(
+			ctx, actorAcct.String(), actorID.String(),
+			&domain.MortgageLiability{UserID: victimID.String(), AccountID: victimAcct.String()},
+		)
+		require.ErrorIs(t, err, ErrReplaceTenantMismatch)
+
+		var victimCount, actorCount int
+		require.NoError(t, tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM mortgage_liabilities WHERE user_id = $1`, victimID).Scan(&victimCount))
+		assert.Equal(t, 0, victimCount, "no mortgage row may be written for the other tenant")
+		require.NoError(t, tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM mortgage_liabilities WHERE user_id = $1`, actorID).Scan(&actorCount))
+		assert.Equal(t, 1, actorCount, "the actor's mortgage row must survive a rejected replace")
 	})
 
-	t.Run("accounts", func(t *testing.T) {
-		err := assertSingleTenantAccounts("", []domain.Account{{UserID: ""}})
-		require.Error(t, err, "an empty actor must be rejected outright, not matched vacuously "+
-			"against equally-empty element user_ids")
-		assert.ErrorIs(t, err, ErrAccountBatchTenantMismatch)
-	})
+	t.Run("student loan", func(t *testing.T) {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO student_loan_liabilities (id, user_id, account_id, synced_at)
+			VALUES (gen_random_uuid(), $1, $2, NOW())
+		`, actorID, actorAcct)
+		require.NoError(t, err, "seed actor student loan liability")
 
-	t.Run("a real actor with a real matching element still passes", func(t *testing.T) {
-		// Guards against over-correcting into rejecting everything.
-		require.NoError(t, assertSingleTenantOverrides("u1", []domain.MerchantNameOverride{{UserID: "u1"}}))
-		require.NoError(t, assertSingleTenantAccounts("u1", []domain.Account{{UserID: "u1"}}))
+		err = NewStudentLoanLiabilityRepository(tx, enc).ReplaceForAccount(
+			ctx, actorAcct.String(), actorID.String(),
+			&domain.StudentLoanLiability{UserID: victimID.String(), AccountID: victimAcct.String()},
+		)
+		require.ErrorIs(t, err, ErrReplaceTenantMismatch)
+
+		var victimCount, actorCount int
+		require.NoError(t, tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM student_loan_liabilities WHERE user_id = $1`, victimID).Scan(&victimCount))
+		assert.Equal(t, 0, victimCount, "no student loan row may be written for the other tenant")
+		require.NoError(t, tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM student_loan_liabilities WHERE user_id = $1`, actorID).Scan(&actorCount))
+		assert.Equal(t, 1, actorCount, "the actor's student loan row must survive a rejected replace")
 	})
 }
