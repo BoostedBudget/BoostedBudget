@@ -148,6 +148,38 @@ func TestMutatingRoutesRegisteredAfterMiddlewareChain(t *testing.T) {
 		}
 	}
 
+	// G11 (gap analysis): findRouteCalls only recognises operations.Register*Routes(...). Two shapes
+	// escape it, and both are invisible today only by convention rather than by construction:
+	//   (a) a bare huma.Register(humaAPI, ...) written directly in cmd/server, and
+	//   (b) a Register*Routes call living in some other cmd/server file instead of main.go.
+	// Either would register a route this ordering check never sees, which is exactly how #1560
+	// happened — a route nobody was looking at. Fail on both rather than rely on style holding.
+	if bare := regexp.MustCompile(`huma\.Register\(\s*humaAPI\b`).FindAllStringIndex(src, -1); len(bare) > 0 {
+		t.Errorf("%d bare huma.Register(humaAPI, ...) call(s) in main.go. This ordering guard only "+
+			"tracks operations.Register*Routes groups, so a directly-registered operation is invisible "+
+			"to it — register it through a Register*Routes function, or teach this guard to resolve it.",
+			len(bare))
+	}
+	otherFiles, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read cmd/server dir: %v", err)
+	}
+	for _, e := range otherFiles {
+		n := e.Name()
+		if e.IsDir() || n == "main.go" || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
+			continue
+		}
+		b, rerr := os.ReadFile(n)
+		if rerr != nil {
+			t.Fatalf("read %s: %v", n, rerr)
+		}
+		if reRouteCallOpen.MatchString(string(b)) {
+			t.Errorf("%s registers routes with operations.Register*Routes, but this guard only reads "+
+				"main.go — its line-ordering comparison is meaningless across files. Move the "+
+				"registration into main.go or extend the guard to span cmd/server.", n)
+		}
+	}
+
 	calls := findRouteCalls(src)
 	if len(calls) == 0 {
 		t.Fatal("scanned zero operations.Register*Routes(...) calls in main.go — the guard is " +

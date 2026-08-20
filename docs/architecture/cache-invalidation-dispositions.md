@@ -200,12 +200,29 @@ fix and passes after, and both assertions were mutation-probed — including a p
 test comparing the cached read against the *warm* value, which is exactly what a stale cache returns
 and would therefore have passed under the bug it guarded.
 
-The first test in this repository to observe a **production-issued** bump, with no test-authored
-`Bump` anywhere in it, is `cmd/server/deletion_route_middleware_integration_test.go`: it builds the
-API the way `main.go` does, issues a real request, and asserts the generation store was written by
-the real cache-invalidation middleware. That is the shape to copy. Removing the middleware from that
-test's chain fails it; removing the read-only middleware fails its companion discrimination
-assertion.
+### Where production-issued bumps ARE proven
+
+A second correction, because I got this wrong too and in the opposite direction: an earlier version
+of this section implied no test observed a production-issued bump. **Twenty-four do**, across eight
+files in `internal/services/`, each driving a real service method with a real `cache.Generations`
+backed by `redisclient.Fake` and asserting the generation actually moved — not a "Bump was called"
+spy. They predate this work; #1531 built them. They cover the fingerprint/dispossessed-owner
+cross-user path, the household `RemoveMember` / `AcceptInvite` / `ForceDisband` member fan-outs,
+transaction sync (user and household scope), investment and liability sync, deletion's cross-user
+affected owners, and context-cancellation variants of each.
+
+So the property "an `ExplicitBump` path really does bump" is well covered. What was genuinely
+missing was the **`CoveredByHTTPMiddleware`** side: no test drove a real route through the real
+middleware chain and observed the bump. `cmd/server/deletion_route_middleware_integration_test.go`
+closes that — it builds the API the way `main.go` does, issues a real request, and asserts the
+generation store was written by the real middleware. Removing the middleware fails it; removing the
+read-only middleware fails its companion discrimination assertion.
+
+**Why the parity harness legitimately differs.** Its `Bump` being test-authored is not a defect in
+context: its job is proving cached output equals uncached ground truth, and supplying the bump
+isolates the read path from the question of who triggers it. The mistake was only in its doc comment
+calling that "the production invalidation hook" — two different properties, tested in two different
+places, and the comment blurred them.
 
 **The general rule this episode illustrates:** a test that supplies the very effect it claims to
 verify proves nothing about production. Ask of any invalidation test — *if I deleted the production
