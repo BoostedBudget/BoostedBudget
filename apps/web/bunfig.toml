@@ -57,4 +57,12 @@ preload = [
 # NOTE: Tests requiring real implementations run via test-conflict-files.sh from /tmp.
 #       This avoids loading these preloads (toggle-group.tsx, registry.ts, etc.).
 
+# ⚠ INERT IN BUN 1.4.0 — kept only to document intent. Verified empirically (#1537): a test
+# that sleeps 6s fails at exactly 5000ms with this setting alone, and passes when
+# `--timeout 30000` is given on the command line. So this key does nothing today.
+#
+# The effective timeout comes from the CLI flag in BOTH scripts/test-regular.sh and
+# scripts/test-conflict-files.sh. If you change the intended value, change it there — editing
+# this line alone will silently have no effect, which is exactly how the 362-file suite ended
+# up running at bun's 5s default while its sibling suite got 30s.
 timeout = 30000
