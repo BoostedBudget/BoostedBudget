@@ -42,15 +42,14 @@ func createTestJWT(t *testing.T, privateKey *ecdsa.PrivateKey, kid string, bodyH
 
 // Test helper: Create JWK from ECDSA public key
 func publicKeyToJWK(t *testing.T, pub *ecdsa.PublicKey, kid string) map[string]interface{} {
-	// Convert coordinates to base64url
-	xBytes := pub.X.Bytes()
-	yBytes := pub.Y.Bytes()
-
-	// Pad to 32 bytes for P-256
-	xPadded := make([]byte, 32)
-	yPadded := make([]byte, 32)
-	copy(xPadded[32-len(xBytes):], xBytes)
-	copy(yPadded[32-len(yBytes):], yBytes)
+	// Encode as a SEC 1 uncompressed point: 0x04 || X || Y, each coordinate
+	// already left-padded to the curve's byte size (32 bytes for P-256).
+	// PublicKey.Bytes replaces the deprecated pub.X / pub.Y big.Int accessors.
+	raw, err := pub.Bytes()
+	require.NoError(t, err)
+	require.Len(t, raw, 65, "expected an uncompressed P-256 point")
+	xPadded := raw[1:33]
+	yPadded := raw[33:65]
 
 	return map[string]interface{}{
 		"kty": "EC",
@@ -312,8 +311,13 @@ func TestParseJWK_ValidKey(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, parsedKey)
-	assert.Equal(t, publicKey.X.Cmp(parsedKey.X), 0)
-	assert.Equal(t, publicKey.Y.Cmp(parsedKey.Y), 0)
+	// Compare the full encoded points rather than the deprecated X / Y big.Int
+	// accessors; this asserts the curve and both coordinates round-tripped.
+	expectedPoint, err := publicKey.Bytes()
+	require.NoError(t, err)
+	actualPoint, err := parsedKey.Bytes()
+	require.NoError(t, err)
+	assert.Equal(t, expectedPoint, actualPoint)
 }
 
 func TestParseJWK_InvalidCurve(t *testing.T) {

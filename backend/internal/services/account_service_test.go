@@ -3250,16 +3250,19 @@ func TestLinkAccounts_ActiveTakesPrecedence_OverDisconnected(t *testing.T) {
 	found, err := mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusActive))
 	require.NoError(t, err)
 
-	// Simulate the guard: only check disconnected if active is nil
+	// Simulate the guard: only check disconnected if active is nil.
+	// The nil branch must NOT be taken; keeping it live is what gives the
+	// AssertNotCalled below something to actually prove.
 	if found == nil {
-		// This branch should NOT be taken
 		_, _ = mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected))
+	} else {
+		// Assert: Active item was found
+		assert.Equal(t, activeItem.ID, found.ID)
+		assert.Equal(t, domain.LinkedItemStatusActive, found.Status)
 	}
 
-	// Assert: Active item was found
+	// Assert: the active lookup returned an item, so the nil branch above did not run
 	require.NotNil(t, found)
-	assert.Equal(t, activeItem.ID, found.ID)
-	assert.Equal(t, domain.LinkedItemStatusActive, found.Status)
 
 	// Assert: Disconnected was NOT called (active took precedence)
 	mockLinkedItemRepo.AssertNotCalled(t, "GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected))
@@ -3403,7 +3406,9 @@ func newTestPlaidServer(t *testing.T, accessToken, plaidItemID string, accounts 
 
 	mux.HandleFunc("/item/public_token/exchange", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		// Discarded deliberately: encoding to an httptest ResponseWriter cannot
+		// meaningfully fail, and t.Fatal is not usable from a handler goroutine.
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"access_token": accessToken,
 			"item_id":      plaidItemID,
 			"request_id":   "req-exchange-test",
@@ -3412,7 +3417,9 @@ func newTestPlaidServer(t *testing.T, accessToken, plaidItemID string, accounts 
 
 	mux.HandleFunc("/accounts/get", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		// Discarded deliberately: encoding to an httptest ResponseWriter cannot
+		// meaningfully fail, and t.Fatal is not usable from a handler goroutine.
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"accounts": accounts,
 			"item": map[string]interface{}{
 				"item_id":            plaidItemID,

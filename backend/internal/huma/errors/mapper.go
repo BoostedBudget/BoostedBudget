@@ -291,6 +291,11 @@ func MapError(err error) error {
 		return huma.Error500InternalServerError("Account batch spans more than one user")
 	case errors.Is(err, repository.ErrReplaceTenantMismatch):
 		return huma.Error500InternalServerError("Replace batch spans more than one user")
+	// Same shape, different fault: SAME tenant, wrong account. Kept distinct from the line above on
+	// purpose — reusing the cross-tenant message would send an operator hunting a data leak that did
+	// not happen, when the actual fault is one of the user's own accounts overwriting another.
+	case errors.Is(err, repository.ErrReplaceAccountMismatch):
+		return huma.Error500InternalServerError("Replace batch targets a different account")
 
 	default:
 		return huma.Error500InternalServerError("Internal server error")

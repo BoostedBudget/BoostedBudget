@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -143,8 +144,24 @@ func (p *plaidSyncProvider) SyncForLinkedItem(ctx context.Context, linkedItemID 
 		}
 	}
 
-	// Update cursor in database for next incremental sync
-	if cursor != nil {
+	// Update cursor in database for next incremental sync.
+	//
+	// cursor is non-nil by construction: the pagination loop above always runs at
+	// least one iteration and unconditionally assigns cursor = &nextCursor before
+	// it can break, and every other exit from the loop is a return. The previous
+	// `if cursor != nil` guard was therefore dead code (staticcheck SA4031).
+	//
+	// It IS guarded on non-empty, which is a different and load-bearing check. Plaid treats an
+	// absent-or-empty cursor as "start from the beginning of history", so persisting "" turns the next
+	// INCREMENTAL sync into a full re-sync and pushes the entire history back through CreateBatch.
+	// The stored cursor is the only thing making this incremental, so overwriting a good one with a
+	// blank is strictly destructive.
+	//
+	// The dead nil-check that staticcheck removed looked like it was doing this — "don't persist a
+	// cursor we never got" — but `cursor != nil` tested a pointer that could not be nil and never
+	// looked at the string. So the protection its comment implied did not exist until now.
+	// Pinned by TestPlaidSyncProvider_EmptyNextCursor_DoesNotOverwriteStoredCursor.
+	if *cursor != "" {
 		if cursorErr := p.linkedItemRepo.UpdateCursor(ctx, linkedItemID, *cursor); cursorErr != nil {
 			return n, fmt.Errorf("failed to update cursor: %w", cursorErr)
 		}
@@ -183,8 +200,13 @@ func (p *plaidSyncProvider) processAdded(ctx context.Context, linkedItem *domain
 			Timestamp:   time.Now(),
 		}
 		if err := p.eventEmitter.Emit(ctx, event); err != nil {
-			// Log error but don't fail sync
-			// In production, would use structured logging
+			// Emit failures are non-fatal: the transactions are already persisted,
+			// so a dropped event must not roll back or abort the sync. Log and continue.
+			slog.ErrorContext(ctx, "failed to emit transaction event",
+				"error", err,
+				"event_type", events.EventTypeAdded,
+				"linked_item_id", linkedItem.ID,
+			)
 		}
 	}
 
@@ -220,7 +242,12 @@ func (p *plaidSyncProvider) processModified(ctx context.Context, linkedItem *dom
 			Timestamp:   time.Now(),
 		}
 		if err := p.eventEmitter.Emit(ctx, event); err != nil {
-			// Log error but don't fail sync
+			// Non-fatal: the update is already committed. Log and continue.
+			slog.ErrorContext(ctx, "failed to emit transaction event",
+				"error", err,
+				"event_type", events.EventTypeModified,
+				"linked_item_id", linkedItem.ID,
+			)
 		}
 	}
 
@@ -250,7 +277,12 @@ func (p *plaidSyncProvider) processRemoved(ctx context.Context, linkedItem *doma
 			Timestamp: time.Now(),
 		}
 		if err := p.eventEmitter.Emit(ctx, event); err != nil {
-			// Log error but don't fail sync
+			// Non-fatal: the delete is already committed. Log and continue.
+			slog.ErrorContext(ctx, "failed to emit transaction event",
+				"error", err,
+				"event_type", events.EventTypeRemoved,
+				"linked_item_id", linkedItem.ID,
+			)
 		}
 	}
 

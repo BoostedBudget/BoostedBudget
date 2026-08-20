@@ -33,10 +33,10 @@ func writeClerkJSONError(ctx huma.Context, status int, message string) {
 	ctx.SetStatus(status)
 	ctx.SetHeader("Content-Type", "application/problem+json")
 	// Write minimal RFC 9457 response
-	_, _ = ctx.BodyWriter().Write([]byte(fmt.Sprintf(
+	_, _ = fmt.Fprintf(ctx.BodyWriter(),
 		`{"status":%d,"title":"%s","detail":"%s"}`,
 		status, http.StatusText(status), message,
-	)))
+	)
 }
 
 // SubscriptionStatusReader can look up a user's EFFECTIVE subscription status (override-aware;
@@ -151,7 +151,7 @@ func (v *clerkOAuthVerifier) VerifyAccessToken(ctx context.Context, token string
 	if err != nil {
 		return "", fmt.Errorf("clerk oauth verify request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 
 	if resp.StatusCode != http.StatusOK {

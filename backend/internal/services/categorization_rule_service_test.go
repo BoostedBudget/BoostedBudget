@@ -77,32 +77,6 @@ func (m *mockRuleRepository) IncrementOverrideCount(ctx context.Context, ruleID 
 	return args.Error(0)
 }
 
-// Mock subscription checker
-type mockSubscriptionChecker struct {
-	mock.Mock
-}
-
-func (m *mockSubscriptionChecker) GetEffectiveSubscription(ctx context.Context, user *domain.User) (*domain.EffectiveSubscription, error) {
-	args := m.Called(ctx, user)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*domain.EffectiveSubscription), args.Error(1)
-}
-
-// Mock user getter
-type mockUserGetter struct {
-	mock.Mock
-}
-
-func (m *mockUserGetter) GetUserByID(ctx context.Context, userID string) (*domain.User, error) {
-	args := m.Called(ctx, userID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*domain.User), args.Error(1)
-}
-
 // Helper to create a test request
 func createTestRuleRequest() *domain.CreateCategorizationRuleRequest {
 	return &domain.CreateCategorizationRuleRequest{

@@ -93,7 +93,7 @@ func TestClerkMiddleware_MCPOrigin_ValidSecretAndToken(t *testing.T) {
 	server := setupMCPTestServer(t, repo, &mockRegistrationService{}, "worker-secret", verifier)
 
 	resp := mcpRequest(t, server.URL, "worker-secret", "opaque-oauth-token")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, 1, verifier.calls, "the OAuth token must be verified with Clerk")
@@ -105,7 +105,7 @@ func TestClerkMiddleware_MCPOrigin_VerifierRejects(t *testing.T) {
 	server := setupMCPTestServer(t, &mockUserIdentityRepository{}, &mockRegistrationService{}, "worker-secret", verifier)
 
 	resp := mcpRequest(t, server.URL, "worker-secret", "bad-token")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
@@ -116,7 +116,7 @@ func TestClerkMiddleware_MCPOrigin_MissingBearer(t *testing.T) {
 	server := setupMCPTestServer(t, &mockUserIdentityRepository{}, &mockRegistrationService{}, "worker-secret", verifier)
 
 	resp := mcpRequest(t, server.URL, "worker-secret", "")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	assert.Equal(t, 0, verifier.calls)
@@ -129,7 +129,7 @@ func TestClerkMiddleware_MCPOrigin_WrongSecretDoesNotBypass(t *testing.T) {
 	server := setupMCPTestServer(t, &mockUserIdentityRepository{}, &mockRegistrationService{}, "worker-secret", verifier)
 
 	resp := mcpRequest(t, server.URL, "wrong-secret", "opaque-oauth-token")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	assert.Equal(t, 0, verifier.calls, "verifier must not run when the worker secret is invalid")

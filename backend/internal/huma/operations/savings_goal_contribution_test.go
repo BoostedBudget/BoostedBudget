@@ -172,11 +172,12 @@ func TestContributionRouteRegistration(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			var code int
-			if tc.method == http.MethodGet {
+			switch tc.method {
+			case http.MethodGet:
 				code = api.Get(tc.path).Code
-			} else if tc.method == http.MethodPost {
+			case http.MethodPost:
 				code = api.Post(tc.path, map[string]interface{}{}).Code
-			} else if tc.method == http.MethodDelete {
+			case http.MethodDelete:
 				code = api.Delete(tc.path).Code
 			}
 			// 401 = route found, auth required. 404 = route not registered.

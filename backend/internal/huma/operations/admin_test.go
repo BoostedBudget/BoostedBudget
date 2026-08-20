@@ -186,23 +186,6 @@ func (m *mockLinkedItemRepo) MarkPlaidRemovalFailed(ctx context.Context, ids []s
 	return nil
 }
 
-// mockEncryptionService is a mock implementation of services.EncryptionService
-type mockEncryptionService struct {
-	decryptedToken string
-	decryptErr     error
-}
-
-func (m *mockEncryptionService) Encrypt(plaintext string) (string, error) {
-	return plaintext, nil
-}
-
-func (m *mockEncryptionService) Decrypt(ciphertext string) (string, error) {
-	if m.decryptErr != nil {
-		return "", m.decryptErr
-	}
-	return m.decryptedToken, nil
-}
-
 // mockTrialService is a mock implementation of TrialGranter for admin tests
 // Issue #698: Used to test trial grant endpoint
 type mockTrialService struct {

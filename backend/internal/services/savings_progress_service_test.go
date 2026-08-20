@@ -84,8 +84,6 @@ func makeGoal(id, userID, accountID, basis string, target, current float64) *dom
 	}
 }
 
-func float64Ptr(v float64) *float64 { return &v }
-
 // ─── manual basis ─────────────────────────────────────────────────────────────
 
 // TestSavingsProgress_Manual_NoOp tests that manual basis is a no-op — no DB calls.

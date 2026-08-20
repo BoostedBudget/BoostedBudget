@@ -155,6 +155,7 @@ func TestMapError_TenancyMismatchSentinelsAreDistinguishable(t *testing.T) {
 		{"merchant override batch", repository.ErrOverrideTenantMismatch},
 		{"account batch", repository.ErrAccountBatchTenantMismatch},
 		{"replace-for-account batch", repository.ErrReplaceTenantMismatch},
+		{"replace-for-account wrong account", repository.ErrReplaceAccountMismatch},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result := humaerrors.MapError(tc.err)
@@ -168,6 +169,16 @@ func TestMapError_TenancyMismatchSentinelsAreDistinguishable(t *testing.T) {
 			assert.NotEqual(t, generic, statusErr.Error(),
 				"the sentinel falls through to the anonymous default, so an operator seeing this in "+
 					"Sentry cannot tell a cross-tenant batch from any other 500. Map it explicitly.")
+
+			// The two replace-batch sentinels must not share a message: one is a cross-tenant leak,
+			// the other is same-tenant misfiling, and an operator needs to tell them apart.
+			if tc.err == repository.ErrReplaceAccountMismatch {
+				other := humaerrors.MapError(repository.ErrReplaceTenantMismatch)
+				otherStatus, ok := other.(huma.StatusError)
+				require.True(t, ok)
+				assert.NotEqual(t, otherStatus.Error(), statusErr.Error(),
+					"same-tenant wrong-account and cross-tenant batches must be distinguishable")
+			}
 
 			// Wrapped, as a repository would return it through a service.
 			wrapped := humaerrors.MapError(fmt.Errorf("syncing holdings: %w", tc.err))
