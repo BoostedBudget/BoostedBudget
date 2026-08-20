@@ -161,7 +161,7 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"prior task's code and out of scope to change here."},
 	"item_cleanup.go": {dispositionNoCacheImpact, "CORRECTED from an initial ExplicitBump attempt " +
 		"after Codex adversarial review disproved the premise: every cached analytics query filters " +
-		"on `accounts.status = 'active'` (repository/analytics_repository.go), never on " +
+		"on `accounts.status = 'active'` in the 9 HOUSEHOLD-scope analytics queries only — the 10 personal-scope variants do NOT filter it (#1537/#1561 premise correction) — never on " +
 		"linked_items status. Grepped plaid_item_cleanup_service.go end to end: it never references " +
 		"AccountRepository or the accounts table at all — RemoveItem only writes " +
 		"linked_items.plaid_removed_at/status, and this job's own ClearCleanupSchedule/Delete write " +
@@ -221,7 +221,7 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"classified item_cleanup.go above (same file-level reasoning, same table): this sweep's " +
 		"own writes (LinkedItemRepository.MarkForCleanup/ClearCleanupSchedule) touch only " +
 		"linked_items bookkeeping columns (cleanup_scheduled_at and friends), never accounts.status " +
-		"— every cached analytics query filters on accounts.status = 'active', never on any " +
+		"— the 9 household-scope cached analytics queries filter on accounts.status = 'active' (the 10 personal-scope variants do not; #1537/#1561 premise correction), and none filters on any " +
 		"linked_items column (confirmed by the same repo-wide grep item_cleanup.go's entry cites). " +
 		"The actual Plaid /item/remove call and any accounts-table effect happen in a SEPARATE, " +
 		"HTTP-middleware-covered path (accountService.DeleteAccount), exactly as item_cleanup.go's " +
