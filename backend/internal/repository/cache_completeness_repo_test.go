@@ -418,9 +418,12 @@ func TestEveryMutatingRepoMethodIsInReviewedAllowlist(t *testing.T) {
 	}
 
 	if len(unclassified) > 0 {
-		t.Skipf("TODO #1531: %d repository method(s) remain dispositionUnclassified{} pending "+
-			"review — see the worklist table in task-10b-3-report.md (Task 10b-3), which groups "+
-			"them by suggested slice and is the actual deliverable of this guard: %s",
+		t.Errorf("#1537: %d repository method(s) remain dispositionUnclassified{}. This is now a HARD "+
+			"FAILURE (it was a t.Skipf until #1537): an unreviewed write is indistinguishable from a "+
+			"missing cache bump, and one entry in this list — AccountRepository."+
+			"ExpireAccountsByFingerprint — hid a live cross-user stale-cache bug that every review "+
+			"round missed precisely because it sat where nobody was looking. Classify the method; do "+
+			"not re-add an Unclassified entry: %s",
 			len(unclassified), strings.Join(unclassified, ", "))
 	}
 }
