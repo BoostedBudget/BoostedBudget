@@ -29,17 +29,8 @@ type CustomCategoryRepository interface {
 	// Update updates an existing category
 	Update(ctx context.Context, category *domain.CustomCategory) error
 
-	// Delete removes a category from the database
-	Delete(ctx context.Context, id string) error
-
 	// CountByUserID counts the total number of categories for a user
 	CountByUserID(ctx context.Context, userID string) (int, error)
-
-	// IncrementUsageCount increments the usage count for a category
-	IncrementUsageCount(ctx context.Context, userID, categoryName string) error
-
-	// DecrementUsageCount decrements the usage count for a category
-	DecrementUsageCount(ctx context.Context, userID, categoryName string) error
 
 	// GetNamesByIDs returns a map of id→name for the given IDs scoped to userID.
 	// IDs not owned by userID or not found are omitted from the result.
@@ -51,10 +42,6 @@ type CustomCategoryRepository interface {
 
 	// HasChildren reports whether the given category has any direct children.
 	HasChildren(ctx context.Context, id string) (bool, error)
-
-	// ClearParentForChildren reparents all direct children of parentID to top-level
-	// (sets their parent_id to NULL). Used before deleting a parent category.
-	ClearParentForChildren(ctx context.Context, parentID string) error
 
 	// GetCategoryUsage returns live counts of transactions, budget categories,
 	// rules, and child categories referencing the given category (Issue #1203).
@@ -298,22 +285,6 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 	return tx.Commit(ctx)
 }
 
-// Delete removes a category from the database
-func (r *customCategoryRepository) Delete(ctx context.Context, id string) error {
-	query := `DELETE FROM custom_categories WHERE id = $1`
-
-	ct, err := r.db.Exec(ctx, query, id)
-	if err != nil {
-		return err
-	}
-
-	if ct.RowsAffected() == 0 {
-		return domain.ErrCategoryNotFound
-	}
-
-	return nil
-}
-
 // CountByUserID counts the total number of categories for a user
 func (r *customCategoryRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
 	query := `SELECT COUNT(*) FROM custom_categories WHERE user_id = $1`
@@ -325,46 +296,6 @@ func (r *customCategoryRepository) CountByUserID(ctx context.Context, userID str
 	}
 
 	return count, nil
-}
-
-// IncrementUsageCount increments the usage count for a category
-func (r *customCategoryRepository) IncrementUsageCount(ctx context.Context, userID, categoryName string) error {
-	query := `
-		UPDATE custom_categories
-		SET usage_count = usage_count + 1, updated_at = $1
-		WHERE user_id = $2 AND name = $3
-	`
-
-	ct, err := r.db.Exec(ctx, query, time.Now(), userID, categoryName)
-	if err != nil {
-		return err
-	}
-
-	if ct.RowsAffected() == 0 {
-		return domain.ErrCategoryNotFound
-	}
-
-	return nil
-}
-
-// DecrementUsageCount decrements the usage count for a category
-func (r *customCategoryRepository) DecrementUsageCount(ctx context.Context, userID, categoryName string) error {
-	query := `
-		UPDATE custom_categories
-		SET usage_count = GREATEST(usage_count - 1, 0), updated_at = $1
-		WHERE user_id = $2 AND name = $3
-	`
-
-	ct, err := r.db.Exec(ctx, query, time.Now(), userID, categoryName)
-	if err != nil {
-		return err
-	}
-
-	if ct.RowsAffected() == 0 {
-		return domain.ErrCategoryNotFound
-	}
-
-	return nil
 }
 
 // GetNamesByIDs returns a map of id→name for the given IDs scoped to userID.
@@ -466,13 +397,6 @@ func (r *customCategoryRepository) HasChildren(ctx context.Context, id string) (
 		return false, err
 	}
 	return exists, nil
-}
-
-// ClearParentForChildren reparents all direct children of parentID to top-level.
-func (r *customCategoryRepository) ClearParentForChildren(ctx context.Context, parentID string) error {
-	query := `UPDATE custom_categories SET parent_id = NULL, updated_at = $1 WHERE parent_id = $2`
-	_, err := r.db.Exec(ctx, query, time.Now(), parentID)
-	return err
 }
 
 // GetCategoryUsage returns live reference counts for a custom category.

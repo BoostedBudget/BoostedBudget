@@ -80,18 +80,6 @@ func (r *MerchantOverrideRepository) Upsert(ctx context.Context, override domain
 	return &out, nil
 }
 
-// BulkUpsert inserts or updates multiple merchant name overrides using UNNEST.
-// Empty input returns an empty slice immediately.
-// Applies the same ON CONFLICT COALESCE invariant as Upsert (G31, #957).
-//
-// Delegates to bulkUpsertTx so the same SQL body can be reused inside BulkApply's tx.
-func (r *MerchantOverrideRepository) BulkUpsert(ctx context.Context, overrides []domain.MerchantNameOverride) ([]domain.MerchantNameOverride, error) {
-	if len(overrides) == 0 {
-		return []domain.MerchantNameOverride{}, nil
-	}
-	return bulkUpsertTx(ctx, r.db, overrides)
-}
-
 // GetByUserID returns all merchant name overrides for a user, ordered by created_at DESC.
 func (r *MerchantOverrideRepository) GetByUserID(ctx context.Context, userID string) ([]domain.MerchantNameOverride, error) {
 	const q = `

@@ -251,18 +251,3 @@ func TestMerchantOverride_Delete_DBError(t *testing.T) {
 	require.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
-
-// TestMerchantOverride_BulkUpsert_Empty verifies empty input returns empty slice.
-func TestMerchantOverride_BulkUpsert_Empty(t *testing.T) {
-	mock, repo := setupOverrideMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-
-	result, err := repo.BulkUpsert(ctx, []domain.MerchantNameOverride{})
-
-	require.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Empty(t, result)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}

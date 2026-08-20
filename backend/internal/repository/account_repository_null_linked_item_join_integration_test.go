@@ -74,7 +74,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 		Type:           "depository",
 		CurrencyCode:   "USD",
 	}
-	require.NoError(t, repo.Create(ctx, &acct))
+	require.NoError(t, repo.CreateBatch(ctx, []domain.Account{acct}))
 
 	accounts, err := repo.GetAccountsWithInstitutionFiltered(ctx, userID.String(), AccountFilterOptions{})
 	require.NoError(t, err, "a NULL l.status/l.institution_name must not fail the scan")
@@ -130,7 +130,7 @@ func TestAccountRepository_CheckFingerprintOwnership_NullItemStatus_Integration(
 		CurrencyCode:                "USD",
 		FallbackFingerprintBlindIdx: &fingerprint,
 	}
-	require.NoError(t, repo.Create(ctx, &acct))
+	require.NoError(t, repo.CreateBatch(ctx, []domain.Account{acct}))
 
 	ownership, err := repo.CheckFingerprintOwnership(ctx, fingerprint, requesterID.String())
 	require.NoError(t, err, "a NULL li.status must not fail the scan")

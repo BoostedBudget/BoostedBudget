@@ -43,12 +43,6 @@ type BudgetRepository interface {
 
 	// Envelope budgeting income management (Issue #491)
 	UpdateBudgetIncome(ctx context.Context, budgetID string, incomeAmount float64) error
-	AddIncomeSource(ctx context.Context, budgetID string, source domain.IncomeSource) error
-	RemoveIncomeSource(ctx context.Context, budgetID string, sourceIndex int) error
-
-	// Envelope budgeting rollover operations (Issue #36: Rule Executors)
-	// AdjustCategoryAllocatedAmount adjusts the allocated amount by delta (can be positive or negative)
-	AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error
 
 	// GetAllActivePaginated returns all active budgets across all users, ordered by id ASC.
 	// "Active" means is_active = true. Used by the period-close scanner (Issue #972).
@@ -906,82 +900,6 @@ func (r *budgetRepository) UpdateBudgetIncome(ctx context.Context, budgetID stri
 
 	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetNotFound
-	}
-
-	return nil
-}
-
-// AddIncomeSource appends a new income source to a budget's income_sources array.
-// This is used for envelope budgeting income tracking (Issue #491).
-func (r *budgetRepository) AddIncomeSource(ctx context.Context, budgetID string, source domain.IncomeSource) error {
-	sourceJSON, err := json.Marshal(source)
-	if err != nil {
-		return err
-	}
-
-	// Use JSONB concatenation to append the new source
-	query := `
-		UPDATE budgets
-		SET income_sources = income_sources || $1::jsonb, updated_at = NOW()
-		WHERE id = $2
-	`
-
-	ct, err := r.db.Exec(ctx, query, sourceJSON, budgetID)
-	if err != nil {
-		return err
-	}
-
-	if ct.RowsAffected() == 0 {
-		return domain.ErrBudgetNotFound
-	}
-
-	return nil
-}
-
-// RemoveIncomeSource removes an income source at the specified index from a budget's income_sources array.
-// This is used for envelope budgeting income tracking (Issue #491).
-func (r *budgetRepository) RemoveIncomeSource(ctx context.Context, budgetID string, sourceIndex int) error {
-	// Use JSONB array removal by index
-	// jsonb_set with the element at index removed
-	query := `
-		UPDATE budgets
-		SET income_sources = (
-			SELECT COALESCE(jsonb_agg(elem), '[]'::jsonb)
-			FROM jsonb_array_elements(income_sources) WITH ORDINALITY arr(elem, idx)
-			WHERE idx != $1 + 1
-		), updated_at = NOW()
-		WHERE id = $2
-	`
-
-	ct, err := r.db.Exec(ctx, query, sourceIndex, budgetID)
-	if err != nil {
-		return err
-	}
-
-	if ct.RowsAffected() == 0 {
-		return domain.ErrBudgetNotFound
-	}
-
-	return nil
-}
-
-// AdjustCategoryAllocatedAmount adjusts the allocated_amount by a delta value.
-// This is used for envelope budgeting rollovers (Issue #36: Rule Executors).
-// Delta can be positive (increase allocation) or negative (decrease allocation).
-func (r *budgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error {
-	query := `
-		UPDATE budget_categories
-		SET allocated_amount = allocated_amount + $1, updated_at = $2
-		WHERE id = $3
-	`
-
-	ct, err := r.db.Exec(ctx, query, delta, time.Now(), categoryID)
-	if err != nil {
-		return err
-	}
-
-	if ct.RowsAffected() == 0 {
-		return domain.ErrBudgetCategoryNotFound
 	}
 
 	return nil

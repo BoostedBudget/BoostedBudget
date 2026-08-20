@@ -263,11 +263,6 @@ type MockAccountRepository struct {
 	mock.Mock
 }
 
-func (m *MockAccountRepository) Create(ctx context.Context, account *domain.Account) error {
-	args := m.Called(ctx, account)
-	return args.Error(0)
-}
-
 func (m *MockAccountRepository) CreateBatch(ctx context.Context, accounts []domain.Account) error {
 	args := m.Called(ctx, accounts)
 	return args.Error(0)
