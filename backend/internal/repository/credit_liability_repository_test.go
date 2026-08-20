@@ -467,3 +467,43 @@ func TestCreditLiabilityRepository_GetByAccountID_ChainExpand(t *testing.T) {
 	assert.Equal(t, replacedAccountID, result.AccountID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestCreditLiabilityRepository_ReplaceForAccount_RejectsForeignLiability proves the repository
+// itself refuses a liability owned by someone other than the acting user (#1566). The DELETE was
+// scoped to userID while the INSERT wrote liability.UserID.
+func TestCreditLiabilityRepository_ReplaceForAccount_RejectsForeignLiability(t *testing.T) {
+	mock, repo := setupCreditLiabilityMockDB(t)
+	defer mock.Close()
+
+	accountID := uuid.New().String()
+	actor := uuid.New().String()
+	liability := makeCreditLiability(uuid.New().String(), accountID) // owned by someone else
+
+	err := repo.ReplaceForAccount(context.Background(), accountID, actor, liability)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
+	assert.Contains(t, err.Error(), "creditLiabilityRepository.ReplaceForAccount")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCreditLiabilityRepository_ReplaceForAccount_RejectsEmptyActor covers both the vacuous
+// empty-vs-empty match and the nil (delete-only) path, which is still tenant-scoped.
+func TestCreditLiabilityRepository_ReplaceForAccount_RejectsEmptyActor(t *testing.T) {
+	for name, liability := range map[string]*domain.CreditLiability{
+		"unowned liability": makeCreditLiability("", uuid.New().String()),
+		"delete only":       nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			mock, repo := setupCreditLiabilityMockDB(t)
+			defer mock.Close()
+
+			err := repo.ReplaceForAccount(context.Background(), uuid.New().String(), "", liability)
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
+			assert.Contains(t, err.Error(), "no acting user_id")
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}

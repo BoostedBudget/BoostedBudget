@@ -34,6 +34,17 @@ func NewCreditLiabilityRepository(db DB) CreditLiabilityRepository {
 
 // ReplaceForAccount atomically replaces the credit liability for an account.
 func (r *creditLiabilityRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, liability *domain.CreditLiability) error {
+	// #1566: DELETE is scoped to userID while the INSERT writes liability.UserID. Enforce ownership
+	// here rather than trusting callers. The nil (delete-only) path still asserts a non-empty actor
+	// because the DELETE is itself tenant-scoped.
+	var owners []string
+	if liability != nil {
+		owners = []string{liability.UserID}
+	}
+	if err := assertActorOwnsRows("creditLiabilityRepository.ReplaceForAccount", userID, owners); err != nil {
+		return err
+	}
+
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -192,4 +203,3 @@ func (r *creditLiabilityRepository) GetByAccountID(ctx context.Context, accountI
 
 	return cl, nil
 }
-

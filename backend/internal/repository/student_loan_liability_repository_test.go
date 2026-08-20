@@ -639,3 +639,42 @@ func TestStudentLoanLiabilityRepository_GetByAccountID_ChainExpand(t *testing.T)
 	assert.Equal(t, replacedAccountID, result.AccountID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestStudentLoanLiabilityRepository_ReplaceForAccount_RejectsForeignLiability — see #1566: DELETE
+// was scoped to userID while the INSERT wrote liability.UserID, with no assertion between them.
+func TestStudentLoanLiabilityRepository_ReplaceForAccount_RejectsForeignLiability(t *testing.T) {
+	mock, repo := setupStudentLoanLiabilityMockDB(t)
+	defer mock.Close()
+
+	accountID := uuid.New().String()
+	actor := uuid.New().String()
+	liability := makeStudentLoanLiability(uuid.New().String(), accountID) // owned by someone else
+
+	err := repo.ReplaceForAccount(context.Background(), accountID, actor, liability)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
+	assert.Contains(t, err.Error(), "studentLoanLiabilityRepository.ReplaceForAccount")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestStudentLoanLiabilityRepository_ReplaceForAccount_RejectsEmptyActor covers the vacuous
+// empty-vs-empty match and the nil (delete-only) path.
+func TestStudentLoanLiabilityRepository_ReplaceForAccount_RejectsEmptyActor(t *testing.T) {
+	for name, liability := range map[string]*domain.StudentLoanLiability{
+		"unowned liability": makeStudentLoanLiability("", uuid.New().String()),
+		"delete only":       nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			mock, repo := setupStudentLoanLiabilityMockDB(t)
+			defer mock.Close()
+
+			err := repo.ReplaceForAccount(context.Background(), uuid.New().String(), "", liability)
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
+			assert.Contains(t, err.Error(), "no acting user_id")
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}

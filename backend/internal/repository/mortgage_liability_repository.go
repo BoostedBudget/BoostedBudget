@@ -110,6 +110,16 @@ func (r *mortgageLiabilityRepository) decryptMortgagePIIFields(ml *domain.Mortga
 
 // ReplaceForAccount atomically replaces the mortgage liability for an account.
 func (r *mortgageLiabilityRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, liability *domain.MortgageLiability) error {
+	// #1566: see creditLiabilityRepository.ReplaceForAccount — same DELETE/INSERT tenant split.
+	// nil liability => nothing to own-check, but the actor is still validated.
+	var owners []string
+	if liability != nil {
+		owners = []string{liability.UserID}
+	}
+	if err := assertActorOwnsRows("mortgageLiabilityRepository.ReplaceForAccount", userID, owners); err != nil {
+		return err
+	}
+
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
