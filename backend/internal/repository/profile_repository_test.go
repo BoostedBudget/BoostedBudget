@@ -690,36 +690,6 @@ const userSelectQueryForTest = `SELECT id, clerk_user_id, email, email_verified,
 // (uses blind index column since paddle_subscription_id is now encrypted)
 const activePaddleSubsWhereClause = ` WHERE paddle_subscription_id_blind_idx IS NOT NULL AND subscription_status NOT IN ('inactive', 'cancelled') AND is_deleted = FALSE`
 
-// makeUserRow creates a pgxmock row for a user with the given parameters
-func makeUserRow(t *testing.T, userID, clerkID, email string, paddleSubID *string) *pgxmock.Rows {
-	t.Helper()
-	now := time.Now()
-	rows := pgxmock.NewRows([]string{
-		"id", "clerk_user_id", "email", "email_verified",
-		"subscription_tier", "subscription_status", "subscription_started_at", "subscription_ends_at",
-		"trial_started_at", "trial_ends_at", "had_trial",
-		"paddle_customer_id", "paddle_subscription_id", "primary_region", "is_active", "is_deleted",
-		"deletion_requested_at", "deletion_scheduled_at",
-		"created_at", "updated_at", "last_login_at",
-		"manual_tier_override", "manual_tier_ends_at",
-		"retention_started_at", "retention_expires_at", "retention_notice_30d_sent_at", "retention_notice_7d_sent_at",
-		"timezone", "timezone_source",
-		"past_due_started_at", "plaid_cleanup_pending_at",
-	}).AddRow(
-		userID, clerkID, email, true,
-		"premium", "active", &now, nil,
-		nil, nil, false,
-		stringPtr("cus_123"), paddleSubID, "iad", true, false,
-		nil, nil,
-		now, now, &now,
-		nil, nil,
-		nil, nil, nil, nil,
-		"UTC", "default",
-		nil, nil,
-	)
-	return rows
-}
-
 // TestGetUsersWithActivePaddleSubscriptions_WithResults tests returning users with active subscriptions
 func TestGetUsersWithActivePaddleSubscriptions_WithResults(t *testing.T) {
 	mock, repo := setupMockDB(t)

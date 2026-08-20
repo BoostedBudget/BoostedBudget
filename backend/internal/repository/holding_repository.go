@@ -78,6 +78,42 @@ func assertActorOwnsRows(caller, userID string, owners []string) error {
 	return nil
 }
 
+// ErrReplaceAccountMismatch is returned when a ReplaceForAccount call is handed a row whose
+// AccountID is not the account being replaced, or when no account_id is supplied at all
+// (issue #1568). Distinct from ErrReplaceTenantMismatch on purpose: this is a SAME-tenant fault
+// (one of the user's own accounts overwriting another), so reporting it as "spans more than one
+// user" would send an operator hunting a cross-tenant leak that does not exist.
+var ErrReplaceAccountMismatch = errors.New("replace batch contains a row belonging to another account")
+
+// assertRowsTargetAccount fails unless every row account in rowAccounts equals accountID.
+//
+// The DELETE in every ReplaceForAccount is scoped to the scalar accountID while the INSERT writes
+// each element's own AccountID, so "replace account A with rows carrying account B" clears A and
+// attributes the data to B. Same tenant, so not a leak — but the rows silently move between the
+// user's own accounts, and nothing else in the write path notices.
+//
+// An empty accountID is rejected outright, mirroring the empty-actor rule in assertActorOwnsRows:
+// with both sides empty the comparison below is vacuous, and the tenant-scoped DELETE degenerates
+// to an empty account_id.
+//
+// An empty row account is a mismatch too — a zero value is how an unattributed row slips in.
+//
+// Not skipped for an empty slice: the delete-only path still runs a DELETE scoped by accountID.
+//
+// caller names the calling method, as in assertActorOwnsRows.
+func assertRowsTargetAccount(caller, accountID string, rowAccounts []string) error {
+	if accountID == "" {
+		return fmt.Errorf("%s: %w: no account_id was supplied", caller, ErrReplaceAccountMismatch)
+	}
+	for i, rowAccount := range rowAccounts {
+		if rowAccount != accountID {
+			return fmt.Errorf("%s: %w: element %d has account_id %q, expected %q",
+				caller, ErrReplaceAccountMismatch, i, rowAccount, accountID)
+		}
+	}
+	return nil
+}
+
 // ReplaceForAccount atomically replaces all holdings for an account.
 // Wraps DELETE + INSERT in a single transaction.
 func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) error {
@@ -91,6 +127,17 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 		owners[i] = holdings[i].UserID
 	}
 	if err := assertActorOwnsRows("holdingRepository.ReplaceForAccount", userID, owners); err != nil {
+		return err
+	}
+
+	// #1568: the same split exists on the account axis — the DELETE uses the scalar accountID while
+	// each INSERT writes holdings[i].AccountID, so a misfiled element would clear this account and
+	// re-file the holdings under another of the user's accounts.
+	rowAccounts := make([]string, len(holdings))
+	for i := range holdings {
+		rowAccounts[i] = holdings[i].AccountID
+	}
+	if err := assertRowsTargetAccount("holdingRepository.ReplaceForAccount", accountID, rowAccounts); err != nil {
 		return err
 	}
 

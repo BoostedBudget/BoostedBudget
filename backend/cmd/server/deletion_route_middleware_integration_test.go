@@ -103,11 +103,28 @@ func clerkStub(userID, clerkUserID, email string) func(huma.Context, func(huma.C
 // order to reproduce #1560.
 func buildDeletionAPI(t *testing.T, registerBeforeMiddleware bool) (*echo.Echo, *stubDeletionService, *redisclient.Fake) {
 	t.Helper()
+	svc := &stubDeletionService{}
+	e, fake := buildDeletionAPIWithService(t, svc, "user-uuid-1", "user_clerk_1", "someone@example.com", registerBeforeMiddleware)
+	return e, svc, fake
+}
+
+// buildDeletionAPIWithService is buildDeletionAPI generalised over the service under test and the
+// identity the Clerk stub injects. It exists so the integration variant in
+// issue1560_deletion_endpoint_real_service_integration_test.go can drive the SAME wiring — same
+// humaconfig, same middleware order, same real route registration — with a REAL
+// services.DeletionService backed by a real ProfileRepository and a real Postgres, rather than
+// standing up a parallel harness that could silently drift from this one.
+func buildDeletionAPIWithService(
+	t *testing.T,
+	svc services.DeletionService,
+	userID, clerkUserID, email string,
+	registerBeforeMiddleware bool,
+) (*echo.Echo, *redisclient.Fake) {
+	t.Helper()
 
 	e := echo.New()
 	api := humaecho.NewV4(e, humaconfig.NewAPIConfig("test", "test"))
 
-	svc := &stubDeletionService{}
 	handler := operations.NewDeletionHandler(svc)
 
 	fake := redisclient.NewFake("cache")
@@ -133,14 +150,14 @@ func buildDeletionAPI(t *testing.T, registerBeforeMiddleware bool) (*echo.Echo, 
 	if registerBeforeMiddleware {
 		register()
 	}
-	api.UseMiddleware(clerkStub("user-uuid-1", "user_clerk_1", "someone@example.com"))
+	api.UseMiddleware(clerkStub(userID, clerkUserID, email))
 	api.UseMiddleware(humamiddleware.NewReadOnlyMiddleware(nil))
 	api.UseMiddleware(humamiddleware.NewCacheInvalidationMiddleware(gens, nil, nil))
 	if !registerBeforeMiddleware {
 		register()
 	}
 
-	return e, svc, fake
+	return e, fake
 }
 
 func postDeletion(t *testing.T, e *echo.Echo) *httptest.ResponseRecorder {

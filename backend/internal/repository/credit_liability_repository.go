@@ -45,6 +45,17 @@ func (r *creditLiabilityRepository) ReplaceForAccount(ctx context.Context, accou
 		return err
 	}
 
+	// #1568: same split on the account axis — the DELETE uses the scalar accountID while the INSERT
+	// writes liability.AccountID, so a misfiled row would clear this account and re-file the data
+	// under another of the user's accounts.
+	var rowAccounts []string
+	if liability != nil {
+		rowAccounts = []string{liability.AccountID}
+	}
+	if err := assertRowsTargetAccount("creditLiabilityRepository.ReplaceForAccount", accountID, rowAccounts); err != nil {
+		return err
+	}
+
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err

@@ -948,7 +948,7 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 	if filters.MerchantID != nil {
 		conditions = append(conditions, fmt.Sprintf("t.merchant_id = $%d", argIndex))
 		args = append(args, *filters.MerchantID)
-		argIndex++
+		argIndex++ //nolint:ineffassign // kept so a filter added below inherits the correct arg index
 	}
 
 	// Combine all conditions with AND
@@ -1455,7 +1455,7 @@ func (r *transactionRepository) GetReviewSummary(ctx context.Context, userID str
 	if filters.EndDate != nil {
 		dateCondition += fmt.Sprintf(" AND date <= $%d", argIndex)
 		args = append(args, *filters.EndDate)
-		argIndex++
+		argIndex++ //nolint:ineffassign // kept so a filter added below inherits the correct arg index
 	}
 
 	query := fmt.Sprintf(`

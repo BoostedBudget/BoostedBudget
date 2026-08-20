@@ -386,3 +386,95 @@ func TestMortgageAndStudentLoanReplaceForAccount_CrossTenantLiability_Rejected_I
 		assert.Equal(t, 1, actorCount, "the actor's student loan row must survive a rejected replace")
 	})
 }
+
+// TestReplaceForAccount_SameTenantForeignAccount_Rejected_Integration covers the account axis of
+// the DELETE/INSERT split (#1568). Every ReplaceForAccount scoped its DELETE by the scalar
+// accountID but wrote each element's own AccountID, so replacing account A with rows carrying
+// account B cleared A and re-filed the data under B. Same user, so the tenant assertion of #1566
+// never fired and the cache middleware bump was correct — the data simply moved between the user's
+// own accounts, silently. Assert the rejection against a real DB: account A keeps its row and
+// account B gains nothing.
+func TestReplaceForAccount_SameTenantForeignAccount_Rejected_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, itemID, uaID := seedTenantFixture(ctx, t, tx, "ts1568-acct")
+	acctA := seedTenantAccount(ctx, t, tx, userID, itemID, uaID, "ts1568-a")
+	acctB := seedTenantAccount(ctx, t, tx, userID, itemID, uaID, "ts1568-b")
+	enc := newTestFieldEncryptor(t)
+
+	// countsUnmoved asserts account A kept its single seeded row and account B never gained one.
+	countsUnmoved := func(t *testing.T, table string) {
+		t.Helper()
+		var inA, inB int
+		require.NoError(t, tx.QueryRow(ctx,
+			"SELECT COUNT(*) FROM "+table+" WHERE account_id = $1", acctA).Scan(&inA))
+		require.NoError(t, tx.QueryRow(ctx,
+			"SELECT COUNT(*) FROM "+table+" WHERE account_id = $1", acctB).Scan(&inB))
+		assert.Equal(t, 1, inA, table+": the replaced account must keep its row after a rejected call")
+		assert.Equal(t, 0, inB, table+": no row may be re-filed under the other account")
+	}
+
+	t.Run("holdings", func(t *testing.T) {
+		securityID := seedTestSecurity(ctx, t, tx, "ts1568")
+		_, err := tx.Exec(ctx, `
+			INSERT INTO holdings (id, user_id, account_id, security_id, quantity)
+			VALUES (gen_random_uuid(), $1, $2, $3, 5)
+		`, userID, acctA, securityID)
+		require.NoError(t, err, "seed holding on account A")
+
+		err = NewHoldingRepository(tx).ReplaceForAccount(ctx, acctA.String(), userID.String(),
+			[]domain.Holding{{
+				UserID:     userID.String(),
+				AccountID:  acctB.String(),
+				SecurityID: securityID.String(),
+				Quantity:   99,
+			}})
+		require.ErrorIs(t, err, ErrReplaceAccountMismatch,
+			"a holding attributed to another account must be refused, not re-filed")
+		countsUnmoved(t, "holdings")
+	})
+
+	t.Run("credit liability", func(t *testing.T) {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO credit_liabilities (id, user_id, account_id, synced_at)
+			VALUES (gen_random_uuid(), $1, $2, NOW())
+		`, userID, acctA)
+		require.NoError(t, err, "seed credit liability on account A")
+
+		err = NewCreditLiabilityRepository(tx).ReplaceForAccount(ctx, acctA.String(), userID.String(),
+			&domain.CreditLiability{UserID: userID.String(), AccountID: acctB.String()})
+		require.ErrorIs(t, err, ErrReplaceAccountMismatch)
+		countsUnmoved(t, "credit_liabilities")
+	})
+
+	t.Run("mortgage liability", func(t *testing.T) {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO mortgage_liabilities (id, user_id, account_id, synced_at)
+			VALUES (gen_random_uuid(), $1, $2, NOW())
+		`, userID, acctA)
+		require.NoError(t, err, "seed mortgage liability on account A")
+
+		err = NewMortgageLiabilityRepository(tx, enc).ReplaceForAccount(ctx, acctA.String(), userID.String(),
+			&domain.MortgageLiability{UserID: userID.String(), AccountID: acctB.String()})
+		require.ErrorIs(t, err, ErrReplaceAccountMismatch)
+		countsUnmoved(t, "mortgage_liabilities")
+	})
+
+	t.Run("student loan liability", func(t *testing.T) {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO student_loan_liabilities (id, user_id, account_id, synced_at)
+			VALUES (gen_random_uuid(), $1, $2, NOW())
+		`, userID, acctA)
+		require.NoError(t, err, "seed student loan liability on account A")
+
+		err = NewStudentLoanLiabilityRepository(tx, enc).ReplaceForAccount(ctx, acctA.String(), userID.String(),
+			&domain.StudentLoanLiability{UserID: userID.String(), AccountID: acctB.String()})
+		require.ErrorIs(t, err, ErrReplaceAccountMismatch)
+		countsUnmoved(t, "student_loan_liabilities")
+	})
+}

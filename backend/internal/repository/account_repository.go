@@ -275,7 +275,7 @@ func (r *accountRepository) CreateBatch(ctx context.Context, userID string, acco
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
 	query := `
 		INSERT INTO accounts
@@ -772,7 +772,7 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
 	query := `
 		UPDATE accounts

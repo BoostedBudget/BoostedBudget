@@ -45,7 +45,8 @@ func TestDashboardPreferencesRepository_GetByUserID(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 		if prefs == nil {
-			t.Error("expected preferences, got nil")
+			// Fatal, not Error: every assertion below dereferences prefs.
+			t.Fatal("expected preferences, got nil")
 		}
 		if prefs.UserID != userID {
 			t.Errorf("expected userID %s, got %s", userID, prefs.UserID)
