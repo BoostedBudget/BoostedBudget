@@ -970,10 +970,15 @@ func main() {
 			deletionService.SetWorkClaimsRepo(workClaimsRepo)
 			appLogger.Info("Deletion service initialized (30-day grace period)")
 
-			// Register Huma deletion routes (Issue #559: Huma migration)
-			humaDeletionHandler := operations.NewDeletionHandler(deletionService)
-			operations.RegisterDeletionRoutes(humaAPI, humaDeletionHandler)
-			appLogger.Info("Huma deletion routes registered")
+			// Issue #1560: deletion routes are NOT registered here. huma.Register snapshots the
+			// middleware chain at registration time (huma.go:881 -> chain.go:22-32), and every
+			// UseMiddleware call happens far below this point — so registering here gave
+			// requestDeletion zero middlewares: no Clerk auth (its AuthenticatedWithEmailInput
+			// resolver then 401s unconditionally, which is why the GDPR deletion endpoint was
+			// dead), no read-only enforcement despite read_only.go listing that exact path, and no
+			// cache-generation bump. Registration now happens after the middleware chain is
+			// assembled; see the RegisterDeletionRoutes call further down. deletionService is the
+			// outer-scoped var declared near the top, so it is reachable from there.
 
 			// Issue #629: Create River-based deletion workers
 			// These will be registered with River after jobQueue is created
@@ -2008,6 +2013,22 @@ func main() {
 		humaAdminMiddleware := humamiddleware.NewAdminMiddleware(cfg, adminService)
 		humaAPI.UseMiddleware(humaAdminMiddleware)
 		appLogger.Info("Huma Admin middleware applied")
+
+		// Register Huma deletion routes (Issue #559: Huma migration).
+		// Issue #1560: MUST stay below every humaAPI.UseMiddleware call — huma snapshots the
+		// middleware chain when Register runs, so registering earlier silently opts these routes
+		// out of Clerk auth, read-only enforcement and cache invalidation. Guarded on
+		// deletionService rather than cfg.DeletionTokenSecret so this cannot drift from the
+		// construction block above, which is what decides whether the service exists at all.
+		// TestMutatingRoutesRegisteredAfterCacheInvalidationMiddleware enforces the ordering.
+		if deletionService != nil {
+			humaDeletionHandler := operations.NewDeletionHandler(deletionService)
+			operations.RegisterDeletionRoutes(humaAPI, humaDeletionHandler)
+			appLogger.Info("Huma deletion routes registered")
+		} else {
+			appLogger.Warn("Deletion routes NOT registered — deletion service unavailable " +
+				"(DELETION_TOKEN_SECRET unset); POST /api/v1/user/delete will 404")
+		}
 
 		// Shared idempotency repository (Issue #1087: MCP server — R4-5 wiring)
 		humaIdempotencyRepo := repository.NewIdempotencyRepository(db)
