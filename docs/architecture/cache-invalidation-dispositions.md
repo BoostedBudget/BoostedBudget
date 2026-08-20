@@ -122,7 +122,7 @@ cached-read tables  ∩  method's write tables  ==  ∅   ⇒   NoCacheImpact
 ```
 
 A derived entry has no prose to rot, and it **breaks** the day someone adds a cached read over a
-table it writes. Prose cannot do that. 80 of the 127 were discharged this way.
+table it writes. Prose cannot do that. 79 of the 127 are discharged this way (80 initially; LinkedItemRepository.Update was later moved here from a prose entry whose every factual clause turned out to be false, and two DELETE-shaped entries moved OUT once the derivation became FK-cascade aware).
 
 Both sides expand package-level SQL constants and follow intra-package delegation, because neither
 side is visible from literal text alone. Getting the write side to resolve every method required

@@ -24,7 +24,7 @@ package jobs
 //     Concretely: retention_cleanup_check.go is classified dispositionBumps here because ONE of its
 //     several write paths (the GDPR deletion call) is covered; several OTHER writes in the same
 //     file (retention-clock marker repair) are not independently verified to have no cache impact —
-//     the file-level grain cannot express that distinction. See the report's per-file notes.
+//     the file-level grain cannot express that distinction. See docs/architecture/cache-invalidation-dispositions.md.
 //   - A dispositionNoCacheImpact entry records this reviewer's read of the current code, not a
 //     structural guarantee — there is no mechanism stopping someone from adding a genuine cache-
 //     relevant write to a file already marked NoCacheImpact without ever re-deriving the claim.
@@ -79,7 +79,7 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"account_deletion.go. NOTE (file-level blind spot, see package doc comment): this file ALSO " +
 		"writes retention-clock repair markers (profileRepo.RepairRetentionClock, " +
 		"StampMissingPlaidCleanupMarkers, ClearCompletedPlaidCleanupMarkers, etc.) that are not " +
-		"independently verified here — flagged in the report as a follow-up read, not asserted " +
+		"independently verified here rather than deferred to a report that was never committed " +
 		"NoCacheImpact by this entry."},
 
 	// --- NoCacheImpact: reviewed, touches no cached namespace. ---
@@ -105,17 +105,20 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"which does not change here, so no cached mapping is invalidated by this write."},
 	"paddle_reconciliation.go": {dispositionNoCacheImpact, "writes ProfileRepository." +
 		"UpdateSubscriptionFromPaddle only — subscription status is deliberately NOT a cached " +
-		"namespace (see task brief)."},
+		"namespace: NamespaceEntitlement is HardDisabled in cache/namespace.go and can never be enabled, and `users` is not one of the 12 tables any cache.GetOrLoad-backed read observes (see docs/architecture/cache-invalidation-dispositions.md)."},
 	"trial_expiration_check.go": {dispositionNoCacheImpact, "calls TrialService.ExpireTrial, which " +
 		"updates trial/subscription status fields — the same deliberately-uncached bucket as " +
-		"paddle_reconciliation.go. MEDIUM CONFIDENCE: flagged in the report for controller " +
-		"confirmation that ExpireTrial touches no entitlement or household field that IS cached."},
+		"paddle_reconciliation.go. Subscription/trial columns on `users`, which no cached read " +
+		"observes; see the corresponding ProfileRepository entries in " +
+		"repository/cache_completeness_repo_test.go. ExpireTrial touches no entitlement or household " +
+		"field that IS cached."},
 	"past_due_check.go": {dispositionNoCacheImpact, "calls PastDueService.ProcessPastDueUser, which " +
-		"updates past-due/subscription status fields only — the same deliberately-uncached bucket. " +
-		"MEDIUM CONFIDENCE: flagged in the report for controller confirmation."},
+		"updates past-due/subscription status fields only — the same deliberately-uncached bucket; see " +
+		"the corresponding ProfileRepository entries in repository/cache_completeness_repo_test.go " +
+		"and docs/architecture/cache-invalidation-dispositions.md."},
 	"manual_tier_override_expiry_check.go": {dispositionNoCacheImpact, "clears an expired manual " +
 		"tier override on the user's profile (a subscription-tier field) — the same deliberately- " +
-		"uncached bucket. MEDIUM CONFIDENCE: flagged in the report for controller confirmation."},
+		"uncached bucket; see the corresponding ProfileRepository entries in repository/cache_completeness_repo_test.go and docs/architecture/cache-invalidation-dispositions.md."},
 
 	// --- Bumps (Task 10b-2a-iii; that report was never committed — see the docs file above
 	// on each). ---
@@ -130,7 +133,7 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"stale until TTL. This mirrors investment_sync_service.go/liability_sync_service.go's own " +
 		"accepted ScopeUser-only simplification (their doc comments state the same trade-off " +
 		"explicitly) rather than a new gap introduced here; flagged, not fixed, to keep this slice " +
-		"bounded — see the report's Concerns section."},
+		"bounded — see issue #1562, which tracks it."},
 	"household_over_capacity_check.go": {dispositionBumps, "autoOffboard's call to " +
 		"OffboardExcessMembers removes household members via HouseholdService.removeMemberTx — for " +
 		"this job's call site specifically, there is no HTTP middleware coverage at all " +
@@ -155,7 +158,7 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"investmentService.GetPortfolioSummary/GetPortfolioHistory (investment_service.go), both " +
 		"served directly from huma/operations/investments.go with NO cache.GetOrLoad wrapper — " +
 		"uncached, always-fresh reads. Bumping cache.Generations for this write invalidates a " +
-		"namespace nothing about this data actually populates. See the report's Concerns section — " +
+		"namespace nothing about this data actually populates. See issue #1562 — " +
 		"this also means the PRE-EXISTING bump in investment_sync_service.go's SyncHoldings (after " +
 		"the same Upsert call) is likely based on the same incorrect premise, though that is a " +
 		"prior task's code and out of scope to change here."},
