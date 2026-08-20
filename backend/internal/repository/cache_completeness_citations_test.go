@@ -218,3 +218,145 @@ func TestDispositionCitationsResolve(t *testing.T) {
 			len(uncited), strings.Join(uncited, ", "))
 	}
 }
+
+// registeredOperation is one huma.Operation literal found in internal/huma/operations.
+type registeredOperation struct {
+	method  string
+	path    string
+	secured bool
+}
+
+// scanOperations extracts every huma.Operation literal from the operations package, brace-balanced.
+//
+// Brace-balanced and NOT regex-delimited on purpose: a non-greedy `huma.Operation{...}` match stops
+// at the first `}`, which is the one inside `Security: []map[string][]string{{"clerk": {}}}` — so a
+// naive scan silently truncates every operation that declares Security before Path, which is most of
+// them. Measured while building this: the naive version found 117 of 195 operations and reported
+// paths for none of the ones that mattered.
+func scanOperations(t *testing.T) map[string]registeredOperation {
+	t.Helper()
+	dir := filepath.Join("..", "huma", "operations")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read operations dir: %v", err)
+	}
+	reOpen := regexp.MustCompile(`huma\.Operation\{`)
+	reID := regexp.MustCompile(`OperationID:\s*"([^"]+)"`)
+	rePath := regexp.MustCompile(`Path:\s*"([^"]+)"`)
+	reMethod := regexp.MustCompile(`Method:\s*(?:http\.Method(\w+)|"(\w+)")`)
+	reSecurity := regexp.MustCompile(`Security:\s*\[\]map\[string\]\[\]string\{`)
+
+	out := map[string]registeredOperation{}
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, n))
+		if err != nil {
+			t.Fatalf("read %s: %v", n, err)
+		}
+		src := string(b)
+		for _, loc := range reOpen.FindAllStringIndex(src, -1) {
+			i := loc[1] - 1
+			depth, j := 1, i+1
+			for ; j < len(src) && depth > 0; j++ {
+				switch src[j] {
+				case '{':
+					depth++
+				case '}':
+					depth--
+				}
+			}
+			body := src[i:j]
+			id := reID.FindStringSubmatch(body)
+			if id == nil {
+				continue
+			}
+			op := registeredOperation{}
+			if m := rePath.FindStringSubmatch(body); m != nil {
+				op.path = m[1]
+			}
+			if m := reMethod.FindStringSubmatch(body); m != nil {
+				op.method = strings.ToUpper(m[1] + m[2])
+			}
+			// Security must be read BRACE-BALANCED, not to end-of-line. Go's `.` does not span
+			// newlines, and this codebase routinely writes
+			//     Security: []map[string][]string{
+			//         {"bearerAuth": {}},
+			//     },
+			// so a line-scoped capture reads empty and reports a secured operation as unsecured.
+			// That false positive fired on updateUserAccount while this was being written — the same
+			// regex-versus-brace-balanced trap that truncated the operation scan above.
+			if loc := reSecurity.FindStringIndex(body); loc != nil {
+				k := loc[1] - 1
+				d2, e2 := 1, k+1
+				for ; e2 < len(body) && d2 > 0; e2++ {
+					switch body[e2] {
+					case '{':
+						d2++
+					case '}':
+						d2--
+					}
+				}
+				op.secured = strings.Contains(body[k+1:e2-1], "{")
+			}
+			out[id[1]] = op
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("scanned zero huma.Operation literals — the scan is broken and every check below " +
+			"would pass vacuously")
+	}
+	return out
+}
+
+// TestDispositionOpsResolve is the machine-checkable half of a CoveredByHTTPMiddleware claim.
+func TestDispositionOpsResolve(t *testing.T) {
+	ops := scanOperations(t)
+
+	var problems []string
+	for key, named := range dispositionOps {
+		if _, ok := repoMethodDispositions[key]; !ok {
+			problems = append(problems, key+" is named in dispositionOps but has no disposition entry")
+			continue
+		}
+		if len(named) == 0 {
+			problems = append(problems, key+" has an empty ops list — omit the key instead of asserting nothing")
+		}
+		for _, id := range named {
+			op, ok := ops[id]
+			if !ok {
+				problems = append(problems, key+" cites operation "+strconv.Quote(id)+
+					", which does not exist in internal/huma/operations")
+				continue
+			}
+			switch op.method {
+			case "GET", "HEAD", "OPTIONS", "":
+				problems = append(problems, key+" cites "+id+" whose method is "+strconv.Quote(op.method)+
+					" — the cache-invalidation middleware skips those, so it cannot provide coverage")
+			}
+			if !op.secured {
+				problems = append(problems, key+" cites "+id+
+					", which declares no non-empty Security — the middleware's gate is len(Security)==0, "+
+					"so it never runs for that operation")
+			}
+		}
+	}
+
+	// The two maps must not drift: a middleware-coverage claim has to name its operation.
+	for key, d := range repoMethodDispositions {
+		if d.kind != dispositionCoveredByHTTPMiddleware {
+			continue
+		}
+		if _, ok := dispositionOps[key]; !ok {
+			problems = append(problems, key+" is dispositionCoveredByHTTPMiddleware but names no operation "+
+				"in dispositionOps — the coverage claim is then prose only, checkable by nothing")
+		}
+	}
+
+	sort.Strings(problems)
+	if len(problems) > 0 {
+		t.Errorf("%d disposition/operation problem(s):\n  - %s", len(problems), strings.Join(problems, "\n  - "))
+	}
+}

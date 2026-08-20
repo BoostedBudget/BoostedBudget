@@ -822,22 +822,24 @@ func TestUserAccountRepository_UpdatePrimaryTypeAndSubtype_Success(t *testing.T)
 
 	ctx := context.Background()
 	userAccountID := uuid.New().String()
+	userID := uuid.New().String()
 	primaryType := "credit"
 	primarySubtype := "credit card"
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE user_accounts
 		SET primary_type = $1, primary_subtype = $2, updated_at = $3
-		WHERE id = $4
+		WHERE id = $4 AND user_id = $5
 	`)).WithArgs(
 		primaryType,
 		primarySubtype,
 		pgxmock.AnyArg(), // updated_at
 		userAccountID,
+		userID,
 	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
-	err := repo.UpdatePrimaryTypeAndSubtype(ctx, userAccountID, primaryType, primarySubtype)
+	err := repo.UpdatePrimaryTypeAndSubtype(ctx, userAccountID, userID, primaryType, primarySubtype)
 
 	// Assert
 	assert.NoError(t, err)
@@ -851,20 +853,22 @@ func TestUserAccountRepository_UpdatePrimaryTypeAndSubtype_NotFound(t *testing.T
 
 	ctx := context.Background()
 	userAccountID := uuid.New().String()
+	userID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE user_accounts
 		SET primary_type = $1, primary_subtype = $2, updated_at = $3
-		WHERE id = $4
+		WHERE id = $4 AND user_id = $5
 	`)).WithArgs(
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
 		userAccountID,
+		userID,
 	).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	// Execute
-	err := repo.UpdatePrimaryTypeAndSubtype(ctx, userAccountID, "depository", "checking")
+	err := repo.UpdatePrimaryTypeAndSubtype(ctx, userAccountID, userID, "depository", "checking")
 
 	// Assert
 	assert.ErrorIs(t, err, ErrUserAccountNotFound)
@@ -882,19 +886,21 @@ func TestUserAccountRepository_UpdateHidden_SetTrue(t *testing.T) {
 
 	ctx := context.Background()
 	userAccountID := uuid.New().String()
+	userID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE user_accounts
 		SET is_hidden = $1, updated_at = $2
-		WHERE id = $3
+		WHERE id = $3 AND user_id = $4
 	`)).WithArgs(
 		true,
 		pgxmock.AnyArg(), // updated_at
 		userAccountID,
+		userID,
 	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
-	err := repo.UpdateHidden(ctx, userAccountID, true)
+	err := repo.UpdateHidden(ctx, userAccountID, userID, true)
 
 	// Assert
 	assert.NoError(t, err)
@@ -908,19 +914,21 @@ func TestUserAccountRepository_UpdateHidden_SetFalse(t *testing.T) {
 
 	ctx := context.Background()
 	userAccountID := uuid.New().String()
+	userID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE user_accounts
 		SET is_hidden = $1, updated_at = $2
-		WHERE id = $3
+		WHERE id = $3 AND user_id = $4
 	`)).WithArgs(
 		false,
 		pgxmock.AnyArg(), // updated_at
 		userAccountID,
+		userID,
 	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
-	err := repo.UpdateHidden(ctx, userAccountID, false)
+	err := repo.UpdateHidden(ctx, userAccountID, userID, false)
 
 	// Assert
 	assert.NoError(t, err)
@@ -934,21 +942,134 @@ func TestUserAccountRepository_UpdateHidden_NotFound(t *testing.T) {
 
 	ctx := context.Background()
 	userAccountID := uuid.New().String()
+	userID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE user_accounts
 		SET is_hidden = $1, updated_at = $2
-		WHERE id = $3
+		WHERE id = $3 AND user_id = $4
 	`)).WithArgs(
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
 		userAccountID,
+		userID,
 	).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	// Execute
-	err := repo.UpdateHidden(ctx, userAccountID, true)
+	err := repo.UpdateHidden(ctx, userAccountID, userID, true)
 
 	// Assert
+	assert.ErrorIs(t, err, ErrUserAccountNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserAccountRepository_UpdateHidden_ScopesByUserID pins the ownership predicate into the SQL
+// itself (#1566). The old statement was `WHERE id = $3` with no user predicate — a caller passing
+// an unvalidated id flipped a stranger's row while the cache middleware bumped only the actor.
+func TestUserAccountRepository_UpdateHidden_ScopesByUserID(t *testing.T) {
+	mock, repo := setupUserAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userAccountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE user_accounts
+		SET is_hidden = $1, updated_at = $2
+		WHERE id = $3 AND user_id = $4
+	`)).WithArgs(
+		true,
+		pgxmock.AnyArg(), // updated_at
+		userAccountID,
+		userID,
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.UpdateHidden(ctx, userAccountID, userID, true)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserAccountRepository_UpdateHidden_NonOwner_NoRowsAffected verifies that when the id/user_id
+// pair matches nothing (the cross-tenant case) the method reports not-found instead of succeeding.
+func TestUserAccountRepository_UpdateHidden_NonOwner_NoRowsAffected(t *testing.T) {
+	mock, repo := setupUserAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	victimUAID := uuid.New().String()
+	actorID := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE user_accounts
+		SET is_hidden = $1, updated_at = $2
+		WHERE id = $3 AND user_id = $4
+	`)).WithArgs(
+		true,
+		pgxmock.AnyArg(),
+		victimUAID,
+		actorID,
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.UpdateHidden(ctx, victimUAID, actorID, true)
+
+	assert.ErrorIs(t, err, ErrUserAccountNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserAccountRepository_UpdatePrimaryTypeAndSubtype_ScopesByUserID pins the same predicate on
+// the sibling id-only UPDATE (#1566).
+func TestUserAccountRepository_UpdatePrimaryTypeAndSubtype_ScopesByUserID(t *testing.T) {
+	mock, repo := setupUserAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userAccountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE user_accounts
+		SET primary_type = $1, primary_subtype = $2, updated_at = $3
+		WHERE id = $4 AND user_id = $5
+	`)).WithArgs(
+		"credit",
+		"credit card",
+		pgxmock.AnyArg(), // updated_at
+		userAccountID,
+		userID,
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.UpdatePrimaryTypeAndSubtype(ctx, userAccountID, userID, "credit", "credit card")
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserAccountRepository_UpdatePrimaryTypeAndSubtype_NonOwner_NoRowsAffected verifies the
+// cross-tenant call reports not-found rather than succeeding.
+func TestUserAccountRepository_UpdatePrimaryTypeAndSubtype_NonOwner_NoRowsAffected(t *testing.T) {
+	mock, repo := setupUserAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	victimUAID := uuid.New().String()
+	actorID := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE user_accounts
+		SET primary_type = $1, primary_subtype = $2, updated_at = $3
+		WHERE id = $4 AND user_id = $5
+	`)).WithArgs(
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+		victimUAID,
+		actorID,
+	).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.UpdatePrimaryTypeAndSubtype(ctx, victimUAID, actorID, "depository", "checking")
+
 	assert.ErrorIs(t, err, ErrUserAccountNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

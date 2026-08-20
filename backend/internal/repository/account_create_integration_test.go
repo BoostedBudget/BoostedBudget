@@ -67,7 +67,7 @@ func TestAccountRepository_CreateBatch_PersistsUserAccountID_Integration(t *test
 		Type:           "depository",
 		CurrencyCode:   "USD",
 	}
-	require.NoError(t, repo.CreateBatch(ctx, []domain.Account{acct}))
+	require.NoError(t, repo.CreateBatch(ctx, acct.UserID, []domain.Account{acct}))
 
 	var got *string
 	require.NoError(t, tx.QueryRow(ctx,
