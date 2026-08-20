@@ -280,6 +280,18 @@ func MapError(err error) error {
 	case errors.Is(err, services.ErrInvalidKeySize):
 		return huma.Error500InternalServerError("Invalid encryption key configuration")
 
+	// Cross-tenant batch assertions (#1537/#1566). These are 500s on purpose: every one is raised by
+	// a pre-flight check against a batch the SERVER assembled from a linked item it owns, so the
+	// caller can neither cause nor fix it. The point of mapping them is a message an operator can act
+	// on — falling through to the anonymous default made a cross-tenant batch indistinguishable from
+	// any other 500 in Sentry. Codex flagged the third; checking the class found all three unmapped.
+	case errors.Is(err, repository.ErrOverrideTenantMismatch):
+		return huma.Error500InternalServerError("Merchant override batch spans more than one user")
+	case errors.Is(err, repository.ErrAccountBatchTenantMismatch):
+		return huma.Error500InternalServerError("Account batch spans more than one user")
+	case errors.Is(err, repository.ErrReplaceTenantMismatch):
+		return huma.Error500InternalServerError("Replace batch spans more than one user")
+
 	default:
 		return huma.Error500InternalServerError("Internal server error")
 	}

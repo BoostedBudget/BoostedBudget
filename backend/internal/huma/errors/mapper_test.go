@@ -11,6 +11,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -121,6 +122,59 @@ func TestLoggingMapError_Household(t *testing.T) {
 			statusErr, ok := result.(huma.StatusError)
 			require.True(t, ok, "expected huma.StatusError")
 			assert.Equal(t, tc.status, statusErr.GetStatus())
+		})
+	}
+}
+
+// TestMapError_TenancyMismatchSentinelsAreDistinguishable pins that the three cross-tenant batch
+// sentinels this branch added map to messages a reader can act on, rather than falling through to
+// the anonymous "Internal server error" default.
+//
+// Codex adversarial review (#1537 round 4) flagged ErrReplaceTenantMismatch as unhandled by
+// MapError. Checking the class rather than the reported instance found all THREE unmapped:
+// ErrOverrideTenantMismatch and ErrAccountBatchTenantMismatch were added earlier in the same branch
+// and had the identical hole.
+//
+// WHY 500 AND NOT 4xx, deliberately. A batch containing another tenant's row is not a client mistake
+// — every one of these is raised by a pre-flight assertion against a batch the SERVER assembled from
+// a linked item it owns. The caller cannot cause it and cannot fix it. So 500 is the correct status
+// and the defect was never the code; it was that the message said nothing. This follows the existing
+// convention for internal faults in mapper.go, which map to Error500InternalServerError with a
+// specific message (ErrInvalidPaddleEnv, ErrEncryptionKeyRequired, ErrInvalidKeySize).
+//
+// Current callers are queue/sync paths, so none of these can reach a handler today. The mapping is
+// insurance for the day one does — and, more usefully, it makes the sentinel greppable from a Sentry
+// message instead of anonymous.
+func TestMapError_TenancyMismatchSentinelsAreDistinguishable(t *testing.T) {
+	generic := "Internal server error"
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"merchant override batch", repository.ErrOverrideTenantMismatch},
+		{"account batch", repository.ErrAccountBatchTenantMismatch},
+		{"replace-for-account batch", repository.ErrReplaceTenantMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := humaerrors.MapError(tc.err)
+			require.NotNil(t, result)
+
+			statusErr, ok := result.(huma.StatusError)
+			require.True(t, ok, "expected huma.StatusError")
+			assert.Equal(t, http.StatusInternalServerError, statusErr.GetStatus(),
+				"a server-assembled batch crossing tenants is an internal invariant violation, not a "+
+					"client error — 500 is intended")
+			assert.NotEqual(t, generic, statusErr.Error(),
+				"the sentinel falls through to the anonymous default, so an operator seeing this in "+
+					"Sentry cannot tell a cross-tenant batch from any other 500. Map it explicitly.")
+
+			// Wrapped, as a repository would return it through a service.
+			wrapped := humaerrors.MapError(fmt.Errorf("syncing holdings: %w", tc.err))
+			wrappedStatus, ok := wrapped.(huma.StatusError)
+			require.True(t, ok)
+			assert.NotEqual(t, generic, wrappedStatus.Error(),
+				"errors.Is must see through wrapping — repositories return these wrapped by callers")
 		})
 	}
 }
