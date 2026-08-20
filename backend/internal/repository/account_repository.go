@@ -38,9 +38,6 @@ type AccountFilterOptions struct {
 
 // AccountRepository defines the interface for account data access
 type AccountRepository interface {
-	// Create creates a new account in the database
-	Create(ctx context.Context, account *domain.Account) error
-
 	// CreateBatch creates multiple accounts in a single transaction
 	CreateBatch(ctx context.Context, accounts []domain.Account) error
 
@@ -229,62 +226,6 @@ func (r *accountRepository) decryptAccountPIIFields(a *domain.Account) error {
 			return err
 		}
 		a.InstitutionName = decryptedInstitutionName
-	}
-
-	return nil
-}
-
-// Create creates a new account in the database
-func (r *accountRepository) Create(ctx context.Context, account *domain.Account) error {
-	// Generate UUID if not already set
-	if account.ID == "" {
-		account.ID = uuid.New().String()
-	}
-
-	// Set timestamps
-	now := time.Now()
-	account.CreatedAt = now
-	account.UpdatedAt = now
-
-	// Compute blind index from plaintext before encrypting
-	plaidAccountIDBlindIdx := r.enc.BlindIndex(account.PlaidAccountID)
-
-	if err := r.encryptAccountPIIFields(account); err != nil {
-		return err
-	}
-
-	query := `
-		INSERT INTO accounts
-		(id, linked_item_id, user_id, user_account_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
-		 type, subtype, mask, current_balance, available_balance, currency_code,
-		 persistent_account_id_blind_idx, fallback_fingerprint_blind_idx,
-		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-	`
-
-	_, err := r.db.Exec(ctx, query,
-		account.ID,
-		account.LinkedItemID,
-		account.UserID,
-		account.UserAccountID,
-		account.PlaidAccountID,
-		plaidAccountIDBlindIdx,
-		account.Name,
-		account.OfficialName,
-		account.Type,
-		account.Subtype,
-		account.Mask,
-		account.CurrentBalance,
-		account.AvailableBalance,
-		account.CurrencyCode,
-		account.PersistentAccountIDBlindIdx,
-		account.FallbackFingerprintBlindIdx,
-		account.CreatedAt,
-		account.UpdatedAt,
-	)
-
-	if err != nil {
-		return mapConstraintError(err)
 	}
 
 	return nil

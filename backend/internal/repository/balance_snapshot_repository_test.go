@@ -468,26 +468,6 @@ func TestBalanceSnapshotRepository_GetLatestByAccountID_NoSnapshot(t *testing.T)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestBalanceSnapshotRepository_DeleteByAccountID tests deleting snapshots for an account
-func TestBalanceSnapshotRepository_DeleteByAccountID(t *testing.T) {
-	mock, repo := setupSnapshotMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	accountID := uuid.New().String()
-
-	mock.ExpectExec(regexp.QuoteMeta(`
-		DELETE FROM balance_snapshots WHERE account_id = $1
-	`)).WithArgs(accountID).WillReturnResult(pgxmock.NewResult("UPDATE", 5)) // 5 rows deleted
-
-	// Execute
-	err := repo.DeleteByAccountID(ctx, accountID)
-
-	// Assert
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
 // TestBalanceSnapshotRepository_Create_PreservesMicroseconds tests that microsecond precision is preserved
 func TestBalanceSnapshotRepository_Create_PreservesMicroseconds(t *testing.T) {
 	mock, repo := setupSnapshotMockDB(t)

@@ -55,9 +55,6 @@ var transactionSelectExprT = func() string {
 // TransactionRepository defines the interface for transaction data access.
 // Supports transactions from all providers (Plaid, manual, Teller, etc.)
 type TransactionRepository interface {
-	// Create creates a new transaction in the database
-	Create(ctx context.Context, transaction *domain.Transaction) error
-
 	// CreateBatch creates multiple transactions in a single database operation.
 	// Returns a map of transaction IDs that were genuinely inserted (as opposed to
 	// conflict-preserved by ON CONFLICT DO UPDATE).  Callers use this to gate
@@ -270,77 +267,6 @@ func (r *transactionRepository) decryptTransactionPIIFields(t *domain.Transactio
 		return fmt.Errorf("decrypt external_metadata: %w", err)
 	}
 	t.ExternalMetadata = decMeta
-
-	return nil
-}
-
-// Create creates a new transaction in the database
-func (r *transactionRepository) Create(ctx context.Context, transaction *domain.Transaction) error {
-	// Generate UUID if not already set
-	if transaction.ID == "" {
-		transaction.ID = uuid.New().String()
-	}
-
-	// Set timestamps
-	now := time.Now()
-	transaction.CreatedAt = now
-	transaction.UpdatedAt = now
-
-	// Encrypt PII fields and compute blind index before writing
-	extIDBlindIdx, err := r.encryptTransactionPIIFields(transaction)
-	if err != nil {
-		return fmt.Errorf("failed to encrypt transaction fields: %w", err)
-	}
-
-	query := `
-		INSERT INTO transactions
-		(id, user_id, account_id, linked_item_id, source, external_transaction_id,
-		 external_transaction_id_blind_idx, external_metadata, amount, date, authorized_date,
-		 name, merchant_name, pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url,
-		 payment_channel, pending, user_notes, created_at, updated_at, effective_category_name)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-		    CASE WHEN $23 = 'custom' THEN (SELECT name FROM custom_categories WHERE id = $24::uuid AND user_id = $2)
-		         WHEN $23 = 'pfc'    THEN $25
-		         ELSE $14 END)
-	`
-
-	_, err = r.db.Exec(ctx, query,
-		transaction.ID,
-		transaction.UserID,
-		transaction.AccountID,
-		transaction.LinkedItemID,
-		string(transaction.Source),
-		transaction.ExternalTransactionID,
-		extIDBlindIdx,
-		transaction.ExternalMetadata,
-		transaction.Amount,
-		transaction.Date,
-		transaction.AuthorizedDate,
-		transaction.Name,
-		transaction.MerchantName,
-		transaction.PFCPrimary,
-		transaction.PFCDetailed,
-		transaction.PFCConfidenceLevel,
-		transaction.PFCCategoryIconURL,
-		transaction.PaymentChannel,
-		transaction.Pending,
-		transaction.UserNotes,
-		transaction.CreatedAt,
-		transaction.UpdatedAt,
-		transaction.CategoryOverrideKind,
-		transaction.CustomCategoryOverrideID,
-		transaction.PFCPrimaryOverride,
-	)
-
-	if err != nil {
-		// Check for unique constraint violations
-		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			if strings.Contains(err.Error(), "unique_source_transaction") {
-				return ErrDuplicateTransaction
-			}
-		}
-		return fmt.Errorf("failed to create transaction: %w", err)
-	}
 
 	return nil
 }

@@ -53,11 +53,6 @@ func (m *MockBalanceSnapshotRepository) GetLatestByAccountID(ctx context.Context
 	return args.Get(0).(*domain.BalanceSnapshot), args.Error(1)
 }
 
-func (m *MockBalanceSnapshotRepository) DeleteByAccountID(ctx context.Context, accountID string) error {
-	args := m.Called(ctx, accountID)
-	return args.Error(0)
-}
-
 func (m *MockBalanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
 	args := m.Called(ctx, requestingUserID, scope, asOf)
 	if args.Get(0) == nil {

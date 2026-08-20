@@ -42,9 +42,6 @@ func (m *mockAccountRepositoryForChainResolver) GetByUserAccountID(ctx context.C
 }
 
 // Stub remaining AccountRepository methods to satisfy the interface.
-func (m *mockAccountRepositoryForChainResolver) Create(ctx context.Context, account *domain.Account) error {
-	return nil
-}
 func (m *mockAccountRepositoryForChainResolver) CreateBatch(ctx context.Context, accounts []domain.Account) error {
 	return nil
 }

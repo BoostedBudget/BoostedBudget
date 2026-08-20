@@ -35,6 +35,16 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
+// createAccountNullCurrencyFixtureAccount inserts acct through CreateBatch — the only
+// production insert path (AccountRepository.Create was removed in #1565) — and copies the
+// generated ID back onto acct so callers can reference it in follow-up SQL.
+func createAccountNullCurrencyFixtureAccount(t *testing.T, ctx context.Context, repo AccountRepository, acct *domain.Account) {
+	t.Helper()
+	batch := []domain.Account{*acct}
+	require.NoError(t, repo.CreateBatch(ctx, batch))
+	acct.ID = batch[0].ID
+}
+
 // newAccountNullCurrencyTestTx begins a transaction, registers a rollback, and returns an
 // AccountRepository bound to it — no residue is left in the shared dev DB.
 func newAccountNullCurrencyTestTx(t *testing.T, ctx context.Context) (pgx.Tx, AccountRepository) {
@@ -106,7 +116,7 @@ func TestAccountRepository_NullCurrencyCode_GetByLinkedItemID(t *testing.T) {
 		Type:           "depository",
 		CurrencyCode:   "USD",
 	}
-	require.NoError(t, repo.Create(ctx, acct))
+	createAccountNullCurrencyFixtureAccount(t, ctx, repo, acct)
 	_, err := tx.Exec(ctx, `UPDATE accounts SET currency_code = NULL WHERE id = $1`, acct.ID)
 	require.NoError(t, err)
 
@@ -131,7 +141,7 @@ func TestAccountRepository_NullCurrencyCode_GetByUserID(t *testing.T) {
 		Type:           "depository",
 		CurrencyCode:   "USD",
 	}
-	require.NoError(t, repo.Create(ctx, acct))
+	createAccountNullCurrencyFixtureAccount(t, ctx, repo, acct)
 	_, err := tx.Exec(ctx, `UPDATE accounts SET currency_code = NULL WHERE id = $1`, acct.ID)
 	require.NoError(t, err)
 
@@ -156,7 +166,7 @@ func TestAccountRepository_NullCurrencyCodeAndInstitutionName_GetAccountsWithIns
 		Type:           "depository",
 		CurrencyCode:   "USD",
 	}
-	require.NoError(t, repo.Create(ctx, acct))
+	createAccountNullCurrencyFixtureAccount(t, ctx, repo, acct)
 	_, err := tx.Exec(ctx, `UPDATE accounts SET currency_code = NULL WHERE id = $1`, acct.ID)
 	require.NoError(t, err)
 	_, err = tx.Exec(ctx, `UPDATE linked_items SET institution_name = NULL WHERE id = $1`, linkedItemID)
@@ -184,7 +194,7 @@ func TestAccountRepository_NullCurrencyCode_GetByIDAndUser(t *testing.T) {
 		Type:           "depository",
 		CurrencyCode:   "USD",
 	}
-	require.NoError(t, repo.Create(ctx, acct))
+	createAccountNullCurrencyFixtureAccount(t, ctx, repo, acct)
 	_, err := tx.Exec(ctx, `UPDATE accounts SET currency_code = NULL WHERE id = $1`, acct.ID)
 	require.NoError(t, err)
 
@@ -210,7 +220,7 @@ func TestAccountRepository_NullCurrencyCode_GetByUserAccountIDAndUser(t *testing
 		Type:           "depository",
 		CurrencyCode:   "USD",
 	}
-	require.NoError(t, repo.Create(ctx, acct))
+	createAccountNullCurrencyFixtureAccount(t, ctx, repo, acct)
 	_, err := tx.Exec(ctx, `UPDATE accounts SET currency_code = NULL WHERE id = $1`, acct.ID)
 	require.NoError(t, err)
 
@@ -234,7 +244,7 @@ func TestAccountRepository_NullCurrencyCode_GetAccountsWithInstitutionFiltered(t
 		Type:           "depository",
 		CurrencyCode:   "USD",
 	}
-	require.NoError(t, repo.Create(ctx, acct))
+	createAccountNullCurrencyFixtureAccount(t, ctx, repo, acct)
 	_, err := tx.Exec(ctx, `UPDATE accounts SET currency_code = NULL WHERE id = $1`, acct.ID)
 	require.NoError(t, err)
 
@@ -261,7 +271,7 @@ func TestAccountRepository_NullCurrencyCode_GetByUserAccountAndStatus(t *testing
 		Type:           "depository",
 		CurrencyCode:   "USD",
 	}
-	require.NoError(t, repo.Create(ctx, acct))
+	createAccountNullCurrencyFixtureAccount(t, ctx, repo, acct)
 	_, err := tx.Exec(ctx, `UPDATE accounts SET currency_code = NULL WHERE id = $1`, acct.ID)
 	require.NoError(t, err)
 
@@ -288,7 +298,7 @@ func TestAccountRepository_NullCurrencyCode_GetByUserAccountID(t *testing.T) {
 		Type:           "depository",
 		CurrencyCode:   "USD",
 	}
-	require.NoError(t, repo.Create(ctx, acct))
+	createAccountNullCurrencyFixtureAccount(t, ctx, repo, acct)
 	_, err := tx.Exec(ctx, `UPDATE accounts SET currency_code = NULL WHERE id = $1`, acct.ID)
 	require.NoError(t, err)
 

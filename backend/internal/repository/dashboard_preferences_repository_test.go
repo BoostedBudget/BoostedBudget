@@ -2,14 +2,14 @@ package repository
 
 import (
 	"context"
-	
+
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/pashagolub/pgxmock/v4"
 )
 
 func TestDashboardPreferencesRepository_GetByUserID(t *testing.T) {
@@ -129,43 +129,6 @@ func TestDashboardPreferencesRepository_Upsert(t *testing.T) {
 		}
 		if prefs.Layout == nil {
 			t.Error("expected Layout to be set to default")
-		}
-	})
-}
-
-func TestDashboardPreferencesRepository_Delete(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("failed to create sqlmock: %v", err)
-	}
-	defer mock.Close()
-
-	repo := NewDashboardPreferencesRepository(mock)
-	ctx := context.Background()
-
-	t.Run("success", func(t *testing.T) {
-		userID := "user-123"
-
-		mock.ExpectExec("DELETE FROM user_dashboard_preferences").
-			WithArgs(userID).
-			WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-
-		err := repo.Delete(ctx, userID)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-	})
-
-	t.Run("not found", func(t *testing.T) {
-		userID := "nonexistent-user"
-
-		mock.ExpectExec("DELETE FROM user_dashboard_preferences").
-			WithArgs(userID).
-			WillReturnResult(pgxmock.NewResult("UPDATE", 0))
-
-		err := repo.Delete(ctx, userID)
-		if err != ErrDashboardPreferencesNotFound {
-			t.Errorf("expected ErrDashboardPreferencesNotFound, got %v", err)
 		}
 	})
 }

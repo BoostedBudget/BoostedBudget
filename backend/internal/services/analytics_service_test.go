@@ -1852,9 +1852,6 @@ func (m *mockBalanceSnapshotRepository) GetLatestByUserID(ctx context.Context, u
 func (m *mockBalanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, accountID string) (*domain.BalanceSnapshot, error) {
 	return nil, nil
 }
-func (m *mockBalanceSnapshotRepository) DeleteByAccountID(ctx context.Context, accountID string) error {
-	return nil
-}
 func (m *mockBalanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
 	return nil, nil
 }

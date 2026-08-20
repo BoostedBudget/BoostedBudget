@@ -54,10 +54,6 @@ type BalanceSnapshotRepository interface {
 	// GetLatestByAccountID retrieves the most recent balance snapshot for a specific account.
 	// Used for deduplication checking (5-minute window) before creating new snapshots.
 	GetLatestByAccountID(ctx context.Context, accountID string) (*domain.BalanceSnapshot, error)
-
-	// DeleteByAccountID removes all balance snapshots for a specific account.
-	// Used when an account is deleted (cascade delete should handle this, but kept for explicit cleanup).
-	DeleteByAccountID(ctx context.Context, accountID string) error
 }
 
 // balanceSnapshotRepository implements BalanceSnapshotRepository using PostgreSQL
@@ -378,13 +374,6 @@ func (r *balanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, ac
 	}
 
 	return &s, nil
-}
-
-// DeleteByAccountID removes all balance snapshots for a specific account
-func (r *balanceSnapshotRepository) DeleteByAccountID(ctx context.Context, accountID string) error {
-	_, err := r.db.Exec(ctx, `DELETE FROM balance_snapshots WHERE account_id = $1`, accountID)
-	// It's not an error if no rows were deleted (account might not have any snapshots)
-	return err
 }
 
 // scanSnapshots is a helper to reduce duplication in snapshot scanning logic
