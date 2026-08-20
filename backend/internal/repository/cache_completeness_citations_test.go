@@ -240,12 +240,6 @@ func scanOperations(t *testing.T) map[string]registeredOperation {
 	if err != nil {
 		t.Fatalf("read operations dir: %v", err)
 	}
-	reOpen := regexp.MustCompile(`huma\.Operation\{`)
-	reID := regexp.MustCompile(`OperationID:\s*"([^"]+)"`)
-	rePath := regexp.MustCompile(`Path:\s*"([^"]+)"`)
-	reMethod := regexp.MustCompile(`Method:\s*(?:http\.Method(\w+)|"(\w+)")`)
-	reSecurity := regexp.MustCompile(`Security:\s*\[\]map\[string\]\[\]string\{`)
-
 	out := map[string]registeredOperation{}
 	for _, e := range entries {
 		n := e.Name()
@@ -256,7 +250,48 @@ func scanOperations(t *testing.T) map[string]registeredOperation {
 		if err != nil {
 			t.Fatalf("read %s: %v", n, err)
 		}
-		src := string(b)
+		for id, op := range scanOperationsInSource(string(b)) {
+			out[id] = op
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("scanned zero huma.Operation literals — the scan is broken and every check below " +
+			"would pass vacuously")
+	}
+	return out
+}
+
+// maskLineComments blanks the body of every `//` comment with spaces, PRESERVING LENGTH so every
+// byte offset in the original source stays valid.
+//
+// Adversarial review (Codex) found the defect this exists to fix: brace counting ran on raw source,
+// so a `{` or `}` inside a comment shifted the depth counter and could terminate the operation
+// literal early or run it past its end. An earlier fix of mine stripped comments only from the
+// already-extracted Security slice — which fixed the inner scan and left the outer one broken. Mask
+// once, up front, and both scans are correct by construction.
+func maskLineComments(src string) string {
+	out := []byte(src)
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] != '/' || out[i+1] != '/' {
+			continue
+		}
+		for j := i; j < len(out) && out[j] != '\n'; j++ {
+			out[j] = ' '
+		}
+	}
+	return string(out)
+}
+
+func scanOperationsInSource(raw string) map[string]registeredOperation {
+	reOpen := regexp.MustCompile(`huma\.Operation\{`)
+	reID := regexp.MustCompile(`OperationID:\s*"([^"]+)"`)
+	rePath := regexp.MustCompile(`Path:\s*"([^"]+)"`)
+	reMethod := regexp.MustCompile(`Method:\s*(?:http\.Method(\w+)|"(\w+)")`)
+	reSecurity := regexp.MustCompile(`Security:\s*\[\]map\[string\]\[\]string\{`)
+
+	out := map[string]registeredOperation{}
+	{
+		src := maskLineComments(raw)
 		for _, loc := range reOpen.FindAllStringIndex(src, -1) {
 			i := loc[1] - 1
 			depth, j := 1, i+1
@@ -299,19 +334,12 @@ func scanOperations(t *testing.T) map[string]registeredOperation {
 						d2--
 					}
 				}
-				// Strip line comments first: raw brace counting would accept
-				//     Security: []map[string][]string{ // TODO: add {clerk} back
-				//     },
-				// as secured on the strength of a brace inside a comment (adversarial review, nit).
-				inner := reLineComm.ReplaceAllString(body[k+1:e2-1], "")
-				op.secured = strings.Contains(inner, "{")
+				// Comments are already masked out of `src`, so this brace test cannot be
+				// fooled by a `{` in a comment.
+				op.secured = strings.Contains(body[k+1:e2-1], "{")
 			}
 			out[id[1]] = op
 		}
-	}
-	if len(out) == 0 {
-		t.Fatal("scanned zero huma.Operation literals — the scan is broken and every check below " +
-			"would pass vacuously")
 	}
 	return out
 }
@@ -364,4 +392,91 @@ func TestDispositionOpsResolve(t *testing.T) {
 	if len(problems) > 0 {
 		t.Errorf("%d disposition/operation problem(s):\n  - %s", len(problems), strings.Join(problems, "\n  - "))
 	}
+}
+
+// TestOperationScanIsNotFooledByBracesInComments pins the defect Codex's adversarial review found in
+// the FIRST attempt at this fix.
+//
+// The original scan counted braces over raw source. My first correction stripped comments only from
+// the already-extracted `Security` slice — so the inner scan was fixed while the OUTER scan, which
+// decides where the operation literal ends, still counted braces inside comments.
+//
+// ONLY THE TRUNCATION DIRECTION IS TESTED, and that is a deliberate, measured choice rather than an
+// omission. A stray `}` in a comment ends the literal early, so Path/Method/Security below it become
+// invisible and a secured operation reads unsecured — case 1, which fails when maskLineComments is
+// reverted to the identity function (verified).
+//
+// I tried and FAILED to construct a harmful case for the opposite direction. An unbalanced `{` does
+// extend the literal past its end, but the extension is benign for this scanner: `FindAllStringIndex`
+// still matches the next operation's own `huma.Operation{` independently, so nothing is lost, and the
+// merged body cannot inherit the neighbour's Security because the comment's own
+// `Security: []map[string][]string{` text is the FIRST `reSecurity` match and anchors the inner scan
+// locally. Two drafts of an "extends" case passed under the mutant before I observed the scan output
+// directly instead of reasoning about it. Rather than keep an assertion that cannot fail, the finding
+// is recorded here: masking fixes both directions, but only one of them was ever exploitable.
+func TestOperationScanIsNotFooledByBracesInComments(t *testing.T) {
+	cases := []struct {
+		name        string
+		src         string
+		wantID      string
+		wantSecured bool
+		wantPath    bool // whether Path/Method must be populated (false when the op declares none)
+	}{
+		{
+			// A `}` in a comment ends the literal early: without masking, Path, Method and Security
+			// are never seen — the operation reads unsecured with an empty path.
+			name: "closing brace in comment truncates the literal",
+			src: `var _ = huma.Operation{
+	OperationID: "probeOp",
+	// historical note: the old shape was map[string]string} and is gone
+	Method:      http.MethodPost,
+	Path:        "/api/v1/probe",
+	Security:    []map[string][]string{{"clerk": {}}},
+}`,
+			wantID: "probeOp", wantSecured: true, wantPath: true,
+		},
+		{
+			// Control, the direction the earlier nit-fix aimed at: an EMPTY Security literal whose
+			// trailing comment contains a brace must still read UNSECURED. Masking must not degrade
+			// into "any brace anywhere means secured".
+			name: "empty security with a braced comment stays unsecured",
+			src: `var _ = huma.Operation{
+	OperationID: "unsecuredOp",
+	Method:      http.MethodPost,
+	Path:        "/api/v1/unsecured",
+	Security:    []map[string][]string{}, // was {"clerk": {}} before the MCP change
+}`,
+			wantID: "unsecuredOp", wantSecured: false, wantPath: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := scanOperationsInSource(tc.src)
+			op, ok := got[tc.wantID]
+			if !ok {
+				t.Fatalf("operation %q not scanned at all; scanned %v", tc.wantID, keysOf(got))
+			}
+			if tc.wantPath && op.path == "" {
+				t.Errorf("Path empty — the literal was truncated before reaching Path")
+			}
+			if tc.wantPath && op.method != "POST" {
+				t.Errorf("Method = %q, want POST — the literal was truncated before reaching Method", op.method)
+			}
+			if op.secured != tc.wantSecured {
+				t.Errorf("secured = %v, want %v — brace counting was fooled by a comment. "+
+					"A false `true` here means the guard would pass an UNSECURED mutating operation.",
+					op.secured, tc.wantSecured)
+			}
+		})
+	}
+}
+
+func keysOf(m map[string]registeredOperation) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
