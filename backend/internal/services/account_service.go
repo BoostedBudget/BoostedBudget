@@ -281,12 +281,26 @@ func (s *accountService) checkFingerprintOwnership(ctx context.Context, blindIdx
 		}
 		// Issue #1531 Blocker 1: ExpireAccountsByFingerprint just flipped a DIFFERENT user's
 		// (ownership.UserID's) accounts from active to expired — the whole point of this method,
-		// since a fingerprint blind index is looked up excluding the ACTING user. Every cached
-		// analytics query filters accounts.status = 'active', so without this bump the
-		// dispossessed owner's net-worth/cash-flow/spending aggregates keep serving pre-release
-		// numbers until the namespace TTL. The HTTP mutation middleware bumps only the actor
-		// (this LinkAccounts caller), never ownership.UserID, so this explicit bump is the only
-		// thing that closes the gap. Called AFTER the write above has committed (commit-then-bump).
+		// since a fingerprint blind index is looked up excluding the ACTING user. The HTTP mutation
+		// middleware bumps only the actor (this LinkAccounts caller), never ownership.UserID, so if
+		// any cached read of that owner's is status-sensitive, this explicit bump is the only thing
+		// that closes the gap. Called AFTER the write above has committed (commit-then-bump).
+		//
+		// ⚠ #1561 NARROWED THIS, and the justification that stood here is no longer true. It claimed
+		// "every cached analytics query filters accounts.status = 'active'", so the owner's
+		// net-worth, cash-flow AND spending aggregates all went stale. #1561 removed those nine
+		// household-scope predicates (personal scope has had none since #1109), so today NO analytics
+		// query is status-sensitive. Re-derived: the three cached wrappers are
+		// analytics_service_cached.go, dashboard_preferences_service_cached.go and
+		// identity_resolver_cached.go, and the only status filter any of them can reach is
+		// GetAggregatedHistoryForHousehold's account-type join (balance_snapshot_repository.go:~296).
+		// The accounts LIST does filter status but is not a cached read (called directly at :946).
+		//
+		// So the bump is still correct, on a much narrower basis: it covers the owner's HOUSEHOLD
+		// net-worth history, where expiring their accounts changes which a.type their balances are
+		// attributed to. For an owner in no household it now invalidates nothing — kept anyway,
+		// because over-invalidation costs one cache miss and this is a cross-user write the
+		// middleware structurally cannot see.
 		s.bumpCacheForDispossessedOwner(ctx, ownership.UserID)
 		return nil
 	}

@@ -50,7 +50,9 @@ const (
 
 type jobFileDisposition struct {
 	kind   jobDispositionKind
-	detail string // mandatory, non-empty for Bumps and NoCacheImpact; ignored for Unclassified
+	detail string // mandatory and non-empty for every kind. (It once read "ignored for
+	// Unclassified"; #1537 deleted that kind from the enum, so there is no longer a kind
+	// for which detail is optional.)
 }
 
 // jobFileDispositions classifies every non-test .go file in internal/queue/jobs/. See the package
@@ -163,9 +165,13 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"the same Upsert call) is likely based on the same incorrect premise, though that is a " +
 		"prior task's code and out of scope to change here."},
 	"item_cleanup.go": {dispositionNoCacheImpact, "CORRECTED from an initial ExplicitBump attempt " +
-		"after Codex adversarial review disproved the premise: every cached analytics query filters " +
-		"on `accounts.status` at all — #1561 removed the household-scope filter so both scopes include replaced/expired-account history, matching #1109's deliberate personal-scope decision — never on " +
-		"linked_items status. Grepped plaid_item_cleanup_service.go end to end: it never references " +
+		"after Codex adversarial review. ⚠ The sentence that stood here lost its negation in a " +
+		"splice and so asserted the very universal claim #1561 disproved; what it should have said, " +
+		"and what is true, is that NO cached analytics query filters on `accounts.status` any more " +
+		"(#1561 removed the household-scope predicates; #1109 had already removed the personal-scope " +
+		"ones), and none has ever filtered on linked_items at all. The verdict rests on the second " +
+		"half, not the first: `linked_items` is absent from the twelve cached-read tables in " +
+		"`expectedCachedReadTables`, which is machine-checked every run. Grepped plaid_item_cleanup_service.go end to end: it never references " +
 		"AccountRepository or the accounts table at all — RemoveItem only writes " +
 		"linked_items.plaid_removed_at/status, and this job's own ClearCleanupSchedule/Delete write " +
 		"only linked_items too. LinkedItemRepository.Delete's own WHERE NOT EXISTS (SELECT 1 FROM " +
@@ -217,14 +223,18 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"BudgetPeriodEventsRepository.InsertMarker/DeleteMarker/HasMarker (period-close idempotency " +
 		"markers) — grepped repository/analytics_repository.go: budget_period_events is never " +
 		"referenced by any cached analytics query. The category-spend writes this worker triggers " +
-		"go through BudgetRepository.UpdateCategorySpentAmount (a still-Unclassified repo method, " +
-		"not independently cleared by this entry — see the package doc comment's file-level-grain " +
+		"go through BudgetRepository.UpdateCategorySpentAmount (dispositionExplicitBump in the " +
+		"repository guard — this entry once called it \"still-Unclassified\", a kind #1537 deleted; " +
+		"it is not independently cleared by this entry — see the package doc comment's file-level-grain " +
 		"caveat, same as retention_cleanup_check.go's own entry above)."},
 	"item_cleanup_check.go": {dispositionNoCacheImpact, "structural sibling of the already-" +
 		"classified item_cleanup.go above (same file-level reasoning, same table): this sweep's " +
 		"own writes (LinkedItemRepository.MarkForCleanup/ClearCleanupSchedule) touch only " +
 		"linked_items bookkeeping columns (cleanup_scheduled_at and friends), never accounts.status " +
-		"— no cached analytics query filters accounts.status any more (#1561 removed the household-scope filter; #1109 had already removed the personal-scope one), and none filters on any " +
+		"— no cached ANALYTICS query filters accounts.status any more (#1561 removed the " +
+		"household-scope predicates; #1109 had already removed the personal-scope ones; the one " +
+		"cached read that still filters it is `GetAggregatedHistoryForHousehold`, which uses it to " +
+		"pick the balance row's a.type, not to filter history), and none filters on any " +
 		"linked_items column (confirmed by the same repo-wide grep item_cleanup.go's entry cites). " +
 		"The actual Plaid /item/remove call and any accounts-table effect happen in a SEPARATE, " +
 		"HTTP-middleware-covered path (accountService.DeleteAccount), exactly as item_cleanup.go's " +
