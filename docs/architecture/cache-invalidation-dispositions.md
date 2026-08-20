@@ -183,12 +183,33 @@ invalidation hook" but resolves to a **test-authored** `gens.Bump(...)`, and its
 SQL straight to the pool. It proves "if something bumps, the cached read updates" — it can never
 prove "the production path bumps".
 
-`services/merchant_normalize_cross_user_integration_test.go` is the template for the opposite shape:
-seed two users sharing a row, drive the **real** repository write, bump only the user production
-bumps, and assert the other user's cached read matches ground truth. It failed before the merchant
-fix and passes after, and both of its assertions were mutation-probed independently — including one
-probe that caught the test comparing against the warm value, which is exactly what a stale cache
-returns and would have passed under the bug.
+### What each test actually proves — corrected
+
+An earlier version of this section claimed
+`services/merchant_normalize_cross_user_integration_test.go` was the template for proving the
+production path bumps. **That was wrong, and the distinction matters enough to record rather than
+quietly amend.** That test calls `merchantRepo.GetOrCreateMerchantsWithNormalize` *directly* rather
+than driving `transactionSyncService.SyncTransactions`, and it issues the bump itself. So deleting
+`bumpCacheForSync` from `transaction_sync_service.go` entirely leaves it green — it cannot detect a
+missing production bump, which is the very criticism levelled at the parity harness above.
+
+What it *is*: a cross-user-write-elimination regression test, and a good one. Its load-bearing
+assertion is that an existing `merchants` row's `normalized_name` is **not** rewritten by another
+user's sync, which is what makes the whole staleness class unreachable. It failed before the merchant
+fix and passes after, and both assertions were mutation-probed — including a probe that caught the
+test comparing the cached read against the *warm* value, which is exactly what a stale cache returns
+and would therefore have passed under the bug it guarded.
+
+The first test in this repository to observe a **production-issued** bump, with no test-authored
+`Bump` anywhere in it, is `cmd/server/deletion_route_middleware_integration_test.go`: it builds the
+API the way `main.go` does, issues a real request, and asserts the generation store was written by
+the real cache-invalidation middleware. That is the shape to copy. Removing the middleware from that
+test's chain fails it; removing the read-only middleware fails its companion discrimination
+assertion.
+
+**The general rule this episode illustrates:** a test that supplies the very effect it claims to
+verify proves nothing about production. Ask of any invalidation test — *if I deleted the production
+bump, would this fail?* If not, it is measuring something else, however convincing it reads.
 
 ## Adding a mutating repository method
 
