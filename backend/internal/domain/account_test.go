@@ -159,11 +159,6 @@ func float64Ptr(f float64) *float64 {
 	return &f
 }
 
-// Helper function to create int pointers for tests
-func intPtr(i int) *int {
-	return &i
-}
-
 // boolPtr is defined in privacy_test.go in the same package
 
 // TestUpdateAccountRequest_Validate tests validation of account customization requests

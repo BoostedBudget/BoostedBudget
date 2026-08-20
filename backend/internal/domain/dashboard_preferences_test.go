@@ -304,7 +304,7 @@ func TestDefaultDashboardLayout(t *testing.T) {
 	layout := DefaultDashboardLayout()
 
 	if layout == nil {
-		t.Error("DefaultDashboardLayout() returned nil")
+		t.Fatal("DefaultDashboardLayout() returned nil")
 	}
 
 	// Issue #474: Version 4 with 2 widgets (synced with config/default_dashboard_layout.yaml)

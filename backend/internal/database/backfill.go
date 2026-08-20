@@ -283,7 +283,8 @@ func backfillUserPrefixIndices(ctx context.Context, db *pgxpool.Pool, enc *appcr
 	if err != nil {
 		return resultProcessed, err
 	}
-	defer tx.Rollback(ctx)
+	// Rollback is a no-op after a successful Commit; the error is intentionally discarded.
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Lock the user row — SKIP LOCKED means we skip rather than wait if UpdateUserEmailTx holds it.
 	var encEmail string
