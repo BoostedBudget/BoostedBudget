@@ -3,9 +3,20 @@
 # `[test] timeout` does not work.
 #
 # WHY THIS EXISTS (#1537). apps/web/bunfig.toml has declared `[test] timeout = 30000` since it was
-# written. Bun 1.4.0 ignores that key. Verified empirically rather than assumed: a test that sleeps
-# 6s fails at exactly 5000ms — bun's built-in default — under bunfig alone, and passes when
-# `--timeout 30000` is given on the command line.
+# written, and it was not taking effect. Two independent pieces of evidence:
+#
+#   - locally (bun 1.4.0): a test that sleeps 6s fails at exactly 5005ms — bun's built-in default —
+#     under bunfig alone, and passes when `--timeout 30000` is given on the command line;
+#   - in CI (bun 1.3.14, pinned at .github/workflows/test.yml:1535): the Frontend Tests job reported
+#     "timed out after 5000ms", again the default, not the declared 30000.
+#
+# ⚠ An earlier version of this comment blamed "bun 1.4.0 ignores that key". Codex review showed that
+# is overbroad: bun 1.3.14's own docs DO document `[test] timeout`, and 1.3.14 is what CI pins — yet
+# CI still hit the 5s default. So the honest statement is that the key was not in effect in EITHER
+# environment; why it is not (version behaviour, config discovery, a preload interaction) is
+# unestablished. The CLI flag is the fix either way, and this guard checks the effect rather than the
+# cause. Worth recording that I proved a local fact on 1.4.0 and generalised it to the repo without
+# checking which bun CI runs.
 #
 # The consequence was not theoretical. `scripts/test-conflict-files.sh` already passed the flag on
 # both of its invocations, so someone had found this before; it simply was never applied to
@@ -68,12 +79,38 @@ else
     bad "found only ${found:-0} 'bun test' invocations — the scan is broken, and test 1 would pass vacuously"
 fi
 
-echo "Test 3: the EFFECTIVE per-test timeout exceeds bun's 5s default"
-if ! command -v bun >/dev/null 2>&1; then
-    echo "  SKIP: bun not on PATH"
+echo "Test 3: the EFFECTIVE per-test timeout the runner uses exceeds bun's 5s default"
+# Rebuilt (#1537 round 6). The first version wrote its probe into apps/web/src and invoked
+# scripts/test-regular.sh, which was wrong three ways, all mine:
+#   1. no cleanup trap — an interrupted run left the 5.6s probe in src/, where test-regular.sh's
+#      `find src` collects it into EVERY later run;
+#   2. it ran all 362 files to check one property, because test-regular.sh parses args only for
+#      --coverage and always rebuilds its list from `find src` — the path argument was ignored;
+#   3. its exit code covered 6400 tests, so any unrelated failure made this guard claim the timeout
+#      was broken. A guard that cries wolf gets worked around.
+# Now: read the value the runner actually passes, assert it is above bun's default, and prove it
+# works on the probe ALONE, outside src/, with cleanup guaranteed by a trap.
+# Read the value from the INVOCATION, not from anywhere in the file. The first version grepped the
+# whole script and matched the explanatory comment above the command — so with the flag deleted from
+# `bun test` it still reported "the runner passes --timeout 30000". Caught by the axis-1 mutation.
+# awk extracts the `bun test` continuation block (a run of lines ending in backslash) and stops at the
+# first line that does not, so only real command text is searched.
+configured=$(awk '/^bun test/{f=1} f{print; if ($0 !~ /\\$/) exit}' "$WEB_DIR/scripts/test-regular.sh" \
+    | grep -oE -- "--timeout[[:space:]]+[0-9]+" | head -1 | grep -oE "[0-9]+")
+if [ -z "${configured:-}" ]; then
+    bad "scripts/test-regular.sh passes no --timeout, so the suite runs at bun's 5s default"
+elif [ "$configured" -le 5000 ]; then
+    bad "scripts/test-regular.sh passes --timeout $configured, which is not above bun's 5000ms default"
 else
-    probe="$WEB_DIR/src/zz_effective_timeout_probe.test.ts"
-    cat > "$probe" <<'PROBE'
+    ok "the runner passes --timeout $configured, above bun's 5000ms default"
+
+    if ! command -v bun >/dev/null 2>&1; then
+        echo "  SKIP: bun not on PATH — cannot verify the value has effect"
+    else
+        tmp=$(mktemp -d)
+        trap 'rm -rf "$tmp"' EXIT   # guaranteed: an interrupted run leaves nothing behind, and
+                                    # nothing is ever written under apps/web/src
+        cat > "$tmp/effective_timeout_probe.test.ts" <<'PROBE'
 import { test, expect } from 'bun:test'
 
 // Sleeps just past bun's 5000ms built-in default. Passes only if a larger timeout is in effect.
@@ -82,13 +119,12 @@ test('effective timeout probe', async () => {
   expect(true).toBe(true)
 })
 PROBE
-    # Run through the real runner so the guard exercises what CI exercises, not a hand-built command.
-    if (cd "$WEB_DIR" && bash scripts/test-regular.sh "$probe" >/dev/null 2>&1); then
-        ok "a 5.6s test survives the configured runner, so the effective timeout is above 5s"
-    else
-        bad "a 5.6s test timed out via scripts/test-regular.sh — the effective timeout is bun's 5s default. bunfig.toml's [test] timeout does NOT work; pass --timeout on the command line."
+        if (cd "$WEB_DIR" && bun test --timeout "$configured" "$tmp/effective_timeout_probe.test.ts" >/dev/null 2>&1); then
+            ok "a 5.6s test survives --timeout $configured, so the value has real effect"
+        else
+            bad "a 5.6s test timed out under --timeout $configured — the flag is not taking effect"
+        fi
     fi
-    rm -f "$probe"
 fi
 
 echo
