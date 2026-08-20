@@ -167,6 +167,16 @@ func (r *studentLoanLiabilityRepository) decryptStudentLoanPIIFields(sl *domain.
 
 // ReplaceForAccount atomically replaces the student loan liability for an account.
 func (r *studentLoanLiabilityRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, liability *domain.StudentLoanLiability) error {
+	// #1566: see creditLiabilityRepository.ReplaceForAccount — same DELETE/INSERT tenant split.
+	// nil liability => nothing to own-check, but the actor is still validated.
+	var owners []string
+	if liability != nil {
+		owners = []string{liability.UserID}
+	}
+	if err := assertActorOwnsRows("studentLoanLiabilityRepository.ReplaceForAccount", userID, owners); err != nil {
+		return err
+	}
+
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
