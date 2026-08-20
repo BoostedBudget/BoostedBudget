@@ -37,8 +37,8 @@ import (
 // written as escapes below for exactly that reason.
 func TestNoTypographicQuotesInTrackedGoFiles(t *testing.T) {
 	const (
-		leftDoubleQuote  = "“"
-		rightDoubleQuote = "”"
+		leftDoubleQuote  = "\u201C"
+		rightDoubleQuote = "\u201D"
 	)
 
 	// Repo root: backend/internal/repository -> backend/internal -> backend -> root.
