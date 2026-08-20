@@ -526,7 +526,7 @@ func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requesting
 // migration 000007:22 — DEFAULT 'USD' but no NOT NULL; linked_items.institution_name: migration
 // 000006:14 — no NOT NULL, no default) but were scanned directly into bare (non-pointer) string
 // fields — "cannot scan NULL into *string". COALESCE guarantees a non-NULL scan target: 'USD' for
-// currency_code (matching the column's own default intent), ” for institution_name (the natural
+// currency_code (matching the column's own default intent), '' for institution_name (the natural
 // zero for this omitempty field, matching GetAccountsWithInstitutionFiltered's established rule
 // for the same column).
 func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
