@@ -56,7 +56,8 @@ package main
 // internal/repository/cache_completeness_repo_test.go) require a mandatory, non-empty
 // dispositionNoCacheImpact{reason} rather than a bare boolean skip.
 //
-// ADVERSARIAL VALIDATION (recorded 2026-08-14, see task-10b-4-report.md for the full transcript):
+// ADVERSARIAL VALIDATION (recorded 2026-08-14; the cited task-10b-4-report.md was never
+// committed and does not exist in any commit — see docs/architecture/cache-invalidation-dispositions.md):
 // commented out `householdOverCapacityCheckWorker.SetCacheInvalidation(cacheInstance.Generations())`
 // (main.go ~:905) — this test FAILED, naming HouseholdOverCapacityCheckWorker specifically and
 // listing householdOverCapacityCheckWorker as the unwired variable. Restored the line — this test

@@ -197,7 +197,8 @@ func NewHouseholdOverCapacityCheckWorker(deps HouseholdOverCapacityCheckWorkerDe
 // OffboardExcessMembers has exactly one caller — this job — so nothing bumped the household's
 // cache generation after an auto-offboard actually removed members. This worker's own
 // SetOverCapacity/ClearOverCapacity/notice-marker writes carry no cache impact of their own
-// (see task-10b-2a-iii-report.md); only the member-removal path below needs this. Optional: nil
+// (that report was never committed; see docs/architecture/cache-invalidation-dispositions.md); only the member-removal path
+// below needs this. Optional: nil
 // is a safe no-op.
 func (w *HouseholdOverCapacityCheckWorker) SetCacheInvalidation(gens *cache.Generations) {
 	w.cacheGens = gens

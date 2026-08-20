@@ -24,7 +24,8 @@ package operations
 //     tell you whether that middleware's bump is scoped correctly for the new operation's side
 //     effects; see cache_invalidation.go's own tests for that question.
 //
-// ADVERSARIAL VALIDATION (recorded 2026-08-14, see task-10b-3-report.md for the transcript):
+// ADVERSARIAL VALIDATION (recorded 2026-08-14; the cited task-10b-3-report.md was never
+// committed and does not exist in any commit — see docs/architecture/cache-invalidation-dispositions.md):
 //   - Added a fake huma.Register call (Method: http.MethodPost, no Security, OperationID
 //     "fakeUnclassifiedMutation") to a scratch file in this package: guard FAILED, reporting the new
 //     operation ID as missing from publicMutationAllowlist. Removed it: guard PASSED.
