@@ -182,10 +182,20 @@ export default defineConfig({
     // Builds the Rolldown production bundle and serves via `vite preview` — the only way
     // to exercise rolldownOptions.codeSplitting. `vite dev` bypasses chunking entirely.
     ...(prodPort ? [{
-      command: `VITE_CLERK_PUBLISHABLE_KEY=${process.env.CLERK_PUBLISHABLE_KEY || 'pk_test_e2e_placeholder'} VITE_MCP_URL=https://staging-mcp.boostedbudget.com bun run build && bunx vite preview --port ${prodPort} --strictPort`,
+      command: `VITE_CLERK_PUBLISHABLE_KEY=${process.env.CLERK_PUBLISHABLE_KEY || 'pk_test_e2e_placeholder'} VITE_MCP_URL=https://staging-mcp.boostedbudget.com bunx vite build && bunx vite preview --port ${prodPort} --strictPort`,
       url: `http://localhost:${prodPort}`,
       reuseExistingServer: false, // always rebuild: command includes the build step
-      timeout: 180 * 1000, // ~60s for tsc+rolldown build + preview startup
+      // #1489: this budget is what the E2E job actually fails on under host contention — the job
+      // timed out at 180s while two runs for the same branch built concurrently on the self-hosted
+      // runner, with migrations and seeding already green.
+      //
+      // Two changes, and the first is the real one: the command was `bun run build`, which is
+      // `tsc --noEmit && vite build` (package.json). CI ALREADY typechecks the frontend in its own
+      // jobs (.github/workflows/test.yml, two `bun run typecheck` steps), so the typecheck was
+      // duplicated work inside the budget it was blowing. `bunx vite build` drops it and keeps the
+      // bundle this server exists to serve. Second, the budget goes to 300s so a contended runner
+      // has headroom rather than a 3x-optimistic estimate.
+      timeout: 300 * 1000, // rolldown build + preview startup, with headroom for a loaded runner
     }] : []),
     {
       // Pass env vars to backend for E2E testing:
