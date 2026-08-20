@@ -1074,3 +1074,90 @@ func userAccountStrPtr(s string) *string {
 func userAccountIntPtr(i int) *int {
 	return &i
 }
+
+// =============================================================================
+// Cross-tenant normalization tests (#1566 follow-up)
+//
+// normalizeExistingUserAccount must scope its two writes to the AUTHENTICATED
+// ACTOR, not to the owner read off the matched row. Passing existing.UserID
+// makes the repository's `WHERE id = $x AND user_id = $y` predicate tautological
+// — it can never reject — so a matched row belonging to somebody else would be
+// rewritten. These tests drive MatchOrCreate with an actor that differs from the
+// row owner and require (a) the actor id to reach the repository and (b) the
+// resulting ErrUserAccountNotFound rejection to be observable to the caller.
+// =============================================================================
+
+// TestUserAccountService_MatchOrCreate_ForeignHiddenRow_RejectsAndPropagates covers the
+// un-hide write.
+func TestUserAccountService_MatchOrCreate_ForeignHiddenRow_RejectsAndPropagates(t *testing.T) {
+	mockRepo := new(MockUserAccountRepository)
+	service := NewUserAccountService(mockRepo)
+
+	ctx := context.Background()
+	actorID := "user-actor"
+	victimID := "user-victim"
+	institutionID := "ins_bofa"
+	mask := "1234"
+
+	// A row owned by somebody other than the authenticated actor.
+	foreignUA := &domain.UserAccount{
+		ID:             "ua-victim",
+		UserID:         victimID,
+		InstitutionID:  institutionID,
+		Mask:           &mask,
+		PrimaryType:    userAccountStrPtr("depository"),
+		PrimarySubtype: userAccountStrPtr("checking"),
+		IsHidden:       true,
+	}
+
+	mockRepo.On("FindByInstitutionAndMask", ctx, actorID, institutionID, &mask).Return(foreignUA, nil)
+	// Scoped to the actor: the repository rejects, because the actor does not own the row.
+	mockRepo.On("UpdateHidden", ctx, foreignUA.ID, actorID, false).Return(repository.ErrUserAccountNotFound)
+	// Scoped to the row owner (the tautological call): the repository happily succeeds.
+	mockRepo.On("UpdateHidden", ctx, foreignUA.ID, victimID, false).Return(nil)
+
+	result, err := service.MatchOrCreate(ctx, actorID, institutionID, &mask, "BoA Checking", "depository", "checking")
+
+	mockRepo.AssertNotCalled(t, "UpdateHidden", ctx, foreignUA.ID, victimID, false)
+	assert.Error(t, err, "un-hiding a row the actor does not own must not succeed silently")
+	assert.ErrorIs(t, err, repository.ErrUserAccountNotFound)
+	assert.Nil(t, result, "no account should be returned for a cross-tenant match")
+}
+
+// TestUserAccountService_MatchOrCreate_ForeignRowTypeChange_RejectsAndPropagates covers the
+// type/subtype write.
+func TestUserAccountService_MatchOrCreate_ForeignRowTypeChange_RejectsAndPropagates(t *testing.T) {
+	mockRepo := new(MockUserAccountRepository)
+	service := NewUserAccountService(mockRepo)
+
+	ctx := context.Background()
+	actorID := "user-actor"
+	victimID := "user-victim"
+	institutionID := "ins_bofa"
+	mask := "1234"
+	newType := "investment"
+	newSubtype := "brokerage"
+
+	foreignUA := &domain.UserAccount{
+		ID:             "ua-victim",
+		UserID:         victimID,
+		InstitutionID:  institutionID,
+		Mask:           &mask,
+		PrimaryType:    userAccountStrPtr("depository"),
+		PrimarySubtype: userAccountStrPtr("checking"),
+		IsHidden:       false,
+	}
+
+	mockRepo.On("FindByInstitutionAndMask", ctx, actorID, institutionID, &mask).Return(foreignUA, nil)
+	mockRepo.On("UpdatePrimaryTypeAndSubtype", ctx, foreignUA.ID, actorID, newType, newSubtype).
+		Return(repository.ErrUserAccountNotFound)
+	mockRepo.On("UpdatePrimaryTypeAndSubtype", ctx, foreignUA.ID, victimID, newType, newSubtype).
+		Return(nil)
+
+	result, err := service.MatchOrCreate(ctx, actorID, institutionID, &mask, "BoA", newType, newSubtype)
+
+	mockRepo.AssertNotCalled(t, "UpdatePrimaryTypeAndSubtype", ctx, foreignUA.ID, victimID, newType, newSubtype)
+	assert.Error(t, err, "rewriting type/subtype on a row the actor does not own must not succeed silently")
+	assert.ErrorIs(t, err, repository.ErrUserAccountNotFound)
+	assert.Nil(t, result, "no account should be returned for a cross-tenant match")
+}
