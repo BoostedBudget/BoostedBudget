@@ -99,6 +99,13 @@ var (
 	reRowLock  = regexp.MustCompile(`(?i)FOR\s+(?:NO\s+KEY\s+)?UPDATE|FOR\s+SHARE`)
 	reLineComm = regexp.MustCompile(`(?m)//[^\n]*`)
 	reCTEName  = regexp.MustCompile(`(?i)(?:WITH|,)\s+"?([a-z_][a-z0-9_]*)"?\s+AS\s*\(`)
+	// Fragment matching: used by packageSQLFragments and fragmentsUsedIn.
+	reSingle = regexp.MustCompile("(?m)^(?:const|var)\\s+(\\w+)\\s*=\\s*`([^`]*)`")
+	reBlock  = regexp.MustCompile("(?ms)^(?:const|var)\\s*\\(\\n(.*?)^\\)")
+	reInner  = regexp.MustCompile("(?m)^\\t(\\w+)\\s*=\\s*`([^`]*)`")
+	// Called delegation: followed in writeTablesFor.
+	reCall       = regexp.MustCompile(`\b(?:[a-z]\w*\.)?([a-z]\w*)\s*\(`)
+	reMethodCall = regexp.MustCompile(`\.([A-Z]\w*)\s*\(`)
 )
 
 func normalizeSQL(s string) string { return reRowLock.ReplaceAllString(s, " ") }
@@ -154,9 +161,6 @@ func schemaTables(t *testing.T) map[string]bool {
 // under-reports both sides.
 func packageSQLFragments(t *testing.T, srcs map[string]string) map[string]string {
 	t.Helper()
-	reSingle := regexp.MustCompile("(?m)^(?:const|var)\\s+(\\w+)\\s*=\\s*`([^`]*)`")
-	reBlock := regexp.MustCompile("(?ms)^(?:const|var)\\s*\\(\\n(.*?)^\\)")
-	reInner := regexp.MustCompile("(?m)^\\t(\\w+)\\s*=\\s*`([^`]*)`")
 	out := map[string]string{}
 	for _, src := range srcs {
 		for _, m := range reSingle.FindAllStringSubmatch(src, -1) {
@@ -171,14 +175,24 @@ func packageSQLFragments(t *testing.T, srcs map[string]string) map[string]string
 	return out
 }
 
+// fragmentsUsedIn returns the SQL fragment values whose identifiers appear in text as word boundaries.
+// Consolidates the common pattern of finding which fragments are referenced in a text blob.
+func fragmentsUsedIn(text string, frags map[string]string) []string {
+	var result []string
+	for name, val := range frags {
+		if regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`).MatchString(text) {
+			result = append(result, val)
+		}
+	}
+	return result
+}
+
 func expandFragments(text string, frags map[string]string) string {
 	var sb strings.Builder
 	sb.WriteString(text)
-	for name, val := range frags {
-		if regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`).MatchString(text) {
-			sb.WriteString("\n")
-			sb.WriteString(val)
-		}
+	for _, val := range fragmentsUsedIn(text, frags) {
+		sb.WriteString("\n")
+		sb.WriteString(val)
 	}
 	return sb.String()
 }
@@ -308,10 +322,8 @@ func writeTablesFor(bodies map[funcKey]string, frags map[string]string, schema m
 		}
 	}
 	harvest(body)
-	for fname, val := range frags {
-		if regexp.MustCompile(`\b` + regexp.QuoteMeta(fname) + `\b`).MatchString(body) {
-			harvest(val)
-		}
+	for _, val := range fragmentsUsedIn(body, frags) {
+		harvest(val)
 	}
 
 	follow := func(rt, callee string) {
@@ -324,7 +336,6 @@ func writeTablesFor(bodies map[funcKey]string, frags map[string]string, schema m
 		}
 	}
 	// Unexported helpers and package-level funcs (AuditLogRepository.Log -> writeAuditLogEntry).
-	reCall := regexp.MustCompile(`\b(?:[a-z]\w*\.)?([a-z]\w*)\s*\(`)
 	for _, m := range reCall.FindAllStringSubmatch(body, -1) {
 		follow(recv, m[1])
 		follow("", m[1])
@@ -334,7 +345,6 @@ func writeTablesFor(bodies map[funcKey]string, frags map[string]string, schema m
 	// and calls txRepo.Create / txRepo.CreateCategory; a lowercase-only callee regex saw no SQL at
 	// all and reported the method unresolved. Followed only against the SAME receiver, so an
 	// injected collaborator's tables are not misattributed here.
-	reMethodCall := regexp.MustCompile(`\.([A-Z]\w*)\s*\(`)
 	for _, m := range reMethodCall.FindAllStringSubmatch(body, -1) {
 		follow(recv, m[1])
 	}
