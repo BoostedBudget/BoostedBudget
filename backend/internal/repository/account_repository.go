@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	ErrAccountNotFound          = errors.New("account not found")
-	ErrDuplicateAccount         = errors.New("account already exists for this user")
+	ErrAccountNotFound           = errors.New("account not found")
+	ErrDuplicateAccount          = errors.New("account already exists for this user")
 	ErrAccountOwnedByAnotherUser = errors.New("one or more accounts are already linked by another user")
 
 	// ErrAccountBatchTenantMismatch is returned when a batch write is handed a row whose UserID
@@ -242,6 +242,11 @@ func (r *accountRepository) decryptAccountPIIFields(a *domain.Account) error {
 // userID. An empty element UserID is a mismatch too: a zero value is exactly how a
 // mixed-tenant slice slips in, and treating it as "inherit the actor" would paper over the bug.
 func assertSingleTenantAccounts(userID string, accounts []domain.Account) error {
+	// An empty actor is never a valid tenant — see assertSingleTenantOverrides for the vacuous-match
+	// case this closes.
+	if userID == "" {
+		return fmt.Errorf("CreateBatch: %w: no acting user_id was supplied", ErrAccountBatchTenantMismatch)
+	}
 	for i := range accounts {
 		if accounts[i].UserID != userID {
 			return fmt.Errorf("CreateBatch: %w: element %d has user_id %q, expected %q",
@@ -521,7 +526,7 @@ func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requesting
 // migration 000007:22 — DEFAULT 'USD' but no NOT NULL; linked_items.institution_name: migration
 // 000006:14 — no NOT NULL, no default) but were scanned directly into bare (non-pointer) string
 // fields — "cannot scan NULL into *string". COALESCE guarantees a non-NULL scan target: 'USD' for
-// currency_code (matching the column's own default intent), '' for institution_name (the natural
+// currency_code (matching the column's own default intent), ” for institution_name (the natural
 // zero for this omitempty field, matching GetAccountsWithInstitutionFiltered's established rule
 // for the same column).
 func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {

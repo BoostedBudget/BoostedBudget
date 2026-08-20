@@ -44,10 +44,22 @@ type InvestmentSyncService interface {
 	SetAnalytics(a phclient.Analytics)
 
 	// SetCacheInvalidation wires cache generation bumping (setter injection, matching
-	// TransactionSyncService's convention). Issue #1531 Task 10b-2a-ii: GetNetWorthTrend is a
-	// cached read that folds in holdings/investment-transaction data, so a Plaid HOLDINGS or
-	// INVESTMENTS_TRANSACTIONS webhook — routed through ProcessWebhook, which calls SyncHoldings/
-	// SyncInvestmentTransactions below — must bump the synced user's cache generation once those
+	// TransactionSyncService's convention).
+	//
+	// ⚠ #1537 CORRECTION: the original rationale here — "GetNetWorthTrend is a cached read that folds
+	// in holdings/investment-transaction data" — is FALSE, and the M7 note on bumpCacheForUser below
+	// already contradicted it. GetNetWorthTrend reads balance_snapshots ONLY
+	// (analytics_service.go GetNetWorthTrend -> balanceSnapshotRepo.GetAggregatedHistory[ForHousehold]),
+	// and this service writes holdings / investment_transactions / portfolio_snapshots — none of which
+	// any cache.GetOrLoad-backed read observes. The four disposition entries that claimed
+	// ExplicitBump coverage from this bump are therefore now dispositionDerivedNoCacheImpact.
+	//
+	// The bump is KEPT deliberately: over-invalidation costs a cache miss and nothing else, and it is
+	// cheap insurance if a future cached read ever touches holdings. It is defence, not coverage — do
+	// not cite it as the reason a write is invalidated. Issue #1562 tracks the history.
+	//
+	// A Plaid HOLDINGS or INVESTMENTS_TRANSACTIONS webhook — routed through ProcessWebhook, which
+	// calls SyncHoldings/SyncInvestmentTransactions below — still bumps the synced user once those
 	// writes commit. Optional: nil is a safe no-op (every call site is nil-guarded).
 	SetCacheInvalidation(gens *cache.Generations)
 }

@@ -228,3 +228,58 @@ func TestDeletionRoute_RegisteredBeforeMiddleware_Reproduces1560(t *testing.T) {
 	assert.Zero(t, fake.SetCalls()+fake.SetNXCalls(),
 		"no bump can happen when the cache-invalidation middleware never ran either")
 }
+
+// TestDeletionRoute_RealClerkMiddleware_RefusesUnauthenticated closes a gap in the test above,
+// raised by adversarial review.
+//
+// The test above injects the Clerk context keys directly rather than running the real
+// NewClerkMiddleware, because verifying a Clerk signature needs external crypto. That is a
+// legitimate stub — but it means a production Clerk/identity regression that 401s every request
+// would leave that test GREEN. It proves the route is reachable THROUGH the chain and that the
+// downstream middlewares behave; it does not prove production authentication works.
+//
+// This companion runs the REAL NewClerkMiddleware (with a test secret and a stub identity repo, the
+// pattern from internal/huma/middleware/clerk_subscription_status_test.go) and asserts an
+// unauthenticated request is REFUSED. Together the two bracket the property: the real Clerk
+// middleware is in the chain and enforcing, and once a request carries valid auth context it reaches
+// the handler. Neither alone is sufficient, and #1560's criterion 1 — a 200 from a running server
+// with a genuine Clerk JWT — remains the only thing that closes the middle.
+func TestDeletionRoute_RealClerkMiddleware_RefusesUnauthenticated(t *testing.T) {
+	e := echo.New()
+	api := humaecho.NewV4(e, humaconfig.NewAPIConfig("test", "test"))
+
+	svc := &stubDeletionService{}
+	fake := redisclient.NewFake("cache")
+
+	// The REAL Clerk middleware. No identity repo interaction should be reached: with no bearer token
+	// and no MCP headers, it must refuse before resolving anything.
+	api.UseMiddleware(humamiddleware.NewClerkMiddleware(
+		"sk_test_secret", nil, nil, nil, nil, nil,
+	))
+	api.UseMiddleware(humamiddleware.NewReadOnlyMiddleware(nil))
+	api.UseMiddleware(humamiddleware.NewCacheInvalidationMiddleware(cache.NewGenerations(fake), nil, nil))
+	operations.RegisterDeletionRoutes(api, operations.NewDeletionHandler(svc))
+
+	// A bearer token that is present but invalid, NOT a bare unauthenticated request. That
+	// distinction is what makes this falsifiable: with no Authorization header at all, the input
+	// resolver would 401 on a missing UserIDKey whether or not the Clerk middleware ran — so the
+	// test would pass with Clerk deleted from the chain, proving nothing. Probed and confirmed.
+	// A malformed token forces Clerk itself to answer, and its message is attributable to it.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/user/delete", nil)
+	req.Header.Set("Authorization", "Bearer not-a-real-jwt")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	assert.GreaterOrEqual(t, rec.Code, 400,
+		"a request with an invalid bearer token must be refused; got %d: %s. A 2xx here would mean the "+
+			"deletion endpoint is reachable without valid authentication.", rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "Invalid or expired token",
+		"the refusal must come from the REAL Clerk middleware, which is the only thing that can produce "+
+			"this message. If it instead reads like the input resolver's 'User not authenticated', Clerk "+
+			"is not in the chain and this test would otherwise pass vacuously — the same trap the "+
+			"read-only assertion above had to be rewritten to avoid. Body: %s", rec.Body.String())
+	assert.False(t, svc.called,
+		"the deletion service must never be reached by an unauthenticated request")
+	assert.Zero(t, fake.SetCalls()+fake.SetNXCalls(),
+		"no cache generation bump may be issued for a request that was refused")
+}

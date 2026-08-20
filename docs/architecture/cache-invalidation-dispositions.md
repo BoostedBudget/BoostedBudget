@@ -203,8 +203,9 @@ and would therefore have passed under the bug it guarded.
 ### Where production-issued bumps ARE proven
 
 A second correction, because I got this wrong too and in the opposite direction: an earlier version
-of this section implied no test observed a production-issued bump. **Twenty-four do**, across eight
-files in `internal/services/`, each driving a real service method with a real `cache.Generations`
+of this section implied no test observed a production-issued bump. **At least twenty-six do**, across nine
+files in `internal/services/` (my first count said 24 across 8 — corrected by review, which found two
+more in `deletion_service_cache_purge_test.go`), each driving a real service method with a real `cache.Generations`
 backed by `redisclient.Fake` and asserting the generation actually moved — not a "Bump was called"
 spy. They predate this work; #1531 built them. They cover the fingerprint/dispossessed-owner
 cross-user path, the household `RemoveMember` / `AcceptInvite` / `ForceDisband` member fan-outs,
