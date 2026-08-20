@@ -29,8 +29,12 @@
 # exceed bun's default. The second part is what makes it more than a grep: if a future bun release
 # starts honouring bunfig (or stops honouring the flag), test 3 is what notices.
 #
-# Deliberately NOT asserted: the specific value 30000. The repo's intent is "comfortably more than
-# 5s"; pinning the exact number would fail on a legitimate tuning change.
+# The floor is 15000ms, not "anything above bun's 5000ms default" (Codex review, #1537 round 6).
+# A `--timeout 6000` would clear both a >5000 check and the 5.6s probe, yet the CI failure that
+# started all of this took 9910ms — so the guard would have passed a configuration that still breaks
+# the build. The floor must cover the observed duration with headroom.
+#
+# Still NOT asserted: the exact value 30000. Pinning it would fail a legitimate tuning change.
 
 set -uo pipefail
 
@@ -95,21 +99,32 @@ echo "Test 3: the EFFECTIVE per-test timeout the runner uses exceeds bun's 5s de
 # `bun test` it still reported "the runner passes --timeout 30000". Caught by the axis-1 mutation.
 # awk extracts the `bun test` continuation block (a run of lines ending in backslash) and stops at the
 # first line that does not, so only real command text is searched.
-configured=$(awk '/^bun test/{f=1} f{print; if ($0 !~ /\\$/) exit}' "$WEB_DIR/scripts/test-regular.sh" \
+# Comments are stripped BEFORE searching, and the command may be indented or env-prefixed. Codex
+# found both holes: a trailing `# --timeout 30000` on the command's last line satisfied the old
+# version, and `^bun test` missed `  bun test` or `env bun test`.
+configured=$(awk '/(^|[[:space:]])bun[[:space:]]+test([[:space:]]|$)/{f=1} f{sub(/#.*/, ""); print; if ($0 !~ /\\[[:space:]]*$/) exit}' \
+    "$WEB_DIR/scripts/test-regular.sh" \
     | grep -oE -- "--timeout[[:space:]]+[0-9]+" | head -1 | grep -oE "[0-9]+")
 if [ -z "${configured:-}" ]; then
     bad "scripts/test-regular.sh passes no --timeout, so the suite runs at bun's 5s default"
-elif [ "$configured" -le 5000 ]; then
-    bad "scripts/test-regular.sh passes --timeout $configured, which is not above bun's 5000ms default"
+elif [ "$configured" -lt 15000 ]; then
+    bad "scripts/test-regular.sh passes --timeout $configured. That clears bun's 5000ms default but not the observed slow case: the CI failure this guard exists for took 9910ms. Use at least 15000."
 else
-    ok "the runner passes --timeout $configured, above bun's 5000ms default"
+    ok "the runner passes --timeout $configured (>= 15000, covering the observed 9910ms case)"
 
     if ! command -v bun >/dev/null 2>&1; then
-        echo "  SKIP: bun not on PATH — cannot verify the value has effect"
+        # Not a SKIP. The static check alone can pass while the flag has no effect, which is the
+        # entire failure this guard exists to catch — and a SKIP left `fail` at zero, so the suite
+        # reported success having verified nothing (Codex review).
+        bad "bun is not on PATH, so the EFFECT of --timeout was never verified. This repo requires bun; a green run here would be meaningless."
     else
+        # Trap FIRST, then create: installing it afterwards leaves a window where a signal
+        # arriving between the two lines orphans the directory (Codex review). The guard is
+        # "no residue on any signal bash can handle" — SIGKILL is still unhandleable, so this is
+        # not literally guaranteed, and the earlier comment claiming it was is corrected here.
+        tmp=""
+        trap 'if [ -n "${tmp:-}" ]; then rm -rf "$tmp"; fi' EXIT INT TERM
         tmp=$(mktemp -d)
-        trap 'rm -rf "$tmp"' EXIT   # guaranteed: an interrupted run leaves nothing behind, and
-                                    # nothing is ever written under apps/web/src
         cat > "$tmp/effective_timeout_probe.test.ts" <<'PROBE'
 import { test, expect } from 'bun:test'
 
