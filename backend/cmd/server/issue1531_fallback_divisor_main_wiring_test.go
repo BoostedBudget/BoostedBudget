@@ -50,7 +50,7 @@ func TestWiring_RateLimitFallbackDivisorIsActuallyAppliedAtCallSite(t *testing.T
 		resp, err := srv.Client().Get(srv.URL + "/")
 		require.NoError(t, err)
 		statuses = append(statuses, resp.StatusCode)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	// RateLimitIP=100 divided by RateLimitFallbackDivisor=25 == 4: the first 4 requests must

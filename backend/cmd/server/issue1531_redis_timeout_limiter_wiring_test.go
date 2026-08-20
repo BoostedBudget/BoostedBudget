@@ -68,7 +68,7 @@ func TestWiring_RedisTimeoutMsIsActuallyAppliedToTheLimiterPrimaryTimeout(t *tes
 
 	resp, err := srv.Client().Get(srv.URL + "/")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode,
 		"RedisTimeoutMs=200 must reach the limiter's PrimaryTimeout so an 80ms primary's own "+

@@ -610,3 +610,47 @@ func TestMortgageLiabilityRepository_ReplaceForAccount_RejectsEmptyActor(t *test
 		})
 	}
 }
+
+// TestMortgageLiabilityRepository_ReplaceForAccount_RejectsForeignAccount proves the account half of the DELETE/INSERT
+// split is enforced too (#1568): the DELETE is scoped to the scalar accountID while the INSERT
+// writes liability.AccountID, so replacing account A with a mortgage liability carrying account B cleared A
+// and attributed the row to B. Same tenant, so not a leak — but the row moved between the user's
+// own accounts, which "replace for account" must never do.
+func TestMortgageLiabilityRepository_ReplaceForAccount_RejectsForeignAccount(t *testing.T) {
+	mock, repo := setupMortgageLiabilityMockDB(t)
+	defer mock.Close()
+
+	userID := uuid.New().String()
+	accountA := uuid.New().String()
+	accountB := uuid.New().String()
+	liability := makeMortgageLiability(userID, accountB) // belongs to a different account of the same user
+
+	// No mock expectations: not a single statement may run.
+	err := repo.ReplaceForAccount(context.Background(), accountA, userID, liability)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReplaceAccountMismatch)
+	assert.Contains(t, err.Error(), "mortgageLiabilityRepository.ReplaceForAccount")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestMortgageLiabilityRepository_ReplaceForAccount_RejectsEmptyAccountID closes the vacuous-match hole on the account
+// axis and covers the nil (delete-only) path, whose DELETE is itself scoped by account_id.
+func TestMortgageLiabilityRepository_ReplaceForAccount_RejectsEmptyAccountID(t *testing.T) {
+	for name, liability := range map[string]*domain.MortgageLiability{
+		"unattributed liability": makeMortgageLiability("u", ""),
+		"delete only":            nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			mock, repo := setupMortgageLiabilityMockDB(t)
+			defer mock.Close()
+
+			err := repo.ReplaceForAccount(context.Background(), "", "u", liability)
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrReplaceAccountMismatch)
+			assert.Contains(t, err.Error(), "no account_id")
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}

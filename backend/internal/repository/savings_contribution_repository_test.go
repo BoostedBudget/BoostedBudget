@@ -29,15 +29,6 @@ var contributionColumns = []string{
 	"managed_by_reconciliation", "confirmed_by_user", "occurred_on", "created_at", "updated_at",
 }
 
-// buildContribRow returns a row suitable for WillReturnRows with contributionColumns.
-func buildContribRow(id, goalID string, txnID *string, amount float64, source, status string) []interface{} {
-	now := time.Now()
-	return []interface{}{
-		id, goalID, txnID, amount, source, status,
-		false, false, "2024-01-15", now, now,
-	}
-}
-
 // TestSavingsContributionRepository_Insert_Basic tests a simple contribution insert.
 func TestSavingsContributionRepository_Insert_Basic(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)

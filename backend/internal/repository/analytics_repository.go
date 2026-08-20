@@ -123,7 +123,7 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 		for _, at := range filters.AccountTypes {
 			args = append(args, at)
 		}
-		argIndex += len(filters.AccountTypes)
+		argIndex += len(filters.AccountTypes) //nolint:ineffassign // kept so a filter added below inherits the correct arg index
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
@@ -173,7 +173,7 @@ func (r *analyticsRepository) getCashFlowAggregationHousehold(ctx context.Contex
 		for _, at := range filters.AccountTypes {
 			args = append(args, at)
 		}
-		argIndex += len(filters.AccountTypes)
+		argIndex += len(filters.AccountTypes) //nolint:ineffassign // kept so a filter added below inherits the correct arg index
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
@@ -237,7 +237,7 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		for _, at := range filters.AccountTypes {
 			args = append(args, at)
 		}
-		argIndex += len(filters.AccountTypes)
+		argIndex += len(filters.AccountTypes) //nolint:ineffassign // kept so a filter added below inherits the correct arg index
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
@@ -321,7 +321,7 @@ func (r *analyticsRepository) getCashFlowGroupedHousehold(ctx context.Context, r
 		for _, at := range filters.AccountTypes {
 			args = append(args, at)
 		}
-		argIndex += len(filters.AccountTypes)
+		argIndex += len(filters.AccountTypes) //nolint:ineffassign // kept so a filter added below inherits the correct arg index
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 

@@ -73,7 +73,11 @@ func main() {
 		log.Printf("⚠️  OTEL init failed: %v", err)
 		shutdownTracer = func(ctx context.Context) error { return nil }
 	}
-	defer shutdownTracer(context.Background())
+	defer func() {
+		if err := shutdownTracer(context.Background()); err != nil {
+			log.Printf("⚠️  OTEL tracer shutdown failed: %v", err)
+		}
+	}()
 
 	// Create unified logger
 	appLogger := observability.NewLogger(observability.LogConfig{

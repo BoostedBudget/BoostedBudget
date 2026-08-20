@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -406,8 +407,14 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 // Uses regex word-boundary to avoid partial matches ($1 inside $10, $11 etc.).
 func renumberPlaceholders(clause string, start int) string {
 	return placeholderRe.ReplaceAllStringFunc(clause, func(m string) string {
-		var n int
-		fmt.Sscanf(m, "$%d", &n)
+		// placeholderRe guarantees m is "$" followed by digits, so the only way Atoi can
+		// fail is an integer overflow on an absurdly long run of digits. Leave such a
+		// match untouched rather than emitting "$<start-1>" from a zero value, which
+		// would silently point the clause at the wrong argument.
+		n, err := strconv.Atoi(m[1:])
+		if err != nil {
+			return m
+		}
 		return fmt.Sprintf("$%d", n+start-1)
 	})
 }
