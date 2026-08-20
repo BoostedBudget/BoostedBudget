@@ -122,7 +122,22 @@ cached-read tables  ∩  method's write tables  ==  ∅   ⇒   NoCacheImpact
 ```
 
 A derived entry has no prose to rot, and it **breaks** the day someone adds a cached read over a
-table it writes. Prose cannot do that. 79 of the 127 are discharged this way (80 initially; LinkedItemRepository.Update was later moved here from a prose entry whose every factual clause turned out to be false, and two DELETE-shaped entries moved OUT once the derivation became FK-cascade aware).
+table it writes. Prose cannot do that. **78** of the 127 are discharged this way. That number has been wrong in this document twice (80, then 79) because it was tracked by hand as entries moved in and out; it is now re-derived mechanically by diffing the base and HEAD versions of the guard's map, and the derivation sums to exactly 127:
+
+| at HEAD | count |
+|---|---|
+| `dispositionDerivedNoCacheImpact` | 78 |
+| `dispositionCoveredByHTTPMiddleware` | 28 |
+| `dispositionNoCacheImpact` | 5 |
+| `dispositionExplicitBump` | 4 |
+| method deleted (#1565) | 12 |
+| **total** | **127** |
+
+Two reconciliations worth recording, because both were reported as contradictions:
+- **12 vs 13 deleted.** #1565 removed **13** repository methods; **12** of them were among the 127. The thirteenth was already classified before this branch, so it never counted against the unclassified set. Both figures are right about different sets.
+- **"79 derived / 45 human-reviewed"** (the PR's original table) summed to 124, not 127, and was wrong on both terms. Human-classified among the 127 is **37** (28 + 5 + 4).
+
+`LinkedItemRepository.Update` was moved into the derived set from a prose entry whose every factual clause turned out to be false, and two DELETE-shaped entries moved OUT once the derivation became FK-cascade aware — that churn is why a hand-tracked count drifted.
 
 Both sides expand package-level SQL constants and follow intra-package delegation, because neither
 side is visible from literal text alone. Getting the write side to resolve every method required

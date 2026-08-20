@@ -754,3 +754,256 @@ func TestAnalyticsRepository_GetSpendingByCategory_Household_IncludesReplacedAcc
 	assert.Equal(t, 2, results[0].TransactionCount,
 		"both transactions are real spending regardless of the account's current link state")
 }
+
+// ─── Non-active account inclusion across ALL household join sites ────────────────
+//
+// The test above pins getSpendingByCategoryHousehold only. #1369 reintroduced
+// `AND a.status = 'active'` on NINE household join sites; every other pre-existing
+// household test seeds status='active' accounts exclusively, so re-adding the predicate
+// to any of the other eight left the suite green. The tests below close that hole, one
+// per remaining join site:
+//
+//	analytics_repository.go join site -> unexported variant -> exported method
+//	~168   getCashFlowAggregationHousehold      -> GetCashFlowAggregation
+//	~319   getCashFlowGroupedHousehold          -> GetCashFlowGrouped
+//	~874   getSpendingByMerchantHousehold       -> GetSpendingByMerchant
+//	~987   getSpendingTrendsHousehold           -> GetSpendingTrends
+//	~1133  getAverageMonthlySpendHousehold      -> GetAverageMonthlySpend
+//	~1269  getSavingsRateForPeriodHousehold     -> GetSavingsRateForPeriod
+//	~1375  getMonthOverMonthSpendingHousehold   -> GetMonthOverMonthSpending
+//	~1566  getIncomeSourceBreakdownHousehold    -> GetIncomeSourceBreakdown
+//
+// Both non-active statuses are covered across the set. 'expired' matters especially:
+// AccountRepository.ExpireAccountsByFingerprint writes exactly that status in production
+// (the cross-user fingerprint-collision path), so 'expired' — not 'replaced' — is the
+// status real users' dropped history actually carries.
+
+// markAccountNonActive flips an accounts row to a non-active status. accounts_valid_status
+// admits exactly ('active','replaced','expired'); accounts_replaced_at_consistency
+// additionally requires replaced_at alongside status='replaced', so set it for that case.
+func markAccountNonActive(t *testing.T, pool *pgxpool.Pool, accountID, status string) {
+	t.Helper()
+	var err error
+	if status == "replaced" {
+		_, err = pool.Exec(context.Background(),
+			`UPDATE accounts SET status = 'replaced', replaced_at = now() WHERE id = $1`, accountID)
+	} else {
+		_, err = pool.Exec(context.Background(),
+			`UPDATE accounts SET status = $2 WHERE id = $1`, accountID, status)
+	}
+	require.NoError(t, err, "mark account %s", status)
+
+	// Assert the mutation actually landed — a silently-matched-nothing UPDATE would make
+	// every assertion below vacuous (the account would still be 'active').
+	var got string
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT status FROM accounts WHERE id = $1`, accountID).Scan(&got))
+	require.Equal(t, status, got, "accounts.status must actually be %s for this test to mean anything", status)
+}
+
+// nonActiveHouseholdFixture builds a single-member household owning two shared accounts:
+// one 'active', one flipped to the given non-active status. Both carry spend/income, so a
+// reintroduced `a.status = 'active'` predicate shows up as a missing contribution.
+func nonActiveHouseholdFixture(t *testing.T, pool *pgxpool.Pool, status string) (owner, hh string, activeAcct, staleAcct householdTestFixture) {
+	t.Helper()
+	owner = insertTestUser(t, pool)
+	hh = insertTestHousehold(t, pool, owner)
+	activeAcct = setupHouseholdMemberAccount(t, pool, owner)
+	staleAcct = setupHouseholdMemberAccount(t, pool, owner)
+
+	now := time.Now().UTC()
+	insertHouseholdShare(t, pool, hh, activeAcct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+	insertHouseholdShare(t, pool, hh, staleAcct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+
+	markAccountNonActive(t, pool, staleAcct.AccountID, status)
+	return owner, hh, activeAcct, staleAcct
+}
+
+func TestAnalyticsRepository_GetCashFlowAggregation_Household_IncludesExpiredAccountTransactions(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	// 'expired' is what ExpireAccountsByFingerprint writes in production.
+	owner, hh, activeAcct, staleAcct := nonActiveHouseholdFixture(t, pool, "expired")
+	now := time.Now().UTC()
+	insertHouseholdTransaction(t, pool, owner, activeAcct.AccountID, activeAcct.LinkedItemID, 80, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, owner, staleAcct.AccountID, staleAcct.LinkedItemID, 20, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, owner, staleAcct.AccountID, staleAcct.LinkedItemID, -500, now.AddDate(0, 0, -5), "INCOME")
+
+	filters := domain.CashFlowFilters{
+		StartDate:      now.AddDate(0, -1, 0),
+		EndDate:        now,
+		HouseholdScope: &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}},
+	}
+
+	agg, err := repo.GetCashFlowAggregation(ctx, owner, filters)
+	require.NoError(t, err)
+	assert.InDelta(t, 100, agg.Expenses, 0.01,
+		"expired account's $20 must join the active account's $80; 80 means the household cash-flow "+
+			"join is filtering accounts.status='active' and dropping post-expiry history")
+	assert.InDelta(t, 500, agg.Income, 0.01,
+		"income recorded on the now-expired account is immutable history and must still count")
+}
+
+func TestAnalyticsRepository_GetCashFlowGrouped_Household_IncludesReplacedAccountTransactions(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner, hh, activeAcct, staleAcct := nonActiveHouseholdFixture(t, pool, "replaced")
+	now := time.Now().UTC()
+	sameDay := now.AddDate(0, 0, -5)
+	insertHouseholdTransaction(t, pool, owner, activeAcct.AccountID, activeAcct.LinkedItemID, 80, sameDay, "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, owner, staleAcct.AccountID, staleAcct.LinkedItemID, 20, sameDay, "FOOD_AND_DRINK")
+
+	filters := domain.CashFlowFilters{
+		StartDate:      now.AddDate(0, -1, 0),
+		EndDate:        now,
+		Grouping:       "daily",
+		HouseholdScope: &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}},
+	}
+
+	results, err := repo.GetCashFlowGrouped(ctx, owner, filters)
+	require.NoError(t, err)
+
+	var total float64
+	for _, r := range results {
+		total += r.Expenses
+	}
+	assert.InDelta(t, 100, total, 0.01,
+		"replaced account's $20 must appear in the grouped household series alongside the active $80")
+}
+
+func TestAnalyticsRepository_GetSpendingByMerchant_Household_IncludesExpiredAccountTransactions(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner, hh, activeAcct, staleAcct := nonActiveHouseholdFixture(t, pool, "expired")
+	now := time.Now().UTC()
+	insertHouseholdTransaction(t, pool, owner, activeAcct.AccountID, activeAcct.LinkedItemID, 80, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, owner, staleAcct.AccountID, staleAcct.LinkedItemID, 20, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+
+	filters := domain.SpendingFilters{
+		StartDate:      now.AddDate(0, -1, 0),
+		EndDate:        now,
+		HouseholdScope: &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}},
+	}
+
+	results, err := repo.GetSpendingByMerchant(ctx, owner, filters, 10)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.InDelta(t, 100, results[0].Total, 0.01,
+		"merchant spend on an expired account is real history and must stay in the household total")
+	assert.Equal(t, 2, results[0].TransactionCount)
+}
+
+func TestAnalyticsRepository_GetSpendingTrends_Household_IncludesReplacedAccountTransactions(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner, hh, activeAcct, staleAcct := nonActiveHouseholdFixture(t, pool, "replaced")
+	now := time.Now().UTC()
+	insertHouseholdTransaction(t, pool, owner, activeAcct.AccountID, activeAcct.LinkedItemID, 80, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, owner, staleAcct.AccountID, staleAcct.LinkedItemID, 20, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+
+	filters := domain.SpendingFilters{
+		StartDate:      now.AddDate(0, -1, 0),
+		EndDate:        now,
+		HouseholdScope: &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}},
+	}
+
+	results, err := repo.GetSpendingTrends(ctx, owner, filters)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.InDelta(t, 100, results[0].Total, 0.01,
+		"a re-link must not put a step-change in the household trend line — pre-relink spend still counts")
+}
+
+func TestAnalyticsRepository_GetAverageMonthlySpend_Household_IncludesExpiredAccountTransactions(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner, hh, activeAcct, staleAcct := nonActiveHouseholdFixture(t, pool, "expired")
+	now := time.Now().UTC()
+	insertHouseholdTransaction(t, pool, owner, activeAcct.AccountID, activeAcct.LinkedItemID, 80, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, owner, staleAcct.AccountID, staleAcct.LinkedItemID, 20, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+
+	filters := domain.SpendingFilters{
+		StartDate:      now.AddDate(0, -1, 0),
+		EndDate:        now,
+		HouseholdScope: &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}},
+	}
+
+	row, err := repo.GetAverageMonthlySpend(ctx, owner, filters)
+	require.NoError(t, err)
+	assert.InDelta(t, 100, row.Total, 0.01,
+		"expired account's $20 must be part of the household average-monthly-spend base")
+}
+
+func TestAnalyticsRepository_GetSavingsRateForPeriod_Household_IncludesReplacedAccountTransactions(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner, hh, activeAcct, staleAcct := nonActiveHouseholdFixture(t, pool, "replaced")
+	now := time.Now().UTC()
+	insertHouseholdTransaction(t, pool, owner, activeAcct.AccountID, activeAcct.LinkedItemID, -1000, now.AddDate(0, 0, -5), "INCOME")
+	insertHouseholdTransaction(t, pool, owner, staleAcct.AccountID, staleAcct.LinkedItemID, -500, now.AddDate(0, 0, -5), "INCOME")
+	insertHouseholdTransaction(t, pool, owner, staleAcct.AccountID, staleAcct.LinkedItemID, 200, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+	row, err := repo.GetSavingsRateForPeriod(ctx, owner, now.AddDate(0, -1, 0), now, scope)
+	require.NoError(t, err)
+	assert.InDelta(t, 1500, row.Income, 0.01,
+		"paycheques deposited into an account that was later replaced still happened")
+	assert.InDelta(t, 200, row.Expenses, 0.01,
+		"and so did the spending on it — dropping it would inflate the household savings rate")
+}
+
+func TestAnalyticsRepository_GetMonthOverMonthSpending_Household_IncludesExpiredAccountTransactions(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner, hh, activeAcct, staleAcct := nonActiveHouseholdFixture(t, pool, "expired")
+	now := time.Now().UTC()
+	insertHouseholdTransaction(t, pool, owner, activeAcct.AccountID, activeAcct.LinkedItemID, 80, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, owner, staleAcct.AccountID, staleAcct.LinkedItemID, 20, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+
+	filters := domain.SpendingFilters{
+		HouseholdScope: &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}},
+	}
+
+	results, err := repo.GetMonthOverMonthSpending(ctx, owner, now.AddDate(0, -1, 0), "", filters)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.InDelta(t, 100, results[0].Total, 0.01,
+		"an expiry mid-comparison must not fabricate a month-over-month drop in household spend")
+}
+
+func TestAnalyticsRepository_GetIncomeSourceBreakdown_Household_IncludesReplacedAccountTransactions(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner, hh, activeAcct, staleAcct := nonActiveHouseholdFixture(t, pool, "replaced")
+	now := time.Now().UTC()
+	insertHouseholdTransaction(t, pool, owner, activeAcct.AccountID, activeAcct.LinkedItemID, -1000, now.AddDate(0, 0, -5), "INCOME")
+	insertHouseholdTransaction(t, pool, owner, staleAcct.AccountID, staleAcct.LinkedItemID, -500, now.AddDate(0, 0, -5), "INCOME")
+
+	filters := domain.SpendingFilters{
+		StartDate:      now.AddDate(0, -1, 0),
+		EndDate:        now,
+		HouseholdScope: &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}},
+	}
+
+	results, err := repo.GetIncomeSourceBreakdown(ctx, owner, filters)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.InDelta(t, 1500, results[0].Total, 0.01,
+		"income received on a since-replaced account must remain in the household income breakdown")
+}
