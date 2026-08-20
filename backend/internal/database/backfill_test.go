@@ -76,7 +76,7 @@ func TestEncryptWithBlind_LowerCaseNormalization(t *testing.T) {
 
 // TestBackfillEncryption_NilInputs verifies nil inputs are handled gracefully
 func TestBackfillEncryption_NilInputs(t *testing.T) {
-	err := BackfillEncryption(nil, nil, nil)
+	err := BackfillEncryption(context.Background(), nil, nil)
 	assert.NoError(t, err, "nil inputs should be a no-op")
 }
 

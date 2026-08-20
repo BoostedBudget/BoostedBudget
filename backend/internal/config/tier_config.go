@@ -400,7 +400,11 @@ func (tc *TierConfig) GetTierByPriceID(priceID string) (domain.TierName, error) 
 // If configPath is empty, uses default path
 func NewTierConfig(configPath string) (*TierConfig, error) {
 	if configPath != "" {
-		os.Setenv("SUBSCRIPTION_TIERS_CONFIG", configPath)
+		// Must not be ignored: if the override fails to stick, LoadTierConfig would
+		// silently fall back to the default catalogue (possibly sandbox Paddle price IDs).
+		if err := os.Setenv("SUBSCRIPTION_TIERS_CONFIG", configPath); err != nil {
+			return nil, fmt.Errorf("set SUBSCRIPTION_TIERS_CONFIG=%s: %w", configPath, err)
+		}
 	}
 	return LoadTierConfig()
 }
