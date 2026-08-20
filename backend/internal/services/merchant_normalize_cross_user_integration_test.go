@@ -15,8 +15,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// #1537 — regression test for a CONFIRMED cross-user cache bug, and the step-9 template for
-// blast-radius evidence.
+// #1537 — regression test for a CONFIRMED cross-user cache bug.
+//
+// ⚠ WHAT THIS DOES NOT PROVE, corrected after review: this is NOT an invalidation harness, and an
+// earlier version of this comment implied it was. It calls the repository method directly rather
+// than driving transactionSyncService.SyncTransactions, and it issues the bump itself below — so
+// deleting bumpCacheForSync from transaction_sync_service.go entirely would leave this test GREEN.
+// It cannot detect a missing production bump, which is precisely the criticism this comment levels
+// at the parity harness a few lines down.
+//
+// What it DOES prove, and what its load-bearing assertion is: an existing merchants row's
+// normalized_name is not rewritten by another user's sync (require.Nil on the stored value). That
+// makes the staleness class unreachable at the source, which is stronger than invalidating after
+// the fact. For a test that observes a genuinely production-issued bump, see
+// cmd/server/deletion_route_middleware_integration_test.go.
 //
 // The existing parity harness cannot detect a missing production bump: its `Bump` field is
 // documented as "the production invalidation hook" but resolves to bumpPersonal(), i.e.
