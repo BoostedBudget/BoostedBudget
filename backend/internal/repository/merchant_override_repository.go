@@ -31,10 +31,10 @@ type querier interface {
 // and toFlatten slices before calling BulkApply; the repository is a pure write.
 // Self-merges (src == Canonical) must be excluded by the caller.
 type BulkMergeGroup struct {
-	Sources      []string   // merchant IDs to merge into Canonical (self-merges excluded)
-	Canonical    string     // resolved canonical target merchant ID
-	ToFlatten    []string   // IDs whose inbound merge chains must be re-pointed to Canonical
-	DisplayNames []*string  // parallel slice to Sources; nil entries preserve existing names
+	Sources      []string  // merchant IDs to merge into Canonical (self-merges excluded)
+	Canonical    string    // resolved canonical target merchant ID
+	ToFlatten    []string  // IDs whose inbound merge chains must be re-pointed to Canonical
+	DisplayNames []*string // parallel slice to Sources; nil entries preserve existing names
 }
 
 // MerchantOverrideRepository handles data access for merchant_name_overrides.
@@ -313,6 +313,12 @@ func bulkUpsertTx(ctx context.Context, q querier, userID string, overrides []dom
 // slice slips in, and treating it as "inherit the actor" would paper over the bug. Mismatched
 // elements are never silently skipped — a silent skip is worse than a loud failure.
 func assertSingleTenantOverrides(userID string, overrides []domain.MerchantNameOverride) error {
+	// An empty actor is never a valid tenant. Without this the comparison below is vacuous when both
+	// sides are empty — assertSingleTenantOverrides("", []{UserID: ""}) passed, waving through a batch
+	// with no owner and leaving the DB's own constraints as the only guard (adversarial review).
+	if userID == "" {
+		return fmt.Errorf("BulkApply: %w: no acting user_id was supplied", ErrOverrideTenantMismatch)
+	}
 	for i := range overrides {
 		if overrides[i].UserID != userID {
 			return fmt.Errorf("BulkApply: %w: element %d has user_id %q, expected %q",

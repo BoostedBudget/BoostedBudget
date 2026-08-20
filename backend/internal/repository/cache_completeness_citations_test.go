@@ -299,7 +299,12 @@ func scanOperations(t *testing.T) map[string]registeredOperation {
 						d2--
 					}
 				}
-				op.secured = strings.Contains(body[k+1:e2-1], "{")
+				// Strip line comments first: raw brace counting would accept
+				//     Security: []map[string][]string{ // TODO: add {clerk} back
+				//     },
+				// as secured on the strength of a brace inside a comment (adversarial review, nit).
+				inner := reLineComm.ReplaceAllString(body[k+1:e2-1], "")
+				op.secured = strings.Contains(inner, "{")
 			}
 			out[id[1]] = op
 		}

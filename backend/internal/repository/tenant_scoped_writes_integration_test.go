@@ -210,3 +210,37 @@ func TestUserAccountRepository_UpdatePrimaryTypeAndSubtype_CrossTenantRow_Untouc
 	assert.Equal(t, "depository", primaryType, "the other tenant's primary_type must not change")
 	assert.Equal(t, "checking", primarySubtype, "the other tenant's primary_subtype must not change")
 }
+
+// TestTenantAssertions_EmptyActor_Rejected closes a vacuous-match hole in the #1566 assertions,
+// raised by adversarial review.
+//
+// Both assertions compared element.UserID against the passed userID and nothing else, so
+// assertSingleTenantOverrides("", []{UserID: ""}) and assertSingleTenantAccounts("", []{UserID: ""})
+// PASSED — no mismatch exists when both sides are empty. The tenancy check would then wave through a
+// batch with no owner at all, leaving the DB's own NOT NULL/FK constraints as the only thing standing
+// between that and rows nobody owns. An empty actor is never a valid tenant, so the assertion should
+// say so rather than relying on a downstream constraint to notice.
+//
+// Not integration-tagged in spirit — it needs no DB — but it lives here to sit beside the other
+// tenancy tests it belongs with.
+func TestTenantAssertions_EmptyActor_Rejected(t *testing.T) {
+	t.Run("overrides", func(t *testing.T) {
+		err := assertSingleTenantOverrides("", []domain.MerchantNameOverride{{UserID: ""}})
+		require.Error(t, err, "an empty actor must be rejected outright, not matched vacuously "+
+			"against equally-empty element user_ids")
+		assert.ErrorIs(t, err, ErrOverrideTenantMismatch)
+	})
+
+	t.Run("accounts", func(t *testing.T) {
+		err := assertSingleTenantAccounts("", []domain.Account{{UserID: ""}})
+		require.Error(t, err, "an empty actor must be rejected outright, not matched vacuously "+
+			"against equally-empty element user_ids")
+		assert.ErrorIs(t, err, ErrAccountBatchTenantMismatch)
+	})
+
+	t.Run("a real actor with a real matching element still passes", func(t *testing.T) {
+		// Guards against over-correcting into rejecting everything.
+		require.NoError(t, assertSingleTenantOverrides("u1", []domain.MerchantNameOverride{{UserID: "u1"}}))
+		require.NoError(t, assertSingleTenantAccounts("u1", []domain.Account{{UserID: "u1"}}))
+	})
+}

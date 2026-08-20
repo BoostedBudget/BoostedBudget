@@ -283,7 +283,17 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 		        a.type AS account_type
 		    FROM balance_snapshots bs
 		    JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
-		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id
+		    -- #1561 CORRECTION: this status filter is NOT the history filter #1561 removed from the
+		    -- analytics joins, and must NOT be removed again. Snapshots are already selected by
+		    -- bs.user_account_id, so every member of a re-link chain contributes its snapshots
+		    -- regardless of status — no history is dropped here. This join exists solely to supply
+		    -- a.type for the per-type grouping, and it matches EVERY chain member sharing that
+		    -- user_account_id. Without the filter, DISTINCT ON breaks the tie on a.id (an arbitrary
+		    -- UUID) and can attribute the balance to a REPLACED member's type — and with an
+		    -- accountTypes filter applied, drop it from the result entirely. The ACTIVE row's type is
+		    -- the authoritative one. Pinned by
+		    -- TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType.
+		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id AND a.status = 'active'
 		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $5::date
 		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.fingerprint,

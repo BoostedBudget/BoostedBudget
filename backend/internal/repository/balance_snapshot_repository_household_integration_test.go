@@ -397,3 +397,72 @@ func TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccount
 	assert.False(t, found222, "member's pre-share data must be excluded even though owner's data from the same era is included")
 	assert.True(t, found333, "member's post-share data must be included")
 }
+
+// TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType is the regression test for a
+// defect introduced while fixing #1561, and caught by adversarial review — not by any existing test.
+//
+// #1561 removed `AND a.status = 'active'` from the household analytics joins, correctly: there the
+// filter was dropping pre-relink transaction history that personal scope deliberately keeps.
+//
+// Applying the same removal to THIS query was wrong, because the filter plays a different role here.
+// Balance snapshots are already selected by `bs.user_account_id`, so every member of a re-link chain
+// contributes its snapshots regardless of status — no history is being dropped. The accounts join
+// exists solely to supply `a.type` for the per-type grouping, and it matches EVERY chain member
+// sharing that `user_account_id`. With the status filter gone, `DISTINCT ON` breaks the tie on
+// `a.id` — an arbitrary UUID — so the balance could be attributed to a REPLACED account's type, and
+// with an accountTypes filter applied it could be dropped from the result entirely.
+//
+// The active account's type is the authoritative one. This test seeds an active `depository` and a
+// replaced `credit` account on the SAME user_account_id, with the replaced account given a
+// deliberately LOWER uuid so the `a.id` tiebreak would choose it — making the pre-fix failure
+// deterministic rather than a coin flip.
+func TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ua := insertTestUserAccount(t, pool, owner)
+	li := insertTestLinkedItem(t, pool, owner)
+
+	// Replaced chain member: type 'credit', uuid forced to sort FIRST so the a.id tiebreak prefers it.
+	const lowUUID = "00000000-0000-4000-8000-000000000001"
+	_, err := pool.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, user_account_id,
+		                      status, replaced_at)
+		VALUES ($1::uuid, $2, $3, 'plaid_'||gen_random_uuid()::text, 'Old (relinked)', 'credit', $4,
+		        'replaced', now())`, lowUUID, li, owner, ua)
+	require.NoError(t, err, "seed the replaced chain member")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1::uuid`, lowUUID) //nolint:errcheck
+	})
+
+	// Active chain member: type 'depository' (the authoritative type).
+	activeID := insertTestAccount(t, pool, li, owner, ua)
+
+	now := time.Now().UTC()
+	insertHouseholdShare(t, pool, hh, ua, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO balance_snapshots (account_id, user_id, user_account_id, current_balance, snapshot_at,
+		                               currency_code, source)
+		VALUES ($1, $2, $3, 500.00, $4, 'USD', 'plaid')`, activeID, owner, ua, now.AddDate(0, 0, -1))
+	require.NoError(t, err, "seed the balance snapshot")
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+	rows, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, now.AddDate(0, 0, -7), now, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, rows, "the shared account's snapshot must appear in household history")
+
+	for _, r := range rows {
+		assert.Contains(t, r.ByType, "depository",
+			"the balance must be attributed to the ACTIVE account's type. A 'credit' bucket here means "+
+				"the accounts join is picking a REPLACED chain member via the arbitrary a.id tiebreak — "+
+				"balances land in the wrong type bucket, and an accountTypes filter would drop them "+
+				"entirely. Got ByType=%v", r.ByType)
+		assert.NotContains(t, r.ByType, "credit",
+			"the replaced chain member's type must not appear at all: it is the same physical account, "+
+				"and only the active row's type is authoritative. Got ByType=%v", r.ByType)
+	}
+}
