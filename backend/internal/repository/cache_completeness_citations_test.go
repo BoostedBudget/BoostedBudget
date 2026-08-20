@@ -578,3 +578,88 @@ func TestExactCitationsAreInRange(t *testing.T) {
 			len(stale), strings.Join(stale, "\n  - "))
 	}
 }
+
+// TestMethodCitationsPointInsideTheirMethod checks that a citation of the form
+//
+//	`someService.DoThing` (`internal/services/some_service.go:248`)
+//
+// names a line that actually falls inside DoThing's body.
+//
+// WHY CONTAINMENT AND NOT PROXIMITY. I first tried "the identifier must appear within +/-8 lines of
+// the cited line" and measured it before adopting it: 10 of 17 pairs would have failed. Every one
+// was a FALSE positive, because these citations deliberately point at a CALL SITE inside the named
+// function rather than at its declaration — `budget_service.go:248` is the
+// `s.budgetRepo.CreateWithCategories(...)` call inside `CreateBudget`, which begins at :105. That is
+// the more useful citation, and a proximity check punishes it. The citations were better than my
+// checker.
+//
+// Containment is the right relation, and measured 11/11 with zero failures on adoption. It stays
+// silent on correct citations of both kinds — declaration or call site — and speaks only when a line
+// has drifted outside the function it is attributed to, which is the failure mode that actually
+// occurred on this branch when #1565's deletions and a metric cleanup moved several hundred lines.
+//
+// Coverage is modest by construction: it needs `Type.Method` adjacent to the citation, which is 11
+// pairs today. It costs nothing and grows as more citations adopt that form. Line refs with no
+// method name (a bare SQL predicate, say) are not covered here — TestExactCitationsAreInRange bounds
+// those, and one off-by-one predicate ref that survived both checks was found by hand this round, so
+// neither guard should be read as making prose trustworthy.
+func TestMethodCitationsPointInsideTheirMethod(t *testing.T) {
+	re := regexp.MustCompile("`([A-Za-z_][A-Za-z0-9_]*)\\.([A-Za-z_][A-Za-z0-9_]*)`[,;]?\\s*\\(?`((?:[a-z0-9_]+/)*[a-z0-9_]+\\.go):(\\d+)`")
+
+	b, err := os.ReadFile("cache_completeness_repo_test.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	var violations []string
+	checked := 0
+	for _, m := range re.FindAllStringSubmatch(string(b), -1) {
+		method, path, lnStr := m[2], m[3], m[4]
+
+		var resolved string
+		for _, root := range citationSearchRoots {
+			c := filepath.Join(root, path)
+			if _, statErr := os.Stat(c); statErr == nil {
+				resolved = c
+				break
+			}
+		}
+		if resolved == "" {
+			continue // path shorthand is TestDispositionCitationsResolve's business
+		}
+		line, convErr := strconv.Atoi(lnStr)
+		if convErr != nil {
+			continue
+		}
+
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, resolved, nil, 0)
+		if parseErr != nil {
+			continue // not our business to police unparseable files
+		}
+		for _, d := range file.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Name.Name != method || fn.Body == nil {
+				continue
+			}
+			lo, hi := fset.Position(fn.Pos()).Line, fset.Position(fn.End()).Line
+			checked++
+			if line < lo || line > hi {
+				violations = append(violations, path+":"+lnStr+" is cited for "+method+
+					", but "+method+"'s body spans "+strconv.Itoa(lo)+"-"+strconv.Itoa(hi)+
+					" — the line has drifted out of the function it is attributed to")
+			}
+			break
+		}
+	}
+
+	if checked < 5 {
+		t.Fatalf("only %d method citations were containment-checkable — the extraction is broken, "+
+			"and a pass would be meaningless", checked)
+	}
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		t.Errorf("%d method citation(s) point outside the method they name:\n  - %s",
+			len(violations), strings.Join(violations, "\n  - "))
+	}
+}

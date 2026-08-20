@@ -76,7 +76,7 @@ func seedCustomCategory(ctx context.Context, t *testing.T, db DB, userIDStr, pre
 // TestUuidCastRegression_Analytics_SpendingByMerchantWithCustomCategory verifies
 // GetSpendingByMerchant with CustomCategoryIDs+RollUpChildren succeeds despite
 // merchantSortJoins (mno.user_id=$1::text) and custom_categories.user_id=$1 both
-// appearing in the same prepared statement (analytics_repository.go:384).
+// appearing in the same prepared statement (analytics_repository.go:377).
 func TestUuidCastRegression_Analytics_SpendingByMerchantWithCustomCategory(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()

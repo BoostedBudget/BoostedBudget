@@ -698,11 +698,15 @@ var (
 	//   accounts_list      - GetAccountsWithInstitutionFiltered (active-only path)
 	//   balance_summary    - GetBalanceSummary, GetAccountTypes
 	//   dashboard_history  - GetLatestByUserID, GetAggregatedHistory
-	//   analytics          - analytics_repository spending/cash-flow joins
 	//   transaction_match  - MonitorForMatches chain resolution
 	//   automation         - rule execution chain resolution, savings goal creation
 	//   investments        - holdings/investment_transactions active filter
 	//   liabilities        - liability repositories active filter
+	//
+	// Retired family: "analytics". Issue #1561 removed the last accounts.status predicate
+	// from analytics_repository.go, so its 22 increments counted executions that excluded
+	// nothing and expanded no re-link chain. The family was retired with the predicates
+	// rather than left to report a filter that no longer exists.
 	AccountsReplacedFiltered = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "accounts_replaced_filtered_total",
 		Help: "Number of query executions that excluded at least one replaced account or expanded a re-link chain",
