@@ -690,3 +690,67 @@ func TestAnalyticsRepository_GetSavingsRateForPeriod_Household_IncludesSharedMem
 	require.NoError(t, err)
 	assert.InDelta(t, 1500, row.Income, 0.01, "owner's $1000 + member's $500 income must both be counted")
 }
+
+// TestAnalyticsRepository_GetSpendingByCategory_Household_IncludesReplacedAccountTransactions is the
+// household counterpart of the personal-scope guarantee, and it closes a real scope divergence.
+//
+// #1109 deliberately REMOVED `AND a.status = 'active'` from the personal-scope analytics joins, with
+// the stated reason "pre-relink transactions are immutable historical events; status filter
+// incorrectly drops them", and renamed its tests to *_IncludesReplacedAccountTransactions to pin
+// that (see analytics_spending_repository_test.go). Spending that happened, happened — re-linking an
+// institution later does not un-spend it.
+//
+// #1369's household variants then reintroduced the filter on 9 join sites. The result was that the
+// SAME user, over the SAME period, saw different totals depending on scope, and the household number
+// was the one silently missing real history. Nothing pinned that behaviour: the household tests only
+// ever seeded status='active' accounts, and #1369's commit message justifies "active" in terms of
+// household MEMBERSHIP (ActiveMemberUserIDs / ResolveScope) — a different concept the SQL then
+// applied to accounts.status.
+//
+// accounts_valid_status admits exactly ('active','replaced','expired'), so the filter dropped both
+// re-linked and expired history.
+func TestAnalyticsRepository_GetSpendingByCategory_Household_IncludesReplacedAccountTransactions(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+
+	activeAcct := setupHouseholdMemberAccount(t, pool, owner)
+	replacedAcct := setupHouseholdMemberAccount(t, pool, owner)
+
+	now := time.Now().UTC()
+	insertHouseholdShare(t, pool, hh, activeAcct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+	insertHouseholdShare(t, pool, hh, replacedAcct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+
+	// The institution was re-linked: the old accounts row is 'replaced', but the spending it recorded
+	// is immutable history.
+	// accounts_replaced_at_consistency requires replaced_at alongside status='replaced'.
+	_, err := pool.Exec(ctx,
+		`UPDATE accounts SET status = 'replaced', replaced_at = now() WHERE id = $1`, replacedAcct.AccountID)
+	require.NoError(t, err, "mark the account replaced")
+
+	insertHouseholdTransaction(t, pool, owner, activeAcct.AccountID, activeAcct.LinkedItemID, 100, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, owner, replacedAcct.AccountID, replacedAcct.LinkedItemID, 40, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+
+	filters := domain.SpendingFilters{
+		StartDate: now.AddDate(0, -1, 0),
+		EndDate:   now,
+		HouseholdScope: &domain.HouseholdScope{
+			HouseholdID:   hh,
+			MemberUserIDs: []string{owner},
+		},
+	}
+
+	results, err := repo.GetSpendingByCategory(ctx, owner, filters)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.InDelta(t, 140, results[0].Total, 0.01,
+		"household scope must include the replaced account's $40 alongside the active account's $100. "+
+			"A total of 100 means household scope is still filtering accounts.status='active' and is "+
+			"dropping pre-relink history that personal scope deliberately keeps (#1109) — the same user "+
+			"would see 140 in personal scope and 100 here.")
+	assert.Equal(t, 2, results[0].TransactionCount,
+		"both transactions are real spending regardless of the account's current link state")
+}

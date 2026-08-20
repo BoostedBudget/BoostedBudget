@@ -165,7 +165,7 @@ func (r *analyticsRepository) getCashFlowAggregationHousehold(ctx context.Contex
 			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as expenses,
 			COUNT(CASE WHEN t.amount > 0 THEN 1 END) as expense_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -316,7 +316,7 @@ func (r *analyticsRepository) getCashFlowGroupedHousehold(ctx context.Context, r
 			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as expenses,
 			COUNT(*) as transaction_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -751,7 +751,7 @@ func (r *analyticsRepository) getSpendingByCategoryHousehold(ctx context.Context
 			COALESCE(SUM(ABS(t.amount)), 0) as total,
 			COUNT(*) as transaction_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -871,7 +871,7 @@ func (r *analyticsRepository) getSpendingByMerchantHousehold(ctx context.Context
 			COALESCE(SUM(ABS(t.amount)), 0)                                                                                    AS total,
 			COUNT(*)                                                                                                            AS transaction_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		` + merchantSortJoins + `
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
@@ -984,7 +984,7 @@ func (r *analyticsRepository) getSpendingTrendsHousehold(ctx context.Context, re
 			%s as category_display,
 			COALESCE(SUM(ABS(t.amount)), 0) as total
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -1130,7 +1130,7 @@ func (r *analyticsRepository) getAverageMonthlySpendHousehold(ctx context.Contex
 		WITH %s
 		SELECT COALESCE(SUM(t.amount), 0) as total
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -1266,7 +1266,7 @@ func (r *analyticsRepository) getSavingsRateForPeriodHousehold(ctx context.Conte
 			COALESCE(ABS(SUM(CASE WHEN t.amount < 0 THEN t.amount ELSE 0 END)), 0) AS income,
 			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS expenses
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -1372,7 +1372,7 @@ func (r *analyticsRepository) getMonthOverMonthSpendingHousehold(ctx context.Con
 		WITH %s
 		SELECT DATE_TRUNC('month', t.date)::date AS month, COALESCE(SUM(t.amount), 0) AS total
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.amount > 0
@@ -1563,7 +1563,7 @@ func (r *analyticsRepository) getIncomeSourceBreakdownHousehold(ctx context.Cont
 		WITH %s
 		SELECT (%s) AS category, ABS(SUM(t.amount)) AS total, COUNT(*) AS count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5

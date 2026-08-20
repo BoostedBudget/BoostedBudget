@@ -287,7 +287,7 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 		        a.type AS account_type
 		    FROM balance_snapshots bs
 		    JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
-		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id AND a.status = 'active'
+		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id
 		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $5::date
 		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.fingerprint,
