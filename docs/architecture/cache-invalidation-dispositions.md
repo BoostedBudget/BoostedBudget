@@ -97,8 +97,17 @@ coverage:
 
 ## The four dispositions
 
-Every mutating repository method carries one, in `repoMethodDispositions`
-(`internal/repository/cache_completeness_repo_test.go`).
+Every mutating repository method **that the enumeration can see** carries one, in
+`repoMethodDispositions` (`internal/repository/cache_completeness_repo_test.go`).
+
+⚠ That qualifier is load-bearing and used to be missing. This section previously opened "Every
+mutating repository method carries one", full stop — while *What none of this proves* below states
+that the enumeration walks **interfaces only**, so a concrete-only writer is invisible to it, and
+while the guard's own doc comment names `AuditLogRepository.Log`/`LogInTx` as real writes
+deliberately left out. A completeness claim one page away from its own retraction is worse than
+either statement alone, because a reader who stops at the first one is misled by the document that
+exists to prevent exactly that. The scope is: every mutating method reachable through a repository
+INTERFACE. Read the limits section for what that excludes.
 
 - **`dispositionExplicitBump`** — a named production file bumps for this write. Detail mandatory.
 - **`dispositionCoveredByHTTPMiddleware`** — all six conditions above. Detail mandatory.
@@ -109,9 +118,11 @@ Every mutating repository method carries one, in `repoMethodDispositions`
   carry *no* detail.
 
 There is deliberately **no "unclassified" kind**. It existed, accumulated 127 entries, and was
-skipped rather than failed — so it blocked nothing and grew for months. Issue #1537 classified all
-127 and then deleted the enum value in both this guard and the job guard, so the category cannot be
-expressed at all.
+skipped rather than failed — so it blocked nothing and grew for months. Issue #1537 dispositioned all
+127 — 78 derived, 28 middleware-covered, 5 NoCacheImpact, 4 ExplicitBump, and 12 whose methods were
+deleted as dead (#1565) — and then deleted the enum value in both this guard and the job guard, so
+the category cannot be expressed at all. Those figures are re-derived by diffing the base and HEAD
+maps, not tracked by hand; the hand-tracked version was wrong three times.
 
 ## Derived, not narrated
 
