@@ -220,30 +220,33 @@ test-scripts:
 	@echo "Running shell script regression suites"
 	@echo "========================================"
 	@echo ""
-	@echo "1/7: check-frontend-coverage.test.sh (exercises the real lcov merger)"
+	@echo "1/8: check-frontend-coverage.test.sh (exercises the real lcov merger)"
 	@if command -v lcov &> /dev/null; then \
 		bash scripts/check-frontend-coverage.test.sh; \
 	else \
 		echo "⚠️  lcov not installed — skipping (install: brew install lcov). CI always has lcov."; \
 	fi
 	@echo ""
-	@echo "2/7: check-orphan-chunks.test.sh"
+	@echo "2/8: check-orphan-chunks.test.sh"
 	@bash scripts/__tests__/check-orphan-chunks.test.sh
 	@echo ""
-	@echo "3/7: rollback-residue.test.sh"
+	@echo "3/8: rollback-residue.test.sh"
 	@bash scripts/__tests__/rollback-residue.test.sh
 	@echo ""
-	@echo "4/7: pg_dump-via-docker.test.sh"
+	@echo "4/8: pg_dump-via-docker.test.sh"
 	@bash scripts/__tests__/pg_dump-via-docker.test.sh
 	@echo ""
-	@echo "5/7: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
+	@echo "5/8: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
 	@bash scripts/__tests__/check-e2e-storage-state.test.sh
 	@echo ""
-	@echo "6/7: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
+	@echo "6/8: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
 	@bash scripts/__tests__/check-mcp-job-triggers.test.sh
 	@echo ""
-	@echo "7/7: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
+	@echo "7/8: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
 	@bash scripts/__tests__/check-typographic-quotes.test.sh
+	@echo ""
+	@echo "8/8: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is inert)"
+	@bash scripts/__tests__/check-frontend-test-timeout.test.sh
 	@echo ""
 	@echo "✅ Shell script regression suites passed!"
 
