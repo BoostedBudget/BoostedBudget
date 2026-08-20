@@ -36,24 +36,6 @@ func (m *mockSuggestionRepoForMonitor) UpdateStatus(ctx context.Context, id stri
 // Test Helpers
 // =============================================================================
 
-func createTestSuggestionForMonitor(userID string, toAccountID string, amount float64, createdAt time.Time) *domain.TransferSuggestion {
-	fromAcct := "from-account"
-	reason := "Savings goal"
-	return &domain.TransferSuggestion{
-		ID:            "suggestion-" + toAccountID,
-		UserID:        userID,
-		FromAccountID: &fromAcct,
-		ToAccountID:   &toAccountID,
-		Amount:        amount,
-		CurrencyCode:  "USD",
-		Reason:        &reason,
-		Source:        domain.SuggestionSourceBoost,
-		Status:        domain.SuggestionStatusPending,
-		CreatedAt:     createdAt,
-		UpdatedAt:     createdAt,
-	}
-}
-
 func createTestTransactionForMonitor(userID string, accountID string, amount float64, date time.Time) *domain.Transaction {
 	return &domain.Transaction{
 		ID:        "txn-" + accountID,

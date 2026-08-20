@@ -443,9 +443,10 @@ func TestGetAccountTypes_Success(t *testing.T) {
 	// Find types in result
 	var depositoryType, creditType *domain.AccountTypeInfo
 	for i := range result.Types {
-		if result.Types[i].Key == "depository" {
+		switch result.Types[i].Key {
+		case "depository":
 			depositoryType = &result.Types[i]
-		} else if result.Types[i].Key == "credit" {
+		case "credit":
 			creditType = &result.Types[i]
 		}
 	}

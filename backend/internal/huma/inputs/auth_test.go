@@ -296,20 +296,30 @@ func TestContextKeys(t *testing.T) {
 	assert.NotEqual(t, inputs.ClerkUserIDKey, inputs.ClerkClaimsKey)
 }
 
-// TestContextKeys_NoCollisionWithStringKey tests that typed keys don't collide with string keys
+// foreignContextKey stands in for an unrelated package's context-key type that happens
+// to use the same underlying string ("user_id") as inputs.UserIDKey. A bare `string`
+// key cannot be used here — staticcheck SA1029 forbids it, and it is exactly the mistake
+// inputs.ContextKey exists to prevent — but a distinctly-typed key with an identical
+// underlying value is the realistic collision scenario this test is pinning.
+type foreignContextKey string
+
+const foreignUserIDKey foreignContextKey = "user_id"
+
+// TestContextKeys_NoCollisionWithStringKey tests that typed keys don't collide with
+// same-valued keys of a different type declared elsewhere.
 func TestContextKeys_NoCollisionWithStringKey(t *testing.T) {
 	// Using typed key
 	ctx1 := context.WithValue(context.Background(), inputs.UserIDKey, "typed-value")
 
-	// Using plain string key (would be a mistake)
-	ctx2 := context.WithValue(ctx1, "user_id", "string-value")
+	// Using another package's key with the same underlying string value
+	ctx2 := context.WithValue(ctx1, foreignUserIDKey, "string-value")
 
 	// Verify they don't interfere with each other
 	typedValue, ok := ctx2.Value(inputs.UserIDKey).(string)
 	assert.True(t, ok)
 	assert.Equal(t, "typed-value", typedValue)
 
-	stringValue, ok := ctx2.Value("user_id").(string)
+	stringValue, ok := ctx2.Value(foreignUserIDKey).(string)
 	assert.True(t, ok)
 	assert.Equal(t, "string-value", stringValue)
 }

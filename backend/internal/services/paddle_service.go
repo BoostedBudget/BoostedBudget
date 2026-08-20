@@ -410,7 +410,7 @@ func (s *paddleService) CreateCheckoutSession(
 		s.logger.Error("Paddle transaction missing checkout URL",
 			"transaction_id", transaction.ID,
 		)
-		return "", "", fmt.Errorf("Paddle transaction missing checkout URL")
+		return "", "", errors.New("paddle transaction missing checkout URL")
 	}
 
 	s.logger.Info("Paddle checkout session created successfully",

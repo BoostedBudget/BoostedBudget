@@ -22,7 +22,7 @@ func newMCPWriteAuditEntry(userID, grantID, operationID, idempotencyKey string) 
 }
 
 func rollbackMCPAuditTx(ctx context.Context, tx pgx.Tx) {
-	tx.Rollback(ctx) // error ignored — rollback on failure
+	_ = tx.Rollback(ctx) // error ignored — rollback on failure
 }
 
 func recordMCPWriteAuditInTx(
