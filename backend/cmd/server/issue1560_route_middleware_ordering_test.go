@@ -26,8 +26,8 @@ import (
 // empty. A `humaAPI.UseMiddleware(...)` call therefore has NO effect on any operation
 // already registered.
 //
-// #1560 was exactly that: `operations.RegisterDeletionRoutes` ran at main.go:975 while
-// every UseMiddleware call happens at 1869+, so `requestDeletion` — POST, and declaring
+// #1560 was exactly that: `operations.RegisterDeletionRoutes` ran early in main() while
+// every UseMiddleware call happens much later, so `requestDeletion` — POST, and declaring
 // `Security: {{"clerk"}}` — ran with zero middlewares. No Clerk auth (so its
 // AuthenticatedWithEmailInput resolver returned 401 unconditionally, leaving the GDPR
 // deletion endpoint dead), no read-only enforcement despite read_only.go:87 listing that
@@ -40,9 +40,12 @@ import (
 // `CoveredByHTTPMiddleware` is only sound for operations registered AFTER the
 // cache-invalidation middleware.
 //
-// Deliberately keyed on the cache-invalidation middleware rather than the Clerk one: it is
-// registered LAST of the three request-scoped middlewares (1883 > 1874 > 1869), so
-// clearing it clears all of them.
+// The anchor is the LAST of the three request-scoped middlewares to be registered, computed
+// from the source rather than assumed: keying on any single one (Codex review, Low finding)
+// would let a future reorder — or a fourth middleware added after the cache one — leave a
+// route past the anchor but still ahead of a middleware it needs. Deliberately excludes the
+// admin middleware, which gates on the /api/v1/admin path prefix (admin.go) and so is
+// irrelevant to non-admin route groups.
 
 // earlyRouteExemptions names each Register*Routes group that may legitimately be
 // registered on humaAPI before the middleware chain is assembled, with the reason.
@@ -58,86 +61,189 @@ var earlyRouteExemptions = map[string]string{
 }
 
 var (
-	reCacheMW           = regexp.MustCompile(`UseMiddleware\(\s*humamiddleware\.NewCacheInvalidationMiddleware`)
-	reRouteCall         = regexp.MustCompile(`operations\.(Register[A-Za-z]+Routes)\(\s*humaAPI\b`)
-	reMutatingMethod    = regexp.MustCompile(`^(POST|PUT|PATCH|DELETE)$`)
+	// requestScopedMiddlewares are the middlewares whose protection a secured route depends on.
+	// Every one must be registered before any such route, so the guard anchors on the last.
+	requestScopedMiddlewares = []*regexp.Regexp{
+		regexp.MustCompile(`UseMiddleware\(\s*humaClerkMiddleware`),
+		regexp.MustCompile(`UseMiddleware\(\s*humamiddleware\.NewReadOnlyMiddleware`),
+		regexp.MustCompile(`UseMiddleware\(\s*humamiddleware\.NewCacheInvalidationMiddleware`),
+	}
+	reRouteCallOpen  = regexp.MustCompile(`operations\.(Register[A-Za-z]+Routes)\(`)
+	reMutatingMethod = regexp.MustCompile(`^(POST|PUT|PATCH|DELETE)$`)
 )
 
-func TestMutatingRoutesRegisteredAfterCacheInvalidationMiddleware(t *testing.T) {
-	data, err := os.ReadFile("main.go")
+// requiredLateRouteGroups must be registered on humaAPI, exactly once, AFTER the anchor.
+// Without this the ordering check is vacuous for the very endpoint #1560 was about: deleting
+// the RegisterDeletionRoutes call entirely would satisfy "nothing is registered too early"
+// while /api/v1/user/delete returned 404 (Codex review, Medium finding 1). Each entry also
+// names the paths that group must expose, checked against the operations package.
+var requiredLateRouteGroups = map[string][]string{
+	"RegisterDeletionRoutes": {"/api/v1/user/delete", "/api/v1/user/delete/cancel/{token}"},
+}
+
+// routeCall is one operations.Register*Routes(...) call found in main.go.
+type routeCall struct {
+	group string
+	api   string // the first argument: humaAPI, internalHumaAPI, or something unresolved
+	line  int
+}
+
+// findRouteCalls scans src for operations.Register*Routes(...) calls, reading forward to the
+// matching close paren so a call split across lines is still seen (Codex review, Medium
+// finding 2 — the original single-line regex missed those). The first argument is captured
+// rather than matched, so a call on a DIFFERENT api value surfaces as a distinct api string
+// instead of silently vanishing from the scan.
+func findRouteCalls(src string) []routeCall {
+	var out []routeCall
+	for _, m := range reRouteCallOpen.FindAllStringSubmatchIndex(src, -1) {
+		group := src[m[2]:m[3]]
+		depth, i := 1, m[1]
+		for ; i < len(src) && depth > 0; i++ {
+			switch src[i] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+			}
+		}
+		firstArg := strings.TrimSpace(src[m[1] : i-1])
+		if c := strings.IndexByte(firstArg, ','); c >= 0 {
+			firstArg = strings.TrimSpace(firstArg[:c])
+		}
+		out = append(out, routeCall{
+			group: group,
+			api:   firstArg,
+			line:  strings.Count(src[:m[0]], "\n") + 1,
+		})
+	}
+	return out
+}
+
+func TestMutatingRoutesRegisteredAfterMiddlewareChain(t *testing.T) {
+	raw, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatalf("read main.go: %v", err)
 	}
-	lines := strings.Split(string(data), "\n")
+	src := string(raw)
+	lines := strings.Split(src, "\n")
 
-	mwLine := 0
-	for i, l := range lines {
-		if reCacheMW.MatchString(l) {
-			mwLine = i + 1
-			break
+	// Anchor = the LAST request-scoped middleware registration. Every one must be located; a
+	// middleware this guard cannot find is a guard looking at the wrong thing.
+	anchor := 0
+	for _, re := range requestScopedMiddlewares {
+		found := 0
+		for i, l := range lines {
+			if re.MatchString(l) {
+				found = i + 1
+				break
+			}
+		}
+		if found == 0 {
+			t.Fatalf("could not locate a UseMiddleware call matching %s in main.go — this guard is "+
+				"looking for the wrong thing, or that middleware was removed; a silently unanchored "+
+				"ordering check is worse than no check", re)
+		}
+		if found > anchor {
+			anchor = found
 		}
 	}
-	if mwLine == 0 {
-		t.Fatal("could not locate the NewCacheInvalidationMiddleware UseMiddleware call in main.go — " +
-			"this guard is looking for the wrong thing, or the middleware was removed; a silently " +
-			"unanchored ordering check is worse than no check")
+
+	calls := findRouteCalls(src)
+	if len(calls) == 0 {
+		t.Fatal("scanned zero operations.Register*Routes(...) calls in main.go — the guard is " +
+			"broken, not the wiring")
 	}
 
-	type call struct {
-		group string
-		line  int
-	}
-	var early []call
-	total := 0
-	for i, l := range lines {
-		m := reRouteCall.FindStringSubmatch(l)
-		if m == nil {
+	byGroup := operationsByGroup(t)
+	secured := securedRouteGroupOperations(t, byGroup)
+	var violations []string
+
+	// (1) Nothing secured may be registered before the anchor.
+	for _, c := range calls {
+		if c.api != "humaAPI" {
+			// internalHumaAPI is the separate internal metrics listener with its own stack;
+			// anything else is unrecognised and reported rather than assumed harmless.
+			if c.api != "internalHumaAPI" {
+				violations = append(violations, c.group+" (main.go:"+strconv.Itoa(c.line)+
+					") is registered on an unrecognised api value "+strconv.Quote(c.api)+
+					" — this guard cannot reason about its middleware stack")
+			}
 			continue
 		}
-		total++
-		if i+1 < mwLine {
-			early = append(early, call{group: m[1], line: i + 1})
+		if c.line >= anchor {
+			continue
 		}
-	}
-	if total == 0 {
-		t.Fatal("scanned zero operations.Register*Routes(humaAPI, ...) calls in main.go — the guard " +
-			"is broken, not the wiring")
-	}
-
-	secured := securedMutatingRouteGroups(t)
-
-	var violations []string
-	for _, c := range early {
 		reason, exempt := earlyRouteExemptions[c.group]
 		if !exempt {
 			violations = append(violations, c.group+" (main.go:"+strconv.Itoa(c.line)+
-				") is registered before the cache-invalidation middleware (main.go:"+strconv.Itoa(mwLine)+
-				") and is not in earlyRouteExemptions")
+				") is registered before the middleware chain is complete (main.go:"+
+				strconv.Itoa(anchor)+") and is not in earlyRouteExemptions")
 			continue
 		}
 		if strings.TrimSpace(reason) == "" {
 			t.Errorf("earlyRouteExemptions[%q] has an empty reason — a bare exemption defeats the guard", c.group)
 		}
-		// The exemption must be TRUE, not merely asserted.
+		// The exemption must be TRUE, not merely asserted. ANY secured operation disqualifies a
+		// group, not merely a mutating one: Clerk skips only operations with empty Security
+		// (clerk.go), so an early secured GET loses authentication just as thoroughly as an
+		// early secured POST loses cache invalidation (Codex review, Medium finding 2).
 		if ops := secured[c.group]; len(ops) > 0 {
 			sort.Strings(ops)
 			violations = append(violations, c.group+" (main.go:"+strconv.Itoa(c.line)+
-				") is exempted as pre-auth, but registers mutating operation(s) that declare Security: "+
+				") is exempted as pre-auth, but registers operation(s) declaring Security: "+
 				strings.Join(ops, ", ")+" — those run with NO middleware")
+		}
+	}
+
+	// (2) Required groups must actually be registered, exactly once, after the anchor.
+	for group, wantPaths := range requiredLateRouteGroups {
+		var seen []routeCall
+		for _, c := range calls {
+			if c.group == group && c.api == "humaAPI" {
+				seen = append(seen, c)
+			}
+		}
+		switch {
+		case len(seen) == 0:
+			violations = append(violations, group+" is not registered on humaAPI in main.go at all — "+
+				"the routes it owns would 404; #1560 was about exactly this endpoint being unreachable")
+		case len(seen) > 1:
+			var at []string
+			for _, c := range seen {
+				at = append(at, strconv.Itoa(c.line))
+			}
+			violations = append(violations, group+" is registered "+strconv.Itoa(len(seen))+
+				" times on humaAPI (main.go:"+strings.Join(at, ", ")+") — duplicate registration")
+		case seen[0].line < anchor:
+			violations = append(violations, group+" (main.go:"+strconv.Itoa(seen[0].line)+
+				") must be registered AFTER the middleware chain is complete (main.go:"+
+				strconv.Itoa(anchor)+")")
+		}
+		for _, want := range wantPaths {
+			if !pathRegisteredByGroup(byGroup, group, want) {
+				violations = append(violations, group+" no longer registers the path "+want+
+					" — a caller of that endpoint would 404")
+			}
 		}
 	}
 
 	if len(violations) > 0 {
 		sort.Strings(violations)
-		t.Errorf("%d route group(s) registered before the middleware chain is assembled; huma "+
-			"snapshots the chain at Register time, so their middlewares never run:\n  - %s",
+		t.Errorf("%d route-registration problem(s); huma snapshots the middleware chain at Register "+
+			"time, so a route registered too early runs with no middleware at all:\n  - %s",
 			len(violations), strings.Join(violations, "\n  - "))
 	}
 }
 
-// securedMutatingRouteGroups maps each Register*Routes function in internal/huma/operations
-// to the OperationIDs it registers that are both mutating and declare a non-empty Security.
-func securedMutatingRouteGroups(t *testing.T) map[string][]string {
+// registeredOp is one huma.Operation literal found in the operations package.
+type registeredOp struct {
+	id, method, path string
+	secured          bool
+}
+
+// operationsByGroup maps each Register*Routes function in internal/huma/operations to every
+// huma.Operation literal it registers.
+func operationsByGroup(t *testing.T) map[string][]registeredOp {
 	t.Helper()
 	dir := filepath.Join("..", "..", "internal", "huma", "operations")
 	entries, err := os.ReadDir(dir)
@@ -145,7 +251,7 @@ func securedMutatingRouteGroups(t *testing.T) map[string][]string {
 		t.Fatalf("read operations dir: %v", err)
 	}
 
-	out := map[string][]string{}
+	out := map[string][]registeredOp{}
 	fset := token.NewFileSet()
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
@@ -170,8 +276,7 @@ func securedMutatingRouteGroups(t *testing.T) map[string][]string {
 				if !ok || sel.Sel.Name != "Operation" {
 					return true
 				}
-				opID, method := "", ""
-				securityNonEmpty := false
+				op := registeredOp{}
 				for _, el := range lit.Elts {
 					kv, ok := el.(*ast.KeyValueExpr)
 					if !ok {
@@ -183,30 +288,65 @@ func securedMutatingRouteGroups(t *testing.T) map[string][]string {
 					}
 					switch key.Name {
 					case "OperationID":
-						opID = stringLit(kv.Value)
+						op.id = stringLit(kv.Value)
 					case "Method":
-						method = httpMethodName(kv.Value)
+						op.method = httpMethodName(kv.Value)
+					case "Path":
+						op.path = stringLit(kv.Value)
 					case "Security":
 						if cl, ok := kv.Value.(*ast.CompositeLit); ok {
-							securityNonEmpty = len(cl.Elts) > 0
+							op.secured = len(cl.Elts) > 0
 						}
 					}
 				}
-				if securityNonEmpty && reMutatingMethod.MatchString(method) {
-					if opID == "" {
-						opID = "<unresolved OperationID>"
-					}
-					out[fn.Name.Name] = append(out[fn.Name.Name], opID)
-				}
+				out[fn.Name.Name] = append(out[fn.Name.Name], op)
 				return true
 			})
 		}
 	}
 	if len(out) == 0 {
-		t.Fatal("found zero secured mutating operations across the operations package — the scan is " +
-			"broken; every exemption below would then pass vacuously")
+		t.Fatal("found zero huma.Operation literals across the operations package — the scan is " +
+			"broken; every exemption and required-path check would then pass vacuously")
 	}
 	return out
+}
+
+// securedRouteGroupOperations maps each Register*Routes function to the OperationIDs it
+// registers that declare a non-empty Security, regardless of HTTP method.
+func securedRouteGroupOperations(t *testing.T, byGroup map[string][]registeredOp) map[string][]string {
+	t.Helper()
+	out := map[string][]string{}
+	anySecured := false
+	for group, ops := range byGroup {
+		for _, op := range ops {
+			if !op.secured {
+				continue
+			}
+			anySecured = true
+			id := op.id
+			if id == "" {
+				id = "<unresolved OperationID>"
+			}
+			if reMutatingMethod.MatchString(op.method) {
+				id += " (" + op.method + ")"
+			}
+			out[group] = append(out[group], id)
+		}
+	}
+	if !anySecured {
+		t.Fatal("found zero secured operations across the operations package — the Security scan is " +
+			"broken; every exemption cross-check would then pass vacuously")
+	}
+	return out
+}
+
+func pathRegisteredByGroup(byGroup map[string][]registeredOp, group, path string) bool {
+	for _, op := range byGroup[group] {
+		if op.path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func stringLit(e ast.Expr) string {
@@ -229,13 +369,6 @@ func httpMethodName(e ast.Expr) string {
 	return strings.ToUpper(strings.TrimPrefix(sel.Sel.Name, "Method"))
 }
 
-// TestHumaSnapshotsMiddlewareChainAtRegistration pins the huma behaviour that makes the
-// ordering guard above necessary at all. Without this, a reader has to take the claim on
-// trust, and if a future huma upgrade resolved middlewares lazily at request time the
-// guard would silently become cargo cult.
-//
-// Uses the same constructor main.go does (humaecho.NewV4 over echo/v4) so the result is
-// about this deployment's adapter, not huma in the abstract.
 func TestHumaSnapshotsMiddlewareChainAtRegistration(t *testing.T) {
 	for _, tc := range []struct {
 		name            string

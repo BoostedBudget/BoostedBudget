@@ -2020,7 +2020,8 @@ func main() {
 		// out of Clerk auth, read-only enforcement and cache invalidation. Guarded on
 		// deletionService rather than cfg.DeletionTokenSecret so this cannot drift from the
 		// construction block above, which is what decides whether the service exists at all.
-		// TestMutatingRoutesRegisteredAfterCacheInvalidationMiddleware enforces the ordering.
+		// TestMutatingRoutesRegisteredAfterMiddlewareChain enforces the ordering, that this
+		// group stays registered, and that it keeps both of its paths.
 		if deletionService != nil {
 			humaDeletionHandler := operations.NewDeletionHandler(deletionService)
 			operations.RegisterDeletionRoutes(humaAPI, humaDeletionHandler)
