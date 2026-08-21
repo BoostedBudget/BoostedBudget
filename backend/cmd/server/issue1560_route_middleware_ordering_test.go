@@ -79,6 +79,74 @@ var earlyRouteExemptions = map[string]string{
 		"pre-authentication by design.",
 }
 
+// secondaryAPIMiddlewareExemptions names each api identifier OTHER than guardedAPIIdent whose
+// UseMiddleware calls in main.go are legitimate, with the reason — the same proof-carrying shape as
+// earlyRouteExemptions.
+//
+// It exists because the two axes of this guard used to disagree about the SAME identifier:
+// earlyRegistrationViolations recognises internalHumaAPI as the internal metrics listener and
+// reasons about it, while every internalHumaAPI.UseMiddleware call was an unconditional failure
+// whose leading theory was "if it is a typo, it is the whole of #1560 in one token". Adding a
+// middleware to the internal listener is a perfectly ordinary thing to do, and a guard that fails
+// with a #1560 accusation for doing it is a guard that gets deleted. Tolerated on one axis and fatal
+// on the other was unintentional, so the exemption is now explicit and testable.
+//
+// Exempting a receiver is NOT a blanket pass: a call whose argument matches one of
+// requestScopedMiddlewareMarkers still FAILS on any receiver, because those middlewares belong to
+// guardedAPIIdent's chain and moving one to another api is precisely the T49 one-token defect
+// (H1a in route_registration_scan_test.go).
+var secondaryAPIMiddlewareExemptions = map[string]string{
+	"internalHumaAPI": "The internal metrics listener (newInternalMetricsAPI, internal_metrics.go), " +
+		"a separate huma.API with its own stack that serves only RegisterMetricsRoutes. huma " +
+		"snapshots per api, so middleware installed here cannot affect humaAPI's chain — and a " +
+		"middleware humaAPI DOES depend on is still refused below, whatever the receiver.",
+}
+
+// otherReceiverMiddlewareViolations reports every UseMiddleware call that is not on
+// guardedAPIIdent and is not covered by a truthful secondaryAPIMiddlewareExemptions entry.
+// Extracted from the test body so both the tolerated and the fatal case can be driven from
+// fixtures rather than from whatever main.go happens to contain today.
+func otherReceiverMiddlewareViolations(calls []middlewareCall) []string {
+	var violations []string
+	for _, m := range calls {
+		recv := m.receiver
+		if recv == "" {
+			recv = "<not a plain identifier>"
+		}
+		// A middleware guardedAPIIdent depends on is refused on ANY receiver, exempt or not:
+		// that is #1560 in one token, and missingMiddleware() catching it too is not a reason to
+		// let the more precise message go unsaid.
+		for _, marker := range requestScopedMiddlewareMarkers {
+			if strings.Contains(m.arg, marker.marker) {
+				violations = append(violations, "main.go:"+strconv.Itoa(m.line)+" installs "+
+					guardedAPIIdent+"'s "+marker.label+" middleware ("+marker.marker+
+					") on "+recv+" instead: "+recv+".UseMiddleware("+m.arg+"). huma snapshots the "+
+					"chain per api, so this installs NOTHING on the api the guarded routes register "+
+					"on — every route past the anchor then runs without it. No "+
+					"secondaryAPIMiddlewareExemptions entry can wave this through.")
+			}
+		}
+		reason, exempt := secondaryAPIMiddlewareExemptions[recv]
+		if exempt && strings.TrimSpace(reason) == "" {
+			violations = append(violations, "secondaryAPIMiddlewareExemptions["+strconv.Quote(recv)+
+				"] has an empty reason — a bare exemption defeats the guard")
+			continue
+		}
+		if exempt {
+			continue
+		}
+		violations = append(violations, "main.go:"+strconv.Itoa(m.line)+" installs middleware on "+
+			recv+", not on "+guardedAPIIdent+": "+recv+".UseMiddleware("+m.arg+"). huma snapshots "+
+			"the chain per api, so this installs NOTHING on the api the guarded routes register on. "+
+			"If it is a typo, it is the whole of #1560 in one token. If that api deliberately has "+
+			"its own middleware stack, add it to secondaryAPIMiddlewareExemptions in this file with "+
+			"the reason why its routes do not depend on "+guardedAPIIdent+"'s chain (see the "+
+			"internalHumaAPI entry) — a middleware from requestScopedMiddlewareMarkers is still "+
+			"refused there.")
+	}
+	return violations
+}
+
 var (
 	// requestScopedMiddlewares are the middlewares whose protection a secured route depends on.
 	// Every one must be registered before any such route, so the guard anchors on the last.
@@ -115,16 +183,8 @@ func TestMutatingRoutesRegisteredAfterMiddlewareChain(t *testing.T) {
 	// `internalHumaAPI.UseMiddleware(cache…)` counted toward humaAPI's chain and the guard stayed
 	// green with every post-anchor mutating route running uninvalidated (T49). Report it before
 	// what is missing, so the failure names the cause and not only the symptom.
-	for _, m := range scan.middlewareOtherReceiver {
-		recv := m.receiver
-		if recv == "" {
-			recv = "<not a plain identifier>"
-		}
-		t.Errorf("main.go:%d installs middleware on %s, not on %s: %s.UseMiddleware(%s). huma "+
-			"snapshots the chain per api, so this installs NOTHING on the api the guarded routes "+
-			"register on — if it is "+
-			"deliberate, this guard has to be taught about that api's stack; if it is a typo, it is "+
-			"the whole of #1560 in one token.", m.line, recv, guardedAPIIdent, recv, m.arg)
+	for _, problem := range otherReceiverMiddlewareViolations(scan.middlewareOtherReceiver) {
+		t.Error(problem)
 	}
 	// A middleware install outside func main() must FAIL, not quietly produce a lower anchor. The
 	// four calls hoisted into an uncalled `func installHumaMiddleware(...)` above main() collapse the
@@ -523,4 +583,95 @@ func orderingProbeHandler(context.Context, *orderingProbeInput) (*orderingProbeO
 	out := &orderingProbeOutput{}
 	out.Body.OK = true
 	return out, nil
+}
+
+// TestOtherReceiverMiddlewareIsExemptedOnlyWhenSafe pins the resolution of the guard's
+// two-axis asymmetry (T62 finding 3): internalHumaAPI is recognised by
+// earlyRegistrationViolations for route registrations, and is now recognised here too — but the
+// exemption is bounded, and everything else on another receiver still fails with a message that
+// names the exemption and what to do about it.
+func TestOtherReceiverMiddlewareIsExemptedOnlyWhenSafe(t *testing.T) {
+	fixture := func(t *testing.T, body string) []middlewareCall {
+		t.Helper()
+		scan, err := scanGoSource("main.go", "package main\n\nfunc main() {\n"+body+"\n}\n")
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if len(scan.middlewareOtherReceiver) == 0 {
+			t.Fatalf("fixture produced no other-receiver call — it proves nothing:\n%s", body)
+		}
+		return scan.middlewareOtherReceiver
+	}
+
+	t.Run("a middleware of its own on internalHumaAPI is tolerated", func(t *testing.T) {
+		got := otherReceiverMiddlewareViolations(fixture(t,
+			"\tinternalHumaAPI.UseMiddleware(internalOnlyRateLimitMiddleware)"))
+		if len(got) != 0 {
+			t.Errorf("violations = %v, want none. internalHumaAPI is the internal metrics "+
+				"listener with its own stack; failing here with a #1560 accusation for an ordinary "+
+				"addition is the false-failure this exemption removes — and it is exactly the "+
+				"reasoning earlyRegistrationViolations already applies to the same identifier.", got)
+		}
+	})
+
+	t.Run("humaAPI's own middleware on internalHumaAPI is still fatal", func(t *testing.T) {
+		got := otherReceiverMiddlewareViolations(fixture(t,
+			"\tinternalHumaAPI.UseMiddleware(humamiddleware.NewCacheInvalidationMiddleware(a, b, c))"))
+		if len(got) != 1 {
+			t.Fatalf("violations = %v, want exactly one. The exemption must not swallow the T49/H1a "+
+				"one-token defect: moving humaAPI's cache-invalidation middleware to another api "+
+				"leaves every post-anchor mutating route uninvalidated.", got)
+		}
+		for _, want := range []string{"cache-invalidation", "NewCacheInvalidationMiddleware", "internalHumaAPI"} {
+			if !strings.Contains(got[0], want) {
+				t.Errorf("violation %q does not name %q", got[0], want)
+			}
+		}
+	})
+
+	t.Run("an unrecognised api is fatal and says what to do", func(t *testing.T) {
+		got := otherReceiverMiddlewareViolations(fixture(t,
+			"\tsomeOtherAPI.UseMiddleware(loggingMiddleware)"))
+		if len(got) != 1 {
+			t.Fatalf("violations = %v, want exactly one — an unrecognised api must not be assumed "+
+				"harmless", got)
+		}
+		for _, want := range []string{"someOtherAPI", "secondaryAPIMiddlewareExemptions", "internalHumaAPI"} {
+			if !strings.Contains(got[0], want) {
+				t.Errorf("violation %q does not name %q. A guard that fails without naming its own "+
+					"exemption hatch is the guard that gets deleted instead of taught.", got[0], want)
+			}
+		}
+	})
+
+	t.Run("a receiver that is not a plain identifier is fatal", func(t *testing.T) {
+		got := otherReceiverMiddlewareViolations(fixture(t,
+			"\tapis[0].UseMiddleware(loggingMiddleware)"))
+		if len(got) != 1 || !strings.Contains(got[0], "<not a plain identifier>") {
+			t.Errorf("violations = %v, want one naming the unresolvable receiver — an exemption is "+
+				"keyed by identifier, and a receiver with no identifier can match none of them", got)
+		}
+	})
+
+	t.Run("an exemption with an empty reason is refused", func(t *testing.T) {
+		secondaryAPIMiddlewareExemptions["bareAPI"] = "   "
+		t.Cleanup(func() { delete(secondaryAPIMiddlewareExemptions, "bareAPI") })
+		got := otherReceiverMiddlewareViolations(fixture(t,
+			"\tbareAPI.UseMiddleware(loggingMiddleware)"))
+		if len(got) != 1 || !strings.Contains(got[0], "empty reason") {
+			t.Errorf("violations = %v, want the empty-reason refusal — an unexplained exemption is "+
+				"how the registration axis' exemptions would have rotted too", got)
+		}
+	})
+
+	t.Run("every exemption in the map carries a reason", func(t *testing.T) {
+		if len(secondaryAPIMiddlewareExemptions) == 0 {
+			t.Skip("no exemptions to check")
+		}
+		for api, reason := range secondaryAPIMiddlewareExemptions {
+			if strings.TrimSpace(reason) == "" {
+				t.Errorf("secondaryAPIMiddlewareExemptions[%q] has no reason", api)
+			}
+		}
+	})
 }

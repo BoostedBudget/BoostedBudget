@@ -212,3 +212,63 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_AllStatuses_DoesNo
 	assert.Equal(t, before+1, testutil.ToFloat64(counter),
 		"the active-only path is the canary's actual subject and must still fire")
 }
+
+// TestAccountRepository_GetAccountsWithInstitutionFiltered_ReplacedOnlyBeatsAllStatuses pins the
+// documented precedence of the two contradictory status flags, and the canary's silence for both.
+//
+// The combination is unreachable today (accountService only ever sets ReplacedOnly for
+// StatusFilter=="replaced", never together with AllStatuses), so nothing observes it in production
+// — which is exactly why it needs a test: the switch matches ReplacedOnly first, so AllStatuses is
+// IGNORED and active rows are dropped. Before resolveAccountStatusScope, the canary condition
+// `!IncludeReplaced && !AllStatuses` read AllStatuses independently of that switch and stayed
+// SILENT for this combination, so the counter whose job is catching an unexpected active-only
+// filter reported nothing at all while a filter was applied. The canary is now derived from the
+// resolved scope, so it cannot disagree with the query.
+func TestAccountRepository_GetAccountsWithInstitutionFiltered_ReplacedOnlyBeatsAllStatuses(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAccountRepository(pool, newTestFieldEncryptor(t))
+
+	user := insertTestUser(t, pool)
+	activeAcct := setupHouseholdMemberAccount(t, pool, user)
+	replacedAcct := setupHouseholdMemberAccount(t, pool, user)
+	expiredAcct := setupHouseholdMemberAccount(t, pool, user)
+	setAccountStatus(t, pool, replacedAcct.AccountID, domain.AccountStatusReplaced)
+	setAccountStatus(t, pool, expiredAcct.AccountID, domain.AccountStatusExpired)
+
+	counter := observability.AccountsReplacedFiltered.WithLabelValues("accounts_list")
+	before := testutil.ToFloat64(counter)
+
+	got, err := repo.GetAccountsWithInstitutionFiltered(ctx, user,
+		repository.AccountFilterOptions{ReplacedOnly: true, AllStatuses: true, IncludeHidden: true})
+	require.NoError(t, err)
+	require.Len(t, got, 1,
+		"most specific wins: ReplacedOnly is matched before AllStatuses, so the result is the "+
+			"replaced row only — AllStatuses does not widen it back out")
+	assert.Equal(t, replacedAcct.AccountID, got[0].ID)
+	assert.Equal(t, before, testutil.ToFloat64(counter),
+		"a replaced-only query excludes ACTIVE rows, not replaced ones, so it must not increment a "+
+			"counter documented as 'excluded at least one replaced account'")
+
+	// Control: ReplacedOnly alone resolves to the same predicate and is equally silent. That
+	// silence is a CHANGE — it used to increment, labelling a replaced-only query as the
+	// accounts_list "active-only path" (a pre-existing #1109 mislabel, not from the #1537
+	// all-statuses work).
+	alone, err := repo.GetAccountsWithInstitutionFiltered(ctx, user,
+		repository.AccountFilterOptions{ReplacedOnly: true, IncludeHidden: true})
+	require.NoError(t, err)
+	require.Len(t, alone, 1)
+	assert.Equal(t, replacedAcct.AccountID, alone[0].ID)
+	assert.Equal(t, before, testutil.ToFloat64(counter),
+		"ReplacedOnly must not fire the replaced-accounts-filtered canary")
+
+	// Positive control, so the two assertions above cannot pass because the counter is dead:
+	// the active-only default is the canary's actual subject.
+	activeOnly, err := repo.GetAccountsWithInstitutionFiltered(ctx, user,
+		repository.AccountFilterOptions{IncludeHidden: true})
+	require.NoError(t, err)
+	require.Len(t, activeOnly, 1)
+	assert.Equal(t, activeAcct.AccountID, activeOnly[0].ID)
+	assert.Equal(t, before+1, testutil.ToFloat64(counter),
+		"the active-only path drops the replaced row and must still fire")
+}
