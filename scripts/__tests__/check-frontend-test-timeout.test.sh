@@ -29,10 +29,18 @@
 # exceed bun's default. The second part is what makes it more than a grep: if a future bun release
 # starts honouring bunfig (or stops honouring the flag), test 3 is what notices.
 #
+# Test 3 covers EVERY bun invocation in BOTH runner scripts, not just test-regular.sh. package.json's
+# `test`/`test:ci` scripts run both, and a value floor on one of two is half a floor - especially for
+# a guard whose whole premise is that these two siblings drifted apart.
+#
 # The floor is 15000ms, not "anything above bun's 5000ms default" (Codex review, #1537 round 6).
 # A `--timeout 6000` would clear both a >5000 check and the 5.6s probe, yet the CI failure that
-# started all of this took 9910ms — so the guard would have passed a configuration that still breaks
+# started all of this took 9910ms - so the guard would have passed a configuration that still breaks
 # the build. The floor must cover the observed duration with headroom.
+#
+# Two or more `--timeout` flags in one command is a FAILURE, not something the guard resolves for
+# you. bun honours the last one, so `--timeout 30000 --timeout 1000` really runs at 1000ms while
+# reading as 30000ms to a human - and to the guard, before round 8.
 #
 # Still NOT asserted: the exact value 30000. Pinning it would fail a legitimate tuning change.
 
@@ -83,50 +91,114 @@ else
     bad "found only ${found:-0} 'bun test' invocations — the scan is broken, and test 1 would pass vacuously"
 fi
 
-echo "Test 3: the EFFECTIVE per-test timeout the runner uses exceeds bun's 5s default"
-# Rebuilt (#1537 round 6). The first version wrote its probe into apps/web/src and invoked
-# scripts/test-regular.sh, which was wrong three ways, all mine:
-#   1. no cleanup trap — an interrupted run left the 5.6s probe in src/, where test-regular.sh's
+echo "Test 3: EVERY bun invocation in BOTH runner scripts sets an unambiguous timeout above the floor"
+# Rebuilt (#1537 round 6, extended round 8). The first version wrote its probe into apps/web/src and
+# invoked scripts/test-regular.sh, which was wrong three ways, all mine:
+#   1. no cleanup trap - an interrupted run left the 5.6s probe in src/, where test-regular.sh's
 #      `find src` collects it into EVERY later run;
 #   2. it ran all 362 files to check one property, because test-regular.sh parses args only for
-#      --coverage and always rebuilds its list from `find src` — the path argument was ignored;
+#      --coverage and always rebuilds its list from `find src` - the path argument was ignored;
 #   3. its exit code covered 6400 tests, so any unrelated failure made this guard claim the timeout
 #      was broken. A guard that cries wolf gets worked around.
-# Now: read the value the runner actually passes, assert it is above bun's default, and prove it
-# works on the probe ALONE, outside src/, with cleanup on any trappable signal (SIGKILL excepted — see the trap).
+# Now: read the value(s) each runner actually passes, assert every one is above the floor, and prove
+# the smallest of them works on a probe ALONE, outside src/, with cleanup on any trappable signal
+# (SIGKILL excepted - see the trap).
+#
 # Read the value from the INVOCATION, not from anywhere in the file. The first version grepped the
-# whole script and matched the explanatory comment above the command — so with the flag deleted from
+# whole script and matched the explanatory comment above the command - so with the flag deleted from
 # `bun test` it still reported "the runner passes --timeout 30000". Caught by the axis-1 mutation.
-# awk extracts the `bun test` continuation block (a run of lines ending in backslash) and stops at the
-# first line that does not, so only real command text is searched.
-# Comments are stripped FIRST, then the command is matched — order matters and an earlier version of
+# awk extracts each `bun test` continuation block (a run of lines ending in backslash) and stops at
+# the first line that does not, so only real command text is searched.
+# Comments are stripped FIRST, then the command is matched - order matters and an earlier version of
 # this comment described it backwards. Codex found that: the match ran before the strip, so a comment
 # line merely mentioning `bun test --timeout 30000` could start the block scan at the wrong place.
 # The match also tolerates indentation and an `env` prefix, which `^bun test` did not.
 #
+# THREE defects fixed in round 8, each demonstrated before it was fixed:
+#   - It read only test-regular.sh. Test 1 checks flag PRESENCE across all of apps/web/scripts, but
+#     the VALUE was checked on one hardcoded file, so test-conflict-files.sh could drop to
+#     `--timeout 100` with the whole guard green. package.json's `test` script runs BOTH, so both
+#     matter - and "the two sibling scripts drifted apart" is this guard's entire premise.
+#   - It took the FIRST `--timeout` (`head -1`) while bun honours the LAST. Demonstrated: with
+#     `--timeout 30000 --timeout 1000` the guard reported 30000 and passed, while the same command
+#     line kills a 5.6s test at 1003ms - an effective 1000ms, five times worse than the default this
+#     guard exists to escape. Rather than silently taking the last, MORE THAN ONE `--timeout` in a
+#     single command block is now itself a failure: ambiguous configuration is the defect, and a
+#     maintainer should be told rather than have the guard quietly resolve it.
+#   - The regex demanded whitespace, so `--timeout=30000` - which bun accepts, verified - parsed to
+#     empty and the guard reported "passes no --timeout ... runs at bun's 5s default", which was
+#     simply false. `[[:space:]=]` now accepts both forms.
+#
 # LIMIT, stated rather than left to be discovered: `sub(/#.*/, "")` is a comment stripper, not a shell
-# parser. A `${VAR#pattern}` expansion inside the command block would be mangled. None exists in
-# test-regular.sh today, and mangling can only ever REMOVE a match (it cannot fabricate a
-# `--timeout N`), so the failure direction is a false alarm, never a false pass.
-configured=$(sed 's/#.*//' "$WEB_DIR/scripts/test-regular.sh" \
-    | awk '/(^|[[:space:]])bun[[:space:]]+test([[:space:]]|$)/{f=1} f{print; if ($0 !~ /\\[[:space:]]*$/) exit}' \
-    | grep -oE -- "--timeout[[:space:]]+[0-9]+" | head -1 | grep -oE "[0-9]+")
-if [ -z "${configured:-}" ]; then
-    bad "scripts/test-regular.sh passes no --timeout, so the suite runs at bun's 5s default"
-elif [ "$configured" -lt 15000 ]; then
-    bad "scripts/test-regular.sh passes --timeout $configured. That clears bun's 5000ms default but not the observed slow case: the CI failure this guard exists for took 9910ms. Use at least 15000."
+# parser. A `${VAR#pattern}` expansion inside a command block would be mangled. None exists in either
+# script today, and mangling can only ever REMOVE a match (it cannot fabricate a `--timeout N`), so
+# the failure direction is a false alarm, never a false pass.
+TIMEOUT_FLOOR=15000
+blocks=$(awk '
+    { line = $0; sub(/#.*/, "", line) }
+    inblock {
+        buf = buf " " line
+        if (line !~ /\\[[:space:]]*$/) { print start "\t" buf; inblock = 0 }
+        next
+    }
+    line ~ /(^|[[:space:]])bun[[:space:]]+test([[:space:]]|$)/ {
+        start = FILENAME ":" FNR
+        buf = line
+        if (line ~ /\\[[:space:]]*$/) { inblock = 1 } else { print start "\t" buf }
+        next
+    }
+' "$WEB_DIR/scripts/test-regular.sh" "$WEB_DIR/scripts/test-conflict-files.sh")
+
+timeout_problems=""
+blocks_seen=0
+min_timeout=""
+while IFS= read -r block; do
+    [ -n "$block" ] || continue
+    blocks_seen=$((blocks_seen + 1))
+    loc="${block%%$'\t'*}"
+    cmd="${block#*$'\t'}"
+    flag_count=$(printf '%s\n' "$cmd" | grep -oE -- "--timeout" | wc -l | tr -d ' ')
+    if [ "$flag_count" -eq 0 ]; then
+        timeout_problems+="    $loc: no --timeout at all, so this invocation runs at bun's 5s default"$'\n'
+        continue
+    fi
+    if [ "$flag_count" -gt 1 ]; then
+        # Do NOT silently resolve this to the last value. bun's precedence is real but invisible to a
+        # reader, and the observed failure mode was a large value masking a tiny one.
+        timeout_problems+="    $loc: $flag_count --timeout flags in one command. bun honours the LAST, so the intent is ambiguous and a large leading value can mask a tiny trailing one. Pass exactly one."$'\n'
+        continue
+    fi
+    value=$(printf '%s\n' "$cmd" | grep -oE -- "--timeout[[:space:]=]+[0-9]+" | grep -oE "[0-9]+$")
+    if [ -z "${value:-}" ]; then
+        timeout_problems+="    $loc: --timeout is present but its value is not a literal number this guard can check (a variable or expansion?). Use a literal so the floor is verifiable."$'\n'
+        continue
+    fi
+    if [ "$value" -lt "$TIMEOUT_FLOOR" ]; then
+        timeout_problems+="    $loc: --timeout $value. That may clear bun's 5000ms default but not the observed slow case: the CI failure this guard exists for took 9910ms. Use at least $TIMEOUT_FLOOR."$'\n'
+        continue
+    fi
+    if [ -z "${min_timeout:-}" ] || [ "$value" -lt "$min_timeout" ]; then
+        min_timeout="$value"
+    fi
+done <<< "$blocks"
+
+if [ "$blocks_seen" -lt 2 ]; then
+    bad "found only $blocks_seen bun invocation block(s) across both runner scripts - the block scan is broken, so this test would pass having checked nothing"
+elif [ -n "$timeout_problems" ]; then
+    bad "bun invocations with an unusable timeout:"
+    printf '%s' "$timeout_problems"
 else
-    ok "the runner passes --timeout $configured (>= 15000, covering the observed 9910ms case)"
+    ok "all $blocks_seen bun invocation(s) in both runner scripts pass exactly one --timeout, each >= $TIMEOUT_FLOOR (smallest: $min_timeout, covering the observed 9910ms case)"
 
     if ! command -v bun >/dev/null 2>&1; then
         # Not a SKIP. The static check alone can pass while the flag has no effect, which is the
-        # entire failure this guard exists to catch — and a SKIP left `fail` at zero, so the suite
+        # entire failure this guard exists to catch - and a SKIP left `fail` at zero, so the suite
         # reported success having verified nothing (Codex review).
         bad "bun is not on PATH, so the EFFECT of --timeout was never verified. This repo requires bun; a green run here would be meaningless."
     else
         # Trap FIRST, then create: installing it afterwards leaves a window where a signal
         # arriving between the two lines orphans the directory (Codex review). The guard is
-        # "no residue on any signal bash can handle" — SIGKILL is still unhandleable, so this is
+        # "no residue on any signal bash can handle" - SIGKILL is still unhandleable, so this is
         # not literally guaranteed, and the earlier comment claiming it was is corrected here.
         tmp=""
         # EXIT cleans up; INT/TERM clean up AND exit non-zero. Cleaning up without exiting was a real
@@ -146,10 +218,12 @@ test('effective timeout probe', async () => {
   expect(true).toBe(true)
 })
 PROBE
-        if (cd "$WEB_DIR" && bun test --timeout "$configured" "$tmp/effective_timeout_probe.test.ts" >/dev/null 2>&1); then
-            ok "a 5.6s test survives --timeout $configured, so the value has real effect"
+        # Probed with the SMALLEST value any invocation uses: if the weakest link has real effect,
+        # every other invocation does too.
+        if (cd "$WEB_DIR" && bun test --timeout "$min_timeout" "$tmp/effective_timeout_probe.test.ts" >/dev/null 2>&1); then
+            ok "a 5.6s test survives --timeout $min_timeout, so the value has real effect"
         else
-            bad "a 5.6s test timed out under --timeout $configured — the flag is not taking effect"
+            bad "a 5.6s test timed out under --timeout $min_timeout - the flag is not taking effect"
         fi
     fi
 fi

@@ -245,7 +245,7 @@ test-scripts:
 	@echo "7/8: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
 	@bash scripts/__tests__/check-typographic-quotes.test.sh
 	@echo ""
-	@echo "8/8: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is inert)"
+	@echo "8/8: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
 	@bash scripts/__tests__/check-frontend-test-timeout.test.sh
 	@echo ""
 	@echo "✅ Shell script regression suites passed!"

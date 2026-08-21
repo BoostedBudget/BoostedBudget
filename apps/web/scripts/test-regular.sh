@@ -64,10 +64,17 @@ echo "Testing $REGULAR_COUNT/$TOTAL_COUNT tests (excluding $((TOTAL_COUNT - REGU
 
 # Run tests
 # --timeout is passed EXPLICITLY and must stay that way. bunfig.toml declares
-# `[test] timeout = 30000`, and bun 1.4.0 ignores it — verified with a 6s probe test, which
-# times out at exactly 5000ms (bun's built-in default) under bunfig alone and passes with
-# this flag. So the 30s the repo has declared since bunfig was written has never actually
-# applied to this script.
+# `[test] timeout = 30000` and that declaration is NOT IN EFFECT — verified with a 6s probe
+# test, which times out at exactly 5000ms (bun's built-in default) under bunfig alone and
+# passes with this flag. CI, on its pinned bun 1.3.14, hit the same 5000ms default. Note the
+# limit of that evidence: it shows the key has no effect in either environment, not WHY —
+# 1.3.14's docs do document `[test] timeout`, so blaming a particular bun version would be
+# overclaiming, and the cause is unestablished. Either way the 30s the repo has declared since
+# bunfig was written has never actually applied to this script.
+#
+# Pass exactly ONE --timeout here. bun honours the LAST one given, so a second flag silently
+# overrides this value; scripts/__tests__/check-frontend-test-timeout.test.sh fails the build on
+# a duplicate rather than letting a small trailing value hide behind a large leading one.
 #
 # Its sibling test-conflict-files.sh already passed `--timeout 30000` on both of its
 # invocations, so the workaround existed — it just was not applied here, to the 362-file
