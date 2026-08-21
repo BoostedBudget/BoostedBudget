@@ -122,6 +122,22 @@ func (s *userAccountService) MatchOrCreate(
 // either way. userAccountService has no logger dependency, so propagating is the only way
 // to make a rejection observable (adding a logger would change the constructor and every
 // wiring site; deliberately out of scope here).
+//
+// ⚠ WHAT PROPAGATING COSTS, recorded in #1537 round 9 because the paragraph above states the benefit
+// and not the price. The tenancy predicate cannot actually reject on THIS path: `existing` comes from
+// the user-scoped FindByInstitutionAndMask, so actorUserID always equals existing.UserID and the
+// predicate is satisfied by construction. What the propagated error really reports is
+// RowsAffected == 0 — the row vanished between the match and the update (a users-cascade racing a
+// re-link). And the caller's response to any error from MatchOrCreate is to log and continue WITHOUT a
+// user_account_id (account_service.go, "Continue without user_account_id"), which inserts an account
+// with a NULL chain key — losing the stable re-link key #171/#1109 exist for. Before #1566 the same
+// race left a stale type LABEL instead, which is strictly less damaging.
+//
+// So the trade is: a genuine cross-tenant write (unreachable here today, but reachable if a future
+// caller resolves the id some other way) is now refused, at the cost of a lost chain key on a rare
+// race. That is the right trade — a wrong-tenant write is unbounded, a NULL chain key is recoverable
+// on the next sync — but it is a trade, and the earlier version of this comment presented it as pure
+// gain.
 func (s *userAccountService) normalizeExistingUserAccount(
 	ctx context.Context,
 	actorUserID string,

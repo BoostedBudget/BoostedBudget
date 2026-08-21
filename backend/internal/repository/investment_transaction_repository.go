@@ -102,6 +102,15 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 					SET user_account_id = EXCLUDED.user_account_id
 					WHERE investment_transactions.user_account_id IS NULL
 					  AND EXCLUDED.user_account_id IS NOT NULL
+					  -- #1537: the conflict target is the plaid id ALONE (unique_plaid_investment_
+					  -- transaction_id, migration 000051), which carries no ownership — so without this
+					  -- predicate a plaid-id collision across two users lets one user's sync stamp its
+					  -- user_account_id onto the other's row. Narrow in practice (only an unattributed
+					  -- row, only one column, and Plaid does not reuse transaction ids), but this
+					  -- package's stated rule is that ownership is enforced in the SQL rather than
+					  -- delegated to caller discipline (holding_repository.go). Pinned by
+					  -- TestUpsertBatch_ForeignUsersRow_IsNotBackfilled.
+					  AND investment_transactions.user_id = EXCLUDED.user_id
 				RETURNING id, (xmax::text::bigint = 0) AS is_new_insert
 			)
 			SELECT COUNT(*) FILTER (WHERE is_new_insert) AS inserted FROM ins

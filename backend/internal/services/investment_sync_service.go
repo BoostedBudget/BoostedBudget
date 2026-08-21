@@ -260,6 +260,23 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 	accountMap := make(map[string]string, len(accounts))
 	holdingUserAccountMap := make(map[string]*string, len(accounts))
 	for _, a := range accounts {
+		// #1537 (F14): the (actor, account) pair is assembled from two sources that nothing forces to
+		// agree — UserID comes from linkedItem.UserID below, while these accounts come from
+		// GetByLinkedItemID, which is keyed on linked_item_id and is NOT user-scoped. If
+		// accounts.user_id ever diverged from linked_items.user_id, every holding would carry a
+		// self-consistent-looking pair: assertActorOwnsRows would see the right actor on every row
+		// and assertRowsTargetAccount would see the right account on every row, so BOTH repository
+		// assertions pass while the write lands on someone else's account. Rejecting it here, where
+		// the two values first meet, is the only place either fact is available.
+		if a.UserID != linkedItem.UserID {
+			s.logger.Error("skipping an account that does not belong to the linked item's owner",
+				"linked_item_id", linkedItem.ID,
+				"account_id", a.ID,
+				"account_user_id", a.UserID,
+				"linked_item_user_id", linkedItem.UserID,
+			)
+			continue
+		}
 		accountMap[a.PlaidAccountID] = a.ID
 		holdingUserAccountMap[a.PlaidAccountID] = a.UserAccountID
 	}
@@ -406,6 +423,17 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 	accountMap := make(map[string]string, len(accounts))
 	userAccountMap := make(map[string]*string, len(accounts))
 	for _, a := range accounts {
+		// #1537 (F14): same guard as SyncHoldings above — see that comment for why the repository
+		// assertions cannot catch this. These rows go to UpsertBatch carrying linkedItem.UserID.
+		if a.UserID != linkedItem.UserID {
+			s.logger.Error("skipping an account that does not belong to the linked item's owner",
+				"linked_item_id", linkedItem.ID,
+				"account_id", a.ID,
+				"account_user_id", a.UserID,
+				"linked_item_user_id", linkedItem.UserID,
+			)
+			continue
+		}
 		accountMap[a.PlaidAccountID] = a.ID
 		userAccountMap[a.PlaidAccountID] = a.UserAccountID
 	}

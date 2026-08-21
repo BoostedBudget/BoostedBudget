@@ -282,6 +282,26 @@ func (r *transactionRepository) decryptTransactionPIIFields(t *domain.Transactio
 // Issue #1213: Returns a map of transaction IDs that were genuinely inserted.
 // RETURNING id, (xmax::text::bigint = 0) AS inserted lets us distinguish fresh
 // inserts (xmax=0) from conflict-updates (xmax!=0) in a single round-trip.
+//
+// ⚠ WHY THIS METHOD HAS NO TENANCY ASSERTION, while its siblings do (#1537 round 9, F13). A review
+// flagged it as "the same unguarded shape" as the four ReplaceForAccount methods that gained
+// assertActorOwnsRows/assertRowsTargetAccount under #1566/#1568. It is not the same shape, and the
+// difference is the whole reason those assertions exist:
+//
+//   - Those methods DELETE by a scalar accountID while INSERTing each element's own AccountID, so the
+//     two can disagree and the mismatch silently moves data between accounts. That gap is what is
+//     being asserted away.
+//   - This method takes no scalar actor or account. Every row is self-describing, there is no scalar
+//     for a row to disagree with, and the ON CONFLICT target is user-scoped by construction. A
+//     mixed-tenant batch here would require the SERVICE to assemble one, which is a different defect
+//     in a different layer — and adding an actor parameter would change the interface and every mock
+//     to assert something no code path can currently violate.
+//
+// The tenancy risk on this path was closed at its actual source instead: the sync services now reject
+// accounts whose user_id disagrees with the linked item's owner before any row is built
+// (investment_sync_service.go, liability_sync_service.go). Compare
+// investment_transaction_repository.go's UpsertBatch, which DID need a predicate, because its conflict
+// target is a Plaid id that carries no ownership at all.
 func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []domain.Transaction) (map[string]bool, error) {
 	if len(transactions) == 0 {
 		return nil, nil

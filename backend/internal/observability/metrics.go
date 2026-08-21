@@ -707,12 +707,17 @@ var (
 	//
 	// Emitted families (each has at least one WithLabelValues call site):
 	//   accounts_list                - GetAccountsWithInstitutionFiltered (active-only path)
-	//   dashboard_history            - GetLatestByUserID, GetAggregatedHistory
+	//   dashboard_history            - GetLatestByUserID, GetAggregatedHistory, GetSnapshotsAsOfForHousehold, GetAggregatedHistoryForHousehold
 	//   automation                   - rule execution chain resolution, savings goal creation
 	//   investments                  - holdings/investment_transactions active filter
 	//   investments_with_securities  - GetByUserIDWithSecurities (holdings + securities join)
 	//   investments_keyset           - keyset-paginated investment transaction listing
 	//   liabilities                  - liability repositories active filter
+	//
+	// ⚠ The guard cross-checks family NAMES in both directions; it does NOT check the call-site
+	// descriptions to the right of the dash. So a right name beside a wrong list is invisible to it —
+	// which is exactly how dashboard_history sat here naming 2 of its 4 call sites until #1537
+	// round 9. Treat those descriptions as prose, and re-derive them rather than trusting them.
 	//
 	// Removed families, and why (Issue #1567):
 	//   transaction_match  - named transactionMonitorService.MonitorForMatches, which is a

@@ -205,6 +205,19 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 	}
 	accountMap := make(map[string]string, len(accounts))
 	for _, a := range accounts {
+		// #1537 (F14): same guard, same reason as SyncHoldings in investment_sync_service.go —
+		// GetByLinkedItemID is keyed on linked_item_id and is not user-scoped, so a divergence
+		// between accounts.user_id and linked_items.user_id would produce an (actor, account) pair
+		// that both ReplaceForAccount assertions accept while the write lands on a foreign account.
+		if a.UserID != linkedItem.UserID {
+			s.logger.Error("skipping an account that does not belong to the linked item's owner",
+				"linked_item_id", linkedItem.ID,
+				"account_id", a.ID,
+				"account_user_id", a.UserID,
+				"linked_item_user_id", linkedItem.UserID,
+			)
+			continue
+		}
 		accountMap[a.PlaidAccountID] = a.ID
 	}
 

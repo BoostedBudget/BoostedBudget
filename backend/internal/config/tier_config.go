@@ -402,6 +402,19 @@ func NewTierConfig(configPath string) (*TierConfig, error) {
 	if configPath != "" {
 		// Must not be ignored: if the override fails to stick, LoadTierConfig would
 		// silently fall back to the default catalogue (possibly sandbox Paddle price IDs).
+		//
+		// ⚠ Two honest limits on that sentence, added in #1537 round 9 because the original
+		// overstated what checking this error buys:
+		//
+		//  1. os.Setenv with a compile-time-constant name can only fail if the name contains '=' or
+		//     NUL, so this branch is effectively unreachable. Checking it is correct but is hygiene,
+		//     not a fix for anything observed.
+		//  2. The REAL fail-open is larger and is not closed here: LoadTierConfig is sync.Once-gated
+		//     (see configOnce above), so on any call after the first this env write is ignored
+		//     entirely and the already-cached catalogue is returned regardless of configPath. A
+		//     second caller passing a different path silently gets the first one's config. Every
+		//     current caller passes "" or is a test, so nothing is broken today — but do not read the
+		//     error check above as making this function's contract safe.
 		if err := os.Setenv("SUBSCRIPTION_TIERS_CONFIG", configPath); err != nil {
 			return nil, fmt.Errorf("set SUBSCRIPTION_TIERS_CONFIG=%s: %w", configPath, err)
 		}
