@@ -470,7 +470,27 @@ func (s *transactionSyncService) SyncTransactions(
 		// DoesNotOverwriteStoredCursor, which failed before this guard existed.
 		newCursor := resp.GetNextCursor()
 		if newCursor == "" {
-			s.logger.Warn("plaid returned an empty next_cursor on a successful page; keeping the "+
+			// #1537 round 10: an empty next_cursor is only SAFE to ignore on the last page.
+			//
+			// If Plaid also says has_more=true there is no safe continuation: this loop is `for hasMore`
+			// and the cursor cannot advance, so returning here is the difference between failing a job
+			// and re-issuing the IDENTICAL request forever — the loop has no page cap, and its only
+			// non-error exit is has_more going false. Round 9 added the blank-cursor guard without this
+			// branch and so converted bad data into a potential hang, which is the worse failure. Both
+			// reviewers found it independently; pinned by
+			// TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping, whose
+			// load-bearing assertion is the Plaid CALL COUNT rather than the error.
+			//
+			// Plaid's contract is that has_more=true must be followed by a request carrying
+			// next_cursor; an empty one means the data is not yet available. Failing closed lets the
+			// job retry with the cursor we still hold, which is exactly what we want.
+			if resp.GetHasMore() {
+				return result, fmt.Errorf(
+					"plaid returned has_more=true with an empty next_cursor on page %d for item %s: "+
+						"cannot advance, refusing to re-request the same page",
+					pageCount, linkedItem.ID)
+			}
+			s.logger.Warn("plaid returned an empty next_cursor on the final page; keeping the "+
 				"existing cursor rather than persisting a blank, which would force a full "+
 				"historical re-sync on the next run",
 				"item_id", linkedItem.ID,
