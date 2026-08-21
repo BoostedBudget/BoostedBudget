@@ -394,6 +394,14 @@ func (m *MockAccountRepository) GetForHouseholdScope(ctx context.Context, reques
 	return args.Get(0).([]domain.Account), args.Error(1)
 }
 
+func (m *MockAccountRepository) GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+	args := m.Called(ctx, requestingUserID, scope, asOf)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.Account), args.Error(1)
+}
+
 type MockUserRepository struct {
 	mock.Mock
 }
