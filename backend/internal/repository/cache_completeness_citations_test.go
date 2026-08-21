@@ -854,7 +854,7 @@ var reAnyCitedPath = regexp.MustCompile(`\b((?:[a-z0-9_.-]+/)*[a-z0-9_.-]+\.(?:g
 // reBareLineRef matches a backticked, filename-less line reference — `:1212`, `:472-478`,
 // `:115,233,689`. Backticks are required deliberately: an unquoted ":123" appears in prose for other
 // reasons (issue numbers, percentages), and this guard errs toward silence.
-var reBareLineRef = regexp.MustCompile("`:(\\d+(?:[-,]\\d+)*)`")
+var reBareLineRef = regexp.MustCompile("`:(\\d+(?:\\s*[-,]\\s*\\d+)*)`")
 
 // bareRefsWithOwner walks one detail string in order and pairs every bare `:NNN` ref with the .go
 // file most recently named before it. Returns (file, line) pairs; refs with no resolvable owning .go
@@ -891,7 +891,7 @@ func bareRefsWithOwner(detail string) map[string][]int {
 		if current == "" {
 			continue
 		}
-		for _, part := range strings.FieldsFunc(e.nums, func(r rune) bool { return r == '-' || r == ',' }) {
+		for _, part := range strings.FieldsFunc(e.nums, func(r rune) bool { return r == '-' || r == ',' || r == ' ' || r == '\t' }) {
 			if n, err := strconv.Atoi(part); err == nil {
 				out[current] = append(out[current], n)
 			}
@@ -945,6 +945,14 @@ func TestBareLineRefsAreInRange(t *testing.T) {
 			}
 			for _, ln := range lines {
 				checked++
+				if ln < 1 {
+					// #1537 round 16: line 0 was rejected in the exact and SQL guards and MISSED
+					// here — the third guard in this file. Found by adversarial review after the
+					// other two were fixed: the half-swept class this branch keeps hitting.
+					stale = append(stale, key+": bare `:"+strconv.Itoa(ln)+"` is not a line number "+
+						"(files are 1-based), so nothing can check it against "+path)
+					continue
+				}
 				if ln > total {
 					stale = append(stale, key+": bare `:"+strconv.Itoa(ln)+"` resolves against "+path+
 						", which has only "+strconv.Itoa(total)+" lines")
@@ -1211,7 +1219,7 @@ var reSQLSyntaxFragment = regexp.MustCompile(
 // be within +/-4 of 113. Of the discarded tail, :935 is an error return, :1103 is blank, and :1315
 // and :1519 are closing braces. Checking one value of a ten-value citation is not checking it.
 var reCitationAfterFragment = regexp.MustCompile(
-	"^\\s*(?:[,;]|—|–)?\\s*[(\\[]?\\s*`(~?)((?:[a-z0-9_.-]+/)*[a-z0-9_.-]+\\.go)?(~?):(~?)(\\d+(?:[-,]\\d+)*)`")
+	"^\\s*(?:[,;]|—|–)?\\s*[(\\[]?\\s*`(~?)((?:[a-z0-9_.-]+/)*[a-z0-9_.-]+\\.go)?(~?):(~?)(\\d+(?:\\s*[-,]\\s*\\d+)*)`")
 
 // Capture-group indices into reCitationAfterFragment. Named because the tilde may appear in three
 // places and an off-by-one here silently turns an approximate ref into an exact one.
@@ -1287,7 +1295,7 @@ func citationInstanceCount(details map[string]string) int {
 	total := 0
 	countValues := func(s string) int {
 		n := 0
-		for _, part := range strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == ',' }) {
+		for _, part := range strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == ',' || r == ' ' || r == '\t' }) {
 			if _, err := strconv.Atoi(part); err == nil {
 				n++
 			}
@@ -1437,7 +1445,8 @@ func TestCitedSQLFragmentsAreNearTheirCitedLine(t *testing.T) {
 	// paragraphs — 15 hits were 13 anchors — so a hit-count floor can be satisfied while real
 	// coverage halves. Set near 75% of the measured count, the same ratio and for the same reason as
 	// TestMethodCitationsPointInsideTheirMethod's floor (25 against a measured 34). Measured here:
-	// 19 distinct anchors, so the floor is 14. It trips on a scanner regression while leaving room to
+	// 18 distinct anchors, so the floor is 14 (the number was 19 before the last conversion; the
+	// funnel line above is authoritative and this comment is not). It trips on a scanner regression while leaving room to
 	// legitimately delete citations. Re-measure by reading the funnel line above, not by trusting
 	// this comment.
 	//
