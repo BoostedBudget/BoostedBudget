@@ -96,3 +96,94 @@ func TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor(t *testin
 		}
 	}
 }
+
+// TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping is the case the test above
+// could not see, and it is a defect the round-9 fix INTRODUCED. Issue #1537 round 10.
+//
+// The pagination loop is `for hasMore`, and the round-9 guard moved `cursor = newCursor` into the else
+// branch. So when Plaid returns has_more=true with next_cursor="":
+//
+//   - cursor is not advanced,
+//   - hasMore = resp.GetHasMore() stays true,
+//   - the next iteration reissues the IDENTICAL request.
+//
+// There is no page cap anywhere in the loop (verified: the only non-error exit is hasMore going false),
+// so that repeats until the context is cancelled, re-processing the same page each time. The pre-round-9
+// code was wrong but TERMINATING — it persisted "" and the next scheduled sync did a full re-sync. So
+// the guard turned bad data into a possible hang, which is a worse failure mode.
+//
+// Plaid's contract: when has_more=true the client must call again WITH next_cursor. An empty cursor
+// alongside has_more=true means the page is not yet available, so there is nothing safe to do with it —
+// fail closed and let the job retry.
+//
+// HOW THIS TEST SEES A LOOP. Asserting only "an error was returned" would pass even if the loop ran
+// twice first, so the load-bearing assertion is the Plaid CALL COUNT. The second stubbed response
+// terminates the loop (has_more=false) purely so a regressed implementation fails fast instead of
+// hanging the suite — it is scaffolding, not the thing under test.
+func TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping(t *testing.T) {
+	ctx := context.Background()
+
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo,
+		nil, nil, mockPlaidService, nil, nil, nil, nil, nil, nil,
+	)
+
+	goodCursor := "cursor-earned-over-many-syncs"
+	linkedItem := &domain.LinkedItem{
+		ID:          "linked-item-loop",
+		UserID:      "user-loop",
+		ItemID:      "plaid-item-loop",
+		AccessToken: "access-token",
+		Cursor:      &goodCursor,
+	}
+
+	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-loop").
+		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-loop"}}, nil).Maybe()
+
+	// Response 1: the contract violation under test — more pages promised, no cursor to fetch them with.
+	bad := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{}, Removed: []plaid.RemovedTransaction{},
+	}
+	bad.SetNextCursor("")
+	bad.SetHasMore(true)
+
+	// Response 2 exists ONLY so a regressed implementation terminates instead of hanging the suite.
+	terminating := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{}, Removed: []plaid.RemovedTransaction{},
+	}
+	terminating.SetNextCursor("cursor-next")
+	terminating.SetHasMore(false)
+
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", goodCursor, 0).Return(bad, nil).Once()
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", goodCursor, 0).Return(terminating, nil).Maybe()
+
+	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	_, err := service.SyncTransactions(ctx, linkedItem)
+
+	syncCalls := 0
+	for _, c := range mockPlaidService.Calls {
+		if c.Method == "TransactionsSync" {
+			syncCalls++
+		}
+	}
+	assert.Equal(t, 1, syncCalls,
+		"TransactionsSync was called %d times. With has_more=true and an empty next_cursor the cursor "+
+			"cannot advance, so every extra call is the SAME request — an unbounded re-request loop, "+
+			"since the page loop has no cap and its only non-error exit is has_more going false.", syncCalls)
+	require.Error(t, err,
+		"an empty next_cursor alongside has_more=true is a Plaid contract violation with no safe "+
+			"continuation; it must fail closed so the job retries, not spin")
+
+	for _, c := range mockLinkedItemRepo.Calls {
+		if c.Method == "UpdateCursor" {
+			assert.NotEmpty(t, c.Arguments.Get(2),
+				"the blank cursor must still never be persisted, even on the failing path")
+		}
+	}
+}
