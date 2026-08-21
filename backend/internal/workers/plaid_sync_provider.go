@@ -20,6 +20,24 @@ type PlaidClient interface {
 	TransactionsSync(ctx context.Context, accessToken string, cursor *string) (*plaid.TransactionsSyncResponse, error)
 }
 
+// ⚠ THIS PROVIDER IS NOT WIRED INTO PRODUCTION, and a guard added here does NOT protect the running
+// system. Read this before "fixing" anything in this file (#1537 round 9).
+//
+// NewPlaidSyncProvider has no non-test caller, and neither does the layer above it:
+// NewTransactionSyncOrchestrator (orchestrator.go) is never constructed outside tests either. The
+// whole TransactionSyncProvider abstraction is deliberate scaffolding for the multi-provider future
+// provider.go describes (Teller, Finicity, Yodlee, manual entry) — kept on purpose, unlike the
+// genuinely accidental dead code #1565 deleted.
+//
+// The transaction sync that ACTUALLY RUNS is services/transactionSyncService.SyncTransactions,
+// reached from PlaidSyncWorker (queue/jobs/plaid_sync.go) and wired in cmd/server/main.go.
+//
+// This matters because it has already gone wrong once: round 4 of this branch found that a blank
+// Plaid cursor must never be persisted (it forces a full historical re-sync), added the guard HERE,
+// and left the live path unguarded for five more rounds. The two implementations are similar enough
+// to be mistaken for each other and are not kept in sync by anything. If you change a sync
+// invariant, change it in the service first, and check whether it belongs here at all.
+
 // plaidSyncProvider implements TransactionSyncProvider for Plaid
 type plaidSyncProvider struct {
 	linkedItemRepo repository.LinkedItemRepository
