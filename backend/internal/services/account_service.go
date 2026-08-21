@@ -286,15 +286,23 @@ func (s *accountService) checkFingerprintOwnership(ctx context.Context, blindIdx
 		// any cached read of that owner's is status-sensitive, this explicit bump is the only thing
 		// that closes the gap. Called AFTER the write above has committed (commit-then-bump).
 		//
-		// ⚠ #1561 NARROWED THIS, and the justification that stood here is no longer true. It claimed
-		// "every cached analytics query filters accounts.status = 'active'", so the owner's
-		// net-worth, cash-flow AND spending aggregates all went stale. #1561 removed those nine
-		// household-scope predicates (personal scope has had none since #1109), so today NO analytics
-		// query is status-sensitive. Re-derived: the three cached wrappers are
+		// ⚠ #1561 NARROWED THIS. The original justification claimed "every cached analytics query
+		// filters accounts.status = 'active'", so the owner's net-worth, cash-flow AND spending
+		// aggregates all went stale; #1561 removed those nine household-scope predicates (personal
+		// scope has had none since #1109). The #1561 CORRECTION that replaced it was then wrong in
+		// turn: it said "the only status filter any of them can reach is
+		// GetAggregatedHistoryForHousehold's account-type join". There is no such filter. That join
+		// is unfiltered — `LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id`
+		// (repository/balance_snapshot_repository.go:308) — and status appears only as the first
+		// DISTINCT ON tiebreak, `(a.status = 'active') DESC NULLS LAST, a.id` (:313).
+		//
+		// Re-derived, and stated as a preference rather than a filter: the three cached wrappers are
 		// analytics_service_cached.go, dashboard_preferences_service_cached.go and
-		// identity_resolver_cached.go, and the only status filter any of them can reach is
-		// GetAggregatedHistoryForHousehold's account-type join (balance_snapshot_repository.go:~296).
-		// The accounts LIST does filter status but is not a cached read (called directly at :946).
+		// identity_resolver_cached.go; NONE of the queries they reach FILTERS on accounts.status, and
+		// exactly one of them — GetAggregatedHistoryForHousehold, via GetNetWorthTrend — PREFERS an
+		// active row when choosing which chain member's a.type a household balance is attributed to.
+		// That preference is what makes this write cache-relevant. The accounts LIST does filter
+		// status, but it is not a cached read (called directly from GetAccountsFiltered at :960).
 		//
 		// So the bump is still correct, on a much narrower basis: it covers the owner's HOUSEHOLD
 		// net-worth history, where expiring their accounts changes which a.type their balances are

@@ -64,15 +64,23 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"for the deleted user, stronger than a generation bump."},
 	"cache_purge_retry.go": {dispositionBumps, "the durable retry for the GDPR purge path itself: " +
 		"calls purger.PurgeUser and gens.Bump(ScopeHousehold, ...) directly."},
-	"investment_holdings_sync.go": {dispositionBumps, "calls InvestmentSyncService.SyncHoldings, " +
-		"which calls bumpCacheForUser after every successful sync (investment_sync_service.go:339)."},
+	"investment_holdings_sync.go": {dispositionBumps, "calls `InvestmentSyncService.SyncHoldings` " +
+		"(`services/investment_sync_service.go:227`), which calls bumpCacheForUser after every " +
+		"successful sync (`services/investment_sync_service.go:235`). Was cited as :339, a line " +
+		"that belongs to SyncInvestmentTransactions; nothing checked the jobs guard's citations " +
+		"until #1537 T41 extended the repository citation guards to this file."},
 	"investment_transactions_sync.go": {dispositionBumps, "calls " +
-		"InvestmentSyncService.SyncInvestmentTransactions, which calls bumpCacheForUser after every " +
-		"successful sync (investment_sync_service.go:204)."},
+		"`InvestmentSyncService.SyncInvestmentTransactions` " +
+		"(`services/investment_sync_service.go:381`), which calls bumpCacheForUser after every " +
+		"successful sync (`services/investment_sync_service.go:387`). Was cited as :204, which is " +
+		"inside ProcessWebhook. (`internal/services/investment_sync_service.go` is under concurrent " +
+		"edit by another slice as of this writing; if these two numbers have moved again, the " +
+		"citation guards in repository/cache_completeness_citations_test.go will say so.)"},
 	"plaid_sync.go": {dispositionBumps, "calls TransactionSyncService.SyncTransactions, which bumps " +
 		"cache via a defer + any-commit flag (see plaid_sync_cache_invalidation_test.go)."},
 	"webhook_processing.go": {dispositionBumps, "routes transactions/investments/liabilities " +
-		"webhooks to the same sync services as plaid_sync.go / investment_*_sync.go, all of which " +
+		"webhooks to the same sync services as plaid_sync.go, investment_holdings_sync.go and " +
+		"investment_transactions_sync.go, all of which " +
 		"bump (see webhook_processing_cache_invalidation_test.go)."},
 	"scheduled_deletion_check.go": {dispositionBumps, "only enumerates users due for deletion and " +
 		"enqueues account_deletion.go's job; the actual write (and bump) happens there."},
@@ -80,9 +88,12 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"users past their retention window, which drives the same GDPR purge path as " +
 		"account_deletion.go. NOTE (file-level blind spot, see package doc comment): this file ALSO " +
 		"writes retention-clock repair markers (profileRepo.RepairRetentionClock, " +
-		"StampMissingPlaidCleanupMarkers, ClearCompletedPlaidCleanupMarkers, etc.) that are not " +
-		"independently verified here rather than deferred to a report that was never committed " +
-		"NoCacheImpact by this entry."},
+		"StampMissingPlaidCleanupMarkers, ClearCompletedPlaidCleanupMarkers, etc.) that this entry does " +
+		"NOT independently verify as NoCacheImpact. An edit once landed mid-predicate here and left " +
+		"the tail stranded (\"...that are not independently verified here rather than deferred to a " +
+		"report that was never committed NoCacheImpact by this entry\"), which parsed as nothing at " +
+		"all; the claim it was trying to make is the one above, and the report it alluded to was " +
+		"never committed. Durable record: docs/architecture/cache-invalidation-dispositions.md."},
 
 	// --- NoCacheImpact: reviewed, touches no cached namespace. ---
 	"idempotency_cleanup.go": {dispositionNoCacheImpact, "deletes expired rows from the idempotency " +
@@ -141,8 +152,8 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"this job's call site specifically, there is no HTTP middleware coverage at all " +
 		"(OffboardExcessMembers has exactly one caller, this job). This job bumps ScopeHousehold " +
 		"after a successful auto-offboard that actually removed at least one member — see " +
-		"TestHouseholdOverCapacityCheck_AutoOffboard_BumpsHouseholdCacheGeneration. UPDATED Task " +
-		"10b-2b: services/household_service.go's OffboardExcessMembers ITSELF now also explicitly " +
+		"TestHouseholdOverCapacityCheck_AutoOffboard_BumpsHouseholdCacheGeneration. #1531 UPDATED: " +
+		"services/household_service.go's OffboardExcessMembers ITSELF now also explicitly " +
 		"bumps every member captured before the LIFO removal loop (owner + every non-owner) plus " +
 		"ScopeHousehold, directly — this job's own bump is now redundant with (not contradicted by) " +
 		"that service-level bump, kept as-is since a second, cheap Redis write is harmless. The " +
@@ -179,9 +190,10 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"path (accountService.DeleteAccount, called only from the secured, HTTP-middleware-covered " +
 		"DELETE /accounts/{id} operation) before this job's Delete can ever succeed. So this job's " +
 		"own writes never change what any cached analytics query returns. (An earlier version of this " +
-		"entry cited a task-10b-3-report.md worklist, which was never committed and does not exist in " +
-		"any commit; its original 'no bump observed' framing was right that no bump exists and wrong " +
-		"that one is needed.)"},
+		"entry cited a Task 10b-3 worklist report by filename; no such file was ever committed, in any " +
+		"commit, so the filename is deliberately not repeated here — the durable record is " +
+		"docs/architecture/cache-invalidation-dispositions.md. Its original 'no bump observed' " +
+		"framing was right that no bump exists and wrong that one is needed.)"},
 	"savings_stats_worker.go": {dispositionNoCacheImpact, "writes SavingsImpactRepository." +
 		"WriteSnapshot (a GLOBAL k-anonymity-gated aggregate row), which is read ONLY by " +
 		"GetSavingsImpactAggregate/GetSavingsImpactMe (huma/operations/savings_impact.go) via " +
@@ -231,10 +243,13 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"classified item_cleanup.go above (same file-level reasoning, same table): this sweep's " +
 		"own writes (LinkedItemRepository.MarkForCleanup/ClearCleanupSchedule) touch only " +
 		"linked_items bookkeeping columns (cleanup_scheduled_at and friends), never accounts.status " +
-		"— no cached ANALYTICS query filters accounts.status any more (#1561 removed the " +
-		"household-scope predicates; #1109 had already removed the personal-scope ones; the one " +
-		"cached read that still filters it is `GetAggregatedHistoryForHousehold`, which uses it to " +
-		"pick the balance row's a.type, not to filter history), and none filters on any " +
+		"— NO cached read filters accounts.status any more (#1561 removed the household-scope " +
+		"predicates; #1109 had already removed the personal-scope ones). Re-derived rather than " +
+		"inherited: the last cached read that was ever described as filtering it, " +
+		"`GetAggregatedHistoryForHousehold`, does not — its accounts join is unfiltered and status " +
+		"appears only as a DISTINCT ON tiebreak preference, `(a.status = 'active') DESC NULLS " +
+		"LAST, a.id` (repository/balance_snapshot_repository.go:313). Status is still cache-" +
+		"RELEVANT there, via ordering; it is not a filter anywhere. And none filters on any " +
 		"linked_items column (confirmed by the same repo-wide grep item_cleanup.go's entry cites). " +
 		"The actual Plaid /item/remove call and any accounts-table effect happen in a SEPARATE, " +
 		"HTTP-middleware-covered path (accountService.DeleteAccount), exactly as item_cleanup.go's " +
