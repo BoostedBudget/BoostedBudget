@@ -82,3 +82,68 @@ func TestSyncHoldings_AccountOwnedByAnotherUser_IsSkipped(t *testing.T) {
 	}
 	assert.Equal(t, 1, result.AccountsProcessed, "only the actor's own account should be processed")
 }
+
+// TestSyncInvestmentTransactions_AccountOwnedByAnotherUser_IsSkipped covers the SECOND of the three
+// sites that got the identical owner guard. Issue #1537 round 10, finding C-5.
+//
+// Why it needs its own test rather than trusting the first: review pointed out that the same guard was
+// pasted into three places and only one was falsified. Three copies of a predicate are three
+// opportunities to paste it with the comparison inverted or the wrong variable, and a passing sibling
+// test proves nothing about the copy next door. This is the same lesson the branch learned when a
+// tenancy predicate turned out to be tautological at 2 of 3 sites.
+func TestSyncInvestmentTransactions_AccountOwnedByAnotherUser_IsSkipped(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	actorUserID := uuid.New().String()
+	strangerUserID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-inv-txn-tenancy", actorUserID)
+
+	ownedPlaid, ownedInternal := "plaid-acct-owned", uuid.New().String()
+	foreignPlaid, foreignInternal := "plaid-acct-foreign", uuid.New().String()
+
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: ownedInternal, PlaidAccountID: ownedPlaid, UserID: actorUserID},
+		{ID: foreignInternal, PlaidAccountID: foreignPlaid, UserID: strangerUserID},
+	}, nil)
+
+	// A transaction that belongs to the FOREIGN account. With the guard working, that plaid account id
+	// maps to nothing, so nothing may be written for it.
+	txn := makePlaidCashTxn("txn-foreign", foreignPlaid, 500.0, "2024-01-15")
+	txnResp := plaid.NewInvestmentsTransactionsGetResponse(
+		makeMinimalPlaidItem(),
+		[]plaid.AccountBase{},
+		[]plaid.Security{},
+		[]plaid.InvestmentTransaction{txn},
+		1,
+		"req-tenancy",
+	)
+	deps.plaidSvc.On("InvestmentsTransactionsGet",
+		ctx, linkedItem.AccessToken,
+		mock.AnythingOfType("string"), mock.AnythingOfType("string"),
+		mock.AnythingOfType("int32"), mock.AnythingOfType("int32"),
+	).Return(txnResp, nil)
+
+	deps.invTxnRepo.On("UpsertBatch", ctx, mock.Anything).Return(0, nil).Maybe()
+	deps.linkedItemRepo.On("UpdateInvestmentsLastSyncedDate", ctx, linkedItem.ID, mock.Anything).Return(nil).Maybe()
+
+	_, err := svc.SyncInvestmentTransactions(ctx, linkedItem)
+	require.NoError(t, err, "one foreign account must not fail the whole sync")
+
+	for _, c := range deps.invTxnRepo.Calls {
+		if c.Method != "UpsertBatch" {
+			continue
+		}
+		txns, ok := c.Arguments.Get(1).([]domain.InvestmentTransaction)
+		if !ok {
+			continue
+		}
+		for _, tx := range txns {
+			assert.NotEqual(t, foreignInternal, tx.AccountID,
+				"an investment transaction was written for account %s, owned by user %s, under actor %s",
+				foreignInternal, strangerUserID, actorUserID)
+			assert.NotEqual(t, strangerUserID, tx.UserID,
+				"an investment transaction was written carrying a foreign user_id")
+		}
+	}
+}

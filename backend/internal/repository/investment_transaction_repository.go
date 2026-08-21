@@ -109,7 +109,9 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 					  -- row, only one column, and Plaid does not reuse transaction ids), but this
 					  -- package's stated rule is that ownership is enforced in the SQL rather than
 					  -- delegated to caller discipline (holding_repository.go). Pinned by
-					  -- TestUpsertBatch_ForeignUsersRow_IsNotBackfilled.
+					  -- TestUpsertBatch_ForeignUsersRow_IsNotBackfilled, which drives THIS method --
+					  -- when first written it issued its own copy of this SQL and so could not have
+					  -- failed if this predicate were deleted (#1537 round 10, caught by review).
 					  AND investment_transactions.user_id = EXCLUDED.user_id
 				RETURNING id, (xmax::text::bigint = 0) AS is_new_insert
 			)
