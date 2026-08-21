@@ -485,10 +485,36 @@ func (s *transactionSyncService) SyncTransactions(
 			// next_cursor; an empty one means the data is not yet available. Failing closed lets the
 			// job retry with the cursor we still hold, which is exactly what we want.
 			if resp.GetHasMore() {
+				// #1537 round 11: the round-10 version returned an error here unconditionally, which
+				// LOST DATA on any multi-page sync. UpdateCursor runs per page (below), while storage
+				// happens after this loop — and the worker discards `result` on error. So page 1's
+				// transactions were thrown away while page 1's cursor had already been persisted, and
+				// /transactions/sync does not re-deliver them. That was a REGRESSION against the
+				// pre-round-9 code, which reset the cursor, looped, and stored everything.
+				//
+				// The cursor already points at the page we cannot fetch, so the lossless move depends
+				// on whether we got anything this run:
+				if pageCount > 1 {
+					// Progress made. Stop paginating and let the caller store pages 1..N-1; the next
+					// sync resumes exactly where the cursor points. Not an error: the data is intact
+					// and the item is simply not fully caught up, which is the normal state of an
+					// incremental sync between runs.
+					s.logger.Warn("plaid returned has_more=true with an empty next_cursor; stopping "+
+						"pagination and keeping the pages already fetched, which the persisted cursor "+
+						"is consistent with",
+						"item_id", linkedItem.ID,
+						"page", pageCount,
+						"pages_kept", pageCount-1,
+					)
+					break
+				}
+				// No progress: the very FIRST page came back malformed, so there is nothing to keep.
+				// Fail closed so the job retries and, if it persists, dead-letters visibly — returning
+				// success here would make the job report "done" having synced nothing, forever, which
+				// is a silent stall and worse for an operator than a loud failure.
 				return result, fmt.Errorf(
-					"plaid returned has_more=true with an empty next_cursor on page %d for item %s: "+
-						"cannot advance, refusing to re-request the same page",
-					pageCount, linkedItem.ID)
+					"plaid returned has_more=true with an empty next_cursor on the first page for "+
+						"item %s: cannot advance and nothing was fetched", linkedItem.ID)
 			}
 			s.logger.Warn("plaid returned an empty next_cursor on the final page; keeping the "+
 				"existing cursor rather than persisting a blank, which would force a full "+
