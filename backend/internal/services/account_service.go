@@ -935,10 +935,15 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 
 // AccountFilterOptions holds filter options for GetAccountsFiltered (Issue #1109).
 type AccountFilterOptions struct {
-	IncludeHidden   bool   // if true, include hidden accounts
-	IncludeReplaced bool   // if true, equivalent to StatusFilter="all" (backward-compat alias)
-	StatusFilter    string // "active" (default), "replaced" (replaced only), "all" (no filter)
-	UserAccountID   string // if set, filter to accounts with this user_account_id
+	IncludeHidden   bool // if true, include hidden accounts
+	IncludeReplaced bool // if true, equivalent to StatusFilter="all" (backward-compat alias)
+	// StatusFilter is "active" (default), "replaced" (replaced only), or "all". "all" is a
+	// misnomer inherited from the public query parameter: it maps to the repository's
+	// IncludeReplaced, i.e. `status IN ('active','replaced')`, so accounts a fully-disconnected
+	// chain left at status='expired' are NOT returned. No service-level option exposes the
+	// repository's AllStatuses (the genuine no-status-predicate read) today. Issue #1537.
+	StatusFilter  string
+	UserAccountID string // if set, filter to accounts with this user_account_id
 }
 
 // GetAccountsFiltered retrieves accounts with optional filters (Issue #307, #1109).

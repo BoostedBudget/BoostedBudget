@@ -35,10 +35,14 @@ type FingerprintOwnership struct {
 
 // AccountFilterOptions configures filtering for GetAccountsWithInstitutionFiltered (Issue #1109).
 type AccountFilterOptions struct {
-	IncludeHidden   bool   // if true, includes hidden accounts
-	IncludeReplaced bool   // if true, widens the status filter to active + replaced
-	ReplacedOnly    bool   // if true, returns only replaced accounts (status=replaced)
-	UserAccountID   string // if non-empty, filters to accounts sharing this user_account_id
+	IncludeHidden   bool // if true, includes hidden accounts
+	IncludeReplaced bool // if true, widens the status filter to active + replaced (NOT expired)
+	// ReplacedOnly returns only replaced accounts (status='replaced'). It has the HIGHEST
+	// precedence of the three status flags — see resolveAccountStatusScope: setting AllStatuses
+	// alongside it does not widen the result, and active rows are dropped.
+	ReplacedOnly bool
+
+	UserAccountID string // if non-empty, filters to accounts sharing this user_account_id
 
 	// AllStatuses removes the status predicate entirely, returning active, replaced AND
 	// expired accounts. IncludeReplaced is NOT a substitute: it produces
@@ -51,7 +55,9 @@ type AccountFilterOptions struct {
 	//
 	// AllStatuses deliberately does NOT increment the AccountsReplacedFiltered canary: that
 	// counter measures active-only calls that DROP replaced accounts, and this option drops
-	// nothing.
+	// nothing. That decision is no longer re-derived from these booleans at the call site — it
+	// is taken from the resolved accountStatusScope, so the counter cannot disagree with the
+	// predicate the query actually ran (which it did for ReplacedOnly+AllStatuses).
 	AllStatuses bool
 }
 
@@ -418,8 +424,11 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 
 // GetByUserID retrieves active-only accounts for a specific user, including status and re-link fields.
 // Returns ONLY accounts with status='active' (excludes replaced and expired).
-// Callers that need all chain members (active + replaced) should use GetAccountsWithInstitutionFiltered
-// with IncludeReplaced=true or StatusFilter="all".
+// Callers that need the active + replaced chain members should use
+// GetAccountsWithInstitutionFiltered with IncludeReplaced=true; that still EXCLUDES 'expired', so
+// callers that need every status (the point-in-time universe) need AllStatuses=true. There is no
+// repository-level "StatusFilter" option — that name belongs to services.AccountFilterOptions,
+// where "all" maps to IncludeReplaced and therefore also stops short of 'expired'.
 func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
@@ -485,21 +494,44 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 // GetSnapshotsAsOfForHousehold call this account map is paired with (Issue #1369
 // gap-closure G1) — see the interface doc for why. Issue #1369 — Phase 5.
 func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
-	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, " AND a.status = 'active'")
+	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, householdActiveOnly)
 }
 
 // GetForHouseholdScopeAllStatuses is GetForHouseholdScope with the status predicate removed,
 // so a chain that has since been replaced or expired in its entirety still resolves. See the
 // interface doc for when that is the correct universe and when it is not. Issue #1537.
 func (r *accountRepository) GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
-	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, "")
+	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, householdAllStatuses)
 }
 
-// getForHouseholdScope is the shared body of the two exported household-scope account reads.
-// statusClause is spliced in as a literal (never user input) so the two variants cannot drift
-// apart in their column list, CTE, dedup or decryption handling.
-func (r *accountRepository) getForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time, statusClause string) ([]domain.Account, error) {
-	query := "WITH " + householdAccountsCTEForBalancesAsOf() + `
+// householdStatusFilter selects which account statuses a household-scope read returns. It is a
+// typed flag rather than a SQL fragment on purpose: this helper used to take the WHERE clause
+// itself as a string and splice it in, which was safe only for as long as every call site was
+// inspected and stayed a compile-time literal. A closed two-value type makes an injected
+// predicate impossible by construction, not merely absent today. Issue #1537.
+type householdStatusFilter int
+
+const (
+	// householdActiveOnly restricts to `a.status = 'active'` (GetForHouseholdScope).
+	householdActiveOnly householdStatusFilter = iota
+	// householdAllStatuses applies no status predicate, so active, replaced AND expired chain
+	// members resolve (GetForHouseholdScopeAllStatuses).
+	householdAllStatuses
+)
+
+// statusClause renders the SQL predicate for this filter, appended after `WHERE TRUE`. The two
+// strings are the only status SQL either household-scope read can produce.
+func (f householdStatusFilter) statusClause() string {
+	if f == householdAllStatuses {
+		return ""
+	}
+	return " AND a.status = 'active'"
+}
+
+// householdScopeQuery builds the household-scope account SELECT. Pure and separate from the
+// read itself so the exact SQL each filter produces can be asserted without a database.
+func householdScopeQuery(statuses householdStatusFilter) string {
+	return "WITH " + householdAccountsCTEForBalancesAsOf() + `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
@@ -507,9 +539,16 @@ func (r *accountRepository) getForHouseholdScope(ctx context.Context, requesting
 		       a.created_at, a.updated_at
 		FROM accounts a
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
-		WHERE TRUE` + statusClause + `
+		WHERE TRUE` + statuses.statusClause() + `
 		ORDER BY a.created_at ASC
 	`
+}
+
+// getForHouseholdScope is the shared body of the two exported household-scope account reads.
+// The status predicate is chosen from the typed statuses flag (never from caller-supplied text)
+// so the two variants cannot drift apart in their column list, CTE, dedup or decryption handling.
+func (r *accountRepository) getForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time, statuses householdStatusFilter) ([]domain.Account, error) {
+	query := householdScopeQuery(statuses)
 
 	args := householdScopeArgs(requestingUserID, scope)
 	args = append(args, asOf)
@@ -835,14 +874,91 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 	return tx.Commit(ctx)
 }
 
+// accountStatusScope is the status predicate GetAccountsWithInstitutionFiltered resolved from
+// AccountFilterOptions. Named rather than left as a bare SQL string so the canary counter can be
+// derived from the SAME decision the query uses instead of re-deriving it from the flags.
+type accountStatusScope int
+
+const (
+	// accountStatusActiveOnly is the default: `status = 'active'`, dropping replaced and expired.
+	accountStatusActiveOnly accountStatusScope = iota
+	// accountStatusActiveAndReplaced is IncludeReplaced: `status IN ('active','replaced')`.
+	accountStatusActiveAndReplaced
+	// accountStatusReplacedOnly is ReplacedOnly: `status = 'replaced'` — active rows are DROPPED.
+	accountStatusReplacedOnly
+	// accountStatusAny is AllStatuses: no status predicate (active, replaced AND expired).
+	accountStatusAny
+)
+
+// resolveAccountStatusScope maps the (independent, non-exclusive) status booleans to exactly one
+// predicate. The precedence is MOST SPECIFIC WINS, and it is deliberate rather than incidental:
+//
+//	ReplacedOnly > AllStatuses > IncludeReplaced > default(active-only)
+//
+// The only combination where that is observable is ReplacedOnly+AllStatuses, which is
+// contradictory ("only replaced" vs "no status filter at all"). It resolves to replaced-only —
+// i.e. setting AllStatuses alongside ReplacedOnly does NOT widen the result, it is ignored, and
+// active rows are dropped. No caller does this today (the sole ReplacedOnly caller is
+// accountService.GetAccountsFiltered's StatusFilter=="replaced" branch, which never sets
+// AllStatuses); it is documented and pinned by test rather than left to be rediscovered.
+func resolveAccountStatusScope(opts AccountFilterOptions) accountStatusScope {
+	switch {
+	case opts.ReplacedOnly:
+		return accountStatusReplacedOnly
+	case opts.AllStatuses:
+		return accountStatusAny
+	case opts.IncludeReplaced:
+		return accountStatusActiveAndReplaced
+	default:
+		return accountStatusActiveOnly
+	}
+}
+
+// clause renders the SQL status predicate, appended after `WHERE a.user_id = $1`.
+func (s accountStatusScope) clause() string {
+	switch s {
+	case accountStatusReplacedOnly:
+		return " AND a.status = 'replaced'"
+	case accountStatusAny:
+		return ""
+	case accountStatusActiveAndReplaced:
+		return " AND a.status IN ('active', 'replaced')"
+	default:
+		return " AND a.status = 'active'"
+	}
+}
+
+// dropsReplaced reports whether this scope excludes at least one replaced account — precisely what
+// AccountsReplacedFiltered counts ("query executions that excluded at least one replaced account or
+// expanded a re-link chain", see observability/metrics.go).
+//
+// Only the active-only default qualifies. Note what that means for the two edge scopes:
+//
+//   - accountStatusAny (AllStatuses) drops nothing, so it must stay silent — that decision is
+//     already pinned by an integration test (#1537 round 10).
+//   - accountStatusReplacedOnly drops ACTIVE rows, not replaced ones, so by the metric's own
+//     definition it is also silent. Before this change it INCREMENTED, labelling a replaced-only
+//     query as the "accounts_list active-only path" in the family list — a PRE-EXISTING mislabel
+//     dating to Issue #1109, not introduced or inherited by this branch's all-statuses work. It is
+//     corrected here because deriving the canary from the resolved scope is what removes the
+//     fail-open above, and a flags-based special case for ReplacedOnly would have reintroduced the
+//     same two-sources-of-truth shape.
+func (s accountStatusScope) dropsReplaced() bool {
+	return s == accountStatusActiveOnly
+}
+
 // GetAccountsWithInstitutionFiltered retrieves accounts with institution names and flexible filtering.
 // Issue #679, #680: Also includes linked_item status to show 'disconnected' when subscription expires.
 // Issue #1109: Added IncludeReplaced and UserAccountID filter options.
 func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error) {
-	// Canary counter: every active-only call filters out replaced accounts (Issue #1109).
-	// AllStatuses is excluded because it filters nothing out — counting it would make the
-	// canary fire for a call that is the opposite of what the canary measures (Issue #1537).
-	if !opts.IncludeReplaced && !opts.AllStatuses {
+	// The status predicate is resolved FIRST and the canary is derived FROM it, because the two
+	// used to be computed independently from the same booleans and could disagree: the switch
+	// matched ReplacedOnly before AllStatuses (so both set yielded `status = 'replaced'`, dropping
+	// active rows), while the canary condition `!IncludeReplaced && !AllStatuses` read AllStatuses
+	// and stayed silent — a fail-open in the counter whose job is catching fail-opens. Deriving one
+	// from the other makes that class of disagreement unrepresentable (Issue #1537).
+	statusScope := resolveAccountStatusScope(opts)
+	if statusScope.dropsReplaced() {
 		observability.AccountsReplacedFiltered.WithLabelValues("accounts_list").Inc()
 	}
 	hiddenClause := ""
@@ -850,17 +966,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		hiddenClause = " AND a.is_hidden = FALSE"
 	}
 
-	var statusClause string
-	switch {
-	case opts.ReplacedOnly:
-		statusClause = " AND a.status = 'replaced'"
-	case opts.AllStatuses:
-		statusClause = ""
-	case opts.IncludeReplaced:
-		statusClause = " AND a.status IN ('active', 'replaced')"
-	default:
-		statusClause = " AND a.status = 'active'"
-	}
+	statusClause := statusScope.clause()
 
 	userAccountClause := ""
 	args := []any{userID}
