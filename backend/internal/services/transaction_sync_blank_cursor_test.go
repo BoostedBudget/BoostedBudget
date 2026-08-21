@@ -187,3 +187,125 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping(t
 		}
 	}
 }
+
+// TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages is the axis the round-10
+// fix missed, and it is the third time this branch has traded one failure mode for a worse one.
+// Issue #1537 round 11.
+//
+// THE LOSS. `UpdateCursor` runs INSIDE the pagination loop (per page), while storage happens AFTER it.
+// So on a two-page sync where page 1 succeeds and page 2 returns has_more=true with an empty cursor:
+//
+//	1. page 1's transactions are appended to `result` and page 1's cursor is PERSISTED;
+//	2. round 10's guard returned an error before any storage;
+//	3. the worker reads `result` only on the success path (queue/jobs/plaid_sync.go) — on error it is
+//	   discarded entirely.
+//
+// The retry then resumes from page 1's cursor, and /transactions/sync does not re-deliver page 1. Those
+// transactions are gone. The condition is server-side and deterministic on retry, so all five attempts
+// burn and the item dead-letters with a silent hole in its history.
+//
+// ⚠ This was a REGRESSION against the pre-round-9 code, which is the part I got wrong twice. That code
+// set cursor="" and re-entered the loop, so Plaid replayed the window inline and everything was stored
+// — expensive, but lossless. "Bad data became a possible hang" was true only for a single-page sync;
+// for N>1 it became silent data loss.
+//
+// THE FIX, and why it is not "return the error differently": the cursor already sits at page 1, so the
+// lossless move is to keep what was fetched. If we made progress, stop paginating and return the
+// accumulated pages with NO error, so the worker stores them and the next sync resumes exactly where
+// the cursor points. Only when we made NO progress (the very first page came back malformed) is an
+// error right — otherwise the job would "succeed" having done nothing, forever, which is a silent
+// stall and worse for an operator than a visible failure. Both branches are tested.
+func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t *testing.T) {
+	ctx := context.Background()
+
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo,
+		nil, nil, mockPlaidService, nil, nil, nil, nil, nil, nil,
+	)
+
+	startCursor := "cursor-page-0"
+	linkedItem := &domain.LinkedItem{
+		ID:          "linked-item-multipage",
+		UserID:      "user-multipage",
+		ItemID:      "plaid-item-multipage",
+		AccessToken: "access-token",
+		Cursor:      &startCursor,
+	}
+
+	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-multipage").
+		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-multipage"}}, nil).Maybe()
+
+	// Page 1: a normal, successful page carrying real transactions and a real cursor.
+	page1 := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{
+			{TransactionId: "txn-page1", AccountId: "plaid-acc-1", Amount: 42.00, Date: "2024-01-15", Name: "Page one"},
+		},
+		Modified: []plaid.Transaction{}, Removed: []plaid.RemovedTransaction{},
+	}
+	page1.SetNextCursor("cursor-page-1")
+	page1.SetHasMore(true)
+
+	// Page 2: the malformed shape — more promised, no cursor to fetch it with.
+	page2 := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{}, Removed: []plaid.RemovedTransaction{},
+	}
+	page2.SetNextCursor("")
+	page2.SetHasMore(true)
+
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", startCursor, 0).Return(page1, nil).Once()
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", "cursor-page-1", 0).Return(page2, nil).Once()
+	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	// Storage must be REACHED — that is the whole point. SyncTransactions does its own CreateBatch
+	// (transaction_sync_service.go:589 -> :863), so the round-10 error path returned before its own
+	// storage step. Stubbing it lets us assert page 1 actually arrives there.
+	mockTransactionRepo.On("CreateBatch", mock.Anything, mock.Anything).
+		Return(map[string]bool{"txn-page1": true}, nil).Maybe()
+
+	result, err := service.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err,
+		"page 1 was fetched and its cursor persisted, so returning an error makes the worker discard "+
+			"page 1's transactions while the cursor has already moved past them — Plaid will not "+
+			"re-deliver them. Having made progress, stop paginating and hand back what we have.")
+	require.NotNil(t, result)
+	require.Len(t, result.Added, 1,
+		"page 1's transactions must survive; they are the data that would otherwise be lost")
+	assert.Equal(t, "txn-page1", result.Added[0].GetTransactionId())
+
+	// The blank cursor must still never be persisted, and page 1's real cursor must be.
+	var persisted []string
+	for _, c := range mockLinkedItemRepo.Calls {
+		if c.Method == "UpdateCursor" {
+			persisted = append(persisted, c.Arguments.Get(2).(string))
+		}
+	}
+	assert.Equal(t, []string{"cursor-page-1"}, persisted,
+		"exactly page 1's cursor should be persisted — never the blank")
+
+	// The strongest form of the assertion: page 1's transaction reached STORAGE, not merely the
+	// returned struct. Under the round-10 behaviour CreateBatch was never called at all.
+	stored := 0
+	for _, c := range mockTransactionRepo.Calls {
+		if c.Method != "CreateBatch" {
+			continue
+		}
+		txns, ok := c.Arguments.Get(1).([]domain.Transaction)
+		if !ok {
+			continue
+		}
+		for _, txn := range txns {
+			if txn.ExternalTransactionID != nil && *txn.ExternalTransactionID == "txn-page1" {
+				stored++
+			}
+		}
+	}
+	assert.Equal(t, 1, stored,
+		"page 1's transaction must reach CreateBatch. Returning an error before the storage step is "+
+			"what lost it, while its cursor had already been persisted.")
+}
