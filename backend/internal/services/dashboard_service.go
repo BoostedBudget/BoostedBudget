@@ -22,27 +22,47 @@ func snapshotChainKey(s domain.BalanceSnapshot) string {
 
 // buildChainAwareAccountMap builds a map keyed by both account.ID and account.UserAccountID
 // so that snapshots carrying a replaced account_id still resolve via the chain key (Issue #1109).
-// baselineBalanceForComparison sums the 30-day-ago snapshots using the SAME account universe and
-// type filter the current total uses, so the period comparison is apples-to-apples.
+// baselineBalanceForComparison sums the 30-day-ago snapshots for the period comparison, applying
+// the SAME AccountTypes filter the current total applies, over a DELIBERATELY DIFFERENT account
+// universe.
 //
-// Issue #1537 round 9. Both callers previously summed every snapshot they were handed, while their
-// current-balance loops applied a chain-aware accountMap lookup AND the AccountTypes filter. With a
-// type filter active the baseline therefore included accounts the current total excluded, and
-// ChangeAmount/ChangePercent were arbitrary — a measured +50% was reported as +150%.
+// Issue #1537 round 9 fixed the filter half. Both callers previously summed every snapshot they were
+// handed, while their current-balance loops applied a chain-aware accountMap lookup AND the
+// AccountTypes filter. With a type filter active the baseline therefore included accounts the current
+// total excluded, and ChangeAmount/ChangePercent were arbitrary — a measured +50% was reported as
+// +150%.
+//
+// Issue #1537 round 10 fixed the universe half, which round 9 broke. Round 9 applied the CURRENT
+// account map to the baseline as well, and that map comes from an active-only read
+// (GetByUserID: `status = 'active'`; GetForHouseholdScope: `a.status = 'active'`, regardless of its
+// asOf) while the snapshot reads filter on user_id/household membership alone. A snapshot whose
+// account has since gone 'replaced' or 'expired' with no active chain successor therefore had no map
+// entry and was dropped: a $1,000 account disconnected 30 days ago produced baseline $0 (or, with
+// another account still active, an equal current and baseline), and the comparison reported "no
+// change" for what was really a large decrease.
+//
+// THE TWO SIDES USE DIFFERENT ACCOUNT UNIVERSES ON PURPOSE. Net worth history includes historical
+// balances, because a snapshot is a fact about a point in time; the CURRENT total includes only
+// linked/active accounts. That asymmetry is what makes a disconnection surface as a real decrease,
+// and it is why the field is PreviousBalance rather than "previous balance of the accounts that
+// happen to still be active". historicalAccounts supplies the since-inactive accounts — used ONLY to
+// learn an account's type so the AccountTypes filter can still be applied to it; the balance itself
+// always comes from the snapshot row. activeAccounts is consulted first so a re-linked chain keeps
+// resolving to its active member exactly as before.
 //
 // dedupChains reflects a real difference between the two callers, not an oversight: the personal path
 // can receive several snapshots per logical account on a re-link day (it sorts DESC first and keeps
 // the latest per chain), while the household path is already one row per account.
 //
-// KNOWN APPROXIMATION, stated rather than left to be discovered: accountMap is built as of NOW, and
-// is applied here to snapshots from 30 days ago. An account that has since disappeared from the map
-// drops out of the baseline. That is deliberate — the current total is computed over exactly this
-// universe, so using it on both sides is what makes the two comparable. The alternative (a second,
-// as-of-then account map) is what the comment above getBalanceSummaryHousehold's snapshot fetch was
-// avoiding when it justified the raw sum, and it would reintroduce the mismatch it was avoiding.
+// ⚠ The comment that used to live here asserted the single-map approach as a deliberate "KNOWN
+// APPROXIMATION". It was wrong. Stated plainly because this exact claim has now been wrong twice in
+// opposite directions — first "the baseline needs no map at all", then "one now-shaped map serves
+// both sides" — and each time the wrong version was written down as a justification rather than a
+// question. Two universes are needed; anything that collapses them re-breaks one half.
 func baselineBalanceForComparison(
 	snapshots []domain.BalanceSnapshot,
-	accountMap map[string]domain.Account,
+	activeAccounts map[string]domain.Account,
+	historicalAccounts map[string]domain.Account,
 	accountTypes []string,
 	dedupChains bool,
 ) float64 {
@@ -56,7 +76,10 @@ func baselineBalanceForComparison(
 			}
 			seenChainKeys[key] = true
 		}
-		account, exists := accountMap[key]
+		account, exists := activeAccounts[key]
+		if !exists {
+			account, exists = historicalAccounts[key]
+		}
 		if !exists {
 			continue
 		}
@@ -77,6 +100,19 @@ func baselineBalanceForComparison(
 		}
 	}
 	return total
+}
+
+// hasSnapshotOutsideAccountMap reports whether any snapshot's chain key is absent from accountMap.
+// It gates the extra all-statuses account read behind the only case that needs it: a chain with no
+// active member left. A chain that was merely re-linked still resolves through the chain-aware map's
+// user_account_id key, so the common path keeps its single account query and its single round trip.
+func hasSnapshotOutsideAccountMap(snapshots []domain.BalanceSnapshot, accountMap map[string]domain.Account) bool {
+	for _, snapshot := range snapshots {
+		if _, exists := accountMap[snapshotChainKey(snapshot)]; !exists {
+			return true
+		}
+	}
+	return false
 }
 
 func buildChainAwareAccountMap(accounts []domain.Account) map[string]domain.Account {
@@ -220,7 +256,19 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 		if filters != nil {
 			accountTypes = filters.AccountTypes
 		}
-		previousBalance := baselineBalanceForComparison(previousSnapshots, accountMap, accountTypes, true)
+		historicalMap, histErr := s.historicalAccountMap(ctx, userID, previousSnapshots, accountMap)
+		if histErr != nil {
+			// Omit the comparison rather than report one computed over the wrong universe. This
+			// matches how the surrounding code already degrades (a failed previous-snapshot read
+			// leaves periodComparison nil), and reporting "no change" for a disconnection is
+			// exactly the user-visible lie #1537 round 10 exists to remove.
+			return &domain.BalanceSummaryResponse{
+				AsOfDate:     asOfDate,
+				TotalBalance: totalBalance,
+				ByType:       byType,
+			}, nil
+		}
+		previousBalance := baselineBalanceForComparison(previousSnapshots, accountMap, historicalMap, accountTypes, true)
 
 		changeAmount := totalBalance - previousBalance
 		changePercent := 0.0
@@ -241,6 +289,37 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 		ByType:           byType,
 		PeriodComparison: periodComparison,
 	}, nil
+}
+
+// historicalAccountMap returns the chain-aware account map for the personal-scope comparison
+// baseline: every status, so a snapshot belonging to a chain that has since been fully replaced or
+// expired can still be attributed to an account type. It returns an empty (non-nil-safe to read) map
+// without querying when every baseline snapshot already resolves in activeMap, which is the common
+// case — a merely re-linked chain resolves there through its user_account_id key.
+//
+// AllStatuses, not IncludeReplaced: IncludeReplaced widens the filter to
+// `status IN ('active','replaced')` and so still excludes 'expired', which is precisely what
+// ExpireAccountsByFingerprint writes for the fully-disconnected chains this baseline must account
+// for. IncludeHidden is set to true to match GetByUserID, which applies no is_hidden predicate at
+// all — switching the baseline to a source that defaults to hiding hidden accounts would silently
+// change which accounts count toward it. Issue #1537.
+func (s *dashboardService) historicalAccountMap(
+	ctx context.Context,
+	userID string,
+	baselineSnapshots []domain.BalanceSnapshot,
+	activeMap map[string]domain.Account,
+) (map[string]domain.Account, error) {
+	if !hasSnapshotOutsideAccountMap(baselineSnapshots, activeMap) {
+		return map[string]domain.Account{}, nil
+	}
+	accounts, err := s.accountRepo.GetAccountsWithInstitutionFiltered(ctx, userID, repository.AccountFilterOptions{
+		AllStatuses:   true,
+		IncludeHidden: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all-status accounts for comparison baseline: %w", err)
+	}
+	return buildChainAwareAccountMap(accounts), nil
 }
 
 // getBalanceSummaryHousehold is the household-scope variant of GetBalanceSummary. It MUST
@@ -274,14 +353,19 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
 	}
-	// One "now"-asOf account map serves both the current total and the previous-period baseline
-	// (unlike getNetWorthHousehold, which needs a map per point in time) — #1369 gap-closure G1.
+	// This "now"-asOf map is the CURRENT universe: active accounts only, per the product rule that
+	// current totals include only linked/active accounts.
 	//
-	// ⚠ Corrected in #1537 round 9. This comment used to say the comparison "sums snapshots directly
-	// without any accountMap lookup", which was true and was a bug: the baseline then included
-	// accounts the filtered current total excluded, making ChangePercent arbitrary under a type
-	// filter. The baseline now goes through baselineBalanceForComparison with this same map, which is
-	// what keeps one map sufficient AND the two sides comparable.
+	// ⚠ This comment has been wrong twice, in opposite directions, so the history is recorded rather
+	// than quietly overwritten a third time. It first said the comparison "sums snapshots directly
+	// without any accountMap lookup" — true, and a bug: the baseline then included accounts the
+	// filtered current total excluded, making ChangePercent arbitrary under a type filter (#1537
+	// round 9). Round 9's replacement then said this one map "serves both the current total and the
+	// previous-period baseline" — also a bug, because GetForHouseholdScope filters
+	// `a.status = 'active'` regardless of its asOf, so a household account disconnected since the
+	// cutoff vanished from the baseline and a real decrease was reported as "no change" (#1537
+	// round 10). The baseline needs its OWN map, resolved at the previous cutoff and over all
+	// statuses — like getNetWorthHousehold, this path needs a map per point in time after all.
 	accounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household accounts: %w", err)
@@ -333,9 +417,27 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 
 	var periodComparison *domain.PeriodComparisonData
 	previousDate := asOfDate.AddDate(0, 0, -30)
-	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, endOfDay(previousDate))
+	// previousCutoff is captured once and shared by the baseline snapshot read and the baseline
+	// account map below, for the same reason currentCutoff is shared above: the two must agree on
+	// which member's copy wins a joint-account fingerprint collision (#1369 gap-closure G1).
+	previousCutoff := endOfDay(previousDate)
+	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, previousCutoff)
 	if err == nil && len(previousSnapshots) > 0 {
-		previousBalance := baselineBalanceForComparison(previousSnapshots, accountMap, filters.AccountTypes, false)
+		historicalMap := map[string]domain.Account{}
+		if hasSnapshotOutsideAccountMap(previousSnapshots, accountMap) {
+			historicalAccounts, histErr := s.accountRepo.GetForHouseholdScopeAllStatuses(ctx, userID, scope, previousCutoff)
+			if histErr != nil {
+				// Omit the comparison rather than compute it over the wrong universe — see the
+				// personal path's identical guard for why silence beats a false "no change".
+				return &domain.BalanceSummaryResponse{
+					AsOfDate:     asOfDate,
+					TotalBalance: totalBalance,
+					ByType:       byType,
+				}, nil
+			}
+			historicalMap = buildChainAwareAccountMap(historicalAccounts)
+		}
+		previousBalance := baselineBalanceForComparison(previousSnapshots, accountMap, historicalMap, filters.AccountTypes, false)
 		changeAmount := totalBalance - previousBalance
 		changePercent := 0.0
 		if previousBalance != 0 {

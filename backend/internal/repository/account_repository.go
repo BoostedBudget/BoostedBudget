@@ -36,9 +36,23 @@ type FingerprintOwnership struct {
 // AccountFilterOptions configures filtering for GetAccountsWithInstitutionFiltered (Issue #1109).
 type AccountFilterOptions struct {
 	IncludeHidden   bool   // if true, includes hidden accounts
-	IncludeReplaced bool   // if true, returns all accounts regardless of status (active + replaced)
+	IncludeReplaced bool   // if true, widens the status filter to active + replaced
 	ReplacedOnly    bool   // if true, returns only replaced accounts (status=replaced)
 	UserAccountID   string // if non-empty, filters to accounts sharing this user_account_id
+
+	// AllStatuses removes the status predicate entirely, returning active, replaced AND
+	// expired accounts. IncludeReplaced is NOT a substitute: it produces
+	// `status IN ('active','replaced')`, which excludes 'expired' — and 'expired' is exactly
+	// what ExpireAccountsByFingerprint writes for a fully-disconnected chain (the three
+	// statuses are enumerated in domain/account.go). Callers that need the account universe
+	// as it was at some past instant — e.g. the dashboard's 30-day comparison baseline, which
+	// must attribute a since-disconnected account's historical snapshot to its real type —
+	// need this, not IncludeReplaced. Issue #1537.
+	//
+	// AllStatuses deliberately does NOT increment the AccountsReplacedFiltered canary: that
+	// counter measures active-only calls that DROP replaced accounts, and this option drops
+	// nothing.
+	AllStatuses bool
 }
 
 // AccountRepository defines the interface for account data access
@@ -67,6 +81,17 @@ type AccountRepository interface {
 	// can disagree on which member's copy wins for a joint account (Issue #1369
 	// gap-closure G1). Issue #1369 — Phase 5.
 	GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error)
+
+	// GetForHouseholdScopeAllStatuses is GetForHouseholdScope without the
+	// `a.status = 'active'` predicate: it returns every chain member (active, replaced AND
+	// expired) of every account shared into the household. Household aggregation of a PAST
+	// instant needs it, because GetForHouseholdScope filters to active REGARDLESS of its asOf
+	// argument — so a household account disconnected since asOf is missing from its result and
+	// its historical snapshot cannot be attributed to an account type. Same asOf contract as
+	// GetForHouseholdScope: it must match the asOf of the GetSnapshotsAsOfForHousehold call it
+	// is paired with. Callers must NOT use this for a "current" figure — the product rule is
+	// that current totals include only linked/active accounts. Issue #1537.
+	GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error)
 
 	// GetAccountsWithInstitution retrieves all accounts for a user with institution names
 	// This method performs a LEFT JOIN with linked_items to include institution_name
@@ -460,6 +485,20 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 // GetSnapshotsAsOfForHousehold call this account map is paired with (Issue #1369
 // gap-closure G1) — see the interface doc for why. Issue #1369 — Phase 5.
 func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, " AND a.status = 'active'")
+}
+
+// GetForHouseholdScopeAllStatuses is GetForHouseholdScope with the status predicate removed,
+// so a chain that has since been replaced or expired in its entirety still resolves. See the
+// interface doc for when that is the correct universe and when it is not. Issue #1537.
+func (r *accountRepository) GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, "")
+}
+
+// getForHouseholdScope is the shared body of the two exported household-scope account reads.
+// statusClause is spliced in as a literal (never user input) so the two variants cannot drift
+// apart in their column list, CTE, dedup or decryption handling.
+func (r *accountRepository) getForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time, statusClause string) ([]domain.Account, error) {
 	query := "WITH " + householdAccountsCTEForBalancesAsOf() + `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
@@ -468,7 +507,7 @@ func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requesting
 		       a.created_at, a.updated_at
 		FROM accounts a
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
-		WHERE a.status = 'active'
+		WHERE TRUE` + statusClause + `
 		ORDER BY a.created_at ASC
 	`
 
@@ -801,7 +840,9 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 // Issue #1109: Added IncludeReplaced and UserAccountID filter options.
 func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error) {
 	// Canary counter: every active-only call filters out replaced accounts (Issue #1109).
-	if !opts.IncludeReplaced {
+	// AllStatuses is excluded because it filters nothing out — counting it would make the
+	// canary fire for a call that is the opposite of what the canary measures (Issue #1537).
+	if !opts.IncludeReplaced && !opts.AllStatuses {
 		observability.AccountsReplacedFiltered.WithLabelValues("accounts_list").Inc()
 	}
 	hiddenClause := ""
@@ -813,6 +854,8 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	switch {
 	case opts.ReplacedOnly:
 		statusClause = " AND a.status = 'replaced'"
+	case opts.AllStatuses:
+		statusClause = ""
 	case opts.IncludeReplaced:
 		statusClause = " AND a.status IN ('active', 'replaced')"
 	default:
