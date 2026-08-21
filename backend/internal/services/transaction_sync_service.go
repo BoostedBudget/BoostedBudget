@@ -497,7 +497,35 @@ func (s *transactionSyncService) SyncTransactions(
 				if pageCount > 1 {
 					// Progress made: pages 1..N are ALL kept — page N's rows were appended above,
 					// BEFORE this guard. The cursor still points at page N-1, so the next sync
-					// re-fetches page N and CreateBatch upserts it: no loss and no duplicate rows.
+					// re-fetches page N and re-runs the whole post-pagination tail against it.
+					//
+					// #1537 T93(a): an earlier version of this comment claimed "no loss and no
+					// duplicate rows". Only the first half is right, and only for TRANSACTION rows.
+					// What re-fetching page N is actually idempotent in:
+					//   - added: transactionRepo.CreateBatch is ON CONFLICT (source,
+					//     external_transaction_id_blind_idx, user_id) DO UPDATE — re-upsert, no dupe.
+					//   - modified: Update keyed on the existing row's id.
+					//   - removed: DeleteByExternalID tolerates an already-deleted row.
+					// What it is NOT idempotent in (all verified, all downstream of storage):
+					//   - balance_snapshots: balanceSnapshotRepository.Create is a plain INSERT with
+					//     NO ON CONFLICT, and snapshot_at is a fresh time.Now() per run, so a re-run
+					//     more than createBalanceSnapshots' 5-minute dedup window later ADDS a row
+					//     per account. Migration 000017 deliberately dropped the old
+					//     UNIQUE(account_id, snapshot_date) to allow many snapshots per day, and the
+					//     read paths take only the latest per account per day — so this inflates row
+					//     count, not reported balances.
+					//   - Plaid sync metrics: the worker's PlaidSyncTxns counters
+					//     (queue/jobs/plaid_sync.go, the observability block after a successful sync)
+					//     add page N's added/modified/removed a SECOND time.
+					//   - boost rules: RecalculateBudgetAmounts below re-emits budget_updated, and
+					//     boostExecutionService.ProcessEventTrigger has no cooldown or dedup — every
+					//     matching rule re-executes, writing a new boost_executions row, bumping
+					//     IncrementExecutionCount/UpdateLastSuccessful, and (for transfer-suggestion
+					//     rules) creating a NEW pending suggestion with a fresh uuid. Note this is
+					//     not specific to this branch — every sync run does it — but the extra run
+					//     this branch causes is an extra round of it.
+					//
+					// Net: transactions are safe to re-deliver; nothing else on the tail is.
 					// Not an error; the item is simply not fully caught up between incremental syncs.
 					s.logger.Warn("plaid returned has_more=true with an empty next_cursor; stopping "+
 						"pagination and keeping every page fetched this run — the cursor lags one "+
@@ -550,6 +578,21 @@ func (s *transactionSyncService) SyncTransactions(
 	// pages already fetched ARE stored and the persisted cursor is consistent with them, so the next
 	// sync resumes correctly — but this is NOT a complete sync, and an earlier version of this comment
 	// said "All pages fetched successfully", which my own break made false.
+	//
+	// #1537 T93(c) — KNOWN, UNFIXED DATA-LOSS WINDOW between here and the storage steps below.
+	// UpdateCursor is called PER PAGE inside the loop above, but nothing has been stored yet. So
+	// every error return between this point and the end of Step 8 loses the rows for the pages
+	// whose cursors were already persisted: the worker (queue/jobs/plaid_sync.go) discards `result`
+	// entirely on a non-nil error, and /transactions/sync will not re-deliver rows the cursor has
+	// moved past. Concretely, the triggers are:
+	//   1. buildAccountMaps failing (accountRepo.GetByLinkedItemID error) — loses EVERY page.
+	//   2. processAddedTransactions / processModifiedTransactions failing — loses the rows after
+	//      the failure point (Modified commits one Update per row and returns on the first error).
+	// The narrow fix is NOT to add a retry here: it is to stop persisting the cursor per page and
+	// only advance it after storage commits, since Plaid re-delivers everything from the old cursor
+	// and CreateBatch upserts (see the T93(a) note above for exactly what re-delivery is safe for).
+	// That changes cursor semantics for every multi-page sync, so it is tracked as issue #1570
+	// rather than folded into #1537. Do not delete this note without closing #1570.
 	result.NewCursor = cursor
 	s.logger.Info("sync complete",
 		"item_id", linkedItem.ID,
@@ -564,13 +607,24 @@ func (s *transactionSyncService) SyncTransactions(
 	// Store Added/Modified transactions, delete Removed transactions
 	// ========================================================================
 
-	// Issue #1531 Task 10b-2a-ii: track whether ANY storage step below actually committed a
-	// write, and bump the cache on the way out (via defer) REGARDLESS of whether a later step
-	// fails. Without this, a sync that stores Added successfully and then fails on Modified
-	// would return an error before ever reaching the single bumpCacheForSync call at the end of
-	// this function's success path — leaving the just-committed Added rows invisible to cached
-	// reads for the full namespace TTL. Bumping is void+idempotent (cache.Generations.Bump), so
-	// an extra bump on top of the always-bump-on-full-success behavior below costs nothing.
+	// Issue #1531 Task 10b-2a-ii / #1537 T92: bump the cache on the way out (via defer) whenever
+	// a storage step was ATTEMPTED, regardless of whether it — or any later step — failed.
+	//
+	// What the deferred bump guarantees, precisely: if control reached the `if len(result.X) > 0`
+	// guard of ANY of the three storage steps below, the user's (and, where resolvable, their
+	// household's) cache generation is bumped on EVERY exit path from here on, error or success.
+	// It does NOT guarantee a bump for writes made before this point (the pagination loop's
+	// UpdateCursor calls, which touch no cached-read table) nor for the non-fatal post-storage
+	// steps, which are reached only after cacheBumpNeeded is already true.
+	//
+	// The flag is armed BEFORE each write is attempted, not after it succeeds (#1537 T92). It used
+	// to be armed after: processModifiedTransactions commits one transactionRepo.Update PER ROW
+	// and returns on the first failure, so a MODIFIED-ONLY sync (Plaid DEFAULT_UPDATE's common
+	// shape, with result.Added empty and therefore no earlier step to arm the flag) that committed
+	// 5 of 10 updates returned before arming it — five durable rows in `transactions`, a
+	// cached-read table, left invisible to cached analytics for the full namespace TTL. Arming
+	// first is unambiguously the fail-safe direction: a spurious bump costs exactly one cache
+	// generation (Bump is void and idempotent), while a missed bump serves stale financial data.
 	var cacheBumpNeeded bool
 	defer func() {
 		if cacheBumpNeeded {
@@ -591,30 +645,33 @@ func (s *transactionSyncService) SyncTransactions(
 	// Step 6: Process Added transactions (create batch)
 	// Issue #171: Pass userAccountMap for stable UserAccountID propagation
 	if len(result.Added) > 0 {
+		// #1537 T92: arm BEFORE the write, not after it succeeds — see the defer above.
+		cacheBumpNeeded = true
 		if err := s.processAddedTransactions(ctx, result.Added, linkedItem, accountMap, userAccountMap); err != nil {
 			s.logger.Error("failed to process added transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process added transactions: %w", err)
 		}
-		cacheBumpNeeded = true
 	}
 
 	// Step 7: Process Modified transactions (update with user_notes preservation)
 	// Issue #171: Pass userAccountMap for stable UserAccountID propagation
 	if len(result.Modified) > 0 {
+		// #1537 T92: arm BEFORE the write, not after it succeeds — see the defer above.
+		cacheBumpNeeded = true
 		if err := s.processModifiedTransactions(ctx, result.Modified, linkedItem, accountMap, userAccountMap); err != nil {
 			s.logger.Error("failed to process modified transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process modified transactions: %w", err)
 		}
-		cacheBumpNeeded = true
 	}
 
 	// Step 8: Process Removed transactions (hard delete)
 	if len(result.Removed) > 0 {
+		// #1537 T92: arm BEFORE the write, not after it succeeds — see the defer above.
+		cacheBumpNeeded = true
 		if err := s.processRemovedTransactions(ctx, result.Removed, linkedItem); err != nil {
 			s.logger.Error("failed to process removed transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process removed transactions: %w", err)
 		}
-		cacheBumpNeeded = true
 	}
 
 	s.logger.Info("transaction storage complete", "item_id", linkedItem.ID)

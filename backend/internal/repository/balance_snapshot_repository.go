@@ -22,6 +22,22 @@ type BalanceSnapshotRepository interface {
 	// Create inserts a new balance snapshot.
 	// Does NOT perform upsert - allows multiple snapshots per account per day for high-frequency syncs.
 	// Deduplication (5-minute window) should be handled by the service layer using GetLatestByAccountID.
+	//
+	// #1537 T93(b): the plain INSERT is deliberate and there is NO safe uniqueness key to add an
+	// ON CONFLICT against. Investigated and rejected:
+	//   - (account_id, snapshot_at, source): snapshot_at is a fresh time.Now().UTC() stamped per
+	//     sync run (transactionSyncService.createBalanceSnapshots), so two runs never collide on
+	//     it. A unique index here would never fire and would therefore dedup nothing.
+	//   - (user_account_id, snapshot_at, source): same problem, plus user_account_id is NULLABLE
+	//     (migration 000038 adds it with ON DELETE SET NULL), and NULLs never conflict under a
+	//     plain UNIQUE — so every snapshot for an account with no user_account link would slip past.
+	//   - (account_id, DATE(snapshot_at)): this is exactly the UNIQUE(account_id, snapshot_date)
+	//     that migration 000017 DROPPED on purpose, to support multiple snapshots per day.
+	// Retry duplication is bounded instead by the service's 5-minute window, and the read paths
+	// (GetAggregatedHistory, GetLatestByUserID, GetSnapshotsAsOf*) all collapse to the latest
+	// snapshot per account (per day where relevant) — so extra rows inflate row count, never a
+	// reported balance. Do not add an ON CONFLICT here without first changing how snapshot_at is
+	// derived; that is a schema/semantics decision, not a repository cleanup.
 	Create(ctx context.Context, snapshot *domain.BalanceSnapshot) error
 
 	// GetAggregatedHistory retrieves aggregated balance history for dashboard charts.

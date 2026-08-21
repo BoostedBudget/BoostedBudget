@@ -215,6 +215,14 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping(t
 // the cursor points. Only when we made NO progress (the very first page came back malformed) is an
 // error right — otherwise the job would "succeed" having done nothing, forever, which is a silent
 // stall and worse for an operator than a visible failure. Both branches are tested.
+// TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages exercises the
+// pages_kept break branch END TO END.
+//
+// #1537 T97: the previous version of this test gave page 2 EMPTY Added/Modified/Removed and ran
+// exactly one sync, so it proved neither of the two things it claimed — that page N's own rows
+// survive the break (page 2 had none), nor that the next sync re-delivers and re-upserts them
+// (there was no next sync). Page 2 now carries a real row, and a SECOND sync runs from the cursor
+// the first one persisted.
 func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t *testing.T) {
 	ctx := context.Background()
 
@@ -240,7 +248,6 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-multipage").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-multipage"}}, nil).Maybe()
 
-	// Page 1: a normal, successful page carrying real transactions and a real cursor.
 	page1 := &plaid.TransactionsSyncResponse{
 		Added: []plaid.Transaction{
 			{TransactionId: "txn-page1", AccountId: "plaid-acc-1", Amount: 42.00, Date: "2024-01-15", Name: "Page one"},
@@ -250,9 +257,16 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 	page1.SetNextCursor("cursor-page-1")
 	page1.SetHasMore(true)
 
-	// Page 2: the malformed shape — more promised, no cursor to fetch it with.
+	// T97: page 2 carries REAL rows — an added row, a modified row, and a removed row — so the
+	// break branch is proven to keep page N's own payload, not just page 1's.
 	page2 := &plaid.TransactionsSyncResponse{
-		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{}, Removed: []plaid.RemovedTransaction{},
+		Added: []plaid.Transaction{
+			{TransactionId: "txn-page2", AccountId: "plaid-acc-1", Amount: 7.00, Date: "2024-01-16", Name: "Page two"},
+		},
+		Modified: []plaid.Transaction{
+			{TransactionId: "txn-page2-mod", AccountId: "plaid-acc-1", Amount: 9.00, Date: "2024-01-17", Name: "Page two mod"},
+		},
+		Removed: []plaid.RemovedTransaction{{TransactionId: stringPtr("txn-page2-rem")}},
 	}
 	page2.SetNextCursor("")
 	page2.SetHasMore(true)
@@ -261,11 +275,13 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", "cursor-page-1", 0).Return(page2, nil).Once()
 	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	// Storage must be REACHED — that is the whole point. SyncTransactions does its own CreateBatch
-	// (transaction_sync_service.go:594 -> :868), so the round-10 error path returned before its own
-	// storage step. Stubbing it lets us assert page 1 actually arrives there.
 	mockTransactionRepo.On("CreateBatch", mock.Anything, mock.Anything).
-		Return(map[string]bool{"txn-page1": true}, nil).Maybe()
+		Return(map[string]bool{"txn-page1": true, "txn-page2": true}, nil).Maybe()
+	mockTransactionRepo.On("GetByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-mod", "user-multipage").
+		Return(&domain.Transaction{ID: "existing-mod", ExternalTransactionID: stringPtr("txn-page2-mod")}, nil).Maybe()
+	mockTransactionRepo.On("Update", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockTransactionRepo.On("DeleteByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-rem", "user-multipage").
+		Return(nil).Maybe()
 
 	result, err := service.SyncTransactions(ctx, linkedItem)
 
@@ -274,11 +290,13 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 			"page 1's transactions while the cursor has already moved past them — Plaid will not "+
 			"re-deliver them. Having made progress, stop paginating and hand back what we have.")
 	require.NotNil(t, result)
-	require.Len(t, result.Added, 1,
-		"page 1's transactions must survive; they are the data that would otherwise be lost")
-	assert.Equal(t, "txn-page1", result.Added[0].GetTransactionId())
+	require.Len(t, result.Added, 2,
+		"BOTH pages' added rows must survive the break — page N's rows are appended before the guard")
+	assert.Equal(t, []string{"txn-page1", "txn-page2"},
+		[]string{result.Added[0].GetTransactionId(), result.Added[1].GetTransactionId()})
+	require.Len(t, result.Modified, 1, "page 2's modified rows must survive the break too")
+	require.Len(t, result.Removed, 1, "page 2's removed rows must survive the break too")
 
-	// The blank cursor must still never be persisted, and page 1's real cursor must be.
 	var persisted []string
 	for _, c := range mockLinkedItemRepo.Calls {
 		if c.Method == "UpdateCursor" {
@@ -288,10 +306,74 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 	assert.Equal(t, []string{"cursor-page-1"}, persisted,
 		"exactly page 1's cursor should be persisted — never the blank")
 
-	// The strongest form of the assertion: page 1's transaction reached STORAGE, not merely the
-	// returned struct. Under the round-10 behaviour CreateBatch was never called at all.
-	stored := 0
-	for _, c := range mockTransactionRepo.Calls {
+	storedInSync1 := storedExternalIDs(mockTransactionRepo)
+	assert.Equal(t, 1, storedInSync1["txn-page1"],
+		"page 1's transaction must reach CreateBatch. Returning an error before the storage step is "+
+			"what lost it, while its cursor had already been persisted.")
+	assert.Equal(t, 1, storedInSync1["txn-page2"],
+		"page N's OWN transaction must reach CreateBatch as well — it was appended to result before "+
+			"the break, so dropping it here would be silent loss of the last page")
+	// The page-2 modify/delete are what the break branch actually commits beyond page 1.
+	mockTransactionRepo.AssertCalled(t, "Update", mock.Anything, mock.Anything)
+	mockTransactionRepo.AssertCalled(t, "DeleteByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-rem", "user-multipage")
+
+	// ------------------------------------------------------------------
+	// T97 second sync: the cursor lags one page, so Plaid re-delivers page 2. This is the
+	// redelivery the break branch's comment depends on; it was previously never exercised.
+	// ------------------------------------------------------------------
+	// Derive the resume point from what production ACTUALLY persisted, not from a literal: an
+	// over-advanced cursor (the data-loss shape) must make this second sync visibly wrong rather
+	// than silently agree with a hardcoded expectation.
+	require.NotEmpty(t, persisted)
+	resumedCursor := persisted[len(persisted)-1]
+	linkedItem.Cursor = &resumedCursor
+
+	page2Redelivered := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{
+			{TransactionId: "txn-page2", AccountId: "plaid-acc-1", Amount: 7.00, Date: "2024-01-16", Name: "Page two"},
+		},
+		Modified: []plaid.Transaction{
+			{TransactionId: "txn-page2-mod", AccountId: "plaid-acc-1", Amount: 9.00, Date: "2024-01-17", Name: "Page two mod"},
+		},
+		Removed: []plaid.RemovedTransaction{{TransactionId: stringPtr("txn-page2-rem")}},
+	}
+	page2Redelivered.SetNextCursor("cursor-page-2")
+	page2Redelivered.SetHasMore(false)
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", resumedCursor, 0).
+		Return(page2Redelivered, nil).Once()
+
+	result2, err2 := service.SyncTransactions(ctx, linkedItem)
+	require.NoError(t, err2, "the follow-up sync must complete now that Plaid sends a real next_cursor")
+	require.Len(t, result2.Added, 1)
+	assert.Equal(t, "txn-page2", result2.Added[0].GetTransactionId(),
+		"the second sync must pick up exactly the page the lagging cursor pointed at — no loss")
+
+	storedTotal := storedExternalIDs(mockTransactionRepo)
+	assert.Equal(t, 2, storedTotal["txn-page2"],
+		"page 2 reached CreateBatch TWICE across the two syncs. That is the redelivery the break "+
+			"branch relies on being safe: CreateBatch is ON CONFLICT DO UPDATE, so the second write "+
+			"upserts rather than duplicating. Only TRANSACTION rows have that property — see the "+
+			"pages_kept comment for the non-idempotent tail (balance snapshots, sync metrics, boosts).")
+	assert.Equal(t, 1, storedTotal["txn-page1"],
+		"page 1 must NOT be re-fetched: the persisted cursor is already past it")
+
+	var persistedAfter []string
+	for _, c := range mockLinkedItemRepo.Calls {
+		if c.Method == "UpdateCursor" {
+			persistedAfter = append(persistedAfter, c.Arguments.Get(2).(string))
+		}
+	}
+	assert.Equal(t, []string{"cursor-page-1", "cursor-page-2"}, persistedAfter,
+		"the second sync must advance the cursor past page 2, ending the lag")
+
+	mockPlaidService.AssertExpectations(t)
+}
+
+// storedExternalIDs counts, per external transaction id, how many times a row with that id was
+// handed to transactionRepo.CreateBatch across every call recorded on the mock.
+func storedExternalIDs(repo *MockTransactionRepository) map[string]int {
+	counts := make(map[string]int)
+	for _, c := range repo.Calls {
 		if c.Method != "CreateBatch" {
 			continue
 		}
@@ -300,12 +382,10 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 			continue
 		}
 		for _, txn := range txns {
-			if txn.ExternalTransactionID != nil && *txn.ExternalTransactionID == "txn-page1" {
-				stored++
+			if txn.ExternalTransactionID != nil {
+				counts[*txn.ExternalTransactionID]++
 			}
 		}
 	}
-	assert.Equal(t, 1, stored,
-		"page 1's transaction must reach CreateBatch. Returning an error before the storage step is "+
-			"what lost it, while its cursor had already been persisted.")
+	return counts
 }

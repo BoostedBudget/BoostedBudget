@@ -620,37 +620,70 @@ func TestExactCitationsAreInRange(t *testing.T) {
 			"extraction is broken and a pass here would be meaningless", len(seen))
 	}
 
-	var stale []string
+	var stale, ambiguous []string
+	rangeChecked := 0
 	for r, count := range seen {
-		resolved := ""
-		for _, root := range citationSearchRoots {
-			c := filepath.Join(root, r.path)
-			if _, err := os.Stat(c); err == nil {
-				resolved = c
-				break
-			}
-		}
+		// SHARED RESOLVER, not a local re-implementation (#1537 T96). This loop used to inline a
+		// citationSearchRoots-only lookup, which cannot resolve the bare-basename shorthand these
+		// details use everywhere — so 31 of ~199 distinct exact refs fell through `continue` and got
+		// NO range check from ANY test in this file. One of them — the SetBalanceSnapshotRepo ref in
+		// repoMethodDispositions — named a bare main.go basename and pointed four lines short of the
+		// call; it is now written with a qualified path. ⚠ De-numbered deliberately: this file is in
+		// the guards' own scan list, so a file.go:NNN example written into a comment here becomes a
+		// finding about itself. Write examples as prose, never as a live-looking citation.
+		// resolveCitedFileForRange does resolve unambiguous
+		// basenames, and the sibling guards have used it all along; only this one had its own copy.
+		resolved, candidates := resolveCitedFileForRangeWithCount(r.path)
 		if resolved == "" {
-			// Bare-basename shorthand is resolved (and enforced) by TestDispositionCitationsResolve;
-			// this test only judges line numbers for paths it can locate unambiguously.
+			// AMBIGUITY IS REPORTED, NOT SKIPPED. A basename with several candidates (main.go has
+			// four) resolved to "" and was silently dropped, so a `dashboard.go` ref with a five-digit line passed every guard
+			// in this file. It cannot be range-checked against an arbitrary candidate — but that is a
+			// defect in the CITATION, which should name enough path to be resolvable, so it is
+			// surfaced rather than swallowed. The sibling guards' rule throughout this file is fall
+			// back or account, never skip.
+			if candidates > 1 {
+				ambiguous = append(ambiguous, r.path+":"+strconv.Itoa(r.line)+" (cited "+
+					strconv.Itoa(count)+"x) — basename matches "+strconv.Itoa(candidates)+
+					" files, so no guard can range-check it")
+			}
+			// Zero candidates is TestDispositionCitationsResolve's business, and it fails there.
 			continue
 		}
 		b, err := os.ReadFile(resolved)
 		if err != nil {
 			continue
 		}
-		if n := len(strings.Split(string(b), "\n")); r.line > n {
+		rangeChecked++
+		n := len(strings.Split(string(b), "\n"))
+		switch {
+		case r.line < 1:
+			// LOWER BOUND. There was none: only `r.line > n` was checked, so
+			// a `WHERE id = $1` fragment cited at transaction_repository.go line 0 — a plainly wrong
+			// citation — passed this guard AND the fragment guard (whose linesAround returned a silent
+			// skip for line < 1). A demonstrated fail-open, closed on both sides.
+			stale = append(stale, r.path+":"+strconv.Itoa(r.line)+" (cited "+strconv.Itoa(count)+
+				"x) — line numbers are 1-based; this names no line at all")
+		case r.line > n:
 			stale = append(stale, r.path+":"+strconv.Itoa(r.line)+" (cited "+strconv.Itoa(count)+
 				"x) — file has only "+strconv.Itoa(n)+" lines")
 		}
 	}
 
+	t.Logf("range-check coverage: %d distinct exact refs extracted, %d resolved and range-checked, "+
+		"%d unresolvable-because-ambiguous", len(seen), rangeChecked, len(ambiguous))
+
 	if len(stale) > 0 {
 		sort.Strings(stale)
-		t.Errorf("%d citation(s) point past the end of the file they name. A line number that cannot "+
+		t.Errorf("%d citation(s) name a line the file does not have. A line number that cannot "+
 			"be opened is worse than none: it reads as evidence. Re-anchor it, write it as ~:NNN if "+
 			"it is approximate, or drop the number if a guard already proves the point:\n  - %s",
 			len(stale), strings.Join(stale, "\n  - "))
+	}
+	if len(ambiguous) > 0 {
+		sort.Strings(ambiguous)
+		t.Errorf("%d citation(s) name a basename too ambiguous to range-check, so they are checked by "+
+			"nothing. Qualify the path (add enough directory to make it unique) so a guard can read "+
+			"it:\n  - %s", len(ambiguous), strings.Join(ambiguous, "\n  - "))
 	}
 }
 
@@ -936,14 +969,24 @@ func TestBareLineRefsAreInRange(t *testing.T) {
 // when the tree search finds exactly ONE file with that name — an ambiguous basename is skipped
 // rather than range-checked against an arbitrary one of several candidates.
 func resolveCitedFileForRange(cited string) string {
+	resolved, _ := resolveCitedFileForRangeWithCount(cited)
+	return resolved
+}
+
+// resolveCitedFileForRangeWithCount is resolveCitedFileForRange plus the number of basename
+// candidates it found, so a caller can tell "this citation names nothing" (0) apart from "this
+// citation names four different files" (>1). The distinction matters because the second is a
+// reportable defect in the citation and the first is already reported elsewhere; collapsing both to
+// "" is what let an ambiguous ref be range-checked by nothing at all.
+func resolveCitedFileForRangeWithCount(cited string) (string, int) {
 	for _, root := range citationSearchRoots {
 		c := filepath.Join(root, cited)
 		if st, err := os.Stat(c); err == nil && !st.IsDir() {
-			return c
+			return c, 1
 		}
 	}
 	if strings.ContainsRune(cited, '/') {
-		return ""
+		return "", 0
 	}
 	var hits []string
 	_ = filepath.WalkDir("../..", func(path string, d os.DirEntry, err error) error {
@@ -956,9 +999,9 @@ func resolveCitedFileForRange(cited string) string {
 		return nil
 	})
 	if len(hits) == 1 {
-		return hits[0]
+		return hits[0], 1
 	}
-	return ""
+	return "", len(hits)
 }
 
 // ── Cited SQL predicates ────────────────────────────────────────────────────────────────────────
@@ -1147,33 +1190,84 @@ var reSQLSyntaxFragment = regexp.MustCompile(
 	`SELECT|LEFT JOIN|INNER JOIN|JOIN|WHERE|ORDER BY|DISTINCT ON|GROUP BY|ON CONFLICT|` +
 		`INSERT INTO|UPDATE |DELETE FROM|DESC NULLS|AND [a-z_][a-z0-9_]*\.`)
 
-// reFragmentIsProse rejects a span that merely TALKS about SQL. Sentence punctuation and the words
-// so/the/which do not occur in the short literal fragments these details quote, and they occur in
-// nearly every prose span that the fragment scanner picks up between two code spans.
-var reFragmentIsProse = regexp.MustCompile(`(?i)\. |, |; |\b(so|the|which)\b`)
-
-// reCitationAfterFragment is the citation permitted to follow a fragment: nothing between them but
-// whitespace and an opening paren/bracket, then either `file.go:NNN` or a bare `:NNN`.
+// reCitationAfterFragment is the citation permitted to follow a quoted fragment. Between fragment
+// and citation it allows whitespace, an opening paren/bracket, and — this is the part that was
+// missing — ORDINARY SENTENCE PUNCTUATION: a comma, a semicolon, an em- or en-dash. It then accepts
+// either `file.go:NNN…` or a bare `:NNN…`, with an optional `~` in any of the three places these
+// details write one (`~file.go:296`, `file.go~:296`, `file.go:~296`, and the bare `~:296`).
 //
-// A RANGE (`:1470-1471`) is accepted and judged by its FIRST line: two of the stale citations this
-// guard found were written as ranges, and requiring a single number made them invisible.
+// WHY PUNCTUATION IS ALLOWED (#1537 T96). The original version permitted only whitespace and
+// `(`/`[`, which made the guard's coverage a function of how the author punctuated the sentence.
+// Measured: `WHERE user_id = $3 AND is_primary = true`, `user_identity_repository.go:328-334` —
+// separated by a single COMMA — was never checked, and it was hiding a 41-line drift (the quoted
+// text lives at :369-370; :330 is the VALUES list of an unrelated INSERT). This file already
+// records the lesson in TestBareLineRefsAreInRange's own doc comment: "A guard whose coverage
+// depends on the citation's punctuation is not a guard." It applied here too.
+//
+// A RANGE OR LIST (`:1470-1471`, `:115,233,689`) is accepted and EVERY value in it is checked, not
+// just the first. Measured: one entry cites `:115,233,689,810,935,1103,1315,1423,1469,1519` for ten
+// personal-scope `LEFT JOIN accounts` sites; the real lines are 113,228,681,800,922,1087,1291,1395,
+// 1439,1488, so all ten are wrong — yet the first-value-only version passed, because 115 happens to
+// be within +/-4 of 113. Of the discarded tail, :935 is an error return, :1103 is blank, and :1315
+// and :1519 are closing braces. Checking one value of a ten-value citation is not checking it.
 var reCitationAfterFragment = regexp.MustCompile(
-	"^\\s*[(\\[]?\\s*`((?:[a-z0-9_.-]+/)*[a-z0-9_.-]+\\.go)?:(\\d+)(?:[-,]\\d+)*`")
+	"^\\s*(?:[,;]|—|–)?\\s*[(\\[]?\\s*`(~?)((?:[a-z0-9_.-]+/)*[a-z0-9_.-]+\\.go)?(~?):(~?)(\\d+(?:[-,]\\d+)*)`")
+
+// Capture-group indices into reCitationAfterFragment. Named because the tilde may appear in three
+// places and an off-by-one here silently turns an approximate ref into an exact one.
+const (
+	citGroupTildeBeforePath = 1
+	citGroupPath            = 2
+	citGroupTildeAfterPath  = 3
+	citGroupTildeAfterColon = 4
+	citGroupLines           = 5
+)
+
+// Window half-widths. `~` means "about here", so it WIDENS the window; it does not exempt the ref.
+//
+// WHY WIDEN RATHER THAN EXEMPT (#1537 T96). Neither `file.go:~296` nor `~:296` matched the adjacency
+// regex at all, so every approximate ref was unguarded — and the citation whose rot motivated this
+// entire guard was written `:~296`. Under an exemption rule, "add a tilde" is the cheapest way to
+// turn a failing citation green, which is a guard that pays authors to disable it. Under a widening
+// rule the tilde costs its author nothing when it is honest and still catches the drifts that
+// actually occurred here, which were 5 to 56 lines out — well outside even the wide window.
+const (
+	sqlFragmentWindowExact  = 4
+	sqlFragmentWindowApprox = 10
+)
+
+// lineWindowSkip marks a linesAround failure that belongs to ANOTHER guard (an unresolvable path is
+// TestDispositionCitationsResolve's, a line past EOF is TestExactCitationsAreInRange's /
+// TestBareLineRefsAreInRange's). Any other non-empty problem string is a condition the CALLER must
+// report: silently skipping it is how a citation to line 0 of transaction_repository.go passed
+// every guard in this file.
+const lineWindowSkip = "skip"
 
 // linesAround returns the flattened text of path's lines in [line-window, line+window], 1-based,
-// with comments masked, or ("", false) if the file cannot be read or the line is out of range.
-func linesAround(path string, line, window int) (string, bool) {
+// with comments masked. The second return is "" on success, lineWindowSkip when the text is
+// unavailable for a reason another guard owns, and otherwise a human-readable problem the caller is
+// required to REPORT.
+//
+// An impossible line number (< 1) is that reportable case, and it was a demonstrated fail-open:
+// a `WHERE id = $1` fragment cited at transaction_repository.go line 0 is a plainly wrong
+// citation, and it passed both
+// this guard (line < 1 returned "skip") and TestExactCitationsAreInRange (which bounded only
+// line > len(file)). Neither guard had a lower bound at all.
+func linesAround(path string, line, window int) (string, string) {
 	resolved := resolveCitedFileForRange(path)
 	if resolved == "" || !strings.HasSuffix(resolved, ".go") {
-		return "", false
+		return "", lineWindowSkip
 	}
 	b, err := os.ReadFile(resolved)
 	if err != nil {
-		return "", false
+		return "", lineWindowSkip
+	}
+	if line < 1 {
+		return "", "line " + strconv.Itoa(line) + " is not a line number (files are 1-based)"
 	}
 	lines := strings.Split(sqlHaystack(string(b)), "\n")
-	if line < 1 || line > len(lines) {
-		return "", false // out of range is TestExactCitationsAreInRange's business
+	if line > len(lines) {
+		return "", lineWindowSkip // past EOF is the in-range guards' business
 	}
 	lo, hi := line-1-window, line-1+window
 	if lo < 0 {
@@ -1182,7 +1276,35 @@ func linesAround(path string, line, window int) (string, bool) {
 	if hi >= len(lines) {
 		hi = len(lines) - 1
 	}
-	return flattenSQLForCompare(strings.Join(lines[lo:hi+1], "\n")), true
+	return flattenSQLForCompare(strings.Join(lines[lo:hi+1], "\n")), ""
+}
+
+// citationInstanceCount counts every file:line and bare `:NNN` citation instance in the details,
+// expanding multi-value refs. It is the DENOMINATOR of this guard's self-report: without it, a
+// coverage claim ("this checks 15 citations") is a numerator with nothing to compare against, and
+// every such claim made about this guard from the outside — including by its author — has been wrong.
+func citationInstanceCount(details map[string]string) int {
+	total := 0
+	countValues := func(s string) int {
+		n := 0
+		for _, part := range strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == ',' }) {
+			if _, err := strconv.Atoi(part); err == nil {
+				n++
+			}
+		}
+		return n
+	}
+	rePathWithLines := regexp.MustCompile(
+		`\b(?:[a-z0-9_.-]+/)*[a-z0-9_.-]+\.(?:go|md|sql|yaml|yml|json|ts|tsx):(\d+(?:[-,]\d+)*)\b`)
+	for _, detail := range details {
+		for _, m := range rePathWithLines.FindAllStringSubmatch(detail, -1) {
+			total += countValues(m[1])
+		}
+		for _, m := range reBareLineRef.FindAllStringSubmatch(detail, -1) {
+			total += countValues(m[1])
+		}
+	}
+	return total
 }
 
 // TestCitedSQLFragmentsAreNearTheirCitedLine closes the hole every other guard in this file leaves
@@ -1193,26 +1315,43 @@ func linesAround(path string, line, window int) (string, bool) {
 // guard closes that hole only for SQL-BEARING citations; every other class of citation is still
 // range-checked and nothing more.
 //
-// The rule: a backticked SQL fragment immediately followed by `file.go:NNN` (or a bare `:NNN`,
-// resolved against the last .go file the entry named) claims that text is AT that line, so the
-// fragment must appear within +/-4 lines of it.
+// The rule: a backticked SQL fragment followed by `file.go:NNN` (or a bare `:NNN`, resolved against
+// the last .go file the entry named) claims that text is AT that line, so the fragment must appear
+// within the window of EVERY line value the citation lists.
 //
 // THE LOOSE VERSION WAS MEASURED AND REJECTED. Checking every backticked span adjacent to a citation
 // yields 160 candidates and 121 "findings", almost all of them the scanner capturing the PROSE
-// between two code spans — `" operation ("`, `" = the actor, so blast radius is the actor; "`. That
-// is a false-positive generator, and a guard that cries wolf gets worked around. Requiring SQL
-// syntax AND the absence of sentence punctuation narrows it to 14 candidates, of which 13 were real
-// staleness and zero were false positives — every one hand-verified before this guard was adopted.
+// between two code spans. Requiring SQL syntax narrows it to a handful of real ones.
 //
-// The window is +/-4 rather than exact because these fragments are quoted from multi-line raw SQL
-// strings and a citation legitimately points at the statement's first line rather than at the clause.
-// The drifts this found were 5 to 56 lines out, far outside the window, so widening it slightly
-// costs no detection.
+// ⚠ THAT 121 WAS MEASURED ON THE WRONG BASIS, and a `reFragmentIsProse` filter was added on the
+// strength of it. The 121 came from scanning RAW SOURCE LINES, where a `+`-concatenated detail is
+// cut mid-span and backtick parity is broken, so the scanner really was capturing prose. The guard
+// that shipped scans FLATTENED details, where parity is balanced. Re-measured on the basis the guard
+// actually uses (#1537 T96): 936 backticked spans, 42 pass the SQL-syntax filter, 23 have an
+// accepted adjacent citation, and ZERO of either set is captured prose. Meanwhile the filter — which
+// rejected any fragment containing ", " — was excluding real, comma-rich SQL, including
+// `(a.status = 'active') DESC NULLS LAST, a.id`: the citation that has rotted twice and that
+// reCitedSQLPredicate grew a third shape specifically to cover. It prevented nothing and hid the one
+// fragment most in need of watching, so it is gone. Measure on the basis the code uses, not the
+// basis the earlier draft used.
+//
+// SELF-MEASURING BY CONSTRUCTION. The funnel below is logged on every run and the floor is asserted
+// against DISTINCT anchors, not raw hits. Both are responses to measured fail-opens: the old floor
+// was `checked < 10` against 15 hits that were only 13 distinct anchors (one paragraph is
+// copy-pasted three times), so rewriting five citations from `frag` (`file.go:N`) to
+// `frag`, `file.go:N` would have halved real coverage and stayed green. A guard nobody can
+// mis-describe is one that prints its own coverage.
 func TestCitedSQLFragmentsAreNearTheirCitedLine(t *testing.T) {
 	details := allDispositionDetails(t)
 
+	type anchor struct {
+		frag, path string
+		line       int
+	}
+	distinct := map[anchor]bool{}
+
 	var stale []string
-	checked := 0
+	spans, sqlShaped, withCitation, checked := 0, 0, 0, 0
 	for key, detail := range details {
 		goPaths := reAnyCitedPath.FindAllStringSubmatchIndex(detail, -1)
 		// lastGoPathBefore resolves a bare `:NNN` the way a reader does: against the most recent .go
@@ -1231,45 +1370,88 @@ func TestCitedSQLFragmentsAreNearTheirCitedLine(t *testing.T) {
 		}
 
 		for _, m := range reBacktickedFragment.FindAllStringSubmatchIndex(detail, -1) {
+			spans++
 			frag := detail[m[2]:m[3]]
-			if !reSQLSyntaxFragment.MatchString(frag) ||
-				reFragmentIsProse.MatchString(frag) ||
-				reSQLNoise.MatchString(frag) {
+			if !reSQLSyntaxFragment.MatchString(frag) || reSQLNoise.MatchString(frag) {
 				continue
 			}
+			sqlShaped++
 			cm := reCitationAfterFragment.FindStringSubmatchIndex(detail[m[1]:])
 			if cm == nil {
 				continue
 			}
-			path := ""
-			if cm[2] >= 0 {
-				path = detail[m[1]+cm[2] : m[1]+cm[3]]
+			group := func(i int) string {
+				if cm[2*i] < 0 {
+					return ""
+				}
+				return detail[m[1]+cm[2*i] : m[1]+cm[2*i+1]]
 			}
+			path := group(citGroupPath)
 			if path == "" {
 				path = lastGoPathBefore(m[0])
 			}
 			if path == "" {
 				continue
 			}
-			line, err := strconv.Atoi(detail[m[1]+cm[4] : m[1]+cm[5]])
-			if err != nil {
-				continue
+			withCitation++
+			window := sqlFragmentWindowExact
+			if group(citGroupTildeBeforePath) != "" || group(citGroupTildeAfterPath) != "" ||
+				group(citGroupTildeAfterColon) != "" {
+				window = sqlFragmentWindowApprox
 			}
-			window, ok := linesAround(path, line, 4)
-			if !ok {
-				continue
-			}
-			checked++
-			if !strings.Contains(window, flattenSQLForCompare(frag)) {
-				stale = append(stale, key+": "+strconv.Quote(strings.TrimSpace(frag))+" is cited at "+
-					path+":"+strconv.Itoa(line)+", but that text is not within +/-4 lines of it")
+			// EVERY value of a multi-value citation, not just the first.
+			for _, part := range strings.FieldsFunc(group(citGroupLines), func(r rune) bool {
+				return r == '-' || r == ','
+			}) {
+				line, err := strconv.Atoi(part)
+				if err != nil {
+					continue
+				}
+				distinct[anchor{flattenSQLForCompare(frag), path, line}] = true
+				text, problem := linesAround(path, line, window)
+				if problem == lineWindowSkip {
+					continue
+				}
+				checked++
+				if problem != "" {
+					stale = append(stale, key+": "+strconv.Quote(strings.TrimSpace(frag))+" is cited at "+
+						path+":"+part+", and "+problem)
+					continue
+				}
+				if !strings.Contains(text, flattenSQLForCompare(frag)) {
+					stale = append(stale, key+": "+strconv.Quote(strings.TrimSpace(frag))+" is cited at "+
+						path+":"+strconv.Itoa(line)+", but that text is not within +/-"+
+						strconv.Itoa(window)+" lines of it")
+				}
 			}
 		}
 	}
 
-	if checked < 10 {
-		t.Fatalf("only %d SQL fragment/line pairs were checkable — the narrow scan measured 14; the "+
-			"extraction is broken and a pass here would be meaningless", checked)
+	// The funnel, printed every run. Read it before believing any prose about this guard's reach.
+	t.Logf("coverage funnel: %d backticked spans scanned -> %d SQL-shaped -> %d with an accepted "+
+		"adjacent citation -> %d line values checked (%d distinct fragment/file/line anchors), out of "+
+		"%d line-citation instances present in the dispositions",
+		spans, sqlShaped, withCitation, checked, len(distinct), citationInstanceCount(details))
+
+	// FLOOR RATIONALE. Asserted on DISTINCT anchors, because raw hits are inflated by copy-pasted
+	// paragraphs — 15 hits were 13 anchors — so a hit-count floor can be satisfied while real
+	// coverage halves. Set near 75% of the measured count, the same ratio and for the same reason as
+	// TestMethodCitationsPointInsideTheirMethod's floor (25 against a measured 34). Measured here:
+	// 19 distinct anchors, so the floor is 14. It trips on a scanner regression while leaving room to
+	// legitimately delete citations. Re-measure by reading the funnel line above, not by trusting
+	// this comment.
+	//
+	// ⚠ This floor was 22, calibrated against 30 anchors, and was LOWERED deliberately — the only
+	// legitimate reason to lower one. #1537 T95 converted 12 of those 30 anchors to identifier-based
+	// references (the ten-value analytics list, whose ten line numbers were all wrong, and the
+	// thrice-rotted balance_snapshot pair), so the corpus genuinely shrank rather than the extraction
+	// regressing. A floor cannot be derived from the current measurement — that would be circular,
+	// since its whole job is to notice when the measurement drops — so it is hard-coded and MUST be
+	// re-tuned by hand whenever citations are deliberately removed. If you are lowering it for any
+	// other reason, you are hiding a regression.
+	if len(distinct) < 14 {
+		t.Fatalf("only %d distinct SQL fragment/file/line anchors were checkable (funnel above); the "+
+			"extraction has regressed and a pass here would be meaningless", len(distinct))
 	}
 	if len(stale) > 0 {
 		sort.Strings(stale)
