@@ -495,16 +495,16 @@ func (s *transactionSyncService) SyncTransactions(
 				// The cursor already points at the page we cannot fetch, so the lossless move depends
 				// on whether we got anything this run:
 				if pageCount > 1 {
-					// Progress made. Stop paginating and let the caller store pages 1..N-1; the next
-					// sync resumes exactly where the cursor points. Not an error: the data is intact
-					// and the item is simply not fully caught up, which is the normal state of an
-					// incremental sync between runs.
+					// Progress made: pages 1..N are ALL kept — page N's rows were appended above,
+					// BEFORE this guard. The cursor still points at page N-1, so the next sync
+					// re-fetches page N and CreateBatch upserts it: no loss and no duplicate rows.
+					// Not an error; the item is simply not fully caught up between incremental syncs.
 					s.logger.Warn("plaid returned has_more=true with an empty next_cursor; stopping "+
-						"pagination and keeping the pages already fetched, which the persisted cursor "+
-						"is consistent with",
+						"pagination and keeping every page fetched this run — the cursor lags one "+
+						"page, so the last is re-fetched and upserted on the next sync",
 						"item_id", linkedItem.ID,
 						"page", pageCount,
-						"pages_kept", pageCount-1,
+						"pages_kept", pageCount,
 					)
 					break
 				}

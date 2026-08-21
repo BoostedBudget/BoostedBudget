@@ -51,8 +51,8 @@
 - **Tests Written:**
   - CreateOrUpdate with new snapshot
   - CreateOrUpdate with conflict (UPSERT behavior)
-  - GetByUserIDAndDateRange with results
-  - GetByUserIDAndDateRange with no results
+  - ~~GetByUserIDAndDateRange with results~~ (method deleted in #1537)
+  - ~~GetByUserIDAndDateRange with no results~~ (method deleted in #1537)
   - GetAggregatedHistory with account type filter
   - GetAggregatedHistory without filter (all types)
   - GetLatestByUserID (DISTINCT ON pattern)
@@ -312,7 +312,7 @@ if err := s.createBalanceSnapshots(ctx, linkedItem, accessToken); err != nil {
 - [ ] `balance_snapshot_repository_test.go::TestCreateOrUpdate_Success`
 - [ ] `balance_snapshot_repository_test.go::TestCreateOrUpdate_Conflict`
 - [ ] `balance_snapshot_repository_test.go::TestGetAggregatedHistory`
-- [ ] `balance_snapshot_repository_test.go::TestGetByUserIDAndDateRange`
+- [x] ~~`balance_snapshot_repository_test.go::TestGetByUserIDAndDateRange`~~ — N/A: `GetByUserIDAndDateRange` was **deleted** in #1537 (it was a zero-width-window read that production never matched). Superseded by `GetSnapshotsAsOfForUser`; do not write a test for a method that no longer exists.
 - [ ] `transaction_sync_service_test.go::TestCreateBalanceSnapshots_Success`
 - [ ] `transaction_sync_service_test.go::TestCreateBalanceSnapshots_PlaidAPIError`
 - [ ] `dashboard_service_test.go::TestGetBalanceSummary`
