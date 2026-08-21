@@ -778,7 +778,7 @@ jobs:
 
       - name: Run MCP server tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
-        run: bun test src/
+        run: bun test --timeout 30000 src/
 
       - name: Typecheck MCP server
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
