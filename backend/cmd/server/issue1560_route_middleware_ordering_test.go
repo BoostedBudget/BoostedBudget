@@ -54,6 +54,17 @@ import (
 // which any route — including an admin one — could register and pass. It is included now, and
 // scanGoSource fails on any UseMiddleware argument NOT in the marker list, so the list can no longer
 // silently fall behind main.go.
+//
+// Three things the anchor is NOT allowed to be, each of which produced a green guard over an api with
+// middleware missing (T49/T50, demonstrated against the real main.go text before being fixed):
+// a call on another RECEIVER (`internalHumaAPI.UseMiddleware(cache…)` — one token, and every
+// post-anchor mutating route loses cache invalidation), a call OUTSIDE func main() (the four hoisted
+// into an uncalled helper collapse the anchor to the top of the file, so everything reads as late
+// while nothing is installed), and a marker match on Args[0] only (UseMiddleware is variadic, so a
+// new middleware entering as the second argument was invisible). All three now FAIL here rather than
+// moving or shrinking the anchor. What is still beyond the scan: it does not resolve calls or
+// aliases, so a middleware installed through a value it cannot name is neither seen nor claimed —
+// see the limits list in route_registration_scan_test.go.
 
 // earlyRouteExemptions names each Register*Routes group that may legitimately be
 // registered on humaAPI before the middleware chain is assembled, with the reason.
@@ -99,6 +110,32 @@ func TestMutatingRoutesRegisteredAfterMiddlewareChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scan main.go: %v", err)
 	}
+	// The RECEIVER first, because a call on the wrong one is what made these two checks
+	// meaningless: the scan used to match the method name on ANY receiver, so
+	// `internalHumaAPI.UseMiddleware(cache…)` counted toward humaAPI's chain and the guard stayed
+	// green with every post-anchor mutating route running uninvalidated (T49). Report it before
+	// what is missing, so the failure names the cause and not only the symptom.
+	for _, m := range scan.middlewareOtherReceiver {
+		recv := m.receiver
+		if recv == "" {
+			recv = "<not a plain identifier>"
+		}
+		t.Errorf("main.go:%d installs middleware on %s, not on %s: %s.UseMiddleware(%s). huma "+
+			"snapshots the chain per api, so this installs NOTHING on the api the guarded routes "+
+			"register on — if it is "+
+			"deliberate, this guard has to be taught about that api's stack; if it is a typo, it is "+
+			"the whole of #1560 in one token.", m.line, recv, guardedAPIIdent, recv, m.arg)
+	}
+	// A middleware install outside func main() must FAIL, not quietly produce a lower anchor. The
+	// four calls hoisted into an uncalled `func installHumaMiddleware(...)` above main() collapse the
+	// anchor to the top of the file, which reads as "every registration is after the chain" while no
+	// chain is installed at all (T49).
+	for _, m := range scan.middlewareOutsideMain {
+		t.Errorf("main.go:%d installs %s middleware outside func main(): %s. This guard compares "+
+			"SOURCE line order within main(), so middleware installed in a helper is ordered against "+
+			"nothing — and a helper that is never CALLED installs nothing while making every "+
+			"registration look late. Install it directly in main().", m.line, guardedAPIIdent, m.arg)
+	}
 	if missing := scan.missingMiddleware(); len(missing) > 0 {
 		t.Fatalf("could not locate UseMiddleware call(s) for %v in main.go — this guard is looking "+
 			"for the wrong thing, or that middleware was removed; a silently unanchored ordering "+
@@ -110,12 +147,12 @@ func TestMutatingRoutesRegisteredAfterMiddlewareChain(t *testing.T) {
 			at = append(at, "main.go:"+strconv.Itoa(m.line)+" "+m.arg)
 		}
 		sort.Strings(at)
-		t.Errorf("%d humaAPI.UseMiddleware call(s) in main.go that requestScopedMiddlewareMarkers "+
+		t.Errorf("%d UseMiddleware argument(s) on %s in main.go that requestScopedMiddlewareMarkers "+
 			"does not describe:\n  - %s\nThe anchor is a max over KNOWN markers, so an unlisted "+
 			"middleware is a link this guard cannot see and every route registered ahead of it "+
 			"passes while running without it. Add a marker for it in route_registration_scan_test.go "+
 			"(that is what the omitted admin middleware cost: a 125-line window with no RBAC).",
-			len(scan.unrecognisedMiddleware), strings.Join(at, "\n  - "))
+			len(scan.unrecognisedMiddleware), guardedAPIIdent, strings.Join(at, "\n  - "))
 	}
 	anchor := scan.anchor
 
@@ -172,7 +209,7 @@ func TestMutatingRoutesRegisteredAfterMiddlewareChain(t *testing.T) {
 	for group, wantPaths := range requiredLateRouteGroups {
 		var seen []routeRegistration
 		for _, c := range calls {
-			if c.group == group && c.api == "humaAPI" {
+			if c.group == group && c.api == guardedAPIIdent {
 				seen = append(seen, c)
 			}
 		}
@@ -215,7 +252,7 @@ func TestMutatingRoutesRegisteredAfterMiddlewareChain(t *testing.T) {
 func earlyRegistrationViolations(calls []routeRegistration, anchor int, secured map[string][]string) []string {
 	var violations []string
 	for _, c := range calls {
-		if c.api != "humaAPI" {
+		if c.api != guardedAPIIdent {
 			// internalHumaAPI is the separate internal metrics listener with its own stack;
 			// anything else is unrecognised and reported rather than assumed harmless.
 			if c.api != "internalHumaAPI" {
