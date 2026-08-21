@@ -22,6 +22,63 @@ func snapshotChainKey(s domain.BalanceSnapshot) string {
 
 // buildChainAwareAccountMap builds a map keyed by both account.ID and account.UserAccountID
 // so that snapshots carrying a replaced account_id still resolve via the chain key (Issue #1109).
+// baselineBalanceForComparison sums the 30-day-ago snapshots using the SAME account universe and
+// type filter the current total uses, so the period comparison is apples-to-apples.
+//
+// Issue #1537 round 9. Both callers previously summed every snapshot they were handed, while their
+// current-balance loops applied a chain-aware accountMap lookup AND the AccountTypes filter. With a
+// type filter active the baseline therefore included accounts the current total excluded, and
+// ChangeAmount/ChangePercent were arbitrary — a measured +50% was reported as +150%.
+//
+// dedupChains reflects a real difference between the two callers, not an oversight: the personal path
+// can receive several snapshots per logical account on a re-link day (it sorts DESC first and keeps
+// the latest per chain), while the household path is already one row per account.
+//
+// KNOWN APPROXIMATION, stated rather than left to be discovered: accountMap is built as of NOW, and
+// is applied here to snapshots from 30 days ago. An account that has since disappeared from the map
+// drops out of the baseline. That is deliberate — the current total is computed over exactly this
+// universe, so using it on both sides is what makes the two comparable. The alternative (a second,
+// as-of-then account map) is what the comment above getBalanceSummaryHousehold's snapshot fetch was
+// avoiding when it justified the raw sum, and it would reintroduce the mismatch it was avoiding.
+func baselineBalanceForComparison(
+	snapshots []domain.BalanceSnapshot,
+	accountMap map[string]domain.Account,
+	accountTypes []string,
+	dedupChains bool,
+) float64 {
+	var total float64
+	seenChainKeys := make(map[string]bool)
+	for _, snapshot := range snapshots {
+		key := snapshotChainKey(snapshot)
+		if dedupChains {
+			if seenChainKeys[key] {
+				continue
+			}
+			seenChainKeys[key] = true
+		}
+		account, exists := accountMap[key]
+		if !exists {
+			continue
+		}
+		if len(accountTypes) > 0 {
+			typeMatch := false
+			for _, filterType := range accountTypes {
+				if account.Type == filterType {
+					typeMatch = true
+					break
+				}
+			}
+			if !typeMatch {
+				continue
+			}
+		}
+		if snapshot.CurrentBalance != nil {
+			total += *snapshot.CurrentBalance
+		}
+	}
+	return total
+}
+
 func buildChainAwareAccountMap(accounts []domain.Account) map[string]domain.Account {
 	m := make(map[string]domain.Account, len(accounts)*2)
 	for _, account := range accounts {
@@ -159,18 +216,11 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 		sort.Slice(previousSnapshots, func(i, j int) bool {
 			return previousSnapshots[i].SnapshotAt.After(previousSnapshots[j].SnapshotAt)
 		})
-		var previousBalance float64
-		seenChainKeys := make(map[string]bool)
-		for _, snapshot := range previousSnapshots {
-			key := snapshotChainKey(snapshot)
-			if seenChainKeys[key] {
-				continue // Dedup: count each logical account (chain) only once
-			}
-			seenChainKeys[key] = true
-			if snapshot.CurrentBalance != nil {
-				previousBalance += *snapshot.CurrentBalance
-			}
+		var accountTypes []string
+		if filters != nil {
+			accountTypes = filters.AccountTypes
 		}
+		previousBalance := baselineBalanceForComparison(previousSnapshots, accountMap, accountTypes, true)
 
 		changeAmount := totalBalance - previousBalance
 		changePercent := 0.0
@@ -224,9 +274,14 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
 	}
-	// This loop's previous-period comparison below sums snapshots directly without any
-	// accountMap lookup, so (unlike getNetWorthHousehold) only one "now"-asOf account map is
-	// ever needed (#1369 gap-closure G1).
+	// One "now"-asOf account map serves both the current total and the previous-period baseline
+	// (unlike getNetWorthHousehold, which needs a map per point in time) — #1369 gap-closure G1.
+	//
+	// ⚠ Corrected in #1537 round 9. This comment used to say the comparison "sums snapshots directly
+	// without any accountMap lookup", which was true and was a bug: the baseline then included
+	// accounts the filtered current total excluded, making ChangePercent arbitrary under a type
+	// filter. The baseline now goes through baselineBalanceForComparison with this same map, which is
+	// what keeps one map sufficient AND the two sides comparable.
 	accounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household accounts: %w", err)
@@ -280,12 +335,7 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 	previousDate := asOfDate.AddDate(0, 0, -30)
 	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, endOfDay(previousDate))
 	if err == nil && len(previousSnapshots) > 0 {
-		var previousBalance float64
-		for _, snapshot := range previousSnapshots {
-			if snapshot.CurrentBalance != nil {
-				previousBalance += *snapshot.CurrentBalance
-			}
-		}
+		previousBalance := baselineBalanceForComparison(previousSnapshots, accountMap, filters.AccountTypes, false)
 		changeAmount := totalBalance - previousBalance
 		changePercent := 0.0
 		if previousBalance != 0 {
