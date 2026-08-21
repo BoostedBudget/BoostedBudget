@@ -37,6 +37,17 @@ type BalanceSnapshotRepository interface {
 	// Uses DISTINCT ON (account_id) to get only the latest snapshot per account.
 	GetLatestByUserID(ctx context.Context, userID string) ([]domain.BalanceSnapshot, error)
 
+	// GetSnapshotsAsOfForUser retrieves, for each of the user's logical accounts, the latest
+	// snapshot at or before asOf. It is GetLatestByUserID bounded by a cutoff: the same
+	// DISTINCT ON re-link chain key, plus `snapshot_at <= asOf`.
+	//
+	// This is the personal-scope twin of GetSnapshotsAsOfForHousehold, and it exists because a
+	// point-in-time question ("what was the balance as of date D?") cannot be answered with a
+	// date RANGE read. GetByUserIDAndDateRange(D, D) is a zero-width window that only matches a
+	// snapshot stored at EXACTLY midnight UTC, and production stores wall-clock instants — so the
+	// personal 30-day comparison it used to back never produced a result outside tests. Issue #1537.
+	GetSnapshotsAsOfForUser(ctx context.Context, userID string, asOf time.Time) ([]domain.BalanceSnapshot, error)
+
 	// GetSnapshotsAsOfForHousehold retrieves, for every account currently shared into the
 	// household (across ALL members, not just requestingUserID), the latest snapshot at or
 	// before asOf. Used for both the current point-in-time balance (asOf=now) and a
@@ -219,6 +230,25 @@ func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userI
 		ORDER BY COALESCE(user_account_id::text, account_id::text), snapshot_at DESC
 	`
 	return r.scanSnapshots(ctx, query, userID)
+}
+
+// GetSnapshotsAsOfForUser retrieves the latest snapshot at or before asOf for each of the user's
+// logical accounts. Mirrors GetLatestByUserID exactly — same DISTINCT ON chain key, same ORDER BY —
+// with the single addition of `snapshot_at <= $2`, so the two agree on which row wins a chain when
+// asOf is in the future. Issue #1537.
+func (r *balanceSnapshotRepository) GetSnapshotsAsOfForUser(ctx context.Context, userID string, asOf time.Time) ([]domain.BalanceSnapshot, error) {
+	// Canary counter: every call uses the re-link chain dedup key (Issue #1109).
+	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
+	query := `
+		SELECT DISTINCT ON (COALESCE(user_account_id::text, account_id::text))
+		       id, account_id, user_account_id, user_id, current_balance, available_balance,
+		       currency_code, snapshot_at, source, created_at
+		FROM balance_snapshots
+		WHERE user_id = $1
+		  AND snapshot_at <= $2
+		ORDER BY COALESCE(user_account_id::text, account_id::text), snapshot_at DESC
+	`
+	return r.scanSnapshots(ctx, query, userID, asOf)
 }
 
 // GetSnapshotsAsOfForHousehold retrieves the latest snapshot at or before asOf for every

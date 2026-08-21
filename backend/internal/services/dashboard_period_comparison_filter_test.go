@@ -51,10 +51,9 @@ func TestGetBalanceSummary_PeriodComparison_AppliesAccountTypeFilterToBaseline(t
 
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(current, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(current, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
-		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(previous, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return(previous, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 
@@ -194,10 +193,9 @@ func TestGetBalanceSummary_PeriodComparison_BaselineIncludesSinceInactiveAccount
 
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(current, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(current, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeAccounts, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
-		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(previous, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return(previous, nil)
 	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
 		mock.MatchedBy(func(opts repository.AccountFilterOptions) bool {
 			// AllStatuses is the only option that reaches 'expired'; IncludeReplaced would
@@ -350,10 +348,9 @@ func TestGetNetWorth_PeriodComparison_BaselineIncludesSinceInactiveAccounts(t *t
 
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(current, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(current, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeAccounts, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
-		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(previous, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return(previous, nil)
 	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
 		mock.MatchedBy(func(opts repository.AccountFilterOptions) bool {
 			return opts.AllStatuses && opts.IncludeHidden && !opts.ReplacedOnly
@@ -496,10 +493,9 @@ func TestGetNetWorth_PeriodComparison_AppliesAccountTypeFilterToBaseline(t *test
 
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(current, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(current, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
-		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(previous, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return(previous, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 
@@ -592,4 +588,636 @@ func TestGetNetWorthHousehold_PeriodComparison_AppliesAccountTypeFilterToBaselin
 
 	mockAccountRepo.AssertNotCalled(t, "GetForHouseholdScopeAllStatuses",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// ─── #1537 T69: the personal 30-day comparison never ran in production ──────────
+//
+// F1. Both personal baselines read GetByUserIDAndDateRange(ctx, userID, previousDate, previousDate)
+// — the SAME instant for both bounds — against SQL that filters
+// `snapshot_at >= $2 AND snapshot_at <= $3`. That window demands snapshot_at be EXACTLY midnight
+// UTC. The only production writer stores wall-clock time (transaction_sync_service.go,
+// `now := time.Now().UTC()`), so the window matches nothing, len(previousSnapshots) > 0 is false,
+// and PeriodComparison is nil for EVERY personal request in production. Three rounds of arithmetic
+// fixes landed inside a block that does not execute.
+//
+// WHY IT SURVIVED. Every pre-existing personal stub passes mock.AnythingOfType("time.Time") for
+// BOTH bounds, so the mock returns rows for a zero-width window and the defect is invisible. The
+// two tests below model the SQL instead: the row comes back only if the window the service actually
+// requests CONTAINS the snapshot's instant. Two per-argument matchers on one expectation compose
+// into exactly that joint predicate.
+func TestGetBalanceSummary_PeriodComparison_FindsWallClockBaselineSnapshot(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-wallclock-baseline"
+
+	// A snapshot written the way production writes them: 30 days ago at 14:32:07, not midnight.
+	baselineAt := time.Now().UTC().AddDate(0, 0, -30).Truncate(24 * time.Hour).
+		Add(14*time.Hour + 32*time.Minute + 7*time.Second)
+
+	cur, prev := 700.00, 500.00
+	current := []domain.BalanceSnapshot{
+		{ID: "cur", AccountID: "acct-1", UserID: userID, CurrentBalance: &cur, SnapshotAt: time.Now().UTC()},
+	}
+	previous := []domain.BalanceSnapshot{
+		{ID: "prev", AccountID: "acct-1", UserID: userID, CurrentBalance: &prev, SnapshotAt: baselineAt},
+	}
+	accounts := []domain.Account{
+		{ID: "acct-1", UserID: userID, Name: "Checking", Type: "depository", Status: domain.AccountStatusActive},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).
+		Return(current, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
+	// Models the baseline read's SQL — `snapshot_at <= $2` — instead of accepting any cutoff: the
+	// row comes back only if the cutoff the service actually asks for is at or after the snapshot's
+	// wall-clock instant. testify tries expectations in order, so the exact current-cutoff
+	// expectation above claims the current read and this one only ever sees the baseline read.
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID,
+		mock.MatchedBy(func(asOf time.Time) bool { return !baselineAt.After(asOf) }),
+	).Return(previous, nil).Maybe()
+	// Any earlier cutoff finds nothing — which is what a midnight-anchored cutoff does.
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID,
+		mock.AnythingOfType("time.Time"),
+	).Return([]domain.BalanceSnapshot{}, nil).Maybe()
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetBalanceSummary(ctx, userID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.PeriodComparison,
+		"a wall-clock baseline snapshot 30 days old MUST produce a comparison. A zero-width "+
+			"[midnight, midnight] window finds nothing, so this is nil for every real user.")
+	assert.Equal(t, 500.00, result.PeriodComparison.PreviousBalance)
+	assert.InDelta(t, 200.00, result.PeriodComparison.ChangeAmount, 0.001)
+	assert.InDelta(t, 40.0, result.PeriodComparison.ChangePercent, 0.001)
+}
+
+// TestGetNetWorth_PeriodComparison_FindsWallClockBaselineSnapshot is the net-worth twin: the same
+// zero-width window is read at dashboard_service.go's other personal baseline, so this path is
+// equally dead in production.
+func TestGetNetWorth_PeriodComparison_FindsWallClockBaselineSnapshot(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-nw-wallclock-baseline"
+
+	baselineAt := time.Now().UTC().AddDate(0, 0, -30).Truncate(24 * time.Hour).
+		Add(14*time.Hour + 32*time.Minute + 7*time.Second)
+
+	cur, prev := 700.00, 500.00
+	current := []domain.BalanceSnapshot{
+		{ID: "cur", AccountID: "acct-1", UserID: userID, CurrentBalance: &cur, SnapshotAt: time.Now().UTC()},
+	}
+	previous := []domain.BalanceSnapshot{
+		{ID: "prev", AccountID: "acct-1", UserID: userID, CurrentBalance: &prev, SnapshotAt: baselineAt},
+	}
+	accounts := []domain.Account{
+		{ID: "acct-1", UserID: userID, Name: "Checking", Type: "depository", Status: domain.AccountStatusActive},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).
+		Return(current, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
+	// Models `snapshot_at <= $2`; see the balance-summary twin above.
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID,
+		mock.MatchedBy(func(asOf time.Time) bool { return !baselineAt.After(asOf) }),
+	).Return(previous, nil).Maybe()
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID,
+		mock.AnythingOfType("time.Time"),
+	).Return([]domain.BalanceSnapshot{}, nil).Maybe()
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, userID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.PeriodComparison,
+		"a wall-clock baseline snapshot 30 days old MUST produce a net-worth comparison")
+	assert.Equal(t, 500.00, result.PeriodComparison.PreviousNetWorth)
+	assert.InDelta(t, 200.00, result.PeriodComparison.NetWorthChange, 0.001)
+	assert.InDelta(t, 40.0, result.PeriodComparison.NetWorthChangePercent, 0.001)
+}
+
+// TestGetBalanceSummary_NoAsOfDate_CountsSnapshotsTakenEarlierToday is the backward-compatibility
+// half of #1537 T69. Bounding the current read by a cutoff where there was previously no bound at
+// all (GetLatestByUserID) can only ever REMOVE rows, so the cutoff has to be the end of the day, not
+// asOfDate itself: `snapshot_at <= midnight-today` would silently drop every snapshot taken so far
+// today — the ones a user syncing at 09:00 actually cares about — and report yesterday's balance as
+// current. The stub models the SQL rather than accepting any cutoff, so a midnight cutoff fails here
+// instead of passing.
+func TestGetBalanceSummary_NoAsOfDate_CountsSnapshotsTakenEarlierToday(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-today-0900"
+
+	todayAt0900 := time.Now().UTC().Truncate(24 * time.Hour).Add(9 * time.Hour)
+	yesterday := time.Now().UTC().Truncate(24 * time.Hour).Add(-3 * time.Hour)
+
+	today, stale := 700.00, 100.00
+	accounts := []domain.Account{
+		{ID: "acct-1", UserID: userID, Name: "Checking", Type: "depository", Status: domain.AccountStatusActive},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
+	// Latest row at or before the requested cutoff: today's 09:00 sync if the cutoff reaches it,
+	// otherwise yesterday's.
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID,
+		mock.MatchedBy(func(asOf time.Time) bool { return !todayAt0900.After(asOf) }),
+	).Return([]domain.BalanceSnapshot{
+		{ID: "today", AccountID: "acct-1", UserID: userID, CurrentBalance: &today, SnapshotAt: todayAt0900},
+	}, nil).Maybe()
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID,
+		mock.AnythingOfType("time.Time"),
+	).Return([]domain.BalanceSnapshot{
+		{ID: "stale", AccountID: "acct-1", UserID: userID, CurrentBalance: &stale, SnapshotAt: yesterday},
+	}, nil).Maybe()
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetBalanceSummary(ctx, userID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 700.00, result.TotalBalance,
+		"a snapshot taken at 09:00 today must still count as current. A midnight cutoff reports "+
+			"yesterday's 100 instead — a regression the unbounded GetLatestByUserID could not have.")
+}
+
+// TestGetNetWorth_NoAsOfDate_CountsSnapshotsTakenEarlierToday is the net-worth twin.
+func TestGetNetWorth_NoAsOfDate_CountsSnapshotsTakenEarlierToday(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-nw-today-0900"
+
+	todayAt0900 := time.Now().UTC().Truncate(24 * time.Hour).Add(9 * time.Hour)
+	yesterday := time.Now().UTC().Truncate(24 * time.Hour).Add(-3 * time.Hour)
+
+	today, stale := 700.00, 100.00
+	accounts := []domain.Account{
+		{ID: "acct-1", UserID: userID, Name: "Checking", Type: "depository", Status: domain.AccountStatusActive},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID,
+		mock.MatchedBy(func(asOf time.Time) bool { return !todayAt0900.After(asOf) }),
+	).Return([]domain.BalanceSnapshot{
+		{ID: "today", AccountID: "acct-1", UserID: userID, CurrentBalance: &today, SnapshotAt: todayAt0900},
+	}, nil).Maybe()
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID,
+		mock.AnythingOfType("time.Time"),
+	).Return([]domain.BalanceSnapshot{
+		{ID: "stale", AccountID: "acct-1", UserID: userID, CurrentBalance: &stale, SnapshotAt: yesterday},
+	}, nil).Maybe()
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, userID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 700.00, result.NetWorth,
+		"a snapshot taken at 09:00 today must still count as current net worth")
+}
+
+// TestGetBalanceSummary_ExplicitAsOfDate_AnchorsBothSides pins the ruling that as_of_date anchors
+// BOTH sides of the response (#1537 T69, finding F2). Before this, the current figures came from the
+// unbounded GetLatestByUserID and only the baseline moved with as_of_date — so asking for a date two
+// months ago returned TODAY's total, labelled with that date, compared against a baseline 30 days
+// before it. Every number in the response was real; the response as a whole described no interval
+// that existed.
+//
+// The two cutoffs are asserted as EXACT values. That is the point: it is the only way to make a
+// wrong cutoff (a zero-width window, a midnight-anchored bound, or a time.Now() that ignores the
+// filter) fail rather than quietly match.
+func TestGetBalanceSummary_ExplicitAsOfDate_AnchorsBothSides(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-explicit-asof"
+
+	asOf := time.Now().UTC().AddDate(0, 0, -60).Truncate(24 * time.Hour)
+	baselineDate := asOf.AddDate(0, 0, -30)
+
+	atAsOf, atBaseline := 900.00, 600.00
+	accounts := []domain.Account{
+		{ID: "acct-1", UserID: userID, Name: "Checking", Type: "depository", Status: domain.AccountStatusActive},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, endOfDay(asOf)).Return(
+		[]domain.BalanceSnapshot{{ID: "at-asof", AccountID: "acct-1", UserID: userID,
+			CurrentBalance: &atAsOf, SnapshotAt: asOf.Add(11 * time.Hour)}}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, endOfDay(baselineDate)).Return(
+		[]domain.BalanceSnapshot{{ID: "at-baseline", AccountID: "acct-1", UserID: userID,
+			CurrentBalance: &atBaseline, SnapshotAt: baselineDate.Add(11 * time.Hour)}}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetBalanceSummary(ctx, userID, &domain.DashboardFilters{AsOfDate: &asOf})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.PeriodComparison)
+
+	assert.Equal(t, asOf, result.AsOfDate)
+	assert.Equal(t, 900.00, result.TotalBalance,
+		"the CURRENT figure must be the balance as of the requested date, not today's")
+	assert.Equal(t, 600.00, result.PeriodComparison.PreviousBalance)
+	assert.InDelta(t, 300.00, result.PeriodComparison.ChangeAmount, 0.001)
+	assert.InDelta(t, 50.0, result.PeriodComparison.ChangePercent, 0.001)
+	mockSnapshotRepo.AssertExpectations(t)
+}
+
+// TestGetNetWorth_ExplicitAsOfDate_AnchorsBothSides is the net-worth twin.
+func TestGetNetWorth_ExplicitAsOfDate_AnchorsBothSides(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-nw-explicit-asof"
+
+	asOf := time.Now().UTC().AddDate(0, 0, -60).Truncate(24 * time.Hour)
+	baselineDate := asOf.AddDate(0, 0, -30)
+
+	atAsOf, atBaseline := 900.00, 600.00
+	accounts := []domain.Account{
+		{ID: "acct-1", UserID: userID, Name: "Checking", Type: "depository", Status: domain.AccountStatusActive},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, endOfDay(asOf)).Return(
+		[]domain.BalanceSnapshot{{ID: "at-asof", AccountID: "acct-1", UserID: userID,
+			CurrentBalance: &atAsOf, SnapshotAt: asOf.Add(11 * time.Hour)}}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, endOfDay(baselineDate)).Return(
+		[]domain.BalanceSnapshot{{ID: "at-baseline", AccountID: "acct-1", UserID: userID,
+			CurrentBalance: &atBaseline, SnapshotAt: baselineDate.Add(11 * time.Hour)}}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, userID, &domain.DashboardFilters{AsOfDate: &asOf})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.PeriodComparison)
+
+	assert.Equal(t, asOf, result.AsOfDate)
+	assert.Equal(t, 900.00, result.NetWorth,
+		"the CURRENT net worth must be as of the requested date, not today")
+	assert.Equal(t, 600.00, result.PeriodComparison.PreviousNetWorth)
+	assert.InDelta(t, 300.00, result.PeriodComparison.NetWorthChange, 0.001)
+	assert.InDelta(t, 50.0, result.PeriodComparison.NetWorthChangePercent, 0.001)
+	mockSnapshotRepo.AssertExpectations(t)
+}
+
+// TestGetBalanceSummaryHousehold_ExplicitAsOfDate_AnchorsBothSides is the household twin, and it
+// doubles as the ONLY coverage of endOfDay on a household path. Both household cutoffs are asserted
+// as exact values, so replacing endOfDay(previousDate) with previousDate — a mutation that left the
+// entire internal/services package green — now has nothing to match and fails. Dropping endOfDay is
+// not cosmetic: `snapshot_at <= midnight` skips every snapshot taken during the baseline day itself.
+func TestGetBalanceSummaryHousehold_ExplicitAsOfDate_AnchorsBothSides(t *testing.T) {
+	ctx := context.Background()
+	requestingUserID := "owner-1"
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"owner-1", "member-2"}}
+
+	asOf := time.Now().UTC().AddDate(0, 0, -60).Truncate(24 * time.Hour)
+	baselineDate := asOf.AddDate(0, 0, -30)
+
+	atAsOf, atBaseline := 900.00, 600.00
+	accounts := []domain.Account{
+		{ID: "acct-1", UserID: "owner-1", Name: "Checking", Type: "depository", Status: domain.AccountStatusActive},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	// A snapshot taken at 23:30 on each anchor day: only an end-of-day cutoff reaches it.
+	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, endOfDay(asOf)).Return(
+		[]domain.BalanceSnapshot{{ID: "at-asof", AccountID: "acct-1", UserID: "owner-1",
+			CurrentBalance: &atAsOf, SnapshotAt: asOf.Add(23*time.Hour + 30*time.Minute)}}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, endOfDay(baselineDate)).Return(
+		[]domain.BalanceSnapshot{{ID: "at-baseline", AccountID: "acct-1", UserID: "owner-1",
+			CurrentBalance: &atBaseline, SnapshotAt: baselineDate.Add(23*time.Hour + 30*time.Minute)}}, nil)
+	// The account map must be resolved at the SAME cutoff as the current snapshot read.
+	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, endOfDay(asOf)).Return(accounts, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetBalanceSummary(ctx, requestingUserID,
+		&domain.DashboardFilters{AsOfDate: &asOf, HouseholdScope: scope})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.PeriodComparison)
+
+	assert.Equal(t, asOf, result.AsOfDate)
+	assert.Equal(t, 900.00, result.TotalBalance,
+		"the household current total must be as of the requested date, not time.Now()")
+	assert.Equal(t, 600.00, result.PeriodComparison.PreviousBalance)
+	assert.InDelta(t, 50.0, result.PeriodComparison.ChangePercent, 0.001)
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestGetNetWorthHousehold_ExplicitAsOfDate_AnchorsBothSides is the household net-worth twin; it
+// pins endOfDay on the second household path, which builds its own previous-cutoff account map.
+func TestGetNetWorthHousehold_ExplicitAsOfDate_AnchorsBothSides(t *testing.T) {
+	ctx := context.Background()
+	requestingUserID := "owner-1"
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"owner-1", "member-2"}}
+
+	asOf := time.Now().UTC().AddDate(0, 0, -60).Truncate(24 * time.Hour)
+	baselineDate := asOf.AddDate(0, 0, -30)
+
+	atAsOf, atBaseline := 900.00, 600.00
+	accounts := []domain.Account{
+		{ID: "acct-1", UserID: "owner-1", Name: "Checking", Type: "depository", Status: domain.AccountStatusActive},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, endOfDay(asOf)).Return(
+		[]domain.BalanceSnapshot{{ID: "at-asof", AccountID: "acct-1", UserID: "owner-1",
+			CurrentBalance: &atAsOf, SnapshotAt: asOf.Add(23*time.Hour + 30*time.Minute)}}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, endOfDay(baselineDate)).Return(
+		[]domain.BalanceSnapshot{{ID: "at-baseline", AccountID: "acct-1", UserID: "owner-1",
+			CurrentBalance: &atBaseline, SnapshotAt: baselineDate.Add(23*time.Hour + 30*time.Minute)}}, nil)
+	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, endOfDay(asOf)).Return(accounts, nil)
+	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, endOfDay(baselineDate)).Return(accounts, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, requestingUserID,
+		&domain.DashboardFilters{AsOfDate: &asOf, HouseholdScope: scope})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.PeriodComparison)
+
+	assert.Equal(t, asOf, result.AsOfDate)
+	assert.Equal(t, 900.00, result.NetWorth)
+	assert.Equal(t, 600.00, result.PeriodComparison.PreviousNetWorth)
+	assert.InDelta(t, 50.0, result.PeriodComparison.NetWorthChangePercent, 0.001)
+	mockSnapshotRepo.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+}
+
+// TestEndOfDay pins the boundary arithmetic itself, which had NO test anywhere in internal/ despite
+// four call sites depending on it. The last representable nanosecond of the day, not the next day's
+// midnight: `snapshot_at <= endOfDay(d)` must include every instant on d and no instant on d+1.
+func TestEndOfDay(t *testing.T) {
+	day := time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC)
+
+	for _, input := range []time.Time{
+		day,
+		day.Add(9 * time.Hour),
+		day.Add(23*time.Hour + 59*time.Minute + 59*time.Second),
+	} {
+		assert.Equal(t, time.Date(2026, 3, 14, 23, 59, 59, 999999999, time.UTC), endOfDay(input),
+			"endOfDay must normalise any instant on the day to that day's last nanosecond")
+	}
+
+	got := endOfDay(day)
+	assert.True(t, got.After(day.Add(23*time.Hour+59*time.Minute+59*time.Second)),
+		"must include a snapshot taken at 23:59:59 — the whole point of not using midnight")
+	assert.True(t, got.Before(day.AddDate(0, 0, 1)),
+		"must NOT reach the next day's midnight, or a `<=` cutoff would leak one instant of d+1")
+}
+
+// ─── #1537 T70: three mutants that survived the entire internal/services package ───
+
+// TestGetBalanceSummary_PeriodComparison_DedupKeepsLatestInChain pins WHICH row of a re-link chain
+// survives dedup, not merely that dedup happens.
+//
+// WHY IT WAS UNPINNED. TestGetBalanceSummary_PreviousPeriodChainDedup gives both chain members the
+// SAME balance (500 and 500) and leaves SnapshotAt at its zero value, so it proves the two rows
+// collapse to one and says nothing about which one. Reversing the sort.Slice that orders
+// previousSnapshots DESC — making dedup keep the OLDEST row per chain — left the whole package green.
+// Distinct balances AND distinct instants are what make the choice observable.
+func TestGetBalanceSummary_PeriodComparison_DedupKeepsLatestInChain(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-dedup-latest"
+	stableUA := "ua-dedup-latest"
+
+	cur, newer, older := 1000.00, 900.00, 400.00
+	baselineDay := time.Now().UTC().AddDate(0, 0, -30).Truncate(24 * time.Hour)
+
+	accounts := []domain.Account{
+		{ID: "acct-new", UserID: userID, Name: "Checking", Type: "depository",
+			Status: domain.AccountStatusActive, UserAccountID: &stableUA},
+	}
+	// Deliberately handed to the service OLDEST-FIRST, the order the repo's ORDER BY would give a
+	// range read: if the service does not sort DESC before deduping, the $400 row wins.
+	previous := []domain.BalanceSnapshot{
+		{ID: "prev-older", AccountID: "acct-old", UserAccountID: &stableUA, UserID: userID,
+			CurrentBalance: &older, SnapshotAt: baselineDay.Add(2 * time.Hour)},
+		{ID: "prev-newer", AccountID: "acct-new", UserAccountID: &stableUA, UserID: userID,
+			CurrentBalance: &newer, SnapshotAt: baselineDay.Add(20 * time.Hour)},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(
+		[]domain.BalanceSnapshot{{ID: "cur", AccountID: "acct-new", UserAccountID: &stableUA,
+			UserID: userID, CurrentBalance: &cur, SnapshotAt: time.Now().UTC()}}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
+		Return(previous, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetBalanceSummary(ctx, userID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result.PeriodComparison)
+	assert.Equal(t, 900.00, result.PeriodComparison.PreviousBalance,
+		"dedup must keep the chain's LATEST baseline snapshot (900), not its oldest (400). "+
+			"Keeping 400 turns a real +11% into +150%.")
+	assert.InDelta(t, 100.00, result.PeriodComparison.ChangeAmount, 0.001)
+}
+
+// TestGetNetWorth_PeriodComparison_DedupKeepsLatestInChain is the net-worth twin: that loop is a
+// separate implementation with its own seen-set, and its dedup test had the same blind spot.
+func TestGetNetWorth_PeriodComparison_DedupKeepsLatestInChain(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-nw-dedup-latest"
+	stableUA := "ua-nw-dedup-latest"
+
+	cur, newer, older := 1000.00, 900.00, 400.00
+	baselineDay := time.Now().UTC().AddDate(0, 0, -30).Truncate(24 * time.Hour)
+
+	accounts := []domain.Account{
+		{ID: "acct-new", UserID: userID, Name: "Checking", Type: "depository",
+			Status: domain.AccountStatusActive, UserAccountID: &stableUA},
+	}
+	previous := []domain.BalanceSnapshot{
+		{ID: "prev-older", AccountID: "acct-old", UserAccountID: &stableUA, UserID: userID,
+			CurrentBalance: &older, SnapshotAt: baselineDay.Add(2 * time.Hour)},
+		{ID: "prev-newer", AccountID: "acct-new", UserAccountID: &stableUA, UserID: userID,
+			CurrentBalance: &newer, SnapshotAt: baselineDay.Add(20 * time.Hour)},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(
+		[]domain.BalanceSnapshot{{ID: "cur", AccountID: "acct-new", UserAccountID: &stableUA,
+			UserID: userID, CurrentBalance: &cur, SnapshotAt: time.Now().UTC()}}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
+		Return(previous, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, userID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result.PeriodComparison)
+	assert.Equal(t, 900.00, result.PeriodComparison.PreviousAssets,
+		"dedup must keep the chain's LATEST baseline snapshot (900), not its oldest (400)")
+	assert.InDelta(t, 100.00, result.PeriodComparison.NetWorthChange, 0.001)
+}
+
+// TestBaselineBalanceForComparison_ActiveAccountMapWinsOverHistorical pins the precedence that
+// twelve lines of comment above baselineBalanceForComparison justify and no test asserted: the
+// ACTIVE map is consulted first and the all-statuses historical map is only a fallback. Swapping the
+// two left the entire package green.
+//
+// The disagreement below (one key, two types) is deliberately artificial — the comment argues it
+// cannot arise in production, because chain members share a type and the fallback fingerprint
+// includes the type. That argument is exactly what needs a guard: it is the reason nobody would
+// notice if the precedence flipped, and it stops being true the moment anyone reads a NAME, an ID,
+// or a status-dependent field from this lookup. The test states the contract directly so the flip
+// is caught by the contract rather than by whatever product bug the flip eventually causes.
+func TestBaselineBalanceForComparison_ActiveAccountMapWinsOverHistorical(t *testing.T) {
+	balance := 1000.00
+	snapshots := []domain.BalanceSnapshot{
+		{ID: "s1", AccountID: "acct-1", CurrentBalance: &balance},
+	}
+	active := map[string]domain.Account{
+		"acct-1": {ID: "acct-1", Type: "depository", Status: domain.AccountStatusActive},
+	}
+	historical := map[string]domain.Account{
+		"acct-1": {ID: "acct-1", Type: "credit", Status: domain.AccountStatusExpired},
+	}
+
+	assert.Equal(t, 1000.00,
+		baselineBalanceForComparison(snapshots, active, historical, []string{"depository"}, true),
+		"the ACTIVE map must win: its account is depository, so a depository filter keeps the row. "+
+			"If the historical map won, the row would read as credit and be filtered out to 0.")
+	assert.Equal(t, 0.00,
+		baselineBalanceForComparison(snapshots, active, historical, []string{"credit"}, true),
+		"and the converse: a credit filter must reject the row, because the type that counts is the "+
+			"ACTIVE map's depository, not the historical map's credit")
+}
+
+// ─── #1537 T71 (F4): a legacy NULL user_account_id snapshot double-counted the chain ───
+
+// TestGetBalanceSummary_PeriodComparison_LegacyNullUserAccountIDDoesNotDoubleCount pins that one
+// logical account contributes to the baseline once even when its snapshots disagree about which
+// column identifies it.
+//
+// THE DEFECT. balance_snapshots.user_account_id is NULLABLE, its backfill was one-shot
+// (migrations/000038) and the FK is ON DELETE SET NULL. So a chain can hold a legacy row keyed on a
+// raw account_id AND a post-relink sibling keyed on the user_account_id. snapshotChainKey returns
+// different keys for those two rows, so the seen-set did not collapse them — while the CURRENT loop
+// counts the chain once, because it resolves through the chain-aware account map. The all-statuses
+// historical map then resurrects the replaced member that the current loop correctly dropped, so the
+// baseline counted $1,000 where the truth was $500: a real $500 → $700 move (+40%) was reported as
+// −30%. The sign of the change was wrong, not just its size.
+func TestGetBalanceSummary_PeriodComparison_LegacyNullUserAccountIDDoesNotDoubleCount(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-legacy-null-ua"
+	stableUA := "ua-legacy-chain"
+
+	cur, legacy, sibling := 700.00, 500.00, 500.00
+	baselineDay := time.Now().UTC().AddDate(0, 0, -30).Truncate(24 * time.Hour)
+
+	// Active universe: only the post-relink account. Its snapshot carries the user_account_id.
+	activeAccounts := []domain.Account{
+		{ID: "acct-new", UserID: userID, Name: "Checking", Type: "depository",
+			Status: domain.AccountStatusActive, UserAccountID: &stableUA},
+	}
+	// All-statuses universe additionally holds the replaced member — same chain, same
+	// user_account_id, which is what lets the two snapshot rows be recognised as one account.
+	allStatusAccounts := append([]domain.Account{}, activeAccounts...)
+	allStatusAccounts = append(allStatusAccounts,
+		domain.Account{ID: "acct-old", UserID: userID, Name: "Checking (replaced)", Type: "depository",
+			Status: domain.AccountStatusReplaced, UserAccountID: &stableUA})
+
+	previous := []domain.BalanceSnapshot{
+		// Legacy row: user_account_id IS NULL, so it keys on its raw (already replaced) account_id.
+		{ID: "prev-legacy", AccountID: "acct-old", UserAccountID: nil, UserID: userID,
+			CurrentBalance: &legacy, SnapshotAt: baselineDay.Add(3 * time.Hour)},
+		// Post-relink sibling for the SAME logical account.
+		{ID: "prev-sibling", AccountID: "acct-new", UserAccountID: &stableUA, UserID: userID,
+			CurrentBalance: &sibling, SnapshotAt: baselineDay.Add(21 * time.Hour)},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeAccounts, nil)
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
+		mock.MatchedBy(func(opts repository.AccountFilterOptions) bool {
+			return opts.AllStatuses && opts.IncludeHidden
+		})).Return(allStatusAccounts, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(
+		[]domain.BalanceSnapshot{{ID: "cur", AccountID: "acct-new", UserAccountID: &stableUA,
+			UserID: userID, CurrentBalance: &cur, SnapshotAt: time.Now().UTC()}}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
+		Return(previous, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetBalanceSummary(ctx, userID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result.PeriodComparison)
+	assert.Equal(t, 500.00, result.PeriodComparison.PreviousBalance,
+		"one logical account, one contribution. Counting the legacy NULL row separately makes the "+
+			"baseline 1000 and reports a real +40% as −30%.")
+	assert.InDelta(t, 200.00, result.PeriodComparison.ChangeAmount, 0.001)
+	assert.InDelta(t, 40.0, result.PeriodComparison.ChangePercent, 0.001)
+}
+
+// TestGetNetWorth_PeriodComparison_LegacyNullUserAccountIDDoesNotDoubleCount is the net-worth twin;
+// its baseline loop keeps its own seen-set and had the identical defect.
+func TestGetNetWorth_PeriodComparison_LegacyNullUserAccountIDDoesNotDoubleCount(t *testing.T) {
+	ctx := context.Background()
+	userID := "test-user-nw-legacy-null-ua"
+	stableUA := "ua-nw-legacy-chain"
+
+	cur, legacy, sibling := 700.00, 500.00, 500.00
+	baselineDay := time.Now().UTC().AddDate(0, 0, -30).Truncate(24 * time.Hour)
+
+	activeAccounts := []domain.Account{
+		{ID: "acct-new", UserID: userID, Name: "Checking", Type: "depository",
+			Status: domain.AccountStatusActive, UserAccountID: &stableUA},
+	}
+	allStatusAccounts := append([]domain.Account{}, activeAccounts...)
+	allStatusAccounts = append(allStatusAccounts,
+		domain.Account{ID: "acct-old", UserID: userID, Name: "Checking (replaced)", Type: "depository",
+			Status: domain.AccountStatusReplaced, UserAccountID: &stableUA})
+
+	previous := []domain.BalanceSnapshot{
+		{ID: "prev-legacy", AccountID: "acct-old", UserAccountID: nil, UserID: userID,
+			CurrentBalance: &legacy, SnapshotAt: baselineDay.Add(3 * time.Hour)},
+		{ID: "prev-sibling", AccountID: "acct-new", UserAccountID: &stableUA, UserID: userID,
+			CurrentBalance: &sibling, SnapshotAt: baselineDay.Add(21 * time.Hour)},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeAccounts, nil)
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
+		mock.MatchedBy(func(opts repository.AccountFilterOptions) bool {
+			return opts.AllStatuses && opts.IncludeHidden
+		})).Return(allStatusAccounts, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(
+		[]domain.BalanceSnapshot{{ID: "cur", AccountID: "acct-new", UserAccountID: &stableUA,
+			UserID: userID, CurrentBalance: &cur, SnapshotAt: time.Now().UTC()}}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
+		Return(previous, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetNetWorth(ctx, userID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result.PeriodComparison)
+	assert.Equal(t, 500.00, result.PeriodComparison.PreviousAssets,
+		"one logical account, one contribution — counting the legacy NULL row separately makes the "+
+			"baseline 1000 and flips the sign of the reported change")
+	assert.InDelta(t, 200.00, result.PeriodComparison.NetWorthChange, 0.001)
+	assert.InDelta(t, 40.0, result.PeriodComparison.NetWorthChangePercent, 0.001)
 }

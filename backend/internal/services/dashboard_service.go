@@ -20,6 +20,25 @@ func snapshotChainKey(s domain.BalanceSnapshot) string {
 	return s.AccountID
 }
 
+// accountChainKey returns the canonical identity of the LOGICAL account (the re-link chain) an
+// accounts row belongs to: its stable user_account_id if it has one, else its own id.
+//
+// Dedup keys must come from here, not from snapshotChainKey, once a snapshot has been resolved to an
+// account. balance_snapshots.user_account_id is NULLABLE, its backfill was one-shot
+// (migrations/000038) and the FK is ON DELETE SET NULL, so one chain can legitimately produce a
+// legacy row keyed on a raw (already replaced) account_id AND a post-relink sibling keyed on the
+// user_account_id. Those two snapshot keys differ, so a seen-set built from snapshotChainKey does
+// not collapse them and the chain is counted twice in the baseline while the current loop correctly
+// counts it once — measured: a true $500 → $700 move (+40%) reported as −30%. Both snapshots resolve
+// to accounts rows that share one user_account_id, which is why the resolved account's key collapses
+// them and the snapshot's own key cannot. Issue #1537.
+func accountChainKey(a domain.Account) string {
+	if a.UserAccountID != nil && *a.UserAccountID != "" {
+		return *a.UserAccountID
+	}
+	return a.ID
+}
+
 // buildChainAwareAccountMap builds a map keyed by both account.ID and account.UserAccountID
 // so that snapshots carrying a replaced account_id still resolve via the chain key (Issue #1109).
 // baselineBalanceForComparison sums the 30-day-ago snapshots for the period comparison, applying
@@ -49,12 +68,18 @@ func snapshotChainKey(s domain.BalanceSnapshot) string {
 // learn an account's type so the AccountTypes filter can still be applied to it; the balance itself
 // always comes from the snapshot row.
 //
-// activeAccounts is consulted first, but note what that precedence actually buys: it is PER-KEY, not
+// activeAccounts is consulted first — pinned by
+// TestBaselineBalanceForComparison_ActiveAccountMapWinsOverHistorical, because swapping the two
+// maps used to leave the whole internal/services package green. Note what that precedence actually
+// buys: it is PER-KEY, not
 // per-chain. A snapshot carrying a user_account_id hits the active member through that key, as
 // intended. A snapshot with a NIL user_account_id keys on its raw (possibly already-replaced)
 // account_id, which the active-only map does not contain — so it falls through and resolves to the
-// INACTIVE chain member instead. That cannot change any output here: the map is read for
-// account.Type alone, and chain members share a type. The fallback fingerprint is literally
+// INACTIVE chain member instead. For account.Type that is harmless, because chain members share a
+// type; and it is now load-bearing for DEDUP, because the inactive member still carries the chain's
+// user_account_id, which is the only way a legacy NULL-user_account_id snapshot can be recognised as
+// the same logical account as its post-relink sibling (see accountChainKey). Whichever member
+// resolves, the canonical key is the same. The fallback fingerprint is literally
 // institution_id|mask|type|subtype (domain.Account.FallbackFingerprintBlindIdx), so a differing type
 // would be a different fingerprint and hence a different chain; the persistent_account_id path
 // identifies one physical account at one institution. The earlier wording — "so a re-linked chain
@@ -64,7 +89,10 @@ func snapshotChainKey(s domain.BalanceSnapshot) string {
 //
 // dedupChains reflects a real difference between the two callers, not an oversight: the personal path
 // can receive several snapshots per logical account on a re-link day (it sorts DESC first and keeps
-// the latest per chain), while the household path is already one row per account.
+// the latest per chain — pinned by TestGetBalanceSummary_PeriodComparison_DedupKeepsLatestInChain,
+// since the older dedup test gave both rows the same balance and a zero SnapshotAt and so could not
+// see which row won), while the household path is already one row per account: its snapshot read
+// JOINs on user_account_id, so it never sees the legacy NULL-key rows accountChainKey exists for.
 //
 // ⚠ The comment that used to live here asserted the single-map approach as a deliberate "KNOWN
 // APPROXIMATION". It was wrong. Stated plainly because this exact claim has now been wrong twice in
@@ -82,18 +110,22 @@ func baselineBalanceForComparison(
 	seenChainKeys := make(map[string]bool)
 	for _, snapshot := range snapshots {
 		key := snapshotChainKey(snapshot)
-		if dedupChains {
-			if seenChainKeys[key] {
-				continue
-			}
-			seenChainKeys[key] = true
-		}
 		account, exists := activeAccounts[key]
 		if !exists {
 			account, exists = historicalAccounts[key]
 		}
 		if !exists {
 			continue
+		}
+		// Dedup AFTER resolution, on the resolved account's chain key — see accountChainKey for why
+		// the snapshot's own key double-counts a chain with a legacy NULL user_account_id row. The
+		// caller sorted DESC, so the row that survives is the chain's LATEST.
+		if dedupChains {
+			canonicalKey := accountChainKey(account)
+			if seenChainKeys[canonicalKey] {
+				continue
+			}
+			seenChainKeys[canonicalKey] = true
 		}
 		if !accountTypeMatchesFilter(account.Type, accountTypes) {
 			continue
@@ -201,8 +233,13 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 		asOfDate = filters.AsOfDate.Truncate(24 * time.Hour)
 	}
 
-	// Get latest snapshots for each account
-	snapshots, err := s.balanceSnapshotRepo.GetLatestByUserID(ctx, userID)
+	// Both sides of this response are anchored on asOfDate: the current figures are the latest
+	// snapshot per chain AT OR BEFORE the end of that day, and the baseline (below) is the same
+	// read 30 days earlier. Before #1537 the current figures came from the unbounded
+	// GetLatestByUserID while only the baseline moved with as_of_date, so a request for a past
+	// date returned TODAY's total labelled with that date and compared it against a 30-days-before
+	// -that-date baseline — a change over an interval nobody asked for.
+	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, endOfDay(asOfDate))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get balance snapshots: %w", err)
 	}
@@ -271,10 +308,19 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 	var periodComparison *domain.PeriodComparisonData
 	previousDate := asOfDate.AddDate(0, 0, -30)
 
-	previousSnapshots, err := s.balanceSnapshotRepo.GetByUserIDAndDateRange(ctx, userID, previousDate, previousDate)
+	// A point-in-time read, NOT a date range. GetByUserIDAndDateRange(previousDate, previousDate)
+	// was a zero-width window — `snapshot_at >= $2 AND snapshot_at <= $3` with both bounds at
+	// midnight UTC — and production stores wall-clock instants (transaction_sync_service.go writes
+	// `time.Now().UTC()`), so it matched nothing and this whole block never ran for a real user.
+	// endOfDay so a snapshot taken any time on previousDate counts, and "latest at or before the
+	// cutoff" so a user who was not synced that exact day still gets their most recent prior
+	// balance rather than no comparison at all. Issue #1537.
+	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, endOfDay(previousDate))
 	if err == nil && len(previousSnapshots) > 0 {
 		// Sort descending so the dedup below keeps the LATEST snapshot per chain key.
-		// The repo returns ASC; on a re-link day both replaced and active rows may exist.
+		// The repo already returns one row per chain, but a re-link chain can still surface twice
+		// here when a legacy NULL-user_account_id row keys on its raw account_id (see
+		// baselineBalanceForComparison), and those two rows carry different instants.
 		sort.Slice(previousSnapshots, func(i, j int) bool {
 			return previousSnapshots[i].SnapshotAt.After(previousSnapshots[j].SnapshotAt)
 		})
@@ -355,13 +401,12 @@ func (s *dashboardService) historicalAccountMap(
 // (freshest-synced copy) and resolve re-link chains via the stable user_account_id, so —
 // unlike the personal path — no further chain-key dedup loop is needed here.
 //
-// The "current" snapshot fetch below intentionally uses time.Now(), not asOfDate — this
-// mirrors the PERSONAL path's existing behavior exactly (GetLatestByUserID has no date
-// parameter at all; filters.AsOfDate only ever affects the response label and the
-// previous-period baseline, never which snapshot counts as "current"). Codex adversarial
-// review flagged this as inconsistent with the AsOfDate param, but making household MORE
-// precise than personal here would itself be a scope-dependent behavioral divergence —
-// out of scope for this phase; see plan decision notes.
+// The "current" snapshot fetch below is anchored on asOfDate, not time.Now(). It used to use
+// time.Now() to mirror the personal path, whose current read (GetLatestByUserID) had no date
+// parameter at all — so filters.AsOfDate shaped the response LABEL and the baseline but never the
+// current figures, and a request for a past date returned today's total labelled with that date.
+// #1537 anchored both scopes on asOfDate instead; the personal read is now
+// GetSnapshotsAsOfForUser(endOfDay(asOfDate)) and this one matches it.
 func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.BalanceSummaryResponse, error) {
 	scope := filters.HouseholdScope
 	asOfDate := time.Now().UTC().Truncate(24 * time.Hour)
@@ -369,12 +414,14 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 		asOfDate = filters.AsOfDate.Truncate(24 * time.Hour)
 	}
 
-	// currentCutoff is captured once and reused for both calls below — two independent
-	// time.Now().UTC() calls could straddle a sync landing in between, letting the snapshot
-	// query and the account-map query resolve a joint account's fingerprint winner to
-	// different members' copies (the same class of bug fixed for the previous-period pair
-	// in #1369 gap-closure G1; flagged by Codex adversarial review on the G1 fix itself).
-	currentCutoff := time.Now().UTC()
+	// currentCutoff is derived from asOfDate, so the snapshot query and the account-map query
+	// below necessarily agree on which member's copy wins a joint account's fingerprint. Two
+	// independent time.Now().UTC() calls — what this used to be — could straddle a sync landing in
+	// between and resolve that winner differently (the same class of bug fixed for the
+	// previous-period pair in #1369 gap-closure G1; flagged by Codex adversarial review on the G1
+	// fix itself). Deriving it from asOfDate makes the agreement structural rather than a
+	// convention one edit could break.
+	currentCutoff := endOfDay(asOfDate)
 	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
@@ -443,9 +490,20 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 
 	var periodComparison *domain.PeriodComparisonData
 	previousDate := asOfDate.AddDate(0, 0, -30)
-	// previousCutoff is captured once and shared by the baseline snapshot read and the baseline
-	// account map below, for the same reason currentCutoff is shared above: the two must agree on
-	// which member's copy wins a joint-account fingerprint collision (#1369 gap-closure G1).
+	// previousCutoff bounds the baseline snapshot read, and — only when the all-statuses fallback
+	// fires — the GetForHouseholdScopeAllStatuses read below.
+	//
+	// It is NOT shared with a prev-cutoff PRIMARY account map: unlike getNetWorthHousehold, which
+	// builds one (see the eight lines there explaining why), this path's primary lookup is the
+	// CURRENT-cutoff accountMap built above, and previousCutoff reaches only the fallback. That is
+	// a real difference between the two household paths, stated plainly because the comment here
+	// previously claimed the sharing that getNetWorthHousehold has and this path does not — so a
+	// reader looking for the #1369 G1 joint-account-winner guarantee would have believed it was
+	// already present here. It is not; the fallback agrees with the snapshot read, the primary
+	// lookup does not.
+	//
+	// endOfDay, not previousDate: `snapshot_at <= previousDate` would demand a snapshot before
+	// midnight and skip every one taken during the baseline day itself.
 	previousCutoff := endOfDay(previousDate)
 	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, previousCutoff)
 	if err == nil && len(previousSnapshots) > 0 {
@@ -635,8 +693,8 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 		asOfDate = filters.AsOfDate.Truncate(24 * time.Hour)
 	}
 
-	// Get latest snapshots for each account
-	snapshots, err := s.balanceSnapshotRepo.GetLatestByUserID(ctx, userID)
+	// as_of_date anchors BOTH sides here too — see GetBalanceSummary's identical read.
+	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, endOfDay(asOfDate))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get balance snapshots: %w", err)
 	}
@@ -739,7 +797,9 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 	var periodComparison *domain.NetWorthPeriodComparison
 	previousDate := asOfDate.AddDate(0, 0, -30)
 
-	previousSnapshots, err := s.balanceSnapshotRepo.GetByUserIDAndDateRange(ctx, userID, previousDate, previousDate)
+	// Point-in-time, not a zero-width date range — see GetBalanceSummary's baseline read for why
+	// the range form matched nothing in production (#1537).
+	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, endOfDay(previousDate))
 	if err == nil && len(previousSnapshots) > 0 {
 		// Sort descending so the dedup below keeps the LATEST snapshot per chain key.
 		sort.Slice(previousSnapshots, func(i, j int) bool {
@@ -790,11 +850,6 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 
 		for _, snapshot := range previousSnapshots {
 			key := snapshotChainKey(snapshot)
-			if seenChainKeys[key] {
-				continue // Dedup: count each logical account (chain) only once
-			}
-			seenChainKeys[key] = true
-
 			// Active map first, historical map as fallback — the same precedence
 			// baselineBalanceForComparison uses.
 			account, exists := accountMap[key]
@@ -804,6 +859,14 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 			if !exists {
 				continue
 			}
+			// Dedup: count each logical account (chain) only once, keyed on the RESOLVED account so
+			// that a legacy NULL-user_account_id row and its post-relink sibling collapse — see
+			// accountChainKey. previousSnapshots is sorted DESC above, so the latest row wins.
+			canonicalKey := accountChainKey(account)
+			if seenChainKeys[canonicalKey] {
+				continue
+			}
+			seenChainKeys[canonicalKey] = true
 			// The same AccountTypes filter the current-period loop above applies.
 			if !accountTypeMatchesFilter(account.Type, accountTypes) {
 				continue
@@ -857,8 +920,8 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 // getBalanceSummaryHousehold, it uses GetSnapshotsAsOfForHousehold/GetForHouseholdScope
 // (never the single-user GetLatestByUserID/GetByUserID — Codex adversarial review, P0-2)
 // and needs no chain-key dedup loop since those methods already collapse joint accounts
-// and re-link chains to one row each. The "current" fetch uses time.Now(), matching the
-// personal path's AsOfDate handling exactly — see getBalanceSummaryHousehold's comment.
+// and re-link chains to one row each. The "current" fetch is anchored on asOfDate, matching the
+// personal path — see getBalanceSummaryHousehold's comment for the behavior this replaced.
 func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.NetWorthResponse, error) {
 	scope := filters.HouseholdScope
 	asOfDate := time.Now().UTC().Truncate(24 * time.Hour)
@@ -866,10 +929,10 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 		asOfDate = filters.AsOfDate.Truncate(24 * time.Hour)
 	}
 
-	// currentCutoff is captured once and reused for both calls below — see the identical
+	// currentCutoff is derived from asOfDate and reused for both calls below — see the identical
 	// comment in getBalanceSummaryHousehold for why two independent time.Now().UTC() calls
 	// would be unsafe here (Codex adversarial review on the G1 fix).
-	currentCutoff := time.Now().UTC()
+	currentCutoff := endOfDay(asOfDate)
 	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
