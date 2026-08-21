@@ -87,6 +87,18 @@
 # "Run frontend tests with coverage"), which shell out to the runners checked here. (The workflow's
 # other `bun run test:integration` step is apps/mcp-server's, not apps/web's — verified.) Test 4
 # closes the route by which they could become load-bearing.
+#
+# ⚠ THAT PARENTHETICAL ABOUT mcp-server WAS A DISMISSAL, AND IT COST A RED BUILD (#1537 round 17).
+# Having noticed apps/mcp-server, this comment filed it under "not apps/web's problem" instead of
+# asking whether it had the same defect. It did: the workflows ran `bun test src/` for it with NO
+# --timeout, so that 283-test suite ran at bun's 5s default — and on a loaded host `MCP Server
+# Validation` went red with a beforeEach hook timing out at 6665ms in src/spec/index-builder.test.ts.
+# The same raw invocation was in deploy-production.yml, so a loaded production deploy could have
+# failed identically.
+#
+# Test 7 now scans every .github/workflows/*.yml for raw `bun test` invocations — the scope this file
+# should have had from the start. The defect is "a bun suite running at the default", not "an
+# apps/web script missing a flag".
 
 set -uo pipefail
 
@@ -401,6 +413,36 @@ fi
 # worst it fires on the words "bun test" inside a comment, which is a false ALARM someone fixes by
 # rewording or by putting the script in package.json where it can be observed properly.
 # ---------------------------------------------------------------------------------------------
+echo "Test 7: no workflow runs a raw 'bun test' without a --timeout at or above the floor"
+# #1537 round 17. Tests 1-6 scan apps/web/scripts. They never saw the WORKFLOWS, which invoke
+# `bun test src/` directly for apps/mcp-server — and this guard's own SCOPE LIMIT note mentioned
+# mcp-server only to EXCLUDE it ("not apps/web's, verified"). That dismissal is what failed: on
+# 2026-08-21 `MCP Server Validation` went red with
+#     src/spec/index-builder.test.ts (fail) (unnamed) [6665.15ms]
+#       ^ a beforeEach/afterEach hook timed out for this test
+# — a 6.7s hook against bun's 5s default, on a loaded host, in a suite that passes when the host is
+# idle. Exactly the defect this file was created for, one directory over. The same raw invocation is
+# in deploy-production.yml, so a loaded PRODUCTION DEPLOY can fail the same way.
+wf_bad=0
+while IFS= read -r wf; do
+  while IFS=: read -r lineno content; do
+    case "$content" in
+      *"--timeout"*)
+        val=$(printf '%s\n' "$content" | sed -n 's/.*--timeout[ =]\{1,\}\([0-9]\{1,\}\).*/\1/p')
+        if [ -z "$val" ] || [ "$val" -lt "$TIMEOUT_FLOOR" ]; then
+          bad "$wf:$lineno runs 'bun test' with --timeout '${val:-<unparsed>}', below the ${TIMEOUT_FLOOR}ms floor"
+          wf_bad=$((wf_bad+1))
+        fi
+        ;;
+      *)
+        bad "$wf:$lineno runs a raw 'bun test' with NO --timeout, so that suite runs at bun's 5s default: $(printf '%s' "$content" | sed 's/^ *//')"
+        wf_bad=$((wf_bad+1))
+        ;;
+    esac
+  done < <(/usr/bin/grep -nE '(^|[^a-z-])bun[[:space:]]+test([[:space:]]|$)' "$wf" 2>/dev/null | /usr/bin/grep -v '^[0-9]*: *#')
+done < <(find "$REPO_ROOT/.github/workflows" -name '*.yml' 2>/dev/null | sort)
+[ "$wf_bad" -eq 0 ] && ok "no workflow invokes a raw 'bun test' below the ${TIMEOUT_FLOOR}ms floor"
+
 echo "Test 6: no unexecuted script under apps/web/scripts invokes 'bun test'"
 unverified=""
 while IFS= read -r f; do
