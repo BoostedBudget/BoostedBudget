@@ -1837,9 +1837,6 @@ type mockBalanceSnapshotRepository struct {
 func (m *mockBalanceSnapshotRepository) Create(ctx context.Context, snapshot *domain.BalanceSnapshot) error {
 	return nil
 }
-func (m *mockBalanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context, userID string, startDate, endDate time.Time) ([]domain.BalanceSnapshot, error) {
-	return nil, nil
-}
 func (m *mockBalanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
 	if m.getAggregatedHistoryFn != nil {
 		return m.getAggregatedHistoryFn(ctx, userID, startDate, endDate, accountTypes)
