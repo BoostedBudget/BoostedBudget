@@ -544,7 +544,12 @@ func (s *transactionSyncService) SyncTransactions(
 		)
 	}
 
-	// All pages fetched successfully
+	// Pagination finished. NOTE this is reached on TWO paths, and the difference matters: either
+	// has_more went false (every page fetched), or #1537 round 11's guard broke out early because
+	// Plaid promised more pages while sending no cursor to fetch them with. In the second case the
+	// pages already fetched ARE stored and the persisted cursor is consistent with them, so the next
+	// sync resumes correctly — but this is NOT a complete sync, and an earlier version of this comment
+	// said "All pages fetched successfully", which my own break made false.
 	result.NewCursor = cursor
 	s.logger.Info("sync complete",
 		"item_id", linkedItem.ID,

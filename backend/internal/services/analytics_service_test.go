@@ -1846,6 +1846,9 @@ func (m *mockBalanceSnapshotRepository) GetAggregatedHistory(ctx context.Context
 	}
 	return nil, nil
 }
+func (m *mockBalanceSnapshotRepository) GetSnapshotsAsOfForUser(ctx context.Context, userID string, asOf time.Time) ([]domain.BalanceSnapshot, error) {
+	return nil, nil
+}
 func (m *mockBalanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userID string) ([]domain.BalanceSnapshot, error) {
 	return nil, nil
 }
