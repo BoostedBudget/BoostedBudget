@@ -419,7 +419,7 @@ func TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccount
 // `a.type`, which NULL never satisfies `= ANY`, so the accountTypes filter drops those snapshots
 // outright while personal scope keeps them. The join is therefore UNFILTERED
 // (`LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id`,
-// balance_snapshot_repository.go:308) and the preference lives in the ORDER BY:
+// balance_snapshot_repository.go:320) and the preference lives in the ORDER BY:
 // `(a.status = 'active') DESC NULLS LAST, a.id` (:313) — active wins, any chain member's type is the
 // fallback, `a.id` only breaks ties within a status class. Both halves are pinned: this test (active
 // wins) and TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory

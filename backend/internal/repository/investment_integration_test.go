@@ -224,7 +224,7 @@ func TestInvestment_Snapshot_PartialNullCostBasis_Integration(t *testing.T) {
 // is not one: after #1561 no spending/cash-flow analytics join carries a status predicate at all
 // (#1109 had already removed the personal-scope ones), and GetAggregatedHistoryForHousehold
 // expresses status as a DISTINCT ON ordering preference rather than a filter
-// (balance_snapshot_repository.go:313). Investment reads are the remaining family that genuinely
+// (balance_snapshot_repository.go:325). Investment reads are the remaining family that genuinely
 // filters, which is why this snapshot matching them is worth pinning.
 func TestInvestment_Snapshot_ExcludesInactiveAccounts_Integration(t *testing.T) {
 	pool := connectTestDB(t)

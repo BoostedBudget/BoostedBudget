@@ -262,7 +262,7 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Storage must be REACHED — that is the whole point. SyncTransactions does its own CreateBatch
-	// (transaction_sync_service.go:589 -> :863), so the round-10 error path returned before its own
+	// (transaction_sync_service.go:594 -> :868), so the round-10 error path returned before its own
 	// storage step. Stubbing it lets us assert page 1 actually arrives there.
 	mockTransactionRepo.On("CreateBatch", mock.Anything, mock.Anything).
 		Return(map[string]bool{"txn-page1": true}, nil).Maybe()

@@ -47,8 +47,8 @@ type BalanceSnapshotRepository interface {
 	// GetSnapshotsAsOfForHousehold retrieves, for every account currently shared into the
 	// household (across ALL members, not just requestingUserID), the latest snapshot at or
 	// before asOf. Used for both the current point-in-time balance (asOf=now) and a
-	// previous-period comparison (asOf=now-30d) — household mode must never fall back to
-	// the personal GetByUserIDAndDateRange, which silently drops other members' data
+	// previous-period comparison (asOf=now-30d) — household mode must never fall back to a
+	// personal-scope read (GetByUserIDAndDateRange, since DELETED in #1537), which dropped
 	// (Codex adversarial review, P0-3). Joint accounts dedup to the freshest-synced copy.
 	// Issue #1369 — Phase 5.
 	GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error)

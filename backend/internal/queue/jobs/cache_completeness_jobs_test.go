@@ -248,7 +248,7 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"inherited: the last cached read that was ever described as filtering it, " +
 		"`GetAggregatedHistoryForHousehold`, does not — its accounts join is unfiltered and status " +
 		"appears only as a DISTINCT ON tiebreak preference, `(a.status = 'active') DESC NULLS " +
-		"LAST, a.id` (repository/balance_snapshot_repository.go:313). Status is still cache-" +
+		"LAST, a.id` (repository/balance_snapshot_repository.go:325). Status is still cache-" +
 		"RELEVANT there, via ordering; it is not a filter anywhere. And none filters on any " +
 		"linked_items column (confirmed by the same repo-wide grep item_cleanup.go's entry cites). " +
 		"The actual Plaid /item/remove call and any accounts-table effect happen in a SEPARATE, " +

@@ -1386,7 +1386,7 @@ func TestGetNetWorth_PreviousPeriodChainDedup(t *testing.T) {
 // ─── #1369 — Phase 5: household balance/net-worth aggregation ───────────────
 //
 // Household mode must use GetSnapshotsAsOfForHousehold / GetForHouseholdScope — NOT
-// GetLatestByUserID / GetByUserID / GetByUserIDAndDateRange, which are single-user and
+// GetLatestByUserID / GetByUserID (and GetByUserIDAndDateRange, deleted in #1537) — single-user, and
 // would silently drop every non-requester member's data (Codex adversarial review,
 // P0-2/P0-3). These are pure-Go aggregation tests (repo correctness is covered by
 // integration tests); they assert the SERVICE picks the right repo methods and sums

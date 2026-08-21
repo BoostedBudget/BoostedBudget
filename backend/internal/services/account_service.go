@@ -293,7 +293,7 @@ func (s *accountService) checkFingerprintOwnership(ctx context.Context, blindIdx
 		// turn: it said "the only status filter any of them can reach is
 		// GetAggregatedHistoryForHousehold's account-type join". There is no such filter. That join
 		// is unfiltered — `LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id`
-		// (repository/balance_snapshot_repository.go:308) — and status appears only as the first
+		// (repository/balance_snapshot_repository.go:320) — and status appears only as the first
 		// DISTINCT ON tiebreak, `(a.status = 'active') DESC NULLS LAST, a.id` (:313).
 		//
 		// Re-derived, and stated as a preference rather than a filter: the three cached wrappers are

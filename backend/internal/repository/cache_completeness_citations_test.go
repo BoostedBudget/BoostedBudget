@@ -569,6 +569,13 @@ func keysOf(m map[string]registeredOperation) []string {
 // assert the line contains any particular construct: many citations legitimately point at the doc
 // comment ABOVE a function, and pinning content would fire on every unrelated edit. Refs written
 // `~:NNN` are exempt, because `~` already declares them approximate.
+//
+// ⚠ READ THIS BEFORE TRUSTING A GREEN RUN: this test proves a cited line is IN RANGE, never that it
+// is CORRECT — an in-range number pointing at wholly unrelated code passes it silently, which is how
+// roughly twenty stale citations survived an entire audit of this branch (five in
+// budget_repository.go, three in transaction_repository.go, and one paragraph copy-pasted to eight
+// sites). TestCitedSQLFragmentsAreNearTheirCitedLine below closes that hole for SQL-bearing
+// citations only; every other class of citation still has nothing but this range bound.
 func TestExactCitationsAreInRange(t *testing.T) {
 	// (?<!~) is unavailable in Go's regexp, so the tilde is captured and rejected in code.
 	re := regexp.MustCompile(`(~?)\b((?:[a-z0-9_]+/)*[a-z0-9_]+\.go):(\d+)\b`)
@@ -1124,5 +1131,151 @@ func TestCitedSQLPredicatesExistInTheirFile(t *testing.T) {
 			"A quoted predicate is a claim about a file's text. Re-read the file and rewrite the "+
 			"claim; do not annotate it with a correction, which is how three of these got wrong.",
 			len(missing), strings.Join(missing, "\n  - "))
+	}
+}
+
+// ── Cited SQL fragments must be AT the line they cite ───────────────────────────────────────────
+
+// reBacktickedFragment matches one backticked span. Spans in these details are well-formed pairs,
+// so a non-overlapping scan yields each span exactly once.
+var reBacktickedFragment = regexp.MustCompile("`([^`]{2,200})`")
+
+// reSQLSyntaxFragment decides whether a backticked span is a quotation of SQL rather than prose,
+// an identifier or a route. It is the whole reason this guard is usable: see the doc comment on
+// TestCitedSQLFragmentsAreNearTheirCitedLine for the measurement that rejected the loose version.
+var reSQLSyntaxFragment = regexp.MustCompile(
+	`SELECT|LEFT JOIN|INNER JOIN|JOIN|WHERE|ORDER BY|DISTINCT ON|GROUP BY|ON CONFLICT|` +
+		`INSERT INTO|UPDATE |DELETE FROM|DESC NULLS|AND [a-z_][a-z0-9_]*\.`)
+
+// reFragmentIsProse rejects a span that merely TALKS about SQL. Sentence punctuation and the words
+// so/the/which do not occur in the short literal fragments these details quote, and they occur in
+// nearly every prose span that the fragment scanner picks up between two code spans.
+var reFragmentIsProse = regexp.MustCompile(`(?i)\. |, |; |\b(so|the|which)\b`)
+
+// reCitationAfterFragment is the citation permitted to follow a fragment: nothing between them but
+// whitespace and an opening paren/bracket, then either `file.go:NNN` or a bare `:NNN`.
+//
+// A RANGE (`:1470-1471`) is accepted and judged by its FIRST line: two of the stale citations this
+// guard found were written as ranges, and requiring a single number made them invisible.
+var reCitationAfterFragment = regexp.MustCompile(
+	"^\\s*[(\\[]?\\s*`((?:[a-z0-9_.-]+/)*[a-z0-9_.-]+\\.go)?:(\\d+)(?:[-,]\\d+)*`")
+
+// linesAround returns the flattened text of path's lines in [line-window, line+window], 1-based,
+// with comments masked, or ("", false) if the file cannot be read or the line is out of range.
+func linesAround(path string, line, window int) (string, bool) {
+	resolved := resolveCitedFileForRange(path)
+	if resolved == "" || !strings.HasSuffix(resolved, ".go") {
+		return "", false
+	}
+	b, err := os.ReadFile(resolved)
+	if err != nil {
+		return "", false
+	}
+	lines := strings.Split(sqlHaystack(string(b)), "\n")
+	if line < 1 || line > len(lines) {
+		return "", false // out of range is TestExactCitationsAreInRange's business
+	}
+	lo, hi := line-1-window, line-1+window
+	if lo < 0 {
+		lo = 0
+	}
+	if hi >= len(lines) {
+		hi = len(lines) - 1
+	}
+	return flattenSQLForCompare(strings.Join(lines[lo:hi+1], "\n")), true
+}
+
+// TestCitedSQLFragmentsAreNearTheirCitedLine closes the hole every other guard in this file leaves
+// open: TestExactCitationsAreInRange proves a cited line is IN RANGE, never that it is CORRECT, and
+// TestCitedSQLPredicatesExistInTheirFile proves a quoted fragment is SOMEWHERE in the cited file.
+// Neither notices a citation that is in-range, in the right file, and pointing at unrelated code —
+// which is exactly what ~20 stale citations looked like while a whole audit passed over them. This
+// guard closes that hole only for SQL-BEARING citations; every other class of citation is still
+// range-checked and nothing more.
+//
+// The rule: a backticked SQL fragment immediately followed by `file.go:NNN` (or a bare `:NNN`,
+// resolved against the last .go file the entry named) claims that text is AT that line, so the
+// fragment must appear within +/-4 lines of it.
+//
+// THE LOOSE VERSION WAS MEASURED AND REJECTED. Checking every backticked span adjacent to a citation
+// yields 160 candidates and 121 "findings", almost all of them the scanner capturing the PROSE
+// between two code spans — `" operation ("`, `" = the actor, so blast radius is the actor; "`. That
+// is a false-positive generator, and a guard that cries wolf gets worked around. Requiring SQL
+// syntax AND the absence of sentence punctuation narrows it to 14 candidates, of which 13 were real
+// staleness and zero were false positives — every one hand-verified before this guard was adopted.
+//
+// The window is +/-4 rather than exact because these fragments are quoted from multi-line raw SQL
+// strings and a citation legitimately points at the statement's first line rather than at the clause.
+// The drifts this found were 5 to 56 lines out, far outside the window, so widening it slightly
+// costs no detection.
+func TestCitedSQLFragmentsAreNearTheirCitedLine(t *testing.T) {
+	details := allDispositionDetails(t)
+
+	var stale []string
+	checked := 0
+	for key, detail := range details {
+		goPaths := reAnyCitedPath.FindAllStringSubmatchIndex(detail, -1)
+		// lastGoPathBefore resolves a bare `:NNN` the way a reader does: against the most recent .go
+		// file the entry named.
+		lastGoPathBefore := func(at int) string {
+			out := ""
+			for _, m := range goPaths {
+				if m[0] >= at {
+					break
+				}
+				if p := detail[m[2]:m[3]]; strings.HasSuffix(p, ".go") {
+					out = p
+				}
+			}
+			return out
+		}
+
+		for _, m := range reBacktickedFragment.FindAllStringSubmatchIndex(detail, -1) {
+			frag := detail[m[2]:m[3]]
+			if !reSQLSyntaxFragment.MatchString(frag) ||
+				reFragmentIsProse.MatchString(frag) ||
+				reSQLNoise.MatchString(frag) {
+				continue
+			}
+			cm := reCitationAfterFragment.FindStringSubmatchIndex(detail[m[1]:])
+			if cm == nil {
+				continue
+			}
+			path := ""
+			if cm[2] >= 0 {
+				path = detail[m[1]+cm[2] : m[1]+cm[3]]
+			}
+			if path == "" {
+				path = lastGoPathBefore(m[0])
+			}
+			if path == "" {
+				continue
+			}
+			line, err := strconv.Atoi(detail[m[1]+cm[4] : m[1]+cm[5]])
+			if err != nil {
+				continue
+			}
+			window, ok := linesAround(path, line, 4)
+			if !ok {
+				continue
+			}
+			checked++
+			if !strings.Contains(window, flattenSQLForCompare(frag)) {
+				stale = append(stale, key+": "+strconv.Quote(strings.TrimSpace(frag))+" is cited at "+
+					path+":"+strconv.Itoa(line)+", but that text is not within +/-4 lines of it")
+			}
+		}
+	}
+
+	if checked < 10 {
+		t.Fatalf("only %d SQL fragment/line pairs were checkable — the narrow scan measured 14; the "+
+			"extraction is broken and a pass here would be meaningless", checked)
+	}
+	if len(stale) > 0 {
+		sort.Strings(stale)
+		t.Errorf("%d cited SQL fragment(s) are in the right file but not at the cited line:\n  - %s\n\n"+
+			"An in-range line number pointing at unrelated code reads as evidence and is not. "+
+			"Re-anchor the number to the line that actually holds the quoted text.",
+			len(stale), strings.Join(stale, "\n  - "))
 	}
 }

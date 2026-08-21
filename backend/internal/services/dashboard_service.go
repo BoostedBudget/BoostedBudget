@@ -32,12 +32,45 @@ func snapshotChainKey(s domain.BalanceSnapshot) string {
 // counts it once — measured: a true $500 → $700 move (+40%) reported as −30%. Both snapshots resolve
 // to accounts rows that share one user_account_id, which is why the resolved account's key collapses
 // them and the snapshot's own key cannot. Issue #1537.
-// ⚠ RESIDUAL LIMIT (#1537 round 13). The legacy-row collapse this enables depends on the INACTIVE
-// chain member's accounts.user_account_id being non-NULL. That column is nullable
-// (migrations/000033_add_accounts_user_account_and_status.up.sql:24 has no NOT NULL), so a chain whose
-// replaced accounts row is ALSO NULL still double-counts in the baseline. This targets the realistic
-// case — the balance_snapshots backfill was one-shot and that FK is ON DELETE SET NULL — rather than
-// every case, and the gap is stated here rather than left for someone to rediscover.
+// ⚠ RESIDUAL LIMIT (#1537 rounds 13, 14). The legacy-row collapse this enables depends on the
+// INACTIVE chain member's accounts.user_account_id being non-NULL. That column is nullable
+// (migrations/000033_add_accounts_user_account_and_status.up.sql:24 adds it with no NOT NULL), and
+// the NULL is REACHABLE, not a theoretical edge: when userAccountSvc.MatchOrCreate errors during
+// linking, account_service.go:543-550 logs the error and DELIBERATELY continues without setting
+// account.UserAccountID ("Continue without user_account_id - transactions can still be synced"), so
+// an accounts row is persisted with a NULL stable id. transaction_sync_service.go:1202 then copies
+// account.UserAccountID straight into the snapshot, propagating that NULL into balance_snapshots.
+// When the user later re-links, account_service.go:510 marks the old row 'replaced' while its
+// successor carries a real user_account_id — so the two rows produce DIFFERENT canonical keys here,
+// the seen-set in baselineBalanceForComparison does not collapse them, and the chain is counted
+// TWICE in the baseline.
+//
+// The consequence is a WRONG NUMBER, not a cosmetic gap: the baseline is overstated, so both
+// ChangeAmount and ChangePercent are wrong, and a real increase can render as a decrease the same
+// way the round-13 case above did.
+//
+// ⚠ accounts.replaced_by_id CANNOT fix this — do not reach for it. The column exists (migration
+// 000033 adds `replaced_by_id UUID REFERENCES accounts(id)`) and domain.Account.ReplacedByID scans
+// it, so it looks like the obvious chain pointer. But NO production path ever writes it non-NULL:
+// its only writer is accountRepository.UpdateStatus, whose sole production caller
+// (account_service.go:510) passes a literal nil, and the only other production statement touching
+// the column (profile_repository.go:1709) sets it to NULL. Following it from a replaced account
+// resolves to nil 100% of the time. It is linked_items.replaced_by_id that is genuinely populated
+// (account_service.go:492); the two same-named columns are easy to conflate, and conflating them
+// has already cost one investigation. See the note on domain.Account.ReplacedByID.
+//
+// The two-hop route that DOES have live data — replaced account → its linked_item →
+// linked_items.replaced_by_id → the new item → its accounts — then still has to decide WHICH
+// successor account corresponds to the replaced one, i.e. match on mask/type. That is precisely the
+// matching MatchOrCreate had just failed at in order to create the NULL, so it is unreliable in
+// exactly the case it would need to handle. Fixing the write side instead (passing a real
+// replacedByID at account_service.go:510) additionally requires reordering account linking, because
+// the old accounts are marked 'replaced' at :510 BEFORE the new accounts are converted and matched
+// at :520+, so the successor id is not known yet at that point.
+//
+// This function therefore targets the realistic case — the balance_snapshots backfill was one-shot
+// and that FK is ON DELETE SET NULL — rather than every case. The gap is recorded here, with its
+// dead ends, rather than left for someone to rediscover.
 func accountChainKey(a domain.Account) string {
 	if a.UserAccountID != nil && *a.UserAccountID != "" {
 		return *a.UserAccountID
