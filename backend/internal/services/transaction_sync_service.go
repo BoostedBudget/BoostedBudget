@@ -453,13 +453,37 @@ func (s *transactionSyncService) SyncTransactions(
 
 		// CRITICAL: Update cursor IMMEDIATELY for resumability
 		// If next page fails, we can resume from this cursor
+		//
+		// Issue #1537: a BLANK next_cursor must never be persisted here. An empty stored cursor sends
+		// the next run down the no-cursor branch above, which applies initial-sync historical options
+		// and asks Plaid for the whole configured window again — so one blank write turns every
+		// subsequent incremental sync into a full re-sync through CreateBatch. Skipping the write
+		// leaves the last known-good cursor in place, which is the correct resume point.
+		//
+		// This guard belongs HERE and not inside UpdateCursor: the PlaidErrorInvalidCursor branch
+		// above writes "" on purpose, precisely to force that full re-sync when Plaid tells us the
+		// stored cursor is no longer valid.
+		//
+		// Round 4 of this branch added the identical check to workers/plaid_sync_provider.go, whose
+		// NewPlaidSyncProvider has no non-test caller — so the fix landed in dead code while this,
+		// the live path, kept the bug. Verified by TestSyncTransactions_BlankNextCursor_
+		// DoesNotOverwriteStoredCursor, which failed before this guard existed.
 		newCursor := resp.GetNextCursor()
-		err = s.linkedItemRepo.UpdateCursor(ctx, linkedItem.ID, newCursor)
-		if err != nil {
-			// Cursor update failed - return partial results with error
-			return result, fmt.Errorf("failed to update cursor on page %d: %w", pageCount, err)
+		if newCursor == "" {
+			s.logger.Warn("plaid returned an empty next_cursor on a successful page; keeping the "+
+				"existing cursor rather than persisting a blank, which would force a full "+
+				"historical re-sync on the next run",
+				"item_id", linkedItem.ID,
+				"page", pageCount,
+			)
+		} else {
+			err = s.linkedItemRepo.UpdateCursor(ctx, linkedItem.ID, newCursor)
+			if err != nil {
+				// Cursor update failed - return partial results with error
+				return result, fmt.Errorf("failed to update cursor on page %d: %w", pageCount, err)
+			}
+			cursor = newCursor
 		}
-		cursor = newCursor
 
 		// Check if more pages exist
 		hasMore = resp.GetHasMore()
