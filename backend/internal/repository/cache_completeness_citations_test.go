@@ -765,7 +765,13 @@ func TestMethodCitationsPointInsideTheirMethod(t *testing.T) {
 		}
 	}
 
-	if checked < 15 {
+	// FLOOR RATIONALE (#1537 round 10). Floors were 15/20/8 against measured counts of 34/117/20 —
+	// the bare-ref floor was 17% of reality, so the scanner could have silently lost four fifths of its
+	// coverage and still reported success. That is the same fail-open shape these guards exist to catch.
+	// Now ~75% of measured, which trips on a scanner regression while leaving room to legitimately
+	// remove citations. Counts were obtained by raising each floor until the Fatalf printed the real
+	// number; re-measure that way rather than trusting these comments.
+	if checked < 25 {
 		t.Fatalf("only %d method citations were containment-checkable — the extraction is broken, "+
 			"and a pass would be meaningless", checked)
 	}
@@ -858,9 +864,15 @@ func bareRefsWithOwner(detail string) map[string][]int {
 //
 // That test requires the shape `file.go:NNN`. A ref DETACHED from its filename — `(`:1212`), written
 // that way precisely because the file was named a clause earlier — matches neither citation guard,
-// and there were 63 of them. Two were out of range, and one of those was a number the citations
+// and there are 117 of them (measured by raising this test's own floor until it printed the count —
+// an earlier version of this comment said 63, which was a figure from a partial pass and was never
+// re-derived). FIVE were out of range, not the two I predicted; one was a number the citations
 // preamble specifically boasts of having fixed: `:1212` against budget_repository.go, still there,
 // just written bare. A guard whose coverage depends on the citation's punctuation is not a guard.
+//
+// ⚠ Both numbers above were wrong in this comment until #1537 round 10, when review caught that the
+// prose said 63 while the test's own Fatalf says 117. That is this file's subject matter appearing in
+// this file's own documentation — recorded rather than quietly corrected.
 //
 // Resolution rule: a bare ref belongs to the .go file most recently named in the SAME detail string.
 // That is exactly how a reader resolves it, and it is why the tracker resets on a .sql/.md citation
@@ -901,7 +913,7 @@ func TestBareLineRefsAreInRange(t *testing.T) {
 		}
 	}
 
-	if checked < 20 {
+	if checked < 90 {
 		t.Fatalf("only %d bare line refs were resolvable — there are dozens; the scanner is broken "+
 			"and a pass here would be meaningless", checked)
 	}
@@ -1102,7 +1114,7 @@ func TestCitedSQLPredicatesExistInTheirFile(t *testing.T) {
 		}
 	}
 
-	if checked < 8 {
+	if checked < 15 {
 		t.Fatalf("only %d cited SQL predicates were checkable — these details quote dozens; the "+
 			"extraction is broken and a pass would be meaningless", checked)
 	}

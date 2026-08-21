@@ -30,6 +30,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
 // TestUpsertBatch_ForeignUsersRow_IsNotBackfilled pins that the DO UPDATE cannot reach across users.
@@ -53,6 +55,7 @@ func TestUpsertBatch_ForeignUsersRow_IsNotBackfilled(t *testing.T) {
 
 	// The actor needs a user_accounts row, since that is the column the DO UPDATE writes.
 	actorUserAccount := uuid.New()
+	actorUserAccountStr := actorUserAccount.String()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO user_accounts (id, user_id, institution_id) VALUES ($1, $2, $3)
 	`, actorUserAccount, actorUser, "ins-"+suffix)
@@ -75,21 +78,29 @@ func TestUpsertBatch_ForeignUsersRow_IsNotBackfilled(t *testing.T) {
 		sharedPlaidID).Scan(&before))
 	require.Nil(t, before, "the victim row must start unattributed for this test to mean anything")
 
-	// The actor's upsert, in the exact shape UpsertBatch issues.
-	_, err = tx.Exec(ctx, `
-		INSERT INTO investment_transactions (
-			id, user_id, account_id, user_account_id,
-			plaid_investment_transaction_id, type, subtype, name,
-			quantity, amount, price, fees, date, created_at
-		) VALUES (gen_random_uuid(), $1, $2, $3,
-			$4, 'buy', 'buy', 'Actor holding', 1, 100, 100, 0, now(), now())
-		ON CONFLICT (plaid_investment_transaction_id) DO UPDATE
-			SET user_account_id = EXCLUDED.user_account_id
-			WHERE investment_transactions.user_account_id IS NULL
-			  AND EXCLUDED.user_account_id IS NOT NULL
-			  AND investment_transactions.user_id = EXCLUDED.user_id
-	`, actorUser, actorAccount, actorUserAccount, sharedPlaidID)
-	require.NoError(t, err)
+	// The actor's upsert, THROUGH THE REPOSITORY.
+	//
+	// ⚠ This test previously issued the upsert as inline SQL that contained the predicate itself, so it
+	// verified PostgreSQL's ON CONFLICT semantics for a statement the test wrote — and could NOT fail if
+	// the repository's own query lost the predicate. Both reviewers caught it independently (#1537
+	// round 10). Driving UpsertBatch is the whole point: the assertion below now fails when
+	// investment_transaction_repository.go changes, which is the only thing worth pinning.
+	buySubtype, oneQty := "buy", 1.0
+	repo := NewInvestmentTransactionRepository(tx)
+	_, err = repo.UpsertBatch(ctx, []domain.InvestmentTransaction{{
+		ID:                           uuid.NewString(),
+		UserID:                       actorUser.String(),
+		AccountID:                    actorAccount.String(),
+		UserAccountID:                &actorUserAccountStr,
+		PlaidInvestmentTransactionID: sharedPlaidID,
+		Type:                         "buy",
+		Subtype:                      &buySubtype,
+		Name:                         "Actor holding",
+		Quantity:                     &oneQty,
+		Amount:                       100,
+		Date:                         time.Now().UTC(),
+	}})
+	require.NoError(t, err, "the upsert itself must succeed; the tenancy predicate makes it a no-op, not an error")
 
 	var after *uuid.UUID
 	var owner uuid.UUID
