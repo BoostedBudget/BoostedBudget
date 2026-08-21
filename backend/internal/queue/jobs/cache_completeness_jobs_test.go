@@ -247,8 +247,12 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"predicates; #1109 had already removed the personal-scope ones). Re-derived rather than " +
 		"inherited: the last cached read that was ever described as filtering it, " +
 		"`GetAggregatedHistoryForHousehold`, does not — its accounts join is unfiltered and status " +
-		"appears only as a DISTINCT ON tiebreak preference, `(a.status = 'active') DESC NULLS " +
-		"LAST, a.id` (repository/balance_snapshot_repository.go:325). Status is still cache-" +
+		"appears only as the FIRST term of that same query's DISTINCT ON tiebreak, `(a.status = " +
+		"'active') DESC NULLS LAST, a.id` (repository/balance_snapshot_repository.go). Cited by " +
+		"query name rather than by line: the " +
+		"`repository/balance_snapshot_repository.go:NNN` form of this reference rotted three times " +
+		"(:313, then :320/:325, then displaced again by a 16-line doc note above it), so the " +
+		"identifier and the quoted SQL are the anchor. Status is still cache-" +
 		"RELEVANT there, via ordering; it is not a filter anywhere. And none filters on any " +
 		"linked_items column (confirmed by the same repo-wide grep item_cleanup.go's entry cites). " +
 		"The actual Plaid /item/remove call and any accounts-table effect happen in a SEPARATE, " +
