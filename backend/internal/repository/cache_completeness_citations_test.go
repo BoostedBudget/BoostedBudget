@@ -944,7 +944,10 @@ func TestBareLineRefsAreInRange(t *testing.T) {
 				continue // unresolvable path is TestDispositionCitationsResolve's business
 			}
 			for _, ln := range lines {
-				checked++
+				// #1537 round 17: `checked++` used to happen HERE, before the rejections below, so
+				// the floor counted ATTEMPTS rather than valid refs — ninety `:0` refs would have
+				// satisfied a floor of 90 while every single one was rejected. It now increments
+				// only for a ref that was actually range-checked.
 				if ln < 1 {
 					// #1537 round 16: line 0 was rejected in the exact and SQL guards and MISSED
 					// here — the third guard in this file. Found by adversarial review after the
@@ -953,6 +956,7 @@ func TestBareLineRefsAreInRange(t *testing.T) {
 						"(files are 1-based), so nothing can check it against "+path)
 					continue
 				}
+				checked++
 				if ln > total {
 					stale = append(stale, key+": bare `:"+strconv.Itoa(ln)+"` resolves against "+path+
 						", which has only "+strconv.Itoa(total)+" lines")
@@ -1275,7 +1279,14 @@ func linesAround(path string, line, window int) (string, string) {
 	}
 	lines := strings.Split(sqlHaystack(string(b)), "\n")
 	if line > len(lines) {
-		return "", lineWindowSkip // past EOF is the in-range guards' business
+		// #1537 round 17: this used to delegate ("past EOF is the in-range guards' business") and
+		// that delegation is UNSOUND for a multi-value citation. The in-range guard extracts refs
+		// with reAnyCitedPath, whose line group is `(?::(\d+))?` — ONE value, no tail. So a
+		// past-EOF value in `foo.go:422, 99999` was seen by nobody: this guard skipped it as
+		// somebody else's job, and the somebody else could not parse it. Report it here, where the
+		// value has already been parsed.
+		return "", "line " + strconv.Itoa(line) + " is past the end of " + resolved + " (" +
+			strconv.Itoa(len(lines)) + " lines)"
 	}
 	lo, hi := line-1-window, line-1+window
 	if lo < 0 {
@@ -1303,7 +1314,7 @@ func citationInstanceCount(details map[string]string) int {
 		return n
 	}
 	rePathWithLines := regexp.MustCompile(
-		`\b(?:[a-z0-9_.-]+/)*[a-z0-9_.-]+\.(?:go|md|sql|yaml|yml|json|ts|tsx):(\d+(?:[-,]\d+)*)\b`)
+		`\b(?:[a-z0-9_.-]+/)*[a-z0-9_.-]+\.(?:go|md|sql|yaml|yml|json|ts|tsx):(\d+(?:\s*[-,]\s*\d+)*)`)
 	for _, detail := range details {
 		for _, m := range rePathWithLines.FindAllStringSubmatch(detail, -1) {
 			total += countValues(m[1])
@@ -1409,7 +1420,13 @@ func TestCitedSQLFragmentsAreNearTheirCitedLine(t *testing.T) {
 			}
 			// EVERY value of a multi-value citation, not just the first.
 			for _, part := range strings.FieldsFunc(group(citGroupLines), func(r rune) bool {
-				return r == '-' || r == ','
+				// Space and tab included (#1537 round 17). reCitationAfterFragment was widened in
+				// round 16 to ACCEPT `foo.go:10, 99999` but this splitter was left splitting on
+				// `-` and `,` only, so the second part arrived as " 99999", strconv.Atoi errored,
+				// and the `continue` below DROPPED it silently. That turned an honest skip (the
+				// pre-round-16 behaviour, where the citation matched nothing) into a FALSE PASS.
+				// Half-widening a grammar without widening its consumer is worse than neither.
+				return r == '-' || r == ',' || r == ' ' || r == '\t'
 			}) {
 				line, err := strconv.Atoi(part)
 				if err != nil {

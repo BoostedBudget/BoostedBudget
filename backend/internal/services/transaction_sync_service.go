@@ -245,7 +245,8 @@ func (s *transactionSyncService) SetCacheInvalidation(gens *cache.Generations, h
 // fully committed ... at the very end of the success path". That is no longer true — SyncTransactions
 // now arms a deferred bump BEFORE each storage step, so this is also called after PARTIAL failures,
 // which is the whole point of that change. Still called at most once per sync — never per page/batch, since a bump's cost is a single
-// Redis write regardless of how much data changed, and bumping per page would multiply that
+// Redis write PER SCOPE (two when a household resolves, one otherwise — corrected round 17)
+// regardless of how much data changed, and bumping per page would multiply that
 // cost by transaction volume for no correctness gain (a single bump after all pages/storage have
 // committed already invalidates everything written during this sync).
 //
@@ -617,8 +618,8 @@ func (s *transactionSyncService) SyncTransactions(
 	// What the deferred bump guarantees, precisely: if control reached the `if len(result.X) > 0`
 	// guard of ANY of the three storage steps below, the user's (and, where resolvable, their
 	// household's) cache generation is ATTEMPTED on every exit path from here on, error or success.
-	// "Attempted", not "guaranteed": generation.Bump swallows a failed Redis SET and only records a
-	// metric, and a household lookup failure leaves the household generation alone — so a bump can be
+	// "Attempted", not "guaranteed": generation.Bump swallows a failed Redis SET — it logs an error
+	// and records a metric, but returns nothing, so the caller cannot know, and a household lookup failure leaves the household generation alone — so a bump can be
 	// requested and not happen. This closes the code path, not the infrastructure.
 	// It does NOT guarantee a bump for writes made before this point (the pagination loop's
 	// UpdateCursor calls, which touch no cached-read table) nor for the non-fatal post-storage
@@ -1155,7 +1156,10 @@ func (s *transactionSyncService) processRemovedTransactions(
 // Issue #364: Migrated to timestamp-based storage for high-frequency syncs
 //
 // Called after transaction sync completes to capture the current state of all account balances.
-// Uses 5-minute deduplication window to prevent excessive snapshots while allowing
+// Uses a 5-minute deduplication window to REDUCE excessive snapshots. Not prevent: the
+// GetLatestByAccountID check and the Create are separate statements, and webhook processing takes no
+// linked-item lock (the sync worker does, FOR UPDATE), so two concurrent paths can both see no recent
+// snapshot and both insert. It bounds SEQUENTIAL duplication only — see #1570. while allowing
 // multiple snapshots per day for high-frequency syncs.
 //
 // Error Handling:
