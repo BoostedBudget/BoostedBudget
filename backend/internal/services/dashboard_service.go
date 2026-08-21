@@ -32,6 +32,12 @@ func snapshotChainKey(s domain.BalanceSnapshot) string {
 // counts it once — measured: a true $500 → $700 move (+40%) reported as −30%. Both snapshots resolve
 // to accounts rows that share one user_account_id, which is why the resolved account's key collapses
 // them and the snapshot's own key cannot. Issue #1537.
+// ⚠ RESIDUAL LIMIT (#1537 round 13). The legacy-row collapse this enables depends on the INACTIVE
+// chain member's accounts.user_account_id being non-NULL. That column is nullable
+// (migrations/000033_add_accounts_user_account_and_status.up.sql:24 has no NOT NULL), so a chain whose
+// replaced accounts row is ALSO NULL still double-counts in the baseline. This targets the realistic
+// case — the balance_snapshots backfill was one-shot and that FK is ON DELETE SET NULL — rather than
+// every case, and the gap is stated here rather than left for someone to rediscover.
 func accountChainKey(a domain.Account) string {
 	if a.UserAccountID != nil && *a.UserAccountID != "" {
 		return *a.UserAccountID
@@ -542,6 +548,12 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 	}, nil
 }
 
+// ⚠ ASSUMES d IS UTC. time.Truncate operates on absolute time since the zero instant and is
+// LOCATION-BLIND, so this always returns a UTC-day boundary regardless of d's location. Measured: an
+// IST-zoned midnight yields 2026-08-19 05:29:59.999999999 +0530, i.e. 2026-08-18 23:59:59.999 UTC —
+// the WRONG DAY. Safe today only because filters.AsOfDate has exactly one producer,
+// dateutil.ParseOptionalDate's time.Parse("2006-01-02", s), which yields UTC. Pass a zoned time here
+// and the cutoff is off by a day (#1537 round 13).
 // endOfDay returns the last representable instant of d's calendar day (23:59:59.999999999),
 // so an "as of this date" snapshot lookup (`snapshot_at <= asOf`) includes every snapshot
 // taken that day, not just ones before midnight.

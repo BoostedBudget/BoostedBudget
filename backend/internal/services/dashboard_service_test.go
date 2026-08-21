@@ -32,14 +32,6 @@ func (m *MockBalanceSnapshotRepository) Create(ctx context.Context, snapshot *do
 	return args.Error(0)
 }
 
-func (m *MockBalanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context, userID string, startDate, endDate time.Time) ([]domain.BalanceSnapshot, error) {
-	args := m.Called(ctx, userID, startDate, endDate)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]domain.BalanceSnapshot), args.Error(1)
-}
-
 func (m *MockBalanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
 	args := m.Called(ctx, userID, startDate, endDate, accountTypes)
 	if args.Get(0) == nil {

@@ -24,10 +24,6 @@ type BalanceSnapshotRepository interface {
 	// Deduplication (5-minute window) should be handled by the service layer using GetLatestByAccountID.
 	Create(ctx context.Context, snapshot *domain.BalanceSnapshot) error
 
-	// GetByUserIDAndDateRange retrieves all balance snapshots for a user within a date range.
-	// Results are ordered by snapshot_at ascending (oldest first).
-	GetByUserIDAndDateRange(ctx context.Context, userID string, startDate, endDate time.Time) ([]domain.BalanceSnapshot, error)
-
 	// GetAggregatedHistory retrieves aggregated balance history for dashboard charts.
 	// Returns daily total balance sums (grouped by DATE(snapshot_at)), optionally filtered by account types.
 	// If accountTypes is nil or empty, all account types are included.
@@ -109,20 +105,6 @@ func (r *balanceSnapshotRepository) Create(ctx context.Context, snapshot *domain
 	)
 
 	return err
-}
-
-// GetByUserIDAndDateRange retrieves all balance snapshots for a user within a date range
-func (r *balanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context, userID string, startDate, endDate time.Time) ([]domain.BalanceSnapshot, error) {
-	query := `
-		SELECT id, account_id, user_account_id, user_id, current_balance, available_balance,
-		       currency_code, snapshot_at, source, created_at
-		FROM balance_snapshots
-		WHERE user_id = $1
-		  AND snapshot_at >= $2
-		  AND snapshot_at <= $3
-		ORDER BY snapshot_at ASC
-	`
-	return r.scanSnapshots(ctx, query, userID, startDate, endDate)
 }
 
 // GetAggregatedHistory retrieves aggregated balance history for dashboard charts.
