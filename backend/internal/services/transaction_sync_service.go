@@ -241,8 +241,10 @@ func (s *transactionSyncService) SetCacheInvalidation(gens *cache.Generations, h
 }
 
 // bumpCacheForSync invalidates userID's cached analytics (and, when resolvable, their
-// household's) after a SyncTransactions call has fully committed. Called ONCE, at the very end
-// of SyncTransactions' success path — never per page/batch, since a bump's cost is a single
+// household's). ⚠ CORRECTED (#1537 round 16): this used to say "after a SyncTransactions call has
+// fully committed ... at the very end of the success path". That is no longer true — SyncTransactions
+// now arms a deferred bump BEFORE each storage step, so this is also called after PARTIAL failures,
+// which is the whole point of that change. Still called at most once per sync — never per page/batch, since a bump's cost is a single
 // Redis write regardless of how much data changed, and bumping per page would multiply that
 // cost by transaction volume for no correctness gain (a single bump after all pages/storage have
 // committed already invalidates everything written during this sync).
@@ -504,7 +506,9 @@ func (s *transactionSyncService) SyncTransactions(
 					// What re-fetching page N is actually idempotent in:
 					//   - added: transactionRepo.CreateBatch is ON CONFLICT (source,
 					//     external_transaction_id_blind_idx, user_id) DO UPDATE — re-upsert, no dupe.
-					//   - modified: Update keyed on the existing row's id.
+					//   - modified: Update keyed on the existing row's id — same final contents, but
+					//     it rewrites updated_at, and if the row has since been DELETED the path skips
+					//     it rather than recreating it, so the modification is silently dropped.
 					//   - removed: DeleteByExternalID tolerates an already-deleted row.
 					// What it is NOT idempotent in (all verified, all downstream of storage):
 					//   - balance_snapshots: balanceSnapshotRepository.Create is a plain INSERT with
@@ -612,7 +616,10 @@ func (s *transactionSyncService) SyncTransactions(
 	//
 	// What the deferred bump guarantees, precisely: if control reached the `if len(result.X) > 0`
 	// guard of ANY of the three storage steps below, the user's (and, where resolvable, their
-	// household's) cache generation is bumped on EVERY exit path from here on, error or success.
+	// household's) cache generation is ATTEMPTED on every exit path from here on, error or success.
+	// "Attempted", not "guaranteed": generation.Bump swallows a failed Redis SET and only records a
+	// metric, and a household lookup failure leaves the household generation alone — so a bump can be
+	// requested and not happen. This closes the code path, not the infrastructure.
 	// It does NOT guarantee a bump for writes made before this point (the pagination loop's
 	// UpdateCursor calls, which touch no cached-read table) nor for the non-fatal post-storage
 	// steps, which are reached only after cacheBumpNeeded is already true.
@@ -624,7 +631,11 @@ func (s *transactionSyncService) SyncTransactions(
 	// 5 of 10 updates returned before arming it — five durable rows in `transactions`, a
 	// cached-read table, left invisible to cached analytics for the full namespace TTL. Arming
 	// first is unambiguously the fail-safe direction: a spurious bump costs exactly one cache
-	// generation (Bump is void and idempotent), while a missed bump serves stale financial data.
+	// generation, while a missed bump serves stale financial data. ⚠ Not free, though: arming before
+	// the write means a batch whose rows are all skipped (already-deleted removals, missing modified
+	// rows) bumps anyway, and each bump is a fresh token plus a Redis write plus metrics — and a
+	// second write for the household scope. The cost is cache misses and regeneration, not just an
+	// integer. It is still the right trade; it is not a no-op.
 	var cacheBumpNeeded bool
 	defer func() {
 		if cacheBumpNeeded {
@@ -682,6 +693,11 @@ func (s *transactionSyncService) SyncTransactions(
 	// ========================================================================
 
 	// Create balance snapshots for all accounts (non-blocking)
+	// #1537 round 16: armed BEFORE the snapshot write too. createBalanceSnapshots writes
+	// balance_snapshots — one of the twelve cached-read tables — and with all three
+	// transaction lists empty none of the guards above has armed the flag, so a panic
+	// between here and the unconditional arm below would skip invalidation entirely.
+	cacheBumpNeeded = true
 	if err := s.createBalanceSnapshots(ctx, linkedItem, accessToken); err != nil {
 		s.logger.Warn("failed to create balance snapshots", "item_id", linkedItem.ID, "error", err)
 		// Don't fail the entire sync - snapshots are non-critical

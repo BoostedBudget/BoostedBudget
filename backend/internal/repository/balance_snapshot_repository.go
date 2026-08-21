@@ -33,11 +33,22 @@ type BalanceSnapshotRepository interface {
 	//     plain UNIQUE — so every snapshot for an account with no user_account link would slip past.
 	//   - (account_id, DATE(snapshot_at)): this is exactly the UNIQUE(account_id, snapshot_date)
 	//     that migration 000017 DROPPED on purpose, to support multiple snapshots per day.
-	// Retry duplication is bounded instead by the service's 5-minute window, and the read paths
-	// (GetAggregatedHistory, GetLatestByUserID, GetSnapshotsAsOf*) all collapse to the latest
-	// snapshot per account (per day where relevant) — so extra rows inflate row count, never a
-	// reported balance. Do not add an ON CONFLICT here without first changing how snapshot_at is
-	// derived; that is a schema/semantics decision, not a repository cleanup.
+	// ⚠ Two claims here were CORRECTED in round 16 after adversarial review.
+	//
+	// (a) "No safe key exists" was too absolute. None exists in the CURRENT schema — there is no
+	// stable logical run or event identifier on a snapshot — but a safe design does: persist a
+	// sync_run_id (or the Plaid webhook/event id, which PlaidSyncArgs already carries as an
+	// optional WebhookID but does not propagate here) and make it UNIQUE with (account_id, source).
+	// That is the fix if this ever needs to be idempotent; see issue #1570.
+	//
+	// (b) "Retry duplication is bounded by the service's 5-minute window" is FALSE. The service
+	// does GetLatestByAccountID and Create as two separate operations, and webhook processing does
+	// not take the linked-item lock the sync worker uses — so two concurrent workers can both see
+	// no recent snapshot and both insert. The window reduces duplication; it does not bound it.
+	//
+	// What remains true, and is why this is not urgent: every read path takes the latest snapshot
+	// per account (per day for the aggregated-history reads), so extra rows inflate row count and
+	// never a reported balance.
 	Create(ctx context.Context, snapshot *domain.BalanceSnapshot) error
 
 	// GetAggregatedHistory retrieves aggregated balance history for dashboard charts.
