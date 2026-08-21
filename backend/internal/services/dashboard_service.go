@@ -47,8 +47,20 @@ func snapshotChainKey(s domain.BalanceSnapshot) string {
 // and it is why the field is PreviousBalance rather than "previous balance of the accounts that
 // happen to still be active". historicalAccounts supplies the since-inactive accounts — used ONLY to
 // learn an account's type so the AccountTypes filter can still be applied to it; the balance itself
-// always comes from the snapshot row. activeAccounts is consulted first so a re-linked chain keeps
-// resolving to its active member exactly as before.
+// always comes from the snapshot row.
+//
+// activeAccounts is consulted first, but note what that precedence actually buys: it is PER-KEY, not
+// per-chain. A snapshot carrying a user_account_id hits the active member through that key, as
+// intended. A snapshot with a NIL user_account_id keys on its raw (possibly already-replaced)
+// account_id, which the active-only map does not contain — so it falls through and resolves to the
+// INACTIVE chain member instead. That cannot change any output here: the map is read for
+// account.Type alone, and chain members share a type. The fallback fingerprint is literally
+// institution_id|mask|type|subtype (domain.Account.FallbackFingerprintBlindIdx), so a differing type
+// would be a different fingerprint and hence a different chain; the persistent_account_id path
+// identifies one physical account at one institution. The earlier wording — "so a re-linked chain
+// keeps resolving to its active member" — overstated this, and is corrected rather than deleted
+// because anyone adding a NAME, ID, or status-dependent read to this lookup would be relying on the
+// overstatement and would be wrong.
 //
 // dedupChains reflects a real difference between the two callers, not an oversight: the personal path
 // can receive several snapshots per logical account on a re-link day (it sorts DESC first and keeps
@@ -83,23 +95,37 @@ func baselineBalanceForComparison(
 		if !exists {
 			continue
 		}
-		if len(accountTypes) > 0 {
-			typeMatch := false
-			for _, filterType := range accountTypes {
-				if account.Type == filterType {
-					typeMatch = true
-					break
-				}
-			}
-			if !typeMatch {
-				continue
-			}
+		if !accountTypeMatchesFilter(account.Type, accountTypes) {
+			continue
 		}
 		if snapshot.CurrentBalance != nil {
 			total += *snapshot.CurrentBalance
 		}
 	}
 	return total
+}
+
+// accountTypeMatchesFilter reports whether an account passes a DashboardFilters.AccountTypes filter.
+// An empty or nil filter matches every type, which is what "no filter requested" means at every
+// call site.
+//
+// This exists as one named predicate because the filter axis has been missed once per copy. A
+// mechanical audit of this file's four period-comparison baselines found the current-period loop
+// applied the filter in 4/4 cases while the baseline applied it in only 2/4: round 9 fixed the two
+// balance-summary baselines by threading accountTypes into baselineBalanceForComparison, and both
+// net-worth baselines were left summing every type against a filtered current total — a real +25%
+// change reported as +150%. Inlining the predicate a third and fourth time is how that happens
+// again, so the net-worth baselines call this instead.
+func accountTypeMatchesFilter(accountType string, accountTypes []string) bool {
+	if len(accountTypes) == 0 {
+		return true
+	}
+	for _, filterType := range accountTypes {
+		if accountType == filterType {
+			return true
+		}
+	}
+	return false
 }
 
 // hasSnapshotOutsideAccountMap reports whether any snapshot's chain key is absent from accountMap.
@@ -719,6 +745,46 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 		sort.Slice(previousSnapshots, func(i, j int) bool {
 			return previousSnapshots[i].SnapshotAt.After(previousSnapshots[j].SnapshotAt)
 		})
+		// The baseline uses a DELIBERATELY DIFFERENT account universe from the current total, for
+		// the same reason baselineBalanceForComparison does (#1537 round 10) — this path was left
+		// unfixed by that round even though both of its instruments already existed. accountMap
+		// here is the active-only "now" map (GetByUserID: `status = 'active'`), while the snapshot
+		// read filters on user_id alone, so a chain with no active member left had no entry and was
+		// dropped: a $1,000 account disconnected 30 days ago produced PreviousAssets $0 and the
+		// divide-by-zero guard reported net_worth_change_percent = 0 — "no change" — for a real
+		// decline.
+		//
+		// That is user-visible, not merely internally inconsistent: GetAggregatedHistory
+		// (balance_snapshot_repository.go) LEFT JOINs accounts with NO status predicate, so the
+		// net-worth history CHART already counts the since-expired account. Unfixed, the chart draws
+		// the drop while the KPI tile above it reads 0.00% — two widgets on one dashboard
+		// disagreeing about the same 30 days.
+		//
+		// historicalMap supplies the since-inactive account's TYPE only, which is what decides
+		// assets vs liabilities; the BALANCE always comes from the snapshot row. It is empty unless
+		// some baseline snapshot actually resolves nowhere in accountMap, so the common path keeps
+		// its single account query.
+		// The baseline must apply the SAME AccountTypes filter the current total applied — see
+		// accountTypeMatchesFilter for why this was missing here while the two balance-summary
+		// baselines already had it.
+		var accountTypes []string
+		if filters != nil {
+			accountTypes = filters.AccountTypes
+		}
+		historicalMap, histErr := s.historicalAccountMap(ctx, userID, previousSnapshots, accountMap)
+		if histErr != nil {
+			// Omit the comparison rather than report one computed over the wrong universe — the
+			// same degradation GetBalanceSummary applies, and for the same reason: reporting "no
+			// change" for a disconnection is exactly the lie this fix removes.
+			return &domain.NetWorthResponse{
+				AsOfDate:         asOfDate,
+				NetWorth:         netWorth,
+				TotalAssets:      totalAssets,
+				TotalLiabilities: totalLiabilities,
+				ByCategory:       byCategory,
+			}, nil
+		}
+
 		var prevAssets, prevLiabilities float64
 		seenChainKeys := make(map[string]bool)
 
@@ -729,8 +795,17 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 			}
 			seenChainKeys[key] = true
 
+			// Active map first, historical map as fallback — the same precedence
+			// baselineBalanceForComparison uses.
 			account, exists := accountMap[key]
 			if !exists {
+				account, exists = historicalMap[key]
+			}
+			if !exists {
+				continue
+			}
+			// The same AccountTypes filter the current-period loop above applies.
+			if !accountTypeMatchesFilter(account.Type, accountTypes) {
 				continue
 			}
 
@@ -887,13 +962,51 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 		// before previousCutoff, the "now" accountMap only knows about that (wrong-for-this-
 		// period) copy's user_account_id, and the lookup below would silently drop the
 		// account instead of resolving to the other member's genuinely earlier copy.
+		//
+		// The right point in time is still not enough: GetForHouseholdScope filters
+		// `a.status = 'active'` REGARDLESS of its asOf, so a member's account disconnected since
+		// the cutoff is absent from previousAccountMap and was dropped from the baseline — the
+		// #1537 round 10 defect, in the path that round did not reach. GetForHouseholdScopeAllStatuses
+		// (added by that round for exactly this) supplies those accounts' TYPE, which is what decides
+		// assets vs liabilities; the BALANCE always comes from the snapshot row.
+		//
+		// Why it is user-visible: GetAggregatedHistory LEFT JOINs accounts with NO status predicate,
+		// so the net-worth history CHART already counts the since-expired account. Unfixed, the chart
+		// draws the drop while the KPI tile above it reads 0.00%.
 		previousAccounts, acctErr := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, previousCutoff)
 		if acctErr == nil {
 			previousAccountMap := buildChainAwareAccountMap(previousAccounts)
+			// Gated on the PREVIOUS-cutoff map, not the "now" map: a chain that merely re-linked
+			// resolves there already, so the extra query stays conditional on the only case that
+			// needs it — a chain with no active member left.
+			historicalMap := map[string]domain.Account{}
+			if hasSnapshotOutsideAccountMap(previousSnapshots, previousAccountMap) {
+				historicalAccounts, histErr := s.accountRepo.GetForHouseholdScopeAllStatuses(ctx, userID, scope, previousCutoff)
+				if histErr != nil {
+					// Omit the comparison rather than compute it over the wrong universe — see the
+					// personal path's identical guard.
+					return &domain.NetWorthResponse{
+						AsOfDate:         asOfDate,
+						NetWorth:         netWorth,
+						TotalAssets:      totalAssets,
+						TotalLiabilities: totalLiabilities,
+						ByCategory:       byCategory,
+					}, nil
+				}
+				historicalMap = buildChainAwareAccountMap(historicalAccounts)
+			}
 			var prevAssets, prevLiabilities float64
 			for _, snapshot := range previousSnapshots {
-				account, exists := previousAccountMap[snapshotChainKey(snapshot)]
+				key := snapshotChainKey(snapshot)
+				account, exists := previousAccountMap[key]
 				if !exists {
+					account, exists = historicalMap[key]
+				}
+				if !exists {
+					continue
+				}
+				// The same AccountTypes filter the current-period loop above applies.
+				if !accountTypeMatchesFilter(account.Type, filters.AccountTypes) {
 					continue
 				}
 				balance := 0.0
