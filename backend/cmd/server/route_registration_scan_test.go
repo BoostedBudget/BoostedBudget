@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path"
 	"strings"
 	"testing"
 )
@@ -36,7 +37,30 @@ import (
 //   - `operations.` was required as the qualifier, so `mcp.RegisterFooRoutes(api, …)` was invisible.
 //     Any selector matching Register…Routes is now seen, whatever the package.
 //   - the bare-`huma.Register` check additionally required the identifier `humaAPI`, so a renamed
-//     variable escaped. Any `huma.Register(...)` is now reported.
+//     variable escaped. Any huma.Register(...) is now reported.
+//
+// WHAT THE ANCHOR IS ALLOWED TO BE (T49/T50). Three further fail-open holes were demonstrated
+// against the real main.go text and are closed here; each one produced a GREEN guard over an api
+// with middleware missing, which is #1560 reintroduced through the guard:
+//
+//   - the RECEIVER of UseMiddleware was never checked, so `internalHumaAPI.UseMiddleware(cache…)` —
+//     a one-token typo on main.go:1892 — left the anchor at 2018 and the guard green while every
+//     post-anchor secured mutating route ran with no cache invalidation. A UseMiddleware call now
+//     counts toward the chain only when its receiver is the identifier the guarded routes register
+//     on (guardedAPIIdent); anything else is recorded in middlewareOtherReceiver and FAILS.
+//   - an anchor could be found OUTSIDE func main(). Hoisting the four calls into
+//     `func installHumaMiddleware(...)` and never calling it collapsed the anchor to the top of the
+//     file, so every registration counted as "after the chain" with zero middleware installed —
+//     precisely the main.go decomposition this branch cites as motivation. A collapsing anchor must
+//     never read as "everything is after the chain", so middleware outside func main() is recorded
+//     in middlewareOutsideMain and FAILS rather than yielding a smaller anchor number. This refuses
+//     the shape (as outsideMain already does for registrations) instead of trying to decide whether
+//     the enclosing helper is reached: the scan does not resolve calls, so "is it called?" is a
+//     question it cannot answer, and a helper that IS called is still unordered lexically.
+//   - only Args[0] was inspected, while UseMiddleware is variadic
+//     (huma/v2@v2.39.1/api.go:421 — `UseMiddleware(middlewares ...func(ctx Context, next func(Context)))`),
+//     so a new middleware entering as the SECOND argument of an existing call was invisible and
+//     unrecognisedMiddleware stayed empty. EVERY argument is now matched.
 //
 // REMAINING LIMIT, stated because the guard cannot see it: this is still LEXICAL order, not execution
 // order. `outsideMain` is what keeps that PARTLY honest — a Register…Routes call inside a helper could
@@ -51,11 +75,27 @@ import (
 // itself scanned and its registrations reported (see siblingFileRegistrationProblems in
 // issue1560_route_middleware_ordering_test.go, which now covers bareRegisters too). A registration
 // reached through a function value, an interface method, or a package outside cmd/server is still
-// invisible. Verifying real execution order would mean extracting a buildAPI() seam from a 2000-line
-// main() — a refactor for its own PR, not a test change.
+// invisible, and so is a receiver or middleware value that only ALIASES the guarded api
+// (`api := humaAPI; api.UseMiddleware(...)`) — no aliasing or const folding is performed. Verifying
+// real execution order would mean extracting a buildAPI() seam from a 2000-line main() — a refactor
+// for its own PR, not a test change.
 //
-// All 38 of main.go's registrations are direct calls in func main(), so none of this constrains
-// anything that exists today.
+// Import aliases ARE resolved: the huma qualifier is taken from the file's import declarations rather
+// than the hardcoded string "huma", so `humav2.Register(...)` is seen. A dot-import of huma/v2 is
+// covered too (a bare `Register(...)` counts when huma is dot-imported); the fallback for a file with
+// no import binding the identifier at all is the literal name "huma", which is what the fixtures in
+// this file use.
+//
+// All 38 of main.go's registrations are direct calls in func main(), and all four of its
+// UseMiddleware calls are on humaAPI inside func main(), so none of this constrains anything that
+// exists today.
+
+// guardedAPIIdent is the identifier the guarded routes register on and therefore the only receiver
+// whose UseMiddleware calls describe THEIR middleware chain. Checked, not assumed: see H1a above.
+const guardedAPIIdent = "humaAPI"
+
+// humaV2ImportPath is the module whose Register snapshots the middleware chain.
+const humaV2ImportPath = "github.com/danielgtaylor/huma/v2"
 
 // routeRegistration is one Register…Routes call found by the AST scan.
 type routeRegistration struct {
@@ -74,32 +114,54 @@ type sourceScan struct {
 	outsideMain   []routeRegistration // ...and those that are not
 	bareRegisters []int               // huma.Register(...) lines, any receiver
 
-	// unrecognisedMiddleware is every UseMiddleware call whose first argument matches NONE of
-	// requestScopedMiddlewareMarkers. Callers must fail on a non-empty result: the anchor is a max
-	// over KNOWN markers, so an unknown middleware added after the last known one is a link the
-	// anchor cannot see, and routes registered ahead of it pass while missing it.
-	unrecognisedMiddleware []unrecognisedMiddlewareCall
+	// unrecognisedMiddleware is every ARGUMENT of every UseMiddleware call on guardedAPIIdent
+	// inside func main() that matches NONE of requestScopedMiddlewareMarkers. Callers must fail on
+	// a non-empty result: the anchor is a max over KNOWN markers, so an unknown middleware added
+	// after the last known one is a link the anchor cannot see, and routes registered ahead of it
+	// pass while missing it.
+	unrecognisedMiddleware []middlewareCall
+
+	// middlewareOtherReceiver is every UseMiddleware call whose receiver is not guardedAPIIdent
+	// (including one whose receiver is not a plain identifier at all). Callers must fail on it: such
+	// a call installs nothing on the guarded api, so counting it toward the chain — as this scan
+	// used to, matching the method name on ANY receiver — hides a missing middleware behind a green
+	// guard.
+	middlewareOtherReceiver []middlewareCall
+
+	// middlewareOutsideMain is every UseMiddleware call on guardedAPIIdent that is NOT lexically
+	// inside func main(). Callers must fail on it. It does not contribute to the anchor, and it must
+	// not be allowed to read as a smaller anchor: an anchor above every registration is
+	// indistinguishable from "the chain is complete" while the chain may never be installed at all.
+	middlewareOutsideMain []middlewareCall
 }
 
-// unrecognisedMiddlewareCall is one UseMiddleware call the marker list does not describe.
-type unrecognisedMiddlewareCall struct {
-	line int
-	arg  string // source text of the first argument, so the failure names what to add
+// middlewareCall is one UseMiddleware call (or one argument of one) the guard has something to say
+// about.
+type middlewareCall struct {
+	line     int
+	receiver string // receiver as written, "" when it is not a plain identifier
+	arg      string // source text of the argument(s), so the failure names what to fix
 }
 
-// requestScopedMiddlewareMarkers identifies EVERY middleware installed on humaAPI. Matched against
-// the SOURCE TEXT OF THE FIRST ARGUMENT of a real UseMiddleware call node, so a mention in a comment
-// cannot contribute.
+// requestScopedMiddlewareMarkers is the marker list for the middlewares installed on
+// guardedAPIIdent. Each marker is matched against the SOURCE TEXT OF EACH ARGUMENT of a real
+// UseMiddleware call node, so a mention in a comment cannot contribute.
 //
 // This list must be COMPLETE, not merely representative, because the anchor is a max over it: a
 // middleware missing from here is a link the anchor cannot see, and every route registered ahead of
 // it passes the guard while running without it. That is not hypothetical — `humaAdminMiddleware` was
 // main.go's fourth UseMiddleware call and was deliberately left out of this list (on the reasoning
 // that it self-scopes to /api/v1/admin), which left lines 1893-2017 as a window in which a route
-// could register with no admin RBAC. Completeness is now ENFORCED rather than trusted:
-// scanGoSource records any UseMiddleware argument matching none of these markers in
-// unrecognisedMiddleware, and the ordering guard fails on it. Adding a middleware to main.go
-// therefore fails this suite until it is added here too.
+// could register with no admin RBAC.
+//
+// Completeness is enforced only for the calls this scan actually accepts as part of the chain, and
+// the previous comment here overstated that — it claimed the list "identifies EVERY middleware
+// installed on humaAPI", which is not something a lexical scan can know. What is true: for every
+// UseMiddleware call on guardedAPIIdent inside func main(), EVERY argument must match a marker here
+// or scanGoSource records it in unrecognisedMiddleware and the ordering guard fails; a call on any
+// other receiver, or outside func main(), fails too rather than being counted or ignored. A
+// middleware installed through a value this scan cannot name (an alias of humaAPI, a helper reached
+// through an interface, another package) remains outside what the list can describe.
 var requestScopedMiddlewareMarkers = []struct{ label, marker string }{
 	{"clerk", "humaClerkMiddleware"},
 	{"read-only", "NewReadOnlyMiddleware"},
@@ -116,13 +178,54 @@ func scanGoSource(filename, src string) (sourceScan, error) {
 
 	out := sourceScan{middleware: map[string]int{}}
 
-	// Body range of func main, used to classify registrations as in-main or not.
+	// Body range of func main, used to classify registrations and middleware installs as in-main
+	// or not.
 	var mainLbrace, mainRbrace token.Pos
 	for _, d := range f.Decls {
 		fn, ok := d.(*ast.FuncDecl)
 		if ok && fn.Recv == nil && fn.Name.Name == "main" && fn.Body != nil {
 			mainLbrace, mainRbrace = fn.Body.Lbrace, fn.Body.Rbrace
 		}
+	}
+	inMain := func(p token.Pos) bool {
+		return mainLbrace != token.NoPos && p > mainLbrace && p < mainRbrace
+	}
+
+	// Resolve the huma qualifier through this file's imports instead of hardcoding "huma": an
+	// aliased `humav2.Register(humaAPI, op, h)` is a plain qualified selector, well inside what this
+	// guard claims to handle, and it was invisible.
+	humaLocals := map[string]bool{}
+	importedLocals := map[string]bool{}
+	var humaDotImported bool
+	for _, imp := range f.Imports {
+		p := strings.Trim(imp.Path.Value, `"`)
+		local := path.Base(p)
+		if p == humaV2ImportPath {
+			local = "huma" // package name, not the /v2 path element
+		}
+		if imp.Name != nil {
+			local = imp.Name.Name
+		}
+		if p == humaV2ImportPath {
+			if local == "." {
+				humaDotImported = true
+			} else if local != "_" {
+				humaLocals[local] = true
+			}
+		}
+		if local != "." && local != "_" {
+			importedLocals[local] = true
+		}
+	}
+	isHumaQualifier := func(q string) bool {
+		if humaLocals[q] {
+			return true
+		}
+		if importedLocals[q] {
+			return false // bound to some other package
+		}
+		// No import binds it (the fixtures in this file declare none): fall back to the name.
+		return q == "huma"
 	}
 
 	// Exact source text of a node. Safe because we parsed this very string.
@@ -132,6 +235,13 @@ func scanGoSource(filename, src string) (sourceScan, error) {
 			return ""
 		}
 		return src[a:b]
+	}
+	argsText := func(call *ast.CallExpr) string {
+		var parts []string
+		for _, a := range call.Args {
+			parts = append(parts, strings.TrimSpace(text(a)))
+		}
+		return strings.Join(parts, ", ")
 	}
 
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -161,9 +271,11 @@ func scanGoSource(filename, src string) (sourceScan, error) {
 		// none of calls/outsideMain/bareRegisters — the guard's blindest spot, since a same-package
 		// registrar is exactly what a "tidy up main.go" refactor produces.
 		var name, qualifier string
+		var qualified bool
 		switch fn := fun.(type) {
 		case *ast.SelectorExpr:
 			name = fn.Sel.Name
+			qualified = true
 			if x, ok := fn.X.(*ast.Ident); ok {
 				qualifier = x.Name
 			}
@@ -176,32 +288,44 @@ func scanGoSource(filename, src string) (sourceScan, error) {
 
 		switch {
 		case name == "UseMiddleware":
-			if len(call.Args) == 0 {
+			mc := middlewareCall{line: line, receiver: qualifier, arg: argsText(call)}
+			// The receiver decides WHOSE chain this call describes. `internalHumaAPI.UseMiddleware`
+			// installs nothing on humaAPI; neither does a receiver this scan cannot name.
+			if !qualified || qualifier != guardedAPIIdent {
+				out.middlewareOtherReceiver = append(out.middlewareOtherReceiver, mc)
 				return true
 			}
-			arg := text(call.Args[0])
-			var known bool
-			for _, m := range requestScopedMiddlewareMarkers {
-				if !strings.Contains(arg, m.marker) {
-					continue
-				}
-				known = true
-				if line > out.middleware[m.label] {
-					out.middleware[m.label] = line
-				}
+			if !inMain(call.Pos()) {
+				out.middlewareOutsideMain = append(out.middlewareOutsideMain, mc)
+				return true
 			}
-			if !known {
-				// Fail-CLOSED on the unknown. The anchor is a max over KNOWN markers, so a
-				// middleware nobody taught this guard about is a link the anchor cannot see; every
-				// route registered ahead of it then passes while missing it. Recording it here is
-				// what stops the NEXT omission rather than only the one already found (the admin
-				// middleware went unwatched from the day it was added).
-				out.unrecognisedMiddleware = append(out.unrecognisedMiddleware,
-					unrecognisedMiddlewareCall{line: line, arg: strings.TrimSpace(arg)})
+			// EVERY argument: UseMiddleware is variadic, and inspecting only Args[0] let a new
+			// middleware ride along as the second argument of an existing call, unseen.
+			for _, a := range call.Args {
+				arg := text(a)
+				var known bool
+				for _, m := range requestScopedMiddlewareMarkers {
+					if !strings.Contains(arg, m.marker) {
+						continue
+					}
+					known = true
+					if line > out.middleware[m.label] {
+						out.middleware[m.label] = line
+					}
+				}
+				if !known {
+					// Fail-CLOSED on the unknown. The anchor is a max over KNOWN markers, so a
+					// middleware nobody taught this guard about is a link the anchor cannot see;
+					// every route registered ahead of it then passes while missing it. Recording it
+					// here is what stops the NEXT omission rather than only the one already found
+					// (the admin middleware went unwatched from the day it was added).
+					out.unrecognisedMiddleware = append(out.unrecognisedMiddleware,
+						middlewareCall{line: line, receiver: qualifier, arg: strings.TrimSpace(arg)})
+				}
 			}
 
-		case name == "Register" && qualifier == "huma":
-			// Any huma.Register, on any api identifier.
+		case name == "Register" && ((qualified && isHumaQualifier(qualifier)) || (!qualified && humaDotImported)):
+			// Any huma.Register, on any api identifier, under any import alias.
 			out.bareRegisters = append(out.bareRegisters, line)
 
 		case strings.HasPrefix(name, "Register") && strings.HasSuffix(name, "Routes"):
@@ -209,7 +333,7 @@ func scanGoSource(filename, src string) (sourceScan, error) {
 			if len(call.Args) > 0 {
 				reg.api = strings.TrimSpace(text(call.Args[0]))
 			}
-			if mainLbrace == token.NoPos || call.Pos() < mainLbrace || call.Pos() > mainRbrace {
+			if !inMain(call.Pos()) {
 				out.outsideMain = append(out.outsideMain, reg)
 			} else {
 				out.calls = append(out.calls, reg)
@@ -226,8 +350,9 @@ func scanGoSource(filename, src string) (sourceScan, error) {
 	return out, nil
 }
 
-// missingMiddleware reports the request-scoped middlewares the scan could not find. An unanchored
-// ordering check is worse than no check, so callers must fail on a non-empty result.
+// missingMiddleware reports the request-scoped middlewares the scan could not find installed on
+// guardedAPIIdent inside func main(). An unanchored ordering check is worse than no check, so
+// callers must fail on a non-empty result.
 func (s sourceScan) missingMiddleware() []string {
 	var out []string
 	for _, m := range requestScopedMiddlewareMarkers {
@@ -414,6 +539,19 @@ func main() {
 		}
 		if got := scan.missingMiddleware(); len(got) > 0 {
 			t.Errorf("could not locate %v in the real main.go", got)
+		}
+		// Pin the real anchor and the three new fail-closed lists: the fixes must not start
+		// failing on correct code, and a guard that reports problems against today's main.go is
+		// as broken as one that reports none against a mutated one.
+		if got, want := scan.anchor, 2018; got != want {
+			t.Errorf("anchor = %d (label %q), want %d — main.go's last UseMiddleware call is the "+
+				"admin middleware on line %d", got, scan.anchorLabel, want, want)
+		}
+		if len(scan.unrecognisedMiddleware) != 0 || len(scan.middlewareOtherReceiver) != 0 ||
+			len(scan.middlewareOutsideMain) != 0 {
+			t.Errorf("the real main.go reports problems: unrecognised=%+v otherReceiver=%+v "+
+				"outsideMain=%+v", scan.unrecognisedMiddleware, scan.middlewareOtherReceiver,
+				scan.middlewareOutsideMain)
 		}
 	})
 }
@@ -607,6 +745,285 @@ func main() {
 				"NO middleware and its listener binds 0.0.0.0 (internal_metrics.go), so a secured "+
 				"operation on it never gets Clerk at any line — earlyRouteExemptions has to PROVE "+
 				"its groups are unsecured, and this escape hatch proves nothing. Got %v", got)
+		}
+	})
+}
+
+// TestRouteRegistrationScanReceiverAndArgumentHoles covers three further fail-open holes, each
+// demonstrated against the REAL main.go text before being fixed here.
+func TestRouteRegistrationScanReceiverAndArgumentHoles(t *testing.T) {
+	t.Run("H1a middleware installed on a foreign receiver is not installed on humaAPI", func(t *testing.T) {
+		scan, err := scanGoSource("main.go", `package main
+
+func main() {
+	humaAPI.UseMiddleware(humaClerkMiddleware)
+	humaAPI.UseMiddleware(humamiddleware.NewReadOnlyMiddleware(x))
+	internalHumaAPI.UseMiddleware(humamiddleware.NewCacheInvalidationMiddleware(a, b, c))
+	humaAPI.UseMiddleware(humaAdminMiddleware)
+}
+`)
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		missing := scan.missingMiddleware()
+		var found bool
+		for _, m := range missing {
+			if m == "NewCacheInvalidationMiddleware" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missingMiddleware() = %v, want it to name NewCacheInvalidationMiddleware. The "+
+				"call is on internalHumaAPI, so humaAPI never gets it — a one-token typo that leaves "+
+				"every mutating route running with no cache invalidation while the guard is green.",
+				missing)
+		}
+	})
+
+	t.Run("H1b middleware installed inside a helper is no anchor for main()", func(t *testing.T) {
+		scan, err := scanGoSource("main.go", `package main
+
+func installHumaMiddleware(humaAPI huma.API) {
+	humaAPI.UseMiddleware(humaClerkMiddleware)
+	humaAPI.UseMiddleware(humamiddleware.NewReadOnlyMiddleware(x))
+	humaAPI.UseMiddleware(humamiddleware.NewCacheInvalidationMiddleware(a, b, c))
+	humaAPI.UseMiddleware(humaAdminMiddleware)
+}
+
+func main() {
+	operations.RegisterDeletionRoutes(humaAPI, h)
+}
+`)
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if got := scan.missingMiddleware(); len(got) != 4 {
+			t.Errorf("missingMiddleware() = %v, want all four markers reported missing. Extracting the "+
+				"UseMiddleware calls into a helper that is never called collapses the anchor to the top "+
+				"of the file, so every registration counts as \"after the chain\" while the chain is not "+
+				"installed at all — #1560 reproduced wholesale. anchor = %d", got, scan.anchor)
+		}
+	})
+
+	t.Run("H2 a middleware passed as a later variadic argument is inspected", func(t *testing.T) {
+		scan, err := scanGoSource("main.go", `package main
+
+func main() {
+	humaAPI.UseMiddleware(humaClerkMiddleware)
+	humaAPI.UseMiddleware(humamiddleware.NewReadOnlyMiddleware(x))
+	humaAPI.UseMiddleware(humamiddleware.NewCacheInvalidationMiddleware(a, b, c))
+	humaAPI.UseMiddleware(humaAdminMiddleware, humamiddleware.NewSomeFutureMiddleware(x))
+}
+`)
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if len(scan.unrecognisedMiddleware) != 1 || scan.unrecognisedMiddleware[0].line != 7 {
+			t.Errorf("unrecognisedMiddleware = %+v, want one entry on line 7. UseMiddleware is "+
+				"variadic (huma/v2 api.go: UseMiddleware(middlewares ...func(Context, func(Context)))), "+
+				"so inspecting only Args[0] means a new middleware smuggled in as the second argument "+
+				"is invisible — falsifying the claim that adding a middleware fails this suite.",
+				scan.unrecognisedMiddleware)
+		}
+	})
+
+	t.Run("H2 a known marker in a later argument still anchors", func(t *testing.T) {
+		scan, err := scanGoSource("main.go", `package main
+
+func main() {
+	humaAPI.UseMiddleware(humamiddleware.NewReadOnlyMiddleware(x))
+	humaAPI.UseMiddleware(humaAdminMiddleware)
+	humaAPI.UseMiddleware(humaClerkMiddleware, humamiddleware.NewCacheInvalidationMiddleware(a, b, c))
+}
+`)
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if got := scan.missingMiddleware(); len(got) != 0 {
+			t.Errorf("missingMiddleware() = %v, want none — all four markers appear, one of them as a "+
+				"second variadic argument", got)
+		}
+		if got, want := scan.anchor, 6; got != want {
+			t.Errorf("anchor = %d, want %d (the cache-invalidation middleware installed as the second "+
+				"argument on line 6)", got, want)
+		}
+	})
+
+	t.Run("H3 an import-aliased huma.Register is reported", func(t *testing.T) {
+		scan, err := scanGoSource("main.go", `package main
+
+import humav2 "github.com/danielgtaylor/huma/v2"
+
+func main() {
+	humav2.Register(humaAPI, securedMutatingOp, handler)
+	humaAPI.UseMiddleware(humaClerkMiddleware)
+}
+`)
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if len(scan.bareRegisters) != 1 {
+			t.Errorf("bareRegisters = %v, want one entry. The qualifier was compared against the "+
+				"hardcoded string \"huma\", so a plain aliased selector — inside what this guard claims "+
+				"to handle, and not one of its documented limits — registered an operation ahead of "+
+				"every middleware with the guard green.", scan.bareRegisters)
+		}
+	})
+
+	t.Run("H3 a dot-imported huma Register is reported", func(t *testing.T) {
+		// Stated as covered in the limits list, so it is checked rather than assumed.
+		scan, err := scanGoSource("main.go", `package main
+
+import . "github.com/danielgtaylor/huma/v2"
+
+func main() {
+	Register(humaAPI, securedMutatingOp, handler)
+	humaAPI.UseMiddleware(humaClerkMiddleware)
+}
+`)
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if len(scan.bareRegisters) != 1 {
+			t.Errorf("bareRegisters = %v, want one entry — with huma dot-imported, a bare "+
+				"Register(...) is huma's", scan.bareRegisters)
+		}
+	})
+
+	t.Run("H3 a Register on some other package is not a huma registration", func(t *testing.T) {
+		// The import table is what makes the qualifier meaningful in both directions: resolving it
+		// must not turn every `X.Register(...)` in main.go into a false failure.
+		scan, err := scanGoSource("main.go", `package main
+
+import "github.com/prometheus/client_golang/prometheus"
+
+func main() {
+	prometheus.Register(someCollector)
+	humaAPI.UseMiddleware(humaClerkMiddleware)
+}
+`)
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if len(scan.bareRegisters) != 0 {
+			t.Errorf("bareRegisters = %v, want none — prometheus.Register is not huma.Register, and a "+
+				"guard that cries wolf on it gets disabled", scan.bareRegisters)
+		}
+	})
+}
+
+// mustReplaceOnce applies a mutation to real source text and REFUSES to continue if the target is
+// not there exactly once. A mutation test whose target has drifted applies nothing and then reports
+// that the guard "does not falsify" — this branch has already produced one of those.
+func mustReplaceOnce(t *testing.T, src, old, replacement string) string {
+	t.Helper()
+	if n := strings.Count(src, old); n != 1 {
+		t.Fatalf("mutation target appears %d times in main.go, want exactly 1 — the mutation would "+
+			"apply to nothing and read as a passing guard. Target:\n%s", n, old)
+	}
+	return strings.Replace(src, old, replacement, 1)
+}
+
+// TestGuardCatchesMutationsOfTheRealMainGo falsifies each fix against the REAL main.go text rather
+// than a hand-written fixture, mutated in memory. Every one of these mutations left the guard GREEN
+// before T49/T50, over a humaAPI missing middleware it needs.
+func TestGuardCatchesMutationsOfTheRealMainGo(t *testing.T) {
+	mainSrc, err := readMainGo()
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+
+	t.Run("H1a one token moves the cache middleware to another api", func(t *testing.T) {
+		src := mustReplaceOnce(t, mainSrc,
+			"humaAPI.UseMiddleware(humamiddleware.NewCacheInvalidationMiddleware(",
+			"internalHumaAPI.UseMiddleware(humamiddleware.NewCacheInvalidationMiddleware(")
+		scan, serr := scanGoSource("main.go", src)
+		if serr != nil {
+			t.Fatalf("scan: %v", serr)
+		}
+		var missingCache bool
+		for _, m := range scan.missingMiddleware() {
+			if m == "NewCacheInvalidationMiddleware" {
+				missingCache = true
+			}
+		}
+		if !missingCache {
+			t.Errorf("missingMiddleware() = %v, want NewCacheInvalidationMiddleware — it is now "+
+				"installed on internalHumaAPI, so humaAPI never gets it and every post-anchor "+
+				"secured mutating route runs uninvalidated", scan.missingMiddleware())
+		}
+		if len(scan.middlewareOtherReceiver) != 1 {
+			t.Errorf("middlewareOtherReceiver = %+v, want the internalHumaAPI call", scan.middlewareOtherReceiver)
+		}
+	})
+
+	t.Run("H1b all middleware hoisted into a helper", func(t *testing.T) {
+		// The decomposition this branch's own commit cites as motivation: lift the UseMiddleware
+		// calls out of main() into a helper. Uncalled, that installs nothing while making every
+		// registration look late.
+		lines := strings.Split(mainSrc, "\n")
+		var kept, hoisted []string
+		for _, l := range lines {
+			if strings.Contains(l, guardedAPIIdent+".UseMiddleware(") {
+				hoisted = append(hoisted, l)
+				continue
+			}
+			kept = append(kept, l)
+		}
+		if len(hoisted) != 4 {
+			t.Fatalf("hoisted %d %s.UseMiddleware lines, want main.go's 4 — the mutation has drifted "+
+				"and would prove nothing", len(hoisted), guardedAPIIdent)
+		}
+		src := strings.Join(kept, "\n") + "\n\nfunc installHumaMiddleware() {\n" +
+			strings.Join(hoisted, "\n") + "\n}\n"
+		scan, serr := scanGoSource("main.go", src)
+		if serr != nil {
+			t.Fatalf("scan: %v", serr)
+		}
+		if len(scan.middlewareOutsideMain) != 4 {
+			t.Errorf("middlewareOutsideMain = %+v, want all four hoisted calls. A chain assembled "+
+				"outside main() is ordered against nothing, and an uncalled helper installs nothing "+
+				"at all — #1560 reproduced wholesale.", scan.middlewareOutsideMain)
+		}
+		if got := scan.missingMiddleware(); len(got) != 4 {
+			t.Errorf("missingMiddleware() = %v, want all four — none of them is installed in main()", got)
+		}
+		if scan.anchor != 0 {
+			t.Errorf("anchor = %d, want 0. A collapsing anchor must not read as a smaller line "+
+				"number: that says every registration is after the chain.", scan.anchor)
+		}
+	})
+
+	t.Run("H2 a new middleware smuggled in as a second argument", func(t *testing.T) {
+		src := mustReplaceOnce(t, mainSrc,
+			"humaAPI.UseMiddleware(humaAdminMiddleware)",
+			"humaAPI.UseMiddleware(humaAdminMiddleware, humamiddleware.NewFutureMiddleware(x))")
+		scan, serr := scanGoSource("main.go", src)
+		if serr != nil {
+			t.Fatalf("scan: %v", serr)
+		}
+		if len(scan.unrecognisedMiddleware) != 1 {
+			t.Errorf("unrecognisedMiddleware = %+v, want the second argument reported. UseMiddleware "+
+				"is variadic, so a middleware that never appears as Args[0] was described by nothing "+
+				"— which falsified this guard's claim that adding a middleware fails the suite until "+
+				"it is listed here.", scan.unrecognisedMiddleware)
+		}
+	})
+
+	t.Run("H3 huma imported under an alias", func(t *testing.T) {
+		src := mustReplaceOnce(t, mainSrc,
+			"\t\"github.com/danielgtaylor/huma/v2\"\n",
+			"\thumav2 \"github.com/danielgtaylor/huma/v2\"\n")
+		src = mustReplaceOnce(t, src, "func main() {\n",
+			"func main() {\n\thumav2.Register(humaAPI, securedMutatingOp, handler)\n")
+		scan, serr := scanGoSource("main.go", src)
+		if serr != nil {
+			t.Fatalf("scan: %v", serr)
+		}
+		if len(scan.bareRegisters) != 1 {
+			t.Errorf("bareRegisters = %v, want one entry. The qualifier used to be compared against "+
+				"the literal string \"huma\", so an aliased import registered an operation ahead of "+
+				"every middleware with the guard green.", scan.bareRegisters)
 		}
 	})
 }
