@@ -126,25 +126,45 @@ func TestLoggingMapError_Household(t *testing.T) {
 	}
 }
 
-// TestMapError_TenancyMismatchSentinelsAreDistinguishable pins that the three cross-tenant batch
-// sentinels this branch added map to messages a reader can act on, rather than falling through to
-// the anonymous "Internal server error" default.
+// TestMapError_TenancyMismatchSentinelsAreDistinguishable pins that all FOUR batch-tenancy sentinels
+// map to distinct messages a reader can act on, rather than falling through to the anonymous
+// "Internal server error" default.
+//
+// FOUR, not three, and not all cross-tenant. The header here said "three cross-tenant sentinels"
+// while the table below iterated four, one of which (ErrReplaceAccountMismatch) is a SAME-tenant
+// wrong-account fault. The count and the adjective are both fixed.
 //
 // Codex adversarial review (#1537 round 4) flagged ErrReplaceTenantMismatch as unhandled by
-// MapError. Checking the class rather than the reported instance found all THREE unmapped:
-// ErrOverrideTenantMismatch and ErrAccountBatchTenantMismatch were added earlier in the same branch
-// and had the identical hole.
+// MapError. Checking the class rather than the reported instance found all three of the
+// then-existing sentinels unmapped: ErrOverrideTenantMismatch and ErrAccountBatchTenantMismatch were
+// added earlier in the same branch and had the identical hole.
 //
-// WHY 500 AND NOT 4xx, deliberately. A batch containing another tenant's row is not a client mistake
-// — every one of these is raised by a pre-flight assertion against a batch the SERVER assembled from
-// a linked item it owns. The caller cannot cause it and cannot fix it. So 500 is the correct status
-// and the defect was never the code; it was that the message said nothing. This follows the existing
-// convention for internal faults in mapper.go, which map to Error500InternalServerError with a
-// specific message (ErrInvalidPaddleEnv, ErrEncryptionKeyRequired, ErrInvalidKeySize).
+// WHY 500 AND NOT 4xx. The reason recorded here was FALSE and is corrected: it claimed "none of
+// these can reach a handler today", and that "every one of these is raised by a pre-flight assertion
+// against a batch the SERVER assembled from a linked item it owns". Two of the four are
+// handler-reachable, and one of those two takes a CLIENT-supplied batch —
+// ErrOverrideTenantMismatch via MerchantService.BulkSetOverrides → BulkApply
+// (services/merchant_service.go:311) behind the secured bulkSetMerchantOverrides operation, and
+// ErrAccountBatchTenantMismatch via accountService.LinkAccounts → CreateBatch
+// (services/account_service.go:576) behind exchangePublicToken. Only the two ReplaceForAccount
+// sentinels are queue-only.
 //
-// Current callers are queue/sync paths, so none of these can reach a handler today. The mapping is
-// insurance for the day one does — and, more usefully, it makes the sentinel greppable from a Sentry
-// message instead of anonymous.
+// 500 is still correct, on the argument that survives: each sentinel reports a violated INTERNAL
+// INVARIANT, not a rejected input. Every row's tenancy is set by the server from the authenticated
+// actor before the repository sees it, so a mismatch means server-side assembly is broken — no input
+// the caller could send produces it and no change they make fixes it. A 4xx would tell them to retry
+// something that is not theirs to correct. This follows the existing convention for internal faults
+// in mapper.go, which map to Error500InternalServerError with a specific message
+// (ErrInvalidPaddleEnv, ErrEncryptionKeyRequired, ErrInvalidKeySize).
+// allTenancySentinels is every batch-tenancy sentinel MapError distinguishes. Adding one here
+// without mapping it, or mapping two to the same string, fails the pairwise check below.
+var allTenancySentinels = []error{
+	repository.ErrOverrideTenantMismatch,
+	repository.ErrAccountBatchTenantMismatch,
+	repository.ErrReplaceTenantMismatch,
+	repository.ErrReplaceAccountMismatch,
+}
+
 func TestMapError_TenancyMismatchSentinelsAreDistinguishable(t *testing.T) {
 	generic := "Internal server error"
 
@@ -152,10 +172,10 @@ func TestMapError_TenancyMismatchSentinelsAreDistinguishable(t *testing.T) {
 		name string
 		err  error
 	}{
-		{"merchant override batch", repository.ErrOverrideTenantMismatch},
-		{"account batch", repository.ErrAccountBatchTenantMismatch},
-		{"replace-for-account batch", repository.ErrReplaceTenantMismatch},
-		{"replace-for-account wrong account", repository.ErrReplaceAccountMismatch},
+		{"merchant override batch (cross-tenant, client-supplied)", repository.ErrOverrideTenantMismatch},
+		{"account batch (cross-tenant, server-assembled)", repository.ErrAccountBatchTenantMismatch},
+		{"replace-for-account batch (cross-tenant, queue-only)", repository.ErrReplaceTenantMismatch},
+		{"replace-for-account wrong account (SAME tenant, queue-only)", repository.ErrReplaceAccountMismatch},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result := humaerrors.MapError(tc.err)
@@ -170,14 +190,21 @@ func TestMapError_TenancyMismatchSentinelsAreDistinguishable(t *testing.T) {
 				"the sentinel falls through to the anonymous default, so an operator seeing this in "+
 					"Sentry cannot tell a cross-tenant batch from any other 500. Map it explicitly.")
 
-			// The two replace-batch sentinels must not share a message: one is a cross-tenant leak,
-			// the other is same-tenant misfiling, and an operator needs to tell them apart.
-			if tc.err == repository.ErrReplaceAccountMismatch {
-				other := humaerrors.MapError(repository.ErrReplaceTenantMismatch)
-				otherStatus, ok := other.(huma.StatusError)
+			// PAIRWISE distinct across all four, not just the two replace-batch ones. The check
+			// used to compare only ErrReplaceAccountMismatch against ErrReplaceTenantMismatch, so
+			// collapsing the merchant-override message into the account-batch message — two
+			// different batches, two different subsystems — passed. Every sentinel names a
+			// different assembly path, and an operator reading one line in Sentry has nothing else
+			// to go on.
+			for _, other := range allTenancySentinels {
+				if other == tc.err {
+					continue
+				}
+				otherMapped, ok := humaerrors.MapError(other).(huma.StatusError)
 				require.True(t, ok)
-				assert.NotEqual(t, otherStatus.Error(), statusErr.Error(),
-					"same-tenant wrong-account and cross-tenant batches must be distinguishable")
+				assert.NotEqual(t, otherMapped.Error(), statusErr.Error(),
+					"%v and %v map to the SAME message — an operator cannot tell which batch "+
+						"assembly path failed", tc.err, other)
 			}
 
 			// Wrapped, as a repository would return it through a service.

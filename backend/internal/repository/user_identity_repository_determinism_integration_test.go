@@ -15,21 +15,38 @@ package repository
 //     encryption is AES-GCM with a random nonce (services/encryption_service.go), so the same
 //     plaintext yields a different ciphertext every time. BlindIndex, by contrast, is a
 //     deterministic HMAC-SHA256 (crypto/field_encryptor.go:130).
-//  3. Two identity rows for one user with DIFFERENT providers is the designed case —
-//     `unique_user_provider UNIQUE(user_id, provider)` says "one identity per provider per user" —
-//     and both rows carry the same clerk_user_id, hence the same blind index.
+//  3. No PRODUCTION path can create two rows sharing a blind index. This is a correction: point 3
+//     used to read "two identity rows for one user with DIFFERENT providers is the designed case …
+//     and both rows carry the same clerk_user_id, hence the same blind index". That is false in its
+//     own terms. `provider` is DERIVED FROM the Clerk ID — domain.NewUserIdentity calls
+//     ParseExternalUserID (domain/user_identity.go:43) — and is the only non-test construction site
+//     (services/registration_service.go:184), with the only inserts at registration_service.go:205
+//     and :223, one per registration. Two rows sharing a blind index therefore share the plaintext
+//     Clerk ID, hence the derived provider, hence violate
+//     `unique_user_provider UNIQUE(user_id, provider)`
+//     (000008_create_user_identities_table.up.sql:26). Different providers mean different Clerk IDs
+//     mean different blind indices.
 //
-// So multiple rows CAN share a blind index, by design. GetByClerkID uses QueryRow with no ORDER BY
-// and no LIMIT, which means the row it returns is whichever Postgres happens to hand back first.
+//     What CAN produce duplicates is state written outside this code:
+//     000008_create_user_identities_table.up.sql:47-65 backfills one identity per pre-existing user,
+//     and fixtures insert rows directly (apps/web/scripts/seed-e2e-data.sql). Legacy, backfilled, or
+//     manually-inserted rows are the genuine risk, which is why the tests below model duplicates
+//     with raw SQL rather than through the repository API.
 //
-// WHY #1566's SUGGESTED FIX IS THE WRONG INSTRUMENT, and this is the substance of criterion (e): a
-// bare UNIQUE index on clerk_user_id_blind_idx would forbid exactly the multi-provider rows point 3
-// describes, so it does not harden the schema — it forecloses a designed feature. The invariant that
-// actually matters is CROSS-ROW ("all rows sharing a blind index belong to one user"), which no
-// single-column unique index can express. Today that invariant holds by construction, because
+// So multiple rows CAN share a blind index — as corrupt or legacy state, not by design. GetByClerkID
+// used QueryRow with no ORDER BY and no LIMIT, which means the row it returned was whichever Postgres
+// happened to hand back first.
+//
+// WHY #1566's SUGGESTED FIX IS THE WRONG INSTRUMENT, and this is the substance of criterion (e). The
+// CONCLUSION survives the correction above; the reason does not. A bare UNIQUE index on
+// clerk_user_id_blind_idx would not foreclose a designed feature — there is no such feature — it
+// would forbid NOTHING REACHABLE, since no production path can produce a second row for one Clerk
+// ID. So it hardens nothing, while adding a constraint that a backfill or a fixture could trip. The
+// invariant that actually matters is CROSS-ROW ("all rows sharing a blind index belong to one user"),
+// which no single-column unique index can express. Today it holds by construction, because
 // `unique_users_clerk_id_blind` on the `users` table blocks the only reachable creation path
 // (registration), so there is no live exposure. What IS live, and is fixed here, is that the row
-// chosen among a user's own identities was arbitrary.
+// chosen among duplicate rows was arbitrary.
 //
 // Every consumer reads only identity.UserID today — middleware/clerk.go, huma/middleware/clerk.go,
 // operations/mcp_audit.go:97, registration_service.go, identity_resolver_cached.go — and those rows

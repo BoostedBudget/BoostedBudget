@@ -214,8 +214,18 @@ func TestInvestment_Snapshot_PartialNullCostBasis_Integration(t *testing.T) {
 // ── GAP C: snapshot Upsert excludes inactive-account holdings ────────────────
 
 // TestInvestment_Snapshot_ExcludesInactiveAccounts_Integration proves that the
-// snapshot Upsert excludes holdings on inactive (replaced) accounts, consistent
-// with all read paths that JOIN accounts WHERE status='active'.
+// snapshot Upsert excludes holdings on inactive (replaced) accounts, consistent with every
+// INVESTMENT read path — holding_repository.go:204/363/415, investment_analytics_repository.go:83/
+// 187/376/481/578, investment_transaction_repository.go:151, portfolio_snapshot_repository.go:82 —
+// each of which joins accounts with `a.status = 'active'`.
+//
+// SCOPED TO THE INVESTMENT DOMAIN on purpose. This comment used to say "consistent with all read
+// paths that JOIN accounts WHERE status='active'", which read as a universal about the codebase and
+// is not one: after #1561 no spending/cash-flow analytics join carries a status predicate at all
+// (#1109 had already removed the personal-scope ones), and GetAggregatedHistoryForHousehold
+// expresses status as a DISTINCT ON ordering preference rather than a filter
+// (balance_snapshot_repository.go:313). Investment reads are the remaining family that genuinely
+// filters, which is why this snapshot matching them is worth pinning.
 func TestInvestment_Snapshot_ExcludesInactiveAccounts_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()

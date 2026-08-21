@@ -404,13 +404,26 @@ func TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccount
 // #1561 removed `AND a.status = 'active'` from the household analytics joins, correctly: there the
 // filter was dropping pre-relink transaction history that personal scope deliberately keeps.
 //
-// Applying the same removal to THIS query was wrong, because the filter plays a different role here.
+// Applying the same removal to THIS query was wrong, because status plays a different role here.
 // Balance snapshots are already selected by `bs.user_account_id`, so every member of a re-link chain
 // contributes its snapshots regardless of status — no history is being dropped. The accounts join
 // exists solely to supply `a.type` for the per-type grouping, and it matches EVERY chain member
-// sharing that `user_account_id`. With the status filter gone, `DISTINCT ON` breaks the tie on
-// `a.id` — an arbitrary UUID — so the balance could be attributed to a REPLACED account's type, and
-// with an accountTypes filter applied it could be dropped from the result entirely.
+// sharing that `user_account_id`. With nothing expressing a preference, `DISTINCT ON` broke the tie
+// on `a.id` — an arbitrary UUID — so the balance could be attributed to a REPLACED account's type,
+// and with an accountTypes filter applied it could be dropped from the result entirely.
+//
+// WHAT THE FIX IS, stated exactly, because this comment previously argued for the wrong instrument.
+// It reads as though the fix restored the JOIN PREDICATE. It did not, and restoring it would have
+// reintroduced a second bug: when NO active row shares the user_account_id — what
+// ExpireAccountsByFingerprint leaves behind for a whole fingerprint — a filtered join yields a NULL
+// `a.type`, which NULL never satisfies `= ANY`, so the accountTypes filter drops those snapshots
+// outright while personal scope keeps them. The join is therefore UNFILTERED
+// (`LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id`,
+// balance_snapshot_repository.go:308) and the preference lives in the ORDER BY:
+// `(a.status = 'active') DESC NULLS LAST, a.id` (:313) — active wins, any chain member's type is the
+// fallback, `a.id` only breaks ties within a status class. Both halves are pinned: this test (active
+// wins) and TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory
+// (fallback).
 //
 // The active account's type is the authoritative one. This test seeds an active `depository` and a
 // replaced `credit` account on the SAME user_account_id, with the replaced account given a
