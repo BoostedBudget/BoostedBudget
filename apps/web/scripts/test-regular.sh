@@ -8,10 +8,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$FRONTEND_DIR"
 
-COVERAGE=false
+# NOTE: this must be EMPTY, not the string "false". Line ~86 expands it with `${COVERAGE:+...}`,
+# which fires whenever COVERAGE is NON-EMPTY — so `COVERAGE=false` meant coverage ran on EVERY
+# invocation, including a plain `bun run test`, silently rewriting apps/web/coverage/ every time.
+# Found in #1537 round 11 by a guard that observes the argv bun actually receives rather than
+# parsing this file; no amount of reading the script had caught it in six rounds of looking at it.
+COVERAGE=
 for arg in "$@"; do
     case $arg in
-        --coverage) COVERAGE=true; shift ;;
+        --coverage) COVERAGE=1; shift ;;
     esac
 done
 
