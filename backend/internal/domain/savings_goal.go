@@ -231,6 +231,13 @@ const (
 	FreshnessFresh         = "fresh"          // balance_as_of within 24 h
 	FreshnessStale         = "stale"          // balance_as_of older than 24 h
 	FreshnessUnknown       = "unknown"        // balance_as_of not yet recorded
+	// FreshnessBasisAccountDisconnected marks a balance/account_percentage-basis goal whose
+	// linked account is no longer active (status replaced, expired, or removed — Issue #1569).
+	// The backend stops updating that account's current_balance once it leaves 'active', so
+	// recompute freezes current_amount rather than reporting a stale figure as if it were live.
+	// Distinct from FreshnessStale, which means "the balance IS still being updated, just not
+	// recently" — a disconnected account's balance will NEVER update again.
+	FreshnessBasisAccountDisconnected = "basis_account_disconnected"
 )
 
 // ComputedFrom constants label the progress source for MCP consumers.

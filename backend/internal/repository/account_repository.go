@@ -797,6 +797,12 @@ func (r *accountRepository) Delete(ctx context.Context, accountID, userID string
 }
 
 // GetByIDAndUser retrieves an account by ID with ownership validation.
+//
+// Selects `status` (Issue #1569): callers like savings_progress_service.go need to tell a
+// retained (replaced/expired/removed) account apart from an active one — this query applies NO
+// status predicate itself (deliberately: a caller may need to look up a since-disconnected
+// account, e.g. to explain why its balance is frozen), so returning the status is what lets
+// them make that call themselves instead of silently treating every result as active.
 func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userID string) (*domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
@@ -804,7 +810,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id,
+		       user_account_id, status,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -817,7 +823,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 		&account.DisplayOrder, &account.IsHidden,
-		&account.UserAccountID,
+		&account.UserAccountID, &account.Status,
 		&account.CreatedAt, &account.UpdatedAt,
 	)
 
