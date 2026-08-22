@@ -363,7 +363,7 @@ func TestLinkedItemRepository_DeleteByUser_Success(t *testing.T) {
 	itemID := uuid.New().String()
 	userID := uuid.New().String()
 
-	expectedQuery := `DELETE FROM linked_items WHERE id = $1 AND user_id = $2`
+	expectedQuery := `DELETE FROM linked_items WHERE id = $1 AND user_id = $2 AND NOT EXISTS (SELECT 1 FROM accounts WHERE linked_item_id = $1)`
 
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(itemID, userID).
@@ -386,7 +386,7 @@ func TestLinkedItemRepository_DeleteByUser_NotFound(t *testing.T) {
 	itemID := uuid.New().String()
 	userID := uuid.New().String()
 
-	expectedQuery := `DELETE FROM linked_items WHERE id = $1 AND user_id = $2`
+	expectedQuery := `DELETE FROM linked_items WHERE id = $1 AND user_id = $2 AND NOT EXISTS (SELECT 1 FROM accounts WHERE linked_item_id = $1)`
 
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(itemID, userID).
@@ -410,7 +410,7 @@ func TestLinkedItemRepository_DeleteByUser_NotOwner(t *testing.T) {
 	itemID := uuid.New().String()
 	wrongUserID := uuid.New().String()
 
-	expectedQuery := `DELETE FROM linked_items WHERE id = $1 AND user_id = $2`
+	expectedQuery := `DELETE FROM linked_items WHERE id = $1 AND user_id = $2 AND NOT EXISTS (SELECT 1 FROM accounts WHERE linked_item_id = $1)`
 
 	mock.ExpectExec(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(itemID, wrongUserID).
