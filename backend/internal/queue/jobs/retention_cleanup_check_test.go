@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -2453,6 +2454,90 @@ func TestRetentionCleanupCheck_7dNotice_SentToUsers(t *testing.T) {
 
 	require.NoError(t, err)
 	mockRepo.AssertExpectations(t)
+	mockEmail.AssertExpectations(t)
+}
+
+// TestRetentionCleanupCheck_30dNotice_DisclosesWhatGetsDeleted pins that the 30-day warning
+// email plainly names what the retention sweep deletes (Issue #1569: "your data" was too vague
+// under "retain unless explicitly deleted" — the privacy policy's Section 8.4 was sharpened the
+// same way in this issue and the email must not fall behind it).
+func TestRetentionCleanupCheck_30dNotice_DisclosesWhatGetsDeleted(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(25 * 24 * time.Hour)
+	users := []*domain.User{
+		{ID: "user-1", Email: "user1@example.com", RetentionExpiresAt: &retentionExpiresAt},
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
+	mockRepo.On("GetOrphanedFKlessUserScopedRowCounts", mock.Anything).Return(repository.OrphanedFKlessUserScopedRowCounts{}, nil).Maybe()
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
+	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
+	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
+	mockRepo.On("IsRetentionNotice30dEligibleForOccurrence", ctx, "user-1", retentionExpiresAt).Return(true, nil)
+	mockRepo.On("SetRetentionNotice30dSent", ctx, "user-1").Return(nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
+
+	mockEmail.On("SendRetentionNoticeEmail", ctx, "user1@example.com", mock.AnythingOfType("string"),
+		mock.MatchedBy(func(body string) bool {
+			return strings.Contains(body, "automation rules") && strings.Contains(body, "transaction history")
+		}),
+	).Return(nil)
+
+	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
+	worker.SetWorkClaimsRepo(newAllowingRetentionClaimsRepo())
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockEmail.AssertExpectations(t)
+}
+
+// TestRetentionCleanupCheck_7dNotice_DisclosesWhatGetsDeleted is the 7-day sibling of the test
+// above.
+func TestRetentionCleanupCheck_7dNotice_DisclosesWhatGetsDeleted(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(5 * 24 * time.Hour)
+	users := []*domain.User{
+		{ID: "user-3", Email: "user3@example.com", RetentionExpiresAt: &retentionExpiresAt},
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
+	mockRepo.On("GetOrphanedFKlessUserScopedRowCounts", mock.Anything).Return(repository.OrphanedFKlessUserScopedRowCounts{}, nil).Maybe()
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
+	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
+	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return(users, nil)
+	mockRepo.On("IsRetentionNotice7dEligibleForOccurrence", ctx, "user-3", retentionExpiresAt).Return(true, nil)
+	mockRepo.On("SetRetentionNotice7dSent", ctx, "user-3").Return(nil)
+	mockRepo.On("GetUsersWithExpiredRetentionPage", ctx, mock.Anything, mock.Anything).Return([]*domain.User{}, nil)
+
+	mockEmail.On("SendRetentionNoticeEmail", ctx, "user3@example.com", mock.AnythingOfType("string"),
+		mock.MatchedBy(func(body string) bool {
+			return strings.Contains(body, "automation rules") && strings.Contains(body, "transaction history")
+		}),
+	).Return(nil)
+
+	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
+	worker.SetWorkClaimsRepo(newAllowingRetentionClaimsRepo())
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
 	mockEmail.AssertExpectations(t)
 }
 

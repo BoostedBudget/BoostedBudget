@@ -736,7 +736,10 @@ func (w *RetentionCleanupCheckWorker) send30dNotices(ctx context.Context, jobID 
 		action:     repository.ActionRetentionNotice30d,
 		noticeName: "30d",
 		subject:    "Your BoostedBudget data will be deleted in 30 days",
-		body:       "Your account data is preserved in read-only mode. Your data will be permanently deleted in 30 days unless you resubscribe. Visit boostedbudget.com/pricing to restore full access.",
+		// Issue #1569: names what gets deleted (automation rules, transaction history, balance
+		// history) instead of the vague "your data" — matching the privacy policy's Section 8.4
+		// disclosure, sharpened in the same issue.
+		body:       "Your account data is preserved in read-only mode. In 30 days, unless you resubscribe, we will permanently delete your data — including your automation rules, transaction history, and balance history. Visit boostedbudget.com/pricing to restore full access.",
 		isEligible: w.profileRepo.IsRetentionNotice30dEligibleForOccurrence,
 		markSent:   w.profileRepo.SetRetentionNotice30dSent,
 	})
@@ -762,7 +765,8 @@ func (w *RetentionCleanupCheckWorker) send7dNotices(ctx context.Context, jobID i
 		action:     repository.ActionRetentionNotice7d,
 		noticeName: "7d",
 		subject:    "Final notice: BoostedBudget data deletion in 7 days",
-		body:       "This is your final warning. Your BoostedBudget account data will be permanently deleted in 7 days. Resubscribe at boostedbudget.com/pricing to keep your data.",
+		// Issue #1569: same disclosure sharpening as the 30-day notice above.
+		body:       "This is your final warning. In 7 days, we will permanently delete your BoostedBudget account data — including your automation rules, transaction history, and balance history. Resubscribe at boostedbudget.com/pricing to keep your data.",
 		isEligible: w.profileRepo.IsRetentionNotice7dEligibleForOccurrence,
 		markSent:   w.profileRepo.SetRetentionNotice7dSent,
 	})
