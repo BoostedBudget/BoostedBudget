@@ -308,6 +308,90 @@ describe('AccountsPage', () => {
     })
   })
 
+  // Issue #1569, Task 5D: retained (non-active) accounts have nowhere to be viewed today.
+  // AccountsPage now fetches status=all_statuses and locally splits active vs. closed, so a
+  // "Show closed accounts" toggle (mirroring the existing "Show Hidden" idiom) can surface them
+  // without padding the active list, the account count, or any picker.
+  describe('closed accounts (Task 5D)', () => {
+    const activeAccount = {
+      id: 'acc-active',
+      name: 'Chase Checking',
+      institution_name: 'Chase',
+      type: 'depository',
+      subtype: 'checking',
+      status: 'active',
+      is_hidden: false,
+      current_balance: 1000,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    }
+    const closedAccount = {
+      id: 'acc-closed',
+      name: 'Old Savings',
+      institution_name: 'Chase',
+      type: 'depository',
+      subtype: 'savings',
+      status: 'removed',
+      removed_at: '2026-03-01T00:00:00Z',
+      is_hidden: false,
+      current_balance: 500,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2026-03-01T00:00:00Z',
+    }
+
+    beforeEach(() => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [activeAccount, closedAccount] },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+    })
+
+    it('fetches with status=all_statuses so closed accounts are available to split locally', () => {
+      renderAccountsPage()
+      expect(mockUseGetAccounts).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'all_statuses' })
+      )
+    })
+
+    it('does not show closed accounts in the default (active) list', () => {
+      renderAccountsPage()
+      expect(screen.getByText('Chase Checking')).toBeInTheDocument()
+      expect(screen.queryByText('Old Savings')).not.toBeInTheDocument()
+    })
+
+    it('does not count closed accounts toward the account count', () => {
+      renderAccountsPage()
+      expect(screen.getByText(/^1 account$/)).toBeInTheDocument()
+    })
+
+    it('shows a "Show closed accounts" toggle when closed accounts exist', () => {
+      renderAccountsPage()
+      expect(screen.getByRole('button', { name: /show closed accounts/i })).toBeInTheDocument()
+    })
+
+    it('does not show the toggle when there are no closed accounts', () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [activeAccount] },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+      renderAccountsPage()
+      expect(screen.queryByRole('button', { name: /show closed accounts/i })).not.toBeInTheDocument()
+    })
+
+    it('reveals closed accounts when the toggle is clicked, still excluded from the count', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+
+      expect(screen.getByText('Old Savings')).toBeInTheDocument()
+      expect(screen.getByText(/^1 account$/)).toBeInTheDocument()
+    })
+  })
+
   describe('delete dialog integration (Task 7)', () => {
     const mockAccount = {
       id: 'acc-1',
@@ -366,14 +450,18 @@ describe('AccountsPage', () => {
       expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-confirm-text', 'Chase Checking')
     })
 
-    it('shows transaction-preserved and balance-removed messages in description', () => {
+    // Issue #1569: DeleteAccount now soft-removes — the account row, its balance_snapshots,
+    // holdings, and liabilities all survive. "Balance history will be removed" was false the
+    // moment that shipped; the dialog must say history is retained instead.
+    it('shows transaction-preserved and balance-retained messages in description', () => {
       renderAccountsPage()
 
       fireEvent.click(screen.getByText('Delete'))
 
       const desc = screen.getByTestId('dialog-description')
       expect(desc.textContent).toContain('transactions will be preserved')
-      expect(desc.textContent).toContain('Balance history will be removed')
+      expect(desc.textContent).toContain('balance history will be retained')
+      expect(desc.textContent).not.toContain('Balance history will be removed')
     })
 
     it('shows institution removal message when account is the last for its linked_item_id', () => {
