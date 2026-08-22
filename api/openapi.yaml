@@ -7719,12 +7719,12 @@ paths:
           schema:
             description: If 'true', includes hidden accounts
             type: string
-        - description: "Filter by account status: 'active' (default), 'replaced', 'expired', 'removed', or 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter)"
+        - description: "Filter by account status: 'active' (default), 'replaced', 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter), or 'all_statuses' (every status: active, replaced, expired, removed — for surfaces like the closed-accounts view that need the full universe)"
           explode: false
           in: query
           name: status
           schema:
-            description: "Filter by account status: 'active' (default), 'replaced', 'expired', 'removed', or 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter)"
+            description: "Filter by account status: 'active' (default), 'replaced', 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter), or 'all_statuses' (every status: active, replaced, expired, removed — for surfaces like the closed-accounts view that need the full universe)"
             type: string
         - description: If 'true', equivalent to status=all (backward-compat alias)
           explode: false
