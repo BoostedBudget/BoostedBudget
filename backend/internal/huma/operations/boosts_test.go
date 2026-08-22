@@ -290,7 +290,7 @@ func TestBoostHandler_TriggerBoost_Success(t *testing.T) {
 	}
 	manager.RegisterProvider(mockProvider)
 	_ = manager.Start(context.Background())
-	defer manager.Stop(context.Background())
+	defer func() { _ = manager.Stop(context.Background()) }()
 
 	handler := NewBoostHandler(mockService, manager)
 
@@ -322,7 +322,7 @@ func TestBoostHandler_TriggerBoost_WithTriggerData(t *testing.T) {
 	}
 	manager.RegisterProvider(mockProvider)
 	_ = manager.Start(context.Background())
-	defer manager.Stop(context.Background())
+	defer func() { _ = manager.Stop(context.Background()) }()
 
 	handler := NewBoostHandler(mockService, manager)
 

@@ -2932,14 +2932,6 @@ type MockMerchantRepo struct {
 	mock.Mock
 }
 
-func (m *MockMerchantRepo) GetOrCreateMerchants(ctx context.Context, names []string) (map[string]string, error) {
-	args := m.Called(ctx, names)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(map[string]string), args.Error(1)
-}
-
 func (m *MockMerchantRepo) GetOrCreateMerchantsWithNormalize(ctx context.Context, names []string, normalize func(string) string) (map[string]string, error) {
 	args := m.Called(ctx, names, normalize)
 	if args.Get(0) == nil {
@@ -2965,7 +2957,7 @@ func (m *MockMerchantRepo) GetDuplicateSuggestions(ctx context.Context, userID s
 }
 
 // TestProcessAddedTransactions_StampsMerchantID verifies that when transactions have
-// a MerchantName, GetOrCreateMerchants is called once and MerchantID is stamped on
+// a MerchantName, GetOrCreateMerchantsWithNormalize is called once and MerchantID is stamped on
 // each transaction before CreateBatch is invoked.
 func TestProcessAddedTransactions_StampsMerchantID(t *testing.T) {
 	mockTransactionRepo := new(MockTransactionRepository)
@@ -3024,7 +3016,7 @@ func TestProcessAddedTransactions_StampsMerchantID(t *testing.T) {
 }
 
 // TestProcessAddedTransactions_MerchantUpsertError_ContinuesSync verifies that when
-// GetOrCreateMerchants fails, the sync continues without MerchantID (best-effort).
+// GetOrCreateMerchantsWithNormalize fails, the sync continues without MerchantID (best-effort).
 func TestProcessAddedTransactions_MerchantUpsertError_ContinuesSync(t *testing.T) {
 	mockTransactionRepo := new(MockTransactionRepository)
 	mockMerchantRepo := new(MockMerchantRepo)
@@ -3071,7 +3063,7 @@ func TestProcessAddedTransactions_MerchantUpsertError_ContinuesSync(t *testing.T
 }
 
 // TestProcessAddedTransactions_NoMerchantName_SkipsMerchantUpsert verifies that when
-// no transactions have a MerchantName, GetOrCreateMerchants is never called.
+// no transactions have a MerchantName, GetOrCreateMerchantsWithNormalize is never called.
 func TestProcessAddedTransactions_NoMerchantName_SkipsMerchantUpsert(t *testing.T) {
 	mockTransactionRepo := new(MockTransactionRepository)
 	mockMerchantRepo := new(MockMerchantRepo)
@@ -3157,7 +3149,7 @@ func TestProcessAddedTransactions_WhitespaceOnlyMerchantName_SkipsMerchantUpsert
 }
 
 // TestProcessModifiedTransactions_StampsMerchantID verifies that when modified
-// transactions have a MerchantName, GetOrCreateMerchants is called once (per batch)
+// transactions have a MerchantName, GetOrCreateMerchantsWithNormalize is called once (per batch)
 // and MerchantID is stamped on each transaction before Update is invoked.
 // This is the GREEN test for Gap 1 of the #1163 gap analysis.
 func TestProcessModifiedTransactions_StampsMerchantID(t *testing.T) {
@@ -3236,7 +3228,7 @@ func TestProcessModifiedTransactions_StampsMerchantID(t *testing.T) {
 }
 
 // TestProcessModifiedTransactions_MerchantUpsertError_ContinuesUpdate verifies that when
-// GetOrCreateMerchants fails during modification, the Update still proceeds without MerchantID.
+// GetOrCreateMerchantsWithNormalize fails during modification, the Update still proceeds without MerchantID.
 func TestProcessModifiedTransactions_MerchantUpsertError_ContinuesUpdate(t *testing.T) {
 	mockTransactionRepo := new(MockTransactionRepository)
 	mockMerchantRepo := new(MockMerchantRepo)

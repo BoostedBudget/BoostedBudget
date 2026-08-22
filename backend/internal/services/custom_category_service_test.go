@@ -50,24 +50,9 @@ func (m *MockCustomCategoryRepository) Update(ctx context.Context, category *dom
 	return args.Error(0)
 }
 
-func (m *MockCustomCategoryRepository) Delete(ctx context.Context, id string) error {
-	args := m.Called(ctx, id)
-	return args.Error(0)
-}
-
 func (m *MockCustomCategoryRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
 	args := m.Called(ctx, userID)
 	return args.Int(0), args.Error(1)
-}
-
-func (m *MockCustomCategoryRepository) IncrementUsageCount(ctx context.Context, userID, categoryName string) error {
-	args := m.Called(ctx, userID, categoryName)
-	return args.Error(0)
-}
-
-func (m *MockCustomCategoryRepository) DecrementUsageCount(ctx context.Context, userID, categoryName string) error {
-	args := m.Called(ctx, userID, categoryName)
-	return args.Error(0)
 }
 
 func (m *MockCustomCategoryRepository) GetNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
@@ -89,11 +74,6 @@ func (m *MockCustomCategoryRepository) GetChildren(ctx context.Context, parentID
 func (m *MockCustomCategoryRepository) HasChildren(ctx context.Context, id string) (bool, error) {
 	args := m.Called(ctx, id)
 	return args.Bool(0), args.Error(1)
-}
-
-func (m *MockCustomCategoryRepository) ClearParentForChildren(ctx context.Context, parentID string) error {
-	args := m.Called(ctx, parentID)
-	return args.Error(0)
 }
 
 func (m *MockCustomCategoryRepository) GetCategoryUsage(ctx context.Context, userID, categoryID string) (*domain.CategoryUsage, error) {

@@ -241,9 +241,12 @@ func (s *transactionSyncService) SetCacheInvalidation(gens *cache.Generations, h
 }
 
 // bumpCacheForSync invalidates userID's cached analytics (and, when resolvable, their
-// household's) after a SyncTransactions call has fully committed. Called ONCE, at the very end
-// of SyncTransactions' success path — never per page/batch, since a bump's cost is a single
-// Redis write regardless of how much data changed, and bumping per page would multiply that
+// household's). ⚠ CORRECTED (#1537 round 16): this used to say "after a SyncTransactions call has
+// fully committed ... at the very end of the success path". That is no longer true — SyncTransactions
+// now arms a deferred bump BEFORE each storage step, so this is also called after PARTIAL failures,
+// which is the whole point of that change. Still called at most once per sync — never per page/batch, since a bump's cost is a single
+// Redis write PER SCOPE (two when a household resolves, one otherwise — corrected round 17)
+// regardless of how much data changed, and bumping per page would multiply that
 // cost by transaction volume for no correctness gain (a single bump after all pages/storage have
 // committed already invalidates everything written during this sync).
 //
@@ -453,13 +456,113 @@ func (s *transactionSyncService) SyncTransactions(
 
 		// CRITICAL: Update cursor IMMEDIATELY for resumability
 		// If next page fails, we can resume from this cursor
+		//
+		// Issue #1537: a BLANK next_cursor must never be persisted here. An empty stored cursor sends
+		// the next run down the no-cursor branch above, which applies initial-sync historical options
+		// and asks Plaid for the whole configured window again — so one blank write turns every
+		// subsequent incremental sync into a full re-sync through CreateBatch. Skipping the write
+		// leaves the last known-good cursor in place, which is the correct resume point.
+		//
+		// This guard belongs HERE and not inside UpdateCursor: the PlaidErrorInvalidCursor branch
+		// above writes "" on purpose, precisely to force that full re-sync when Plaid tells us the
+		// stored cursor is no longer valid.
+		//
+		// Round 4 of this branch added the identical check to workers/plaid_sync_provider.go, whose
+		// NewPlaidSyncProvider has no non-test caller — so the fix landed in dead code while this,
+		// the live path, kept the bug. Verified by TestSyncTransactions_BlankNextCursor_
+		// DoesNotOverwriteStoredCursor, which failed before this guard existed.
 		newCursor := resp.GetNextCursor()
-		err = s.linkedItemRepo.UpdateCursor(ctx, linkedItem.ID, newCursor)
-		if err != nil {
-			// Cursor update failed - return partial results with error
-			return result, fmt.Errorf("failed to update cursor on page %d: %w", pageCount, err)
+		if newCursor == "" {
+			// #1537 round 10: an empty next_cursor is only SAFE to ignore on the last page.
+			//
+			// If Plaid also says has_more=true there is no safe continuation: this loop is `for hasMore`
+			// and the cursor cannot advance, so returning here is the difference between failing a job
+			// and re-issuing the IDENTICAL request forever — the loop has no page cap, and its only
+			// non-error exit is has_more going false. Round 9 added the blank-cursor guard without this
+			// branch and so converted bad data into a potential hang, which is the worse failure. Both
+			// reviewers found it independently; pinned by
+			// TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping, whose
+			// load-bearing assertion is the Plaid CALL COUNT rather than the error.
+			//
+			// Plaid's contract is that has_more=true must be followed by a request carrying
+			// next_cursor; an empty one means the data is not yet available. Failing closed lets the
+			// job retry with the cursor we still hold, which is exactly what we want.
+			if resp.GetHasMore() {
+				// #1537 round 11: the round-10 version returned an error here unconditionally, which
+				// LOST DATA on any multi-page sync. UpdateCursor runs per page (below), while storage
+				// happens after this loop — and the worker discards `result` on error. So page 1's
+				// transactions were thrown away while page 1's cursor had already been persisted, and
+				// /transactions/sync does not re-deliver them. That was a REGRESSION against the
+				// pre-round-9 code, which reset the cursor, looped, and stored everything.
+				//
+				// The cursor already points at the page we cannot fetch, so the lossless move depends
+				// on whether we got anything this run:
+				if pageCount > 1 {
+					// Progress made: pages 1..N are ALL kept — page N's rows were appended above,
+					// BEFORE this guard. The cursor still points at page N-1, so the next sync
+					// re-fetches page N and re-runs the whole post-pagination tail against it.
+					//
+					// #1537 T93(a): an earlier version of this comment claimed "no loss and no
+					// duplicate rows". Only the first half is right, and only for TRANSACTION rows.
+					// What re-fetching page N is actually idempotent in:
+					//   - added: transactionRepo.CreateBatch is ON CONFLICT (source,
+					//     external_transaction_id_blind_idx, user_id) DO UPDATE — re-upsert, no dupe.
+					//   - modified: Update keyed on the existing row's id — same final contents, but
+					//     it rewrites updated_at, and if the row has since been DELETED the path skips
+					//     it rather than recreating it, so the modification is silently dropped.
+					//   - removed: DeleteByExternalID tolerates an already-deleted row.
+					// What it is NOT idempotent in (all verified, all downstream of storage):
+					//   - balance_snapshots: balanceSnapshotRepository.Create is a plain INSERT with
+					//     NO ON CONFLICT, and snapshot_at is a fresh time.Now() per run, so a re-run
+					//     more than createBalanceSnapshots' 5-minute dedup window later ADDS a row
+					//     per account. Migration 000017 deliberately dropped the old
+					//     UNIQUE(account_id, snapshot_date) to allow many snapshots per day, and the
+					//     read paths take only the latest per account per day — so this inflates row
+					//     count, not reported balances.
+					//   - Plaid sync metrics: the worker's PlaidSyncTxns counters
+					//     (queue/jobs/plaid_sync.go, the observability block after a successful sync)
+					//     add page N's added/modified/removed a SECOND time.
+					//   - boost rules: RecalculateBudgetAmounts below re-emits budget_updated, and
+					//     boostExecutionService.ProcessEventTrigger has no cooldown or dedup — every
+					//     matching rule re-executes, writing a new boost_executions row, bumping
+					//     IncrementExecutionCount/UpdateLastSuccessful, and (for transfer-suggestion
+					//     rules) creating a NEW pending suggestion with a fresh uuid. Note this is
+					//     not specific to this branch — every sync run does it — but the extra run
+					//     this branch causes is an extra round of it.
+					//
+					// Net: transactions are safe to re-deliver; nothing else on the tail is.
+					// Not an error; the item is simply not fully caught up between incremental syncs.
+					s.logger.Warn("plaid returned has_more=true with an empty next_cursor; stopping "+
+						"pagination and keeping every page fetched this run — the cursor lags one "+
+						"page, so the last is re-fetched and upserted on the next sync",
+						"item_id", linkedItem.ID,
+						"page", pageCount,
+						"pages_kept", pageCount,
+					)
+					break
+				}
+				// No progress: the very FIRST page came back malformed, so there is nothing to keep.
+				// Fail closed so the job retries and, if it persists, dead-letters visibly — returning
+				// success here would make the job report "done" having synced nothing, forever, which
+				// is a silent stall and worse for an operator than a loud failure.
+				return result, fmt.Errorf(
+					"plaid returned has_more=true with an empty next_cursor on the first page for "+
+						"item %s: cannot advance and nothing was fetched", linkedItem.ID)
+			}
+			s.logger.Warn("plaid returned an empty next_cursor on the final page; keeping the "+
+				"existing cursor rather than persisting a blank, which would force a full "+
+				"historical re-sync on the next run",
+				"item_id", linkedItem.ID,
+				"page", pageCount,
+			)
+		} else {
+			err = s.linkedItemRepo.UpdateCursor(ctx, linkedItem.ID, newCursor)
+			if err != nil {
+				// Cursor update failed - return partial results with error
+				return result, fmt.Errorf("failed to update cursor on page %d: %w", pageCount, err)
+			}
+			cursor = newCursor
 		}
-		cursor = newCursor
 
 		// Check if more pages exist
 		hasMore = resp.GetHasMore()
@@ -474,7 +577,27 @@ func (s *transactionSyncService) SyncTransactions(
 		)
 	}
 
-	// All pages fetched successfully
+	// Pagination finished. NOTE this is reached on TWO paths, and the difference matters: either
+	// has_more went false (every page fetched), or #1537 round 11's guard broke out early because
+	// Plaid promised more pages while sending no cursor to fetch them with. In the second case the
+	// pages already fetched ARE stored and the persisted cursor is consistent with them, so the next
+	// sync resumes correctly — but this is NOT a complete sync, and an earlier version of this comment
+	// said "All pages fetched successfully", which my own break made false.
+	//
+	// #1537 T93(c) — KNOWN, UNFIXED DATA-LOSS WINDOW between here and the storage steps below.
+	// UpdateCursor is called PER PAGE inside the loop above, but nothing has been stored yet. So
+	// every error return between this point and the end of Step 8 loses the rows for the pages
+	// whose cursors were already persisted: the worker (queue/jobs/plaid_sync.go) discards `result`
+	// entirely on a non-nil error, and /transactions/sync will not re-deliver rows the cursor has
+	// moved past. Concretely, the triggers are:
+	//   1. buildAccountMaps failing (accountRepo.GetByLinkedItemID error) — loses EVERY page.
+	//   2. processAddedTransactions / processModifiedTransactions failing — loses the rows after
+	//      the failure point (Modified commits one Update per row and returns on the first error).
+	// The narrow fix is NOT to add a retry here: it is to stop persisting the cursor per page and
+	// only advance it after storage commits, since Plaid re-delivers everything from the old cursor
+	// and CreateBatch upserts (see the T93(a) note above for exactly what re-delivery is safe for).
+	// That changes cursor semantics for every multi-page sync, so it is tracked as issue #1570
+	// rather than folded into #1537. Do not delete this note without closing #1570.
 	result.NewCursor = cursor
 	s.logger.Info("sync complete",
 		"item_id", linkedItem.ID,
@@ -489,13 +612,31 @@ func (s *transactionSyncService) SyncTransactions(
 	// Store Added/Modified transactions, delete Removed transactions
 	// ========================================================================
 
-	// Issue #1531 Task 10b-2a-ii: track whether ANY storage step below actually committed a
-	// write, and bump the cache on the way out (via defer) REGARDLESS of whether a later step
-	// fails. Without this, a sync that stores Added successfully and then fails on Modified
-	// would return an error before ever reaching the single bumpCacheForSync call at the end of
-	// this function's success path — leaving the just-committed Added rows invisible to cached
-	// reads for the full namespace TTL. Bumping is void+idempotent (cache.Generations.Bump), so
-	// an extra bump on top of the always-bump-on-full-success behavior below costs nothing.
+	// Issue #1531 Task 10b-2a-ii / #1537 T92: bump the cache on the way out (via defer) whenever
+	// a storage step was ATTEMPTED, regardless of whether it — or any later step — failed.
+	//
+	// What the deferred bump guarantees, precisely: if control reached the `if len(result.X) > 0`
+	// guard of ANY of the three storage steps below, the user's (and, where resolvable, their
+	// household's) cache generation is ATTEMPTED on every exit path from here on, error or success.
+	// "Attempted", not "guaranteed": generation.Bump swallows a failed Redis SET — it logs an error
+	// and records a metric, but returns nothing, so the caller cannot know, and a household lookup failure leaves the household generation alone — so a bump can be
+	// requested and not happen. This closes the code path, not the infrastructure.
+	// It does NOT guarantee a bump for writes made before this point (the pagination loop's
+	// UpdateCursor calls, which touch no cached-read table) nor for the non-fatal post-storage
+	// steps, which are reached only after cacheBumpNeeded is already true.
+	//
+	// The flag is armed BEFORE each write is attempted, not after it succeeds (#1537 T92). It used
+	// to be armed after: processModifiedTransactions commits one transactionRepo.Update PER ROW
+	// and returns on the first failure, so a MODIFIED-ONLY sync (Plaid DEFAULT_UPDATE's common
+	// shape, with result.Added empty and therefore no earlier step to arm the flag) that committed
+	// 5 of 10 updates returned before arming it — five durable rows in `transactions`, a
+	// cached-read table, left invisible to cached analytics for the full namespace TTL. Arming
+	// first is unambiguously the fail-safe direction: a spurious bump costs exactly one cache
+	// generation, while a missed bump serves stale financial data. ⚠ Not free, though: arming before
+	// the write means a batch whose rows are all skipped (already-deleted removals, missing modified
+	// rows) bumps anyway, and each bump is a fresh token plus a Redis write plus metrics — and a
+	// second write for the household scope. The cost is cache misses and regeneration, not just an
+	// integer. It is still the right trade; it is not a no-op.
 	var cacheBumpNeeded bool
 	defer func() {
 		if cacheBumpNeeded {
@@ -516,30 +657,33 @@ func (s *transactionSyncService) SyncTransactions(
 	// Step 6: Process Added transactions (create batch)
 	// Issue #171: Pass userAccountMap for stable UserAccountID propagation
 	if len(result.Added) > 0 {
+		// #1537 T92: arm BEFORE the write, not after it succeeds — see the defer above.
+		cacheBumpNeeded = true
 		if err := s.processAddedTransactions(ctx, result.Added, linkedItem, accountMap, userAccountMap); err != nil {
 			s.logger.Error("failed to process added transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process added transactions: %w", err)
 		}
-		cacheBumpNeeded = true
 	}
 
 	// Step 7: Process Modified transactions (update with user_notes preservation)
 	// Issue #171: Pass userAccountMap for stable UserAccountID propagation
 	if len(result.Modified) > 0 {
+		// #1537 T92: arm BEFORE the write, not after it succeeds — see the defer above.
+		cacheBumpNeeded = true
 		if err := s.processModifiedTransactions(ctx, result.Modified, linkedItem, accountMap, userAccountMap); err != nil {
 			s.logger.Error("failed to process modified transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process modified transactions: %w", err)
 		}
-		cacheBumpNeeded = true
 	}
 
 	// Step 8: Process Removed transactions (hard delete)
 	if len(result.Removed) > 0 {
+		// #1537 T92: arm BEFORE the write, not after it succeeds — see the defer above.
+		cacheBumpNeeded = true
 		if err := s.processRemovedTransactions(ctx, result.Removed, linkedItem); err != nil {
 			s.logger.Error("failed to process removed transactions", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to process removed transactions: %w", err)
 		}
-		cacheBumpNeeded = true
 	}
 
 	s.logger.Info("transaction storage complete", "item_id", linkedItem.ID)
@@ -550,6 +694,11 @@ func (s *transactionSyncService) SyncTransactions(
 	// ========================================================================
 
 	// Create balance snapshots for all accounts (non-blocking)
+	// #1537 round 16: armed BEFORE the snapshot write too. createBalanceSnapshots writes
+	// balance_snapshots — one of the twelve cached-read tables — and with all three
+	// transaction lists empty none of the guards above has armed the flag, so a panic
+	// between here and the unconditional arm below would skip invalidation entirely.
+	cacheBumpNeeded = true
 	if err := s.createBalanceSnapshots(ctx, linkedItem, accessToken); err != nil {
 		s.logger.Warn("failed to create balance snapshots", "item_id", linkedItem.ID, "error", err)
 		// Don't fail the entire sync - snapshots are non-critical
@@ -1007,7 +1156,10 @@ func (s *transactionSyncService) processRemovedTransactions(
 // Issue #364: Migrated to timestamp-based storage for high-frequency syncs
 //
 // Called after transaction sync completes to capture the current state of all account balances.
-// Uses 5-minute deduplication window to prevent excessive snapshots while allowing
+// Uses a 5-minute deduplication window to REDUCE excessive snapshots. Not prevent: the
+// GetLatestByAccountID check and the Create are separate statements, and webhook processing takes no
+// linked-item lock (the sync worker does, FOR UPDATE), so two concurrent paths can both see no recent
+// snapshot and both insert. It bounds SEQUENTIAL duplication only — see #1570. while allowing
 // multiple snapshots per day for high-frequency syncs.
 //
 // Error Handling:

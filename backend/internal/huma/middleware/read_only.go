@@ -222,5 +222,5 @@ func writeReadOnlyJSONError(ctx huma.Context, status int, message string) {
 	ctx.SetStatus(status)
 	ctx.SetHeader("Content-Type", "application/problem+json")
 	response := fmt.Sprintf(`{"status":%d,"title":"%s","detail":"%s"}`, status, http.StatusText(status), message)
-	ctx.BodyWriter().Write([]byte(response))
+	_, _ = ctx.BodyWriter().Write([]byte(response))
 }

@@ -263,3 +263,171 @@ func TestSyncTransactions_NoBumpWhenCacheInvalidationNotWired(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 }
+
+// ============================================================================
+// Issue #1537 T92: cacheBumpNeeded was armed AFTER each storage step SUCCEEDED,
+// so a step that committed some rows and then failed returned before arming it.
+// Every pre-existing test in this file has a PRIOR successful step (Added), which
+// already armed the flag — so none of them can see this. The tests below keep
+// result.Added EMPTY on purpose.
+// ============================================================================
+
+// newSingleStepSyncHarness wires a service with ONE real account and a Plaid response the
+// caller supplies, so a single storage step (Added, Modified, or Removed) can be exercised in
+// isolation with result.Added deliberately empty where required.
+func newSingleStepSyncHarness(t *testing.T, itemSuffix string, resp *plaid.TransactionsSyncResponse) (
+	service TransactionSyncService, txnRepo *MockTransactionRepository,
+	linkedItem *domain.LinkedItem, c cache.Cache,
+) {
+	t.Helper()
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	txnRepo = new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+
+	service = NewTransactionSyncService(
+		nil, mockLinkedItemRepo, txnRepo, mockAccountRepo,
+		nil, nil, mockPlaidService, nil, nil, nil, nil, nil, nil,
+	)
+
+	linkedItem = &domain.LinkedItem{
+		ID:          "linked-item-" + itemSuffix,
+		UserID:      "user-" + itemSuffix,
+		ItemID:      "item-" + itemSuffix,
+		AccessToken: "decrypted-token",
+		Cursor:      stringPtr("cursor-before"),
+	}
+
+	ctx := context.Background()
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).
+		Return([]domain.Account{{ID: "account-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: linkedItem.UserID}}, nil)
+	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-before", 0).Return(resp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-after").Return(nil)
+
+	fake := redisclient.NewFake("cache")
+	c = cache.NewCache(cache.Options{Client: fake})
+	hhReader := &mockHouseholdReaderForDeletion{}
+	hhReader.On("GetHouseholdForUser", mock.Anything, linkedItem.UserID).Return(nil, false, false, nil).Maybe()
+	service.SetCacheInvalidation(c.Generations(), hhReader)
+
+	return service, txnRepo, linkedItem, c
+}
+
+// TestSyncTransactions_ModifiedOnlyPartialCommitStillBumpsCache is the T92 bug proper.
+// processModifiedTransactions commits ONE transactionRepo.Update per row and returns on the
+// FIRST failure. On a MODIFIED-ONLY sync (Plaid DEFAULT_UPDATE's common shape) the rows updated
+// before that failure are durable, but SyncTransactions returned before arming cacheBumpNeeded,
+// so cached analytics kept serving pre-sync numbers for the whole namespace TTL.
+func TestSyncTransactions_ModifiedOnlyPartialCommitStillBumpsCache(t *testing.T) {
+	resp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, // CRITICAL: no prior successful step to arm the flag
+		Modified: []plaid.Transaction{
+			{TransactionId: "txn-mod-1", AccountId: "plaid-acc-1", Amount: 10.0, Date: "2024-01-15", Name: "Mod one"},
+			{TransactionId: "txn-mod-2", AccountId: "plaid-acc-1", Amount: 20.0, Date: "2024-01-16", Name: "Mod two"},
+		},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "cursor-after",
+		HasMore:    false,
+	}
+	service, txnRepo, linkedItem, c := newSingleStepSyncHarness(t, "modified-only", resp)
+	ctx := context.Background()
+
+	txnRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "txn-mod-1", linkedItem.UserID).
+		Return(&domain.Transaction{ID: "existing-1", ExternalTransactionID: stringPtr("txn-mod-1")}, nil)
+	txnRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "txn-mod-2", linkedItem.UserID).
+		Return(&domain.Transaction{ID: "existing-2", ExternalTransactionID: stringPtr("txn-mod-2")}, nil)
+	// Row 1 COMMITS, row 2 fails: the partial-commit shape.
+	txnRepo.On("Update", ctx, mock.Anything).Return(nil).Once()
+	txnRepo.On("Update", ctx, mock.Anything).Return(errors.New("update failed on row 2")).Once()
+
+	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
+	require.NoError(t, err)
+
+	_, syncErr := service.SyncTransactions(ctx, linkedItem)
+
+	// Falsification guard for the ASSUMPTION the whole fix rests on: we must have left
+	// SyncTransactions through the Modified error return, NOT the success path — otherwise a
+	// passing generation assertion below would prove nothing about the deferred bump.
+	require.Error(t, syncErr)
+	require.Contains(t, syncErr.Error(), "failed to process modified transactions",
+		"the test must exercise the Modified ERROR return path; if this changes, the deferred-bump "+
+			"assertion below is no longer testing what it claims")
+
+	postGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
+	require.NoError(t, err)
+	assert.NotEqual(t, preGen, postGen,
+		"row 1's Update COMMITTED before row 2 failed. transactions is a cached-read table, so "+
+			"leaving the generation untouched serves stale financial data for the namespace TTL. "+
+			"This also proves the deferred bump runs on an error return.")
+}
+
+// TestSyncTransactions_RemovedOnlyPartialCommitStillBumpsCache is the Removed-only twin — and it
+// PASSED at HEAD, before the arm-before-write fix. Finding: the T92 brief's claim that the
+// Removed arm can be skipped by a mid-step failure is FALSE. processRemovedTransactions treats a
+// failed DeleteByExternalID as "already deleted", logs it, and continues; it returns nil on every
+// path, so `if err != nil { return }` at the Removed step is unreachable and the flag was always
+// armed. Kept as a characterization guard: if that function ever starts propagating a per-row
+// delete error, this test fails unless the flag is armed first.
+func TestSyncTransactions_RemovedOnlyPartialCommitStillBumpsCache(t *testing.T) {
+	resp := &plaid.TransactionsSyncResponse{
+		Added:    []plaid.Transaction{}, // CRITICAL: no prior successful step
+		Modified: []plaid.Transaction{},
+		Removed: []plaid.RemovedTransaction{
+			{TransactionId: stringPtr("txn-rem-1")},
+			{TransactionId: stringPtr("txn-rem-2")},
+		},
+		NextCursor: "cursor-after",
+		HasMore:    false,
+	}
+	service, txnRepo, linkedItem, c := newSingleStepSyncHarness(t, "removed-only", resp)
+	ctx := context.Background()
+
+	txnRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID).Return(nil).Once()
+	txnRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "txn-rem-2", linkedItem.UserID).
+		Return(errors.New("delete failed on row 2")).Once()
+
+	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
+	require.NoError(t, err)
+
+	_, syncErr := service.SyncTransactions(ctx, linkedItem)
+	_ = syncErr
+
+	postGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
+	require.NoError(t, err)
+	assert.NotEqual(t, preGen, postGen,
+		"row 1's delete COMMITTED; the generation must move regardless of row 2's outcome")
+}
+
+// TestSyncTransactions_AddedOnlyFailureStillBumpsCache is the Added-only twin. CreateBatch is a
+// single multi-row INSERT, so it cannot half-commit *server-side* — but a client-visible error
+// (connection reset, context deadline) after the server committed is indistinguishable from a
+// real rollback, so the error alone is not evidence that nothing landed. Fail safe: bump.
+func TestSyncTransactions_AddedOnlyFailureStillBumpsCache(t *testing.T) {
+	resp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{
+			{TransactionId: "txn-add-1", AccountId: "plaid-acc-1", Amount: 10.0, Date: "2024-01-15", Name: "Add one"},
+		},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "cursor-after",
+		HasMore:    false,
+	}
+	service, txnRepo, linkedItem, c := newSingleStepSyncHarness(t, "added-only", resp)
+	ctx := context.Background()
+
+	txnRepo.On("CreateBatch", ctx, mock.Anything).
+		Return(map[string]bool(nil), errors.New("connection reset after commit"))
+
+	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
+	require.NoError(t, err)
+
+	_, syncErr := service.SyncTransactions(ctx, linkedItem)
+	require.Error(t, syncErr)
+	require.Contains(t, syncErr.Error(), "failed to process added transactions",
+		"must exercise the Added ERROR return path")
+
+	postGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
+	require.NoError(t, err)
+	assert.NotEqual(t, preGen, postGen,
+		"a CreateBatch error cannot prove the rows did not land; the fail-safe is to bump")
+}

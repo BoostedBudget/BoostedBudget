@@ -120,16 +120,6 @@ func (m *MockBudgetRepository) UpdateBudgetIncome(ctx context.Context, budgetID 
 	return args.Error(0)
 }
 
-func (m *MockBudgetRepository) AddIncomeSource(ctx context.Context, budgetID string, source domain.IncomeSource) error {
-	args := m.Called(ctx, budgetID, source)
-	return args.Error(0)
-}
-
-func (m *MockBudgetRepository) RemoveIncomeSource(ctx context.Context, budgetID string, sourceIndex int) error {
-	args := m.Called(ctx, budgetID, sourceIndex)
-	return args.Error(0)
-}
-
 // Issue #972: Paginated active-budget enumeration for period-close scanner
 func (m *MockBudgetRepository) GetAllActivePaginated(ctx context.Context, limit, offset int) ([]*domain.Budget, error) {
 	args := m.Called(ctx, limit, offset)
@@ -146,12 +136,6 @@ func (m *MockBudgetRepository) GetTimezonesByUserIDs(ctx context.Context, userID
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(map[string]string), args.Error(1)
-}
-
-// Envelope budgeting rollover method (Issue #36: Rule Executors)
-func (m *MockBudgetRepository) AdjustCategoryAllocatedAmount(ctx context.Context, categoryID string, delta float64) error {
-	args := m.Called(ctx, categoryID, delta)
-	return args.Error(0)
 }
 
 // GetCategoryByIDAndUser retrieves a category scoped to a user (Issue #1270: ownership validation).

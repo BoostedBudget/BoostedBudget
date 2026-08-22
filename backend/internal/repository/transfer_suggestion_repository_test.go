@@ -15,18 +15,6 @@ import (
 // UpdateStatus Race Condition Guard Tests
 // =============================================================================
 
-// mockDB is a minimal test double for the DB interface.
-type mockUpdateStatusDB struct {
-	execFn func(ctx context.Context, query string, args ...interface{}) (pgxCommandTag, error)
-}
-
-// pgxCommandTag is a minimal stand-in for pgconn.CommandTag.
-type pgxCommandTag struct {
-	rowsAffected int64
-}
-
-func (t pgxCommandTag) RowsAffected() int64 { return t.rowsAffected }
-
 // TestUpdateStatus_PendingGuard verifies that UpdateStatus returns
 // ErrTransferSuggestionAlreadyActioned when the SQL WHERE clause
 // (status = 'pending') matches zero rows because the suggestion was

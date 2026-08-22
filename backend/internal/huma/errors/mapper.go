@@ -280,6 +280,42 @@ func MapError(err error) error {
 	case errors.Is(err, services.ErrInvalidKeySize):
 		return huma.Error500InternalServerError("Invalid encryption key configuration")
 
+	// Cross-tenant batch assertions (#1537/#1566). Still 500s, but CORRECTED as to why: the sentence
+	// that stood here said every one is "raised by a pre-flight check against a batch the SERVER
+	// assembled from a linked item it owns", and two of the four are not.
+	//
+	//   * ErrOverrideTenantMismatch IS handler-reachable, over a CLIENT-supplied batch:
+	//     MerchantService.BulkSetOverrides passes the request's own items to
+	//     MerchantOverrideRepo.BulkApply (services/merchant_service.go:311), behind the secured
+	//     bulkSetMerchantOverrides operation.
+	//   * ErrAccountBatchTenantMismatch IS handler-reachable: accountService.LinkAccounts calls
+	//     AccountRepository.CreateBatch (services/account_service.go:576), behind the secured
+	//     exchangePublicToken operation.
+	//   * ErrReplaceTenantMismatch and ErrReplaceAccountMismatch are the two that really are
+	//     queue-only: ReplaceForAccount's callers are investment_sync_service.go and
+	//     liability_sync_service.go, both driven by River workers.
+	//
+	// The 500 is nonetheless right for all four, on the argument that actually holds: each is a
+	// violated INTERNAL INVARIANT, not a rejected input. The tenancy of every row in these batches is
+	// set by the server from the authenticated actor before the repository sees it, so a mismatch
+	// means server-side assembly is broken — nothing the caller sent could produce it and nothing the
+	// caller can change will fix it. A 4xx would tell them to retry something that is not theirs to
+	// correct. The point of mapping them at all is a message an operator can act on: falling through
+	// to the anonymous default made a cross-tenant batch indistinguishable from any other 500 in
+	// Sentry. Codex flagged ErrReplaceTenantMismatch; checking the class found all three of the
+	// then-existing sentinels unmapped.
+	case errors.Is(err, repository.ErrOverrideTenantMismatch):
+		return huma.Error500InternalServerError("Merchant override batch spans more than one user")
+	case errors.Is(err, repository.ErrAccountBatchTenantMismatch):
+		return huma.Error500InternalServerError("Account batch spans more than one user")
+	case errors.Is(err, repository.ErrReplaceTenantMismatch):
+		return huma.Error500InternalServerError("Replace batch spans more than one user")
+	// Same shape, different fault: SAME tenant, wrong account. Kept distinct from the line above on
+	// purpose — reusing the cross-tenant message would send an operator hunting a data leak that did
+	// not happen, when the actual fault is one of the user's own accounts overwriting another.
+	case errors.Is(err, repository.ErrReplaceAccountMismatch):
+		return huma.Error500InternalServerError("Replace batch targets a different account")
+
 	default:
 		return huma.Error500InternalServerError("Internal server error")
 	}

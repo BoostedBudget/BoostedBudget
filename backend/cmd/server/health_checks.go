@@ -135,7 +135,7 @@ func createClerkCheckWithURL(secretKey string, httpClient *http.Client, url stri
 		if err != nil {
 			return fmt.Errorf("clerk jwks request: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode >= 400 {
 			return fmt.Errorf("clerk jwks request: unexpected status %d", resp.StatusCode)

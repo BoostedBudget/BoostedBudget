@@ -123,7 +123,6 @@ func (m *MockBoostsRepository) GetBoostsByScheduleTrigger(ctx context.Context) (
 type MockBoostExecutor struct {
 	mock.Mock
 	ExecutionCount int32
-	mu             sync.Mutex
 }
 
 func (m *MockBoostExecutor) ExecuteBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostExecution, error) {

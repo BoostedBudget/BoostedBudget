@@ -9,13 +9,12 @@ package jobs
 //     service method already reviewed and bumping, e.g. plaid_sync.go → SyncTransactions).
 //   - dispositionNoCacheImpact{reason} — reviewed and found to touch no cached namespace
 //     (analytics, analytics_rows, dashprefs, identity). Reason is mandatory and non-empty.
-//   - dispositionUnclassified{} — not yet reviewed to a confident conclusion. An EXISTING entry of
-//     this kind SKIPS the completeness check (t.Skipf), naming every such file, rather than
-//     failing it — the backlog of reclassifying them is #1537's job, not this guard's. What DOES
-//     still fail (t.Errorf) is a job file with NO entry in jobFileDispositions at all — i.e. a
-//     newly-added file this guard has never seen — so a wrong guess is never silently recorded as
-//     a pass, even though an already-acknowledged unclassified one does not block CI. See
-//     task-10b-3-report.md for the full worklist these produce.
+//
+// There is no "unclassified" kind: issue #1537 removed it here as well as from the repository
+// guard, once this map had none left. The enum value is GONE, so the category cannot be expressed
+// and a new job file must be dispositioned rather than acknowledged-and-skipped. The previously
+// cited "task-10b-3-report.md" does not exist in the repository and never has, in any commit; the
+// durable documentation is docs/architecture/cache-invalidation-dispositions.md.
 //
 // WHAT THIS DOES NOT PROVE (read this before trusting a green run):
 //   - This guard is FILE-LEVEL, not statement-level or even function-level. A file already
@@ -25,12 +24,13 @@ package jobs
 //     Concretely: retention_cleanup_check.go is classified dispositionBumps here because ONE of its
 //     several write paths (the GDPR deletion call) is covered; several OTHER writes in the same
 //     file (retention-clock marker repair) are not independently verified to have no cache impact —
-//     the file-level grain cannot express that distinction. See the report's per-file notes.
+//     the file-level grain cannot express that distinction. See docs/architecture/cache-invalidation-dispositions.md.
 //   - A dispositionNoCacheImpact entry records this reviewer's read of the current code, not a
 //     structural guarantee — there is no mechanism stopping someone from adding a genuine cache-
 //     relevant write to a file already marked NoCacheImpact without ever re-deriving the claim.
 //
-// ADVERSARIAL VALIDATION (recorded 2026-08-14, see task-10b-3-report.md for the transcript):
+// ADVERSARIAL VALIDATION (recorded 2026-08-14; the cited task-10b-3-report.md was never
+// committed and does not exist in any commit — see docs/architecture/cache-invalidation-dispositions.md):
 //   - Added a scratch file `zzz_fake_guard_probe.go` (a real, non-test .go file with a Kind()
 //     method, mimicking a genuine job file) to this directory: guard FAILED, reporting the new
 //     filename as missing from jobFileDispositions. Removed it: guard PASSED.
@@ -46,12 +46,13 @@ type jobDispositionKind int
 const (
 	dispositionBumps jobDispositionKind = iota
 	dispositionNoCacheImpact
-	dispositionUnclassified
 )
 
 type jobFileDisposition struct {
 	kind   jobDispositionKind
-	detail string // mandatory, non-empty for Bumps and NoCacheImpact; ignored for Unclassified
+	detail string // mandatory and non-empty for every kind. (It once read "ignored for
+	// Unclassified"; #1537 deleted that kind from the enum, so there is no longer a kind
+	// for which detail is optional.)
 }
 
 // jobFileDispositions classifies every non-test .go file in internal/queue/jobs/. See the package
@@ -63,15 +64,23 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"for the deleted user, stronger than a generation bump."},
 	"cache_purge_retry.go": {dispositionBumps, "the durable retry for the GDPR purge path itself: " +
 		"calls purger.PurgeUser and gens.Bump(ScopeHousehold, ...) directly."},
-	"investment_holdings_sync.go": {dispositionBumps, "calls InvestmentSyncService.SyncHoldings, " +
-		"which calls bumpCacheForUser after every successful sync (investment_sync_service.go:339)."},
+	"investment_holdings_sync.go": {dispositionBumps, "calls `InvestmentSyncService.SyncHoldings` " +
+		"(`services/investment_sync_service.go:227`), which calls bumpCacheForUser after every " +
+		"successful sync (`services/investment_sync_service.go:235`). Was cited as :339, a line " +
+		"that belongs to SyncInvestmentTransactions; nothing checked the jobs guard's citations " +
+		"until #1537 T41 extended the repository citation guards to this file."},
 	"investment_transactions_sync.go": {dispositionBumps, "calls " +
-		"InvestmentSyncService.SyncInvestmentTransactions, which calls bumpCacheForUser after every " +
-		"successful sync (investment_sync_service.go:204)."},
+		"`InvestmentSyncService.SyncInvestmentTransactions` " +
+		"(`services/investment_sync_service.go:381`), which calls bumpCacheForUser after every " +
+		"successful sync (`services/investment_sync_service.go:387`). Was cited as :204, which is " +
+		"inside ProcessWebhook. (`internal/services/investment_sync_service.go` is under concurrent " +
+		"edit by another slice as of this writing; if these two numbers have moved again, the " +
+		"citation guards in repository/cache_completeness_citations_test.go will say so.)"},
 	"plaid_sync.go": {dispositionBumps, "calls TransactionSyncService.SyncTransactions, which bumps " +
 		"cache via a defer + any-commit flag (see plaid_sync_cache_invalidation_test.go)."},
 	"webhook_processing.go": {dispositionBumps, "routes transactions/investments/liabilities " +
-		"webhooks to the same sync services as plaid_sync.go / investment_*_sync.go, all of which " +
+		"webhooks to the same sync services as plaid_sync.go, investment_holdings_sync.go and " +
+		"investment_transactions_sync.go, all of which " +
 		"bump (see webhook_processing_cache_invalidation_test.go)."},
 	"scheduled_deletion_check.go": {dispositionBumps, "only enumerates users due for deletion and " +
 		"enqueues account_deletion.go's job; the actual write (and bump) happens there."},
@@ -79,9 +88,12 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"users past their retention window, which drives the same GDPR purge path as " +
 		"account_deletion.go. NOTE (file-level blind spot, see package doc comment): this file ALSO " +
 		"writes retention-clock repair markers (profileRepo.RepairRetentionClock, " +
-		"StampMissingPlaidCleanupMarkers, ClearCompletedPlaidCleanupMarkers, etc.) that are not " +
-		"independently verified here — flagged in the report as a follow-up read, not asserted " +
-		"NoCacheImpact by this entry."},
+		"StampMissingPlaidCleanupMarkers, ClearCompletedPlaidCleanupMarkers, etc.) that this entry does " +
+		"NOT independently verify as NoCacheImpact. An edit once landed mid-predicate here and left " +
+		"the tail stranded (\"...that are not independently verified here rather than deferred to a " +
+		"report that was never committed NoCacheImpact by this entry\"), which parsed as nothing at " +
+		"all; the claim it was trying to make is the one above, and the report it alluded to was " +
+		"never committed. Durable record: docs/architecture/cache-invalidation-dispositions.md."},
 
 	// --- NoCacheImpact: reviewed, touches no cached namespace. ---
 	"idempotency_cleanup.go": {dispositionNoCacheImpact, "deletes expired rows from the idempotency " +
@@ -106,19 +118,22 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"which does not change here, so no cached mapping is invalidated by this write."},
 	"paddle_reconciliation.go": {dispositionNoCacheImpact, "writes ProfileRepository." +
 		"UpdateSubscriptionFromPaddle only — subscription status is deliberately NOT a cached " +
-		"namespace (see task brief)."},
+		"namespace: NamespaceEntitlement is HardDisabled in cache/namespace.go and can never be enabled, and `users` is not one of the 12 tables any cache.GetOrLoad-backed read observes (see docs/architecture/cache-invalidation-dispositions.md)."},
 	"trial_expiration_check.go": {dispositionNoCacheImpact, "calls TrialService.ExpireTrial, which " +
 		"updates trial/subscription status fields — the same deliberately-uncached bucket as " +
-		"paddle_reconciliation.go. MEDIUM CONFIDENCE: flagged in the report for controller " +
-		"confirmation that ExpireTrial touches no entitlement or household field that IS cached."},
+		"paddle_reconciliation.go. Subscription/trial columns on `users`, which no cached read " +
+		"observes; see the corresponding ProfileRepository entries in " +
+		"repository/cache_completeness_repo_test.go. ExpireTrial touches no entitlement or household " +
+		"field that IS cached."},
 	"past_due_check.go": {dispositionNoCacheImpact, "calls PastDueService.ProcessPastDueUser, which " +
-		"updates past-due/subscription status fields only — the same deliberately-uncached bucket. " +
-		"MEDIUM CONFIDENCE: flagged in the report for controller confirmation."},
+		"updates past-due/subscription status fields only — the same deliberately-uncached bucket; see " +
+		"the corresponding ProfileRepository entries in repository/cache_completeness_repo_test.go " +
+		"and docs/architecture/cache-invalidation-dispositions.md."},
 	"manual_tier_override_expiry_check.go": {dispositionNoCacheImpact, "clears an expired manual " +
 		"tier override on the user's profile (a subscription-tier field) — the same deliberately- " +
-		"uncached bucket. MEDIUM CONFIDENCE: flagged in the report for controller confirmation."},
+		"uncached bucket; see the corresponding ProfileRepository entries in repository/cache_completeness_repo_test.go and docs/architecture/cache-invalidation-dispositions.md."},
 
-	// --- Bumps (Task 10b-2a-iii — see task-10b-2a-iii-report.md for full RED->GREEN evidence
+	// --- Bumps (Task 10b-2a-iii; that report was never committed — see the docs file above
 	// on each). ---
 	"effective_category_refresh.go": {dispositionBumps, "rewrites " +
 		"transactions.effective_category_name (the field several cached analytics queries GROUP " +
@@ -131,14 +146,14 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"stale until TTL. This mirrors investment_sync_service.go/liability_sync_service.go's own " +
 		"accepted ScopeUser-only simplification (their doc comments state the same trade-off " +
 		"explicitly) rather than a new gap introduced here; flagged, not fixed, to keep this slice " +
-		"bounded — see the report's Concerns section."},
+		"bounded — see issue #1562, which tracks it."},
 	"household_over_capacity_check.go": {dispositionBumps, "autoOffboard's call to " +
 		"OffboardExcessMembers removes household members via HouseholdService.removeMemberTx — for " +
 		"this job's call site specifically, there is no HTTP middleware coverage at all " +
 		"(OffboardExcessMembers has exactly one caller, this job). This job bumps ScopeHousehold " +
 		"after a successful auto-offboard that actually removed at least one member — see " +
-		"TestHouseholdOverCapacityCheck_AutoOffboard_BumpsHouseholdCacheGeneration. UPDATED Task " +
-		"10b-2b: services/household_service.go's OffboardExcessMembers ITSELF now also explicitly " +
+		"TestHouseholdOverCapacityCheck_AutoOffboard_BumpsHouseholdCacheGeneration. #1531 UPDATED: " +
+		"services/household_service.go's OffboardExcessMembers ITSELF now also explicitly " +
 		"bumps every member captured before the LIFO removal loop (owner + every non-owner) plus " +
 		"ScopeHousehold, directly — this job's own bump is now redundant with (not contradicted by) " +
 		"that service-level bump, kept as-is since a second, cheap Redis write is harmless. The " +
@@ -156,23 +171,29 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"investmentService.GetPortfolioSummary/GetPortfolioHistory (investment_service.go), both " +
 		"served directly from huma/operations/investments.go with NO cache.GetOrLoad wrapper — " +
 		"uncached, always-fresh reads. Bumping cache.Generations for this write invalidates a " +
-		"namespace nothing about this data actually populates. See the report's Concerns section — " +
+		"namespace nothing about this data actually populates. See issue #1562 — " +
 		"this also means the PRE-EXISTING bump in investment_sync_service.go's SyncHoldings (after " +
 		"the same Upsert call) is likely based on the same incorrect premise, though that is a " +
 		"prior task's code and out of scope to change here."},
 	"item_cleanup.go": {dispositionNoCacheImpact, "CORRECTED from an initial ExplicitBump attempt " +
-		"after Codex adversarial review disproved the premise: every cached analytics query filters " +
-		"on `accounts.status = 'active'` (repository/analytics_repository.go), never on " +
-		"linked_items status. Grepped plaid_item_cleanup_service.go end to end: it never references " +
+		"after Codex adversarial review. ⚠ The sentence that stood here lost its negation in a " +
+		"splice and so asserted the very universal claim #1561 disproved; what it should have said, " +
+		"and what is true, is that NO cached analytics query filters on `accounts.status` any more " +
+		"(#1561 removed the household-scope predicates; #1109 had already removed the personal-scope " +
+		"ones), and none has ever filtered on linked_items at all. The verdict rests on the second " +
+		"half, not the first: `linked_items` is absent from the twelve cached-read tables in " +
+		"`expectedCachedReadTables`, which is machine-checked every run. Grepped plaid_item_cleanup_service.go end to end: it never references " +
 		"AccountRepository or the accounts table at all — RemoveItem only writes " +
 		"linked_items.plaid_removed_at/status, and this job's own ClearCleanupSchedule/Delete write " +
 		"only linked_items too. LinkedItemRepository.Delete's own WHERE NOT EXISTS (SELECT 1 FROM " +
 		"accounts WHERE linked_item_id = $1) guard confirms accounts are removed through a SEPARATE " +
 		"path (accountService.DeleteAccount, called only from the secured, HTTP-middleware-covered " +
 		"DELETE /accounts/{id} operation) before this job's Delete can ever succeed. So this job's " +
-		"own writes never change what any cached analytics query returns; the task-10b-3-report.md " +
-		"worklist's original 'no bump observed' framing was correct that no bump exists, but wrong " +
-		"that one is needed."},
+		"own writes never change what any cached analytics query returns. (An earlier version of this " +
+		"entry cited a Task 10b-3 worklist report by filename; no such file was ever committed, in any " +
+		"commit, so the filename is deliberately not repeated here — the durable record is " +
+		"docs/architecture/cache-invalidation-dispositions.md. Its original 'no bump observed' " +
+		"framing was right that no bump exists and wrong that one is needed.)"},
 	"savings_stats_worker.go": {dispositionNoCacheImpact, "writes SavingsImpactRepository." +
 		"WriteSnapshot (a GLOBAL k-anonymity-gated aggregate row), which is read ONLY by " +
 		"GetSavingsImpactAggregate/GetSavingsImpactMe (huma/operations/savings_impact.go) via " +
@@ -214,14 +235,25 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"BudgetPeriodEventsRepository.InsertMarker/DeleteMarker/HasMarker (period-close idempotency " +
 		"markers) — grepped repository/analytics_repository.go: budget_period_events is never " +
 		"referenced by any cached analytics query. The category-spend writes this worker triggers " +
-		"go through BudgetRepository.UpdateCategorySpentAmount (a still-Unclassified repo method, " +
-		"not independently cleared by this entry — see the package doc comment's file-level-grain " +
+		"go through BudgetRepository.UpdateCategorySpentAmount (dispositionExplicitBump in the " +
+		"repository guard — this entry once called it \"still-Unclassified\", a kind #1537 deleted; " +
+		"it is not independently cleared by this entry — see the package doc comment's file-level-grain " +
 		"caveat, same as retention_cleanup_check.go's own entry above)."},
 	"item_cleanup_check.go": {dispositionNoCacheImpact, "structural sibling of the already-" +
 		"classified item_cleanup.go above (same file-level reasoning, same table): this sweep's " +
 		"own writes (LinkedItemRepository.MarkForCleanup/ClearCleanupSchedule) touch only " +
 		"linked_items bookkeeping columns (cleanup_scheduled_at and friends), never accounts.status " +
-		"— every cached analytics query filters on accounts.status = 'active', never on any " +
+		"— NO cached read filters accounts.status any more (#1561 removed the household-scope " +
+		"predicates; #1109 had already removed the personal-scope ones). Re-derived rather than " +
+		"inherited: the last cached read that was ever described as filtering it, " +
+		"`GetAggregatedHistoryForHousehold`, does not — its accounts join is unfiltered and status " +
+		"appears only as the FIRST term of that same query's DISTINCT ON tiebreak, `(a.status = " +
+		"'active') DESC NULLS LAST, a.id` (repository/balance_snapshot_repository.go). Cited by " +
+		"query name rather than by line: the " +
+		"`repository/balance_snapshot_repository.go:NNN` form of this reference rotted three times " +
+		"(:313, then :320/:325, then displaced again by a 16-line doc note above it), so the " +
+		"identifier and the quoted SQL are the anchor. Status is still cache-" +
+		"RELEVANT there, via ordering; it is not a filter anywhere. And none filters on any " +
 		"linked_items column (confirmed by the same repo-wide grep item_cleanup.go's entry cites). " +
 		"The actual Plaid /item/remove call and any accounts-table effect happen in a SEPARATE, " +
 		"HTTP-middleware-covered path (accountService.DeleteAccount), exactly as item_cleanup.go's " +
@@ -275,7 +307,6 @@ func TestEveryJobFileDeclaresCacheInvalidationDisposition(t *testing.T) {
 	}
 
 	var missing []string
-	var unclassified []string
 	for _, f := range files {
 		d, ok := jobFileDispositions[f]
 		if !ok {
@@ -288,8 +319,10 @@ func TestEveryJobFileDeclaresCacheInvalidationDisposition(t *testing.T) {
 				t.Errorf("jobFileDispositions[%q] has an empty detail — a bare entry defeats the "+
 					"point of this guard", f)
 			}
-		case dispositionUnclassified:
-			unclassified = append(unclassified, f)
+		default:
+			// Unreachable today. Present so a newly added kind cannot slip through unvalidated.
+			t.Errorf("jobFileDispositions[%q] has disposition kind %d, which this guard does not know "+
+				"how to validate — teach it, do not leave the kind unchecked", f, int(d.kind))
 		}
 	}
 
@@ -298,9 +331,4 @@ func TestEveryJobFileDeclaresCacheInvalidationDisposition(t *testing.T) {
 			len(missing), strings.Join(missing, ", "))
 	}
 
-	if len(unclassified) > 0 {
-		t.Skipf("TODO #1531: %d job file(s) remain dispositionUnclassified{} pending review — "+
-			"see the worklist table in task-10b-3-report.md (Task 10b-3): %s",
-			len(unclassified), strings.Join(unclassified, ", "))
-	}
 }

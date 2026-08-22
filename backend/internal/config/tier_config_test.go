@@ -17,24 +17,27 @@ func resetConfigSingleton() {
 	configOnce = *new(sync.Once)
 }
 
-// setAndCleanupEnv sets environment variables and returns a cleanup function
-func setAndCleanupEnv(envVars map[string]string) func() {
+// setAndCleanupEnv sets environment variables and returns a cleanup function.
+// Deliberately not t.Setenv: callers rely on the returned cleanup running when *they*
+// choose (some invoke it when a helper returns, before the test ends), and on ""
+// meaning a genuine unset rather than an empty value.
+func setAndCleanupEnv(t *testing.T, envVars map[string]string) func() {
+	t.Helper()
+	setOrUnset := func(key, value string) {
+		if value != "" {
+			require.NoError(t, os.Setenv(key, value))
+		} else {
+			require.NoError(t, os.Unsetenv(key))
+		}
+	}
 	original := make(map[string]string)
 	for key, value := range envVars {
 		original[key] = os.Getenv(key)
-		if value != "" {
-			os.Setenv(key, value)
-		} else {
-			os.Unsetenv(key)
-		}
+		setOrUnset(key, value)
 	}
 	return func() {
 		for key, originalValue := range original {
-			if originalValue != "" {
-				os.Setenv(key, originalValue)
-			} else {
-				os.Unsetenv(key)
-			}
+			setOrUnset(key, originalValue)
 		}
 	}
 }
@@ -235,7 +238,7 @@ func TestTierConfig_Validation_Trial(t *testing.T) {
 }
 
 func TestLoadTierConfig_InvalidPath(t *testing.T) {
-	defer setAndCleanupEnv(map[string]string{
+	defer setAndCleanupEnv(t, map[string]string{
 		"SUBSCRIPTION_TIERS_CONFIG": "/nonexistent/path/config.yaml",
 	})()
 
@@ -246,7 +249,7 @@ func TestLoadTierConfig_InvalidPath(t *testing.T) {
 }
 
 func TestTierConfig_Reload(t *testing.T) {
-	defer setAndCleanupEnv(map[string]string{
+	defer setAndCleanupEnv(t, map[string]string{
 		"SUBSCRIPTION_TIERS_CONFIG": "",
 	})()
 
@@ -288,7 +291,7 @@ func TestGetConfigPath_EnvironmentSpecific(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer setAndCleanupEnv(map[string]string{
+			defer setAndCleanupEnv(t, map[string]string{
 				"SUBSCRIPTION_TIERS_CONFIG": tt.subscriptionTiers,
 				"PADDLE_ENVIRONMENT":        tt.paddleEnv,
 			})()
@@ -305,7 +308,7 @@ func TestGetConfigPath_EnvironmentSpecific(t *testing.T) {
 // matching config/subscription_tiers.<env>.yaml exists, rather than silently falling back to
 // the default/template catalogue (which may carry sandbox Paddle price IDs).
 func TestGetConfigPath_UnknownEnvironmentFailsClosed(t *testing.T) {
-	defer setAndCleanupEnv(map[string]string{
+	defer setAndCleanupEnv(t, map[string]string{
 		"SUBSCRIPTION_TIERS_CONFIG": "",
 		"PADDLE_ENVIRONMENT":        "staging-does-not-exist",
 	})()
@@ -319,7 +322,7 @@ func TestGetConfigPath_UnknownEnvironmentFailsClosed(t *testing.T) {
 // Same failure mode, exercised through the public LoadTierConfig entry point rather than the
 // unexported getConfigPath directly.
 func TestLoadTierConfig_UnknownEnvironmentFailsClosed(t *testing.T) {
-	defer setAndCleanupEnv(map[string]string{
+	defer setAndCleanupEnv(t, map[string]string{
 		"SUBSCRIPTION_TIERS_CONFIG": "",
 		"PADDLE_ENVIRONMENT":        "staging-does-not-exist",
 	})()
@@ -341,7 +344,7 @@ func TestLoadTierConfig_EnvironmentSpecific(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer setAndCleanupEnv(map[string]string{
+			defer setAndCleanupEnv(t, map[string]string{
 				"PADDLE_ENVIRONMENT": tt.paddleEnv,
 			})()
 
@@ -356,7 +359,7 @@ func TestLoadTierConfig_EnvironmentSpecific(t *testing.T) {
 }
 
 func TestLoadTierConfig_ProductionHasCompletePaddleCatalog(t *testing.T) {
-	cleanup := setAndCleanupEnv(map[string]string{
+	cleanup := setAndCleanupEnv(t, map[string]string{
 		"SUBSCRIPTION_TIERS_CONFIG": "",
 		"PADDLE_ENVIRONMENT":        "production",
 	})
@@ -525,7 +528,7 @@ func TestCatalogueSemanticParity_DevVsSandbox(t *testing.T) {
 func loadTierConfigForEnvironment(t *testing.T, paddleEnvironment string) *TierConfig {
 	t.Helper()
 
-	cleanup := setAndCleanupEnv(map[string]string{
+	cleanup := setAndCleanupEnv(t, map[string]string{
 		"SUBSCRIPTION_TIERS_CONFIG": "",
 		"PADDLE_ENVIRONMENT":        paddleEnvironment,
 	})
@@ -543,7 +546,7 @@ func loadTierConfigForEnvironment(t *testing.T, paddleEnvironment string) *TierC
 func loadPaddlePriceIDsForEnvironment(t *testing.T, paddleEnvironment string) map[string]domain.TierName {
 	t.Helper()
 
-	cleanup := setAndCleanupEnv(map[string]string{
+	cleanup := setAndCleanupEnv(t, map[string]string{
 		"SUBSCRIPTION_TIERS_CONFIG": "",
 		"PADDLE_ENVIRONMENT":        paddleEnvironment,
 	})
@@ -672,7 +675,7 @@ func TestTierConfig_GetPastDueConfig(t *testing.T) {
 
 // Issue #898: Test Reload copies PastDue
 func TestTierConfig_Reload_CopiesPastDue(t *testing.T) {
-	defer setAndCleanupEnv(map[string]string{
+	defer setAndCleanupEnv(t, map[string]string{
 		"SUBSCRIPTION_TIERS_CONFIG": "",
 	})()
 	resetConfigSingleton()

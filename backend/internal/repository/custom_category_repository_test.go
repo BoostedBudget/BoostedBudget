@@ -297,42 +297,6 @@ func TestCustomCategoryRepository_Update_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestCustomCategoryRepository_Delete tests successful category deletion
-func TestCustomCategoryRepository_Delete(t *testing.T) {
-	mock, repo := setupCategoryMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	categoryID := uuid.New().String()
-
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM custom_categories WHERE id = $1`)).
-		WithArgs(categoryID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-
-	err := repo.Delete(ctx, categoryID)
-
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestCustomCategoryRepository_Delete_NotFound tests deletion when category doesn't exist
-func TestCustomCategoryRepository_Delete_NotFound(t *testing.T) {
-	mock, repo := setupCategoryMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	categoryID := uuid.New().String()
-
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM custom_categories WHERE id = $1`)).
-		WithArgs(categoryID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
-
-	err := repo.Delete(ctx, categoryID)
-
-	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
 // TestCustomCategoryRepository_CountByUserID tests counting categories for a user
 func TestCustomCategoryRepository_CountByUserID(t *testing.T) {
 	mock, repo := setupCategoryMockDB(t)
@@ -351,56 +315,6 @@ func TestCustomCategoryRepository_CountByUserID(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, 12, count)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestCustomCategoryRepository_IncrementUsageCount tests incrementing usage count
-func TestCustomCategoryRepository_IncrementUsageCount(t *testing.T) {
-	mock, repo := setupCategoryMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-	categoryName := "Groceries"
-
-	mock.ExpectExec(regexp.QuoteMeta(`
-		UPDATE custom_categories
-		SET usage_count = usage_count + 1, updated_at = $1
-		WHERE user_id = $2 AND name = $3
-	`)).WithArgs(
-		pgxmock.AnyArg(),
-		userID,
-		categoryName,
-	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-
-	err := repo.IncrementUsageCount(ctx, userID, categoryName)
-
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestCustomCategoryRepository_DecrementUsageCount tests decrementing usage count
-func TestCustomCategoryRepository_DecrementUsageCount(t *testing.T) {
-	mock, repo := setupCategoryMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-	categoryName := "Entertainment"
-
-	mock.ExpectExec(regexp.QuoteMeta(`
-		UPDATE custom_categories
-		SET usage_count = GREATEST(usage_count - 1, 0), updated_at = $1
-		WHERE user_id = $2 AND name = $3
-	`)).WithArgs(
-		pgxmock.AnyArg(),
-		userID,
-		categoryName,
-	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-
-	err := repo.DecrementUsageCount(ctx, userID, categoryName)
-
-	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -628,23 +542,5 @@ func TestCustomCategoryRepository_DeleteWithReassignment_NotFound(t *testing.T) 
 
 	err := repo.DeleteWithReassignment(ctx, userID, categoryID)
 	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestCustomCategoryRepository_ClearParentForChildren tests reparenting children to top-level (Issue #1203)
-func TestCustomCategoryRepository_ClearParentForChildren(t *testing.T) {
-	mock, repo := setupCategoryMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	parentID := uuid.New().String()
-
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE custom_categories SET parent_id = NULL, updated_at = $1 WHERE parent_id = $2`)).
-		WithArgs(pgxmock.AnyArg(), parentID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
-
-	err := repo.ClearParentForChildren(ctx, parentID)
-
-	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

@@ -230,7 +230,9 @@ func TestAuthenticatedWithEmailInput_Resolve_MissingClaims(t *testing.T) {
 
 	// Assert
 	require.Len(t, errs, 1)
-	assert.Contains(t, errs[0].Error(), "Claims not found")
+	assert.Contains(t, errs[0].Error(), "session claims not found",
+		"#1560: the message was made diagnostic so an MCP-origin refusal is distinguishable from a "+
+			"malformed JWT")
 }
 
 // TestAuthenticatedWithEmailInput_Resolve_MissingEmail tests that error is returned when email is missing from claims
@@ -294,20 +296,64 @@ func TestContextKeys(t *testing.T) {
 	assert.NotEqual(t, inputs.ClerkUserIDKey, inputs.ClerkClaimsKey)
 }
 
-// TestContextKeys_NoCollisionWithStringKey tests that typed keys don't collide with string keys
+// foreignContextKey stands in for an unrelated package's context-key type that happens
+// to use the same underlying string ("user_id") as inputs.UserIDKey. A bare `string`
+// key cannot be used here — staticcheck SA1029 forbids it, and it is exactly the mistake
+// inputs.ContextKey exists to prevent — but a distinctly-typed key with an identical
+// underlying value is the realistic collision scenario this test is pinning.
+type foreignContextKey string
+
+const foreignUserIDKey foreignContextKey = "user_id"
+
+// TestContextKeys_NoCollisionWithStringKey tests that typed keys don't collide with
+// same-valued keys of a different type declared elsewhere.
 func TestContextKeys_NoCollisionWithStringKey(t *testing.T) {
 	// Using typed key
 	ctx1 := context.WithValue(context.Background(), inputs.UserIDKey, "typed-value")
 
-	// Using plain string key (would be a mistake)
-	ctx2 := context.WithValue(ctx1, "user_id", "string-value")
+	// Using another package's key with the same underlying string value
+	ctx2 := context.WithValue(ctx1, foreignUserIDKey, "string-value")
 
 	// Verify they don't interfere with each other
 	typedValue, ok := ctx2.Value(inputs.UserIDKey).(string)
 	assert.True(t, ok)
 	assert.Equal(t, "typed-value", typedValue)
 
-	stringValue, ok := ctx2.Value("user_id").(string)
+	stringValue, ok := ctx2.Value(foreignUserIDKey).(string)
 	assert.True(t, ok)
 	assert.Equal(t, "string-value", stringValue)
+}
+
+// TestAuthenticatedWithEmailInput_Resolve_MCPOriginIsRefusedDiagnostically pins the refusal that
+// #1560's gap analysis surfaced.
+//
+// The MCP-origin auth branch in middleware/clerk.go sets UserIDKey and ClerkUserIDKey but NOT
+// ClerkClaimsKey — its own comment says "claims is nil for the MCP path (OAuth token, not a session
+// JWT)". So every operation whose input is AuthenticatedWithEmailInput (today: profile.go:54 and
+// deletion.go:27) refuses MCP callers. That refusal is correct and deliberate — the email this input
+// resolves is the session-verified address a GDPR cancellation link is sent to, and an OAuth-scoped
+// agent token does not carry it — but until now it surfaced as a bare "Claims not found in context",
+// which reads as a bug in the caller rather than a boundary of the auth model.
+//
+// This test pins the DIAGNOSTIC quality of the refusal, not merely its existence: a 401 whose text
+// does not name the session-claims requirement is what let #1560's second cause hide behind #1560's
+// first one.
+func TestAuthenticatedWithEmailInput_Resolve_MCPOriginIsRefusedDiagnostically(t *testing.T) {
+	// The exact context shape middleware/clerk.go's MCP branch produces: user resolved, Clerk user
+	// id present, session claims absent.
+	ctx := context.WithValue(context.Background(), inputs.UserIDKey, "user-uuid-12345")
+	ctx = context.WithValue(ctx, inputs.ClerkUserIDKey, "user_mcp_origin")
+	humaCtx := newMockHumaContext(ctx)
+
+	input := &inputs.AuthenticatedWithEmailInput{}
+	errs := input.Resolve(humaCtx)
+
+	require.Len(t, errs, 1, "an MCP-origin request must be refused, not served")
+	msg := errs[0].Error()
+	assert.Contains(t, msg, "session",
+		"the refusal must name the session-claims requirement, so an MCP caller can tell this is a "+
+			"boundary of the auth model rather than a transient failure")
+	assert.NotEqual(t, "Claims not found in context", msg,
+		"the bare pre-#1560 message gave no way to distinguish an MCP-origin refusal from a broken "+
+			"JWT, which is how a second 401 cause stayed hidden behind the first")
 }

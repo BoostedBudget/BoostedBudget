@@ -421,7 +421,7 @@ func TestReadOnlyMiddleware_GET_Inactive_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodGet, "/api/v1/transactions", "inactive")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -431,7 +431,7 @@ func TestReadOnlyMiddleware_POST_Inactive_Blocked(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/transactions", "inactive")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
@@ -441,7 +441,7 @@ func TestReadOnlyMiddleware_POST_Active_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/transactions", "active")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -451,7 +451,7 @@ func TestReadOnlyMiddleware_POST_Cancelled_Blocked(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/transactions", "cancelled")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
@@ -461,7 +461,7 @@ func TestReadOnlyMiddleware_GET_Cancelled_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodGet, "/api/v1/transactions", "cancelled")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -472,7 +472,7 @@ func TestReadOnlyMiddleware_POST_WhitelistedPath_Inactive_Allowed(t *testing.T) 
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/user/delete", "inactive")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -483,7 +483,7 @@ func TestReadOnlyMiddleware_POST_WhitelistedPath_Cancelled_Allowed(t *testing.T)
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/checkout", "cancelled")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -495,7 +495,7 @@ func TestReadOnlyMiddleware_PublicRoute_NoSecurity_Passthrough(t *testing.T) {
 
 	// Plaid webhook has no Security annotation — should pass through even with inactive status
 	resp := doRequest(t, server, http.MethodPost, "/webhooks/plaid", "inactive")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -519,7 +519,7 @@ func TestReadOnlyMiddleware_POST_Unresolved_NonWhitelistedPath_Blocked503(t *tes
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequestUnresolved(t, server, http.MethodPost, "/api/v1/transactions")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
 		"an unresolved status must fail closed (503), not silently grant write access during an outage")
@@ -532,7 +532,7 @@ func TestReadOnlyMiddleware_POST_Unresolved_PaddleWebhookPrefix_Allowed(t *testi
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequestUnresolved(t, server, http.MethodPost, "/webhooks/paddle")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"the unresolved-status check must run AFTER the prefix whitelist, or a DB blip would also block Paddle webhook processing")
@@ -544,7 +544,7 @@ func TestReadOnlyMiddleware_POST_Unresolved_AdminPrefix_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequestUnresolved(t, server, http.MethodPost, "/api/v1/admin/settings")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"admin routes must stay reachable even when the status lookup is unresolved")
@@ -556,7 +556,7 @@ func TestReadOnlyMiddleware_GET_Unresolved_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequestUnresolved(t, server, http.MethodGet, "/api/v1/transactions")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -568,7 +568,7 @@ func TestReadOnlyMiddleware_POST_NoSubscriptionStatus_Active_Passthrough(t *test
 
 	// No subscription status header — middleware should not block
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/transactions", "")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -581,7 +581,7 @@ func TestReadOnlyMiddleware_POST_PastDue_Blocked(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/transactions", "past_due")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
@@ -591,7 +591,7 @@ func TestReadOnlyMiddleware_GET_PastDue_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodGet, "/api/v1/transactions", "past_due")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -602,7 +602,7 @@ func TestReadOnlyMiddleware_POST_Checkout_PastDue_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/checkout", "past_due")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -613,7 +613,7 @@ func TestReadOnlyMiddleware_POST_Cancel_PastDue_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/cancel", "past_due")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -624,7 +624,7 @@ func TestReadOnlyMiddleware_POST_PreviewUpdate_PastDue_Blocked(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/preview-update", "past_due")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
@@ -635,7 +635,7 @@ func TestReadOnlyMiddleware_POST_Update_PastDue_Blocked(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/update", "past_due")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
@@ -646,7 +646,7 @@ func TestReadOnlyMiddleware_POST_PreviewUpdate_Inactive_Blocked(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/preview-update", "inactive")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
@@ -657,7 +657,7 @@ func TestReadOnlyMiddleware_POST_Update_Inactive_Blocked(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/update", "inactive")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
@@ -668,7 +668,7 @@ func TestReadOnlyMiddleware_POST_PreviewUpdate_Cancelled_Blocked(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/preview-update", "cancelled")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
@@ -679,7 +679,7 @@ func TestReadOnlyMiddleware_POST_Update_Cancelled_Blocked(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/update", "cancelled")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
@@ -690,7 +690,7 @@ func TestReadOnlyMiddleware_POST_Cancel_Inactive_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/cancel", "inactive")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -701,7 +701,7 @@ func TestReadOnlyMiddleware_POST_Cancel_Cancelled_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/cancel", "cancelled")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -712,7 +712,7 @@ func TestReadOnlyMiddleware_POST_Checkout_Inactive_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/checkout", "inactive")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -726,7 +726,7 @@ func TestReadOnlyMiddleware_POST_CheckoutPrefixBypass_Blocked(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/checkout-malicious", "past_due")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 		"a route that merely shares a prefix with /checkout must not inherit its whitelist entry")
@@ -738,7 +738,7 @@ func TestReadOnlyMiddleware_POST_HouseholdAccept_Inactive_Allowed(t *testing.T) 
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/households/invites/tok123/accept", "inactive")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "a lapsed user must be able to join a household to regain access")
 }
@@ -747,7 +747,7 @@ func TestReadOnlyMiddleware_POST_HouseholdDecline_Cancelled_Allowed(t *testing.T
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/households/invites/tok123/decline", "cancelled")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -756,7 +756,7 @@ func TestReadOnlyMiddleware_POST_HouseholdRename_Inactive_Blocked(t *testing.T) 
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPatch, "/api/v1/households/me", "inactive")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 		"only accept/decline are whitelisted — other household mutations stay blocked while locked")
@@ -768,7 +768,7 @@ func TestReadOnlyMiddleware_DELETE_HouseholdDisband_Inactive_Allowed(t *testing.
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodDelete, "/api/v1/households/me", "inactive")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"a lapsed owner must be able to disband their household")
@@ -778,7 +778,7 @@ func TestReadOnlyMiddleware_DELETE_HouseholdLeave_Cancelled_Allowed(t *testing.T
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodDelete, "/api/v1/households/me/members/target-user-1", "cancelled")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"a member under a lapsed owner must be able to self-leave to regain access via their own subscription")
@@ -791,7 +791,7 @@ func TestReadOnlyMiddleware_PATCH_HouseholdRename_StillBlocked_AfterLeaveWhiteli
 	server, _ := setupReadOnlyTestAPI(t)
 
 	resp := doRequest(t, server, http.MethodPatch, "/api/v1/households/me", "inactive")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 		"rename must stay blocked even though DELETE on the same path is now whitelisted")
@@ -877,7 +877,7 @@ func TestReadOnlyMiddleware_POST_ReadOnlyStatus_CoveredByHousehold_Allowed(t *te
 	server, _ := setupReadOnlyTestAPIWithHouseholdChecker(t, checker)
 
 	resp := doRequestWithUser(t, server, http.MethodPost, "/api/v1/transactions", "inactive", "member-1")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"a covered household member must not be locked out by their own stale read-only status")
@@ -888,7 +888,7 @@ func TestReadOnlyMiddleware_POST_ReadOnlyStatus_NotCoveredByHousehold_Blocked(t 
 	server, _ := setupReadOnlyTestAPIWithHouseholdChecker(t, checker)
 
 	resp := doRequestWithUser(t, server, http.MethodPost, "/api/v1/transactions", "inactive", "solo-user-1")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
@@ -899,7 +899,7 @@ func TestReadOnlyMiddleware_POST_ReadOnlyStatus_NilChecker_Blocked(t *testing.T)
 	server, _ := setupReadOnlyTestAPIWithHouseholdChecker(t, nil)
 
 	resp := doRequestWithUser(t, server, http.MethodPost, "/api/v1/transactions", "inactive", "member-1")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }

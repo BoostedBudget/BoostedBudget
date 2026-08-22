@@ -51,13 +51,13 @@ type UserAccountRepository interface {
 	Update(ctx context.Context, userAccount *domain.UserAccount) error
 
 	// UpdatePrimaryTypeAndSubtype updates the type information (from most recent Plaid account).
-	// Returns ErrUserAccountNotFound if not found.
-	UpdatePrimaryTypeAndSubtype(ctx context.Context, id, primaryType, primarySubtype string) error
+	// Scoped by (id, userID); returns ErrUserAccountNotFound if the pair matches no row.
+	UpdatePrimaryTypeAndSubtype(ctx context.Context, id, userID, primaryType, primarySubtype string) error
 
 	// UpdateHidden sets the is_hidden flag on a user account by ID.
-	// Returns ErrUserAccountNotFound if not found.
-	// Ownership is not checked here; callers must validate ownership beforehand.
-	UpdateHidden(ctx context.Context, id string, hidden bool) error
+	// Scoped by (id, userID); returns ErrUserAccountNotFound if the pair matches no row,
+	// which includes the case of an id owned by a different user (issue #1566).
+	UpdateHidden(ctx context.Context, id, userID string, hidden bool) error
 }
 
 // userAccountRepository implements UserAccountRepository using PostgreSQL
@@ -425,12 +425,13 @@ func (r *userAccountRepository) Update(ctx context.Context, userAccount *domain.
 	return nil
 }
 
-// UpdatePrimaryTypeAndSubtype updates the type information from the most recent Plaid account
-func (r *userAccountRepository) UpdatePrimaryTypeAndSubtype(ctx context.Context, id, primaryType, primarySubtype string) error {
+// UpdatePrimaryTypeAndSubtype updates the type information from the most recent Plaid account.
+// Scoped by (id, userID) in SQL — see UpdateHidden for why (#1566).
+func (r *userAccountRepository) UpdatePrimaryTypeAndSubtype(ctx context.Context, id, userID, primaryType, primarySubtype string) error {
 	query := `
 		UPDATE user_accounts
 		SET primary_type = $1, primary_subtype = $2, updated_at = $3
-		WHERE id = $4
+		WHERE id = $4 AND user_id = $5
 	`
 
 	result, err := r.db.Exec(ctx, query,
@@ -438,6 +439,7 @@ func (r *userAccountRepository) UpdatePrimaryTypeAndSubtype(ctx context.Context,
 		primarySubtype,
 		time.Now(),
 		id,
+		userID,
 	)
 	if err != nil {
 		return err
@@ -448,15 +450,18 @@ func (r *userAccountRepository) UpdatePrimaryTypeAndSubtype(ctx context.Context,
 	return nil
 }
 
-// UpdateHidden sets the is_hidden flag on a user account by ID.
-// Ownership is not checked here; callers must validate ownership beforehand.
-func (r *userAccountRepository) UpdateHidden(ctx context.Context, id string, hidden bool) error {
+// UpdateHidden sets the is_hidden flag on a user account by ID, scoped to its owner.
+//
+// #1566: ownership is enforced HERE, in the statement, not delegated to caller discipline. The
+// previous `WHERE id = $3` meant any caller with an unvalidated id could flip a stranger's row
+// while the cache-invalidation middleware bumped only the actor.
+func (r *userAccountRepository) UpdateHidden(ctx context.Context, id, userID string, hidden bool) error {
 	query := `
 		UPDATE user_accounts
 		SET is_hidden = $1, updated_at = $2
-		WHERE id = $3
+		WHERE id = $3 AND user_id = $4
 	`
-	result, err := r.db.Exec(ctx, query, hidden, time.Now(), id)
+	result, err := r.db.Exec(ctx, query, hidden, time.Now(), id, userID)
 	if err != nil {
 		return err
 	}

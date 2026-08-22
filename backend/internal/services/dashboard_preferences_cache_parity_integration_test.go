@@ -21,9 +21,14 @@
 // decorator-level Bump. The REAL invalidation hook for dashprefs (ScopeUser, per
 // cache/namespace.go's registry) lives one layer up, in
 // internal/huma/middleware/cache_invalidation.go, which bumps cache.ScopeUser for the acting user
-// after every mutating HTTP request succeeds. That is exactly bumpPersonal's shape in the sibling
-// analytics parity file (gens.Bump(ctx, cache.ScopeUser, userID, "test")), so this test uses the
-// same mechanism directly rather than standing up the HTTP middleware.
+// after every mutating HTTP request succeeds.
+//
+// ⚠ This test does NOT invoke that hook. It calls cache.Generations().Bump itself, from test code,
+// using the same scope/key shape the middleware uses. That is deliberate — the property under test
+// is "the cached read equals uncached ground truth, and reflects a mutation once the generation
+// moves" — but it means this test cannot detect a production path that forgets to bump. The
+// HTTP-middleware side is covered separately by
+// cmd/server/deletion_route_middleware_integration_test.go and the middleware's own tests.
 //
 // Run:
 //
@@ -92,9 +97,10 @@ func TestDashboardPreferencesCacheParity(t *testing.T) {
 	assertDelta(t, afterWarm.Delta(beforeWarm), cache.NamespaceDashPrefs, 1, 0, "GetPreferences: warm read")
 
 	// Step 5: mutate — save a real, non-default layout (one fewer widget than the config
-	// default; still passes DashboardLayout.Validate()), then run the production invalidation
-	// hook directly (see doc comment above for why this is honest: it's what the HTTP middleware
-	// actually does, just without standing up HTTP).
+	// default; still passes DashboardLayout.Validate()), then bump the generation from test code
+	// using the same scope the HTTP middleware bumps. This is NOT the production invalidation hook
+	// (see the ⚠ in the file doc comment): it proves the cached read reflects the save once the
+	// generation moves, not that the production path moves it.
 	customLayout := *layoutConfig.GetDefaultLayout()
 	require.NotEmpty(t, customLayout.Widgets, "sanity: default layout must have at least one widget to remove")
 	customLayout.Widgets = customLayout.Widgets[:len(customLayout.Widgets)-1]

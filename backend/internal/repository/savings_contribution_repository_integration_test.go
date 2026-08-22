@@ -61,7 +61,7 @@ func seedIntegrationUser(t *testing.T, pool *pgxpool.Pool) string {
 	`, userID, "clerk_"+userID, "test_"+userID+"@example.com")
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
 	})
 	return userID
 }
@@ -101,7 +101,7 @@ func seedIntegrationGoal(t *testing.T, pool *pgxpool.Pool, userID, accountID str
 	`, goalID, userID, accountID, "Goal "+goalID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM savings_goals WHERE id = $1`, goalID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM savings_goals WHERE id = $1`, goalID)
 	})
 	return goalID
 }
@@ -166,11 +166,12 @@ func TestSavingsContributionRepository_Integration_AllocCapRace(t *testing.T) {
 	// Exactly one must succeed and one must fail with ErrContributionOverAllocated.
 	var successCount, overAllocCount int
 	for _, err := range errors {
-		if err == nil {
+		switch err {
+		case nil:
 			successCount++
-		} else if err == domain.ErrContributionOverAllocated {
+		case domain.ErrContributionOverAllocated:
 			overAllocCount++
-		} else {
+		default:
 			t.Errorf("unexpected error type: %v", err)
 		}
 	}
@@ -262,7 +263,7 @@ func TestSavingsContributionRepository_Integration_SumConfirmedByGoal_UserScoped
 	`, contribID, goalA)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
+		_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
 	})
 
 	repo := repository.NewSavingsContributionRepository(pool)
@@ -301,7 +302,7 @@ func TestSavingsContributionRepository_Integration_SumConfirmedByGoalInPeriod_Us
 	`, contribID, goalA)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
+		_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
 	})
 
 	repo := repository.NewSavingsContributionRepository(pool)
@@ -392,7 +393,7 @@ func TestSavingsContributionRepository_Integration_RejectedStatus(t *testing.T) 
 	require.NoError(t, err, "status='rejected' must be allowed by the CHECK constraint after migration 000099")
 
 	t.Cleanup(func() {
-		pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
+		_, _ = pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
 	})
 
 	// Verify the row is readable and has the correct status.

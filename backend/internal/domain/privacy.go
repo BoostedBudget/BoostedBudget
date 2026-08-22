@@ -89,7 +89,7 @@ func NewPrivacySettings(userID string) *PrivacySettings {
 // Returns an error if user attempts to disable necessary consent
 func (req *UpdatePrivacySettingsRequest) Validate() error {
 	// GDPR compliance: necessary consent cannot be disabled
-	if req.GDPRNecessaryConsent != nil && *req.GDPRNecessaryConsent == false {
+	if req.GDPRNecessaryConsent != nil && !*req.GDPRNecessaryConsent {
 		return errors.New("gdpr_necessary_consent cannot be disabled - required for app functionality")
 	}
 	return nil

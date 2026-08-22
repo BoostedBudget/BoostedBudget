@@ -24,69 +24,6 @@ func setupAccountMockDB(t *testing.T) (pgxmock.PgxPoolIface, AccountRepository) 
 	return mock, repo
 }
 
-// TestAccountRepository_Create tests successful creation of a single account
-func TestAccountRepository_Create(t *testing.T) {
-	mock, repo := setupAccountMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	now := time.Now()
-	balance := 1500.50
-	available := 1450.25
-
-	account := &domain.Account{
-		ID:               uuid.New().String(),
-		LinkedItemID:     uuid.New().String(),
-		UserID:           uuid.New().String(),
-		PlaidAccountID:   "plaid-acc-xyz123",
-		Name:             "Chase Checking",
-		OfficialName:     strPtr("Chase Total Checking®"),
-		Type:             "depository",
-		Subtype:          strPtr("checking"),
-		Mask:             strPtr("1234"),
-		CurrentBalance:   &balance,
-		AvailableBalance: &available,
-		CurrencyCode:     "USD",
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}
-
-	mock.ExpectExec(regexp.QuoteMeta(`
-		INSERT INTO accounts
-		(id, linked_item_id, user_id, user_account_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
-		 type, subtype, mask, current_balance, available_balance, currency_code,
-		 persistent_account_id_blind_idx, fallback_fingerprint_blind_idx,
-		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-	`)).WithArgs(
-		account.ID,
-		account.LinkedItemID,
-		account.UserID,
-		account.UserAccountID,             // nil
-		pgxmock.AnyArg(),                  // plaid_account_id (encrypted by repo)
-		pgxmock.AnyArg(),                  // plaid_account_id_blind_idx
-		pgxmock.AnyArg(),                  // name (encrypted by repo)
-		pgxmock.AnyArg(),                  // official_name (encrypted by repo)
-		account.Type,
-		account.Subtype,
-		pgxmock.AnyArg(),                  // mask (encrypted by repo)
-		account.CurrentBalance,
-		account.AvailableBalance,
-		account.CurrencyCode,
-		account.PersistentAccountIDBlindIdx, // nil
-		account.FallbackFingerprintBlindIdx, // nil
-		pgxmock.AnyArg(),
-		pgxmock.AnyArg(),
-	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
-
-	// Execute
-	err := repo.Create(ctx, account)
-
-	// Assert
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
 // TestAccountRepository_CreateBatch tests batch creation of multiple accounts
 func TestAccountRepository_CreateBatch(t *testing.T) {
 	mock, repo := setupAccountMockDB(t)
@@ -155,7 +92,7 @@ func TestAccountRepository_CreateBatch(t *testing.T) {
 	mock.ExpectCommit()
 
 	// Execute
-	err := repo.CreateBatch(ctx, accounts)
+	err := repo.CreateBatch(ctx, userID, accounts)
 
 	// Assert
 	assert.NoError(t, err)
@@ -315,6 +252,7 @@ func TestAccountRepository_UniqueConstraint(t *testing.T) {
 
 	// Simulate unique constraint violation
 	// Need to match the full INSERT query with arguments for pgxmock v4
+	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO accounts
 		(id, linked_item_id, user_id, user_account_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
@@ -342,9 +280,10 @@ func TestAccountRepository_UniqueConstraint(t *testing.T) {
 		pgxmock.AnyArg(), // created_at
 		pgxmock.AnyArg(), // updated_at
 	).WillReturnError(errors.New("connection done")) // Simulating constraint error
+	mock.ExpectRollback()
 
-	// Execute
-	err := repo.Create(ctx, account)
+	// Execute — CreateBatch is the only production insert path (#1565).
+	err := repo.CreateBatch(ctx, account.UserID, []domain.Account{*account})
 
 	// Assert
 	assert.Error(t, err)
@@ -1843,5 +1782,44 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 	require.Len(t, accounts, 1)
 	assert.Equal(t, "", accounts[0].InstitutionName, "NULL institution_name should surface as the empty string")
 	assert.Equal(t, "active", accounts[0].LinkedItemStatus, "a NULL linked_item status must be treated as active, per normalizeLinkedItemStatus's established rule")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_CreateBatch_CrossTenantRow_Rejected verifies CreateBatch refuses a slice
+// containing a row for a user other than the actor, before opening a transaction (#1566).
+func TestAccountRepository_CreateBatch_CrossTenantRow_Rejected(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	victimID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	// No mock expectations are registered: any DB call at all is a failure.
+	err := repo.CreateBatch(ctx, actorID, []domain.Account{
+		{ID: uuid.New().String(), LinkedItemID: linkedItemID, UserID: actorID, PlaidAccountID: "a1", Name: "Checking", Type: "depository", CurrencyCode: "USD"},
+		{ID: uuid.New().String(), LinkedItemID: linkedItemID, UserID: victimID, PlaidAccountID: "a2", Name: "Savings", Type: "depository", CurrencyCode: "USD"},
+	})
+
+	require.ErrorIs(t, err, ErrAccountBatchTenantMismatch)
+	assert.Contains(t, err.Error(), victimID, "error must name the offending user_id")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_CreateBatch_EmptyRowUserID_Rejected verifies a blank UserID is rejected
+// rather than silently inheriting the actor.
+func TestAccountRepository_CreateBatch_EmptyRowUserID_Rejected(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+
+	err := repo.CreateBatch(ctx, actorID, []domain.Account{
+		{ID: uuid.New().String(), LinkedItemID: uuid.New().String(), PlaidAccountID: "a1", Name: "Checking", Type: "depository", CurrencyCode: "USD"},
+	})
+
+	require.ErrorIs(t, err, ErrAccountBatchTenantMismatch)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

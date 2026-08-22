@@ -11,6 +11,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// defaultCurrentCutoff and defaultBaselineCutoff are the EXACT asOf cutoffs the personal dashboard
+// paths must request when no as_of_date filter is supplied: end of today, and end of the day 30 days
+// before it. Stubs below match on these values rather than mock.AnythingOfType("time.Time") on
+// purpose — #1537 T69 exists because the old stubs accepted any bound, so a zero-width
+// [midnight, midnight] window that matches nothing in Postgres looked like a working read for years.
+// An expectation on an exact cutoff makes a wrong cutoff an unmatched call, which panics, which
+// fails.
+func defaultCurrentCutoff() time.Time { return endOfDay(time.Now().UTC()) }
+
+func defaultBaselineCutoff() time.Time { return endOfDay(time.Now().UTC().AddDate(0, 0, -30)) }
+
 // MockBalanceSnapshotRepository is a mock for BalanceSnapshotRepository
 type MockBalanceSnapshotRepository struct {
 	mock.Mock
@@ -19,14 +30,6 @@ type MockBalanceSnapshotRepository struct {
 func (m *MockBalanceSnapshotRepository) Create(ctx context.Context, snapshot *domain.BalanceSnapshot) error {
 	args := m.Called(ctx, snapshot)
 	return args.Error(0)
-}
-
-func (m *MockBalanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context, userID string, startDate, endDate time.Time) ([]domain.BalanceSnapshot, error) {
-	args := m.Called(ctx, userID, startDate, endDate)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]domain.BalanceSnapshot), args.Error(1)
 }
 
 func (m *MockBalanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
@@ -45,17 +48,20 @@ func (m *MockBalanceSnapshotRepository) GetLatestByUserID(ctx context.Context, u
 	return args.Get(0).([]domain.BalanceSnapshot), args.Error(1)
 }
 
+func (m *MockBalanceSnapshotRepository) GetSnapshotsAsOfForUser(ctx context.Context, userID string, asOf time.Time) ([]domain.BalanceSnapshot, error) {
+	args := m.Called(ctx, userID, asOf)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.BalanceSnapshot), args.Error(1)
+}
+
 func (m *MockBalanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, accountID string) (*domain.BalanceSnapshot, error) {
 	args := m.Called(ctx, accountID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.BalanceSnapshot), args.Error(1)
-}
-
-func (m *MockBalanceSnapshotRepository) DeleteByAccountID(ctx context.Context, accountID string) error {
-	args := m.Called(ctx, accountID)
-	return args.Error(0)
 }
 
 func (m *MockBalanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
@@ -118,7 +124,7 @@ func TestGetBalanceSummary_Success(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(snapshots, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
 
 	// Mock previous snapshots for period comparison
@@ -136,7 +142,7 @@ func TestGetBalanceSummary_Success(t *testing.T) {
 			CurrentBalance: &previousBalance2,
 		},
 	}
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(previousSnapshots, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return(previousSnapshots, nil)
 
 	// Create service
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -205,9 +211,9 @@ func TestGetBalanceSummary_WithAccountTypeFilter(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(snapshots, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]domain.BalanceSnapshot{}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return([]domain.BalanceSnapshot{}, nil)
 
 	// Create service
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -238,7 +244,7 @@ func TestGetBalanceSummary_SnapshotRepoError(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(nil, assert.AnError)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(nil, assert.AnError)
 
 	// Create service
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -448,9 +454,10 @@ func TestGetAccountTypes_Success(t *testing.T) {
 	// Find types in result
 	var depositoryType, creditType *domain.AccountTypeInfo
 	for i := range result.Types {
-		if result.Types[i].Key == "depository" {
+		switch result.Types[i].Key {
+		case "depository":
 			depositoryType = &result.Types[i]
-		} else if result.Types[i].Key == "credit" {
+		case "credit":
 			creditType = &result.Types[i]
 		}
 	}
@@ -526,7 +533,7 @@ func TestGetNetWorth_Success_MixedAccountTypes(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(snapshots, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
 
 	// Mock previous snapshots for period comparison (30 days ago)
@@ -540,7 +547,7 @@ func TestGetNetWorth_Success_MixedAccountTypes(t *testing.T) {
 		{ID: "prev-3", AccountID: "account-3", CurrentBalance: &prevCredit},
 		{ID: "prev-4", AccountID: "account-4", CurrentBalance: &prevLoan},
 	}
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(previousSnapshots, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return(previousSnapshots, nil)
 
 	// Create service
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -587,9 +594,9 @@ func TestGetNetWorth_ZeroAccounts(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return([]domain.BalanceSnapshot{}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return([]domain.BalanceSnapshot{}, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{}, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]domain.BalanceSnapshot{}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return([]domain.BalanceSnapshot{}, nil)
 
 	// Create service
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -630,9 +637,9 @@ func TestGetNetWorth_OnlyAssets(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(snapshots, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]domain.BalanceSnapshot{}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return([]domain.BalanceSnapshot{}, nil)
 
 	// Create service
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -675,9 +682,9 @@ func TestGetNetWorth_OnlyLiabilities(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(snapshots, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]domain.BalanceSnapshot{}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return([]domain.BalanceSnapshot{}, nil)
 
 	// Create service
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -717,9 +724,9 @@ func TestGetNetWorth_OtherAccountTypeDefaultsToAsset(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(snapshots, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(accounts, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]domain.BalanceSnapshot{}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return([]domain.BalanceSnapshot{}, nil)
 
 	// Create service
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -748,7 +755,7 @@ func TestGetNetWorth_SnapshotRepoError(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(nil, assert.AnError)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(nil, assert.AnError)
 
 	// Create service
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -997,9 +1004,9 @@ func TestGetBalanceSummary_ExcludesReplacedAccounts(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(snapshots, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeOnlyAccounts, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]domain.BalanceSnapshot{}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return([]domain.BalanceSnapshot{}, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 
@@ -1110,10 +1117,10 @@ func TestDashboardService_GetNetWorth_ExcludesReplacedAccounts(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return(snapshots, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(snapshots, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
 	// Period comparison
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return([]domain.BalanceSnapshot{}, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -1163,10 +1170,9 @@ func TestDashboardService_GetNetWorth_ResolvesByUserAccountID(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return([]domain.BalanceSnapshot{snapshot}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return([]domain.BalanceSnapshot{snapshot}, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
-		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return([]domain.BalanceSnapshot{}, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -1225,10 +1231,9 @@ func TestDashboardService_GetNetWorth_PreviousPeriodResolvesChain(t *testing.T) 
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return([]domain.BalanceSnapshot{currentSnapshot}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return([]domain.BalanceSnapshot{currentSnapshot}, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
-		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return([]domain.BalanceSnapshot{previousSnapshot}, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -1296,10 +1301,9 @@ func TestGetBalanceSummary_PreviousPeriodChainDedup(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return([]domain.BalanceSnapshot{currentSnapshot}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return([]domain.BalanceSnapshot{currentSnapshot}, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
-		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return([]domain.BalanceSnapshot{prevSnapReplaced, prevSnapActive}, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -1360,10 +1364,9 @@ func TestGetNetWorth_PreviousPeriodChainDedup(t *testing.T) {
 	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
 	mockAccountRepo := new(MockAccountRepository)
 
-	mockSnapshotRepo.On("GetLatestByUserID", ctx, userID).Return([]domain.BalanceSnapshot{currentSnapshot}, nil)
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return([]domain.BalanceSnapshot{currentSnapshot}, nil)
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{activeAccount}, nil)
-	mockSnapshotRepo.On("GetByUserIDAndDateRange", ctx, userID,
-		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).
 		Return([]domain.BalanceSnapshot{prevSnapReplaced, prevSnapActive}, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -1383,7 +1386,7 @@ func TestGetNetWorth_PreviousPeriodChainDedup(t *testing.T) {
 // ─── #1369 — Phase 5: household balance/net-worth aggregation ───────────────
 //
 // Household mode must use GetSnapshotsAsOfForHousehold / GetForHouseholdScope — NOT
-// GetLatestByUserID / GetByUserID / GetByUserIDAndDateRange, which are single-user and
+// GetLatestByUserID / GetByUserID (and GetByUserIDAndDateRange, deleted in #1537) — single-user, and
 // would silently drop every non-requester member's data (Codex adversarial review,
 // P0-2/P0-3). These are pure-Go aggregation tests (repo correctness is covered by
 // integration tests); they assert the SERVICE picks the right repo methods and sums

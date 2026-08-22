@@ -153,8 +153,6 @@ func (m *MockInvestmentTransactionRepository) GetByUserIDKeyset(ctx context.Cont
 // Plaid SDK Helpers
 // ============================================================================
 
-func testStrPtr(s string) *string { return &s }
-
 func plaidNullStr(s string) plaid.NullableString {
 	return *plaid.NewNullableString(&s)
 }

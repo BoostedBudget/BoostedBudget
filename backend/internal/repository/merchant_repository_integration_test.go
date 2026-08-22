@@ -568,7 +568,7 @@ func TestMergeAndFlatten_DisplayNames_COALESCE_Integration(t *testing.T) {
 	assert.Equal(t, customName, *results2[0].DisplayName, "G27: nil displayNames entry must preserve existing display_name via COALESCE")
 }
 
-// ── G31: Upsert/BulkUpsert must preserve an existing merge pointer on pure-rename ────────────
+// ── G31: Upsert/BulkApply must preserve an existing merge pointer on pure-rename ─────────────
 //
 // Issue #957 Round 10: the ON CONFLICT SET clause unconditionally overwrites
 // merged_into_merchant_id with EXCLUDED.merged_into_merchant_id (NULL on a pure rename),
@@ -619,9 +619,10 @@ func TestUpsert_PureRename_PreservesExistingMergePointer_Integration(t *testing.
 	assert.Equal(t, merchantB.String(), *result.MergedIntoMerchantID, "G31: pure-rename Upsert must COALESCE-preserve the existing merge pointer")
 }
 
-// TestBulkUpsert_PureRename_PreservesExistingMergePointer_Integration mirrors the above
-// for BulkUpsert, which has an identical ON CONFLICT clause.
-func TestBulkUpsert_PureRename_PreservesExistingMergePointer_Integration(t *testing.T) {
+// TestBulkApply_PureRename_PreservesExistingMergePointer_Integration mirrors the above
+// for the bulk write path (BulkApply's display-only upsert), which shares the same
+// ON CONFLICT clause via bulkUpsertTx.
+func TestBulkApply_PureRename_PreservesExistingMergePointer_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
 
@@ -645,22 +646,22 @@ func TestBulkUpsert_PureRename_PreservesExistingMergePointer_Integration(t *test
 	`, userID, merchantA, merchantB)
 	require.NoError(t, err, "seed A→B merge-only override")
 
-	// BulkUpsert with a display_name only (no merged_into_merchant_id).
+	// BulkApply with a display_name only (no merged_into_merchant_id, no merge groups).
 	overrideRepo := NewMerchantOverrideRepository(tx)
 	displayName := "My Merchant A (bulk)"
-	results, err := overrideRepo.BulkUpsert(ctx, []domain.MerchantNameOverride{{
+	results, err := overrideRepo.BulkApply(ctx, userID.String(), []domain.MerchantNameOverride{{
 		UserID:               userID.String(),
 		MerchantID:           merchantA.String(),
 		DisplayName:          &displayName,
 		MergedIntoMerchantID: nil,
-	}})
-	require.NoError(t, err, "BulkUpsert must succeed")
+	}}, nil)
+	require.NoError(t, err, "BulkApply must succeed")
 	require.Len(t, results, 1)
 
 	require.NotNil(t, results[0].DisplayName, "display_name must be set")
 	assert.Equal(t, displayName, *results[0].DisplayName)
 	require.NotNil(t, results[0].MergedIntoMerchantID, "merged_into_merchant_id must be preserved — was wiped before G31 fix")
-	assert.Equal(t, merchantB.String(), *results[0].MergedIntoMerchantID, "G31: BulkUpsert must COALESCE-preserve the existing merge pointer")
+	assert.Equal(t, merchantB.String(), *results[0].MergedIntoMerchantID, "G31: the bulk display-only upsert must COALESCE-preserve the existing merge pointer")
 }
 
 // TestUpsert_PureRenameAfterMerge_StillResolvesToCanonical_Integration is the end-to-end AC5

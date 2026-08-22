@@ -9,8 +9,7 @@ import (
 // MerchantRepo defines the interface for merchant data access.
 // A minimal interface enables mocking in service tests.
 type MerchantRepo interface {
-	GetOrCreateMerchants(ctx context.Context, names []string) (map[string]string, error)
-	// GetOrCreateMerchantsWithNormalize is like GetOrCreateMerchants but also sets
+	// GetOrCreateMerchantsWithNormalize get-or-inserts merchants and also sets
 	// normalized_name when creating new rows. The normalize func is provided by the
 	// caller to avoid import cycles between the repository and merchant normalization packages.
 	GetOrCreateMerchantsWithNormalize(ctx context.Context, names []string, normalize func(string) string) (map[string]string, error)
@@ -25,7 +24,6 @@ type MerchantRepo interface {
 // MerchantOverrideRepo defines the interface for merchant_name_overrides data access.
 type MerchantOverrideRepo interface {
 	Upsert(ctx context.Context, override domain.MerchantNameOverride) (*domain.MerchantNameOverride, error)
-	BulkUpsert(ctx context.Context, overrides []domain.MerchantNameOverride) ([]domain.MerchantNameOverride, error)
 	GetByUserID(ctx context.Context, userID string) ([]domain.MerchantNameOverride, error)
 	Delete(ctx context.Context, userID, merchantID string) error
 	// GetMergeTarget returns the merged_into_merchant_id for the given user+merchant, or
@@ -66,38 +64,36 @@ func NewMerchantRepository(db DB) *MerchantRepository {
 	return &MerchantRepository{db: db}
 }
 
-// GetOrCreateMerchants bulk-upserts merchants by name and returns a map of name→id.
-// Uses a single DB round-trip via UNNEST.
-// ON CONFLICT DO UPDATE is required (not DO NOTHING) to always RETURNING the id.
-func (r *MerchantRepository) GetOrCreateMerchants(ctx context.Context, names []string) (map[string]string, error) {
-	if len(names) == 0 {
-		return map[string]string{}, nil
-	}
-	const q = `
-        INSERT INTO merchants (id, name, created_at)
-        SELECT gen_random_uuid(), u.name, NOW()
-        FROM   unnest($1::text[]) AS u(name)
-        ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-        RETURNING name, id`
-	rows, err := r.db.Query(ctx, q, names)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := make(map[string]string, len(names))
-	for rows.Next() {
-		var name, id string
-		if err := rows.Scan(&name, &id); err != nil {
-			return nil, err
-		}
-		result[name] = id
-	}
-	return result, rows.Err()
-}
-
 // GetOrCreateMerchantsWithNormalize bulk-upserts merchants by name, setting normalized_name
-// via the provided normalize func. Only updates normalized_name when it was previously NULL
-// (backfill-safe).
+// via the provided normalize func ON INSERT ONLY. An existing row's normalized_name is never
+// changed.
+//
+// Issue #1537: it previously backfilled an existing NULL normalized_name via
+// `ON CONFLICT (name) DO UPDATE SET normalized_name = COALESCE(...)`, which was a CROSS-USER
+// write. `merchants` is a global table (UNIQUE(name), no user column), so any two users
+// transacting at the same merchant share one row via transactions.merchant_id. Cached
+// GetSpendingByMerchant / GetCategoryBreakdownForMerchant render
+// `COALESCE(mno_t.display_name, NULLIF(m2.normalized_name, <empty>), m2.name, ...)` —
+// where <empty> is the empty-string literal, spelled out here because gofmt rewrites a bare
+// two-apostrophe sequence in a comment into a U+201D quote and would corrupt this SQL (#1487)
+// — preferring
+// normalized_name over name — so filling a previously-NULL normalized_name during ONE user's
+// Plaid sync changed the merchant name rendered in EVERY sharing user's cached read, while
+// transaction_sync_service.go bumps only the user being synced. Reproduced end-to-end in
+// merchant_normalize_cross_user_integration_test.go before the fix.
+//
+// The conflict action is now a no-op touch (`SET name = merchants.name`) rather than
+// `DO NOTHING`, because RETURNING must still yield the id of every requested name — including
+// ones that already existed. That is load-bearing: callers map name -> id to set
+// transactions.merchant_id, and a DO NOTHING would silently drop existing merchants from the
+// result.
+//
+// Rows created before this change keep normalized_name = NULL and fall back to m2.name, i.e.
+// exactly today's rendered value. That is deliberately NOT backfilled by a migration:
+// merchant.Normalize is 105 lines of Go regex and title-casing that SQL cannot reproduce
+// faithfully, so a SQL backfill would render names DIFFERENT from the Go path — worse than the
+// current fallback. Any backfill wanted for QA/staging should be a one-off Go job reusing
+// merchant.Normalize, and would itself need to bump every affected user.
 func (r *MerchantRepository) GetOrCreateMerchantsWithNormalize(ctx context.Context, names []string, normalize func(string) string) (map[string]string, error) {
 	if len(names) == 0 {
 		return map[string]string{}, nil
@@ -111,7 +107,7 @@ func (r *MerchantRepository) GetOrCreateMerchantsWithNormalize(ctx context.Conte
         SELECT gen_random_uuid(), u.name, u.normalized, NOW()
         FROM   unnest($1::text[], $2::text[]) AS u(name, normalized)
         ON CONFLICT (name) DO UPDATE
-            SET normalized_name = COALESCE(merchants.normalized_name, EXCLUDED.normalized_name)
+            SET name = merchants.name
         RETURNING name, id`
 	rows, err := r.db.Query(ctx, q, names, normalized)
 	if err != nil {

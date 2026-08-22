@@ -22,11 +22,34 @@ type BalanceSnapshotRepository interface {
 	// Create inserts a new balance snapshot.
 	// Does NOT perform upsert - allows multiple snapshots per account per day for high-frequency syncs.
 	// Deduplication (5-minute window) should be handled by the service layer using GetLatestByAccountID.
+	//
+	// #1537 T93(b): the plain INSERT is deliberate and there is NO safe uniqueness key to add an
+	// ON CONFLICT against. Investigated and rejected:
+	//   - (account_id, snapshot_at, source): snapshot_at is a fresh time.Now().UTC() stamped per
+	//     sync run (transactionSyncService.createBalanceSnapshots), so two runs never collide on
+	//     it. A unique index here would never fire and would therefore dedup nothing.
+	//   - (user_account_id, snapshot_at, source): same problem, plus user_account_id is NULLABLE
+	//     (migration 000038 adds it with ON DELETE SET NULL), and NULLs never conflict under a
+	//     plain UNIQUE — so every snapshot for an account with no user_account link would slip past.
+	//   - (account_id, DATE(snapshot_at)): this is exactly the UNIQUE(account_id, snapshot_date)
+	//     that migration 000017 DROPPED on purpose, to support multiple snapshots per day.
+	// ⚠ Two claims here were CORRECTED in round 16 after adversarial review.
+	//
+	// (a) "No safe key exists" was too absolute. None exists in the CURRENT schema — there is no
+	// stable logical run or event identifier on a snapshot — but a safe design does: persist a
+	// sync_run_id (or the Plaid webhook/event id, which PlaidSyncArgs already carries as an
+	// optional WebhookID but does not propagate here) and make it UNIQUE with (account_id, source).
+	// That is the fix if this ever needs to be idempotent; see issue #1570.
+	//
+	// (b) "Retry duplication is bounded by the service's 5-minute window" is FALSE. The service
+	// does GetLatestByAccountID and Create as two separate operations, and webhook processing does
+	// not take the linked-item lock the sync worker uses — so two concurrent workers can both see
+	// no recent snapshot and both insert. The window reduces duplication; it does not bound it.
+	//
+	// What remains true, and is why this is not urgent: every read path takes the latest snapshot
+	// per account (per day for the aggregated-history reads), so extra rows inflate row count and
+	// never a reported balance.
 	Create(ctx context.Context, snapshot *domain.BalanceSnapshot) error
-
-	// GetByUserIDAndDateRange retrieves all balance snapshots for a user within a date range.
-	// Results are ordered by snapshot_at ascending (oldest first).
-	GetByUserIDAndDateRange(ctx context.Context, userID string, startDate, endDate time.Time) ([]domain.BalanceSnapshot, error)
 
 	// GetAggregatedHistory retrieves aggregated balance history for dashboard charts.
 	// Returns daily total balance sums (grouped by DATE(snapshot_at)), optionally filtered by account types.
@@ -37,11 +60,22 @@ type BalanceSnapshotRepository interface {
 	// Uses DISTINCT ON (account_id) to get only the latest snapshot per account.
 	GetLatestByUserID(ctx context.Context, userID string) ([]domain.BalanceSnapshot, error)
 
+	// GetSnapshotsAsOfForUser retrieves, for each of the user's logical accounts, the latest
+	// snapshot at or before asOf. It is GetLatestByUserID bounded by a cutoff: the same
+	// DISTINCT ON re-link chain key, plus `snapshot_at <= asOf`.
+	//
+	// This is the personal-scope twin of GetSnapshotsAsOfForHousehold, and it exists because a
+	// point-in-time question ("what was the balance as of date D?") cannot be answered with a
+	// date RANGE read. GetByUserIDAndDateRange(D, D) is a zero-width window that only matches a
+	// snapshot stored at EXACTLY midnight UTC, and production stores wall-clock instants — so the
+	// personal 30-day comparison it used to back never produced a result outside tests. Issue #1537.
+	GetSnapshotsAsOfForUser(ctx context.Context, userID string, asOf time.Time) ([]domain.BalanceSnapshot, error)
+
 	// GetSnapshotsAsOfForHousehold retrieves, for every account currently shared into the
 	// household (across ALL members, not just requestingUserID), the latest snapshot at or
 	// before asOf. Used for both the current point-in-time balance (asOf=now) and a
-	// previous-period comparison (asOf=now-30d) — household mode must never fall back to
-	// the personal GetByUserIDAndDateRange, which silently drops other members' data
+	// previous-period comparison (asOf=now-30d) — household mode must never fall back to a
+	// personal-scope read (GetByUserIDAndDateRange, since DELETED in #1537), which dropped
 	// (Codex adversarial review, P0-3). Joint accounts dedup to the freshest-synced copy.
 	// Issue #1369 — Phase 5.
 	GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error)
@@ -54,10 +88,6 @@ type BalanceSnapshotRepository interface {
 	// GetLatestByAccountID retrieves the most recent balance snapshot for a specific account.
 	// Used for deduplication checking (5-minute window) before creating new snapshots.
 	GetLatestByAccountID(ctx context.Context, accountID string) (*domain.BalanceSnapshot, error)
-
-	// DeleteByAccountID removes all balance snapshots for a specific account.
-	// Used when an account is deleted (cascade delete should handle this, but kept for explicit cleanup).
-	DeleteByAccountID(ctx context.Context, accountID string) error
 }
 
 // balanceSnapshotRepository implements BalanceSnapshotRepository using PostgreSQL
@@ -102,20 +132,6 @@ func (r *balanceSnapshotRepository) Create(ctx context.Context, snapshot *domain
 	)
 
 	return err
-}
-
-// GetByUserIDAndDateRange retrieves all balance snapshots for a user within a date range
-func (r *balanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context, userID string, startDate, endDate time.Time) ([]domain.BalanceSnapshot, error) {
-	query := `
-		SELECT id, account_id, user_account_id, user_id, current_balance, available_balance,
-		       currency_code, snapshot_at, source, created_at
-		FROM balance_snapshots
-		WHERE user_id = $1
-		  AND snapshot_at >= $2
-		  AND snapshot_at <= $3
-		ORDER BY snapshot_at ASC
-	`
-	return r.scanSnapshots(ctx, query, userID, startDate, endDate)
 }
 
 // GetAggregatedHistory retrieves aggregated balance history for dashboard charts.
@@ -225,6 +241,25 @@ func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userI
 	return r.scanSnapshots(ctx, query, userID)
 }
 
+// GetSnapshotsAsOfForUser retrieves the latest snapshot at or before asOf for each of the user's
+// logical accounts. Mirrors GetLatestByUserID exactly — same DISTINCT ON chain key, same ORDER BY —
+// with the single addition of `snapshot_at <= $2`, so the two agree on which row wins a chain when
+// asOf is in the future. Issue #1537.
+func (r *balanceSnapshotRepository) GetSnapshotsAsOfForUser(ctx context.Context, userID string, asOf time.Time) ([]domain.BalanceSnapshot, error) {
+	// Canary counter: every call uses the re-link chain dedup key (Issue #1109).
+	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
+	query := `
+		SELECT DISTINCT ON (COALESCE(user_account_id::text, account_id::text))
+		       id, account_id, user_account_id, user_id, current_balance, available_balance,
+		       currency_code, snapshot_at, source, created_at
+		FROM balance_snapshots
+		WHERE user_id = $1
+		  AND snapshot_at <= $2
+		ORDER BY COALESCE(user_account_id::text, account_id::text), snapshot_at DESC
+	`
+	return r.scanSnapshots(ctx, query, userID, asOf)
+}
+
 // GetSnapshotsAsOfForHousehold retrieves the latest snapshot at or before asOf for every
 // account shared into the household, across all members. Joint accounts (same physical
 // fingerprint shared by two members) dedup via householdAccountsCTEForBalancesAsOf, which picks
@@ -270,11 +305,13 @@ func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Con
 // Pre-existing, unchanged-by-this-fix assumption: current_balance always comes from the
 // selected balance_snapshots row directly (never wrong), but account_type comes from
 // whichever `accounts` row the LEFT JOIN matches by user_account_id — not specifically
-// bs.account_id. This is only ambiguous if two 'active' accounts rows ever shared one
-// user_account_id, which the Plaid re-link handler guarantees never happens (no DB
-// constraint enforces it — see migration 000033). The trailing `a.id` ORDER BY tiebreak
-// keeps that (should-be-impossible) case deterministic rather than fanning out and
-// double-summing balances, as the pre-#1378 query did.
+// bs.account_id. The ORDER BY prefers the ACTIVE chain member's type and falls back to any
+// member's type when the whole chain has been expired or replaced; the choice is only
+// ambiguous if two 'active' accounts rows ever shared one user_account_id, which the Plaid
+// re-link handler guarantees never happens (no DB constraint enforces it — see migration
+// 000033). The trailing `a.id` ORDER BY tiebreak keeps that (should-be-impossible) case
+// deterministic rather than fanning out and double-summing balances, as the pre-#1378
+// query did.
 func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
 
@@ -287,11 +324,32 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 		        a.type AS account_type
 		    FROM balance_snapshots bs
 		    JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
-		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id AND a.status = 'active'
+		    -- This join exists solely to supply a.type for the per-type grouping; the balance itself
+		    -- always comes from the balance_snapshots row. It matches EVERY member of a re-link chain
+		    -- sharing that user_account_id, so type selection has to be an explicit PREFERENCE, not a
+		    -- filter:
+		    --
+		    --   * #1561 removed AND a.status = 'active' from the household ANALYTICS joins, correctly
+		    --     — there it was dropping pre-relink history. Applying the same removal here was wrong
+		    --     (restored in 58920ae3): with no preference, DISTINCT ON breaks the tie on a.id (an
+		    --     arbitrary UUID) and can attribute the balance to a REPLACED member's type.
+		    --   * But expressing that preference as a JOIN predicate was ALSO wrong. When no active row
+		    --     shares the user_account_id — exactly what ExpireAccountsByFingerprint leaves behind
+		    --     for a whole fingerprint — the LEFT JOIN yields a NULL a.type, which lands in the ''
+		    --     bucket and, because NULL never satisfies = ANY, is dropped outright by the
+		    --     accountTypes filter. Personal scope keeps those snapshots (it reads the type from the
+		    --     snapshot's own account row), so household history silently disagreed with it.
+		    --
+		    -- So the join is unfiltered and the ORDER BY prefers an active row, falling back to any
+		    -- chain member's type when none is active. Both properties are pinned:
+		    -- TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType (active wins) and
+		    -- TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory (fallback).
+		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id
 		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $5::date
 		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.fingerprint,
-		             bs.snapshot_at DESC, bs.id DESC, a.id
+		             bs.snapshot_at DESC, bs.id DESC,
+		             (a.status = 'active') DESC NULLS LAST, a.id
 		)
 		SELECT snapshot_date,
 		       COALESCE(account_type, '') AS account_type,
@@ -378,13 +436,6 @@ func (r *balanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, ac
 	}
 
 	return &s, nil
-}
-
-// DeleteByAccountID removes all balance snapshots for a specific account
-func (r *balanceSnapshotRepository) DeleteByAccountID(ctx context.Context, accountID string) error {
-	_, err := r.db.Exec(ctx, `DELETE FROM balance_snapshots WHERE account_id = $1`, accountID)
-	// It's not an error if no rows were deleted (account might not have any snapshots)
-	return err
 }
 
 // scanSnapshots is a helper to reduce duplication in snapshot scanning logic

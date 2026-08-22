@@ -114,7 +114,7 @@ func TestWiring_HealthProbeSucceedsAndIsFastWithRedisCompletelyDown(t *testing.T
 	resp, err := http.Get(srv.URL + "/health")
 	elapsed := time.Since(start)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Less(t, elapsed, 100*time.Millisecond,
@@ -161,7 +161,7 @@ func TestWiring_ApiRequestsAreStillRateLimitedWithRedisDown(t *testing.T) {
 		resp, err := srv.Client().Get(srv.URL + "/")
 		require.NoError(t, err)
 		statuses[i] = resp.StatusCode
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	require.Equal(t, http.StatusOK, statuses[0],

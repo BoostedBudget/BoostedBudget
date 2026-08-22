@@ -1,0 +1,4 @@
+# #1537 — see ./test-setup.ts for why the timeout floor lives in a preload rather than in a
+# `[test] timeout` key here. That key is INERT on bun 1.3.14 (verified); the preload is honoured.
+[test]
+preload = ["./test-setup.ts"]

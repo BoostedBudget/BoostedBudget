@@ -118,7 +118,7 @@ func TestClerkMiddleware_SubscriptionStatus_LookupSucceeds_SetsEffectiveStatus(t
 	server := setupSubStatusProbeServer(t, reader)
 
 	resp := subStatusProbeRequest(t, server.URL)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var body subStatusProbeBody
@@ -138,7 +138,7 @@ func TestClerkMiddleware_SubscriptionStatus_LookupErrors_SetsUnresolved(t *testi
 	server := setupSubStatusProbeServer(t, reader)
 
 	resp := subStatusProbeRequest(t, server.URL)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var body subStatusProbeBody
@@ -156,7 +156,7 @@ func TestClerkMiddleware_SubscriptionStatus_NoReaderConfigured_SetsNeitherKey(t 
 	server := setupSubStatusProbeServer(t, nil)
 
 	resp := subStatusProbeRequest(t, server.URL)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var body subStatusProbeBody
@@ -230,7 +230,7 @@ func TestClerkAndReadOnlyMiddleware_CompedUser_POST_Allowed(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer opaque-oauth-token")
 	resp, err := (&http.Client{}).Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"a comped user (effective status active) must be allowed to mutate through the REAL Clerk + read-only middleware chain")
