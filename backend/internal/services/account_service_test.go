@@ -1057,6 +1057,60 @@ func TestDeleteAccount_Success(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 }
 
+// TestDeleteAccount_LogsAuditEntry tests that a successful DeleteAccount records an
+// "account.removed" audit entry (Issue #1569, Task 5G — nothing was audit-logged on account
+// deletion before this).
+func TestDeleteAccount_LogsAuditEntry(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockAuditLogger := &MockAuditLogger{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		auditLogger: mockAuditLogger,
+		jobQueue:    nil,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{ID: accountID, LinkedItemID: linkedItemID, UserID: userID}
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
+	mockAuditLogger.On("Log", ctx, "account.removed", "account", accountID).Return(nil)
+
+	err := service.DeleteAccount(ctx, accountID, userID)
+
+	require.NoError(t, err)
+	mockAuditLogger.AssertExpectations(t)
+}
+
+// TestDeleteAccount_NilAuditLogger_StillSucceeds tests that DeleteAccount is nil-safe when no
+// audit logger is wired (matches the jobQueue/userAccountSvc nil-safe optional-dependency
+// pattern already used throughout this service).
+func TestDeleteAccount_NilAuditLogger_StillSucceeds(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		auditLogger: nil,
+		jobQueue:    nil,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	account := &domain.Account{ID: accountID, UserID: userID}
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
+
+	err := service.DeleteAccount(ctx, accountID, userID)
+
+	require.NoError(t, err)
+}
+
 // TestDeleteAccount_RepositoryError tests account deletion when GetByIDAndUser returns error
 // Updated for Issue #668: Error now comes from GetByIDAndUser (called first)
 func TestDeleteAccount_RepositoryError(t *testing.T) {
@@ -1849,6 +1903,46 @@ func TestDisconnectInstitution_Success(t *testing.T) {
 	// The literal "I changed banks" action must no longer hard-delete the row or its accounts.
 	mockLinkedItemRepo.AssertNotCalled(t, "DeleteByUser", mock.Anything, mock.Anything, mock.Anything)
 	mockAccountRepo.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestDisconnectInstitution_LogsAuditEntry tests that a successful DisconnectInstitution
+// records an "institution.disconnected" audit entry (Issue #1569, Task 5G).
+func TestDisconnectInstitution_LogsAuditEntry(t *testing.T) {
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockPlaidService := &MockPlaidService{}
+	mockAccountRepo := &MockAccountRepository{}
+	mockAuditLogger := &MockAuditLogger{}
+
+	service := &accountService{
+		linkedItemRepo: mockLinkedItemRepo,
+		plaidService:   mockPlaidService,
+		accountRepo:    mockAccountRepo,
+		auditLogger:    mockAuditLogger,
+	}
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	userID := uuid.New().String()
+	accessToken := "access-sandbox-test-token"
+
+	linkedItem := &domain.LinkedItem{
+		ID:          linkedItemID,
+		UserID:      userID,
+		ItemID:      "plaid-item-123",
+		AccessToken: accessToken,
+	}
+
+	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
+	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
+	mockLinkedItemRepo.On("MarkPlaidRemoved", ctx, []string{linkedItemID}).Return(nil)
+	mockLinkedItemRepo.On("MarkItemsDisconnected", ctx, []string{linkedItemID}).Return(nil)
+	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID).Return(nil)
+	mockAuditLogger.On("Log", ctx, "institution.disconnected", "linked_item", linkedItemID).Return(nil)
+
+	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
+
+	require.NoError(t, err)
+	mockAuditLogger.AssertExpectations(t)
 }
 
 // TestDisconnectInstitution_StampsPlaidRemoved_GDPRProperty pins the GDPR-load-bearing property

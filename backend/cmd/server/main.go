@@ -1315,6 +1315,10 @@ func main() {
 				// transactionSyncService and humamiddleware.HouseholdLookup.
 				accountService.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
 
+				// Issue #1569, Task 5G: audit-log account.removed / institution.disconnected.
+				// Nothing was audit-logged on either path before this.
+				accountService.SetAuditLogger(auditLogger)
+
 				appLogger.Info("Plaid service initialized")
 				appLogger.Info("Account linking service initialized")
 
