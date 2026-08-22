@@ -2434,6 +2434,18 @@ func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, us
 // #1561 removed status predicates wholesale in the household analytics/history joins and had to be
 // reverted; balance_snapshot_repository.go narrates both failure modes at length.
 //
+// WHY IT IS SCOPED TO 'removed' AND 'expired' — the TERMINAL disconnection states, and not to
+// 'replaced'. Those two are what a disconnection leaves behind (MarkRemovedByLinkedItemID /
+// DeleteAccount write 'removed'; ExpireAccountsByFingerprint writes 'expired' for a whole
+// fingerprint), and a chain in either state has no active successor by construction — which is
+// exactly the case the active-chain leg cannot cover. 'replaced' is the re-link case, and it
+// already has an owner: the chain-expansion machinery of #1109/#1304, keyed on user_account_id.
+// Widening this leg to 'replaced' too would change a behaviour that machinery deliberately
+// defines — a pre-relink row whose user_account_id was never backfilled stays hidden
+// (TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration pins that) — and #1569 is not
+// the issue that gets to redefine it. The current status is used here only to SCOPE the leg to
+// terminal disconnections; the liveness answer itself still comes from the recorded intervals.
+//
 // WHY THERE IS NO LOWER BOUND ON THE INTERVAL. The obvious form of this predicate also asserts
 // `h.valid_from <= dateCol` — "the account was live on the transaction's own date". That is wrong
 // here, and wrong in the direction that destroys the most data. valid_from for an account's first
@@ -2459,9 +2471,12 @@ func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, us
 func retainedAccountVisibilityLeg(alias, dateCol string) string {
 	return fmt.Sprintf(`
 		      OR EXISTS (
-		          SELECT 1 FROM account_status_history h
-		          WHERE h.account_id = %s.account_id
-		            AND h.status = 'active'
+		          SELECT 1
+		          FROM accounts disc_a
+		          JOIN account_status_history h
+		            ON h.account_id = disc_a.id AND h.status = 'active'
+		          WHERE disc_a.id = %s.account_id
+		            AND disc_a.status IN ('removed', 'expired')
 		            AND (h.valid_to IS NULL OR (h.valid_to AT TIME ZONE 'UTC')::date >= %s)
 		      )`, alias, dateCol)
 }
