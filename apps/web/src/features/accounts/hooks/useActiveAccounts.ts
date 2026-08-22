@@ -1,10 +1,13 @@
 /**
  * useActiveAccounts Hook
  *
- * Provides filtered views of accounts that exclude replaced entries.
- * When a Plaid bank account is re-linked, the old `accounts` row gets
- * `status='replaced'`. This hook and its helpers centralise that filter
- * so every consumer stays consistent (Issue #1109).
+ * Provides filtered views of accounts that exclude non-active entries.
+ * An account's `status` becomes `replaced` (superseded by a re-link),
+ * `expired` (90-day fingerprint TTL released the hold), or `removed` (the
+ * user deliberately disconnected it) — only `active` accounts are live. This
+ * hook and its helpers centralise that filter so every consumer stays
+ * consistent (Issue #1109, widened to cover all three non-active statuses in
+ * Issue #1569).
  */
 
 import { useEffect } from 'react'
@@ -27,19 +30,40 @@ import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
  * Accounts with `status === 'replaced'` are soft-deleted after Plaid re-link.
  * Accounts without a `status` field (legacy, created before the field was added)
  * are treated as active for backward compatibility.
+ *
+ * Distinct from `isInactive`: `isReplaced` carries chain semantics (it means
+ * specifically "superseded by a re-link", used when walking `replaced_by_id`
+ * chains) and must not be broadened. Use `isInactive` for "is this account
+ * live right now" — the question every list/picker/count actually asks.
  */
 export function isReplaced(account: Account): boolean {
   return account.status === 'replaced'
 }
 
 /**
- * Pure filter — removes replaced accounts from an array.
+ * Returns true when the account is NOT live: `replaced` (superseded by a
+ * re-link), `expired` (90-day fingerprint TTL released the hold), or
+ * `removed` (the user deliberately disconnected it). Only `active` accounts
+ * are live — see backend/internal/domain/account.go's AccountStatus enum
+ * (Issue #1569).
+ *
+ * Accounts without a `status` field (legacy, created before the field was
+ * added) are treated as active for backward compatibility, same as
+ * `isReplaced`.
+ */
+export function isInactive(account: Account): boolean {
+  return account.status === 'replaced' || account.status === 'expired' || account.status === 'removed'
+}
+
+/**
+ * Pure filter — removes non-active accounts (replaced, expired, removed) from
+ * an array.
  *
  * Safe to call with an empty array or an array of legacy accounts that
  * predate the `status` field (they pass through unchanged).
  */
 export function filterActiveAccounts(accounts: Account[]): Account[] {
-  return accounts.filter((acc) => !isReplaced(acc))
+  return accounts.filter((acc) => !isInactive(acc))
 }
 
 // ---------------------------------------------------------------------------

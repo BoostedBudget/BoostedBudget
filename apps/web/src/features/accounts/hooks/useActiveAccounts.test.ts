@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
-import { filterActiveAccounts, isReplaced, useActiveAccounts } from './useActiveAccounts'
+import { filterActiveAccounts, isInactive, isReplaced, useActiveAccounts } from './useActiveAccounts'
 import type { Account } from '@boostedbudget/api-client/models'
 import {
   mockUseGetAccounts,
@@ -46,6 +46,8 @@ const makeAccount = (overrides: Partial<Account>): Account => ({
 
 const activeAccount = makeAccount({ id: 'acc-active', status: 'active' })
 const replacedAccount = makeAccount({ id: 'acc-replaced', status: 'replaced', replaced_by_id: 'acc-active' })
+const expiredAccount = makeAccount({ id: 'acc-expired', status: 'expired' })
+const removedAccount = makeAccount({ id: 'acc-removed', status: 'removed' })
 // legacyAccount: see legacyNoStatusAccount for the real undefined-status test
 
 // Backward-compat: account created before status field was added — omit key entirely
@@ -117,6 +119,47 @@ describe('filterActiveAccounts', () => {
   it('returns empty array for empty input', () => {
     expect(filterActiveAccounts([])).toHaveLength(0)
   })
+
+  // Issue #1569: 'expired' (90-day fingerprint TTL release) and 'removed' (deliberate user
+  // disconnect) are both non-live statuses, same as 'replaced'. Before this test, only
+  // 'replaced' was excluded — an expired or removed account rendered as live.
+  it('filters out accounts with status "expired"', () => {
+    const result = filterActiveAccounts([activeAccount, expiredAccount])
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe('acc-active')
+  })
+
+  it('filters out accounts with status "removed"', () => {
+    const result = filterActiveAccounts([activeAccount, removedAccount])
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe('acc-active')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// isInactive
+// ---------------------------------------------------------------------------
+
+describe('isInactive', () => {
+  it('returns true for status "replaced"', () => {
+    expect(isInactive(replacedAccount)).toBe(true)
+  })
+
+  it('returns true for status "expired"', () => {
+    expect(isInactive(expiredAccount)).toBe(true)
+  })
+
+  it('returns true for status "removed"', () => {
+    expect(isInactive(removedAccount)).toBe(true)
+  })
+
+  it('returns false for status "active"', () => {
+    expect(isInactive(activeAccount)).toBe(false)
+  })
+
+  it('returns false when status is undefined (legacy account)', () => {
+    expect(isInactive(legacyNoStatusAccount)).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -156,6 +199,23 @@ describe('useActiveAccounts', () => {
   it('returns only active accounts, excluding replaced ones', () => {
     mockUseGetAccounts.mockReturnValue({
       data: { accounts: [activeAccount, replacedAccount] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+
+    const { result } = renderHook(() => useActiveAccounts(), {
+      wrapper: createWrapper(),
+    })
+
+    expect(result.current.accounts).toHaveLength(1)
+    expect(result.current.accounts![0].id).toBe('acc-active')
+  })
+
+  it('excludes expired and removed accounts, not just replaced ones', () => {
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [activeAccount, replacedAccount, expiredAccount, removedAccount] },
       isLoading: false,
       isError: false,
       error: null,
