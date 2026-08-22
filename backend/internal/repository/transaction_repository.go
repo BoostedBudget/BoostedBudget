@@ -2421,6 +2421,51 @@ func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, us
 // layer can detect flag-toggle mid-scroll and return 400 (cursor mismatch).
 // Note: external_transaction_id from banking rows is encrypted; we decrypt it
 // inline after scanning.
+// retainedAccountVisibilityLeg renders the HISTORICAL half of the unified feed's account
+// visibility predicate for a transaction table aliased `t` with a date column `dateCol`.
+//
+// WHY IT EXISTS (#1569). Task 2 stopped hard-deleting disconnected accounts; they are soft-removed
+// and retained. The pre-existing predicate showed a transaction only if its account was 'active',
+// or an 'active' account shared its user_account_id — so a fully disconnected chain now keeps its
+// transactions on disk and loses them from the UI. Retained-but-invisible fails #1569's
+// requirement exactly as completely as deleting them would have.
+//
+// WHY THE ACTIVE LEG STAYS. This is ADDED BESIDE the active-chain branch, never in place of it.
+// #1561 removed status predicates wholesale in the household analytics/history joins and had to be
+// reverted; balance_snapshot_repository.go narrates both failure modes at length.
+//
+// WHY THERE IS NO LOWER BOUND ON THE INTERVAL. The obvious form of this predicate also asserts
+// `h.valid_from <= dateCol` — "the account was live on the transaction's own date". That is wrong
+// here, and wrong in the direction that destroys the most data. valid_from for an account's first
+// 'active' interval is accounts.created_at (migration 000152's backfill; the INSERT trigger's
+// clock_timestamp() for new rows), while a Plaid initial sync pulls up to 24 MONTHS of
+// transactions dated long before that row existed. A lower bound would hide essentially all of a
+// disconnected account's backfilled history — the exact history this issue exists to keep — and it
+// would do so silently, only after the disconnection, when the active leg stopped covering for it.
+// Pinned by TestUnifiedFeed_DisconnectedChain_KeepsTransactionsDatedBeforeAccountCreation.
+//
+// So only the UPPER bound is applied: the account must not already have STOPPED being live before
+// the transaction's date. That still excludes a row dated after the account's last active
+// interval closed, which is the only case this leg has any business hiding.
+//
+// The comparison is day-granular and explicitly UTC ((valid_to AT TIME ZONE 'UTC')::date), matching
+// how every other date/timestamptz comparison in this package is written, so the result does not
+// depend on the session TimeZone. A transaction dated exactly on the day the account was removed
+// stays visible; that is deliberate, since the removal happened partway through that day.
+//
+// TENANCY: this leg adds NO user predicate of its own — it keys on t.account_id, and ownership is
+// carried entirely by the outer query's `user_id = $1::uuid`, exactly as the chain leg above does.
+// TestUnifiedFeed_DisconnectedChain_DoesNotLeakAcrossUsers is what holds that claim to account.
+func retainedAccountVisibilityLeg(alias, dateCol string) string {
+	return fmt.Sprintf(`
+		      OR EXISTS (
+		          SELECT 1 FROM account_status_history h
+		          WHERE h.account_id = %s.account_id
+		            AND h.status = 'active'
+		            AND (h.valid_to IS NULL OR (h.valid_to AT TIME ZONE 'UTC')::date >= %s)
+		      )`, alias, dateCol)
+}
+
 func (r *transactionRepository) GetByUserIDKeysetUnified(
 	ctx context.Context,
 	userID string,
@@ -2779,7 +2824,15 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		              WHERE chain_a.user_account_id = t.user_account_id
 		                AND chain_a.status = 'active'
 		          )
-		      )
+		      )%s
+		      -- Truly orphaned rows: migration 000035's ON DELETE SET NULL left transactions with
+		      -- no account_id behind every pre-Task-2 hard delete. They match neither leg above
+		      -- (NULL never satisfies "id = t.account_id", and there is no accounts row left to
+		      -- have history), so without this disjunct they are retained and permanently
+		      -- invisible. They are still the user's own rows — the outer user_id predicate is
+		      -- what makes that safe. investment_transactions.account_id is NOT NULL, so its
+		      -- branch below has no equivalent and needs none.
+		      OR t.account_id IS NULL
 		  )
 		%s%s%s%s%s%s
 
@@ -2847,7 +2900,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		              WHERE chain_a.user_account_id = it.user_account_id
 		                AND chain_a.status = 'active'
 		          )
-		      )
+		      )%s
 		  )
 		%s%s%s%s%s%s
 
@@ -2855,7 +2908,9 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		LIMIT $%d
 	`,
 		bankingMerchantJoins,
+		retainedAccountVisibilityLeg("t", "t.date"),
 		bankingAcctFilter, bankingDateFilter, bankingSearchFilter, bankingExtraFilter, bankingCursorFilter, bankingActivityFilter,
+		retainedAccountVisibilityLeg("it", "it.date"),
 		investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investCursorFilter, investBankingOnlyFilter,
 		limitPH,
 	)
