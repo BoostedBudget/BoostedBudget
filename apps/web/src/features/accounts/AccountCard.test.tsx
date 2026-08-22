@@ -320,6 +320,38 @@ describe('AccountCard', () => {
     })
   })
 
+  describe('closed accounts (Issue #1569: retained but no longer active)', () => {
+    it('shows a "Closed" badge for a removed account', () => {
+      const removedAccount: Account = {
+        ...mockAccount,
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+      }
+
+      renderWithRouter(<AccountCard account={removedAccount} />)
+
+      expect(screen.getByText('Closed')).toBeInTheDocument()
+    })
+
+    it('does not show a "Closed" badge for an active account', () => {
+      renderWithRouter(<AccountCard account={mockAccount} />)
+      expect(screen.queryByText('Closed')).toBeNull()
+    })
+
+    it('renders the balance as "last known" with an as-of date for a removed account', () => {
+      const removedAccount: Account = {
+        ...mockAccount,
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+      }
+
+      renderWithRouter(<AccountCard account={removedAccount} />)
+
+      expect(screen.getByText('Last known balance')).toBeInTheDocument()
+      expect(screen.getByText(/as of/i)).toBeInTheDocument()
+    })
+  })
+
   describe('onDelete behavior (Task 8: remove window.confirm)', () => {
     it('calls onDelete with the full account object when Delete Account is clicked', () => {
       const onDelete = mock(() => {})
