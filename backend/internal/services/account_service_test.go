@@ -2529,6 +2529,42 @@ func TestGetAccountsFiltered_UserNotFound(t *testing.T) {
 	mockUserRepo.AssertExpectations(t)
 }
 
+// TestGetAccountsFiltered_AllStatuses pins that StatusFilter=="all_statuses" reaches the
+// repository's genuine no-status-predicate read (AllStatuses), distinct from the pre-existing
+// "all" misnomer (which maps to IncludeReplaced — active+replaced, NOT expired/removed). The
+// accounts page's "Closed accounts" surface (Issue #1569, Task 5D) needs the full universe
+// (active, replaced, expired, removed) so it can locally split active vs. closed via isInactive;
+// "all" cannot answer that because it silently drops expired and removed accounts.
+func TestGetAccountsFiltered_AllStatuses(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		userRepo:    mockUserRepo,
+	}
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	user := &domain.User{ID: userID}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+
+	allAccounts := []domain.Account{
+		{ID: uuid.New().String(), UserID: userID, Name: "Checking", Status: domain.AccountStatusActive},
+		{ID: uuid.New().String(), UserID: userID, Name: "Old Savings", Status: domain.AccountStatusExpired},
+	}
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
+		repository.AccountFilterOptions{AllStatuses: true}).Return(allAccounts, nil)
+
+	result, err := service.GetAccountsFiltered(ctx, userID, AccountFilterOptions{StatusFilter: "all_statuses"})
+
+	require.NoError(t, err)
+	assert.Len(t, result, 2)
+	mockAccountRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+}
+
 // TestGetAccountsFiltered_AsOf pins that the service-level AsOf option (Issue #1569, Task 5B)
 // reaches the repository unchanged, so `GET /accounts?as_of_date=...` can answer "which accounts
 // were live on date D" instead of guessing from current status.

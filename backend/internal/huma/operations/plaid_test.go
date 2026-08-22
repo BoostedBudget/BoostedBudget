@@ -509,6 +509,52 @@ func TestGetAccounts_UserAccountIDExplicitStatusNotOverridden(t *testing.T) {
 		"Explicit status should not be overridden even when user_account_id is set")
 }
 
+// TestGetAccounts_StatusAllStatuses tests that status=all_statuses is forwarded via
+// StatusFilter, distinct from the pre-existing status=all misnomer (Issue #1569, Task 5D).
+func TestGetAccounts_StatusAllStatuses(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Status:             "all_statuses",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "all_statuses", mockAccount.capturedOpts.StatusFilter)
+}
+
+// TestGetAccounts_AsOfDate_ConflictWithStatusAllStatuses tests that as_of_date combined with
+// status=all_statuses is rejected the same way as status=all/replaced (both hit
+// repository.ErrAccountFilterAsOfConflict via AllStatuses).
+func TestGetAccounts_AsOfDate_ConflictWithStatusAllStatuses(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "2026-01-15",
+		Status:             "all_statuses",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.False(t, mockAccount.called, "service must not be called when as_of_date conflicts with status=all_statuses")
+}
+
 // TestGetAccounts_AsOfDate tests that a valid as_of_date query param (Issue #1569, Task 5B)
 // is parsed and forwarded as AccountFilterOptions.AsOf.
 func TestGetAccounts_AsOfDate(t *testing.T) {

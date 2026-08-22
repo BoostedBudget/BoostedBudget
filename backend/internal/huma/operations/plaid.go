@@ -68,7 +68,7 @@ type ExchangePublicTokenOutput struct {
 type GetAccountsInput struct {
 	inputs.AuthenticatedInput
 	IncludeHidden   string `query:"include_hidden" doc:"If 'true', includes hidden accounts"`
-	Status          string `query:"status" doc:"Filter by account status: 'active' (default), 'replaced', 'expired', 'removed', or 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter)"`
+	Status          string `query:"status" doc:"Filter by account status: 'active' (default), 'replaced', 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter), or 'all_statuses' (every status: active, replaced, expired, removed — for surfaces like the closed-accounts view that need the full universe)"`
 	IncludeReplaced string `query:"include_replaced" doc:"If 'true', equivalent to status=all (backward-compat alias)"`
 	UserAccountID   string `query:"user_account_id" doc:"When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set."`
 	// AsOfDate resolves the account universe as it REALLY WAS on that day, from
@@ -187,8 +187,8 @@ func (h *PlaidHandler) GetAccounts(ctx context.Context, input *GetAccountsInput)
 	if err != nil {
 		return nil, err
 	}
-	if asOf != nil && (statusFilter == "all" || statusFilter == "replaced" || includeReplaced) {
-		return nil, huma.Error400BadRequest("as_of_date cannot be combined with status=all, status=replaced, or include_replaced=true")
+	if asOf != nil && (statusFilter == "all" || statusFilter == "replaced" || statusFilter == "all_statuses" || includeReplaced) {
+		return nil, huma.Error400BadRequest("as_of_date cannot be combined with status=all, status=replaced, status=all_statuses, or include_replaced=true")
 	}
 
 	opts := services.AccountFilterOptions{

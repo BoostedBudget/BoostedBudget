@@ -37,7 +37,7 @@ export type GetAccountsParams = {
  */
 include_hidden?: string;
 /**
- * Filter by account status: 'active' (default), 'replaced', 'expired', 'removed', or 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter)
+ * Filter by account status: 'active' (default), 'replaced', 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter), or 'all_statuses' (every status: active, replaced, expired, removed — for surfaces like the closed-accounts view that need the full universe)
  */
 status?: string;
 /**

@@ -1062,11 +1062,18 @@ func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string,
 		return []domain.Account{}, nil
 	}
 
-	// Map service options to repository filter options
+	// Map service options to repository filter options.
+	//
+	// StatusFilter=="all_statuses" is distinct from the pre-existing StatusFilter=="all" misnomer:
+	// "all" maps to IncludeReplaced (`status IN ('active','replaced')`), while "all_statuses" maps
+	// to the repository's genuine no-status-predicate AllStatuses read (active, replaced, expired
+	// AND removed). Issue #1569, Task 5D: the accounts page's "Closed accounts" surface needs the
+	// full universe so it can locally split active vs. closed via isInactive.
 	repoOpts := repository.AccountFilterOptions{
 		IncludeHidden:   opts.IncludeHidden,
 		IncludeReplaced: opts.IncludeReplaced || opts.StatusFilter == "all",
 		ReplacedOnly:    opts.StatusFilter == "replaced",
+		AllStatuses:     opts.StatusFilter == "all_statuses",
 		UserAccountID:   opts.UserAccountID,
 		AsOf:            opts.AsOf,
 	}
