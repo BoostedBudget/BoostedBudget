@@ -164,8 +164,8 @@ func setupMerchantTestFixture(t *testing.T, db *pgxpool.Pool) merchantTestFixtur
 		db.Exec(ctx2, `DELETE FROM merchant_name_overrides WHERE user_id = $1`, f.userID) //nolint:errcheck
 		db.Exec(ctx2, `DELETE FROM accounts WHERE user_id = $1`, f.userID)                //nolint:errcheck
 		db.Exec(ctx2, `DELETE FROM linked_items WHERE user_id = $1`, f.userID)            //nolint:errcheck
-		db.Exec(ctx2, `DELETE FROM merchants WHERE id IN ($1, $2, $3)`,
-			f.merchantA, f.merchantB, f.merchantC) //nolint:errcheck
+		db.Exec(ctx2, `DELETE FROM merchants WHERE id IN ($1, $2, $3)`, //nolint:errcheck
+			f.merchantA, f.merchantB, f.merchantC)
 		db.Exec(ctx2, `DELETE FROM users WHERE id = $1`, f.userID) //nolint:errcheck
 	})
 

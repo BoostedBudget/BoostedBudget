@@ -51,7 +51,7 @@ func TestWiring_HealthExemptPathIsNotDividedByFallbackDivisor(t *testing.T) {
 		resp, err := srv.Client().Get(srv.URL + "/health")
 		require.NoError(t, err)
 		statuses = append(statuses, resp.StatusCode)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	// RateLimitIP=4, undivided: the first 4 requests must succeed and the 5th must be rejected.

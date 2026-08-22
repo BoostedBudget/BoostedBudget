@@ -7,6 +7,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRequestID_GeneratesID(t *testing.T) {
@@ -95,7 +96,7 @@ func TestRequestID_UniqueIDs(t *testing.T) {
 
 		middleware := RequestID()
 		h := middleware(handler)
-		h(c)
+		require.NoError(t, h(c))
 	}
 
 	// All request IDs should be unique

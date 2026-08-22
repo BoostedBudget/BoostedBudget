@@ -341,11 +341,6 @@ func TestWebhookEventGetByItemID_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// Helper function to create time pointer
-func timePtr(t time.Time) *time.Time {
-	return &t
-}
-
 // ============================================================================
 // TDD RED PHASE: Issue #256 - Transaction Sync Service
 // New tests for webhook processing metadata

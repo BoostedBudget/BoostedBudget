@@ -333,3 +333,107 @@ func TestHoldingRepository_GetByAccountID_ChainExpand(t *testing.T) {
 	assert.Equal(t, replacedAccountID, holdings[0].AccountID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestHoldingRepository_ReplaceForAccount_RejectsForeignHolding proves ownership is enforced in
+// the repository, not by caller discipline (#1566): the DELETE is scoped to the acting user while
+// the INSERT used each element's own UserID, so a foreign element would have deleted the actor's
+// holdings and written rows owned by someone else. Nothing may reach the DB.
+func TestHoldingRepository_ReplaceForAccount_RejectsForeignHolding(t *testing.T) {
+	mock, repo := setupHoldingMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	actor := uuid.New().String()
+	foreign := uuid.New().String()
+	accountID := uuid.New().String()
+	mine := makeTestHolding(actor, accountID, uuid.New().String())
+	theirs := makeTestHolding(foreign, accountID, uuid.New().String())
+
+	// No mock expectations: not a single statement may run.
+	err := repo.ReplaceForAccount(ctx, accountID, actor, []domain.Holding{mine, theirs})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
+	assert.Contains(t, err.Error(), "holdingRepository.ReplaceForAccount")
+	assert.Contains(t, err.Error(), "element 1")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestHoldingRepository_ReplaceForAccount_RejectsEmptyActor closes the vacuous-match hole: with an
+// empty actor AND an empty element UserID the equality check would pass while the tenant-scoped
+// DELETE degenerates to a user_id comparison against the empty string.
+func TestHoldingRepository_ReplaceForAccount_RejectsEmptyActor(t *testing.T) {
+	mock, repo := setupHoldingMockDB(t)
+	defer mock.Close()
+
+	accountID := uuid.New().String()
+	orphan := makeTestHolding("", accountID, uuid.New().String())
+
+	err := repo.ReplaceForAccount(context.Background(), accountID, "", []domain.Holding{orphan})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
+	assert.Contains(t, err.Error(), "no acting user_id")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestHoldingRepository_ReplaceForAccount_RejectsEmptyActorWithNoHoldings proves the actor check
+// is NOT skipped by an early return on an empty slice: the delete-all path is itself
+// tenant-scoped, so an unowned actor must be refused even when there is nothing to insert.
+func TestHoldingRepository_ReplaceForAccount_RejectsEmptyActorWithNoHoldings(t *testing.T) {
+	mock, repo := setupHoldingMockDB(t)
+	defer mock.Close()
+
+	err := repo.ReplaceForAccount(context.Background(), uuid.New().String(), "", nil)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReplaceTenantMismatch)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestHoldingRepository_ReplaceForAccount_RejectsForeignAccount proves the account half of the
+// DELETE/INSERT split is enforced too (#1568): the DELETE is scoped to the scalar accountID while
+// each INSERT writes holdings[i].AccountID, so replacing account A with rows carrying account B
+// cleared A and attributed the holdings to B. Same tenant, so not a leak — but the data moved
+// between the user's own accounts, which "replace for account" must never do.
+func TestHoldingRepository_ReplaceForAccount_RejectsForeignAccount(t *testing.T) {
+	mock, repo := setupHoldingMockDB(t)
+	defer mock.Close()
+
+	userID := uuid.New().String()
+	accountA := uuid.New().String()
+	accountB := uuid.New().String()
+	mine := makeTestHolding(userID, accountA, uuid.New().String())
+	misfiled := makeTestHolding(userID, accountB, uuid.New().String())
+
+	// No mock expectations: not a single statement may run.
+	err := repo.ReplaceForAccount(context.Background(), accountA, userID, []domain.Holding{mine, misfiled})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReplaceAccountMismatch)
+	assert.Contains(t, err.Error(), "holdingRepository.ReplaceForAccount")
+	assert.Contains(t, err.Error(), "element 1")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestHoldingRepository_ReplaceForAccount_RejectsEmptyAccountID closes the vacuous-match hole on
+// the account axis, and proves the check is not skipped by an empty batch: the delete-only path is
+// itself scoped by account_id, so an empty account_id must never reach the DB.
+func TestHoldingRepository_ReplaceForAccount_RejectsEmptyAccountID(t *testing.T) {
+	for name, holdings := range map[string][]domain.Holding{
+		"unattributed holding": {makeTestHolding("u", "", uuid.New().String())},
+		"delete only":          nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			mock, repo := setupHoldingMockDB(t)
+			defer mock.Close()
+
+			err := repo.ReplaceForAccount(context.Background(), "", "u", holdings)
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrReplaceAccountMismatch)
+			assert.Contains(t, err.Error(), "no account_id")
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}

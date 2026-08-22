@@ -2,6 +2,8 @@ package observability
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -73,10 +75,38 @@ func (t *teeHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return t.primary.Enabled(ctx, level) || t.secondary.Enabled(ctx, level)
 }
 
+// Handle fans the record out to both handlers and reports every failure.
+//
+// Two things it deliberately does, both of which it used to get wrong (#1537 round 4, found as two
+// errcheck findings — the unchecked returns were the symptom, silent failure was the defect):
+//
+//   - It JOINS the errors instead of discarding them, so a failure reaches whoever called Handle.
+//     Joining rather than returning the first also means one broken transport cannot hide another.
+//
+//     ⚠ SCOPE, corrected after Codex review: this does NOT make a broken secondary transport visible
+//     in production logging. `slog.Logger` discards the handler's error — `_ = l.Handler().Handle(...)`
+//     at log/slog/logger.go:256 — so nothing surfaces through the ordinary logging path. An earlier
+//     version of this comment claimed the failure had been "indistinguishable from success" and was
+//     now not; that was overstated. What the join actually buys: conformance with the Handler
+//     contract, an error for any DIRECT Handle caller, and a testable signal. Surfacing a dead
+//     transport in production would need a health check on the handler itself, which this is not.
+//   - It gates each handler on its OWN Enabled. Enabled below is an OR across members, so reaching
+//     Handle proves only that SOMETHING wanted the record — a member that declined the level was
+//     still being handed it. slog's "Handle is only called when Enabled is true" guarantee applies to
+//     the tee, not to what the tee wraps.
 func (t *teeHandler) Handle(ctx context.Context, r slog.Record) error {
-	t.primary.Handle(ctx, r)
-	t.secondary.Handle(ctx, r)
-	return nil
+	var errs []error
+	if t.primary.Enabled(ctx, r.Level) {
+		if err := t.primary.Handle(ctx, r); err != nil {
+			errs = append(errs, fmt.Errorf("primary log handler: %w", err))
+		}
+	}
+	if t.secondary.Enabled(ctx, r.Level) {
+		if err := t.secondary.Handle(ctx, r); err != nil {
+			errs = append(errs, fmt.Errorf("secondary log handler: %w", err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (t *teeHandler) WithAttrs(attrs []slog.Attr) slog.Handler {

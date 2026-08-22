@@ -154,8 +154,7 @@ func TestRegionConfig_InvalidPath(t *testing.T) {
 	globalRegionConfig = nil
 	regionConfigOnce = sync.Once{}
 
-	os.Setenv("REGIONS_CONFIG", "/nonexistent/path/regions.yaml")
-	defer os.Unsetenv("REGIONS_CONFIG")
+	t.Setenv("REGIONS_CONFIG", "/nonexistent/path/regions.yaml")
 
 	_, err := LoadRegionConfig()
 	assert.Error(t, err)
@@ -188,9 +187,8 @@ regions:
 	// Reset singleton and load with override
 	globalRegionConfig = nil
 	regionConfigOnce = sync.Once{}
-	os.Setenv("REGIONS_CONFIG", yamlPath)
+	t.Setenv("REGIONS_CONFIG", yamlPath) // auto-restored at test end
 	defer func() {
-		os.Unsetenv("REGIONS_CONFIG")
 		globalRegionConfig = nil
 		regionConfigOnce = sync.Once{}
 	}()

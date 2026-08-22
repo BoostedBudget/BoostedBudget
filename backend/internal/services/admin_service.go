@@ -222,7 +222,7 @@ func (s *adminService) InvalidateCache(clerkUserID string) {
 
 // parseRolesFromMetadata extracts roles from Clerk privateMetadata JSON.
 func parseRolesFromMetadata(metadata json.RawMessage) []domain.AdminRole {
-	if metadata == nil || len(metadata) == 0 {
+	if len(metadata) == 0 {
 		return []domain.AdminRole{}
 	}
 

@@ -245,7 +245,7 @@ func waitForBlockedByGate(t *testing.T, gatePID int32, want int) {
 	ctx := context.Background()
 	observer, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
 	require.NoError(t, err)
-	defer observer.Close(ctx)
+	defer func() { _ = observer.Close(ctx) }()
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

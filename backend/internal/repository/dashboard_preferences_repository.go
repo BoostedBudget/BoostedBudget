@@ -26,9 +26,6 @@ type DashboardPreferencesRepository interface {
 	// Upsert creates or updates dashboard preferences for a user
 	// Uses PostgreSQL UPSERT (ON CONFLICT UPDATE) for atomic operation
 	Upsert(ctx context.Context, prefs *domain.DashboardPreferences) error
-
-	// Delete removes dashboard preferences for a user
-	Delete(ctx context.Context, userID string) error
 }
 
 // dashboardPreferencesRepository implements DashboardPreferencesRepository using PostgreSQL
@@ -112,22 +109,6 @@ func (r *dashboardPreferencesRepository) Upsert(ctx context.Context, prefs *doma
 
 	if err != nil {
 		return fmt.Errorf("failed to upsert dashboard preferences: %w", err)
-	}
-
-	return nil
-}
-
-// Delete removes dashboard preferences for a user
-func (r *dashboardPreferencesRepository) Delete(ctx context.Context, userID string) error {
-	query := `DELETE FROM user_dashboard_preferences WHERE user_id = $1`
-
-	ct, err := r.db.Exec(ctx, query, userID)
-	if err != nil {
-		return fmt.Errorf("failed to delete dashboard preferences: %w", err)
-	}
-
-	if ct.RowsAffected() == 0 {
-		return ErrDashboardPreferencesNotFound
 	}
 
 	return nil

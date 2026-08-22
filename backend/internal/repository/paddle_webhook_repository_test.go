@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"regexp"
 	"testing"
 	"time"
@@ -717,7 +716,7 @@ func TestListWebhookEvents_WithEventTypeFilter(t *testing.T) {
 	eventType := "subscription.created"
 
 	countRows := pgxmock.NewRows([]string{"count"}).AddRow(int64(1))
-	mock.ExpectQuery(regexp.QuoteMeta(fmt.Sprintf(`SELECT COUNT(*) FROM paddle_webhook_events WHERE event_type = $1`))).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM paddle_webhook_events WHERE event_type = $1`)).
 		WithArgs(eventType).
 		WillReturnRows(countRows)
 

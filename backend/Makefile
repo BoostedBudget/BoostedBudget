@@ -26,8 +26,23 @@ run: ## Run the backend locally
 	go run ./cmd/server
 
 .PHONY: lint
-lint: ## Run linter
+lint: ## Run linter (both tag sets — see below)
+	# Two invocations on purpose. `golangci-lint run ./...` compiles with NO build tags, so it
+	# never sees a single //go:build integration file, and the integration suite is a large part
+	# of this repo's test code. The second run is not redundant; it is the only thing that lints
+	# it, and at the time of writing it is the only thing that catches the one remaining finding
+	# in internal/cache — a fix that the untagged run reports as clean.
+	#
+	# (An earlier version of this comment claimed "seven real findings" were hiding behind the
+	# tag. That was true when observed mid-cleanup and had decayed to one by the time the sweep
+	# finished, so the number is not a durable property of anything. Corrected rather than left,
+	# because a stale count in a comment is the exact defect class #1537 exists to remove.)
+	#
+	# Issue caps are disabled in .golangci.yml: the defaults (max-issues-per-linter 50,
+	# max-same-issues 3) truncate output while still printing a total, so the number looks
+	# authoritative and is not. One cleanup was handed 23 findings and discovered 65.
 	golangci-lint run ./...
+	golangci-lint run --build-tags integration ./...
 
 .PHONY: fmt
 fmt: ## Format code

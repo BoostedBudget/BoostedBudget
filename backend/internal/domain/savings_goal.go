@@ -118,14 +118,6 @@ func (sg *SavingsGoal) Validate() error {
 	return nil
 }
 
-// validProgressBases is the set of allowed progress_basis values.
-var validProgressBases = map[string]bool{
-	ProgressBasisManual:            true,
-	ProgressBasisContributions:     true,
-	ProgressBasisBalance:           true,
-	ProgressBasisAccountPercentage: true,
-}
-
 // SavingsGoalContribution is an explicit, confirmed contribution toward a savings goal (Issue #1300).
 // Only "confirmed" contributions count toward goal progress when basis = "contributions".
 // Contributions are split-capable: one transaction may be allocated across multiple goals

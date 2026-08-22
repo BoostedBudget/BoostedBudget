@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -101,6 +102,17 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 					SET user_account_id = EXCLUDED.user_account_id
 					WHERE investment_transactions.user_account_id IS NULL
 					  AND EXCLUDED.user_account_id IS NOT NULL
+					  -- #1537: the conflict target is the plaid id ALONE (unique_plaid_investment_
+					  -- transaction_id, migration 000051), which carries no ownership — so without this
+					  -- predicate a plaid-id collision across two users lets one user's sync stamp its
+					  -- user_account_id onto the other's row. Narrow in practice (only an unattributed
+					  -- row, only one column, and Plaid does not reuse transaction ids), but this
+					  -- package's stated rule is that ownership is enforced in the SQL rather than
+					  -- delegated to caller discipline (holding_repository.go). Pinned by
+					  -- TestUpsertBatch_ForeignUsersRow_IsNotBackfilled, which drives THIS method --
+					  -- when first written it issued its own copy of this SQL and so could not have
+					  -- failed if this predicate were deleted (#1537 round 10, caught by review).
+					  AND investment_transactions.user_id = EXCLUDED.user_id
 				RETURNING id, (xmax::text::bigint = 0) AS is_new_insert
 			)
 			SELECT COUNT(*) FILTER (WHERE is_new_insert) AS inserted FROM ins
@@ -406,8 +418,14 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 // Uses regex word-boundary to avoid partial matches ($1 inside $10, $11 etc.).
 func renumberPlaceholders(clause string, start int) string {
 	return placeholderRe.ReplaceAllStringFunc(clause, func(m string) string {
-		var n int
-		fmt.Sscanf(m, "$%d", &n)
+		// placeholderRe guarantees m is "$" followed by digits, so the only way Atoi can
+		// fail is an integer overflow on an absurdly long run of digits. Leave such a
+		// match untouched rather than emitting "$<start-1>" from a zero value, which
+		// would silently point the clause at the wrong argument.
+		n, err := strconv.Atoi(m[1:])
+		if err != nil {
+			return m
+		}
 		return fmt.Sprintf("$%d", n+start-1)
 	})
 }

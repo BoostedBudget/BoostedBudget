@@ -1,8 +1,16 @@
 package services
 
-// Issue #1531 Task 10b-2a-ii — webhook fan-out gap: GetNetWorthTrend is a cached read
-// (analytics_service_cached.go) that folds in investment holdings, investment transactions,
-// and liability data. A Plaid HOLDINGS/INVESTMENTS_TRANSACTIONS/LIABILITIES webhook — routed
+// Issue #1531 Task 10b-2a-ii — webhook fan-out gap.
+//
+// #1537 CORRECTION: "GetNetWorthTrend ... folds in investment holdings, investment transactions,
+// and liability data" is FALSE. GetNetWorthTrend reads balance_snapshots ONLY (analytics_service.go
+// -> balanceSnapshotRepo.GetAggregatedHistory[ForHousehold]); holdings, investment_transactions and
+// portfolio_snapshots are read by no cache.GetOrLoad-backed path at all. So these tests do not
+// guard a staleness bug in GetNetWorthTrend — they pin that the sync paths bump, which is kept as
+// cheap insurance (see SetCacheInvalidation in investment_sync_service.go). Do not cite this bump
+// as the reason an investment write is invalidated.
+//
+// What follows is the original rationale, retained for history. A Plaid HOLDINGS/INVESTMENTS_TRANSACTIONS/LIABILITIES webhook — routed
 // through InvestmentSyncService.ProcessWebhook / LiabilitySyncService.ProcessWebhook, both of
 // which call the SAME SyncHoldings/SyncInvestmentTransactions/SyncLiabilities methods their own
 // periodic queue jobs call — used to commit new data to Postgres while never bumping the cached

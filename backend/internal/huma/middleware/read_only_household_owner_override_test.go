@@ -103,7 +103,7 @@ func TestReadOnlyMiddleware_HouseholdOwnerMalformedOverride_MemberMutation_Block
 	// mutates a covered member's own subscription_status, so a real covered member can look
 	// exactly like this if they joined the household while already lapsed.
 	resp := doRequestWithUser(t, server, http.MethodPost, "/api/v1/transactions", "inactive", memberID)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 		"a malformed live override on the household OWNER must not grant every MEMBER write access")
@@ -146,7 +146,7 @@ func TestReadOnlyMiddleware_HouseholdOwnerValidOverride_MemberMutation_Allowed(t
 	server, _ := setupReadOnlyTestAPIWithHouseholdChecker(t, svc)
 
 	resp := doRequestWithUser(t, server, http.MethodPost, "/api/v1/transactions", "inactive", memberID)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"a VALID live owner override must still cover the household's members")

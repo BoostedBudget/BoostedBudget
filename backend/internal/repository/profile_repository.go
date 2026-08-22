@@ -1415,7 +1415,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	if err != nil {
 		return false, nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
 	// affectedOwnerIDs collects, deduplicated, every OTHER user whose row this transaction mutates
 	// below (currently: the dangling-cross-user-category-override clear). See that UPDATE's own

@@ -157,7 +157,7 @@ func TestHumaClerkMiddleware_PublicEndpoint(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
@@ -173,7 +173,7 @@ func TestHumaClerkMiddleware_MissingAuthHeader(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
@@ -205,7 +205,7 @@ func TestHumaClerkMiddleware_InvalidBearerFormat(t *testing.T) {
 
 			// Assert
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 		})
 	}
@@ -228,7 +228,7 @@ func TestHumaClerkMiddleware_InvalidToken(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
@@ -246,7 +246,7 @@ func TestHumaClerkMiddleware_ContentType_ProblemJSON(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	// The content type may vary based on test framework handling
 	// but the important test is that we get a 401 response
@@ -269,7 +269,7 @@ func TestHumaClerkMiddleware_ErrorResponse_Format(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 
 	// Read body and verify it's valid JSON with expected structure

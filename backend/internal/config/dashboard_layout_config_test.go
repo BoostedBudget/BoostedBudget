@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -12,7 +11,7 @@ import (
 func TestLoadDashboardLayoutConfig(t *testing.T) {
 	// Reset singleton for testing
 	ResetDashboardLayoutConfigSingleton()
-	os.Unsetenv("DASHBOARD_LAYOUT_CONFIG")
+	t.Setenv("DASHBOARD_LAYOUT_CONFIG", "") // empty == unset for getEnv; auto-restored (was a bare os.Unsetenv that leaked into later tests)
 
 	config, err := LoadDashboardLayoutConfig()
 	require.NoError(t, err)
@@ -28,7 +27,7 @@ func TestLoadDashboardLayoutConfig(t *testing.T) {
 func TestLoadDashboardLayoutConfig_Singleton(t *testing.T) {
 	// Reset singleton for testing
 	ResetDashboardLayoutConfigSingleton()
-	os.Unsetenv("DASHBOARD_LAYOUT_CONFIG")
+	t.Setenv("DASHBOARD_LAYOUT_CONFIG", "") // empty == unset for getEnv; auto-restored (was a bare os.Unsetenv that leaked into later tests)
 
 	// First call
 	config1, err := LoadDashboardLayoutConfig()
@@ -45,7 +44,7 @@ func TestLoadDashboardLayoutConfig_Singleton(t *testing.T) {
 func TestDashboardLayoutConfig_GetDefaultLayout(t *testing.T) {
 	// Reset singleton for testing
 	ResetDashboardLayoutConfigSingleton()
-	os.Unsetenv("DASHBOARD_LAYOUT_CONFIG")
+	t.Setenv("DASHBOARD_LAYOUT_CONFIG", "") // empty == unset for getEnv; auto-restored (was a bare os.Unsetenv that leaked into later tests)
 
 	config, err := LoadDashboardLayoutConfig()
 	require.NoError(t, err)
@@ -71,7 +70,7 @@ func TestDashboardLayoutConfig_GetDefaultLayout(t *testing.T) {
 func TestDashboardLayoutConfig_GetLayoutVersion(t *testing.T) {
 	// Reset singleton for testing
 	ResetDashboardLayoutConfigSingleton()
-	os.Unsetenv("DASHBOARD_LAYOUT_CONFIG")
+	t.Setenv("DASHBOARD_LAYOUT_CONFIG", "") // empty == unset for getEnv; auto-restored (was a bare os.Unsetenv that leaked into later tests)
 
 	config, err := LoadDashboardLayoutConfig()
 	require.NoError(t, err)
@@ -84,7 +83,7 @@ func TestDashboardLayoutConfig_GetLayoutVersion(t *testing.T) {
 func TestDashboardLayoutConfig_Validation(t *testing.T) {
 	// Reset singleton for testing
 	ResetDashboardLayoutConfigSingleton()
-	os.Unsetenv("DASHBOARD_LAYOUT_CONFIG")
+	t.Setenv("DASHBOARD_LAYOUT_CONFIG", "") // empty == unset for getEnv; auto-restored (was a bare os.Unsetenv that leaked into later tests)
 
 	config, err := LoadDashboardLayoutConfig()
 	require.NoError(t, err)
@@ -107,8 +106,7 @@ func TestDashboardLayoutConfig_Validation(t *testing.T) {
 
 func TestDashboardLayoutConfig_InvalidPath(t *testing.T) {
 	// Set invalid config path
-	os.Setenv("DASHBOARD_LAYOUT_CONFIG", "/nonexistent/path/config.yaml")
-	defer os.Unsetenv("DASHBOARD_LAYOUT_CONFIG")
+	t.Setenv("DASHBOARD_LAYOUT_CONFIG", "/nonexistent/path/config.yaml")
 
 	// Reset singleton
 	ResetDashboardLayoutConfigSingleton()
@@ -119,7 +117,7 @@ func TestDashboardLayoutConfig_InvalidPath(t *testing.T) {
 
 func TestDashboardLayoutConfig_Reload(t *testing.T) {
 	// Reset environment and singleton
-	os.Unsetenv("DASHBOARD_LAYOUT_CONFIG")
+	t.Setenv("DASHBOARD_LAYOUT_CONFIG", "") // empty == unset for getEnv; auto-restored (was a bare os.Unsetenv that leaked into later tests)
 	ResetDashboardLayoutConfigSingleton()
 
 	config, err := LoadDashboardLayoutConfig()
@@ -140,7 +138,7 @@ func TestDashboardLayoutConfig_Reload(t *testing.T) {
 func TestDashboardLayoutConfig_WidgetTypesValid(t *testing.T) {
 	// Reset singleton for testing
 	ResetDashboardLayoutConfigSingleton()
-	os.Unsetenv("DASHBOARD_LAYOUT_CONFIG")
+	t.Setenv("DASHBOARD_LAYOUT_CONFIG", "") // empty == unset for getEnv; auto-restored (was a bare os.Unsetenv that leaked into later tests)
 
 	config, err := LoadDashboardLayoutConfig()
 	require.NoError(t, err)
@@ -164,7 +162,7 @@ func TestDashboardLayoutConfig_WidgetTypesValid(t *testing.T) {
 func TestDashboardLayoutConfig_UniqueWidgetIDs(t *testing.T) {
 	// Reset singleton for testing
 	ResetDashboardLayoutConfigSingleton()
-	os.Unsetenv("DASHBOARD_LAYOUT_CONFIG")
+	t.Setenv("DASHBOARD_LAYOUT_CONFIG", "") // empty == unset for getEnv; auto-restored (was a bare os.Unsetenv that leaked into later tests)
 
 	config, err := LoadDashboardLayoutConfig()
 	require.NoError(t, err)
@@ -202,7 +200,7 @@ func TestIsValidWidgetType(t *testing.T) {
 func TestDashboardLayoutConfig_MatchesExpectedLayout(t *testing.T) {
 	// Reset singleton for testing
 	ResetDashboardLayoutConfigSingleton()
-	os.Unsetenv("DASHBOARD_LAYOUT_CONFIG")
+	t.Setenv("DASHBOARD_LAYOUT_CONFIG", "") // empty == unset for getEnv; auto-restored (was a bare os.Unsetenv that leaked into later tests)
 
 	config, err := LoadDashboardLayoutConfig()
 	require.NoError(t, err)

@@ -154,7 +154,7 @@ func TestBindInternalMetricsListener_FailsLoudlyWhenPortTaken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to reserve a test port via bindInternalMetricsListener: %v", err)
 	}
-	defer first.Close()
+	defer func() { _ = first.Close() }()
 
 	port := first.Addr().(*net.TCPAddr).Port
 	_, err = bindInternalMetricsListener(strconv.Itoa(port))
@@ -168,7 +168,12 @@ func TestBindInternalMetricsListener_FailsLoudlyWhenPortTaken(t *testing.T) {
 // INTERNAL_METRICS_PORT override.
 func TestInternalMetricsPort_DefaultAndEnvOverride(t *testing.T) {
 	t.Run("default", func(t *testing.T) {
-		os.Unsetenv("INTERNAL_METRICS_PORT")
+		// t.Setenv first so its cleanup restores whatever the env had before this
+		// subtest unset it; then unset for real (there is no t.Unsetenv).
+		t.Setenv("INTERNAL_METRICS_PORT", "")
+		if err := os.Unsetenv("INTERNAL_METRICS_PORT"); err != nil {
+			t.Fatalf("failed to unset INTERNAL_METRICS_PORT: %v", err)
+		}
 		if got := internalMetricsPort(); got != "9091" {
 			t.Errorf("internalMetricsPort() = %q, want default %q", got, "9091")
 		}

@@ -56,7 +56,7 @@ func TestPanicRecovery_IncludesPanicInNonProduction(t *testing.T) {
 
 	mw := PanicRecovery(logger, "development")
 	h := mw(handler)
-	h(c)
+	require.NoError(t, h(c))
 
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
@@ -78,7 +78,7 @@ func TestPanicRecovery_HidesPanicInProduction(t *testing.T) {
 
 	mw := PanicRecovery(logger, "production")
 	h := mw(handler)
-	h(c)
+	require.NoError(t, h(c))
 
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
@@ -101,7 +101,7 @@ func TestPanicRecovery_LogsPanicDetails(t *testing.T) {
 
 	mw := PanicRecovery(logger, "development")
 	h := mw(handler)
-	h(c)
+	require.NoError(t, h(c))
 
 	logOutput := logBuffer.String()
 	assert.Contains(t, logOutput, "panic recovered")
@@ -145,7 +145,7 @@ func TestPanicRecovery_RFC9457_Shape(t *testing.T) {
 
 	mw := PanicRecovery(logger, "development")
 	h := mw(handler)
-	h(c)
+	require.NoError(t, h(c))
 
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))

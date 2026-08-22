@@ -21,6 +21,11 @@ type UserAccountService interface {
 	// This is the core re-link matching logic: match on (user_id, institution_id, mask).
 	// If found, updates type/subtype if different and returns existing (preserving customizations).
 	// If not found, creates new UserAccount with provided details.
+	//
+	// The post-match type/subtype and un-hide writes are scoped to userID as the authenticated
+	// actor, not to the owner recorded on the matched row, so they cannot cross tenants (#1566).
+	// Returns repository.ErrUserAccountNotFound (wrapped) if userID does not own the matched row.
+	// Other failures of those two writes are non-fatal: the matched account is still returned.
 	MatchOrCreate(ctx context.Context, userID, institutionID string, mask *string, accountName, accountType, accountSubtype string) (*domain.UserAccount, error)
 
 	// GetByUserID retrieves all user accounts for a user.
@@ -34,9 +39,10 @@ type UserAccountService interface {
 	// Returns the updated UserAccount.
 	UpdateCustomization(ctx context.Context, id, userID string, req *domain.UpdateUserAccountRequest) (*domain.UserAccount, error)
 
-	// SetHidden updates the is_hidden flag on a UserAccount.
+	// SetHidden updates the is_hidden flag on a UserAccount, scoped to the authenticated actor.
 	// Used by DeleteAccount to hide the UserAccount when its last active account is deleted.
-	SetHidden(ctx context.Context, userAccountID string, hidden bool) error
+	// Returns repository.ErrUserAccountNotFound (unwrapped) if userID does not own userAccountID (#1566).
+	SetHidden(ctx context.Context, userAccountID, userID string, hidden bool) error
 }
 
 // userAccountService implements UserAccountService
@@ -67,7 +73,7 @@ func (s *userAccountService) MatchOrCreate(
 
 	if existing != nil {
 		// Found existing - this is a re-link scenario
-		return s.normalizeExistingUserAccount(ctx, existing, accountType, accountSubtype)
+		return s.normalizeExistingUserAccount(ctx, userID, existing, accountType, accountSubtype)
 	}
 
 	// Step 2: No match found - create new UserAccount
@@ -93,7 +99,7 @@ func (s *userAccountService) MatchOrCreate(
 				// Should not happen: Create said duplicate exists but FindBy found nothing
 				return nil, fmt.Errorf("user account not found after duplicate create error")
 			}
-			return s.normalizeExistingUserAccount(ctx, winner, accountType, accountSubtype)
+			return s.normalizeExistingUserAccount(ctx, userID, winner, accountType, accountSubtype)
 		}
 		return nil, err
 	}
@@ -103,9 +109,38 @@ func (s *userAccountService) MatchOrCreate(
 
 // normalizeExistingUserAccount applies post-find updates to an existing UserAccount:
 // updates type/subtype if they differ from the provided values, and un-hides the account
-// if it was previously hidden (e.g. after a re-link). Both updates are non-fatal.
+// if it was previously hidden (e.g. after a re-link).
+//
+// actorUserID is the AUTHENTICATED actor from MatchOrCreate — never existing.UserID. The
+// repository scopes both writes with `WHERE id = $x AND user_id = $y` (#1566); passing the
+// owner read off the matched row would make that predicate tautological, so it could never
+// reject and a row belonging to somebody else would be silently rewritten.
+//
+// Error handling: an ownership rejection (repository.ErrUserAccountNotFound) is a tenancy
+// violation, not a transient hiccup, so it is propagated to the caller. Any other error is
+// non-fatal — the caller only needs the matched row, and its customizations are preserved
+// either way. userAccountService has no logger dependency, so propagating is the only way
+// to make a rejection observable (adding a logger would change the constructor and every
+// wiring site; deliberately out of scope here).
+//
+// ⚠ WHAT PROPAGATING COSTS, recorded in #1537 round 9 because the paragraph above states the benefit
+// and not the price. The tenancy predicate cannot actually reject on THIS path: `existing` comes from
+// the user-scoped FindByInstitutionAndMask, so actorUserID always equals existing.UserID and the
+// predicate is satisfied by construction. What the propagated error really reports is
+// RowsAffected == 0 — the row vanished between the match and the update (a users-cascade racing a
+// re-link). And the caller's response to any error from MatchOrCreate is to log and continue WITHOUT a
+// user_account_id (account_service.go, "Continue without user_account_id"), which inserts an account
+// with a NULL chain key — losing the stable re-link key #171/#1109 exist for. Before #1566 the same
+// race left a stale type LABEL instead, which is strictly less damaging.
+//
+// So the trade is: a genuine cross-tenant write (unreachable here today, but reachable if a future
+// caller resolves the id some other way) is now refused, at the cost of a lost chain key on a rare
+// race. That is the right trade — a wrong-tenant write is unbounded, a NULL chain key is recoverable
+// on the next sync — but it is a trade, and the earlier version of this comment presented it as pure
+// gain.
 func (s *userAccountService) normalizeExistingUserAccount(
 	ctx context.Context,
+	actorUserID string,
 	existing *domain.UserAccount,
 	accountType, accountSubtype string,
 ) (*domain.UserAccount, error) {
@@ -113,20 +148,23 @@ func (s *userAccountService) normalizeExistingUserAccount(
 	existingType := derefPtr(existing.PrimaryType)
 	existingSubtype := derefPtr(existing.PrimarySubtype)
 	if existingType != accountType || existingSubtype != accountSubtype {
-		err := s.repo.UpdatePrimaryTypeAndSubtype(ctx, existing.ID, accountType, accountSubtype)
-		if err != nil {
-			// Non-fatal: log and continue (customizations preserved)
-			// In production, would log warning here
+		err := s.repo.UpdatePrimaryTypeAndSubtype(ctx, existing.ID, actorUserID, accountType, accountSubtype)
+		if errors.Is(err, repository.ErrUserAccountNotFound) {
+			return nil, fmt.Errorf("user %s does not own user account %s: %w", actorUserID, existing.ID, err)
 		}
+		// Other errors are non-fatal: the type labels stay stale, customizations are preserved.
 	}
 
 	// Un-hide if previously hidden (re-link after account deletion).
 	// Only update in-memory state on success to keep DB and caller in sync.
 	if existing.IsHidden {
-		if err := s.repo.UpdateHidden(ctx, existing.ID, false); err != nil {
-			// Non-fatal: log and continue (TODO: add logger to userAccountService)
-			_ = err
-		} else {
+		err := s.repo.UpdateHidden(ctx, existing.ID, actorUserID, false)
+		switch {
+		case errors.Is(err, repository.ErrUserAccountNotFound):
+			return nil, fmt.Errorf("user %s does not own user account %s: %w", actorUserID, existing.ID, err)
+		case err != nil:
+			// Non-fatal: the row stays hidden, and so does the in-memory copy.
+		default:
 			existing.IsHidden = false
 		}
 	}
@@ -229,9 +267,9 @@ func (s *userAccountService) UpdateCustomization(
 	return existing, nil
 }
 
-// SetHidden updates the is_hidden flag on a UserAccount.
-func (s *userAccountService) SetHidden(ctx context.Context, userAccountID string, hidden bool) error {
-	return s.repo.UpdateHidden(ctx, userAccountID, hidden)
+// SetHidden updates the is_hidden flag on a UserAccount, scoped to its owner (#1566).
+func (s *userAccountService) SetHidden(ctx context.Context, userAccountID, userID string, hidden bool) error {
+	return s.repo.UpdateHidden(ctx, userAccountID, userID, hidden)
 }
 
 // strPtrIfNotEmpty returns a pointer to s if s is not empty, otherwise nil

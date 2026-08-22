@@ -8,10 +8,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$FRONTEND_DIR"
 
-COVERAGE=false
+# NOTE: this must be EMPTY, not the string "false". Line ~86 expands it with `${COVERAGE:+...}`,
+# which fires whenever COVERAGE is NON-EMPTY — so `COVERAGE=false` meant coverage ran on EVERY
+# invocation, including a plain `bun run test`, silently rewriting apps/web/coverage/ every time.
+# Found in #1537 round 11 by a guard that observes the argv bun actually receives rather than
+# parsing this file; no amount of reading the script had caught it in six rounds of looking at it.
+COVERAGE=
 for arg in "$@"; do
     case $arg in
-        --coverage) COVERAGE=true; shift ;;
+        --coverage) COVERAGE=1; shift ;;
     esac
 done
 
@@ -63,6 +68,25 @@ REGULAR_COUNT=$(echo "$REGULAR_TESTS" | wc -l | tr -d ' ')
 echo "Testing $REGULAR_COUNT/$TOTAL_COUNT tests (excluding $((TOTAL_COUNT - REGULAR_COUNT)) process-isolated)"
 
 # Run tests
+# --timeout is passed EXPLICITLY and must stay that way. bunfig.toml declares
+# `[test] timeout = 30000` and that declaration is NOT IN EFFECT — verified with a 6s probe
+# test, which times out at exactly 5000ms (bun's built-in default) under bunfig alone and
+# passes with this flag. CI, on its pinned bun 1.3.14, hit the same 5000ms default. Note the
+# limit of that evidence: it shows the key has no effect in either environment, not WHY —
+# 1.3.14's docs do document `[test] timeout`, so blaming a particular bun version would be
+# overclaiming, and the cause is unestablished. Either way the 30s the repo has declared since
+# bunfig was written has never actually applied to this script.
+#
+# Pass exactly ONE --timeout here. bun honours the LAST one given, so a second flag silently
+# overrides this value; scripts/__tests__/check-frontend-test-timeout.test.sh fails the build on
+# a duplicate rather than letting a small trailing value hide behind a large leading one.
+#
+# Its sibling test-conflict-files.sh already passed `--timeout 30000` on both of its
+# invocations, so the workaround existed — it just was not applied here, to the 362-file
+# suite that does the bulk of the work. That inconsistency is what failed CI on #1537:
+# CategoryEditor's "should close creation form and dropdown after successful creation"
+# takes 441ms locally and 9910ms on a loaded runner, and died against the 5s default.
 bun test \
+    --timeout 30000 \
     ${COVERAGE:+--coverage --coverage-reporter=lcov --coverage-dir=coverage} \
     $REGULAR_TESTS

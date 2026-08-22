@@ -155,7 +155,6 @@ func (m *mockTransactionRepoForBudget) GetTransactionsForBudgetCategory(ctx cont
 }
 
 // Implement all required TransactionRepository methods as no-ops
-func (m *mockTransactionRepoForBudget) Create(ctx context.Context, tx *domain.Transaction) error { return nil }
 func (m *mockTransactionRepoForBudget) CreateBatch(ctx context.Context, txs []domain.Transaction) (map[string]bool, error) {
 	return nil, nil
 }
@@ -222,15 +221,8 @@ func (m *mockCustomCategoryRepoForBudget) GetByName(ctx context.Context, userID,
 func (m *mockCustomCategoryRepoForBudget) Update(ctx context.Context, category *domain.CustomCategory) error {
 	return nil
 }
-func (m *mockCustomCategoryRepoForBudget) Delete(ctx context.Context, id string) error { return nil }
 func (m *mockCustomCategoryRepoForBudget) CountByUserID(ctx context.Context, userID string) (int, error) {
 	return 0, nil
-}
-func (m *mockCustomCategoryRepoForBudget) IncrementUsageCount(ctx context.Context, userID, categoryName string) error {
-	return nil
-}
-func (m *mockCustomCategoryRepoForBudget) DecrementUsageCount(ctx context.Context, userID, categoryName string) error {
-	return nil
 }
 func (m *mockCustomCategoryRepoForBudget) GetNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
 	return map[string]string{}, nil
@@ -240,9 +232,6 @@ func (m *mockCustomCategoryRepoForBudget) GetChildren(ctx context.Context, paren
 }
 func (m *mockCustomCategoryRepoForBudget) HasChildren(ctx context.Context, id string) (bool, error) {
 	return false, nil
-}
-func (m *mockCustomCategoryRepoForBudget) ClearParentForChildren(ctx context.Context, parentID string) error {
-	return nil
 }
 func (m *mockCustomCategoryRepoForBudget) GetCategoryUsage(ctx context.Context, userID, categoryID string) (*domain.CategoryUsage, error) {
 	return &domain.CategoryUsage{}, nil

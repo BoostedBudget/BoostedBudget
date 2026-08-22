@@ -367,7 +367,7 @@ func (r *adminUserRepository) UpdateUserTier(ctx context.Context, actorUserID, u
 	if err != nil {
 		return UpdateTierRow{}, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
 	var row UpdateTierRow
 	var clerkUserIDEnc string
@@ -884,7 +884,7 @@ func (r *adminUserRepository) removeTierOverride(
 	if err != nil {
 		return RemoveTierOverrideRow{}, false, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
 	var row RemoveTierOverrideRow
 	var clerkUserIDEnc string

@@ -449,11 +449,12 @@ func (h *PaddleCheckoutHandler) getPaddlePriceIDFromConfig(tierName, billingInte
 
 	// Get appropriate price ID based on billing interval
 	var priceID *string
-	if billingInterval == "month" {
+	switch billingInterval {
+	case "month":
 		priceID = tier.Pricing.PaddlePriceIDMonthly
-	} else if billingInterval == "year" {
+	case "year":
 		priceID = tier.Pricing.PaddlePriceIDYearly
-	} else {
+	default:
 		return "", fmt.Errorf("invalid billing interval: %s (must be 'month' or 'year')", billingInterval)
 	}
 

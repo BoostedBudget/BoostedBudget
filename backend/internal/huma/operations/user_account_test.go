@@ -61,8 +61,8 @@ func (m *mockUserAccountService) UpdateCustomization(
 	return args.Get(0).(*domain.UserAccount), args.Error(1)
 }
 
-func (m *mockUserAccountService) SetHidden(ctx context.Context, userAccountID string, hidden bool) error {
-	args := m.Called(ctx, userAccountID, hidden)
+func (m *mockUserAccountService) SetHidden(ctx context.Context, userAccountID, userID string, hidden bool) error {
+	args := m.Called(ctx, userAccountID, userID, hidden)
 	return args.Error(0)
 }
 
