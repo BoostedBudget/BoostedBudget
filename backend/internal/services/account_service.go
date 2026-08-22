@@ -714,8 +714,13 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 	}
 	linkedItemID := account.LinkedItemID
 
-	// Step 2: Delete the account
-	if err := s.accountRepo.Delete(ctx, accountID, userID); err != nil {
+	// Step 2: Soft-remove the account (Issue #1569) — set status='removed' + removed_at rather
+	// than hard-deleting the row. Before this fix, accountRepo.Delete hard-deleted the account,
+	// which CASCADE-deleted its balance_snapshots, holdings, investment transactions, and (via
+	// migration 000150's now-RESTRICT FK) would have started failing outright once a savings_goal
+	// pointed at it. Retaining the row means that history now survives a single-account removal,
+	// matching the institution-level DisconnectInstitution behavior below.
+	if err := s.accountRepo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil); err != nil {
 		return err
 	}
 
@@ -762,10 +767,10 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 			// not land, so the job would be a guaranteed silent no-op — do not create it; leave the
 			// item to the sweep, which can still see it precisely because the stamp failed.
 			//
-			// NON-ATOMIC, disclosed rather than fixed: accountRepo.Delete above is a standalone
+			// NON-ATOMIC, disclosed rather than fixed: accountRepo.UpdateStatus above is a standalone
 			// autocommit Exec, so it has already committed by the time this stamp runs as a separate
-			// statement. A crash in that window leaves the account gone, cleanup_scheduled_at NULL and
-			// no job — the sweep re-selects most such items, but not a 'replaced'/'disconnected' one
+			// statement. A crash in that window leaves the account marked 'removed', cleanup_scheduled_at
+			// NULL and no job — the sweep re-selects most such items, but not a 'replaced'/'disconnected' one
 			// (it excludes both statuses), which is then stranded and still billing. Pre-existing in
 			// kind — the same window previously sat between Delete and Enqueue — and widened by this
 			// one statement, so not a regression; closing it would need a transaction spanning the
@@ -881,17 +886,21 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 	return nil
 }
 
-// DisconnectInstitution disconnects an institution (linked item) and all associated accounts.
+// DisconnectInstitution disconnects an institution (linked item) while RETAINING the item's row
+// and its accounts' financial history (Issue #1569).
 //
 // This method performs the following steps:
-// 1. Retrieve the linked item with ownership validation
-// 2. Decrypt the Plaid access token
-// 3. Call Plaid /item/remove to stop monthly billing (critical for cost control - Issue #226)
-// 4. Delete the linked item from database (CASCADE deletes all associated accounts)
+//  1. Retrieve the linked item with ownership validation
+//  2. Decrypt the Plaid access token
+//  3. Call Plaid /item/remove to stop monthly billing (critical for cost control - Issue #226)
+//  4. Mark the item 'disconnected', stamp plaid_removed_at, and mark its accounts 'removed' —
+//     see the "Issue #1569" paragraph below for why this replaced a hard DeleteByUser.
 //
-// Issue #1486 follow-up part F: step 4 is CONDITIONAL on step 3 having succeeded. Until this fix a
+// Issue #1486 follow-up part F: step 4 is CONDITIONAL on step 3 having succeeded. Until that fix a
 // Plaid failure was logged and the row deleted anyway, which is the same defect as parts A/B
-// (PlaidItemCleanupService.RemoveItem) on a second, user-initiated path.
+// (PlaidItemCleanupService.RemoveItem) on a second, user-initiated path. That condition is
+// unchanged by the #1569 rewrite below: step 4 still does not run unless step 3 succeeded (or
+// ITEM_NOT_FOUND, see below).
 //
 // On FREQUENCY, since an earlier version of this comment claimed this path "runs far more often than
 // the daily cleanup sweep": that was asserted, not measured, and it is currently FALSE. The frontend
@@ -901,27 +910,41 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 // being identical and irreversible, which needs no frequency argument. Do not reintroduce a frequency
 // claim here without a measurement.
 //
-// Deleting here CASCADE-deletes the accounts too,
-// leaving a live, still-billing Plaid Item with no local record it ever existed, and
-// DeleteUserCascade's C2 guard (repository.uncleanedLinkedItemExistsClause, an EXISTS over
-// linked_items) with nothing left to see.
+// Issue #1569: step 4 used to call linkedItemRepo.DeleteByUser, which hard-deleted the linked_items
+// row and, via accounts.linked_item_id ON DELETE CASCADE, every account under it — and through
+// those accounts, every balance_snapshot, holding, investment transaction, and liability row. That
+// is the literal "I changed banks" action irreversibly destroying the user's financial history, so
+// it is replaced with the same claim → remove → stamp → disconnect contract
+// PlaidItemCleanupService.RemoveItem already implements for the cleanup worker (see that method,
+// and item_cleanup.go's Work): mark the item 'disconnected' (MarkItemsDisconnected, the status this
+// repo has carried since migration 000032 — "'disconnected': User manually disconnected, data
+// preserved" — designed years ago and bypassed by DeleteByUser ever since), stamp
+// plaid_removed_at (MarkPlaidRemoved), and transition the item's accounts to status='removed' with
+// removed_at set (accountRepo.MarkRemovedByLinkedItemID). Nothing is deleted.
 //
-// The inherited rationale — "the access token is likely already invalid, so delete anyway; this
-// prevents orphaned database records" — traded a harmless orphan (a local row) for a harmful one (a
-// billing Plaid Item nobody can find), and rested on plaidService.RemoveItem's doc comment, which
-// asserted the same thing and is corrected alongside this. Plaid bills per ITEM: an Item with an
-// unusable token is still an Item until /item/remove succeeds.
+// The plaid_removed_at stamp is NOT bookkeeping — DeleteUserCascade's C2 guard
+// (repository.uncleanedLinkedItemExistsClause) checks plaid_removed_at IS NULL, not item status,
+// and refuses to erase a user while any item still owes Plaid-side cleanup. A stamp failure here is
+// therefore propagated, exactly as it is in RemoveItem, rather than logged and dropped: leaving it
+// unstamped would silently block that user's GDPR erasure forever.
+//
+// The inherited rationale for the OLD hard delete — "the access token is likely already invalid, so
+// delete anyway; this prevents orphaned database records" — traded a harmless orphan (a local row)
+// for a harmful one (a billing Plaid Item nobody can find) AND for destroyed history, and rested on
+// plaidService.RemoveItem's doc comment, which asserted the same thing and was corrected alongside
+// the #1486 fix. Plaid bills per ITEM: an Item with an unusable token is still an Item until
+// /item/remove succeeds.
 //
 // The ONE Plaid failure still treated as success is ITEM_NOT_FOUND (isPlaidItemAlreadyGone): Plaid
 // has already forgotten the Item, so billing has stopped and there is nothing left to remove.
 // Without that branch this method would refuse forever for any such item and the user could never
 // clear it from their UI — the same asymmetry parts A and B close in RemoveItem.
 //
-// On a genuine failure the row and its accounts are LEFT IN PLACE and the error is returned to the
-// caller (a 500 via the handler). Recovery is the ordinary one: the user retries the disconnect.
-// Note the cleanup sweep will NOT retry it automatically — a healthy, recently-synced item is not a
-// cleanup candidate — which is precisely why the failure must surface rather than be swallowed into
-// a false success.
+// On a genuine Plaid failure the row and its accounts are LEFT IN PLACE, still 'active', and the
+// error is returned to the caller (a 500 via the handler). Recovery is the ordinary one: the user
+// retries the disconnect. Note the cleanup sweep will NOT retry it automatically — a healthy,
+// recently-synced item is not a cleanup candidate — which is precisely why the failure must surface
+// rather than be swallowed into a false success.
 //
 // Returns repository.ErrLinkedItemNotFound if item doesn't exist or user doesn't own it.
 func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error {
@@ -936,7 +959,7 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 	if removeErr := s.plaidService.RemoveItem(ctx, linkedItem.AccessToken); removeErr != nil {
 		if !isPlaidItemAlreadyGone(removeErr) {
 			if s.logger != nil {
-				s.logger.Error("plaid RemoveItem failed; NOT deleting the linked item, which is the only local record of a still-billing Plaid Item",
+				s.logger.Error("plaid RemoveItem failed; NOT disconnecting the linked item locally, since Plaid billing has not stopped",
 					"item_id", linkedItemID,
 					"user_id", userID,
 					"error", removeErr,
@@ -952,9 +975,56 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 		}
 	}
 
-	// Step 4: Delete from database (CASCADE deletes all accounts). Reached only when Plaid billing
-	// really has stopped — see the doc comment.
-	return s.linkedItemRepo.DeleteByUser(ctx, linkedItemID, userID)
+	// Step 4: Retain the row and its history — reached only when Plaid billing really has stopped
+	// (see the doc comment). Mirrors PlaidItemCleanupService.RemoveItem's order, which is
+	// load-bearing there for the same reason: stamp plaid_removed_at BEFORE marking 'disconnected'.
+	// A crash between the two leaves status live, so a retried DisconnectInstitution call reaches
+	// this line again (RemoveItem answers ITEM_NOT_FOUND on the retry) and the stamp still lands.
+	// In the reverse order, a crash after 'disconnected' but before the stamp would still be
+	// recoverable here — cleanupCandidateSelectQuery's sweep does not exclude 'disconnected', only
+	// 'replaced' — but matching RemoveItem's order keeps this path from becoming a second place
+	// that has to reason about that independently.
+	//
+	// MarkPlaidRemoved failure is NOT swallowed: see the doc comment's GDPR paragraph. A genuine
+	// failure here must surface so the caller can retry, not be logged and dropped.
+	if stampErr := s.linkedItemRepo.MarkPlaidRemoved(ctx, []string{linkedItemID}); stampErr != nil &&
+		!errors.Is(stampErr, repository.ErrNoLinkedItemsUpdated) {
+		// ErrNoLinkedItemsUpdated means the row is already gone (MarkPlaidRemoved has no status
+		// guard that could otherwise filter it out) — nothing left to stamp, and nothing left for
+		// uncleanedLinkedItemExistsClause to see. Any OTHER error must propagate.
+		if s.logger != nil {
+			s.logger.Error("plaid removal succeeded but stamping plaid_removed_at failed; NOT proceeding to mark the item disconnected",
+				"item_id", linkedItemID,
+				"user_id", userID,
+				"error", stampErr,
+			)
+		}
+		return fmt.Errorf("failed to record plaid_removed_at for item %s after Plaid removal: %w", linkedItemID, stampErr)
+	}
+
+	if markErr := s.linkedItemRepo.MarkItemsDisconnected(ctx, []string{linkedItemID}); markErr != nil &&
+		!errors.Is(markErr, repository.ErrNoLinkedItemsUpdated) {
+		// ErrNoLinkedItemsUpdated is a legitimate no-op — the row is already 'disconnected' or
+		// 'replaced' (MarkItemsDisconnected's WHERE excludes both). Either way the Plaid side is
+		// already recorded done by the stamp above; any OTHER error must propagate.
+		return fmt.Errorf("failed to mark linked item %s disconnected: %w", linkedItemID, markErr)
+	}
+
+	// Transition the item's accounts to 'removed' with removed_at set — the change that actually
+	// retains history: no CASCADE, no DELETE, balance_snapshots/holdings/investment
+	// transactions/liability rows for these accounts are untouched.
+	if err := s.accountRepo.MarkRemovedByLinkedItemID(ctx, linkedItemID); err != nil {
+		if s.logger != nil {
+			s.logger.Error("failed to mark accounts removed after disconnecting linked item",
+				"item_id", linkedItemID,
+				"user_id", userID,
+				"error", err,
+			)
+		}
+		return fmt.Errorf("failed to mark accounts removed for item %s: %w", linkedItemID, err)
+	}
+
+	return nil
 }
 
 // AccountFilterOptions holds filter options for GetAccountsFiltered (Issue #1109).
