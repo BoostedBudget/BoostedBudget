@@ -35,6 +35,27 @@ describe('PrivacyPolicy', () => {
     expect(screen.getAllByText(/6 months/i).length).toBeGreaterThan(0)
   })
 
+  // Issue #1569: retention_cleanup_check.go auto-deletes a lapsed (cancelled, never explicitly
+  // deleted) user's data after the 6-month window — under "retain unless explicitly deleted"
+  // that must be disclosed plainly, including that it covers transaction/automation-rule
+  // history, not just an abstract "account data."
+  it('plainly discloses that a lapsed account\'s transaction history is deleted after the retention period (Section 8.4)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    expect(screen.getByText(/including your automation rules, transaction history, and balance history/i)).toBeInTheDocument()
+  })
+
+  // Issue #1569: DisconnectInstitution/DeleteAccount now soft-remove a linked bank account —
+  // its transaction, balance, and holdings history is RETAINED, not erased. Section 8.2's
+  // "Account Deletion" heading is ambiguous now that the product also has a per-bank-account
+  // "Delete Account" action (AccountsPage), so the policy must distinguish the two explicitly
+  // rather than let a reader assume disconnecting one bank account erases its history the way
+  // deleting the whole BoostedBudget account does.
+  it('distinguishes removing a linked bank account (history retained) from deleting your BoostedBudget account (Section 8.2a)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    expect(screen.getByText(/removing a linked bank account/i)).toBeInTheDocument()
+    expect(screen.getByText(/is retained/i)).toBeInTheDocument()
+  })
+
   it('renders household member deletion cross-reference (Section 8.5)', () => {
     renderWithRouter(<PrivacyPolicy />)
     expect(screen.getByText(/removed household members/i)).toBeInTheDocument()
