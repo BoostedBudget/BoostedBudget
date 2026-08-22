@@ -159,7 +159,13 @@ describe('excluded operations', () => {
     expect(isExcluded('exchangePublicToken')).toBe(true)
     expect(isExcluded('createLinkToken')).toBe(true)
     expect(isExcluded('disconnectInstitution')).toBe(true)
-    expect(isExcluded('deleteAccount')).toBe(true)
+    // Issue #1569, Task 6: deleteAccount was renamed/split into disconnectAccount (soft) and
+    // purgeAccount (hard delete); disconnectInstitution gained a purgeInstitution sibling. All
+    // four stay excluded — an AI assistant must never touch Plaid linking/removal OR a user's
+    // financial history.
+    expect(isExcluded('disconnectAccount')).toBe(true)
+    expect(isExcluded('purgeAccount')).toBe(true)
+    expect(isExcluded('purgeInstitution')).toBe(true)
   })
 
   it('excludes user/account deletion', () => {
@@ -323,8 +329,10 @@ describe('completeness', () => {
     //   keeping it would have made it a manifest-only entry, invisible to the capabilitySummary
     //   aggregates (see capability-summary.drift.test.ts). It was an *excluded* op, so the
     //   allowed/read/write/destructive counts are unchanged.
+    // +2 net from Issue #1569 Task 6: deleteAccount removed; disconnectAccount, purgeAccount, and
+    //   purgeInstitution added (disconnectInstitution kept, moved to POST).
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(194)
+    expect(ALL_OPERATION_IDS.length).toBe(196)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

@@ -32,12 +32,22 @@ mock.module('./components/AccountCustomizationModal', () => ({
 import { STUB_CONFIRMATION_DIALOG } from '@/test/mocks/confirmation-dialog'
 mock.module('@/components/ui/confirmation-dialog', () => STUB_CONFIRMATION_DIALOG)
 
-// Simplify AccountCard — exposes a Delete button that calls onDelete with the full account object
+// Simplify AccountCard — exposes Disconnect and Purge buttons calling their respective handlers
+// with the full account object (Issue #1569, Task 6: the single Delete verb split in two).
 mock.module('./AccountCard', () => ({
-  AccountCard: ({ account, onDelete }: { account: { name: string; [key: string]: unknown }; onDelete?: (account: unknown) => void }) => (
+  AccountCard: ({
+    account,
+    onDisconnect,
+    onPurge,
+  }: {
+    account: { name: string; [key: string]: unknown }
+    onDisconnect?: (account: unknown) => void
+    onPurge?: (account: unknown) => void
+  }) => (
     <div data-testid="account-card">
       {account.name}
-      <button onClick={() => onDelete?.(account)}>Delete</button>
+      <button onClick={() => onDisconnect?.(account)}>Disconnect</button>
+      <button onClick={() => onPurge?.(account)}>Delete from history</button>
     </div>
   ),
 }))
@@ -137,7 +147,8 @@ import { AccountsPage } from './AccountsPage'
 import {
   mockUseGetAccounts,
   mockRefetchAccounts,
-  mockUseDeleteAccount,
+  mockUseDisconnectAccount,
+  mockUsePurgeAccount,
 } from '@/test/mocks/accounts-api'
 import {
   mockUseGetUserProfile,
@@ -194,7 +205,8 @@ describe('AccountsPage', () => {
     // Clear all mock call history
     resetLocationProbe()
     mockUseGetAccounts.mockClear()
-    mockUseDeleteAccount.mockClear()
+    mockUseDisconnectAccount.mockClear()
+    mockUsePurgeAccount.mockClear()
     mockUseGetUserProfile.mockClear()
     mockUseCreateLinkToken.mockClear()
     mockCreateLinkTokenMutateAsync.mockClear()
@@ -392,7 +404,9 @@ describe('AccountsPage', () => {
     })
   })
 
-  describe('delete dialog integration (Task 7)', () => {
+  // Issue #1569, Task 6: the single "delete" dialog is split into disconnect (primary,
+  // non-destructive) and purge (destructive secondary, type-to-confirm).
+  describe('disconnect dialog integration (Task 7, split for #1569 Task 6)', () => {
     const mockAccount = {
       id: 'acc-1',
       linked_item_id: 'item-1',
@@ -413,7 +427,7 @@ describe('AccountsPage', () => {
         error: null,
         refetch: mockRefetchAccounts,
       })
-      mockUseDeleteAccount.mockReturnValue({
+      mockUseDisconnectAccount.mockReturnValue({
         mutateAsync: mock(() => Promise.resolve()),
         isPending: false,
         isError: false,
@@ -426,10 +440,10 @@ describe('AccountsPage', () => {
       expect(screen.queryByTestId('confirm-delete-dialog')).not.toBeInTheDocument()
     })
 
-    it('shows ConfirmationDialog when account delete is triggered from card', () => {
+    it('shows ConfirmationDialog when account disconnect is triggered from card', () => {
       renderAccountsPage()
 
-      fireEvent.click(screen.getByText('Delete'))
+      fireEvent.click(screen.getByText('Disconnect'))
 
       expect(screen.getByTestId('confirm-delete-dialog')).toBeInTheDocument()
     })
@@ -437,37 +451,35 @@ describe('AccountsPage', () => {
     it('passes correct title to ConfirmationDialog', () => {
       renderAccountsPage()
 
-      fireEvent.click(screen.getByText('Delete'))
+      fireEvent.click(screen.getByText('Disconnect'))
 
-      expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-title', 'Delete Account')
+      expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-title', 'Disconnect account')
     })
 
-    it('passes account name as confirmText to ConfirmationDialog', () => {
+    // Disconnect is the primary, non-destructive action: no type-to-confirm — confirmText is
+    // undefined, unlike purge below.
+    it('does not require type-to-confirm for disconnect', () => {
       renderAccountsPage()
 
-      fireEvent.click(screen.getByText('Delete'))
+      fireEvent.click(screen.getByText('Disconnect'))
 
-      expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-confirm-text', 'Chase Checking')
+      expect(screen.getByTestId('confirm-delete-dialog')).not.toHaveAttribute('data-confirm-text', 'Chase Checking')
     })
 
-    // Issue #1569: DeleteAccount now soft-removes — the account row, its balance_snapshots,
-    // holdings, and liabilities all survive. "Balance history will be removed" was false the
-    // moment that shipped; the dialog must say history is retained instead.
-    it('shows transaction-preserved and balance-retained messages in description', () => {
+    it('shows retained-history messaging in description', () => {
       renderAccountsPage()
 
-      fireEvent.click(screen.getByText('Delete'))
+      fireEvent.click(screen.getByText('Disconnect'))
 
       const desc = screen.getByTestId('dialog-description')
-      expect(desc.textContent).toContain('transactions will be preserved')
-      expect(desc.textContent).toContain('balance history will be retained')
-      expect(desc.textContent).not.toContain('Balance history will be removed')
+      expect(desc.textContent).toContain('retained')
+      expect(desc.textContent).toContain('Closed accounts')
     })
 
     it('shows institution removal message when account is the last for its linked_item_id', () => {
       // Only one account → last for item-1
       renderAccountsPage()
-      fireEvent.click(screen.getByText('Delete'))
+      fireEvent.click(screen.getByText('Disconnect'))
 
       const desc = screen.getByTestId('dialog-description')
       expect(desc.textContent).toContain('bank connection to')
@@ -490,12 +502,73 @@ describe('AccountsPage', () => {
 
       renderAccountsPage()
 
-      // Click delete on the first card
-      const deleteButtons = screen.getAllByText('Delete')
-      fireEvent.click(deleteButtons[0])
+      // Click disconnect on the first card
+      const disconnectButtons = screen.getAllByText('Disconnect')
+      fireEvent.click(disconnectButtons[0])
 
       const desc = screen.getByTestId('dialog-description')
       expect(desc.textContent).not.toContain('bank connection')
+    })
+  })
+
+  describe('purge dialog integration (Issue #1569, Task 6: destructive, type-to-confirm)', () => {
+    const closedAccount = {
+      id: 'acc-1',
+      linked_item_id: 'item-1',
+      name: 'Chase Checking',
+      institution_name: 'Chase',
+      type: 'depository',
+      subtype: 'checking',
+      status: 'removed',
+      removed_at: '2026-03-01T00:00:00Z',
+      is_hidden: false,
+      current_balance: 1000,
+      created_at: '2025-01-01T00:00:00Z',
+    }
+
+    beforeEach(() => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [closedAccount] },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+      mockUsePurgeAccount.mockReturnValue({
+        mutateAsync: mock(() => Promise.resolve()),
+        isPending: false,
+        isError: false,
+        error: null,
+      })
+    })
+
+    it('shows ConfirmationDialog when purge is triggered from card', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+      fireEvent.click(screen.getByText('Delete from history'))
+
+      expect(screen.getByTestId('confirm-delete-dialog')).toBeInTheDocument()
+    })
+
+    it('requires type-to-confirm with the account name', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+      fireEvent.click(screen.getByText('Delete from history'))
+
+      expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-confirm-text', 'Chase Checking')
+    })
+
+    it('states the purge is permanent, that transactions survive, and that a savings goal blocks it', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+      fireEvent.click(screen.getByText('Delete from history'))
+
+      const desc = screen.getByTestId('dialog-description')
+      expect(desc.textContent).toContain('cannot be undone')
+      expect(desc.textContent).toContain('transactions will NOT be deleted')
+      expect(desc.textContent).toContain('savings goal')
     })
   })
 

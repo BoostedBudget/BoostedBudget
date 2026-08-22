@@ -28,7 +28,10 @@ export const ACCOUNT_SORTABLE_COLUMNS = new Set([
 export interface AccountTableProps {
   accounts: Account[]
   onEdit?: (account: Account) => void
-  onDelete?: (account: Account) => void
+  // Issue #1569, Task 6: disconnect (primary, retains history) and purge (destructive, reachable
+  // only for a closed row) replace the single onDelete verb.
+  onDisconnect?: (account: Account) => void
+  onPurge?: (account: Account) => void
   onRowClick?: (account: Account) => void
   loading?: boolean
   sort?: SortState
@@ -48,7 +51,8 @@ export interface AccountTableProps {
 export function AccountTable({
   accounts,
   onEdit,
-  onDelete,
+  onDisconnect,
+  onPurge,
   onRowClick,
   loading = false,
   sort = null,
@@ -63,7 +67,7 @@ export function AccountTable({
   balanceRange,
   onBalanceRangeChange,
 }: AccountTableProps) {
-  const hasActions = !!(onEdit || onDelete)
+  const hasActions = !!(onEdit || onDisconnect || onPurge)
   const hasActiveFilters =
     (institutionFilter?.length ?? 0) > 0 ||
     (typeFilter?.length ?? 0) > 0 ||
@@ -287,34 +291,58 @@ export function AccountTable({
       }
       rowActions={
         hasActions
-          ? (row) => (
-              <div className="flex items-center justify-end gap-2">
-                {onEdit && (
-                  <button
-                    type="button"
-                    onClick={() => onEdit(row)}
-                    disabled={loading}
-                    className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
-                    aria-label="Edit account"
-                    title="Edit account"
-                  >
-                    <Edit aria-hidden="true" />
-                  </button>
-                )}
-                {onDelete && (
-                  <button
-                    type="button"
-                    onClick={() => onDelete(row)}
-                    disabled={loading}
-                    className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
-                    aria-label="Delete account"
-                    title="Delete account"
-                  >
-                    <Trash2 aria-hidden="true" />
-                  </button>
-                )}
-              </div>
-            )
+          ? (row) => {
+              // Issue #1569, Task 6: a closed row's only sensible action is purge — Edit and
+              // Disconnect both act on a LIVE account (a Task 5 reviewer finding: closed rows
+              // previously kept working Edit/Delete actions that harmlessly re-ran
+              // UpdateStatus(removed)).
+              const closed = isInactive(row)
+              return (
+                <div className="flex items-center justify-end gap-2">
+                  {closed ? (
+                    onPurge && (
+                      <button
+                        type="button"
+                        onClick={() => onPurge(row)}
+                        disabled={loading}
+                        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
+                        aria-label="Permanently delete account"
+                        title="Permanently delete this account and its history"
+                      >
+                        <Trash2 aria-hidden="true" />
+                      </button>
+                    )
+                  ) : (
+                    <>
+                      {onEdit && (
+                        <button
+                          type="button"
+                          onClick={() => onEdit(row)}
+                          disabled={loading}
+                          className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
+                          aria-label="Edit account"
+                          title="Edit account"
+                        >
+                          <Edit aria-hidden="true" />
+                        </button>
+                      )}
+                      {onDisconnect && (
+                        <button
+                          type="button"
+                          onClick={() => onDisconnect(row)}
+                          disabled={loading}
+                          className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
+                          aria-label="Disconnect account"
+                          title="Stop syncing this account, retaining its history"
+                        >
+                          <Unplug aria-hidden="true" />
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              )
+            }
           : undefined
       }
     />

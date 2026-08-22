@@ -269,10 +269,10 @@ export const useReorderAccounts = <TError = ErrorType<ErrorModel>,
       return useMutation(getReorderAccountsMutationOptions(options), queryClient);
     }
     /**
- * Deletes a single account with ownership validation.
- * @summary Delete account
+ * Permanently destroys a single account and everything derived from it (balance history, holdings, liabilities) with ownership validation. This cannot be undone. Transactions are not destroyed. Refuses if a savings goal still references this account. Use POST .../disconnect instead to stop syncing while retaining history.
+ * @summary Purge account
  */
-export const deleteAccount = (
+export const purgeAccount = (
     id: string,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
@@ -287,11 +287,11 @@ export const deleteAccount = (
 
 
 
-export const getDeleteAccountMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteAccount>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof deleteAccount>>, TError,{id: string}, TContext> => {
+export const getPurgeAccountMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof purgeAccount>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof purgeAccount>>, TError,{id: string}, TContext> => {
 
-const mutationKey = ['deleteAccount'];
+const mutationKey = ['purgeAccount'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
@@ -301,10 +301,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteAccount>>, {id: string}> = (props) => {
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof purgeAccount>>, {id: string}> = (props) => {
           const {id} = props ?? {};
 
-          return  deleteAccount(id,requestOptions)
+          return  purgeAccount(id,requestOptions)
         }
 
 
@@ -314,22 +314,22 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
   return  { mutationFn, ...mutationOptions }}
 
-    export type DeleteAccountMutationResult = NonNullable<Awaited<ReturnType<typeof deleteAccount>>>
+    export type PurgeAccountMutationResult = NonNullable<Awaited<ReturnType<typeof purgeAccount>>>
 
-    export type DeleteAccountMutationError = ErrorType<ErrorModel>
+    export type PurgeAccountMutationError = ErrorType<ErrorModel>
 
     /**
- * @summary Delete account
+ * @summary Purge account
  */
-export const useDeleteAccount = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteAccount>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+export const usePurgeAccount = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof purgeAccount>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
-        Awaited<ReturnType<typeof deleteAccount>>,
+        Awaited<ReturnType<typeof purgeAccount>>,
         TError,
         {id: string},
         TContext
       > => {
-      return useMutation(getDeleteAccountMutationOptions(options), queryClient);
+      return useMutation(getPurgeAccountMutationOptions(options), queryClient);
     }
     /**
  * Updates account customization fields.
@@ -398,7 +398,133 @@ export const useUpdateAccount = <TError = ErrorType<ErrorModel>,
       return useMutation(getUpdateAccountMutationOptions(options), queryClient);
     }
     /**
- * Disconnects an institution and all associated accounts.
+ * Stops a single account from syncing and retains its financial history. Does not destroy any data — use DELETE to permanently purge an account and its history.
+ * @summary Disconnect account
+ */
+export const disconnectAccount = (
+    id: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<void>(
+      {url: `/api/v1/accounts/${id}/disconnect`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+
+export const getDisconnectAccountMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof disconnectAccount>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof disconnectAccount>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['disconnectAccount'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof disconnectAccount>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  disconnectAccount(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DisconnectAccountMutationResult = NonNullable<Awaited<ReturnType<typeof disconnectAccount>>>
+
+    export type DisconnectAccountMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Disconnect account
+ */
+export const useDisconnectAccount = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof disconnectAccount>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof disconnectAccount>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getDisconnectAccountMutationOptions(options), queryClient);
+    }
+    /**
+ * Permanently destroys a linked item and every account under it (balance history, holdings, liabilities) with ownership validation. This cannot be undone. Transactions are not destroyed. Refuses if a savings goal still references one of its accounts, and refuses unless the institution was already disconnected. Use POST .../disconnect first.
+ * @summary Purge institution
+ */
+export const purgeInstitution = (
+    id: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<void>(
+      {url: `/api/v1/linked-items/${id}`, method: 'DELETE', signal
+    },
+      options);
+    }
+
+
+
+
+export const getPurgeInstitutionMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof purgeInstitution>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof purgeInstitution>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['purgeInstitution'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof purgeInstitution>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  purgeInstitution(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PurgeInstitutionMutationResult = NonNullable<Awaited<ReturnType<typeof purgeInstitution>>>
+
+    export type PurgeInstitutionMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Purge institution
+ */
+export const usePurgeInstitution = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof purgeInstitution>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof purgeInstitution>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getPurgeInstitutionMutationOptions(options), queryClient);
+    }
+    /**
+ * Disconnects an institution (stops Plaid sync/billing) and retains all of its accounts' financial history. Does not destroy any data — use DELETE to permanently purge the institution and its accounts.
  * @summary Disconnect institution
  */
 export const disconnectInstitution = (
@@ -408,7 +534,7 @@ export const disconnectInstitution = (
 
 
       return customInstance<void>(
-      {url: `/api/v1/linked-items/${id}`, method: 'DELETE', signal
+      {url: `/api/v1/linked-items/${id}/disconnect`, method: 'POST', signal
     },
       options);
     }

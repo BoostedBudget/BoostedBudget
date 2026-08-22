@@ -211,14 +211,40 @@ describe('AccountTable', () => {
       expect(onEdit).toHaveBeenCalledWith(mockAccounts[0])
     })
 
-    it('should call onDelete when delete button is clicked', () => {
-      const onDelete = mock(() => {})
-      render(<AccountTable accounts={mockAccounts} onDelete={onDelete} />)
+    it('should call onDisconnect when disconnect button is clicked', () => {
+      const onDisconnect = mock(() => {})
+      render(<AccountTable accounts={mockAccounts} onDisconnect={onDisconnect} />)
 
-      const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
-      fireEvent.click(deleteButtons[0])
+      const disconnectButtons = screen.getAllByRole('button', { name: /disconnect/i })
+      fireEvent.click(disconnectButtons[0])
 
-      expect(onDelete).toHaveBeenCalledWith(mockAccounts[0])
+      expect(onDisconnect).toHaveBeenCalledWith(mockAccounts[0])
+    })
+
+    it('should call onPurge when purge button is clicked for a closed account', () => {
+      const onPurge = mock(() => {})
+      const closedAccounts = [createMockAccount({ status: 'removed', removed_at: '2026-03-01T00:00:00Z' })]
+      render(<AccountTable accounts={closedAccounts} onPurge={onPurge} />)
+
+      const purgeButtons = screen.getAllByRole('button', { name: /permanently delete/i })
+      fireEvent.click(purgeButtons[0])
+
+      expect(onPurge).toHaveBeenCalledWith(closedAccounts[0])
+    })
+
+    it('should not render Edit or Disconnect for a closed account', () => {
+      const closedAccounts = [createMockAccount({ status: 'removed', removed_at: '2026-03-01T00:00:00Z' })]
+      render(
+        <AccountTable
+          accounts={closedAccounts}
+          onEdit={mock(() => {})}
+          onDisconnect={mock(() => {})}
+          onPurge={mock(() => {})}
+        />
+      )
+
+      expect(screen.queryByRole('button', { name: /^edit account$/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: /^disconnect account$/i })).toBeNull()
     })
 
     it('should not show actions column when no handlers provided', () => {
@@ -238,16 +264,16 @@ describe('AccountTable', () => {
         <AccountTable
           accounts={mockAccounts}
           onEdit={() => {}}
-          onDelete={() => {}}
+          onDisconnect={() => {}}
           loading
         />
       )
 
       const editButtons = screen.getAllByRole('button', { name: /edit/i })
-      const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
+      const disconnectButtons = screen.getAllByRole('button', { name: /disconnect/i })
 
       editButtons.forEach((btn) => expect(btn).toBeDisabled())
-      deleteButtons.forEach((btn) => expect(btn).toBeDisabled())
+      disconnectButtons.forEach((btn) => expect(btn).toBeDisabled())
     })
   })
 
@@ -349,15 +375,15 @@ describe('AccountTable', () => {
         <AccountTable
           accounts={mockAccounts}
           onEdit={() => {}}
-          onDelete={() => {}}
+          onDisconnect={() => {}}
         />
       )
 
       const editButtons = screen.getAllByRole('button', { name: /edit account/i })
-      const deleteButtons = screen.getAllByRole('button', { name: /delete account/i })
+      const disconnectButtons = screen.getAllByRole('button', { name: /disconnect account/i })
 
       expect(editButtons.length).toBe(3)
-      expect(deleteButtons.length).toBe(3)
+      expect(disconnectButtons.length).toBe(3)
     })
   })
 
@@ -413,10 +439,18 @@ describe('AccountTable', () => {
       })
     })
 
-    it('should have tooltip on delete button', () => {
-      render(<AccountTable accounts={mockAccounts} onDelete={mock(() => {})} />)
-      screen.getAllByRole('button', { name: /delete account/i }).forEach((btn) => {
-        expect(btn).toHaveAttribute('title', 'Delete account')
+    it('should have tooltip on disconnect button', () => {
+      render(<AccountTable accounts={mockAccounts} onDisconnect={mock(() => {})} />)
+      screen.getAllByRole('button', { name: /disconnect account/i }).forEach((btn) => {
+        expect(btn).toHaveAttribute('title', 'Stop syncing this account, retaining its history')
+      })
+    })
+
+    it('should have tooltip on purge button for a closed account', () => {
+      const closedAccounts = [createMockAccount({ status: 'removed', removed_at: '2026-03-01T00:00:00Z' })]
+      render(<AccountTable accounts={closedAccounts} onPurge={mock(() => {})} />)
+      screen.getAllByRole('button', { name: /permanently delete account/i }).forEach((btn) => {
+        expect(btn).toHaveAttribute('title', 'Permanently delete this account and its history')
       })
     })
   })

@@ -192,9 +192,9 @@ describe('AccountCard', () => {
       expect(link).toHaveAttribute('href', `/accounts/${mockAccount.id}`)
     })
 
-    it('Edit and Delete buttons are NOT nested inside the summary link', () => {
+    it('Edit and Disconnect buttons are NOT nested inside the summary link', () => {
       renderWithRouter(
-        <AccountCard account={mockAccount} onEdit={mock(() => {})} onDelete={mock(() => {})} />
+        <AccountCard account={mockAccount} onEdit={mock(() => {})} onDisconnect={mock(() => {})} />
       )
 
       const link = screen.getByRole('link', { name: /view bank account - checking account ending in 0000 details/i })
@@ -212,13 +212,13 @@ describe('AccountCard', () => {
       expect(link.contains(editButton)).toBe(false)
     })
 
-    it('Delete button is present as a sibling outside the link', () => {
-      const onDelete = mock(() => {})
-      renderWithRouter(<AccountCard account={mockAccount} onDelete={onDelete} />)
+    it('Disconnect button is present as a sibling outside the link', () => {
+      const onDisconnect = mock(() => {})
+      renderWithRouter(<AccountCard account={mockAccount} onDisconnect={onDisconnect} />)
 
       const link = screen.getByRole('link', { name: /view bank account - checking account ending in 0000 details/i })
-      const deleteButton = screen.getByText('Delete Account')
-      expect(link.contains(deleteButton)).toBe(false)
+      const disconnectButton = screen.getByText('Disconnect')
+      expect(link.contains(disconnectButton)).toBe(false)
     })
   })
 
@@ -352,16 +352,56 @@ describe('AccountCard', () => {
     })
   })
 
-  describe('onDelete behavior (Task 8: remove window.confirm)', () => {
-    it('calls onDelete with the full account object when Delete Account is clicked', () => {
-      const onDelete = mock(() => {})
-      renderWithRouter(<AccountCard account={mockAccount} onDelete={onDelete} />)
+  describe('onDisconnect behavior (Task 8: remove window.confirm)', () => {
+    it('calls onDisconnect with the full account object when Disconnect is clicked', () => {
+      const onDisconnect = mock(() => {})
+      renderWithRouter(<AccountCard account={mockAccount} onDisconnect={onDisconnect} />)
 
-      fireEvent.click(screen.getByText('Delete Account'))
+      fireEvent.click(screen.getByText('Disconnect'))
 
-      expect(onDelete).toHaveBeenCalledTimes(1)
-      expect(onDelete).toHaveBeenCalledWith(mockAccount)
+      expect(onDisconnect).toHaveBeenCalledTimes(1)
+      expect(onDisconnect).toHaveBeenCalledWith(mockAccount)
+    })
+  })
+
+  // Issue #1569, Task 6: a closed account's actions are purge-only — Edit/Disconnect both act on
+  // a LIVE account and must not render for one that is already closed (carried-over Task 5
+  // reviewer finding: closed rows previously kept working Edit/Delete actions that harmlessly
+  // re-ran UpdateStatus(removed)).
+  describe('closed account actions (Issue #1569, Task 6: purge-only)', () => {
+    const closedAccount: Account = {
+      ...mockAccount,
+      status: 'removed',
+      removed_at: '2026-03-01T00:00:00Z',
+    }
+
+    it('does not render Edit or Disconnect for a closed account', () => {
+      renderWithRouter(
+        <AccountCard
+          account={closedAccount}
+          onEdit={mock(() => {})}
+          onDisconnect={mock(() => {})}
+          onPurge={mock(() => {})}
+        />
+      )
+
+      expect(screen.queryByRole('button', { name: /edit account/i })).toBeNull()
+      expect(screen.queryByText('Disconnect')).toBeNull()
     })
 
+    it('renders a "Delete from history" purge action for a closed account', () => {
+      const onPurge = mock(() => {})
+      renderWithRouter(<AccountCard account={closedAccount} onPurge={onPurge} />)
+
+      fireEvent.click(screen.getByText('Delete from history'))
+
+      expect(onPurge).toHaveBeenCalledTimes(1)
+      expect(onPurge).toHaveBeenCalledWith(closedAccount)
+    })
+
+    it('does not render the purge action for an active account', () => {
+      renderWithRouter(<AccountCard account={mockAccount} onPurge={mock(() => {})} />)
+      expect(screen.queryByText('Delete from history')).toBeNull()
+    })
   })
 })

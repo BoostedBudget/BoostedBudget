@@ -19,7 +19,8 @@ import type { ListView } from '@/shared/components/ListViewToggle'
 import { STORAGE_KEY_LIST_VIEW } from './constants'
 import {
   useGetAccounts,
-  useDeleteAccount,
+  useDisconnectAccount,
+  usePurgeAccount,
   getGetAccountsQueryKey,
 } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import { useProfile } from '../profile/hooks/useProfile'
@@ -57,7 +58,11 @@ export function AccountsPage() {
   const [view, setView] = useState<ListView>(getInitialView)
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
-  const [accountToDelete, setAccountToDelete] = useState<Account | null>(null)
+  // Issue #1569, Task 6: the single "delete" dialog is split into two verbs — disconnect (stop
+  // syncing, retain history) and purge (permanently destroy). Two separate pieces of state so
+  // each dialog's open/closed state and copy are independent.
+  const [accountToDisconnect, setAccountToDisconnect] = useState<Account | null>(null)
+  const [accountToPurge, setAccountToPurge] = useState<Account | null>(null)
   // Issue #1370 Task 9: post-Plaid-link household share dialog. Dialog
   // visibility and its account list are tracked separately from
   // `isInHousehold` below — the dialog only OPENS when both "in a
@@ -93,7 +98,8 @@ export function AccountsPage() {
     refetch: refetchAccounts,
   } = useGetAccounts({ include_hidden: 'true', status: 'all_statuses' })
 
-  const deleteAccountMutation = useDeleteAccount()
+  const disconnectAccountMutation = useDisconnectAccount()
+  const purgeAccountMutation = usePurgeAccount()
 
   const accounts = accountsData?.accounts ?? []
   const accountsQueryKey = getGetAccountsQueryKey({ include_hidden: 'true', status: 'all_statuses' })
@@ -151,15 +157,34 @@ export function AccountsPage() {
     }
   }
 
-  async function handleDeleteAccount(account: Account) {
+  async function handleDisconnectAccount(account: Account) {
     try {
-      await deleteAccountMutation.mutateAsync({ id: account.id })
+      await disconnectAccountMutation.mutateAsync({ id: account.id })
       trackEvent(ANALYTICS_EVENTS.ACCOUNT_REMOVED)
-      setAccountToDelete(null)
+      setAccountToDisconnect(null)
       await refetchAccounts()
     } catch (err) {
-      console.error('Failed to delete account:', err)
-      toast.error('Failed to delete account. Please try again.')
+      console.error('Failed to disconnect account:', err)
+      toast.error('Failed to disconnect account. Please try again.')
+    }
+  }
+
+  async function handlePurgeAccount(account: Account) {
+    try {
+      await purgeAccountMutation.mutateAsync({ id: account.id })
+      trackEvent(ANALYTICS_EVENTS.ACCOUNT_PURGED)
+      setAccountToPurge(null)
+      await refetchAccounts()
+    } catch (err) {
+      console.error('Failed to purge account:', err)
+      // Issue #1569, Task 6: a savings goal referencing this account surfaces as a 409 with an
+      // actionable message from the backend (repository.ErrPurgeBlockedBySavingsGoal) — show it
+      // rather than a generic failure so the user knows exactly what to do next.
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : 'Failed to permanently delete account. Please try again.'
+      toast.error(message)
     }
   }
 
@@ -171,23 +196,39 @@ export function AccountsPage() {
     return activeAccountsForItem.length === 1
   }
 
-  function buildDeleteDescription(account: Account): React.ReactNode {
+  function buildDisconnectDescription(account: Account): React.ReactNode {
     const displayName = account.nickname || account.official_name || account.name
     const maskPart = account.mask ? ` (...${account.mask})` : ''
     const isLast = isLastAccountForItem(account)
     return (
       <span>
-        You are about to permanently delete <strong data-ph-mask>{displayName}{maskPart}</strong>.
-        <br />Your transactions will be preserved.
-        {/* Issue #1569: DeleteAccount now soft-removes — the row, its balance_snapshots,
-            holdings, and liabilities all survive. "Balance history will be removed" was false
-            the moment that shipped. */}
-        <br />Your balance history will be retained — you can still view this account under Closed accounts.
+        <strong data-ph-mask>{displayName}{maskPart}</strong> will stop syncing new transactions and balances.
+        <br />Your transactions, balance history, and account details are all retained — you can still view this account under Closed accounts.
         {isLast && (
           <>
-            <br />The bank connection to <strong data-ph-mask>{account.institution_name}</strong> will also be removed.
+            <br />The bank connection to <strong data-ph-mask>{account.institution_name}</strong> will also be disconnected.
           </>
         )}
+      </span>
+    )
+  }
+
+  // Issue #1569, Task 6: purge is the ONE place a hard delete is correct, so the dialog must say
+  // exactly what is destroyed and what survives — including the multi-member-chain case. DECISION:
+  // a purge is allowed on a multi-member chain (a re-linked/replaced account) rather than refused,
+  // because MatchOrCreate already keys transactions by the chain's user_account_id independently of
+  // any single account row — a surviving chain member keeps that key, so the purged account's
+  // transactions continue to appear under it automatically. The dialog states this rather than
+  // leaving it implied.
+  function buildPurgeDescription(account: Account): React.ReactNode {
+    const displayName = account.nickname || account.official_name || account.name
+    const maskPart = account.mask ? ` (...${account.mask})` : ''
+    return (
+      <span>
+        You are about to permanently delete <strong data-ph-mask>{displayName}{maskPart}</strong> and all of its balance history, holdings, and liabilities.
+        <br /><strong>This cannot be undone.</strong>
+        <br />Your transactions will NOT be deleted — if another connection to this same account exists, they will continue to appear there; otherwise they remain visible with no linked account.
+        <br />If a savings goal still tracks this account, the purge will be refused until you delete or re-link that goal.
       </span>
     )
   }
@@ -438,7 +479,8 @@ export function AccountsPage() {
               accounts={displayedAccounts}
               loading={loading}
               onEdit={handleEditAccount}
-              onDelete={(account) => setAccountToDelete(account)}
+              onDisconnect={(account) => setAccountToDisconnect(account)}
+              onPurge={(account) => setAccountToPurge(account)}
               onRowClick={(account) => navigate(`/accounts/${account.id}`)}
               sort={sort}
               onSortChange={setSort}
@@ -466,7 +508,8 @@ export function AccountsPage() {
                 <AccountCard
                   key={account.id}
                   account={account}
-                  onDelete={(acc) => setAccountToDelete(acc)}
+                  onDisconnect={(acc) => setAccountToDisconnect(acc)}
+                  onPurge={(acc) => setAccountToPurge(acc)}
                   onEdit={handleEditAccount}
                 />
               ))}
@@ -483,14 +526,29 @@ export function AccountsPage() {
         isSaving={isUpdating}
       />
 
+      {/* Issue #1569, Task 6: disconnect is the primary, non-destructive action — no type-to-confirm,
+          since nothing is destroyed and the account remains fully visible under Closed accounts. */}
       <ConfirmationDialog
-        open={accountToDelete !== null}
-        onOpenChange={(open) => { if (!open) setAccountToDelete(null) }}
-        onConfirm={() => accountToDelete && handleDeleteAccount(accountToDelete)}
-        title="Delete Account"
-        description={accountToDelete ? buildDeleteDescription(accountToDelete) : ''}
-        confirmText={accountToDelete ? (accountToDelete.nickname || accountToDelete.official_name || accountToDelete.name) : ''}
-        loading={deleteAccountMutation.isPending}
+        open={accountToDisconnect !== null}
+        onOpenChange={(open) => { if (!open) setAccountToDisconnect(null) }}
+        onConfirm={() => accountToDisconnect && handleDisconnectAccount(accountToDisconnect)}
+        title="Disconnect account"
+        description={accountToDisconnect ? buildDisconnectDescription(accountToDisconnect) : ''}
+        variant="warning"
+        confirmButtonText="Disconnect"
+        loading={disconnectAccountMutation.isPending}
+      />
+
+      {/* Purge is the destructive secondary action — type-to-confirm, reusing the pattern above,
+          with copy stating exactly what is destroyed and that it cannot be undone. */}
+      <ConfirmationDialog
+        open={accountToPurge !== null}
+        onOpenChange={(open) => { if (!open) setAccountToPurge(null) }}
+        onConfirm={() => accountToPurge && handlePurgeAccount(accountToPurge)}
+        title="Permanently delete account"
+        description={accountToPurge ? buildPurgeDescription(accountToPurge) : ''}
+        confirmText={accountToPurge ? (accountToPurge.nickname || accountToPurge.official_name || accountToPurge.name) : ''}
+        loading={purgeAccountMutation.isPending}
       />
 
       <ShareNewAccountsDialog

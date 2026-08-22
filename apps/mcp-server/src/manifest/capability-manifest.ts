@@ -136,8 +136,14 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getAccounts'),
   write('reorderAccounts', { idempotent: true }),
   write('updateAccount', { idempotent: true }),
-  excluded('deleteAccount', REASON_PLAID_LINKING, 'bank-connections'),
+  // Issue #1569, Task 6: deleteAccount / disconnectInstitution's single DELETE-backed verb split
+  // into disconnect (non-destructive, stops syncing) and purge (permanently destroys history).
+  // ALL FOUR stay excluded — an AI assistant must never touch Plaid linking/removal OR a user's
+  // financial history, and purge is the one place a hard delete is now even possible.
+  excluded('disconnectAccount', REASON_PLAID_LINKING, 'bank-connections'),
+  excluded('purgeAccount', REASON_PLAID_LINKING, 'bank-connections'),
   excluded('disconnectInstitution', REASON_PLAID_LINKING, 'bank-connections'),
+  excluded('purgeInstitution', REASON_PLAID_LINKING, 'bank-connections'),
 
   // ── Admin (all excluded) ─────────────────────────────────────────────────
   excluded('checkRole', REASON_ADMIN),

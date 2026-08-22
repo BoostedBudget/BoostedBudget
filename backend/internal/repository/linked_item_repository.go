@@ -19,6 +19,13 @@ var (
 	ErrLinkedItemNotFound = errors.New("linked item not found")
 	// ErrDuplicateLinkedItem is returned when attempting to create a linked item that already exists
 	ErrDuplicateLinkedItem = errors.New("linked item already exists for this user")
+	// ErrLinkedItemNotDisconnected is returned by PurgeLinkedItem when the item's Plaid side has
+	// not yet been stopped (plaid_removed_at IS NULL). Purging first would permanently destroy the
+	// only local record of a Plaid Item that may still be billing, with no way to find or remove
+	// it afterward — so a purge must be preceded by a successful disconnect (POST
+	// /linked-items/{id}/disconnect), exactly as the closed-accounts surface always reaches it.
+	// Issue #1569, Task 6.
+	ErrLinkedItemNotDisconnected = errors.New("institution must be disconnected before it can be purged")
 	// ErrNoLinkedItemsUpdated is returned by MarkItemsDisconnected when its UPDATE affected ZERO
 	// rows despite being given a non-empty ids slice (Issue #1413 Medium finding, PR #1443 Codex
 	// review round 4): before this fix, RowsAffected was never inspected, so a write that silently
@@ -100,6 +107,27 @@ type LinkedItemRepository interface {
 	//   - The item exists but belongs to a different user (ownership check fails)
 	//   - The item exists and is owned, but at least one account still references it
 	DeleteByUser(ctx context.Context, id, userID string) error
+
+	// PurgeLinkedItem permanently and transactionally destroys the linked item and every account
+	// under it: balance_snapshots for those accounts (explicit — SET NULL, migration 000150), then
+	// the linked_items row itself, which CASCADEs to its accounts (fk_accounts_linked_item_id,
+	// unchanged since creation) and from there to holdings/investment_transactions/liabilities/
+	// account_status_history for each. transactions survive (SET NULL on both account_id and
+	// linked_item_id, migration 000035). Issue #1569, Task 6.
+	//
+	// Refuses with ErrLinkedItemNotDisconnected unless plaid_removed_at is already stamped — a
+	// purge must never be the FIRST thing that happens to an item, or it destroys the only local
+	// record of a Plaid Item that might still be billing. Call the disconnect endpoint first.
+	//
+	// Refuses with ErrPurgeBlockedBySavingsGoal, doing and changing nothing, while a savings goal
+	// still references any account under this item (migration 000150's RESTRICT constraint).
+	//
+	// auditLog, when non-nil, writes a "linked_item.history_purged" entry inside the same
+	// transaction via LogInTx — see AccountRepository.PurgeAccount's doc comment for why that is
+	// safe here (no FOR UPDATE lock on any users row).
+	//
+	// Returns ErrLinkedItemNotFound if the item doesn't exist or isn't owned by userID.
+	PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog AuditLogRepository) error
 
 	// GetByIDForUpdate retrieves a linked item by ID with a row-level exclusive lock.
 	// Use this in sync workers to prevent concurrent syncs for the same item.
@@ -802,6 +830,60 @@ func (r *linkedItemRepository) DeleteByUser(ctx context.Context, id, userID stri
 	}
 
 	return nil
+}
+
+// PurgeLinkedItem implements LinkedItemRepository.PurgeLinkedItem — see that method's doc comment
+// for the full contract.
+func (r *linkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog AuditLogRepository) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+
+	// Lock the row and read plaid_removed_at before doing anything destructive. FOR UPDATE here
+	// is a row lock on linked_items, not users — it cannot participate in the users-row lock
+	// cycle LogInTx's doc comment warns about.
+	var plaidRemovedAt *time.Time
+	err = tx.QueryRow(ctx,
+		`SELECT plaid_removed_at FROM linked_items WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+		linkedItemID, userID,
+	).Scan(&plaidRemovedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrLinkedItemNotFound
+		}
+		return fmt.Errorf("purge linked item %s: %w", linkedItemID, err)
+	}
+	if plaidRemovedAt == nil {
+		return ErrLinkedItemNotDisconnected
+	}
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM balance_snapshots
+		WHERE account_id IN (SELECT id FROM accounts WHERE linked_item_id = $1)
+	`, linkedItemID); err != nil {
+		return fmt.Errorf("purge linked item %s: deleting balance snapshots: %w", linkedItemID, err)
+	}
+
+	ct, err := tx.Exec(ctx, `DELETE FROM linked_items WHERE id = $1 AND user_id = $2`, linkedItemID, userID)
+	if err != nil {
+		if isForeignKeyViolation(err, "fk_savings_goals_account_id") {
+			return ErrPurgeBlockedBySavingsGoal
+		}
+		return fmt.Errorf("purge linked item %s: %w", linkedItemID, err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrLinkedItemNotFound
+	}
+
+	if auditLog != nil {
+		if err := auditLog.LogInTx(ctx, tx, "linked_item.history_purged", "linked_item", linkedItemID); err != nil {
+			return fmt.Errorf("purge linked item %s: audit log: %w", linkedItemID, err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // GetByIDForUpdate retrieves a linked item by ID with a row-level exclusive lock.

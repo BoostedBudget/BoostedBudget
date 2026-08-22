@@ -130,6 +130,10 @@ func (m *mockLinkedItemRepo) DeleteByUser(ctx context.Context, id, userID string
 	return nil
 }
 
+func (m *mockLinkedItemRepo) PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog repository.AuditLogRepository) error {
+	return nil
+}
+
 func (m *mockLinkedItemRepo) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
 	return nil
 }

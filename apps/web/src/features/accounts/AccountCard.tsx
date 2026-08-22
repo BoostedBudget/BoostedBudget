@@ -1,5 +1,5 @@
 import { useId } from 'react'
-import { Pencil, EyeOff, GripVertical, Unplug, Archive } from 'lucide-react'
+import { Pencil, EyeOff, GripVertical, Unplug, Archive, Trash2 } from 'lucide-react'
 import { Link } from 'react-router'
 import { cn } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
@@ -12,14 +12,20 @@ import { isInactive } from './hooks/useActiveAccounts'
 
 interface AccountCardProps {
   account: Account
-  onDelete?: (account: Account) => void
+  // Issue #1569, Task 6: disconnect (stop syncing, retain history) is the primary action for a
+  // LIVE account; purge (permanently destroy) is the destructive action, reachable only for a
+  // CLOSED account — see the render logic below for why a closed account gets neither onEdit nor
+  // onDisconnect (a Task 5 reviewer finding: closed rows previously kept working Edit/Delete
+  // actions that harmlessly re-ran UpdateStatus(removed)).
+  onDisconnect?: (account: Account) => void
+  onPurge?: (account: Account) => void
   onEdit?: (account: Account) => void
   isDragging?: boolean
   dragHandleProps?: React.HTMLAttributes<HTMLDivElement>
 }
 
 
-export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleProps }: AccountCardProps) {
+export function AccountCard({ account, onDisconnect, onPurge, onEdit, isDragging, dragHandleProps }: AccountCardProps) {
   const {
     name,
     official_name,
@@ -130,25 +136,44 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
       </div>
 
       <div className="flex gap-3 mt-4 pt-4 border-t border-border">
-        {onEdit && (
-          <Button
-            variant="secondary"
-            onClick={() => onEdit(account)}
-            title="Customize this account"
-            aria-label="Edit account"
-          >
-            <Pencil className="h-4 w-4" />
-            <span>Edit</span>
-          </Button>
-        )}
-        {onDelete && (
-          <Button
-            variant="destructive"
-            onClick={() => onDelete(account)}
-            title="Delete this account"
-          >
-            Delete Account
-          </Button>
+        {/* Issue #1569, Task 6: a closed account's actions are the ones that make sense for a
+            closed account — purge only. Edit and Disconnect both act on a LIVE account, and this
+            one no longer is one; re-running them would be a silent no-op at best. */}
+        {isClosed ? (
+          onPurge && (
+            <Button
+              variant="destructive"
+              onClick={() => onPurge(account)}
+              title="Permanently delete this account and its history"
+            >
+              <Trash2 className="h-4 w-4" />
+              <span>Delete from history</span>
+            </Button>
+          )
+        ) : (
+          <>
+            {onEdit && (
+              <Button
+                variant="secondary"
+                onClick={() => onEdit(account)}
+                title="Customize this account"
+                aria-label="Edit account"
+              >
+                <Pencil className="h-4 w-4" />
+                <span>Edit</span>
+              </Button>
+            )}
+            {onDisconnect && (
+              <Button
+                variant="secondary"
+                onClick={() => onDisconnect(account)}
+                title="Stop syncing this account, retaining its history"
+              >
+                <Unplug className="h-4 w-4" />
+                <span>Disconnect</span>
+              </Button>
+            )}
+          </>
         )}
       </div>
     </Card>

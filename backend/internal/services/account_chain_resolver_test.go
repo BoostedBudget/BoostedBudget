@@ -84,6 +84,9 @@ func (m *mockAccountRepositoryForChainResolver) ExpireAccountsByFingerprint(ctx 
 func (m *mockAccountRepositoryForChainResolver) MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string) error {
 	return nil
 }
+func (m *mockAccountRepositoryForChainResolver) PurgeAccount(ctx context.Context, accountID, userID string, auditLog repository.AuditLogRepository) error {
+	return nil
+}
 func (m *mockAccountRepositoryForChainResolver) GetByUserAccountIDAndUser(ctx context.Context, userAccountID, userID string) (*domain.Account, error) {
 	return nil, nil
 }
