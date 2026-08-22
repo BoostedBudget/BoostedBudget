@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -361,7 +362,7 @@ func backfillAccountsUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *
 // tests can inject a pgxmock without needing a live database.
 func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerier, enc *appcrypto.FieldEncryptor) error {
 	rows, err := db.Query(ctx, `
-		SELECT a.id, a.user_id, a.mask, li.institution_id
+		SELECT a.id, a.user_id, a.mask, li.institution_id, a.type, a.subtype
 		FROM accounts a
 		JOIN linked_items li ON a.linked_item_id = li.id
 		WHERE a.user_account_id IS NULL
@@ -372,15 +373,17 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 	defer rows.Close()
 
 	type accountRow struct {
-		id     string
-		userID string
-		mask   *string
-		instID *string // nullable on linked_items
+		id          string
+		userID      string
+		mask        *string
+		instID      *string // nullable on linked_items
+		acctType    *string // #1569: carried so a synthesised identity is not typeless
+		acctSubtype *string
 	}
 	var accs []accountRow
 	for rows.Next() {
 		var r accountRow
-		if err := rows.Scan(&r.id, &r.userID, &r.mask, &r.instID); err != nil {
+		if err := rows.Scan(&r.id, &r.userID, &r.mask, &r.instID, &r.acctType, &r.acctSubtype); err != nil {
 			return fmt.Errorf("scan account row: %w", err)
 		}
 		accs = append(accs, r)
@@ -395,7 +398,7 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 	slog.WarnContext(ctx, "#1306 P2: found accounts with null user_account_id, backfilling at startup",
 		"count", len(accs))
 
-	repaired, skippedNoMatch, skippedDecrypt := 0, 0, 0
+	repaired, skippedNoMatch, skippedDecrypt, synthesised := 0, 0, 0, 0
 	for _, r := range accs {
 		if r.instID == nil {
 			// linked_item has no institution_id — cannot compute blind index.
@@ -440,8 +443,24 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 			return err
 		}
 		if !found {
-			skippedNoMatch++
-			continue
+			// Issue #1569: previously this incremented skippedNoMatch and moved on, leaving the
+			// account with a NULL user_account_id "until the next re-link". That was survivable
+			// while identity-less accounts were eventually cascade-deleted. Under
+			// history-retained-by-default they are retained forever, so the NULL becomes a
+			// permanent re-link double-count seed (dashboard_service.go:35-73) and blocks the
+			// accounts.user_account_id NOT NULL constraint the retention model depends on.
+			//
+			// Mint the identity instead. This has to happen here rather than in a SQL migration:
+			// user_accounts.institution_id/mask are encrypted with blind-index uniqueness
+			// (000053, 000100) and only the application holds the HMAC key.
+			uaID, err = synthesiseUserAccountID(ctx, db, enc, r.userID, plainInstID, plainMask,
+				instBlind, maskBlind, r.acctType, r.acctSubtype)
+			if err != nil {
+				return fmt.Errorf("synthesise user_account for account %s: %w", r.id, err)
+			}
+			synthesised++
+			slog.WarnContext(ctx, "#1569: minted a stable identity for an account that had none",
+				"account_id", r.id, "user_account_id", uaID)
 		}
 
 		if _, err := db.Exec(ctx,
@@ -454,8 +473,75 @@ func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerie
 	}
 
 	slog.InfoContext(ctx, "#1306 P2: accounts backfill complete",
-		"repaired", repaired, "skipped_no_match", skippedNoMatch, "skipped_decrypt", skippedDecrypt)
+		"repaired", repaired, "synthesised", synthesised,
+		"skipped_no_match", skippedNoMatch, "skipped_decrypt", skippedDecrypt)
 	return nil
+}
+
+// synthesiseUserAccountID mints a user_accounts row for an account that has no matching identity,
+// and returns its id. Issue #1569.
+//
+// Two properties matter and are pinned by integration tests:
+//
+//   - It is IDEMPOTENT and chain-convergent. The INSERT carries ON CONFLICT DO NOTHING against
+//     unique_user_accounts_inst_mask_blind (user_id, institution_id_blind_idx, mask_blind_idx,
+//     NULLS NOT DISTINCT) and re-reads on conflict. So a second backfill run mints nothing, and
+//     two members of the same re-link chain — which share an institution and mask — converge on
+//     one identity instead of each getting its own. Minting per account would manufacture exactly
+//     the split chain this work exists to eliminate.
+//   - The minted row is genuinely MATCHABLE: it stores the same blind indexes lookupUserAccountID
+//     computes, so the next real re-link finds it rather than minting a second one.
+//
+// institution_id and mask are written encrypted, matching how UserAccountService writes them.
+func synthesiseUserAccountID(
+	ctx context.Context,
+	db backfillQuerier,
+	enc *appcrypto.FieldEncryptor,
+	userID, plainInstID string,
+	plainMask *string,
+	instBlind string,
+	maskBlind *string,
+	acctType, acctSubtype *string,
+) (string, error) {
+	encInstID, err := enc.EncryptString(plainInstID)
+	if err != nil {
+		return "", fmt.Errorf("encrypt institution_id: %w", err)
+	}
+	var encMask *string
+	if plainMask != nil {
+		m, err := enc.EncryptString(*plainMask)
+		if err != nil {
+			return "", fmt.Errorf("encrypt mask: %w", err)
+		}
+		encMask = &m
+	}
+
+	newID := uuid.New().String()
+	if _, err := db.Exec(ctx, `
+		INSERT INTO user_accounts
+			(id, user_id, institution_id, mask, institution_id_blind_idx, mask_blind_idx,
+			 primary_type, primary_subtype)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		-- unique_user_accounts_inst_mask_blind (000100) is a PARTIAL index
+		-- (WHERE institution_id_blind_idx IS NOT NULL), so the inference clause must repeat
+		-- that predicate or Postgres cannot match it (SQLSTATE 42P10).
+		ON CONFLICT (user_id, institution_id_blind_idx, mask_blind_idx)
+			WHERE institution_id_blind_idx IS NOT NULL
+			DO NOTHING
+	`, newID, userID, encInstID, encMask, instBlind, maskBlind, acctType, acctSubtype); err != nil {
+		return "", fmt.Errorf("insert user_account: %w", err)
+	}
+
+	// Re-read rather than trusting newID: on conflict the INSERT was a no-op and the winner is
+	// whichever row already held the triple (possibly one this same loop minted a moment ago).
+	existingID, found, err := lookupUserAccountID(ctx, db, "synthesised", userID, instBlind, maskBlind)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("user_account not found immediately after synthesis for user %s", userID)
+	}
+	return existingID, nil
 }
 
 // lookupUserAccountID fetches up to 2 user_accounts rows matching the given blind-index triple,
@@ -513,7 +599,7 @@ func lookupUserAccountID(
 	}
 
 	if count == 0 {
-		slog.WarnContext(ctx, "#1306 P2: no matching user_account — skipping (self-heals on next re-link)",
+		slog.WarnContext(ctx, "#1306 P2: no matching user_account for blind-index triple (#1569: caller mints one)",
 			"account_id", accountID)
 		return "", false, nil
 	}

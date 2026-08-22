@@ -92,8 +92,10 @@ func TestBackfillUserAccountIDs_MultipleMatch_Warns(t *testing.T) {
 	// mask and institution_id are *string (nullable) — pass pointers so pgxmock scans them correctly.
 	encMaskPtr := &encMask
 	encInstIDPtr := &encInstID
-	accountRows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id"}).
-		AddRow(accountID, userID, encMaskPtr, encInstIDPtr)
+	// #1569 widened this SELECT with a.type/a.subtype so a synthesised identity is not typeless.
+	acctType, acctSubtype := "depository", "checking"
+	accountRows := pgxmock.NewRows([]string{"id", "user_id", "mask", "institution_id", "type", "subtype"}).
+		AddRow(accountID, userID, encMaskPtr, encInstIDPtr, &acctType, &acctSubtype)
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT a.id, a.user_id, a.mask, li.institution_id`)).
 		WillReturnRows(accountRows)
 
