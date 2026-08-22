@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
-import { Eye, EyeOff, Landmark } from 'lucide-react'
+import { Eye, EyeOff, Landmark, Archive } from 'lucide-react'
 import { getAccountTypeLabel } from './utils'
 import { toast } from 'sonner'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -26,7 +26,7 @@ import { useProfile } from '../profile/hooks/useProfile'
 import { useAccountCustomization } from './hooks/useAccountCustomization'
 import { useAccountFilters } from './hooks/useAccountFilters'
 import type { Account, ExchangePublicTokenResponse, UpdateAccountRequest } from './types'
-import { isReplaced } from './hooks/useActiveAccounts'
+import { isInactive } from './hooks/useActiveAccounts'
 import { useHousehold, ShareNewAccountsDialog } from '@/features/household'
 
 // Get initial view from localStorage
@@ -48,6 +48,12 @@ export function AccountsPage() {
   const navigate = useNavigate()
 
   const [showHidden, setShowHidden] = useState(false)
+  // Issue #1569, Task 5D: retained (non-active) accounts have nowhere to be viewed. Mirrors the
+  // "Show Hidden" toggle's idiom rather than a new filter-dropdown dimension — both are
+  // "excluded from the default view, viewable on demand" concepts, and this page has no existing
+  // pattern for a status-based filter dimension (useAccountFilters covers institution/type/
+  // balance only).
+  const [showClosed, setShowClosed] = useState(false)
   const [view, setView] = useState<ListView>(getInitialView)
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -76,17 +82,21 @@ export function AccountsPage() {
 
   const trackEvent = useTrackEvent()
 
+  // status: 'all_statuses' fetches the full universe (active, replaced, expired, removed) in one
+  // request so the "Closed accounts" toggle below can split it locally via isInactive() — see
+  // useActiveAccounts.ts. This is distinct from the pre-existing status=all (active+replaced
+  // only, silently drops expired/removed).
   const {
     data: accountsData,
     isLoading: accountsLoading,
     error: accountsError,
     refetch: refetchAccounts,
-  } = useGetAccounts({ include_hidden: 'true' })
+  } = useGetAccounts({ include_hidden: 'true', status: 'all_statuses' })
 
   const deleteAccountMutation = useDeleteAccount()
 
   const accounts = accountsData?.accounts ?? []
-  const accountsQueryKey = getGetAccountsQueryKey({ include_hidden: 'true' })
+  const accountsQueryKey = getGetAccountsQueryKey({ include_hidden: 'true', status: 'all_statuses' })
 
   const { loading: userLoading, refetch: refetchProfile } = useProfile()
   const { isInHousehold } = useHousehold()
@@ -156,7 +166,7 @@ export function AccountsPage() {
   function isLastAccountForItem(account: Account): boolean {
     const allAccounts = accountsData?.accounts ?? []
     const activeAccountsForItem = allAccounts.filter(
-      a => a.linked_item_id === account.linked_item_id && !isReplaced(a)
+      a => a.linked_item_id === account.linked_item_id && !isInactive(a)
     )
     return activeAccountsForItem.length === 1
   }
@@ -169,7 +179,10 @@ export function AccountsPage() {
       <span>
         You are about to permanently delete <strong data-ph-mask>{displayName}{maskPart}</strong>.
         <br />Your transactions will be preserved.
-        <br />Balance history will be removed.
+        {/* Issue #1569: DeleteAccount now soft-removes — the row, its balance_snapshots,
+            holdings, and liabilities all survive. "Balance history will be removed" was false
+            the moment that shipped. */}
+        <br />Your balance history will be retained — you can still view this account under Closed accounts.
         {isLast && (
           <>
             <br />The bank connection to <strong data-ph-mask>{account.institution_name}</strong> will also be removed.
@@ -185,8 +198,10 @@ export function AccountsPage() {
   }, []) // No deps — setters are stable
 
 
+  // Issue #1569: institution/type picker options are built from ACTIVE accounts only — a closed
+  // account must not pad any picker, even while "Show closed accounts" is on.
   const institutionOptions = useMemo<FilterOption[]>(() => {
-    const accs = accountsData?.accounts ?? []
+    const accs = (accountsData?.accounts ?? []).filter(acc => !isInactive(acc))
     const institutions = Array.from(
       new Set(accs.map((a) => a.institution_name).filter((x): x is string => x != null && x !== ''))
     )
@@ -200,7 +215,7 @@ export function AccountsPage() {
   }, [accountsData?.accounts])
 
   const typeOptions = useMemo<FilterOption[]>(() => {
-    const accs = accountsData?.accounts ?? []
+    const accs = (accountsData?.accounts ?? []).filter(acc => !isInactive(acc))
     // Map from typeValue (subtype || type) → { type, subtype } for label generation
     const seen = new Map<string, { type: string; subtype?: string }>()
     accs.forEach((acc) => {
@@ -238,7 +253,11 @@ export function AccountsPage() {
     const accs = accountsData?.accounts ?? []
     let filtered = accs
 
-    filtered = filtered.filter(acc => !isReplaced(acc))
+    // Closed (non-active) accounts are excluded unless the "Show closed accounts" toggle is on
+    // (Issue #1569, Task 5D) — never padding the default active list.
+    if (!showClosed) {
+      filtered = filtered.filter(acc => !isInactive(acc))
+    }
 
     // Filter hidden accounts unless showHidden is true
     if (!showHidden) {
@@ -314,14 +333,17 @@ export function AccountsPage() {
       // Fallback to created_at
       return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     })
-  }, [accountsData?.accounts, showHidden, sortColumn, sortDirection, institutionFilter, typeFilter, balanceRange])
+  }, [accountsData?.accounts, showHidden, showClosed, sortColumn, sortDirection, institutionFilter, typeFilter, balanceRange])
 
-  const { hiddenCount, activeAccountsCount } = useMemo(() => {
+  const { hiddenCount, activeAccountsCount, closedCount } = useMemo(() => {
     const accs = accountsData?.accounts ?? []
-    const activeAccounts = accs.filter(acc => !isReplaced(acc))
+    const activeAccounts = accs.filter(acc => !isInactive(acc))
     return {
       hiddenCount: activeAccounts.filter(acc => acc.is_hidden).length,
       activeAccountsCount: activeAccounts.length,
+      // Issue #1569, Task 5D: never counted toward activeAccountsCount — the "N accounts"
+      // header must keep meaning "N active accounts", not include retained history.
+      closedCount: accs.filter(isInactive).length,
     }
   }, [accountsData?.accounts])
 
@@ -363,6 +385,16 @@ export function AccountsPage() {
                   <span>Show Hidden ({hiddenCount})</span>
                 </>
               )}
+            </button>
+          )}
+          {closedCount > 0 && (
+            <button
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded border cursor-pointer transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50 ${showClosed ? 'bg-info/10 border-primary text-primary' : 'bg-muted text-foreground border-border hover:bg-accent'}`}
+              onClick={() => setShowClosed(!showClosed)}
+              aria-pressed={showClosed}
+            >
+              <Archive className="h-4 w-4" />
+              <span>{showClosed ? 'Hide' : 'Show'} closed accounts ({closedCount})</span>
             </button>
           )}
           <ListViewToggle
