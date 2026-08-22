@@ -277,6 +277,18 @@ export function PrivacyPolicy() {
             Some data may be retained in anonymized form for analytics or as required by law (e.g., financial records).
           </p>
 
+          <h3>8.2a Removing a Linked Bank Account (Not Account Deletion)</h3>
+          <p>
+            Disconnecting a bank connection or removing a single linked account is different from
+            the account deletion described in Section 8.2 above, which deletes your entire
+            BoostedBudget account. When you remove a linked bank account or disconnect a bank
+            connection, that account's transaction, balance, and holdings history <strong>is
+            retained</strong> — it is not erased — so you can still view it under "Closed
+            accounts" on your Accounts page. It is excluded from your active balances and
+            reports going forward. If you want that history erased as well, you must delete your
+            entire BoostedBudget account per Section 8.2.
+          </p>
+
           <h3>8.3 Backup Retention</h3>
           <p>
             Deleted data may persist in encrypted backups for up to 90 days before being permanently purged.
@@ -287,8 +299,10 @@ export function PrivacyPolicy() {
             If you cancel your subscription but do not request account deletion, we may retain your
             account data in read-only mode for up to <strong>6 months</strong> to allow reactivation.
             We will notify you by email at 30 days and 7 days before your data is scheduled for
-            permanent deletion. After the retention period, we will delete your data unless a longer
-            retention period is legally required. You may request deletion at any time per Section 8.2.
+            permanent deletion. After the retention period, we will automatically and permanently
+            delete your data — including your automation rules, transaction history, and balance
+            history — unless a longer retention period is legally required. You may request
+            deletion sooner at any time per Section 8.2.
           </p>
 
           <h3>8.5 Removed Household Members</h3>
