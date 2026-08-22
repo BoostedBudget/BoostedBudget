@@ -23,6 +23,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
 // seedBalanceSnapshot inserts one balance_snapshot for the fixture account.
@@ -189,4 +191,44 @@ func TestAccountRepository_PurgeAccount_Integration_WritesAuditRowInSameTransact
 		f.AccountID.String(),
 	).Scan(&count))
 	assert.Equal(t, 1, count, "an account.history_purged audit entry must be written")
+}
+
+// TestAccountRepository_PurgeAccount_Integration_MultiMemberChain_TransactionsStayVisibleUnderSurvivor
+// proves the Task 6 "multi-member chain" decision (documented in the task report): a purge is
+// ALLOWED on an account that has a surviving chain member, rather than refused, because
+// MatchOrCreate matches on institution+mask+name+type against user_accounts independently of any
+// single account row — a surviving chain member keeps the SAME user_account_id, and the unified
+// feed's chain-expansion leg (transaction_repository.go's GetByUserIDKeysetUnified) admits any
+// transaction whose user_account_id has a live 'active' chain member, with no dependency on the
+// purged account's row still existing. Uses a rollback tx (not the shared pool) so this test needs
+// no manual fixture cleanup.
+func TestAccountRepository_PurgeAccount_Integration_MultiMemberChain_TransactionsStayVisibleUnderSurvivor(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	f := seedRetainedFixture(ctx, t, tx, "purge-chain-"+uuid.New().String())
+
+	// The surviving chain member: same user_account_id, same institution, a different account row
+	// — exactly what a re-link produces. It stays 'active' after f.AccountID is purged.
+	survivorID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Old Bank Checking (relinked)', 'depository', 'active', $5)
+	`, survivorID, f.LinkedItemID, f.UserID, "survivor-"+survivorID.String(), f.UserAccountID)
+	require.NoError(t, err, "seed surviving chain member")
+
+	seedBankingTxn(ctx, t, tx, f, time.Now().UTC().AddDate(0, 0, -3), "Coffee Before Purge")
+
+	accountRepo := NewAccountRepository(tx, newTestFieldEncryptor(t))
+	require.NoError(t, accountRepo.PurgeAccount(ctx, f.AccountID.String(), f.UserID.String(), nil),
+		"purge must succeed on a multi-member chain, not refuse")
+
+	txnRepo := NewTransactionRepository(tx, nil)
+	items, _, err := txnRepo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	require.NoError(t, err)
+	assert.Contains(t, feedNames(items), "Coffee Before Purge",
+		"purging one chain member must not hide transactions the surviving active member's chain key still covers")
 }
