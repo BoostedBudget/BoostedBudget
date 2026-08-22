@@ -128,6 +128,19 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 			return nil
 		}
 
+		// Issue #1569: a retained (non-active) account's current_balance is frozen at
+		// disconnect and will never update again. Freeze current_amount rather than
+		// recomputing from that frozen figure on every run — same treatment as the nil-balance
+		// case above, and for the same reason (nothing new to report).
+		if isAccountDisconnected(account) {
+			s.logger.Warn("savings_progress: basis account is no longer active — skipping recompute",
+				slog.String("goal_id", goal.ID),
+				slog.String("account_id", goal.AccountID),
+				slog.String("account_status", string(account.Status)),
+			)
+			return nil
+		}
+
 		newAmount = clampNonNegative(*account.CurrentBalance)
 		balanceAt := account.UpdatedAt
 		balanceAsOf = &balanceAt
@@ -146,6 +159,16 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 			s.logger.Warn("savings_progress: account balance is nil — skipping recompute (stale)",
 				slog.String("goal_id", goal.ID),
 				slog.String("account_id", goal.AccountID),
+			)
+			return nil
+		}
+
+		// Issue #1569: see the identical check in the balance-basis branch above.
+		if isAccountDisconnected(account) {
+			s.logger.Warn("savings_progress: basis account is no longer active — skipping recompute",
+				slog.String("goal_id", goal.ID),
+				slog.String("account_id", goal.AccountID),
+				slog.String("account_status", string(account.Status)),
 			)
 			return nil
 		}
@@ -210,6 +233,19 @@ func (s *savingsProgressService) RecomputeUser(ctx context.Context, userID strin
 	}
 
 	return nil
+}
+
+// isAccountDisconnected reports whether a balance-basis goal's linked account is no longer
+// active — replaced, expired, or removed (Issue #1569). An empty Status is treated as active
+// for backward compatibility with any pre-#1569 caller path that never populated the field
+// (mirrors the frontend's isInactive() legacy-account handling in useActiveAccounts.ts).
+func isAccountDisconnected(account *domain.Account) bool {
+	switch account.Status {
+	case domain.AccountStatusReplaced, domain.AccountStatusExpired, domain.AccountStatusRemoved:
+		return true
+	default:
+		return false
+	}
 }
 
 // clampNonNegative returns 0 if v < 0, otherwise v.
@@ -283,16 +319,29 @@ func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID 
 		case domain.ProgressBasisBalance:
 			item.ComputedFrom = domain.ComputedFromAccountBalance
 			item.Freshness = s.computeFreshness(goal.BalanceAsOf, now, freshnessWindow)
-			if acct, err := s.accountRepo.GetByIDAndUser(ctx, goal.AccountID, userID); err == nil && acct != nil && acct.CurrentBalance != nil {
-				bal := clampNonNegative(*acct.CurrentBalance)
-				item.LinkedBalance = &bal
+			if acct, err := s.accountRepo.GetByIDAndUser(ctx, goal.AccountID, userID); err == nil && acct != nil {
+				// Issue #1569: a disconnected basis account's balance will never update again —
+				// report that distinctly from "still updating, just not recently" (FreshnessStale).
+				if isAccountDisconnected(acct) {
+					item.Freshness = domain.FreshnessBasisAccountDisconnected
+				}
+				if acct.CurrentBalance != nil {
+					bal := clampNonNegative(*acct.CurrentBalance)
+					item.LinkedBalance = &bal
+				}
 			}
 		case domain.ProgressBasisAccountPercentage:
 			item.ComputedFrom = domain.ComputedFromAccountPercentage
 			item.Freshness = s.computeFreshness(goal.BalanceAsOf, now, freshnessWindow)
-			if acct, err := s.accountRepo.GetByIDAndUser(ctx, goal.AccountID, userID); err == nil && acct != nil && acct.CurrentBalance != nil {
-				bal := clampNonNegative(*acct.CurrentBalance)
-				item.LinkedBalance = &bal
+			if acct, err := s.accountRepo.GetByIDAndUser(ctx, goal.AccountID, userID); err == nil && acct != nil {
+				// Issue #1569: see the identical check in the balance-basis branch above.
+				if isAccountDisconnected(acct) {
+					item.Freshness = domain.FreshnessBasisAccountDisconnected
+				}
+				if acct.CurrentBalance != nil {
+					bal := clampNonNegative(*acct.CurrentBalance)
+					item.LinkedBalance = &bal
+				}
 			}
 		default: // manual or empty
 			item.ProgressBasis = domain.ProgressBasisManual // normalise empty string
