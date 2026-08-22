@@ -72,19 +72,59 @@
 #   exit code, which is 0 for a stale path in any multi-file group (see the transcript above).
 #   This distinction is the whole point of the guard.
 #
-# * The lists are OBSERVED, not text-parsed. The guard SOURCES each runner script with a recording
-#   stub named `bun` first on PATH (so nothing is actually executed), then reads the resulting bash
-#   arrays. Same rationale as check-frontend-test-timeout.test.sh, which accumulated twelve defects
-#   and three demonstrated FALSE PASSES while it tried to parse shell as text: bash is the only
-#   correct parser of bash. Sourcing handles comments, quoting, `\` continuations, values arriving
-#   from variables, and array expansion for free.
+# * The lists are OBSERVED, not text-parsed. The guard SOURCES each runner script with RECORDING
+#   stubs (`bun`, `bunx`, `npm`, ...) first on PATH, then reads the resulting bash arrays. Same
+#   rationale as check-frontend-test-timeout.test.sh, which accumulated twelve defects and three
+#   demonstrated FALSE PASSES while it tried to parse shell as text: bash is the only correct
+#   parser of bash. Sourcing handles comments, quoting, `\` continuations, values arriving from
+#   variables, and array expansion for free.
+#
+#   The stubs APPEND every invocation (name + argv) to a log and exit 0, and the guard then
+#   ASSERTS that `bun` appears in that log. That assertion is not decoration: a stub on PATH is
+#   only reached for a BARE command name, so a runner that invoked bun by absolute path — or via
+#   $(which bun), or from a node_modules/.bin path — would bypass the stub entirely, really run
+#   the suite, and the guard could still report a pass over whatever it happened to observe. If
+#   that assertion ever fires, either the invocation was moved behind a `[ "${BASH_SOURCE[0]}" =
+#   "$0" ]` main-guard (in which case source-time observation of the arrays is still fine and this
+#   assertion is what needs relaxing) or the stub is being bypassed (in which case fix the runner).
+#
+# * SOURCING EXECUTES THE RUNNER'S TOP-LEVEL CODE. This is a real constraint on what those two
+#   scripts may contain, not an implementation detail: `source` runs everything at file scope,
+#   including test-conflict-files.sh's five trailing `run_group` calls. It is harmless TODAY only
+#   because every command those lines reach is stubbed out. A future runner that did filesystem or
+#   network work at top level — `rm -rf coverage/`, a `curl` to an artifact store, a `git` write —
+#   would have that work EXECUTED inside CI by this guard. The stub set below therefore covers the
+#   package managers plus the obvious side-effecting commands (`curl`, `wget`, `rm`, `git`), which
+#   neutralises the common cases cheaply but is NOT a sandbox. Keep side effects in these runners
+#   behind a function that only a direct `bash runner.sh` invocation calls.
 #
 # * The conflict-side group variables are DISCOVERED via `compgen -A variable` matching
-#   GROUP_<x>_FILES, not enumerated A..E. A new Group F is picked up with no edit here.
+#   GROUP_<x>_FILES, not enumerated A..E. A new Group F is picked up with no edit here. The child
+#   UNSETS every matching name BEFORE sourcing: `compgen -A variable` lists exported environment
+#   variables too, so an unrelated `GROUP_CACHE_FILES=...` in the CI environment would otherwise be
+#   mistaken for a group and fail the existence check — a false alarm sourced from the environment
+#   rather than from the repo. Verified: `GROUP_CACHE_FILES=x bash -c 'compgen -A variable | grep
+#   -E "^GROUP_[A-Za-z0-9]+_FILES$"'` prints GROUP_CACHE_FILES.
 #
 # * FAIL CLOSED everywhere: an empty list, a missing array, or a source that produces no paths is
 #   an ERROR, not a pass. A guard that silently verifies nothing is the failure mode it exists to
 #   prevent.
+#
+# * A SYNTAX ERROR is caught by `bash -n` BEFORE sourcing, and the source status is captured
+#   afterwards rather than being swallowed by `|| true`. Both halves are load-bearing, because
+#   sourcing cannot detect a parse error reliably. MEASURED on bash 3.2: without `set -e` a syntax
+#   error does NOT abort the sourcing shell — `source` returns non-zero and execution CONTINUES, so
+#   a runner that assigns all of its arrays and only THEN hits a syntax error hands back fully
+#   populated arrays (the old `|| true` turned exactly that into rc=0 and the guard passed); WITH
+#   `set -e`, which both runners set, the shell does exit, but `$?` in the EXIT trap is the status
+#   of the last SUCCESSFUL command — observed 0 — so the trap cannot see the parse error either.
+#   Outcomes are reported as explicit markers: __SOURCE_FAILED__:<rc> (the runner exited non-zero),
+#   __NO_GROUP_ARRAYS__ / __NO_EXCLUDE_ARRAY__ (sourced cleanly but defines nothing),
+#   __EMPTY_ARRAY__:<name>, or a list of paths.
+#
+# * A runner that legitimately ends in `exit 0` must NOT read as "no arrays found". `exit` inside a
+#   sourced file terminates the SOURCING shell, so any post-source `compgen` never runs. The child
+#   therefore emits from an EXIT trap, which fires either way, and reports the exit status it saw.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -106,81 +146,182 @@ for s in "$CONFLICT_SCRIPT" "$REGULAR_SCRIPT"; do
   fi
 done
 
-# ── A recording stub PATH so sourcing the runners executes no tests ────────────────────────────
-STUB_DIR="$(mktemp -d)"
-trap 'rm -rf "$STUB_DIR"' EXIT
-for cmd in bun bunx npm npx pnpm yarn; do
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$STUB_DIR/$cmd"
+# ── Recording stub PATH so sourcing the runners executes no tests ──────────────────────────────
+# Each stub APPENDS "<name>|<argv>" to $BB_STUB_LOG and exits 0, and the guard asserts below that
+# `bun` shows up there. See the header for why that assertion matters (a stub is only reached for a
+# BARE command name) and for the side-effect constraint that makes `curl`/`wget`/`rm`/`git` worth
+# stubbing as well: sourcing EXECUTES the runners' top-level code.
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
+STUB_DIR="$WORK_DIR/stubs"
+mkdir -p "$STUB_DIR"
+for cmd in bun bunx npm npx pnpm yarn node deno curl wget git rm; do
+  cat > "$STUB_DIR/$cmd" <<STUB
+#!/usr/bin/env bash
+printf '%s|%s\n' "$cmd" "\$*" >> "\$BB_STUB_LOG"
+exit 0
+STUB
   chmod +x "$STUB_DIR/$cmd"
 done
 
-# Sourced in a child bash so the runners' own `set -e`, `cd`, and variables cannot touch this
-# shell. Output is one path per line on stdout; the runners' own chatter goes to /dev/null.
-extract_conflict_paths() {
-  PATH="$STUB_DIR:$PATH" bash -s -- "$CONFLICT_SCRIPT" <<'INNER'
+# ── The extractor child ────────────────────────────────────────────────────────────────────────
+# Runs in its own bash so the runners' `set -e`, `cd`, `shift` and variables cannot touch this
+# shell. Emits one path per line on stdout, or a __MARKER__ line, and ALWAYS exits 0 — so it is a
+# marker, never an exit code, that the parent interprets. Parse errors are NOT its job: the caller
+# runs `bash -n` first, for the reasons given in the header. What it does have to get right is a
+# runner that finishes by calling `exit`, which terminates this child before any post-source
+# `compgen` could run; emission therefore happens from an EXIT trap, on fd 3.
+cat > "$WORK_DIR/extract.sh" <<'EXTRACT'
+#!/usr/bin/env bash
+# argv: <runner-script> <mode: conflict|regular> <stderr-capture-file>
 set -uo pipefail
-# shellcheck disable=SC1090
-source "$1" >/dev/null 2>&1 || true
-vars=$(compgen -A variable | grep -E '^GROUP_[A-Za-z0-9]+_FILES$' | sort || true)
-if [ -z "$vars" ]; then
-  echo "__NO_GROUP_ARRAYS__"
-  exit 0
-fi
-for v in $vars; do
-  eval 'arr=( ${'"$v"'[@]+"${'"$v"'[@]}"} )'
-  if [ "${#arr[@]}" -eq 0 ]; then
-    echo "__EMPTY_ARRAY__:$v"
-    continue
-  fi
-  printf '%s\n' "${arr[@]}"
+
+RUNNER="$1"; MODE="$2"; ERRFILE="$3"
+
+# `compgen -A variable` lists INHERITED environment variables too, so drop any pre-existing name
+# that would masquerade as a runner-defined array before sourcing anything.
+for v in $(compgen -A variable | grep -E '^(GROUP_[A-Za-z0-9]+_FILES|EXCLUDE_PATTERNS)$' || true); do
+  unset "$v" 2>/dev/null || true
 done
-INNER
+
+emit() {
+  local rc="$1" vars v
+  if [ "$rc" -ne 0 ]; then
+    # Covers BOTH a syntax error and a runner that exited non-zero. Neither is trustworthy, even
+    # when the arrays it left behind look complete.
+    echo "__SOURCE_FAILED__:$rc"
+    return
+  fi
+  if [ "$MODE" = conflict ]; then
+    vars="$(compgen -A variable | grep -E '^GROUP_[A-Za-z0-9]+_FILES$' | sort || true)"
+    if [ -z "$vars" ]; then
+      echo "__NO_GROUP_ARRAYS__"
+      return
+    fi
+    for v in $vars; do
+      eval 'arr=( ${'"$v"'[@]+"${'"$v"'[@]}"} )'
+      if [ "${#arr[@]}" -eq 0 ]; then
+        echo "__EMPTY_ARRAY__:$v"
+        continue
+      fi
+      printf '%s\n' "${arr[@]}"
+    done
+  else
+    if ! declare -p EXCLUDE_PATTERNS >/dev/null 2>&1; then
+      echo "__NO_EXCLUDE_ARRAY__"
+      return
+    fi
+    arr=( ${EXCLUDE_PATTERNS[@]+"${EXCLUDE_PATTERNS[@]}"} )
+    if [ "${#arr[@]}" -eq 0 ]; then
+      echo "__EMPTY_ARRAY__:EXCLUDE_PATTERNS"
+      return
+    fi
+    printf '%s\n' "${arr[@]}"
+  fi
 }
 
-extract_regular_paths() {
-  PATH="$STUB_DIR:$PATH" bash -s -- "$REGULAR_SCRIPT" <<'INNER'
-set -uo pipefail
+# Emit on fd 3, a dup of the ORIGINAL stdout. Not cosmetic: a runner ending in `exit 0` — which is
+# legitimate — makes the EXIT trap fire while `source`'s own `>/dev/null` is still the active
+# stdout. MEASURED: the emission was swallowed and the parent saw "no output at all", i.e. a false
+# alarm on a perfectly good script. fd 3 is immune to that redirection.
+#
+# The trap is also what makes `exit 0` work at all: it terminates THIS shell, so no post-source
+# `compgen` would ever run. A non-zero status here means the runner failed under its own `set -e`
+# or exited non-zero; parse errors are already ruled out by the caller's `bash -n`.
+exec 3>&1
+trap 'emit "$?" >&3; exit 0' EXIT
 # shellcheck disable=SC1090
-source "$1" >/dev/null 2>&1 || true
-arr=( ${EXCLUDE_PATTERNS[@]+"${EXCLUDE_PATTERNS[@]}"} )
-if [ "${#arr[@]}" -eq 0 ]; then
-  echo "__EMPTY_ARRAY__:EXCLUDE_PATTERNS"
-  exit 0
-fi
-printf '%s\n' "${arr[@]}"
-INNER
+source "$RUNNER" >/dev/null 2>"$ERRFILE"
+SRC_RC=$?
+exit "$SRC_RC"
+EXTRACT
+
+observe() { # <runner> <mode>; writes the invocation log to $WORK_DIR/invocations-<mode>.log
+  : > "$WORK_DIR/invocations-$2.log"
+  : > "$WORK_DIR/stderr-$2.txt"
+  BB_STUB_LOG="$WORK_DIR/invocations-$2.log" PATH="$STUB_DIR:$PATH" \
+    bash "$WORK_DIR/extract.sh" "$1" "$2" "$WORK_DIR/stderr-$2.txt"
 }
+
+# ── Syntax check BEFORE sourcing anything ──────────────────────────────────────────────────────
+# `bash -n` parses the WHOLE file and executes nothing, which is the only reliable way to catch
+# this. Sourcing is not: MEASURED on bash 3.2 —
+#
+#   * a syntax error in a sourced file does NOT abort a shell without `set -e`; `source` returns
+#     non-zero and execution CONTINUES, so a runner that assigns every array and only THEN hits a
+#     syntax error hands back fully populated, untrustworthy arrays (the old `|| true` here turned
+#     that into rc=0 and the guard passed);
+#   * with `set -e` active — and BOTH runners set it — the shell does exit, but `$?` inside the
+#     EXIT trap is the status of the last SUCCESSFUL command (observed: 0), so the trap cannot
+#     tell a fatal parse error from a clean finish either.
+#
+# Hence: parse first, loudly, and only then observe.
+for s in "$CONFLICT_SCRIPT" "$REGULAR_SCRIPT"; do
+  if ! bash -n "$s" 2>"$WORK_DIR/parse-error.txt"; then
+    echo "::error::$s does not PARSE (bash -n failed), so its path arrays cannot be read at all. This guard is deliberately refusing to pass; fix the script."
+    echo "--- bash -n output ---"
+    head -20 "$WORK_DIR/parse-error.txt"
+    exit 1
+  fi
+done
+
+# The extractor exits 0 on every outcome it understands, so a non-zero here means the child itself
+# could not run. Fail loudly: a silent non-zero is indistinguishable from a crashed guard.
+CONFLICT_RAW="$(observe "$CONFLICT_SCRIPT" conflict)" || {
+  echo "::error::the extractor child failed to run against $CONFLICT_SCRIPT (exit $?). This guard is deliberately refusing to pass."
+  exit 1
+}
+REGULAR_RAW="$(observe "$REGULAR_SCRIPT" regular)" || {
+  echo "::error::the extractor child failed to run against $REGULAR_SCRIPT (exit $?). This guard is deliberately refusing to pass."
+  exit 1
+}
+
+# ── Fail closed on anything that would make the comparison vacuous ─────────────────────────────
+check_extraction() { # <label> <runner-path> <raw-output> <mode>
+  local label="$1" script="$2" raw="$3" mode="$4" rc
+
+  if [ -z "$raw" ]; then
+    echo "::error::observing $script produced NO output at all. The extractor emits from an EXIT trap, so this means the trap was replaced (does the runner install its own EXIT trap?) or bash died outright. Nothing was verified; fix this rather than deleting the guard."
+    exit 1
+  fi
+
+  case "$raw" in
+    *__SOURCE_FAILED__*)
+      rc="$(printf '%s\n' "$raw" | sed -n 's/.*__SOURCE_FAILED__:\([0-9]*\).*/\1/p' | head -1)"
+      echo "::error::sourcing $script FAILED (exit ${rc:-?}) — a syntax error, or the script exited non-zero. Its $label cannot be trusted: bash keeps executing after a syntax error in a sourced file, so any arrays assigned BEFORE the error look perfectly populated. This guard is refusing to compare them."
+      if [ -s "$WORK_DIR/stderr-$mode.txt" ]; then
+        echo "--- stderr from sourcing $script ---"
+        head -20 "$WORK_DIR/stderr-$mode.txt"
+      fi
+      exit 1 ;;
+    *__NO_GROUP_ARRAYS__*)
+      echo "::error::no GROUP_<x>_FILES arrays found in $script, although it sourced cleanly. Either the arrays were renamed or they are no longer defined at file scope; this guard would otherwise compare an empty list and pass. Fix the guard, do not delete it."
+      exit 1 ;;
+    *__NO_EXCLUDE_ARRAY__*)
+      echo "::error::EXCLUDE_PATTERNS is not defined in $script, although it sourced cleanly. Either it was renamed or it is no longer defined at file scope; this guard would otherwise compare an empty list and pass. Fix the guard, do not delete it."
+      exit 1 ;;
+    *__EMPTY_ARRAY__*)
+      echo "::error::an expected path array is empty: $(printf '%s\n' "$raw" | grep '__EMPTY_ARRAY__' | tr '\n' ' ')"
+      exit 1 ;;
+  esac
+
+  # A stub is consulted only for a BARE command name. If `bun` never reached the stub, either the
+  # runner invoked it by absolute path — in which case sourcing REALLY RAN the suite and this
+  # guard's "nothing is executed" promise is void — or it no longer invokes bun at file scope.
+  if ! grep -q '^bun|' "$WORK_DIR/invocations-$mode.log" 2>/dev/null; then
+    echo "::error::sourcing $script never invoked the stubbed \`bun\`. Commands observed: $(tr '\n' ' ' < "$WORK_DIR/invocations-$mode.log" 2>/dev/null || echo none). Either bun is now called by an absolute path / node_modules/.bin path (which BYPASSES the stub, so sourcing really executes the test suite — fix the runner), or the invocation moved behind a main-guard (in which case relax this assertion deliberately, with a note)."
+    exit 1
+  fi
+}
+
+check_extraction "path arrays"      "$CONFLICT_SCRIPT" "$CONFLICT_RAW" conflict
+check_extraction "EXCLUDE_PATTERNS" "$REGULAR_SCRIPT"  "$REGULAR_RAW"  regular
 
 # Paths are normalised to be relative to apps/web: test-conflict-files.sh spells them
 # "$FRONTEND_DIR/src/...", test-regular.sh spells them "src/...".
 normalise() {
   sed -e "s|^$FRONTEND_DIR/||" -e 's|^\./||'
 }
-
-# A `source` of a file with a SYNTAX ERROR aborts the sourcing shell outright — `|| true` inside
-# the helper cannot catch it, and under `set -e` the assignment below would kill this guard with a
-# bare exit 2 and no message. Fail closed LOUDLY instead: an unreadable runner script is exactly
-# the case where a silent non-zero is indistinguishable from a crashed guard.
-CONFLICT_RAW="$(extract_conflict_paths)" || {
-  echo "::error::could not source $CONFLICT_SCRIPT (exit $?) — it likely has a syntax error, so its path arrays cannot be read. Fix the script; this guard is deliberately refusing to pass."
-  exit 1
-}
-REGULAR_RAW="$(extract_regular_paths)" || {
-  echo "::error::could not source $REGULAR_SCRIPT (exit $?) — it likely has a syntax error, so EXCLUDE_PATTERNS cannot be read. Fix the script; this guard is deliberately refusing to pass."
-  exit 1
-}
-
-# ── Fail closed on anything that would make the comparison vacuous ─────────────────────────────
-for marker in "$CONFLICT_RAW" "$REGULAR_RAW"; do
-  case "$marker" in
-    *__NO_GROUP_ARRAYS__*)
-      echo "::error::no GROUP_<x>_FILES arrays found in $CONFLICT_SCRIPT. Either the arrays were renamed or sourcing failed; this guard would otherwise compare an empty list and pass. Fix the guard, do not delete it."
-      exit 1 ;;
-    *__EMPTY_ARRAY__*)
-      echo "::error::an expected path array is empty: $(printf '%s\n' "$marker" | grep '__EMPTY_ARRAY__')"
-      exit 1 ;;
-  esac
-done
 
 CONFLICT_PATHS="$(printf '%s\n' "$CONFLICT_RAW" | normalise | sed '/^$/d' | sort)"
 REGULAR_PATHS="$(printf '%s\n' "$REGULAR_RAW" | normalise | sed '/^$/d' | sort)"
