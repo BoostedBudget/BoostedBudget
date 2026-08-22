@@ -39,6 +39,14 @@ var (
 	// the API layer can map to an actionable 409, instead of leaking a raw pgconn.PgError. Issue
 	// #1569, Task 6.
 	ErrPurgeBlockedBySavingsGoal = errors.New("a savings goal still references this account; delete the goal first")
+
+	// ErrAccountNotDisconnected is returned by PurgeAccount when the account is still 'active'.
+	// A purge must never be the FIRST thing that happens to a live, actively-syncing account: the
+	// next Plaid sync's MatchOrCreate would recreate the row, silently undoing the "permanent"
+	// deletion the user just confirmed. Mirrors ErrLinkedItemNotDisconnected
+	// (linked_item_repository.go) for the same reason at the institution level. Issue #1569, Task
+	// 6, fix round 1.
+	ErrAccountNotDisconnected = errors.New("account must be disconnected before it can be purged")
 )
 
 // FingerprintOwnership holds information about who owns a fingerprint and the state of their linked item.
@@ -237,6 +245,10 @@ type AccountRepository interface {
 	// alone: purging an account must not delete the transactions the user categorized and
 	// budgeted against. transaction_repository.go's unified feed already renders a NULL
 	// account_id row (the "truly orphaned" leg), so those transactions remain visible.
+	//
+	// Refuses with ErrAccountNotDisconnected, doing and changing nothing, unless the account is
+	// already non-'active' (removed/replaced/expired) — a purge must never be the first thing
+	// that happens to a live, actively-syncing account, or the next Plaid sync recreates it.
 	//
 	// Refuses with ErrPurgeBlockedBySavingsGoal, doing and changing nothing, while a savings goal
 	// still references this account (migration 000150's RESTRICT constraint on
@@ -850,6 +862,37 @@ func (r *accountRepository) PurgeAccount(ctx context.Context, accountID, userID 
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+
+	// Lock the row and check status BEFORE doing anything destructive. Mirrors
+	// PurgeLinkedItem's plaid_removed_at guard: a purge must never be the FIRST thing that
+	// happens to a LIVE, actively-syncing account — Plaid would recreate the row on its next sync
+	// via MatchOrCreate, and the "permanent" deletion the user just confirmed would silently
+	// resurrect itself. FOR UPDATE here is a row lock on accounts, not users, so it cannot
+	// participate in the users-row lock cycle LogInTx's doc comment warns about.
+	var status string
+	err = tx.QueryRow(ctx,
+		`SELECT status FROM accounts WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+		accountID, userID,
+	).Scan(&status)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrAccountNotFound
+		}
+		return fmt.Errorf("purge account %s: %w", accountID, err)
+	}
+	if status == string(domain.AccountStatusActive) {
+		return ErrAccountNotDisconnected
+	}
+
+	// accounts.replaced_by_id -> accounts(id) has NO explicit ON DELETE action (defaults to NO
+	// ACTION, migration 000033). If an OLDER account was replaced by this one on a re-link
+	// (older.replaced_by_id = accountID), the accounts DELETE below would fail with a dangling
+	// foreign-key violation as an opaque error. Mirrors DeleteUserCascade's identical fix
+	// (profile_repository.go) for the same column. Nulling unconditionally is harmless: the
+	// column is nullable and carries no meaning once its target is gone.
+	if _, err := tx.Exec(ctx, `UPDATE accounts SET replaced_by_id = NULL WHERE replaced_by_id = $1`, accountID); err != nil {
+		return fmt.Errorf("purge account %s: clearing dangling replaced_by_id references: %w", accountID, err)
+	}
 
 	// balance_snapshots.account_id is ON DELETE SET NULL (migration 000150), so it will NOT be
 	// removed by the accounts DELETE below — it must be deleted explicitly, before the account

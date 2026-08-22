@@ -269,7 +269,7 @@ export const useReorderAccounts = <TError = ErrorType<ErrorModel>,
       return useMutation(getReorderAccountsMutationOptions(options), queryClient);
     }
     /**
- * Permanently destroys a single account and everything derived from it (balance history, holdings, liabilities) with ownership validation. This cannot be undone. Transactions are not destroyed. Refuses if a savings goal still references this account. Use POST .../disconnect instead to stop syncing while retaining history.
+ * Permanently destroys a single account and everything derived from it — balance history, holdings, liabilities, AND investment transactions (buys, sells, dividends) for an investment account — with ownership validation. This cannot be undone. Bank transactions (from a checking/savings/credit account) are NOT destroyed; investment transactions ARE, since they have no independent existence apart from the account. Refuses if a savings goal still references this account, and refuses unless the account was already disconnected (POST .../disconnect first) — a live account cannot be purged, since the next Plaid sync would recreate it.
  * @summary Purge account
  */
 export const purgeAccount = (
@@ -461,7 +461,7 @@ export const useDisconnectAccount = <TError = ErrorType<ErrorModel>,
       return useMutation(getDisconnectAccountMutationOptions(options), queryClient);
     }
     /**
- * Permanently destroys a linked item and every account under it (balance history, holdings, liabilities) with ownership validation. This cannot be undone. Transactions are not destroyed. Refuses if a savings goal still references one of its accounts, and refuses unless the institution was already disconnected. Use POST .../disconnect first.
+ * Permanently destroys a linked item and every account under it — balance history, holdings, liabilities, AND investment transactions (buys, sells, dividends) for any investment account — with ownership validation. This cannot be undone. Bank transactions are NOT destroyed; investment transactions ARE, since they have no independent existence apart from the account. Refuses if a savings goal still references one of its accounts, and refuses unless the institution was already disconnected. Use POST .../disconnect first.
  * @summary Purge institution
  */
 export const purgeInstitution = (

@@ -160,6 +160,7 @@ import {
   mockUseExchangePublicToken,
   mockExchangePublicTokenMutateAsync,
 } from '@/test/mocks/plaid-api'
+import { mockToastError } from '@/test/mocks/sonner'
 // ============================================================================
 // Test helper
 // ============================================================================
@@ -207,6 +208,7 @@ describe('AccountsPage', () => {
     mockUseGetAccounts.mockClear()
     mockUseDisconnectAccount.mockClear()
     mockUsePurgeAccount.mockClear()
+    mockToastError.mockClear()
     mockUseGetUserProfile.mockClear()
     mockUseCreateLinkToken.mockClear()
     mockCreateLinkTokenMutateAsync.mockClear()
@@ -569,6 +571,38 @@ describe('AccountsPage', () => {
       expect(desc.textContent).toContain('cannot be undone')
       expect(desc.textContent).toContain('transactions will NOT be deleted')
       expect(desc.textContent).toContain('savings goal')
+    })
+
+    // Fix round 1, IMPORTANT 3: the backend's actionable 409 detail (e.g.
+    // repository.ErrPurgeBlockedBySavingsGoal's mapped message) lives at
+    // `err.response.data.detail`, not `err.message` (axios's `.message` for an HTTP error is the
+    // useless "Request failed with status code 409"). This proves it actually reaches the toast.
+    it('surfaces the backend detail message from a rejected purge, not a generic failure string', async () => {
+      const axiosLikeError = {
+        message: 'Request failed with status code 409',
+        response: {
+          status: 409,
+          data: { detail: 'A savings goal still references this account. Delete the goal first, then try again.' },
+        },
+      }
+      mockUsePurgeAccount.mockReturnValue({
+        mutateAsync: mock(() => Promise.reject(axiosLikeError)),
+        isPending: false,
+        isError: false,
+        error: null,
+      })
+
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+      fireEvent.click(screen.getByText('Delete from history'))
+      fireEvent.click(screen.getByTestId('confirm-delete-dialog').querySelector('button')!)
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalledWith(
+          'A savings goal still references this account. Delete the goal first, then try again.'
+        )
+      })
     })
   })
 

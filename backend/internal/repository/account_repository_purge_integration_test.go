@@ -57,6 +57,24 @@ func seedHolding(ctx context.Context, t *testing.T, db DB, f retainedFixture) uu
 }
 
 // seedCreditLiability inserts one credit_liabilities row for the fixture account.
+// seedInvestmentTransaction inserts one investment_transactions row for the fixture account.
+// investment_transactions.account_id is ON DELETE CASCADE (migration 000051) — unlike a banking
+// transaction, an investment transaction (buy/sell/dividend) has no independent existence apart
+// from the account and IS destroyed by a purge. Fix round 1 finding: the purge dialog and API
+// descriptions previously said "transactions are not destroyed" without this carve-out, which was
+// false for every investment account.
+func seedInvestmentTransaction(ctx context.Context, t *testing.T, db DB, f retainedFixture) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	suffix := uuid.New().String()
+	require.NoError(t, db.QueryRow(ctx, `
+		INSERT INTO investment_transactions (user_id, account_id, plaid_investment_transaction_id, type, name, amount, date)
+		VALUES ($1, $2, $3, 'buy', 'Test Buy', 100.00, CURRENT_DATE)
+		RETURNING id
+	`, f.UserID, f.AccountID, "plaid-inv-txn-"+suffix).Scan(&id), "seed investment_transaction")
+	return id
+}
+
 func seedCreditLiability(ctx context.Context, t *testing.T, db DB, f retainedFixture) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
@@ -89,7 +107,14 @@ func countRows(ctx context.Context, t *testing.T, db DB, table, whereCol string,
 // TestAccountRepository_PurgeAccount_Integration_RemovesEverythingDerived proves PurgeAccount
 // transactionally destroys the account row, its balance_snapshots (explicit — SET NULL since
 // migration 000150, so a plain account delete would only orphan them), and — via unchanged
-// ON DELETE CASCADE — its holdings and liabilities.
+// ON DELETE CASCADE — its holdings, liabilities, AND investment_transactions.
+//
+// Fix round 1, CRITICAL finding: investment_transactions.account_id is ON DELETE CASCADE
+// (migration 000051) — a buy/sell/dividend has no independent existence apart from the account,
+// unlike a banking transaction. The purge dialog and API descriptions previously said
+// "transactions are not destroyed" without this carve-out, which was false for any investment
+// account. Asserted here BEFORE and AFTER the purge (not just after) so this assertion cannot
+// pass vacuously if the seed helper silently failed to insert the row.
 func TestAccountRepository_PurgeAccount_Integration_RemovesEverythingDerived(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -104,6 +129,12 @@ func TestAccountRepository_PurgeAccount_Integration_RemovesEverythingDerived(t *
 	snapshotID := seedBalanceSnapshot(ctx, t, pool, f)
 	holdingID := seedHolding(ctx, t, pool, f)
 	liabilityID := seedCreditLiability(ctx, t, pool, f)
+	invTxnID := seedInvestmentTransaction(ctx, t, pool, f)
+	require.Equal(t, 1, countRows(ctx, t, pool, "investment_transactions", "id", invTxnID),
+		"sanity: the investment transaction must exist before the purge, or the assertion below is vacuous")
+
+	// PurgeAccount refuses a live account (fix round 1, IMPORTANT 4) — disconnect first.
+	disconnect(ctx, t, pool, f)
 
 	err := accountRepo.PurgeAccount(ctx, f.AccountID.String(), f.UserID.String(), nil)
 	require.NoError(t, err)
@@ -112,6 +143,27 @@ func TestAccountRepository_PurgeAccount_Integration_RemovesEverythingDerived(t *
 	assert.Equal(t, 0, countRows(ctx, t, pool, "balance_snapshots", "id", snapshotID), "balance_snapshots must be gone")
 	assert.Equal(t, 0, countRows(ctx, t, pool, "holdings", "id", holdingID), "holdings must be gone")
 	assert.Equal(t, 0, countRows(ctx, t, pool, "credit_liabilities", "id", liabilityID), "liabilities must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "investment_transactions", "id", invTxnID),
+		"investment transactions must be destroyed — they have no independent existence apart from the account")
+}
+
+// TestAccountRepository_PurgeAccount_Integration_RefusesLiveAccount proves the fix round 1,
+// IMPORTANT 4 guard: PurgeAccount refuses a still-'active' account rather than destroying its
+// history out from under an actively-syncing Plaid item (whose next sync would recreate the row
+// via MatchOrCreate, silently undoing the "permanent" deletion). Mirrors
+// ErrLinkedItemNotDisconnected's institution-level guard.
+func TestAccountRepository_PurgeAccount_Integration_RefusesLiveAccount(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	accountRepo := NewAccountRepository(pool, newTestFieldEncryptor(t))
+
+	f := seedRetainedFixture(ctx, t, pool, "purge-live-"+uuid.New().String())
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+
+	err := accountRepo.PurgeAccount(ctx, f.AccountID.String(), f.UserID.String(), nil)
+	require.ErrorIs(t, err, ErrAccountNotDisconnected)
+	assert.Equal(t, 1, countRows(ctx, t, pool, "accounts", "id", f.AccountID),
+		"the refused purge must roll back — the account must still exist")
 }
 
 // TestAccountRepository_PurgeAccount_Integration_TransactionsSurvive proves purging an account does
@@ -131,6 +183,7 @@ func TestAccountRepository_PurgeAccount_Integration_TransactionsSurvive(t *testi
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
 	txnID := seedBankingTxn(ctx, t, pool, f, time.Now(), "Coffee Shop")
 
+	disconnect(ctx, t, pool, f)
 	require.NoError(t, accountRepo.PurgeAccount(ctx, f.AccountID.String(), f.UserID.String(), nil))
 
 	var accountIDAfter *uuid.UUID
@@ -157,6 +210,7 @@ func TestAccountRepository_PurgeAccount_Integration_RefusesWhileSavingsGoalRefer
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
 	snapshotID := seedBalanceSnapshot(ctx, t, pool, f)
 	seedSavingsGoal(ctx, t, pool, f)
+	disconnect(ctx, t, pool, f)
 
 	err := accountRepo.PurgeAccount(ctx, f.AccountID.String(), f.UserID.String(), nil)
 	require.ErrorIs(t, err, ErrPurgeBlockedBySavingsGoal)
@@ -182,6 +236,7 @@ func TestAccountRepository_PurgeAccount_Integration_WritesAuditRowInSameTransact
 	// GetItemsForCleanupPage's sweep (a different suite, same real table) would otherwise pick
 	// up on a later run in this package. Delete the fixture user — cascades everything.
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+	disconnect(ctx, t, pool, f)
 
 	require.NoError(t, accountRepo.PurgeAccount(ctx, f.AccountID.String(), f.UserID.String(), auditLog))
 
@@ -191,6 +246,36 @@ func TestAccountRepository_PurgeAccount_Integration_WritesAuditRowInSameTransact
 		f.AccountID.String(),
 	).Scan(&count))
 	assert.Equal(t, 1, count, "an account.history_purged audit entry must be written")
+}
+
+// TestAccountRepository_PurgeAccount_Integration_ClearsDanglingReplacedByReference is the fix
+// round 1 IMPORTANT 2 regression test at the account level (mirrors the linked-item-level test in
+// linked_item_repository_purge_integration_test.go). accounts.replaced_by_id has NO explicit
+// ON DELETE action (defaults to NO ACTION, migration 000033) — if an OLDER account was replaced
+// by the one being purged, the purge must not fail with a dangling foreign-key violation.
+func TestAccountRepository_PurgeAccount_Integration_ClearsDanglingReplacedByReference(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	accountRepo := NewAccountRepository(pool, newTestFieldEncryptor(t))
+
+	f := seedRetainedFixture(ctx, t, pool, "purge-replby-"+uuid.New().String())
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+
+	var oldAccountID uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type, status, replaced_at, replaced_by_id)
+		VALUES ($1, $2, $3, 'Old Checking', 'depository', 'replaced', NOW(), $4)
+		RETURNING id
+	`, f.LinkedItemID, f.UserID, "plaid-acct-old-"+uuid.New().String(), f.AccountID).Scan(&oldAccountID))
+
+	disconnect(ctx, t, pool, f)
+
+	err := accountRepo.PurgeAccount(ctx, f.AccountID.String(), f.UserID.String(), nil)
+	require.NoError(t, err, "purging an account another account's replaced_by_id points at must not fail with a dangling foreign-key violation")
+
+	var replacedBy *string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT replaced_by_id FROM accounts WHERE id = $1`, oldAccountID).Scan(&replacedBy))
+	assert.Nil(t, replacedBy, "the older account's dangling replaced_by_id must be nulled, not left pointing at a deleted row")
 }
 
 // TestAccountRepository_PurgeAccount_Integration_MultiMemberChain_TransactionsStayVisibleUnderSurvivor
@@ -221,6 +306,7 @@ func TestAccountRepository_PurgeAccount_Integration_MultiMemberChain_Transaction
 	require.NoError(t, err, "seed surviving chain member")
 
 	seedBankingTxn(ctx, t, tx, f, time.Now().UTC().AddDate(0, 0, -3), "Coffee Before Purge")
+	disconnect(ctx, t, tx, f)
 
 	accountRepo := NewAccountRepository(tx, newTestFieldEncryptor(t))
 	require.NoError(t, accountRepo.PurgeAccount(ctx, f.AccountID.String(), f.UserID.String(), nil),

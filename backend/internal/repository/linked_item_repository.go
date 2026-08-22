@@ -859,6 +859,23 @@ func (r *linkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID
 		return ErrLinkedItemNotDisconnected
 	}
 
+	// Both replaced_by_id columns are `REFERENCES ...(id)` with no explicit ON DELETE action
+	// (defaults to NO ACTION, migrations 000032/000033). If an older item/account was replaced by
+	// one under this item on a re-link, the deletes below would fail with a dangling foreign-key
+	// violation as an opaque error. Mirrors DeleteUserCascade's identical fix
+	// (profile_repository.go) for the same two columns, scoped here to just this item's accounts
+	// and this item itself rather than a whole user. Nulling unconditionally is harmless: both
+	// columns are nullable and carry no meaning once their target is gone.
+	if _, err := tx.Exec(ctx, `
+		UPDATE accounts SET replaced_by_id = NULL
+		WHERE replaced_by_id IN (SELECT id FROM accounts WHERE linked_item_id = $1)
+	`, linkedItemID); err != nil {
+		return fmt.Errorf("purge linked item %s: clearing dangling accounts.replaced_by_id references: %w", linkedItemID, err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE linked_items SET replaced_by_id = NULL WHERE replaced_by_id = $1`, linkedItemID); err != nil {
+		return fmt.Errorf("purge linked item %s: clearing dangling linked_items.replaced_by_id references: %w", linkedItemID, err)
+	}
+
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM balance_snapshots
 		WHERE account_id IN (SELECT id FROM accounts WHERE linked_item_id = $1)

@@ -88,7 +88,7 @@
       ],
       "manifestClass": "read",
       "excluded": true,
-      "description": "Permanently destroys a single account and everything derived from it (balance history, holdings, liabilities) with ownership validation. This cannot be undone. Transactions are not destroyed. Refuses if a savings goal still references this account. Use POST .../disconnect instead to stop syncing while retaining history.",
+      "description": "Permanently destroys a single account and everything derived from it — balance history, holdings, liabilities, AND investment transactions (buys, sells, dividends) for an investment account — with ownership validation. This cannot be undone. Bank transactions (from a checking/savings/credit account) are NOT destroyed; investment transactions ARE, since they have no independent existence apart from the account. Refuses if a savings goal still references this account, and refuses unless the account was already disconnected (POST .../disconnect first) — a live account cannot be purged, since the next Plaid sync would recreate it.",
       "parameters": [
         {
           "name": "id",
@@ -2835,7 +2835,7 @@
       ],
       "manifestClass": "read",
       "excluded": true,
-      "description": "Permanently destroys a linked item and every account under it (balance history, holdings, liabilities) with ownership validation. This cannot be undone. Transactions are not destroyed. Refuses if a savings goal still references one of its accounts, and refuses unless the institution was already disconnected. Use POST .../disconnect first.",
+      "description": "Permanently destroys a linked item and every account under it — balance history, holdings, liabilities, AND investment transactions (buys, sells, dividends) for any investment account — with ownership validation. This cannot be undone. Bank transactions are NOT destroyed; investment transactions ARE, since they have no independent existence apart from the account. Refuses if a savings goal still references one of its accounts, and refuses unless the institution was already disconnected. Use POST .../disconnect first.",
       "parameters": [
         {
           "name": "id",

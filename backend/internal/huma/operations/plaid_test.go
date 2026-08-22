@@ -835,6 +835,26 @@ func TestPurgePlaidAccount_BlockedBySavingsGoal(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestPurgePlaidAccount_NotDisconnected proves purging a still-active account surfaces an error
+// rather than silently destroying a live account's history (fix round 1, IMPORTANT 4).
+func TestPurgePlaidAccount_NotDisconnected(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		purgeAccountErr: repository.ErrAccountNotDisconnected,
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &PurgeAccountInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "acc-123",
+	}
+
+	_, err := handler.PurgeAccount(context.Background(), input)
+
+	require.Error(t, err)
+}
+
 // TestDisconnectInstitution_Success tests successful institution disconnection.
 func TestDisconnectInstitution_Success(t *testing.T) {
 	mockPlaid := &mockPlaidServiceForPlaid{}
