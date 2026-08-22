@@ -376,6 +376,13 @@ func (m *MockAccountRepository) ExpireAccountsByFingerprint(ctx context.Context,
 	return args.Error(0)
 }
 
+// Issue #1569: transition every active account under a linked item to 'removed' with removed_at
+// set, without deleting the row.
+func (m *MockAccountRepository) MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string) error {
+	args := m.Called(ctx, linkedItemID)
+	return args.Error(0)
+}
+
 // GetByUserAccountIDAndUser retrieves an account by user_account_id with ownership validation.
 // Issue #972: GAP AE — chain-resolver IDOR protection.
 func (m *MockAccountRepository) GetByUserAccountIDAndUser(ctx context.Context, userAccountID, userID string) (*domain.Account, error) {
@@ -1032,7 +1039,7 @@ func TestDeleteAccount_Success(t *testing.T) {
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
 
 	// Mock successful deletion
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 
 	// Execute
 	err := service.DeleteAccount(ctx, accountID, userID)
@@ -1092,7 +1099,7 @@ func TestDeleteAccount_DeleteError(t *testing.T) {
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
 
 	// Mock Delete error
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(assert.AnError)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(assert.AnError)
 
 	// Execute
 	err := service.DeleteAccount(ctx, accountID, userID)
@@ -1142,7 +1149,7 @@ func TestDeleteAccount_EnqueuesCleanupWhenZeroRemaining(t *testing.T) {
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
 
 	// Mock successful deletion
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 
 	// Mock count returning 0 (no remaining accounts)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
@@ -1213,7 +1220,7 @@ func TestDeleteAccount_MarksItemForCleanupBeforeEnqueue(t *testing.T) {
 
 	account := &domain.Account{ID: accountID, LinkedItemID: linkedItemID, UserID: userID}
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
 
 	// One shared recorder both mocks append to — the only way the relative order of calls on two
@@ -1286,7 +1293,7 @@ func TestDeleteAccount_AlreadyScheduled_StillEnqueues(t *testing.T) {
 
 	account := &domain.Account{ID: accountID, LinkedItemID: linkedItemID, UserID: userID}
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
 	mockLinkedItemRepo.On("MarkForCleanup", ctx, linkedItemID, mock.AnythingOfType("time.Time")).
 		Return(repository.ErrLinkedItemNotFound)
@@ -1324,7 +1331,7 @@ func TestDeleteAccount_MarkForCleanupError_SkipsDoomedEnqueue(t *testing.T) {
 
 	account := &domain.Account{ID: accountID, LinkedItemID: linkedItemID, UserID: userID}
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
 	mockLinkedItemRepo.On("MarkForCleanup", ctx, linkedItemID, mock.AnythingOfType("time.Time")).
 		Return(errors.New("database is down"))
@@ -1364,7 +1371,7 @@ func TestDeleteAccount_DoesNotCleanupWhenAccountsRemain(t *testing.T) {
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
 
 	// Mock successful deletion
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 
 	// Mock count returning 2 (other accounts remain)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(2, nil)
@@ -1409,7 +1416,7 @@ func TestDeleteAccount_ContinuesOnCountError(t *testing.T) {
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
 
 	// Mock successful deletion
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 
 	// Mock count error
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, errors.New("database error"))
@@ -1453,7 +1460,7 @@ func TestDeleteAccount_SkipsZeroAccountCheckWhenNoJobQueue(t *testing.T) {
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
 
 	// Mock successful deletion
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 
 	// Execute - should not call CountActiveByLinkedItemID when no jobQueue
 	err := service.DeleteAccount(ctx, accountID, userID)
@@ -1499,7 +1506,7 @@ func TestDeleteAccount_EnqueueErrorDoesNotFailDeletion(t *testing.T) {
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
 
 	// Mock successful deletion
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 
 	// Mock count returning 0 (no remaining accounts)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
@@ -1555,7 +1562,7 @@ func TestDeleteAccount_EnqueueFailureReleasesCleanupStamp(t *testing.T) {
 	}
 
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
 	mockLinkedItemRepo.On("MarkForCleanup", ctx, linkedItemID, mock.Anything).Return(nil)
 	mockJobQueue.On("Enqueue", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("queue error"))
@@ -1614,7 +1621,7 @@ func TestDeleteAccount_HidesUserAccountWhenLastAccount(t *testing.T) {
 	}
 
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
 	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		return job.Kind() == "item_cleanup"
@@ -1673,7 +1680,7 @@ func TestDeleteAccount_DoesNotHideWhenOtherAccountsRemain(t *testing.T) {
 	}
 
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(1, nil)
 	mockAccountRepo.On("GetByUserAccountAndStatus", ctx, userAccountID, string(domain.AccountStatusActive)).
 		Return([]domain.Account{remainingAccount}, nil)
@@ -1722,7 +1729,7 @@ func TestDeleteAccount_SkipsHidingWhenUserAccountSvcNil(t *testing.T) {
 	}
 
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
 	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		return job.Kind() == "item_cleanup"
@@ -1771,7 +1778,7 @@ func TestDeleteAccount_SkipsHidingWhenUserAccountIDNil(t *testing.T) {
 	}
 
 	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
-	mockAccountRepo.On("Delete", ctx, accountID, userID).Return(nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).Return(nil)
 	mockAccountRepo.On("CountActiveByLinkedItemID", ctx, linkedItemID).Return(0, nil)
 	mockJobQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
 		return job.Kind() == "item_cleanup"
@@ -1786,15 +1793,19 @@ func TestDeleteAccount_SkipsHidingWhenUserAccountIDNil(t *testing.T) {
 	mockAccountRepo.AssertNotCalled(t, "GetByUserAccountAndStatus", mock.Anything, mock.Anything, mock.Anything)
 }
 
-// TestDisconnectInstitution_Success tests successful institution disconnection
+// TestDisconnectInstitution_Success tests successful institution disconnection (Issue #1569:
+// history is now RETAINED — the item is marked 'disconnected' and its accounts 'removed', neither
+// is deleted).
 func TestDisconnectInstitution_Success(t *testing.T) {
 	// Setup mocks
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockPlaidService := &MockPlaidService{}
+	mockAccountRepo := &MockAccountRepository{}
 
 	service := &accountService{
 		linkedItemRepo: mockLinkedItemRepo,
 		plaidService:   mockPlaidService,
+		accountRepo:    mockAccountRepo,
 	}
 
 	ctx := context.Background()
@@ -1815,7 +1826,9 @@ func TestDisconnectInstitution_Success(t *testing.T) {
 	// Mock all steps
 	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
-	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(nil)
+	mockLinkedItemRepo.On("MarkPlaidRemoved", ctx, []string{linkedItemID}).Return(nil)
+	mockLinkedItemRepo.On("MarkItemsDisconnected", ctx, []string{linkedItemID}).Return(nil)
+	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID).Return(nil)
 
 	// Execute
 	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
@@ -1824,6 +1837,43 @@ func TestDisconnectInstitution_Success(t *testing.T) {
 	require.NoError(t, err, "DisconnectInstitution should succeed")
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockPlaidService.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
+	// The literal "I changed banks" action must no longer hard-delete the row or its accounts.
+	mockLinkedItemRepo.AssertNotCalled(t, "DeleteByUser", mock.Anything, mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestDisconnectInstitution_StampsPlaidRemoved_GDPRProperty pins the GDPR-load-bearing property
+// called out in the Task 2 brief: plaid_removed_at is what DeleteUserCascade's C2 guard
+// (repository.uncleanedLinkedItemExistsClause) reads — NOT item status — so it must be stamped via
+// MarkPlaidRemoved on every successful disconnect, independent of whichever other assertions a
+// "Success" test happens to make.
+func TestDisconnectInstitution_StampsPlaidRemoved_GDPRProperty(t *testing.T) {
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockPlaidService := &MockPlaidService{}
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		linkedItemRepo: mockLinkedItemRepo,
+		plaidService:   mockPlaidService,
+		accountRepo:    mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	userID := uuid.New().String()
+	accessToken := "access-sandbox-test-token"
+
+	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).
+		Return(&domain.LinkedItem{ID: linkedItemID, UserID: userID, AccessToken: accessToken}, nil)
+	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
+	mockLinkedItemRepo.On("MarkPlaidRemoved", ctx, []string{linkedItemID}).Return(nil)
+	mockLinkedItemRepo.On("MarkItemsDisconnected", ctx, []string{linkedItemID}).Return(nil)
+	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID).Return(nil)
+
+	require.NoError(t, service.DisconnectInstitution(ctx, linkedItemID, userID))
+
+	mockLinkedItemRepo.AssertCalled(t, "MarkPlaidRemoved", ctx, []string{linkedItemID})
 }
 
 // TestDisconnectInstitution_LinkedItemNotFound tests when linked item doesn't exist
@@ -1850,34 +1900,35 @@ func TestDisconnectInstitution_LinkedItemNotFound(t *testing.T) {
 	mockLinkedItemRepo.AssertExpectations(t)
 }
 
-// TestDisconnectInstitution_GenuinePlaidFailure_DoesNotDeleteTheRow is Issue #1486 follow-up part F's
-// failing-first test. It replaces TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds, which
-// pinned the defect as intended behaviour ("should succeed even if Plaid fails").
+// TestDisconnectInstitution_GenuinePlaidFailure_DoesNotProceedToStep4 is Issue #1486 follow-up part
+// F's failing-first test, unchanged in intent by the #1569 rewrite: a genuine Plaid /item/remove
+// failure must not be reported as a successful disconnect, and step 4 (now: mark disconnected,
+// stamp plaid_removed_at, mark accounts removed) must not run.
 //
-// This is the SAME defect as parts A/B, on a second, user-initiated path. (An earlier version of this
-// comment called it "the MORE frequent path"; that was unsupported — `useDisconnectInstitution` has no
-// consumer in apps/web/src outside the test mocks — and is removed rather than softened. The defect
-// being identical and irreversible is the whole argument; frequency was never needed.)
-// It logged the Plaid failure
-// and then unconditionally DeleteByUser'd the row, which CASCADE-deletes the accounts too — leaving a
-// live, still-billing Plaid Item with no local record it ever existed, and DeleteUserCascade's C2
-// guard (an EXISTS over linked_items) with nothing left to see.
+// It replaces TestDisconnectInstitution_PlaidFailureButDatabaseSucceeds, which pinned the defect as
+// intended behaviour ("should succeed even if Plaid fails"). It logged the Plaid failure and then
+// unconditionally DeleteByUser'd the row, which CASCADE-deleted the accounts too — leaving a live,
+// still-billing Plaid Item with no local record it ever existed, and DeleteUserCascade's C2 guard
+// (an EXISTS over linked_items) with nothing left to see.
 //
 // The rationale it inherited from plaidService.RemoveItem's doc comment — "even if this call fails,
 // the Item should still be deleted from the database since the access token cannot be used anyway" —
 // is false for the purpose that matters: Plaid bills per ITEM, and an Item with an unusable token is
 // still an Item until /item/remove succeeds. That comment is corrected in the same change.
 //
-// Leaving the row is recoverable in the ordinary way: the user retries the disconnect. The item is
-// NOT automatically retried by the cleanup sweep (a healthy, recently-synced item is not a candidate),
-// which is exactly why the error must reach the user rather than being swallowed into a false success.
-func TestDisconnectInstitution_GenuinePlaidFailure_DoesNotDeleteTheRow(t *testing.T) {
+// Leaving the row (and now its accounts) is recoverable in the ordinary way: the user retries the
+// disconnect. The item is NOT automatically retried by the cleanup sweep (a healthy, recently-synced
+// item is not a candidate), which is exactly why the error must reach the user rather than being
+// swallowed into a false success.
+func TestDisconnectInstitution_GenuinePlaidFailure_DoesNotProceedToStep4(t *testing.T) {
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockPlaidService := &MockPlaidService{}
+	mockAccountRepo := &MockAccountRepository{}
 
 	service := &accountService{
 		linkedItemRepo: mockLinkedItemRepo,
 		plaidService:   mockPlaidService,
+		accountRepo:    mockAccountRepo,
 	}
 
 	ctx := context.Background()
@@ -1903,25 +1954,31 @@ func TestDisconnectInstitution_GenuinePlaidFailure_DoesNotDeleteTheRow(t *testin
 
 	require.Error(t, err, "a genuine Plaid /item/remove failure must not be reported as a successful disconnect")
 	// The load-bearing assertion: the local row is the ONLY remaining record that this Plaid Item
-	// exists, and the C2 guard reads exactly that row.
+	// exists, and the C2 guard reads exactly that row. None of step 4's writes may run.
 	mockLinkedItemRepo.AssertNotCalled(t, "DeleteByUser", mock.Anything, mock.Anything, mock.Anything)
+	mockLinkedItemRepo.AssertNotCalled(t, "MarkPlaidRemoved", mock.Anything, mock.Anything)
+	mockLinkedItemRepo.AssertNotCalled(t, "MarkItemsDisconnected", mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "MarkRemovedByLinkedItemID", mock.Anything, mock.Anything)
 	mockPlaidService.AssertExpectations(t)
 }
 
-// TestDisconnectInstitution_PlaidItemAlreadyGone_StillDeletesTheRow is part F's other half, and the
-// reason part F is not simply "propagate the error".
+// TestDisconnectInstitution_PlaidItemAlreadyGone_StillProceedsToStep4 is part F's other half, and
+// the reason part F is not simply "propagate the error".
 //
 // ITEM_NOT_FOUND means Plaid has already forgotten this Item — billing has stopped and /item/remove
 // has nothing left to do. Treating it as a failure would make the disconnect button permanently
-// unusable for any item in that state: the row would never be deletable and the user could never
-// clear it from their UI. This is the same asymmetry parts A and B close in RemoveItem, applied here.
-func TestDisconnectInstitution_PlaidItemAlreadyGone_StillDeletesTheRow(t *testing.T) {
+// unusable for any item in that state: the item and its accounts would never transition and the user
+// could never clear it from their UI. This is the same asymmetry parts A and B close in RemoveItem,
+// applied here.
+func TestDisconnectInstitution_PlaidItemAlreadyGone_StillProceedsToStep4(t *testing.T) {
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockPlaidService := &MockPlaidService{}
+	mockAccountRepo := &MockAccountRepository{}
 
 	service := &accountService{
 		linkedItemRepo: mockLinkedItemRepo,
 		plaidService:   mockPlaidService,
+		accountRepo:    mockAccountRepo,
 	}
 
 	ctx := context.Background()
@@ -1932,23 +1989,32 @@ func TestDisconnectInstitution_PlaidItemAlreadyGone_StillDeletesTheRow(t *testin
 	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).
 		Return(&domain.LinkedItem{ID: linkedItemID, UserID: userID, AccessToken: accessToken}, nil)
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(plaidItemNotFoundErr())
-	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(nil)
+	mockLinkedItemRepo.On("MarkPlaidRemoved", ctx, []string{linkedItemID}).Return(nil)
+	mockLinkedItemRepo.On("MarkItemsDisconnected", ctx, []string{linkedItemID}).Return(nil)
+	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID).Return(nil)
 
 	require.NoError(t, service.DisconnectInstitution(ctx, linkedItemID, userID),
 		"ITEM_NOT_FOUND means the Item is already gone from Plaid — billing has stopped, so the disconnect succeeded")
 	mockLinkedItemRepo.AssertExpectations(t)
 	mockPlaidService.AssertExpectations(t)
+	mockAccountRepo.AssertExpectations(t)
 }
 
-// TestDisconnectInstitution_DatabaseDeletionError tests when database deletion fails
-func TestDisconnectInstitution_DatabaseDeletionError(t *testing.T) {
-	// Setup mocks
+// TestDisconnectInstitution_MarkPlaidRemovedError_Propagates pins the brief's GDPR-blocking
+// requirement: "A stamp failure AFTER a successful Plaid removal must surface and be retried, not be
+// logged and dropped." A genuine MarkPlaidRemoved failure must fail the whole call, and must NOT
+// proceed to mark the item disconnected or its accounts removed — otherwise a retry would find the
+// item already 'disconnected' (or a sweep skip) with no proof Plaid is done, exactly the
+// permanent-block shape RemoveItem's own ordering comment describes.
+func TestDisconnectInstitution_MarkPlaidRemovedError_Propagates(t *testing.T) {
 	mockLinkedItemRepo := &MockLinkedItemRepository{}
 	mockPlaidService := &MockPlaidService{}
+	mockAccountRepo := &MockAccountRepository{}
 
 	service := &accountService{
 		linkedItemRepo: mockLinkedItemRepo,
 		plaidService:   mockPlaidService,
+		accountRepo:    mockAccountRepo,
 	}
 
 	ctx := context.Background()
@@ -1956,28 +2022,78 @@ func TestDisconnectInstitution_DatabaseDeletionError(t *testing.T) {
 	userID := uuid.New().String()
 	accessToken := "access-sandbox-test-token"
 
-	// AccessToken is populated by the repository layer (repo-layer encryption)
-	linkedItem := &domain.LinkedItem{
-		ID:              linkedItemID,
-		UserID:          userID,
-		ItemID:          "plaid-item-123",
-		AccessToken:     accessToken,
-		InstitutionID:   "ins_123",
-		InstitutionName: "Chase",
-	}
-
-	// Mock database deletion fails
-	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).Return(linkedItem, nil)
+	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).
+		Return(&domain.LinkedItem{ID: linkedItemID, UserID: userID, AccessToken: accessToken}, nil)
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
-	mockLinkedItemRepo.On("DeleteByUser", ctx, linkedItemID, userID).Return(assert.AnError)
+	mockLinkedItemRepo.On("MarkPlaidRemoved", ctx, []string{linkedItemID}).Return(assert.AnError)
 
-	// Execute
 	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
 
-	// Assert
-	require.Error(t, err, "DisconnectInstitution should return database deletion error")
-	mockLinkedItemRepo.AssertExpectations(t)
-	mockPlaidService.AssertExpectations(t)
+	require.Error(t, err, "a stamp failure after a successful Plaid removal must surface, not be swallowed")
+	mockLinkedItemRepo.AssertNotCalled(t, "MarkItemsDisconnected", mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "MarkRemovedByLinkedItemID", mock.Anything, mock.Anything)
+}
+
+// TestDisconnectInstitution_MarkItemsDisconnectedError_Propagates verifies a genuine (non-no-op)
+// MarkItemsDisconnected failure surfaces as an error rather than being swallowed.
+func TestDisconnectInstitution_MarkItemsDisconnectedError_Propagates(t *testing.T) {
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockPlaidService := &MockPlaidService{}
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		linkedItemRepo: mockLinkedItemRepo,
+		plaidService:   mockPlaidService,
+		accountRepo:    mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	userID := uuid.New().String()
+	accessToken := "access-sandbox-test-token"
+
+	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).
+		Return(&domain.LinkedItem{ID: linkedItemID, UserID: userID, AccessToken: accessToken}, nil)
+	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
+	mockLinkedItemRepo.On("MarkPlaidRemoved", ctx, []string{linkedItemID}).Return(nil)
+	mockLinkedItemRepo.On("MarkItemsDisconnected", ctx, []string{linkedItemID}).Return(assert.AnError)
+
+	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
+
+	require.Error(t, err)
+	mockAccountRepo.AssertNotCalled(t, "MarkRemovedByLinkedItemID", mock.Anything, mock.Anything)
+}
+
+// TestDisconnectInstitution_MarkAccountsRemovedError_Propagates verifies that a failure marking the
+// item's accounts 'removed' surfaces as an error so the caller (and user) learns the disconnect did
+// not fully complete, rather than reporting success while accounts remain 'active' under a
+// disconnected item.
+func TestDisconnectInstitution_MarkAccountsRemovedError_Propagates(t *testing.T) {
+	mockLinkedItemRepo := &MockLinkedItemRepository{}
+	mockPlaidService := &MockPlaidService{}
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		linkedItemRepo: mockLinkedItemRepo,
+		plaidService:   mockPlaidService,
+		accountRepo:    mockAccountRepo,
+	}
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	userID := uuid.New().String()
+	accessToken := "access-sandbox-test-token"
+
+	mockLinkedItemRepo.On("GetByIDAndUser", ctx, linkedItemID, userID).
+		Return(&domain.LinkedItem{ID: linkedItemID, UserID: userID, AccessToken: accessToken}, nil)
+	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
+	mockLinkedItemRepo.On("MarkPlaidRemoved", ctx, []string{linkedItemID}).Return(nil)
+	mockLinkedItemRepo.On("MarkItemsDisconnected", ctx, []string{linkedItemID}).Return(nil)
+	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID).Return(assert.AnError)
+
+	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
+
+	require.Error(t, err, "a failure marking accounts removed must surface")
 }
 
 // ===========================================================================
