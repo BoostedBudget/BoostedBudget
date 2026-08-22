@@ -34,7 +34,7 @@ type Account struct {
 	UserAccountID *string `json:"user_account_id,omitempty" db:"user_account_id"` // FK to user_accounts
 
 	// Soft-delete fields for re-link handling (Issue #171)
-	Status       AccountStatus `json:"status" db:"status"`                       // 'active', 'replaced', 'expired', or 'removed'
+	Status       AccountStatus `json:"status" db:"status" enum:"active,replaced,expired,removed"` // Issue #1569: enumerated so orval emits a union, not `string`
 	ReplacedAt   *time.Time    `json:"replaced_at,omitempty" db:"replaced_at"`   // When this account was replaced
 	// RemovedAt is when the user deliberately disconnected this account (status = 'removed').
 	// NULL for every other status. Issue #1569, migration 000149.

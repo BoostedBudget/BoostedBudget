@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/maxnussbaum/BoostedBudget/internal/dateutil"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -67,9 +68,14 @@ type ExchangePublicTokenOutput struct {
 type GetAccountsInput struct {
 	inputs.AuthenticatedInput
 	IncludeHidden   string `query:"include_hidden" doc:"If 'true', includes hidden accounts"`
-	Status          string `query:"status" doc:"Filter by account status: 'active' (default), 'replaced', or 'all'"`
+	Status          string `query:"status" doc:"Filter by account status: 'active' (default), 'replaced', 'expired', 'removed', or 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter)"`
 	IncludeReplaced string `query:"include_replaced" doc:"If 'true', equivalent to status=all (backward-compat alias)"`
 	UserAccountID   string `query:"user_account_id" doc:"When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set."`
+	// AsOfDate resolves the account universe as it REALLY WAS on that day, from
+	// account_status_history, instead of guessing from current status. Mutually exclusive with
+	// status=all, status=replaced, and include_replaced=true — combining them returns a 400
+	// rather than reaching repository.ErrAccountFilterAsOfConflict. Issue #1569.
+	AsOfDate string `query:"as_of_date" doc:"Get accounts as of a specific date (YYYY-MM-DD) — which accounts were live that day. Cannot be combined with status=all, status=replaced, or include_replaced=true."`
 }
 
 // GetAccountsOutput represents the response for getting accounts.
@@ -171,12 +177,26 @@ func (h *PlaidHandler) GetAccounts(ctx context.Context, input *GetAccountsInput)
 	if input.UserAccountID != "" && input.Status == "" {
 		statusFilter = "all"
 	}
+	includeReplaced := input.IncludeReplaced == "true"
+
+	// Issue #1569: as_of_date and a "widen/narrow current status" filter ask contradictory
+	// questions (see repository.ErrAccountFilterAsOfConflict / resolveAccountStatusScope). The
+	// API layer rejects the combination itself rather than letting the resolver's error leak
+	// through as an opaque 500.
+	asOf, err := dateutil.ParseOptionalDate(input.AsOfDate, "as_of_date")
+	if err != nil {
+		return nil, err
+	}
+	if asOf != nil && (statusFilter == "all" || statusFilter == "replaced" || includeReplaced) {
+		return nil, huma.Error400BadRequest("as_of_date cannot be combined with status=all, status=replaced, or include_replaced=true")
+	}
 
 	opts := services.AccountFilterOptions{
 		IncludeHidden:   input.IncludeHidden == "true",
-		StatusFilter:    statusFilter,                    // "active" (default), "replaced", "all"
-		IncludeReplaced: input.IncludeReplaced == "true", // backward-compat alias for status=all
+		StatusFilter:    statusFilter, // "active" (default), "replaced", "all"
+		IncludeReplaced: includeReplaced,
 		UserAccountID:   input.UserAccountID,
+		AsOf:            asOf,
 	}
 
 	accounts, err := h.accountService.GetAccountsFiltered(ctx, input.UserID, opts)

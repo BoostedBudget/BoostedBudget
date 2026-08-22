@@ -2529,6 +2529,39 @@ func TestGetAccountsFiltered_UserNotFound(t *testing.T) {
 	mockUserRepo.AssertExpectations(t)
 }
 
+// TestGetAccountsFiltered_AsOf pins that the service-level AsOf option (Issue #1569, Task 5B)
+// reaches the repository unchanged, so `GET /accounts?as_of_date=...` can answer "which accounts
+// were live on date D" instead of guessing from current status.
+func TestGetAccountsFiltered_AsOf(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+	mockUserRepo := &MockUserRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		userRepo:    mockUserRepo,
+	}
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	asOf := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+
+	user := &domain.User{ID: userID}
+	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+
+	liveAccounts := []domain.Account{
+		{ID: uuid.New().String(), UserID: userID, Name: "Checking"},
+	}
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
+		repository.AccountFilterOptions{AsOf: &asOf}).Return(liveAccounts, nil)
+
+	result, err := service.GetAccountsFiltered(ctx, userID, AccountFilterOptions{AsOf: &asOf})
+
+	require.NoError(t, err)
+	assert.Len(t, result, 1)
+	mockAccountRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
+}
+
 // ===========================================================================
 // MockJobQueue for testing (Issue #658: Auto-sync after linking)
 // ===========================================================================
