@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"regexp"
 	"testing"
 	"time"
 
@@ -17,6 +18,62 @@ func setupAnalyticsMockDB(t *testing.T) (pgxmock.PgxPoolIface, AnalyticsReposito
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	return mock, NewAnalyticsRepository(mock)
+}
+
+// personalAccountsJoinRe extracts the alias and the ON clause of a personal-scope
+// LEFT JOIN accounts, stopping at the next join or clause keyword.
+var personalAccountsJoinRe = regexp.MustCompile(
+	`(?is)LEFT\s+JOIN\s+accounts\s+(?:AS\s+)?(\w+)\s+ON\s+(.*?)` +
+		`(?:\bWHERE\b|\b(?:LEFT|RIGHT|FULL|INNER|CROSS)\s+JOIN\b|\bJOIN\b|\bGROUP\s+BY\b|\bORDER\s+BY\b|\z)`)
+
+// statusWordRe matches a bare status column reference inside a join ON clause.
+var statusWordRe = regexp.MustCompile(`(?i)\bstatus\b`)
+
+// setupAnalyticsMockDBCapturingSQL behaves like setupAnalyticsMockDB but installs a
+// custom query matcher that records every executed statement while still applying
+// pgxmock default regexp matching, so existing ExpectQuery regexes keep their meaning.
+// Capturing the SQL is what lets a test assert the ABSENCE of a predicate: Go regexp
+// (RE2) has no negative lookahead, so a does-not-contain expectation regex is not
+// expressible and an ExpectQuery pattern alone can never pin it.
+func setupAnalyticsMockDBCapturingSQL(t *testing.T) (pgxmock.PgxPoolIface, AnalyticsRepository, *[]string) {
+	t.Helper()
+	captured := &[]string{}
+	mock, err := pgxmock.NewPool(pgxmock.QueryMatcherOption(pgxmock.QueryMatcherFunc(
+		func(expectedSQL, actualSQL string) error {
+			*captured = append(*captured, actualSQL)
+			return pgxmock.QueryMatcherRegexp.Match(expectedSQL, actualSQL)
+		})))
+	require.NoError(t, err)
+	return mock, NewAnalyticsRepository(mock), captured
+}
+
+// assertPersonalAccountsJoinUnfiltered fails if the personal-scope LEFT JOIN accounts
+// in any captured statement carries a status predicate, either inside its ON clause or
+// in a WHERE conjunct that constrains the joined accounts alias. It deliberately does
+// NOT assert that the word status is absent from the whole statement: other columns and
+// household-scope CTEs may legitimately reference status, so only the accounts join
+// clause and qualified alias.status references are inspected.
+func assertPersonalAccountsJoinUnfiltered(t *testing.T, captured *[]string) {
+	t.Helper()
+	require.NotEmpty(t, *captured, "no SQL captured: matcher was never invoked")
+
+	sawJoin := false
+	for _, sql := range *captured {
+		m := personalAccountsJoinRe.FindStringSubmatch(sql)
+		if m == nil {
+			continue
+		}
+		sawJoin = true
+		alias, onClause := m[1], m[2]
+		require.False(t, statusWordRe.MatchString(onClause),
+			"personal-scope LEFT JOIN accounts must not filter on status; ON clause was: %s", onClause)
+
+		aliasStatusRe := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(alias) + `\s*\.\s*status\b`)
+		require.False(t, aliasStatusRe.MatchString(sql),
+			"query must not constrain %s.status anywhere; pre-relink transactions from replaced accounts would be dropped. SQL: %s",
+			alias, sql)
+	}
+	require.True(t, sawJoin, "expected a personal-scope LEFT JOIN accounts in the captured SQL")
 }
 
 func TestGetSpendingByCategory(t *testing.T) {
@@ -396,7 +453,7 @@ func TestGetSpendingTrends_CustomCategory(t *testing.T) {
 // spending queries use LEFT JOIN (no status filter) so pre-relink transactions
 // from replaced accounts are still counted in historical analytics.
 func TestGetSpendingByCategory_IncludesReplacedAccountTransactions(t *testing.T) {
-	mock, repo := setupAnalyticsMockDB(t)
+	mock, repo, capturedSQL := setupAnalyticsMockDBCapturingSQL(t)
 	defer mock.Close()
 
 	ctx := context.Background()
@@ -418,12 +475,13 @@ func TestGetSpendingByCategory_IncludesReplacedAccountTransactions(t *testing.T)
 	_, err := repo.GetSpendingByCategory(ctx, userID, filters)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+	assertPersonalAccountsJoinUnfiltered(t, capturedSQL)
 }
 
 // TestGetSpendingByMerchant_IncludesReplacedAccountTransactions verifies that
 // merchant queries use LEFT JOIN so pre-relink history is preserved.
 func TestGetSpendingByMerchant_IncludesReplacedAccountTransactions(t *testing.T) {
-	mock, repo := setupAnalyticsMockDB(t)
+	mock, repo, capturedSQL := setupAnalyticsMockDBCapturingSQL(t)
 	defer mock.Close()
 
 	ctx := context.Background()
@@ -444,12 +502,13 @@ func TestGetSpendingByMerchant_IncludesReplacedAccountTransactions(t *testing.T)
 	_, err := repo.GetSpendingByMerchant(ctx, userID, filters, limit)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+	assertPersonalAccountsJoinUnfiltered(t, capturedSQL)
 }
 
 // TestGetSpendingTrends_IncludesReplacedAccountTransactions verifies that
 // trend queries use LEFT JOIN so pre-relink history is preserved.
 func TestGetSpendingTrends_IncludesReplacedAccountTransactions(t *testing.T) {
-	mock, repo := setupAnalyticsMockDB(t)
+	mock, repo, capturedSQL := setupAnalyticsMockDBCapturingSQL(t)
 	defer mock.Close()
 
 	ctx := context.Background()
@@ -470,12 +529,13 @@ func TestGetSpendingTrends_IncludesReplacedAccountTransactions(t *testing.T) {
 	_, err := repo.GetSpendingTrends(ctx, userID, filters)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+	assertPersonalAccountsJoinUnfiltered(t, capturedSQL)
 }
 
 // TestGetCashFlowAggregation_IncludesReplacedAccountTransactions verifies that
 // cash-flow aggregation uses LEFT JOIN so pre-relink transactions remain visible.
 func TestGetCashFlowAggregation_IncludesReplacedAccountTransactions(t *testing.T) {
-	mock, repo := setupAnalyticsMockDB(t)
+	mock, repo, capturedSQL := setupAnalyticsMockDBCapturingSQL(t)
 	defer mock.Close()
 
 	ctx := context.Background()
@@ -495,6 +555,7 @@ func TestGetCashFlowAggregation_IncludesReplacedAccountTransactions(t *testing.T
 	_, err := repo.GetCashFlowAggregation(ctx, userID, filters)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+	assertPersonalAccountsJoinUnfiltered(t, capturedSQL)
 }
 
 func TestGetAverageMonthlySpend(t *testing.T) {
@@ -550,12 +611,16 @@ func TestGetAverageMonthlySpend(t *testing.T) {
 	})
 
 	t.Run("uses JOIN accounts for account-type filtering", func(t *testing.T) {
-		mock, repo := setupAnalyticsMockDB(t)
+		mock, repo, capturedSQL := setupAnalyticsMockDBCapturingSQL(t)
 		defer mock.Close()
 
 		rows := pgxmock.NewRows([]string{"total"}).AddRow(150.0)
 
-		// Query must use LEFT JOIN accounts so pre-relink transactions remain visible (matches all other spending queries)
+		// Query must use LEFT JOIN accounts so pre-relink transactions remain visible (matches all
+		// other spending queries). The regex alone does NOT check that — `LEFT JOIN accounts a ON
+		// ... AND a.status = 'active'` matches it just as happily — so the claim is pinned by
+		// assertPersonalAccountsJoinUnfiltered below instead. Every other subtest here that makes
+		// this same claim was already converted; this one was missed on the first pass.
 		mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
 			WithArgs(userID, filters.StartDate, filters.EndDate).
 			WillReturnRows(rows)
@@ -563,6 +628,7 @@ func TestGetAverageMonthlySpend(t *testing.T) {
 		_, err := repo.GetAverageMonthlySpend(ctx, userID, filters)
 		require.NoError(t, err)
 		require.NoError(t, mock.ExpectationsWereMet())
+		assertPersonalAccountsJoinUnfiltered(t, capturedSQL)
 	})
 }
 
@@ -1022,7 +1088,7 @@ func TestGetIncomeSourceBreakdown(t *testing.T) {
 // TestGetCashFlowGrouped_IncludesReplacedAccountTransactions verifies that
 // grouped cash-flow uses LEFT JOIN so pre-relink transactions remain visible.
 func TestGetCashFlowGrouped_IncludesReplacedAccountTransactions(t *testing.T) {
-	mock, repo := setupAnalyticsMockDB(t)
+	mock, repo, capturedSQL := setupAnalyticsMockDBCapturingSQL(t)
 	defer mock.Close()
 
 	ctx := context.Background()
@@ -1044,4 +1110,5 @@ func TestGetCashFlowGrouped_IncludesReplacedAccountTransactions(t *testing.T) {
 	_, err := repo.GetCashFlowGrouped(ctx, userID, filters)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+	assertPersonalAccountsJoinUnfiltered(t, capturedSQL)
 }

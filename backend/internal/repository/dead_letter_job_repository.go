@@ -166,7 +166,7 @@ func buildDLQWhereClause(filters domain.DeadLetterJobFilters) (string, []interfa
 	if filters.EndDate != nil {
 		conditions = append(conditions, fmt.Sprintf("failed_at <= $%d", argIdx))
 		args = append(args, *filters.EndDate)
-		argIdx++
+		argIdx++ //nolint:ineffassign // kept so a filter added below inherits the correct arg index
 	}
 	if filters.Retried != nil {
 		if *filters.Retried {

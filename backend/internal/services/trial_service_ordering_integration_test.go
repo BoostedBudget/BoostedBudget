@@ -96,8 +96,8 @@ func TestExpireTrial_Integration_NeverTouchesPlaid_RepairQueryHonorsGraceWindow(
 		bg := context.Background()
 		pool.Exec(bg, "DELETE FROM linked_items WHERE user_id = $1", user.ID) //nolint:errcheck
 		pool.Exec(bg, "DELETE FROM users WHERE id = $1", user.ID)             //nolint:errcheck
-		pool.Exec(bg, `DELETE FROM work_claims WHERE resource_type = $1 AND resource_id = $2 AND action = $3`,
-			repository.ResourceTypeUser, user.ID, repository.ActionTrialExpiration) //nolint:errcheck
+		_, _ = pool.Exec(bg, `DELETE FROM work_claims WHERE resource_type = $1 AND resource_id = $2 AND action = $3`,
+			repository.ResourceTypeUser, user.ID, repository.ActionTrialExpiration)
 	})
 
 	// A live linked item on file — this is what makes the user genuinely a

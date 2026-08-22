@@ -42,10 +42,7 @@ func (m *mockAccountRepositoryForChainResolver) GetByUserAccountID(ctx context.C
 }
 
 // Stub remaining AccountRepository methods to satisfy the interface.
-func (m *mockAccountRepositoryForChainResolver) Create(ctx context.Context, account *domain.Account) error {
-	return nil
-}
-func (m *mockAccountRepositoryForChainResolver) CreateBatch(ctx context.Context, accounts []domain.Account) error {
+func (m *mockAccountRepositoryForChainResolver) CreateBatch(ctx context.Context, userID string, accounts []domain.Account) error {
 	return nil
 }
 func (m *mockAccountRepositoryForChainResolver) GetByLinkedItemID(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
@@ -89,6 +86,10 @@ func (m *mockAccountRepositoryForChainResolver) GetByUserAccountIDAndUser(ctx co
 }
 
 func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+	return nil, nil
+}
+
+func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
 	return nil, nil
 }
 

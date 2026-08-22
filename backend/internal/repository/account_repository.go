@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -14,9 +15,13 @@ import (
 )
 
 var (
-	ErrAccountNotFound          = errors.New("account not found")
-	ErrDuplicateAccount         = errors.New("account already exists for this user")
+	ErrAccountNotFound           = errors.New("account not found")
+	ErrDuplicateAccount          = errors.New("account already exists for this user")
 	ErrAccountOwnedByAnotherUser = errors.New("one or more accounts are already linked by another user")
+
+	// ErrAccountBatchTenantMismatch is returned when a batch write is handed a row whose UserID
+	// is not the acting user. See CreateBatch (issue #1566).
+	ErrAccountBatchTenantMismatch = errors.New("account batch contains a row belonging to another user")
 )
 
 // FingerprintOwnership holds information about who owns a fingerprint and the state of their linked item.
@@ -30,19 +35,38 @@ type FingerprintOwnership struct {
 
 // AccountFilterOptions configures filtering for GetAccountsWithInstitutionFiltered (Issue #1109).
 type AccountFilterOptions struct {
-	IncludeHidden   bool   // if true, includes hidden accounts
-	IncludeReplaced bool   // if true, returns all accounts regardless of status (active + replaced)
-	ReplacedOnly    bool   // if true, returns only replaced accounts (status=replaced)
-	UserAccountID   string // if non-empty, filters to accounts sharing this user_account_id
+	IncludeHidden   bool // if true, includes hidden accounts
+	IncludeReplaced bool // if true, widens the status filter to active + replaced (NOT expired)
+	// ReplacedOnly returns only replaced accounts (status='replaced'). It has the HIGHEST
+	// precedence of the three status flags — see resolveAccountStatusScope: setting AllStatuses
+	// alongside it does not widen the result, and active rows are dropped.
+	ReplacedOnly bool
+
+	UserAccountID string // if non-empty, filters to accounts sharing this user_account_id
+
+	// AllStatuses removes the status predicate entirely, returning active, replaced AND
+	// expired accounts. IncludeReplaced is NOT a substitute: it produces
+	// `status IN ('active','replaced')`, which excludes 'expired' — and 'expired' is exactly
+	// what ExpireAccountsByFingerprint writes for a fully-disconnected chain (the three
+	// statuses are enumerated in domain/account.go). Callers that need the account universe
+	// as it was at some past instant — e.g. the dashboard's 30-day comparison baseline, which
+	// must attribute a since-disconnected account's historical snapshot to its real type —
+	// need this, not IncludeReplaced. Issue #1537.
+	//
+	// AllStatuses deliberately does NOT increment the AccountsReplacedFiltered canary: that
+	// counter measures active-only calls that DROP replaced accounts, and this option drops
+	// nothing. That decision is no longer re-derived from these booleans at the call site — it
+	// is taken from the resolved accountStatusScope, so the counter cannot disagree with the
+	// predicate the query actually ran (which it did for ReplacedOnly+AllStatuses).
+	AllStatuses bool
 }
 
 // AccountRepository defines the interface for account data access
 type AccountRepository interface {
-	// Create creates a new account in the database
-	Create(ctx context.Context, account *domain.Account) error
-
-	// CreateBatch creates multiple accounts in a single transaction
-	CreateBatch(ctx context.Context, accounts []domain.Account) error
+	// CreateBatch creates multiple accounts in a single transaction for a single tenant.
+	// Every element's UserID must equal userID; a mismatch returns
+	// ErrAccountBatchTenantMismatch and writes nothing (issue #1566).
+	CreateBatch(ctx context.Context, userID string, accounts []domain.Account) error
 
 	// GetByLinkedItemID retrieves all accounts for a specific linked item
 	GetByLinkedItemID(ctx context.Context, linkedItemID string) ([]domain.Account, error)
@@ -63,6 +87,17 @@ type AccountRepository interface {
 	// can disagree on which member's copy wins for a joint account (Issue #1369
 	// gap-closure G1). Issue #1369 — Phase 5.
 	GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error)
+
+	// GetForHouseholdScopeAllStatuses is GetForHouseholdScope without the
+	// `a.status = 'active'` predicate: it returns every chain member (active, replaced AND
+	// expired) of every account shared into the household. Household aggregation of a PAST
+	// instant needs it, because GetForHouseholdScope filters to active REGARDLESS of its asOf
+	// argument — so a household account disconnected since asOf is missing from its result and
+	// its historical snapshot cannot be attributed to an account type. Same asOf contract as
+	// GetForHouseholdScope: it must match the asOf of the GetSnapshotsAsOfForHousehold call it
+	// is paired with. Callers must NOT use this for a "current" figure — the product rule is
+	// that current totals include only linked/active accounts. Issue #1537.
+	GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error)
 
 	// GetAccountsWithInstitution retrieves all accounts for a user with institution names
 	// This method performs a LEFT JOIN with linked_items to include institution_name
@@ -234,73 +269,44 @@ func (r *accountRepository) decryptAccountPIIFields(a *domain.Account) error {
 	return nil
 }
 
-// Create creates a new account in the database
-func (r *accountRepository) Create(ctx context.Context, account *domain.Account) error {
-	// Generate UUID if not already set
-	if account.ID == "" {
-		account.ID = uuid.New().String()
+// assertSingleTenantAccounts fails if any element of accounts is owned by someone other than
+// userID. An empty element UserID is a mismatch too: a zero value is exactly how a
+// mixed-tenant slice slips in, and treating it as "inherit the actor" would paper over the bug.
+func assertSingleTenantAccounts(userID string, accounts []domain.Account) error {
+	// An empty actor is never a valid tenant — see assertSingleTenantOverrides for the vacuous-match
+	// case this closes.
+	if userID == "" {
+		return fmt.Errorf("CreateBatch: %w: no acting user_id was supplied", ErrAccountBatchTenantMismatch)
 	}
-
-	// Set timestamps
-	now := time.Now()
-	account.CreatedAt = now
-	account.UpdatedAt = now
-
-	// Compute blind index from plaintext before encrypting
-	plaidAccountIDBlindIdx := r.enc.BlindIndex(account.PlaidAccountID)
-
-	if err := r.encryptAccountPIIFields(account); err != nil {
-		return err
+	for i := range accounts {
+		if accounts[i].UserID != userID {
+			return fmt.Errorf("CreateBatch: %w: element %d has user_id %q, expected %q",
+				ErrAccountBatchTenantMismatch, i, accounts[i].UserID, userID)
+		}
 	}
-
-	query := `
-		INSERT INTO accounts
-		(id, linked_item_id, user_id, user_account_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
-		 type, subtype, mask, current_balance, available_balance, currency_code,
-		 persistent_account_id_blind_idx, fallback_fingerprint_blind_idx,
-		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-	`
-
-	_, err := r.db.Exec(ctx, query,
-		account.ID,
-		account.LinkedItemID,
-		account.UserID,
-		account.UserAccountID,
-		account.PlaidAccountID,
-		plaidAccountIDBlindIdx,
-		account.Name,
-		account.OfficialName,
-		account.Type,
-		account.Subtype,
-		account.Mask,
-		account.CurrentBalance,
-		account.AvailableBalance,
-		account.CurrencyCode,
-		account.PersistentAccountIDBlindIdx,
-		account.FallbackFingerprintBlindIdx,
-		account.CreatedAt,
-		account.UpdatedAt,
-	)
-
-	if err != nil {
-		return mapConstraintError(err)
-	}
-
 	return nil
 }
 
-// CreateBatch creates multiple accounts in a single transaction
-func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.Account) error {
+// CreateBatch creates multiple accounts in a single transaction, all owned by userID.
+//
+// #1566: the batch is single-tenant BY ASSERTION, not by convention. `accounts` is joined by
+// every analytics query, so a row inserted for a non-actor user is visible to cached reads of a
+// user the cache-invalidation middleware never bumps. A mixed-tenant slice is refused loudly
+// (ErrAccountBatchTenantMismatch) before any statement runs — never silently skipped.
+func (r *accountRepository) CreateBatch(ctx context.Context, userID string, accounts []domain.Account) error {
 	if len(accounts) == 0 {
 		return nil
+	}
+
+	if err := assertSingleTenantAccounts(userID, accounts); err != nil {
+		return err
 	}
 
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
 	query := `
 		INSERT INTO accounts
@@ -418,8 +424,11 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 
 // GetByUserID retrieves active-only accounts for a specific user, including status and re-link fields.
 // Returns ONLY accounts with status='active' (excludes replaced and expired).
-// Callers that need all chain members (active + replaced) should use GetAccountsWithInstitutionFiltered
-// with IncludeReplaced=true or StatusFilter="all".
+// Callers that need the active + replaced chain members should use
+// GetAccountsWithInstitutionFiltered with IncludeReplaced=true; that still EXCLUDES 'expired', so
+// callers that need every status (the point-in-time universe) need AllStatuses=true. There is no
+// repository-level "StatusFilter" option — that name belongs to services.AccountFilterOptions,
+// where "all" maps to IncludeReplaced and therefore also stops short of 'expired'.
 func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
@@ -485,7 +494,44 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 // GetSnapshotsAsOfForHousehold call this account map is paired with (Issue #1369
 // gap-closure G1) — see the interface doc for why. Issue #1369 — Phase 5.
 func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
-	query := "WITH " + householdAccountsCTEForBalancesAsOf() + `
+	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, householdActiveOnly)
+}
+
+// GetForHouseholdScopeAllStatuses is GetForHouseholdScope with the status predicate removed,
+// so a chain that has since been replaced or expired in its entirety still resolves. See the
+// interface doc for when that is the correct universe and when it is not. Issue #1537.
+func (r *accountRepository) GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, householdAllStatuses)
+}
+
+// householdStatusFilter selects which account statuses a household-scope read returns. It is a
+// typed flag rather than a SQL fragment on purpose: this helper used to take the WHERE clause
+// itself as a string and splice it in, which was safe only for as long as every call site was
+// inspected and stayed a compile-time literal. A closed two-value type makes an injected
+// predicate impossible by construction, not merely absent today. Issue #1537.
+type householdStatusFilter int
+
+const (
+	// householdActiveOnly restricts to `a.status = 'active'` (GetForHouseholdScope).
+	householdActiveOnly householdStatusFilter = iota
+	// householdAllStatuses applies no status predicate, so active, replaced AND expired chain
+	// members resolve (GetForHouseholdScopeAllStatuses).
+	householdAllStatuses
+)
+
+// statusClause renders the SQL predicate for this filter, appended after `WHERE TRUE`. The two
+// strings are the only status SQL either household-scope read can produce.
+func (f householdStatusFilter) statusClause() string {
+	if f == householdAllStatuses {
+		return ""
+	}
+	return " AND a.status = 'active'"
+}
+
+// householdScopeQuery builds the household-scope account SELECT. Pure and separate from the
+// read itself so the exact SQL each filter produces can be asserted without a database.
+func householdScopeQuery(statuses householdStatusFilter) string {
+	return "WITH " + householdAccountsCTEForBalancesAsOf() + `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
@@ -493,9 +539,16 @@ func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requesting
 		       a.created_at, a.updated_at
 		FROM accounts a
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
-		WHERE a.status = 'active'
+		WHERE TRUE` + statuses.statusClause() + `
 		ORDER BY a.created_at ASC
 	`
+}
+
+// getForHouseholdScope is the shared body of the two exported household-scope account reads.
+// The status predicate is chosen from the typed statuses flag (never from caller-supplied text)
+// so the two variants cannot drift apart in their column list, CTE, dedup or decryption handling.
+func (r *accountRepository) getForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time, statuses householdStatusFilter) ([]domain.Account, error) {
+	query := householdScopeQuery(statuses)
 
 	args := householdScopeArgs(requestingUserID, scope)
 	args = append(args, asOf)
@@ -797,7 +850,7 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
 	query := `
 		UPDATE accounts
@@ -821,12 +874,91 @@ func (r *accountRepository) UpdateDisplayOrders(ctx context.Context, userID stri
 	return tx.Commit(ctx)
 }
 
+// accountStatusScope is the status predicate GetAccountsWithInstitutionFiltered resolved from
+// AccountFilterOptions. Named rather than left as a bare SQL string so the canary counter can be
+// derived from the SAME decision the query uses instead of re-deriving it from the flags.
+type accountStatusScope int
+
+const (
+	// accountStatusActiveOnly is the default: `status = 'active'`, dropping replaced and expired.
+	accountStatusActiveOnly accountStatusScope = iota
+	// accountStatusActiveAndReplaced is IncludeReplaced: `status IN ('active','replaced')`.
+	accountStatusActiveAndReplaced
+	// accountStatusReplacedOnly is ReplacedOnly: `status = 'replaced'` — active rows are DROPPED.
+	accountStatusReplacedOnly
+	// accountStatusAny is AllStatuses: no status predicate (active, replaced AND expired).
+	accountStatusAny
+)
+
+// resolveAccountStatusScope maps the (independent, non-exclusive) status booleans to exactly one
+// predicate. The precedence is MOST SPECIFIC WINS, and it is deliberate rather than incidental:
+//
+//	ReplacedOnly > AllStatuses > IncludeReplaced > default(active-only)
+//
+// The only combination where that is observable is ReplacedOnly+AllStatuses, which is
+// contradictory ("only replaced" vs "no status filter at all"). It resolves to replaced-only —
+// i.e. setting AllStatuses alongside ReplacedOnly does NOT widen the result, it is ignored, and
+// active rows are dropped. No caller does this today (the sole ReplacedOnly caller is
+// accountService.GetAccountsFiltered's StatusFilter=="replaced" branch, which never sets
+// AllStatuses); it is documented and pinned by test rather than left to be rediscovered.
+func resolveAccountStatusScope(opts AccountFilterOptions) accountStatusScope {
+	switch {
+	case opts.ReplacedOnly:
+		return accountStatusReplacedOnly
+	case opts.AllStatuses:
+		return accountStatusAny
+	case opts.IncludeReplaced:
+		return accountStatusActiveAndReplaced
+	default:
+		return accountStatusActiveOnly
+	}
+}
+
+// clause renders the SQL status predicate, appended after `WHERE a.user_id = $1`.
+func (s accountStatusScope) clause() string {
+	switch s {
+	case accountStatusReplacedOnly:
+		return " AND a.status = 'replaced'"
+	case accountStatusAny:
+		return ""
+	case accountStatusActiveAndReplaced:
+		return " AND a.status IN ('active', 'replaced')"
+	default:
+		return " AND a.status = 'active'"
+	}
+}
+
+// dropsReplaced reports whether this scope excludes at least one replaced account — precisely what
+// AccountsReplacedFiltered counts ("query executions that excluded at least one replaced account or
+// expanded a re-link chain", see observability/metrics.go).
+//
+// Only the active-only default qualifies. Note what that means for the two edge scopes:
+//
+//   - accountStatusAny (AllStatuses) drops nothing, so it must stay silent — that decision is
+//     already pinned by an integration test (#1537 round 10).
+//   - accountStatusReplacedOnly drops ACTIVE rows, not replaced ones, so by the metric's own
+//     definition it is also silent. Before this change it INCREMENTED, labelling a replaced-only
+//     query as the "accounts_list active-only path" in the family list — a PRE-EXISTING mislabel
+//     dating to Issue #1109, not introduced or inherited by this branch's all-statuses work. It is
+//     corrected here because deriving the canary from the resolved scope is what removes the
+//     fail-open above, and a flags-based special case for ReplacedOnly would have reintroduced the
+//     same two-sources-of-truth shape.
+func (s accountStatusScope) dropsReplaced() bool {
+	return s == accountStatusActiveOnly
+}
+
 // GetAccountsWithInstitutionFiltered retrieves accounts with institution names and flexible filtering.
 // Issue #679, #680: Also includes linked_item status to show 'disconnected' when subscription expires.
 // Issue #1109: Added IncludeReplaced and UserAccountID filter options.
 func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Context, userID string, opts AccountFilterOptions) ([]domain.Account, error) {
-	// Canary counter: every active-only call filters out replaced accounts (Issue #1109).
-	if !opts.IncludeReplaced {
+	// The status predicate is resolved FIRST and the canary is derived FROM it, because the two
+	// used to be computed independently from the same booleans and could disagree: the switch
+	// matched ReplacedOnly before AllStatuses (so both set yielded `status = 'replaced'`, dropping
+	// active rows), while the canary condition `!IncludeReplaced && !AllStatuses` read AllStatuses
+	// and stayed silent — a fail-open in the counter whose job is catching fail-opens. Deriving one
+	// from the other makes that class of disagreement unrepresentable (Issue #1537).
+	statusScope := resolveAccountStatusScope(opts)
+	if statusScope.dropsReplaced() {
 		observability.AccountsReplacedFiltered.WithLabelValues("accounts_list").Inc()
 	}
 	hiddenClause := ""
@@ -834,15 +966,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		hiddenClause = " AND a.is_hidden = FALSE"
 	}
 
-	var statusClause string
-	switch {
-	case opts.ReplacedOnly:
-		statusClause = " AND a.status = 'replaced'"
-	case opts.IncludeReplaced:
-		statusClause = " AND a.status IN ('active', 'replaced')"
-	default:
-		statusClause = " AND a.status = 'active'"
-	}
+	statusClause := statusScope.clause()
 
 	userAccountClause := ""
 	args := []any{userID}

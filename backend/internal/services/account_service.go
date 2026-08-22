@@ -281,12 +281,34 @@ func (s *accountService) checkFingerprintOwnership(ctx context.Context, blindIdx
 		}
 		// Issue #1531 Blocker 1: ExpireAccountsByFingerprint just flipped a DIFFERENT user's
 		// (ownership.UserID's) accounts from active to expired — the whole point of this method,
-		// since a fingerprint blind index is looked up excluding the ACTING user. Every cached
-		// analytics query filters accounts.status = 'active', so without this bump the
-		// dispossessed owner's net-worth/cash-flow/spending aggregates keep serving pre-release
-		// numbers until the namespace TTL. The HTTP mutation middleware bumps only the actor
-		// (this LinkAccounts caller), never ownership.UserID, so this explicit bump is the only
-		// thing that closes the gap. Called AFTER the write above has committed (commit-then-bump).
+		// since a fingerprint blind index is looked up excluding the ACTING user. The HTTP mutation
+		// middleware bumps only the actor (this LinkAccounts caller), never ownership.UserID, so if
+		// any cached read of that owner's is status-sensitive, this explicit bump is the only thing
+		// that closes the gap. Called AFTER the write above has committed (commit-then-bump).
+		//
+		// ⚠ #1561 NARROWED THIS. The original justification claimed "every cached analytics query
+		// filters accounts.status = 'active'", so the owner's net-worth, cash-flow AND spending
+		// aggregates all went stale; #1561 removed those nine household-scope predicates (personal
+		// scope has had none since #1109). The #1561 CORRECTION that replaced it was then wrong in
+		// turn: it said "the only status filter any of them can reach is
+		// GetAggregatedHistoryForHousehold's account-type join". There is no such filter. That join
+		// is unfiltered — `LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id`
+		// (repository/balance_snapshot_repository.go:320) — and status appears only as the first
+		// DISTINCT ON tiebreak, `(a.status = 'active') DESC NULLS LAST, a.id` (:313).
+		//
+		// Re-derived, and stated as a preference rather than a filter: the three cached wrappers are
+		// analytics_service_cached.go, dashboard_preferences_service_cached.go and
+		// identity_resolver_cached.go; NONE of the queries they reach FILTERS on accounts.status, and
+		// exactly one of them — GetAggregatedHistoryForHousehold, via GetNetWorthTrend — PREFERS an
+		// active row when choosing which chain member's a.type a household balance is attributed to.
+		// That preference is what makes this write cache-relevant. The accounts LIST does filter
+		// status, but it is not a cached read (called directly from GetAccountsFiltered at :960).
+		//
+		// So the bump is still correct, on a much narrower basis: it covers the owner's HOUSEHOLD
+		// net-worth history, where expiring their accounts changes which a.type their balances are
+		// attributed to. For an owner in no household it now invalidates nothing — kept anyway,
+		// because over-invalidation costs one cache miss and this is a cross-user write the
+		// middleware structurally cannot see.
 		s.bumpCacheForDispossessedOwner(ctx, ownership.UserID)
 		return nil
 	}
@@ -551,7 +573,7 @@ func (s *accountService) LinkAccounts(
 	}
 
 	// Step 6b: Create accounts in batch
-	if err := s.accountRepo.CreateBatch(ctx, accounts); err != nil {
+	if err := s.accountRepo.CreateBatch(ctx, user.ID, accounts); err != nil {
 		// TODO: Consider rollback mechanism if account creation fails
 		// For now, the linked_item → accounts CASCADE DELETE will clean up on item deletion
 		return nil, fmt.Errorf("failed to create accounts: %w", err)
@@ -817,7 +839,7 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 				)
 			}
 		} else if len(remaining) == 0 {
-			if hideErr := s.userAccountSvc.SetHidden(ctx, *account.UserAccountID, true); hideErr != nil {
+			if hideErr := s.userAccountSvc.SetHidden(ctx, *account.UserAccountID, userID, true); hideErr != nil {
 				if s.logger != nil {
 					s.logger.Warn("failed to hide user_account after last account deletion",
 						"user_account_id", *account.UserAccountID,
@@ -913,10 +935,15 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 
 // AccountFilterOptions holds filter options for GetAccountsFiltered (Issue #1109).
 type AccountFilterOptions struct {
-	IncludeHidden   bool   // if true, include hidden accounts
-	IncludeReplaced bool   // if true, equivalent to StatusFilter="all" (backward-compat alias)
-	StatusFilter    string // "active" (default), "replaced" (replaced only), "all" (no filter)
-	UserAccountID   string // if set, filter to accounts with this user_account_id
+	IncludeHidden   bool // if true, include hidden accounts
+	IncludeReplaced bool // if true, equivalent to StatusFilter="all" (backward-compat alias)
+	// StatusFilter is "active" (default), "replaced" (replaced only), or "all". "all" is a
+	// misnomer inherited from the public query parameter: it maps to the repository's
+	// IncludeReplaced, i.e. `status IN ('active','replaced')`, so accounts a fully-disconnected
+	// chain left at status='expired' are NOT returned. No service-level option exposes the
+	// repository's AllStatuses (the genuine no-status-predicate read) today. Issue #1537.
+	StatusFilter  string
+	UserAccountID string // if set, filter to accounts with this user_account_id
 }
 
 // GetAccountsFiltered retrieves accounts with optional filters (Issue #307, #1109).

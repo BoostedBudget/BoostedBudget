@@ -10,6 +10,13 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
+// ErrOverrideTenantMismatch is returned when a batch of merchant name overrides contains an
+// element whose UserID is not the acting user. bulkUpsertTx derives each written user_id from
+// the individual element, so without this assertion an actor-authenticated request could write
+// a stranger's override row while the cache-invalidation middleware bumps only the actor
+// (issue #1566; same failure mode as ExpireAccountsByFingerprint in #1531).
+var ErrOverrideTenantMismatch = errors.New("merchant override batch contains an element belonging to another user")
+
 // querier is the minimal interface satisfied by both DB (*pgxpool.Pool) and pgx.Tx.
 // Private tx-scoped SQL helpers accept a querier so the same SQL body can run either
 // inside an open transaction (for BulkApply) or directly against the pool (for the
@@ -24,10 +31,10 @@ type querier interface {
 // and toFlatten slices before calling BulkApply; the repository is a pure write.
 // Self-merges (src == Canonical) must be excluded by the caller.
 type BulkMergeGroup struct {
-	Sources      []string   // merchant IDs to merge into Canonical (self-merges excluded)
-	Canonical    string     // resolved canonical target merchant ID
-	ToFlatten    []string   // IDs whose inbound merge chains must be re-pointed to Canonical
-	DisplayNames []*string  // parallel slice to Sources; nil entries preserve existing names
+	Sources      []string  // merchant IDs to merge into Canonical (self-merges excluded)
+	Canonical    string    // resolved canonical target merchant ID
+	ToFlatten    []string  // IDs whose inbound merge chains must be re-pointed to Canonical
+	DisplayNames []*string // parallel slice to Sources; nil entries preserve existing names
 }
 
 // MerchantOverrideRepository handles data access for merchant_name_overrides.
@@ -78,18 +85,6 @@ func (r *MerchantOverrideRepository) Upsert(ctx context.Context, override domain
 		return nil, err
 	}
 	return &out, nil
-}
-
-// BulkUpsert inserts or updates multiple merchant name overrides using UNNEST.
-// Empty input returns an empty slice immediately.
-// Applies the same ON CONFLICT COALESCE invariant as Upsert (G31, #957).
-//
-// Delegates to bulkUpsertTx so the same SQL body can be reused inside BulkApply's tx.
-func (r *MerchantOverrideRepository) BulkUpsert(ctx context.Context, overrides []domain.MerchantNameOverride) ([]domain.MerchantNameOverride, error) {
-	if len(overrides) == 0 {
-		return []domain.MerchantNameOverride{}, nil
-	}
-	return bulkUpsertTx(ctx, r.db, overrides)
 }
 
 // GetByUserID returns all merchant name overrides for a user, ordered by created_at DESC.
@@ -205,6 +200,12 @@ func (r *MerchantOverrideRepository) BulkApply(ctx context.Context, userID strin
 		return []domain.MerchantNameOverride{}, nil
 	}
 
+	// #1566: refuse a mixed-tenant slice BEFORE opening a transaction. bulkUpsertTx derives each
+	// written user_id from the element, so the userID argument constrains nothing on its own.
+	if err := assertSingleTenantOverrides(userID, displayOnly); err != nil {
+		return nil, err
+	}
+
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("BulkApply: begin tx: %w", err)
@@ -219,7 +220,7 @@ func (r *MerchantOverrideRepository) BulkApply(ctx context.Context, userID strin
 
 	if len(displayOnly) > 0 {
 		var bulkResults []domain.MerchantNameOverride
-		bulkResults, err = bulkUpsertTx(ctx, tx, displayOnly)
+		bulkResults, err = bulkUpsertTx(ctx, tx, userID, displayOnly)
 		if err != nil {
 			return nil, fmt.Errorf("BulkApply: display-only upsert: %w", err)
 		}
@@ -247,7 +248,13 @@ var _ MerchantOverrideRepo = (*MerchantOverrideRepository)(nil)
 // Applies ON CONFLICT COALESCE (G31): nil merged_into_merchant_id preserves existing merge pointer.
 // UNNEST column types ($2::uuid[], $4::uuid[]) declare merchantIDs and mergedIntoIDs as uuid;
 // pgx v5 transparently converts string→uuid when scanning.
-func bulkUpsertTx(ctx context.Context, q querier, overrides []domain.MerchantNameOverride) ([]domain.MerchantNameOverride, error) {
+func bulkUpsertTx(ctx context.Context, q querier, userID string, overrides []domain.MerchantNameOverride) ([]domain.MerchantNameOverride, error) {
+	// Re-assert here as well as in BulkApply: this helper writes o.UserID verbatim, so any future
+	// caller must be held to the same single-tenant invariant (#1566).
+	if err := assertSingleTenantOverrides(userID, overrides); err != nil {
+		return nil, err
+	}
+
 	userIDs := make([]string, len(overrides))
 	merchantIDs := make([]string, len(overrides))
 	displayNames := make([]*string, len(overrides))
@@ -299,6 +306,26 @@ func bulkUpsertTx(ctx context.Context, q querier, overrides []domain.MerchantNam
 		return nil, err
 	}
 	return results, nil
+}
+
+// assertSingleTenantOverrides fails if any element of overrides is owned by someone other than
+// userID. An empty element UserID is a mismatch too: a zero value is exactly how a mixed-tenant
+// slice slips in, and treating it as "inherit the actor" would paper over the bug. Mismatched
+// elements are never silently skipped — a silent skip is worse than a loud failure.
+func assertSingleTenantOverrides(userID string, overrides []domain.MerchantNameOverride) error {
+	// An empty actor is never a valid tenant. Without this the comparison below is vacuous when both
+	// sides are empty — assertSingleTenantOverrides("", []{UserID: ""}) passed, waving through a batch
+	// with no owner and leaving the DB's own constraints as the only guard (adversarial review).
+	if userID == "" {
+		return fmt.Errorf("BulkApply: %w: no acting user_id was supplied", ErrOverrideTenantMismatch)
+	}
+	for i := range overrides {
+		if overrides[i].UserID != userID {
+			return fmt.Errorf("BulkApply: %w: element %d has user_id %q, expected %q",
+				ErrOverrideTenantMismatch, i, overrides[i].UserID, userID)
+		}
+	}
+	return nil
 }
 
 // mergeAndFlattenTx executes chain-flatten UPDATE + source upsert INSERT on q.

@@ -757,3 +757,62 @@ func TestPlaidSyncProvider_Analytics_NoCapture_WhenNil(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0, count)
 }
+
+// TestPlaidSyncProvider_EmptyNextCursor_DoesNotOverwriteStoredCursor pins that a blank cursor from
+// Plaid is never persisted.
+//
+// FOUND BY LINT, of all things. staticcheck SA4031 flagged `if cursor != nil` before UpdateCursor as
+// always true — and it was: the pagination loop assigns `cursor = &nextCursor` before it can break,
+// so the guard was dead. Removing dead code is right, but the guard's APPARENT intent — do not
+// persist a cursor we never got — turned out not to be implemented anywhere, by that guard or
+// otherwise. `cursor != nil` never tested for a blank cursor; it tested for a pointer that could not
+// be nil.
+//
+// Why a blank cursor is not benign: Plaid treats an absent-or-empty cursor as "start from the
+// beginning of history". Persisting "" therefore converts the next INCREMENTAL sync into a full
+// re-sync, which re-runs processAdded over the entire history and pushes it all back through
+// CreateBatch. The stored cursor is the only thing that makes the sync incremental, so overwriting a
+// good one with "" is strictly destructive.
+//
+// The provider is currently unwired — NewPlaidSyncProvider has no non-test caller — so this is
+// latent, not live. It is fixed now rather than filed because the fix is three lines and the next
+// person to wire this provider up would inherit a silent full-resync bug.
+func TestPlaidSyncProvider_EmptyNextCursor_DoesNotOverwriteStoredCursor(t *testing.T) {
+	linkedItemRepo := new(MockLinkedItemRepository)
+	txnRepo := new(MockTransactionRepository)
+	plaidClient := new(MockPlaidClient)
+	emitter := new(MockEventEmitter)
+
+	provider := NewPlaidSyncProvider(linkedItemRepo, txnRepo, plaidClient, emitter)
+	ctx := context.Background()
+
+	linkedItemID := "test-linked-item"
+	storedCursor := "a-good-cursor-worth-keeping"
+	linkedItem := &domain.LinkedItem{
+		ID:                   linkedItemID,
+		UserID:               "user-123",
+		AccessTokenEncrypted: "encrypted-token",
+		Cursor:               &storedCursor,
+	}
+
+	// A successful sync that returns NOTHING new and, critically, a blank NextCursor.
+	syncResp := &plaid.TransactionsSyncResponse{
+		Added:      []plaid.Transaction{},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "",
+		HasMore:    false,
+	}
+
+	linkedItemRepo.On("GetByID", ctx, linkedItemID).Return(linkedItem, nil)
+	plaidClient.On("TransactionsSync", ctx, "encrypted-token", &storedCursor).Return(syncResp, nil)
+	// Deliberately NOT registering an UpdateCursor expectation: with testify, an unexpected call
+	// panics the test, so this is the assertion. AssertNotCalled below states it explicitly too.
+
+	count, err := provider.SyncForLinkedItem(ctx, linkedItemID)
+
+	assert.NoError(t, err, "an empty cursor is not an error — Plaid simply had nothing to hand back")
+	assert.Equal(t, 0, count)
+	linkedItemRepo.AssertNotCalled(t, "UpdateCursor", ctx, linkedItemID, "")
+	linkedItemRepo.AssertExpectations(t)
+}

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
-	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // AnalyticsRepository defines the interface for analytics data access.
@@ -100,7 +99,6 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 	if filters.HouseholdScope != nil {
 		return r.getCashFlowAggregationHousehold(ctx, userID, filters)
 	}
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	argIndex := 4
@@ -125,7 +123,7 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 		for _, at := range filters.AccountTypes {
 			args = append(args, at)
 		}
-		argIndex += len(filters.AccountTypes)
+		argIndex += len(filters.AccountTypes) //nolint:ineffassign // kept so a filter added below inherits the correct arg index
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
@@ -151,8 +149,6 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 // aggregates across every account shared into the household, clipped per-account to
 // share_started_at. Issue #1369 — Phase 5.
 func (r *analyticsRepository) getCashFlowAggregationHousehold(ctx context.Context, requestingUserID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
-
 	args := householdScopeArgs(requestingUserID, filters.HouseholdScope)
 	args = append(args, filters.StartDate, filters.EndDate)
 	argIndex := 6
@@ -165,7 +161,7 @@ func (r *analyticsRepository) getCashFlowAggregationHousehold(ctx context.Contex
 			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as expenses,
 			COUNT(CASE WHEN t.amount > 0 THEN 1 END) as expense_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -177,7 +173,7 @@ func (r *analyticsRepository) getCashFlowAggregationHousehold(ctx context.Contex
 		for _, at := range filters.AccountTypes {
 			args = append(args, at)
 		}
-		argIndex += len(filters.AccountTypes)
+		argIndex += len(filters.AccountTypes) //nolint:ineffassign // kept so a filter added below inherits the correct arg index
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
@@ -206,7 +202,6 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 	if filters.HouseholdScope != nil {
 		return r.getCashFlowGroupedHousehold(ctx, userID, filters)
 	}
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
 	var truncInterval string
 	switch filters.Grouping {
@@ -242,7 +237,7 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		for _, at := range filters.AccountTypes {
 			args = append(args, at)
 		}
-		argIndex += len(filters.AccountTypes)
+		argIndex += len(filters.AccountTypes) //nolint:ineffassign // kept so a filter added below inherits the correct arg index
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
@@ -290,8 +285,6 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 // aggregates across every account shared into the household, clipped per-account to
 // share_started_at. Issue #1369 — Phase 5.
 func (r *analyticsRepository) getCashFlowGroupedHousehold(ctx context.Context, requestingUserID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
-
 	var truncInterval string
 	switch filters.Grouping {
 	case "daily":
@@ -316,7 +309,7 @@ func (r *analyticsRepository) getCashFlowGroupedHousehold(ctx context.Context, r
 			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) as expenses,
 			COUNT(*) as transaction_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -328,7 +321,7 @@ func (r *analyticsRepository) getCashFlowGroupedHousehold(ctx context.Context, r
 		for _, at := range filters.AccountTypes {
 			args = append(args, at)
 		}
-		argIndex += len(filters.AccountTypes)
+		argIndex += len(filters.AccountTypes) //nolint:ineffassign // kept so a filter added below inherits the correct arg index
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
@@ -663,7 +656,6 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 	if filters.HouseholdScope != nil {
 		return r.getSpendingByCategoryHousehold(ctx, userID, filters)
 	}
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 	isDrillDown := filters.Category != ""
 	catExpr := effectiveCategoryExpr(isDrillDown)
 
@@ -726,7 +718,6 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 // resolves only the REQUESTER's own custom categories, never a household member's — the
 // custom-category namespace is never widened by household scope. Issue #1369 — Phase 5.
 func (r *analyticsRepository) getSpendingByCategoryHousehold(ctx context.Context, requestingUserID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 	isDrillDown := filters.Category != ""
 	catExpr := effectiveCategoryExpr(isDrillDown)
 	displayExpr := effectiveCategoryDisplayExpr()
@@ -751,7 +742,7 @@ func (r *analyticsRepository) getSpendingByCategoryHousehold(ctx context.Context
 			COALESCE(SUM(ABS(t.amount)), 0) as total,
 			COUNT(*) as transaction_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -792,7 +783,6 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 	if filters.HouseholdScope != nil {
 		return r.getSpendingByMerchantHousehold(ctx, userID, filters, limit)
 	}
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	extraClause, args, argIndex := buildSpendingFilter(filters, args)
@@ -851,8 +841,6 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 // getSpendingByMerchantHousehold is the household-scope variant of GetSpendingByMerchant.
 // Issue #1369 — Phase 5.
 func (r *analyticsRepository) getSpendingByMerchantHousehold(ctx context.Context, requestingUserID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
-
 	args := householdScopeArgs(requestingUserID, filters.HouseholdScope)
 	args = append(args, filters.StartDate, filters.EndDate)
 	extraClause, args, argIndex := buildSpendingFilter(filters, args)
@@ -871,7 +859,7 @@ func (r *analyticsRepository) getSpendingByMerchantHousehold(ctx context.Context
 			COALESCE(SUM(ABS(t.amount)), 0)                                                                                    AS total,
 			COUNT(*)                                                                                                            AS transaction_count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		` + merchantSortJoins + `
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
@@ -918,7 +906,6 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 	if filters.HouseholdScope != nil {
 		return r.getSpendingTrendsHousehold(ctx, userID, filters)
 	}
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
 	catExpr := effectiveCategoryExpr(false)
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
@@ -968,8 +955,6 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 // getSpendingTrendsHousehold is the household-scope variant of GetSpendingTrends.
 // Issue #1369 — Phase 5.
 func (r *analyticsRepository) getSpendingTrendsHousehold(ctx context.Context, requestingUserID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
-
 	catExpr := effectiveCategoryExpr(false)
 	args := householdScopeArgs(requestingUserID, filters.HouseholdScope)
 	args = append(args, filters.StartDate, filters.EndDate)
@@ -984,7 +969,7 @@ func (r *analyticsRepository) getSpendingTrendsHousehold(ctx context.Context, re
 			%s as category_display,
 			COALESCE(SUM(ABS(t.amount)), 0) as total
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -1092,7 +1077,6 @@ func (r *analyticsRepository) GetAverageMonthlySpend(ctx context.Context, userID
 	if filters.HouseholdScope != nil {
 		return r.getAverageMonthlySpendHousehold(ctx, userID, filters)
 	}
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	filterClause, args, _ := buildSpendingFilter(filters, args)
@@ -1120,8 +1104,6 @@ func (r *analyticsRepository) GetAverageMonthlySpend(ctx context.Context, userID
 // getAverageMonthlySpendHousehold is the household-scope variant of GetAverageMonthlySpend.
 // Issue #1369 — Phase 5.
 func (r *analyticsRepository) getAverageMonthlySpendHousehold(ctx context.Context, requestingUserID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
-
 	args := householdScopeArgs(requestingUserID, filters.HouseholdScope)
 	args = append(args, filters.StartDate, filters.EndDate)
 	filterClause, args, _ := buildSpendingFilter(filters, args)
@@ -1130,7 +1112,7 @@ func (r *analyticsRepository) getAverageMonthlySpendHousehold(ctx context.Contex
 		WITH %s
 		SELECT COALESCE(SUM(t.amount), 0) as total
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -1151,8 +1133,6 @@ func (r *analyticsRepository) getAverageMonthlySpendHousehold(ctx context.Contex
 // Uses window functions (LAG) to compute per-merchant inter-charge gaps; filters to monthly cadence
 // (avg gap 25-40 days, stddev < 10, ≥3 occurrences). Single DB round-trip. Issue #1215.
 func (r *analyticsRepository) GetRecurringSubscriptions(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
-
 	const query = `
 		WITH merchant_gaps AS (
 			SELECT
@@ -1234,7 +1214,6 @@ func (r *analyticsRepository) GetSavingsRateForPeriod(ctx context.Context, userI
 	if scope != nil {
 		return r.getSavingsRateForPeriodHousehold(ctx, userID, startDate, endDate, scope)
 	}
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
 	const query = `
 		SELECT
@@ -1258,15 +1237,13 @@ func (r *analyticsRepository) GetSavingsRateForPeriod(ctx context.Context, userI
 // getSavingsRateForPeriodHousehold is the household-scope variant of
 // GetSavingsRateForPeriod. Issue #1369 — Phase 5.
 func (r *analyticsRepository) getSavingsRateForPeriodHousehold(ctx context.Context, requestingUserID string, startDate, endDate time.Time, scope *domain.HouseholdScope) (*domain.SavingsRateRow, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
-
 	query := fmt.Sprintf(`
 		WITH %s
 		SELECT
 			COALESCE(ABS(SUM(CASE WHEN t.amount < 0 THEN t.amount ELSE 0 END)), 0) AS income,
 			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS expenses
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -1291,7 +1268,6 @@ func (r *analyticsRepository) GetMonthOverMonthSpending(ctx context.Context, use
 	if filters.HouseholdScope != nil {
 		return r.getMonthOverMonthSpendingHousehold(ctx, userID, startDate, category, filters)
 	}
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
 	catExpr := effectiveCategoryExpr(false)
 	args := []interface{}{userID, startDate}
@@ -1348,8 +1324,6 @@ func (r *analyticsRepository) GetMonthOverMonthSpending(ctx context.Context, use
 // getMonthOverMonthSpendingHousehold is the household-scope variant of
 // GetMonthOverMonthSpending. Issue #1369 — Phase 5.
 func (r *analyticsRepository) getMonthOverMonthSpendingHousehold(ctx context.Context, requestingUserID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
-
 	catExpr := effectiveCategoryExpr(false)
 	args := householdScopeArgs(requestingUserID, filters.HouseholdScope)
 	args = append(args, startDate)
@@ -1372,7 +1346,7 @@ func (r *analyticsRepository) getMonthOverMonthSpendingHousehold(ctx context.Con
 		WITH %s
 		SELECT DATE_TRUNC('month', t.date)::date AS month, COALESCE(SUM(t.amount), 0) AS total
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.amount > 0
@@ -1408,8 +1382,6 @@ func (r *analyticsRepository) getMonthOverMonthSpendingHousehold(ctx context.Con
 // GetLargestTransactionsForPeriod returns the N largest expense transactions in a date range.
 // Single DB round-trip; limit enforced in SQL (Issue #1215 PR2).
 func (r *analyticsRepository) GetLargestTransactionsForPeriod(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
-
 	catExpr := effectiveCategoryExpr(false)
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	filterClause, args, argIndex := buildSpendingFilter(filters, args)
@@ -1457,8 +1429,6 @@ func (r *analyticsRepository) GetLargestTransactionsForPeriod(ctx context.Contex
 // Filters by merchant_id (effective canonical via merge chain) so merged source transactions are included (#1348 G2b).
 // Single DB round-trip (Issue #1215 PR2).
 func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
-
 	catExpr := effectiveCategoryExpr(false)
 	args := []interface{}{userID, filters.StartDate, filters.EndDate, merchantID}
 	filterClause, args, _ := buildSpendingFilter(filters, args)
@@ -1507,7 +1477,6 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 	if filters.HouseholdScope != nil {
 		return r.getIncomeSourceBreakdownHousehold(ctx, userID, filters)
 	}
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
 	catExpr := effectiveCategoryExpr(false)
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
@@ -1552,8 +1521,6 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 // getIncomeSourceBreakdownHousehold is the household-scope variant of
 // GetIncomeSourceBreakdown. Issue #1369 — Phase 5.
 func (r *analyticsRepository) getIncomeSourceBreakdownHousehold(ctx context.Context, requestingUserID string, filters domain.SpendingFilters) ([]domain.IncomeSourceRow, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
-
 	catExpr := effectiveCategoryExpr(false)
 	args := householdScopeArgs(requestingUserID, filters.HouseholdScope)
 	args = append(args, filters.StartDate, filters.EndDate)
@@ -1563,7 +1530,7 @@ func (r *analyticsRepository) getIncomeSourceBreakdownHousehold(ctx context.Cont
 		WITH %s
 		SELECT (%s) AS category, ABS(SUM(t.amount)) AS total, COUNT(*) AS count
 		FROM transactions t
-		JOIN accounts a ON t.account_id = a.id AND a.status = 'active'
+		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
@@ -1601,8 +1568,6 @@ func (r *analyticsRepository) getIncomeSourceBreakdownHousehold(ctx context.Cont
 // The baseline window is [baselineStart, startDate). Categories with fewer than 3 transactions
 // or zero variance are excluded. Single DB round-trip via CTE with STDDEV_POP. Issue #1215 PR3.
 func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string, baselineStart, startDate, endDate time.Time, sigmaThreshold float64) ([]domain.UnusualSpendRow, error) {
-	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
-
 	catExpr := effectiveCategoryExpr(false)
 
 	query := fmt.Sprintf(`

@@ -95,10 +95,10 @@ func TestHouseholdAcceptConcurrency_SeatCapEnforced(t *testing.T) {
 
 	successCount, seatsFullCount, otherErrCount := 0, 0, 0
 	for _, err := range errs {
-		switch {
-		case err == nil:
+		switch err {
+		case nil:
 			successCount++
-		case err == errSeatsFull:
+		case errSeatsFull:
 			seatsFullCount++
 		default:
 			otherErrCount++

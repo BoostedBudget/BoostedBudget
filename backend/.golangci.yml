@@ -1,0 +1,19 @@
+# golangci-lint configuration.
+#
+# WHY THIS FILE EXISTS (#1537 round 4): there was no config, so golangci-lint applied its DEFAULTS —
+# max-issues-per-linter: 50 and max-same-issues: 3. Those caps silently truncate output, and that is
+# not a cosmetic problem: during this round a per-tree cleanup was handed a list of 23 findings,
+# fixed them, and found the true count was ~65, because 52 identical `defer resp.Body.Close()`
+# errcheck sites had been collapsed to 3. A capped run reports a number that looks like a total and
+# is not one, so "N issues remaining" was wrong every time anyone quoted it, including me.
+#
+# Both caps are therefore disabled. A slow, honest count beats a fast, misleading one — and this is
+# the gate CLAUDE.md asks to pass, so its output has to mean what it says.
+#
+# Note: lint is a LOCAL gate. There is no golangci-lint step in .github/workflows/, so nothing in CI
+# enforces this; `make -C backend lint` is the only thing that runs it.
+version: "2"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

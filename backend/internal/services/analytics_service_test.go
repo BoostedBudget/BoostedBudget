@@ -1837,13 +1837,13 @@ type mockBalanceSnapshotRepository struct {
 func (m *mockBalanceSnapshotRepository) Create(ctx context.Context, snapshot *domain.BalanceSnapshot) error {
 	return nil
 }
-func (m *mockBalanceSnapshotRepository) GetByUserIDAndDateRange(ctx context.Context, userID string, startDate, endDate time.Time) ([]domain.BalanceSnapshot, error) {
-	return nil, nil
-}
 func (m *mockBalanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
 	if m.getAggregatedHistoryFn != nil {
 		return m.getAggregatedHistoryFn(ctx, userID, startDate, endDate, accountTypes)
 	}
+	return nil, nil
+}
+func (m *mockBalanceSnapshotRepository) GetSnapshotsAsOfForUser(ctx context.Context, userID string, asOf time.Time) ([]domain.BalanceSnapshot, error) {
 	return nil, nil
 }
 func (m *mockBalanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userID string) ([]domain.BalanceSnapshot, error) {
@@ -1851,9 +1851,6 @@ func (m *mockBalanceSnapshotRepository) GetLatestByUserID(ctx context.Context, u
 }
 func (m *mockBalanceSnapshotRepository) GetLatestByAccountID(ctx context.Context, accountID string) (*domain.BalanceSnapshot, error) {
 	return nil, nil
-}
-func (m *mockBalanceSnapshotRepository) DeleteByAccountID(ctx context.Context, accountID string) error {
-	return nil
 }
 func (m *mockBalanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
 	return nil, nil

@@ -53,7 +53,9 @@ func TestLinkedItem_JSONMarshaling(t *testing.T) {
 
 	// Verify AccessTokenEncrypted is NOT in JSON (json:"-" tag)
 	var jsonMap map[string]interface{}
-	json.Unmarshal(jsonData, &jsonMap)
+	if err := json.Unmarshal(jsonData, &jsonMap); err != nil {
+		t.Fatalf("Unmarshal into map failed: %v", err)
+	}
 	if _, exists := jsonMap["access_token_encrypted"]; exists {
 		t.Error("AccessTokenEncrypted should not appear in JSON (security)")
 	}

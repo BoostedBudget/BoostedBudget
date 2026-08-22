@@ -24,6 +24,6 @@ func pttl(ctx context.Context, t *testing.T, key string) (time.Duration, error) 
 		t.Fatalf("pttl: parse test URL: %v", err)
 	}
 	rdb := redis.NewClient(opts)
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 	return rdb.PTTL(ctx, key).Result()
 }
