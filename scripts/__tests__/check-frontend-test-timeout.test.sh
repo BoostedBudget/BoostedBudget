@@ -33,9 +33,14 @@
 # command names those bodies use) is placed on PATH; it writes its own argv, NUL-delimited, and
 # exits 0. Two families of things are then really EXECUTED against it:
 #
-#   - the frontend RUNNER SCRIPTS discovered from apps/web/package.json (tests 1, 3);
+#   - the frontend RUNNER SCRIPTS discovered from apps/web/package.json (tests 1, 3), both
+#     synthetically and as replays of the package.json scripts that launch them;
 #   - every PACKAGE.JSON SCRIPT, in the root manifest and in each declared workspace member, whose
 #     body invokes `bun test` (tests 2, 4).
+#
+# The stub claims its record filename ATOMICALLY (set -C + `>`, i.e. O_EXCL). The read-modify-write
+# `.seq` counter it replaced lost records under concurrency — 24 concurrent invocations produced 8
+# records — and losing the BAD record is a false pass. See the note above the stub.
 #
 # Whatever bash handed to `bun` IS the truth — comments, quoting of every kind, multiline strings,
 # `\` continuations, `${VAR#pattern}`, arrays expanded as "$@", values that arrive from variables,
@@ -57,15 +62,35 @@
 # process or it is not. So the manifest half now enumerates with JSON.parse over the `scripts`
 # object only, and judges nothing but observed argv.
 #
+# The runner half executes each runner TWICE OVER. Once synthetically, in a hardcoded matrix of
+# modes (no args, --coverage) — that is the per-runner floor, and it is what would catch a runner
+# that stops running tests in a mode nothing currently uses. And once by REPLAYING the package.json
+# script that launches it (`test`, `test:ci`) as its own body: same cwd, same env prefixes, same
+# argument shapes, same `&&` chaining. The replay exists because the synthetic matrix is a GUESS
+# about how the runner is called, and the guess was falsified in both directions — see the two
+# findings recorded at test 3, phase B. Whatever branch CI takes is now the branch observed.
+#
 # What the observing half does NOT know, stated plainly rather than left to be discovered:
-#   - only the code paths TAKEN in the modes exercised below (no args, and --coverage) are observed.
-#     A branch gated on some other condition (`if [ "$CI" = true ]`) is invisible. Mitigation: every
-#     runner must produce at least one observed `bun test` in EVERY mode, and every candidate
-#     manifest script at least one, or the guard hard-fails;
+#   - only the code paths TAKEN in the invocations performed below are observed. Those are now the
+#     invocations package.json itself performs, plus the synthetic matrix — but a branch gated on
+#     something NEITHER supplies (a workflow step's own `env:` block, a runner-only environment
+#     variable set by the CI image) is still invisible. Mitigation: every runner must produce at
+#     least one observed `bun test` in EVERY synthetic mode AND in every replayed package.json
+#     invocation, and every candidate manifest script at least one, or the guard hard-fails;
 #   - it sees the RUNTIME value of --timeout, so it cannot tell a literal 30000 from a variable that
 #     happened to hold 30000 — and does not care, since the runtime value is what bun obeys;
-#   - a `bun` invoked by ABSOLUTE path bypasses the PATH stub. That direction fails closed: the run
-#     produces no `bun test` record and the vacuity test fails;
+#   - a `bun` reached through a PATH-BEARING name bypasses the PATH stub, so its argv can never be
+#     observed. This does NOT fail closed — an earlier version of this header claimed it did, and
+#     that claim was wrong: it holds only in isolation. With any sibling invocation in the same
+#     execution producing a good record, the run reads clean (observed: `bun test --timeout 30000
+#     src/ && /tmp/redbun/bun test src/` in apps/mcp-server's `test` script gave 9 passed, 0
+#     failed). The shape is therefore REFUSED by name, in the manifest half (test 2) and the runner
+#     half (tests 3 and 8) alike;
+#   - a `bun test` handed to another command AS AN ARGUMENT (`npx --yes concurrently "bun test
+#     src/"`) never runs: every stub records its argv and returns without executing anything. Again
+#     a sibling good record hides it (observed: 9 passed, 0 failed). Also REFUSED by name, in
+#     check_record, rather than analysed — running the nested command for real is exactly what the
+#     stubs exist to prevent;
 #   - the stubs make every intercepted command a no-op exit 0. If a runner ever needs one of those
 #     to do real work, the run misbehaves LOUDLY (non-zero exit or no record = FAIL);
 #   - a manifest body is executed by `/bin/bash -c`, not by bun's own script shell, and with a
@@ -101,9 +126,16 @@
 #     worth executing (executing every script is not an option: see `rm -rf node_modules` above).
 #     NOT reachable today; nothing in any manifest looks like this.
 #   - MANIFEST HALF — a package.json that is not the root and not inside a declared `workspaces`
-#     glob. Enumeration follows `workspaces` (today `apps/*`, `packages/*`), which covers all five
-#     manifests in the tree. A sixth added outside those globs would be invisible: reachable, and
-#     the fix is to declare it as a workspace.
+#     glob. This USED to be invisible (confirmed: a `tools/ci/package.json` whose `test` script ran
+#     `bun test src/`, invoked from test.yml with a `working-directory`, left the guard at 9 passed,
+#     0 failed). It is now REFUSED, not enumerated: test 2 lists every package.json `git ls-files`
+#     knows about — tracked and untracked-but-not-ignored — and fails on any that is outside the
+#     declared globs, naming it. Refusing was chosen over widening discovery because widening would
+#     make this guard's universe differ from the one bun and turbo build from: it would start
+#     policing scripts nothing in this repo runs, while leaving the actual defect (an undeclared
+#     workspace) in place. Refusing forces the declaration, which fixes both at once — and it
+#     covers the workflow `working-directory` variant at the root, with no YAML parsing.
+#     Consequence: the guard requires a git work tree, and says so if it does not have one.
 #   - MANIFEST HALF — `workspaces` glob shapes other than an exact path or `dir/*`. `**`, `?`, `[]`
 #     and `{}` are REFUSED with a named error rather than half-implemented. Not reachable today.
 #   - WORKFLOW TRIPWIRE — a HEREDOC BODY is skipped. test.yml feeds python programs to
@@ -130,20 +162,41 @@
 #     `env:` default is therefore caught, not missed.
 #   - A `bun test` inside a script file invoked by a workflow. apps/web/scripts is covered by tests
 #     1/3 (executed) and test 8 (tripwire); a script under any OTHER directory is not covered.
+#   - RUNNER HALF — a branch gated on env that NEITHER package.json nor the synthetic matrix
+#     supplies: a workflow step's own `env:` block, or a variable the CI image exports. Closing it
+#     would mean parsing workflow YAML, which is the thing this file was burned for twice. Barely
+#     reachable (no workflow step that runs the frontend suite sets any env today); if it ever
+#     appears, the fix is to move the branch into the package.json script, where it is replayed.
+#   - RUNNER HALF — a runner invoked from somewhere OTHER than an apps/web `test*` script. Only
+#     those are replayed. Test 8 is the tripwire for the neighbouring case (an apps/web/scripts
+#     *.sh that nothing in package.json reaches).
+#   - `echo "bun test src/" > run.sh` — an `echo` with no command separator that nonetheless
+#     produces a runnable command. Still skipped as a diagnostic, in workflows and in manifest
+#     script bodies alike. Adding `>` to the separator list would catch it, and was NOT done: a
+#     `echo ... >> "$GITHUB_OUTPUT"` line mentioning bun test would then become a CI-blocking false
+#     alarm, and this file's rule is that a false alarm in a repo-wide gate costs more than a
+#     barely-reachable false pass. Not present.
 #
 # CONTRACT:
 #   - test 1: the runner list is derived from apps/web/package.json (not hardcoded) and is non-empty;
 #   - test 2: the manifest/script universe is enumerated with JSON.parse over the root manifest plus
-#     each declared workspace member, `scripts` object only, and is non-empty in all three counts;
-#   - test 3: every runner, in every mode, exits 0 AND produced at least one observed `bun test` —
-#     PER (runner, mode), not merely somewhere in the aggregate. A mode gutted to `bun run lint;
-#     exit 0` used to pass on the aggregate floor alone (observed);
+#     each declared workspace member, `scripts` object only, and is non-empty in all three counts.
+#     It additionally (a) proves its own candidate selection against a fixture of bodies that must
+#     and must not be selected, (b) fails on any package.json in the tree that the declared
+#     `workspaces` globs do not cover, and (c) refuses any script body that reaches bun through a
+#     path;
+#   - test 3: every runner exits 0 AND produced at least one observed `bun test` — PER (runner,
+#     synthetic mode) and PER replayed package.json invocation, not merely somewhere in the
+#     aggregate. A mode gutted to `bun run lint; exit 0` used to pass on the aggregate floor alone
+#     (observed). At least one apps/web `test*` script must be found that launches a runner, or the
+#     replay verified nothing and the test fails;
 #   - test 4: every enumerated script whose body invokes `bun test` is EXECUTED and exits 0 AND
 #     produced at least one observed `bun test`;
 #   - test 5: every observed `bun test`, from either family, passes EXACTLY one --timeout
 #     (`--timeout N` or `--timeout=N`), an integer >= 15000. Two flags is a FAILURE, not something
 #     the guard resolves: bun honours the last, so `--timeout 30000 --timeout 100` reads as 30s to a
-#     human and runs at 100ms;
+#     human and runs at 100ms. It also fails on any observed command that was handed a `bun test`
+#     as an ARGUMENT, since that nested invocation never ran and was never observed;
 #   - test 6: every observed `bun run <target>` resolves — to a script this guard enumerated, or to
 #     a file on disk. An unresolvable target is a FAILURE, because it means the universe is wrong;
 #   - test 7: the SMALLEST observed value demonstrably survives a 5.6s test under real bun. A
@@ -160,6 +213,17 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WEB_DIR="$REPO_ROOT/apps/web"
 TIMEOUT_FLOOR=15000
 
+# ── shared textual shapes ──────────────────────────────────────────────────────────────────────
+# ONE definition of "this text invokes bun test", used by the manifest candidate selection, the
+# nested-invocation refusal and the workflow tripwire. A leading class that excludes only
+# [A-Za-z0-9_-] deliberately ALLOWS `/`, `.`, `~`, `(` and `"` before `bun`, so
+# `/opt/homebrew/bin/bun test`, `~/.bun/bin/bun test` and `$(bun test)` are all seen. The trailing
+# class stops `bun tests/` matching.
+BUN_TEST_RE='(^|[^A-Za-z0-9_-])bun[[:space:]]+test([^A-Za-z0-9_-]|$)'
+# The same, narrowed to a `bun` reached through a PATH-BEARING name. That is precisely the shape a
+# PATH stub CANNOT intercept, so it is refused rather than observed. See "finding 4" in the header.
+PATHED_BUN_TEST_RE='[^[:space:]]*/bun[[:space:]]+test([^A-Za-z0-9_-]|$)'
+
 pass=0
 fail=0
 
@@ -170,6 +234,49 @@ ok() {
 bad() {
     echo "  FAIL: $1"
     fail=$((fail + 1))
+}
+
+# line_is_diagnostic_only <command-text>
+# True when the text is nothing but an `echo`/`printf` that prints something. This repo's own
+# convention is `echo "::error::bun test failed"`, and flagging that was a CONFIRMED false alarm —
+# in workflows AND, as of this round, in package.json scripts, where a `"test:help": "echo 'run bun
+# test src/foo'"` was selected as a candidate, executed, produced no argv record and failed the
+# guard. The skip is withheld the moment the text also contains a separator, because
+# `echo starting && bun test src/` carries a real invocation and an unconditional first-word skip
+# would be a fresh false pass. Both directions are pinned by fixtures (tests 2 and 9).
+line_is_diagnostic_only() {
+    local body="$1" first
+    first="${body%%[[:space:]]*}"
+    case "$first" in
+        echo|printf) ;;
+        *) return 1 ;;
+    esac
+    case "$body" in
+        *'&&'*|*'||'*|*';'*|*'|'*|*'$('*|*'`'*) return 1 ;;
+    esac
+    return 0
+}
+
+# body_invokes_bun_test <script-body>
+# Candidate selection for the manifest half: does this body have a line that really runs bun test?
+# Whole-line comments and pure diagnostics do not count. Over-selection is harmless (the body is
+# executed and its argv judged); under-selection is the risk, and is named in the out-of-scope list.
+body_invokes_bun_test() {
+    local body="$1" line trimmed
+    while IFS= read -r line || [ -n "$line" ]; do
+        trimmed="${line#"${line%%[![:space:]]*}"}"
+        case "$trimmed" in '#'*) continue ;; esac
+        line_is_diagnostic_only "$trimmed" && continue
+        if printf '%s' "$trimmed" | /usr/bin/grep -qE -- "$BUN_TEST_RE"; then return 0; fi
+    done <<< "$body"
+    return 1
+}
+
+# has_pathed_bun_test <text>
+# A `bun test` reached through a path bypasses the PATH stub entirely, so nothing this guard does
+# can observe its argv. Refused, never analysed.
+has_pathed_bun_test() {
+    printf '%s' "$1" | /usr/bin/grep -qE -- "$PATHED_BUN_TEST_RE"
 }
 
 echo "=== check-frontend-test-timeout.test.sh ==="
@@ -248,11 +355,6 @@ const path = require("path");
 const root = process.env.BB_ROOT;
 const out = process.env.BB_OUT;
 
-// Same shape as the workflow tripwire's rule. A leading class that excludes only [A-Za-z0-9_-]
-// deliberately ALLOWS `/`, `.` and `~`, so `/opt/homebrew/bin/bun test` and `~/.bun/bin/bun test`
-// are seen. The trailing lookahead stops `bun tests/` matching.
-const BUN_TEST = /(?:^|[^A-Za-z0-9_-])bun[ \t]+test(?![A-Za-z0-9_-])/;
-
 function die(msg) {
   fs.writeFileSync(path.join(out, "error.txt"), msg + "\n");
   process.exit(3);
@@ -325,7 +427,7 @@ for (const g of globs) {
 
 const manLines = [];
 const scriptLines = [];
-const candLines = [];
+const allLines = [];
 let idx = 0;
 
 for (const m of manifests) {
@@ -342,17 +444,19 @@ for (const m of manifests) {
       die("manifest " + rel + " script '" + name + "' has a non-string body; refused rather than guessed.");
     }
     scriptLines.push(rel + "\t" + name);
-    if (!BUN_TEST.test(body)) continue;
+    // Every body is written out. Deciding WHICH bodies are worth executing is no longer done here:
+    // it moved to bash, so that the manifest half and the workflow tripwire share ONE definition of
+    // "this text invokes bun test" (including the diagnostic-echo skip that this JS lacked).
     idx += 1;
     const tag = String(idx).padStart(4, "0");
     fs.writeFileSync(path.join(out, "body." + tag), body);
-    candLines.push(tag + "\t" + rel + "\t" + name);
+    allLines.push(tag + "\t" + rel + "\t" + name);
   }
 }
 
 fs.writeFileSync(path.join(out, "manifests.txt"), manLines.join("\n") + (manLines.length ? "\n" : ""));
 fs.writeFileSync(path.join(out, "scripts.txt"), scriptLines.join("\n") + (scriptLines.length ? "\n" : ""));
-fs.writeFileSync(path.join(out, "candidates.txt"), candLines.join("\n") + (candLines.length ? "\n" : ""));
+fs.writeFileSync(path.join(out, "all.txt"), allLines.join("\n") + (allLines.length ? "\n" : ""));
 ENUM
 
 BB_ROOT="$REPO_ROOT" BB_OUT="$MAN_OUT" bun "$WORK/enum.js" >"$MAN_OUT/enum.log" 2>&1
@@ -371,11 +475,92 @@ if [ "$enum_rc" -ne 0 ]; then
 else
     man_count=$(/usr/bin/grep -c '[^[:space:]]' "$MAN_OUT/manifests.txt" 2>/dev/null || echo 0)
     script_count=$(/usr/bin/grep -c '[^[:space:]]' "$MAN_OUT/scripts.txt" 2>/dev/null || echo 0)
-    while IFS= read -r c; do
-        [ -n "$c" ] && CANDS+=("$c")
-    done < "$MAN_OUT/candidates.txt"
 
-    if [ "$man_count" -lt 2 ] || [ "$script_count" -lt 5 ] || [ "${#CANDS[@]}" -lt 2 ]; then
+    universe_problems=""
+
+    # ── candidate selection self-test ──────────────────────────────────────────────────────────
+    # Selection decides what test 4 executes, so a selector that silently matched nothing would
+    # look exactly like a tree with no bun test in it. Each POSITIVE line below must be selected;
+    # each NEGATIVE line must not. The negatives are confirmed false alarms (a diagnostic `echo`
+    # mentioning bun test was selected, executed, produced no argv record and failed the guard).
+    sel_problems=""
+    while IFS= read -r probe; do
+        [ -n "$probe" ] || continue
+        exp="${probe%%$'\t'*}"
+        txt="${probe#*$'\t'}"
+        if body_invokes_bun_test "$txt"; then got=yes; else got=no; fi
+        [ "$got" = "$exp" ] || sel_problems+="    expected select=$exp got=$got for body: $txt"$'\n'
+    done <<'SELFTEST'
+yes	bun test --timeout 30000 src/
+yes	echo starting && bun test src/
+yes	tsc --noEmit && bun test src/
+yes	echo done; bun test src/
+no	echo 'to debug a single file run bun test src/foo.test.ts'
+no	printf '%s\n' "bun test --timeout 0"
+no	# bun test src/ was moved into a runner
+no	bun run test:integration
+no	bunx playwright test --timeout 30000
+SELFTEST
+    [ -n "$sel_problems" ] && universe_problems+="  candidate selection self-test disagreed with its own fixtures:"$'\n'"$sel_problems"
+
+    # ── every package.json in the tree must be inside the declared workspaces ──────────────────
+    # FINDING 6, decided as a REFUSAL rather than as widened discovery. A manifest outside the
+    # `workspaces` globs (say a new tools/ci/package.json whose `test` script runs `bun test src/`,
+    # invoked from a workflow with a `working-directory`) was previously invisible: enumeration
+    # follows `workspaces`, the workflow only says `bun run test`, and the tripwire has nothing to
+    # flag. Confirmed by construction: adding exactly that pair left the guard at "9 passed, 0
+    # failed". The alternative — enumerating every manifest in the tree and checking it — was
+    # rejected because it would make this guard's universe DIFFER from the one bun and turbo build
+    # from, i.e. it would start policing scripts that nothing in this repo actually runs, while
+    # leaving the real defect (an undeclared workspace) in place. Refusing forces the declaration,
+    # which fixes both at once. The list is `git ls-files` over tracked AND untracked-but-not-
+    # ignored files, so a manifest added in the working tree is caught before it is ever committed.
+    declared=""
+    while IFS= read -r m; do
+        [ -n "$m" ] && declared+="$m"$'\n'
+    done < "$MAN_OUT/manifests.txt"
+
+    if ! (cd "$REPO_ROOT" && git rev-parse --is-inside-work-tree) >/dev/null 2>&1; then
+        universe_problems+="    $REPO_ROOT is not a git work tree, so the set of package.json files in it cannot be listed and an undeclared workspace manifest would be invisible."$'\n'
+    else
+        found_any=0
+        while IFS= read -r m; do
+            [ -n "$m" ] || continue
+            case "$m" in */node_modules/*|node_modules/*) continue ;; esac
+            found_any=1
+            if ! printf '%s' "$declared" | /usr/bin/grep -qxF -- "$m"; then
+                universe_problems+="    $m is a package.json this guard never enumerated, because it is not the root manifest and not inside any glob declared in the root 'workspaces' ($(tr '\n' ' ' < "$MAN_OUT/manifests.txt")). Its scripts are therefore unchecked, and a workflow step with a 'working-directory' pointing at it could run 'bun run test' at bun's 5000ms default with nothing noticing. Declare it in the root package.json 'workspaces' array (which also makes bun and turbo see it), or delete it."$'\n'
+            fi
+        done < <(cd "$REPO_ROOT" && git ls-files --cached --others --exclude-standard | /usr/bin/grep -E '(^|/)package\.json$')
+        if [ "$found_any" -eq 0 ]; then
+            universe_problems+="    'git ls-files' listed ZERO package.json files under $REPO_ROOT. This repo has several, so that is a broken listing, not a clean tree."$'\n'
+        fi
+    fi
+
+    # ── candidate selection proper, plus the pathed-bun refusal ────────────────────────────────
+    while IFS= read -r c; do
+        [ -n "$c" ] || continue
+        c_tag="${c%%$'\t'*}"
+        c_rest="${c#*$'\t'}"
+        c_man="${c_rest%%$'\t'*}"
+        c_name="${c_rest#*$'\t'}"
+        c_body=$(/bin/cat "$MAN_OUT/body.$c_tag")
+        # FINDING 4. A `bun` reached through a path is not the PATH stub, so executing this body
+        # would record nothing for it — and if any SIBLING invocation in the same body produced a
+        # good record, the run looks clean. (The header used to claim this "fails closed"; it does
+        # so only in isolation. Observed with `bun test --timeout 30000 src/ && /tmp/redbun/bun test
+        # src/`: 9 passed, 0 failed.) Refused instead of analysed.
+        if has_pathed_bun_test "$c_body"; then
+            universe_problems+="    $c_man scripts.$c_name invokes 'bun test' through a PATH-BEARING name. This guard observes argv by putting a recording 'bun' on PATH, which such an invocation bypasses entirely, so its --timeout can never be verified here - and a sibling invocation on the same line would make the run look clean. Call it as plain 'bun'. Body: $c_body"$'\n'
+            continue
+        fi
+        body_invokes_bun_test "$c_body" && CANDS+=("$c")
+    done < "$MAN_OUT/all.txt"
+
+    if [ -n "$universe_problems" ]; then
+        bad "the manifest/script universe cannot be trusted:"
+        printf '%s' "$universe_problems"
+    elif [ "$man_count" -lt 2 ] || [ "$script_count" -lt 5 ] || [ "${#CANDS[@]}" -lt 2 ]; then
         bad "the enumeration read $man_count manifest(s), $script_count script(s) and found ${#CANDS[@]} that invoke 'bun test'. This repo has five manifests and several bun test scripts, so these numbers mean the enumeration is broken, not that the tree is clean."
     else
         ok "$man_count manifest(s), $script_count script(s); ${#CANDS[@]} invoke 'bun test' and are executed in test 4"
@@ -390,15 +575,26 @@ fi
 SHIM_DIR="$WORK/shim"
 HERM_DIR="$WORK/hermetic"
 mkdir -p "$SHIM_DIR" "$HERM_DIR"
+#
+# ⚠ THE SEQUENCE NUMBER MUST BE CLAIMED ATOMICALLY. It used to be a read-increment-write of a
+# `.seq` file, which is a lost-update race the moment two stubs run at once — and they do, because
+# a script body may background its commands (`bun test a & bun test b & wait`). Measured on this
+# machine: 24 concurrent stub invocations against the `.seq` version produced EIGHT records, and an
+# end-to-end run with a backgrounded `bun test src/` (no --timeout) alongside twelve good ones let
+# the guard report "9 passed, 0 failed" on one run in three. Losing the BAD record is a false pass,
+# so the claim is now `set -C` + `>`, i.e. open(O_CREAT|O_EXCL) — atomic, and a bash builtin, which
+# matters because the manifest family runs under a PATH containing nothing but this stub directory.
 cat > "$WORK/.record" <<'STUB'
 #!/bin/bash
 set -u
 _name=${0##*/}
-_seq=0
-if [ -r "$BB_ARGV_DIR/.seq" ]; then read -r _seq < "$BB_ARGV_DIR/.seq"; fi
-_seq=$((_seq + 1))
-printf '%s\n' "$_seq" > "$BB_ARGV_DIR/.seq"
-printf '%s\0' "$_name" "$@" > "$BB_ARGV_DIR/$(printf 'rec.%04d' "$_seq")"
+_i=0
+while :; do
+    _i=$((_i + 1))
+    printf -v _f '%s/rec.%06d' "$BB_ARGV_DIR" "$_i"
+    if ( set -C; : > "$_f" ) 2>/dev/null; then break; fi
+done
+printf '%s\0' "$_name" "$@" > "$_f"
 exit 0
 STUB
 chmod +x "$WORK/.record"
@@ -419,6 +615,7 @@ MODE_ARGS=("" "--coverage")
 MODE_NAMES=("no args" "--coverage")
 
 timeout_problems=""
+nested_problems=""
 other_invocations=""
 delegation_records=""
 test_invocations=0
@@ -442,6 +639,20 @@ check_record() {
     local sub="" target=""
     [ "$n" -ge 2 ] && sub="${args[1]}"
     [ "$n" -ge 3 ] && target="${args[2]}"
+
+    # FINDING 3. Every command name in the stub set is a no-op that RECORDS AND RETURNS — it does
+    # not run whatever it was handed. So `npx --yes concurrently "bun test src/"` records `npx`,
+    # the nested `bun test` never executes, and if the same body also contains one good invocation
+    # the whole run reads clean (observed: 9 passed, 0 failed with exactly that body in
+    # apps/mcp-server's `test` script). Executing the nested command for real is not an option —
+    # the stubs exist precisely so nothing real runs — so this shape is REFUSED by name.
+    local ai
+    for (( ai = 1; ai < n; ai++ )); do
+        if printf '%s' "${args[ai]}" | /usr/bin/grep -qE -- "$BUN_TEST_RE"; then
+            nested_problems+="    $label: '$cmd' was handed a nested 'bun test' as the argument '${args[ai]}'. This guard stubs '$cmd' to record its argv and return without running anything, so that nested invocation never executed and its --timeout was never observed - and a sibling invocation in the same body would make the run look clean. Invoke bun test directly instead of wrapping it in another command."$'\n'
+            return 0
+        fi
+    done
 
     if [ "$cmd" = "bun" ] && [ "$sub" = "run" ]; then
         if [ -n "$target" ]; then
@@ -511,17 +722,31 @@ collect_records() {
         [ -n "$r" ] && recs+=("$r")
     done < <(find "$dir" -maxdepth 1 -type f -name 'rec.*' 2>/dev/null | sort)
     REC_COUNT="${#recs[@]}"
-    for r in "${recs[@]}"; do
+    # `for r in "${recs[@]}"` on an EMPTY array is an unbound-variable error under `set -u`, which
+    # killed the whole guard mid-run (observed: "line 507: recs[@]: unbound variable", exit 1, tests
+    # 5-9 never executed) the first time an executed body produced no records at all. That also made
+    # test 3's own zero-record branch unreachable dead code.
+    for r in ${recs[@]+"${recs[@]}"}; do
         k=$((k + 1))
         check_record "$r" "$label invocation #$k" "$man_rel"
     done
 }
 
 # ── Test 3: execute every runner, in every mode ────────────────────────────────────────────────
-echo "Test 3: each runner, in EVERY mode, executes under a recording 'bun', exits 0, and reaches 'bun test'"
+echo "Test 3: each runner executes under a recording 'bun' - both synthetically and exactly as package.json invokes it"
 
 vacuity_problems=""
 run_index=0
+
+# FINDING 4, runner half. A runner that reaches bun through a path is not intercepted by the PATH
+# stub, so its argv can never be observed; refused rather than analysed. (Test 8 covers the *.sh
+# files this loop does NOT execute.)
+for rel in "${RUNNERS[@]}"; do
+    if has_pathed_bun_test "$(/bin/cat "$WEB_DIR/$rel")"; then
+        vacuity_problems+="    $rel: invokes 'bun test' through a PATH-BEARING name. This guard observes argv by putting a recording 'bun' on PATH, which such an invocation bypasses entirely, so its --timeout can never be verified - and a sibling invocation elsewhere in the same run would make the result look clean. Call it as plain 'bun'."$'\n'
+    fi
+done
+
 for rel in "${RUNNERS[@]}"; do
     mode_i=0
     while [ "$mode_i" -lt "${#MODE_ARGS[@]}" ]; do
@@ -558,13 +783,78 @@ for rel in "${RUNNERS[@]}"; do
     done
 done
 
+# ── Test 3, phase B: replay the invocations package.json ACTUALLY performs ─────────────────────
+#
+# FINDINGS 1 AND 2. The loop above invokes each runner DIRECTLY, with a hardcoded mode matrix of ""
+# and "--coverage". That is a guess about how the runner is called, and both halves of the guess
+# were falsifiable:
+#
+#   - ENV. `"test:ci": "NODE_ENV=production bash scripts/test-regular.sh --coverage && ..."` sets
+#     env the direct invocation never sets, so a runner branch gated on it is invisible. Observed
+#     with a `BB_FAST` branch that dropped --timeout: guard 9 passed, 0 failed, while `bun run
+#     test:ci` — what CI runs — took the flagless path.
+#   - ARGUMENT SHAPE. `--coverage=lcov` is not `--coverage`. Observed with a `--coverage=*` branch
+#     that dropped --timeout: guard 9 passed, 0 failed.
+#
+# Neither is fixable by adding more guessed modes; the fix is to stop guessing. Each apps/web
+# `test*` script whose body launches a runner is now EXECUTED AS ITS OWN BODY — same cwd, same env
+# prefixes, same argument shapes, same `&&` chaining — under the recording stub. Whatever env or
+# argument branch CI takes is therefore the branch observed here, by construction. The synthetic
+# matrix above is kept as an ADDITIONAL per-runner floor: it is what catches a runner that stops
+# running tests in a mode nothing currently uses.
+#
+# This half runs under PATH="$SHIM_DIR:$PATH" (not the hermetic PATH), because a runner needs real
+# find/grep/sed/wc to do its work; `bash` is deliberately NOT stubbed so the runner really runs.
+invoker_count=0
+if [ -f "$MAN_OUT/all.txt" ]; then
+    while IFS= read -r c; do
+        [ -n "$c" ] || continue
+        i_tag="${c%%$'\t'*}"
+        i_rest="${c#*$'\t'}"
+        i_man="${i_rest%%$'\t'*}"
+        i_name="${i_rest#*$'\t'}"
+        [ "$i_man" = "apps/web/package.json" ] || continue
+        case "$i_name" in test*) ;; *) continue ;; esac
+        case "$i_name" in *e2e*) continue ;; esac
+        i_body=$(/bin/cat "$MAN_OUT/body.$i_tag")
+
+        launches=0
+        for rel in "${RUNNERS[@]}"; do
+            case "$i_body" in *"$rel"*) launches=1 ;; esac
+        done
+        [ "$launches" -eq 1 ] || continue
+
+        invoker_count=$((invoker_count + 1))
+        run_index=$((run_index + 1))
+        inv_dir="$WORK/inv.$i_tag"
+        mkdir -p "$inv_dir"
+        ilog="$inv_dir/output.log"
+
+        ( cd "$WEB_DIR" && BB_ARGV_DIR="$inv_dir" PATH="$SHIM_DIR:$PATH" /bin/bash -c "$i_body" ) >"$ilog" 2>&1
+        irc=$?
+
+        ctx_test_invocations=0
+        collect_records "$inv_dir" "$i_man scripts.$i_name (as package.json invokes it)" "$i_man"
+
+        if [ "$irc" -ne 0 ]; then
+            vacuity_problems+="    $i_man scripts.$i_name: executing the body the way package.json does exited $irc, so its argv cannot be trusted. Body: $i_body -- last output: $(tail -3 "$ilog" | tr '\n' ' ')"$'\n'
+        elif [ "$ctx_test_invocations" -eq 0 ]; then
+            vacuity_problems+="    $i_man scripts.$i_name: launches a runner but produced $REC_COUNT argv record(s) and NOT ONE was a 'bun test'. This is the invocation CI performs, so nothing about its timeout was verified. Body: $i_body"$'\n'
+        fi
+    done < "$MAN_OUT/all.txt"
+fi
+
+if [ "$invoker_count" -eq 0 ]; then
+    vacuity_problems+="    no apps/web 'test*' script was found that launches any of the discovered runner(s) (${RUNNERS[*]}). The runners are then only ever invoked with this guard's GUESSED modes, and an env-gated or argument-gated branch that CI takes would be invisible. Either package.json stopped launching them, or this matching is broken."$'\n'
+fi
+
 if [ -n "$vacuity_problems" ]; then
     bad "runner executions that cannot be trusted:"
     printf '%s' "$vacuity_problems"
 elif [ "$test_invocations" -lt 2 ]; then
     bad "only $test_invocations 'bun test' invocation(s) observed across $run_index runner execution(s) - both runners are expected to run bun test, so this is a broken observation, not a clean one"
 else
-    ok "$run_index runner execution(s) all exited 0 and each reached 'bun test'; $test_invocations invocation(s) observed"
+    ok "$run_index runner execution(s) all exited 0 and each reached 'bun test' ($invoker_count of them replaying package.json's own invocation, env prefixes and argument shapes included); $test_invocations invocation(s) observed"
 fi
 
 # ── Test 4: execute every enumerated script that invokes bun test ──────────────────────────────
@@ -611,9 +901,12 @@ else
 fi
 
 # ── Test 5: judge every observed bun test ──────────────────────────────────────────────────────
-echo "Test 5: every observed 'bun test' passes exactly one --timeout >= $TIMEOUT_FLOOR"
+echo "Test 5: every observed 'bun test' passes exactly one --timeout >= $TIMEOUT_FLOOR, and none is hidden inside another command"
 if [ "$test_invocations" -eq 0 ]; then
     bad "no 'bun test' invocation was observed anywhere, so there is nothing to check - treated as a failure, not a pass"
+elif [ -n "$nested_problems" ]; then
+    bad "'bun test' handed to another command as an argument, so its argv could never be observed:"
+    printf '%s' "$nested_problems"
 elif [ -n "$timeout_problems" ]; then
     bad "bun test invocations with an unusable timeout:"
     printf '%s' "$timeout_problems"
@@ -712,12 +1005,11 @@ fi
 # workflow must not run `bun test` itself.
 echo "Test 9: no workflow invokes 'bun test' directly (delegate via 'bun run <script>' instead)"
 
-# Same leading class as the enumeration's: excluding only [A-Za-z0-9_-] deliberately ALLOWS `/`,
-# `.`, `~`, `(`, `"` before `bun`, so `/opt/homebrew/bin/bun test`, `~/.bun/bin/bun test` and
-# `$(bun test)` are all seen. The old class excluded `/`, `.` and `-`, which made every pathed
-# invocation invisible (observed: guard exit 0 with `/opt/homebrew/bin/bun test src/` in a workflow).
-WF_BUN_TEST_RE='(^|[^A-Za-z0-9_-])bun[[:space:]]+test([^A-Za-z0-9_-]|$)'
-
+# The shape is $BUN_TEST_RE, defined once at the top and shared with the manifest half. Excluding
+# only [A-Za-z0-9_-] before `bun` deliberately ALLOWS `/`, `.`, `~`, `(`, `"`, so
+# `/opt/homebrew/bin/bun test`, `~/.bun/bin/bun test` and `$(bun test)` are all seen. The old class
+# excluded `/`, `.` and `-`, which made every pathed invocation invisible (observed: guard exit 0
+# with `/opt/homebrew/bin/bun test src/` in a workflow).
 wf_findings=""
 wf_lines=0
 
@@ -754,14 +1046,7 @@ scan_workflow() {
         # unconditional first-word skip would have handed back a fresh false pass.
         first="${body%%[[:space:]]*}"
         case "$first" in '#'*) continue ;; esac
-        case "$first" in
-            echo|printf)
-                case "$body" in
-                    *'&&'*|*'||'*|*';'*|*'|'*|*'$('*|*'`'*) ;;
-                    *) continue ;;
-                esac
-                ;;
-        esac
+        line_is_diagnostic_only "$body" && continue
 
         # A `\` continuation whose last word is `bun`: the subcommand is on the next line.
         case "$line" in
@@ -787,7 +1072,7 @@ scan_workflow() {
                 ;;
         esac
 
-        if printf '%s' "$body" | /usr/bin/grep -qE -- "$WF_BUN_TEST_RE"; then
+        if printf '%s' "$body" | /usr/bin/grep -qE -- "$BUN_TEST_RE"; then
             wf_findings+="    $pfx:$lineno: a workflow must not invoke 'bun test' directly. A raw invocation carries whatever timeout is typed on that line, and nothing executes it here, so this guard cannot observe the argv bun really receives - which is exactly how apps/mcp-server's 283-test suite ran at the 5s default in both test.yml and deploy-production.yml. Delegate instead: 'bun run <script>', and put the --timeout in the package.json script, where tests 2/4/5 execute it and read the real argv. Line: $line"$'\n'
         fi
     done < "$f"
