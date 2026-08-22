@@ -22,6 +22,13 @@ var (
 	// ErrAccountBatchTenantMismatch is returned when a batch write is handed a row whose UserID
 	// is not the acting user. See CreateBatch (issue #1566).
 	ErrAccountBatchTenantMismatch = errors.New("account batch contains a row belonging to another user")
+
+	// ErrAccountFilterAsOfConflict is returned when AccountFilterOptions.AsOf is combined with
+	// ReplacedOnly or AllStatuses. Those ask contradictory questions — "which accounts were LIVE
+	// at instant T" versus "which accounts are replaced right now" / "every account regardless of
+	// status" — and there is no defensible silent winner between them, so the resolver refuses
+	// rather than picking one. Issue #1569.
+	ErrAccountFilterAsOfConflict = errors.New("AccountFilterOptions.AsOf cannot be combined with ReplacedOnly or AllStatuses")
 )
 
 // FingerprintOwnership holds information about who owns a fingerprint and the state of their linked item.
@@ -59,6 +66,23 @@ type AccountFilterOptions struct {
 	// is taken from the resolved accountStatusScope, so the counter cannot disagree with the
 	// predicate the query actually ran (which it did for ReplacedOnly+AllStatuses).
 	AllStatuses bool
+
+	// AsOf resolves the account universe as it REALLY WAS at an instant, from the recorded
+	// intervals in account_status_history, instead of guessing it from current
+	// accounts.status. It replaces the active-only default: `a.status = 'active'` becomes
+	// "an 'active' interval for this account covered AsOf", with intervals half-open
+	// [valid_from, valid_to) — live AT valid_from, NOT live at valid_to.
+	//
+	// This is what AllStatuses was an approximation of. AllStatuses answers "ever existed in
+	// any status", which over-includes (an account opened AFTER the instant counts) and
+	// under-explains (it cannot say the account was live then, only that it exists now). A
+	// baseline computed over it is right only because the balance comes from a snapshot that
+	// happens to exist. AsOf is the recorded truth; prefer it for any new point-in-time read.
+	//
+	// Combining AsOf with ReplacedOnly or AllStatuses is a programming error and returns
+	// ErrAccountFilterAsOfConflict — see resolveAccountStatusScope for the full precedence
+	// table. Issue #1569.
+	AsOf *time.Time
 }
 
 // AccountRepository defines the interface for account data access
@@ -98,6 +122,18 @@ type AccountRepository interface {
 	// is paired with. Callers must NOT use this for a "current" figure — the product rule is
 	// that current totals include only linked/active accounts. Issue #1537.
 	GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error)
+
+	// GetForHouseholdScopeLiveAsOf is GetForHouseholdScope with the `a.status = 'active'`
+	// predicate REPLACED by recorded liveness at asOf (account_status_history), rather than
+	// removed. It is the correct source for a household baseline "as of" a past date and
+	// supersedes GetForHouseholdScopeAllStatuses for that job: all-statuses answers "ever
+	// existed", which wrongly admits accounts opened AFTER asOf, while this answers "was live
+	// then". Same asOf contract as GetForHouseholdScope — it must match the asOf of the
+	// GetSnapshotsAsOfForHousehold call it is paired with. Callers must NOT use this for a
+	// "current" figure: the product rule is that current totals include only linked/active
+	// accounts, and passing asOf=now here would readmit an account removed moments ago.
+	// Issue #1569.
+	GetForHouseholdScopeLiveAsOf(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error)
 
 	// GetAccountsWithInstitution retrieves all accounts for a user with institution names
 	// This method performs a LEFT JOIN with linked_items to include institution_name
@@ -510,6 +546,20 @@ func (r *accountRepository) GetForHouseholdScopeAllStatuses(ctx context.Context,
 	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, householdAllStatuses)
 }
 
+// GetForHouseholdScopeLiveAsOf is GetForHouseholdScope with the unconditional `a.status = 'active'`
+// predicate REPLACED by recorded liveness at asOf, read from account_status_history.
+//
+// This is the method GetForHouseholdScope's asOf argument always implied but never delivered: that
+// read threads asOf into the joint-account dedup CTE and then filters on CURRENT status anyway, so
+// a member's account disconnected since the cutoff is absent from a universe that claims to be
+// "as of" a date before the disconnection. GetForHouseholdScopeAllStatuses was #1537's workaround
+// for that (take every status and let the snapshot decide); this is the recorded answer, and it
+// additionally EXCLUDES accounts that did not exist yet at asOf, which all-statuses could not.
+// Issue #1569.
+func (r *accountRepository) GetForHouseholdScopeLiveAsOf(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, householdLiveAsOf)
+}
+
 // householdStatusFilter selects which account statuses a household-scope read returns. It is a
 // typed flag rather than a SQL fragment on purpose: this helper used to take the WHERE clause
 // itself as a string and splice it in, which was safe only for as long as every call site was
@@ -523,15 +573,27 @@ const (
 	// householdAllStatuses applies no status predicate, so active, replaced AND expired chain
 	// members resolve (GetForHouseholdScopeAllStatuses).
 	householdAllStatuses
+	// householdLiveAsOf restricts to accounts that account_status_history records as having been
+	// 'active' at the query's asOf instant (GetForHouseholdScopeLiveAsOf). Issue #1569.
+	householdLiveAsOf
 )
 
-// statusClause renders the SQL predicate for this filter, appended after `WHERE TRUE`. The two
-// strings are the only status SQL either household-scope read can produce.
+// statusClause renders the SQL predicate for this filter, appended after `WHERE TRUE`. These three
+// strings are the only status SQL any household-scope read can produce.
+//
+// householdLiveAsOf binds $4 — NOT a newly appended argument. getForHouseholdScope already appends
+// asOf as the fourth arg after householdScopeArgs' three (requesting user, household, member IDs),
+// and householdAccountsCTEForBalancesAsOf already reads it as $4. Adding asOf to householdScopeArgs
+// as well would double-bind it and shift every other placeholder. Issue #1569.
 func (f householdStatusFilter) statusClause() string {
-	if f == householdAllStatuses {
+	switch f {
+	case householdAllStatuses:
 		return ""
+	case householdLiveAsOf:
+		return accountLiveAsOfPredicate("a", 4)
+	default:
+		return " AND a.status = 'active'"
 	}
-	return " AND a.status = 'active'"
 }
 
 // householdScopeQuery builds the household-scope account SELECT. Pure and separate from the
@@ -894,34 +956,79 @@ const (
 	accountStatusReplacedOnly
 	// accountStatusAny is AllStatuses: no status predicate (active, replaced AND expired).
 	accountStatusAny
+	// accountStatusLiveAsOf is AsOf: recorded liveness at an instant, read from
+	// account_status_history rather than inferred from the current accounts.status. Issue #1569.
+	accountStatusLiveAsOf
 )
 
-// resolveAccountStatusScope maps the (independent, non-exclusive) status booleans to exactly one
+// resolveAccountStatusScope maps the (independent, non-exclusive) status options to exactly one
 // predicate. The precedence is MOST SPECIFIC WINS, and it is deliberate rather than incidental:
 //
-//	ReplacedOnly > AllStatuses > IncludeReplaced > default(active-only)
+//	AsOf(+IncludeReplaced) > ReplacedOnly > AllStatuses > IncludeReplaced > default(active-only)
 //
-// The only combination where that is observable is ReplacedOnly+AllStatuses, which is
-// contradictory ("only replaced" vs "no status filter at all"). It resolves to replaced-only —
-// i.e. setting AllStatuses alongside ReplacedOnly does NOT widen the result, it is ignored, and
-// active rows are dropped. No caller does this today (the sole ReplacedOnly caller is
-// accountService.GetAccountsFiltered's StatusFilter=="replaced" branch, which never sets
-// AllStatuses); it is documented and pinned by test rather than left to be rediscovered.
-func resolveAccountStatusScope(opts AccountFilterOptions) accountStatusScope {
+// with two combinations REJECTED outright rather than resolved. The full table:
+//
+//	AsOf set, ReplacedOnly set      -> ErrAccountFilterAsOfConflict
+//	AsOf set, AllStatuses set       -> ErrAccountFilterAsOfConflict
+//	AsOf set (alone or with IncludeReplaced) -> accountStatusLiveAsOf
+//	ReplacedOnly                    -> accountStatusReplacedOnly
+//	AllStatuses                     -> accountStatusAny
+//	IncludeReplaced                 -> accountStatusActiveAndReplaced
+//	none of the above               -> accountStatusActiveOnly
+//
+// Why AsOf is rejected against ReplacedOnly/AllStatuses instead of being ranked against them: both
+// ask a question about CURRENT status ("which are replaced right now", "all of them regardless"),
+// while AsOf asks a question about a PAST instant. Either silent winner would return a universe
+// the caller did not ask for, and the whole point of #1569 is to stop answering point-in-time
+// questions with current-state guesses. IncludeReplaced is different: it merely widens the
+// active-only default, and a since-replaced account is already covered by AsOf — its own 'active'
+// interval was open at any instant before the re-link — so AsOf subsumes it rather than
+// contradicting it.
+//
+// The pre-existing ReplacedOnly+AllStatuses case remains as it was: contradictory ("only replaced"
+// vs "no status filter at all") and resolved to replaced-only — setting AllStatuses alongside
+// ReplacedOnly does NOT widen the result, it is ignored, and active rows are dropped. No caller
+// does this today (the sole ReplacedOnly caller is accountService.GetAccountsFiltered's
+// StatusFilter=="replaced" branch, which never sets AllStatuses); it is documented and pinned by
+// test rather than left to be rediscovered. It is NOT promoted to an error here because doing so
+// would change the behaviour of a path this issue is not touching.
+func resolveAccountStatusScope(opts AccountFilterOptions) (accountStatusScope, error) {
+	if opts.AsOf != nil {
+		if opts.ReplacedOnly || opts.AllStatuses {
+			return 0, ErrAccountFilterAsOfConflict
+		}
+		return accountStatusLiveAsOf, nil
+	}
 	switch {
 	case opts.ReplacedOnly:
-		return accountStatusReplacedOnly
+		return accountStatusReplacedOnly, nil
 	case opts.AllStatuses:
-		return accountStatusAny
+		return accountStatusAny, nil
 	case opts.IncludeReplaced:
-		return accountStatusActiveAndReplaced
+		return accountStatusActiveAndReplaced, nil
 	default:
-		return accountStatusActiveOnly
+		return accountStatusActiveOnly, nil
 	}
 }
 
-// clause renders the SQL status predicate, appended after `WHERE a.user_id = $1`.
-func (s accountStatusScope) clause() string {
+// accountLiveAsOfPredicate renders the recorded-liveness EXISTS predicate for an account aliased
+// `alias`, testing the instant bound to placeholder $asOfPH. Shared by the personal
+// (accountStatusScope.clause) and household (householdStatusFilter.statusClause) reads so the two
+// cannot drift: a difference between them would mean the personal and household dashboards
+// disagreed about which accounts existed on the same day. Half-open [valid_from, valid_to) —
+// see migration 000151. Issue #1569.
+func accountLiveAsOfPredicate(alias string, asOfPH int) string {
+	return fmt.Sprintf(
+		" AND EXISTS (SELECT 1 FROM account_status_history h"+
+			" WHERE h.account_id = %s.id AND h.status = 'active'"+
+			" AND h.valid_from <= $%d AND (h.valid_to IS NULL OR h.valid_to > $%d))",
+		alias, asOfPH, asOfPH)
+}
+
+// clause renders the SQL status predicate, appended after `WHERE a.user_id = $1`. asOfPH is the
+// argument placeholder holding the as-of instant; it is read ONLY by accountStatusLiveAsOf, so
+// every other scope is safe to render with asOfPH = 0 (no as-of argument bound).
+func (s accountStatusScope) clause(asOfPH int) string {
 	switch s {
 	case accountStatusReplacedOnly:
 		return " AND a.status = 'replaced'"
@@ -929,6 +1036,8 @@ func (s accountStatusScope) clause() string {
 		return ""
 	case accountStatusActiveAndReplaced:
 		return " AND a.status IN ('active', 'replaced')"
+	case accountStatusLiveAsOf:
+		return accountLiveAsOfPredicate("a", asOfPH)
 	default:
 		return " AND a.status = 'active'"
 	}
@@ -942,6 +1051,8 @@ func (s accountStatusScope) clause() string {
 //
 //   - accountStatusAny (AllStatuses) drops nothing, so it must stay silent — that decision is
 //     already pinned by an integration test (#1537 round 10).
+//   - accountStatusLiveAsOf (AsOf) resolves the universe as it really was at its instant, so it
+//     drops nothing that was live then — nothing to warn about, same reasoning as AllStatuses.
 //   - accountStatusReplacedOnly drops ACTIVE rows, not replaced ones, so by the metric's own
 //     definition it is also silent. Before this change it INCREMENTED, labelling a replaced-only
 //     query as the "accounts_list active-only path" in the family list — a PRE-EXISTING mislabel
@@ -963,7 +1074,10 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	// active rows), while the canary condition `!IncludeReplaced && !AllStatuses` read AllStatuses
 	// and stayed silent — a fail-open in the counter whose job is catching fail-opens. Deriving one
 	// from the other makes that class of disagreement unrepresentable (Issue #1537).
-	statusScope := resolveAccountStatusScope(opts)
+	statusScope, err := resolveAccountStatusScope(opts)
+	if err != nil {
+		return nil, err
+	}
 	if statusScope.dropsReplaced() {
 		observability.AccountsReplacedFiltered.WithLabelValues("accounts_list").Inc()
 	}
@@ -972,14 +1086,22 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		hiddenClause = " AND a.is_hidden = FALSE"
 	}
 
-	statusClause := statusScope.clause()
-
 	userAccountClause := ""
 	args := []any{userID}
 	if opts.UserAccountID != "" {
 		args = append(args, opts.UserAccountID)
 		userAccountClause = " AND a.user_account_id = $2"
 	}
+
+	// Appended AFTER the optional user_account_id arg so its placeholder is whatever position it
+	// actually lands in ($2 or $3), never a hardcoded number that silently shifts when the other
+	// optional filter is present.
+	asOfPH := 0
+	if statusScope == accountStatusLiveAsOf {
+		args = append(args, *opts.AsOf)
+		asOfPH = len(args)
+	}
+	statusClause := statusScope.clause(asOfPH)
 
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,

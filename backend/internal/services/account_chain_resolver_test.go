@@ -96,6 +96,10 @@ func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScopeAllStatuses(
 	return nil, nil
 }
 
+func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScopeLiveAsOf(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // ListActiveByUser
 // ---------------------------------------------------------------------------
