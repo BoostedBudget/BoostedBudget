@@ -85,12 +85,16 @@ type AuditLogRepository interface {
 	// ⚠⚠ THIS IS SAFE ONLY WHILE THE ACTOR (audit_logs.user_id) IS WRITTEN AS NULL. READ THIS
 	// BEFORE IMPLEMENTING ISSUE #1506.
 	//
-	// Its one production caller is DeleteUserCascade, which holds `FOR UPDATE` on the subject's
-	// users row for the whole transaction. Because user_id is NULL, fk_audit_logs_user_id is
+	// Its original production caller is DeleteUserCascade, which holds `FOR UPDATE` on the
+	// subject's users row for the whole transaction. Issue #1569, Task 6 added two more callers,
+	// AccountRepository.PurgeAccount and LinkedItemRepository.PurgeLinkedItem — neither takes a
+	// lock on any users row (their FOR UPDATE is on accounts/linked_items respectively), so the
+	// safety argument below is unaffected; it is restated per-caller in each of their own doc
+	// comments rather than re-derived here. Because user_id is NULL, fk_audit_logs_user_id is
 	// satisfied under MATCH SIMPLE and its constraint trigger short-circuits before it reads or
 	// locks anything in users — this INSERT therefore requests NO `FOR KEY SHARE` on any users row,
 	// and no lock cycle involving users is even expressible. That, and nothing else, is why this
-	// write can live inside that transaction.
+	// write can live inside any of these transactions.
 	//
 	// #1506 proposes giving AuditLogger an explicit actor. The instant a non-NULL user_id reaches
 	// THIS method, the FK check fires and takes `FOR KEY SHARE` on that actor's users row — while a

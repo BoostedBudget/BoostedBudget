@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff, Landmark, Archive } from 'lucide-react'
 import { getAccountTypeLabel } from './utils'
 import { toast } from 'sonner'
+import { mutationFailureMessage } from '@/features/admin/lib/mutationFailureMessage'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { PlaidLinkButton } from './PlaidLinkButton'
@@ -177,14 +178,13 @@ export function AccountsPage() {
       await refetchAccounts()
     } catch (err) {
       console.error('Failed to purge account:', err)
-      // Issue #1569, Task 6: a savings goal referencing this account surfaces as a 409 with an
-      // actionable message from the backend (repository.ErrPurgeBlockedBySavingsGoal) — show it
-      // rather than a generic failure so the user knows exactly what to do next.
-      const message =
-        err instanceof Error && err.message
-          ? err.message
-          : 'Failed to permanently delete account. Please try again.'
-      toast.error(message)
+      // Issue #1569, Task 6: a savings goal referencing this account surfaces as a 409 whose
+      // actionable text (repository.ErrPurgeBlockedBySavingsGoal's mapped message) lives at
+      // `err.response.data.detail`, NOT `err.message` (axios's `err.message` for an HTTP error is
+      // the useless "Request failed with status code 409"). mutationFailureMessage is the existing
+      // shared extractor for this exact RFC 9457 shape (already used by the DLQ and Plaid-orphan
+      // admin surfaces) — reused rather than reimplemented so this bug class can't recur here.
+      toast.error(mutationFailureMessage(err))
     }
   }
 
@@ -223,12 +223,24 @@ export function AccountsPage() {
   function buildPurgeDescription(account: Account): React.ReactNode {
     const displayName = account.nickname || account.official_name || account.name
     const maskPart = account.mask ? ` (...${account.mask})` : ''
+    const isInvestment = account.type === 'investment'
+    const isLast = isLastAccountForItem(account)
     return (
       <span>
         You are about to permanently delete <strong data-ph-mask>{displayName}{maskPart}</strong> and all of its balance history, holdings, and liabilities.
         <br /><strong>This cannot be undone.</strong>
-        <br />Your transactions will NOT be deleted — if another connection to this same account exists, they will continue to appear there; otherwise they remain visible with no linked account.
+        {isInvestment && (
+          <>
+            <br /><strong>Its investment transactions (buys, sells, dividends) will also be permanently deleted</strong> — unlike bank transactions, they have no independent existence apart from the account.
+          </>
+        )}
+        <br />Your bank transactions will NOT be deleted — if another connection to this same account exists, they will continue to appear there; otherwise they remain visible with no linked account.
         <br />If a savings goal still tracks this account, the purge will be refused until you delete or re-link that goal.
+        {isLast && (
+          <>
+            <br />The bank connection to <strong data-ph-mask>{account.institution_name}</strong> will also be disconnected.
+          </>
+        )}
       </span>
     )
   }

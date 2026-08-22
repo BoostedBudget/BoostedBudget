@@ -94,7 +94,7 @@ const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
  * derives its class from `capability.confirmationRequired`, which is exactly the
  * field capability-manifest.ts's `excluded()` helper hard-codes to `false` for
  * every excluded entry. Reading it on the denied path therefore reported a denied
- * `deleteAccount` or `grantTrial` as `operation_class = 'read'` — the manifest has
+ * `purgeAccount` or `grantTrial` as `operation_class = 'read'` — the manifest has
  * no opinion about excluded operations to read, so asking it produces a confident
  * wrong answer rather than an absent one. The call never executes (host-proxy.ts
  * throws on `entry.excluded` before any confirmation gate), so what was at stake
