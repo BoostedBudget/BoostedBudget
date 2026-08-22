@@ -75,7 +75,13 @@
 #     `bun` binary is a hard FAIL, never a skip;
 #   - test 6: no *.sh under apps/web/scripts that is NOT executed here contains a `bun test` at all —
 #     that is the only place a text scan survives, and only as a "you added an unverifiable runner"
-#     tripwire whose failure direction is a false ALARM, never a false pass.
+#     tripwire whose failure direction is a false ALARM, never a false pass;
+#   - test 7: no `run:` block in any .github/workflows/*.yml OR *.yaml executes a `bun test` without
+#     exactly one adequate --timeout;
+#   - test 8: no `scripts` entry in any package.json in the repo does either — following `bun run
+#     <name>` delegations within the same package.json rather than flagging them;
+#   - test 9: tests 7 and 8's scanner is itself exercised against SYNTHETIC FIXTURES, one per known
+#     failure mode, each asserted to be flagged (or, for the negative controls, left clean).
 #
 # The floor is 15000, not "above bun's 5000 default": `--timeout 6000` would clear both a >5000 check
 # and the 5.6s probe, yet the CI failure that started this took 9910ms. The exact value 30000 is
@@ -96,9 +102,77 @@
 # The same raw invocation was in deploy-production.yml, so a loaded production deploy could have
 # failed identically.
 #
-# Test 7 now scans every .github/workflows/*.yml for raw `bun test` invocations — the scope this file
-# should have had from the start. The defect is "a bun suite running at the default", not "an
-# apps/web script missing a flag".
+# Tests 7-9 now cover every place a `bun test` command line is WRITTEN DOWN rather than executed —
+# workflow `run:` blocks and package.json `scripts` — because the defect is "a bun suite running at
+# the default", not "an apps/web script missing a flag".
+#
+# ═══ WHY TESTS 7-9 ARE ALLOWED TO PARSE TEXT, AND HOW THEY ARE KEPT HONEST ═════════════════════
+#
+# The observe-don't-parse design above cannot reach these two surfaces: a workflow step is executed
+# by GitHub, and a package.json script by bun's own runner, so there is no runner script this guard
+# can invoke under a PATH shim to watch the argv. Reading the text is the only option left. The
+# first attempt at that (#1537 round 17, test 7 as originally written) shipped FIVE defects, all
+# adversarially found, ALL of them false PASSES over a suite really running at 100ms or 5000ms:
+#
+#   1. it globbed `*.yml` only, so deploy-to-staging.yaml — a real deploy workflow — was never read;
+#   2. it read one invocation per PHYSICAL LINE, so `bun test --timeout 30000 && bun test src/` was
+#      green on the strength of the first command while the second ran at the 5s default;
+#   3. it never saw a `run: |` block whose command was continued with `bun \` + newline, nor a
+#      folded scalar (`>`) that put `bun` and `test` on separate source lines;
+#   4. its greedy `sed -n 's/.*--timeout[ =]*\([0-9]*\).*/\1/p'` happily read the number out of a
+#      trailing COMMENT: `bun test --timeout 100 # --timeout 30000` reported 30000 and passed;
+#   5. it did not look at package.json at all, where three apps/web scripts and two apps/mcp-server
+#      scripts were running `bun test` with no flag whatsoever.
+#
+# Every one of those five shipped for exactly one reason: the check only ever ran against the live
+# repository, so its FAILURE MODES were never exercised. Nothing in the suite could tell "the tree
+# is clean" apart from "the scanner is blind". That is what test 9 fixes, and it is the structural
+# lesson, not the five individual bugs: a text scanner without fixtures is an untested function.
+#
+# The scanner is therefore built to shrink the parsing surface as far as it can go, and to fail
+# LOUDLY wherever it cannot:
+#
+#   - YAML is parsed by `Bun.YAML.parse`, never by a line regex. Block scalars, folded scalars and
+#     multi-line quoted scalars arrive already resolved into one shell snippet, which is what makes
+#     defects 1/3 unrepeatable by construction rather than by another regex. JSON likewise via
+#     JSON.parse. (The same reasoning as test 1, which parses package.json with bun, not a regex.)
+#   - comment stripping tracks quote state across the WHOLE snippet, not per line — the exact bug
+#     that produced a demonstrated false pass in rounds 1-9 — and treats `#` as a comment only when
+#     it is unquoted AND at start-of-text or preceded by whitespace, so `${VAR#refs/heads/}` and
+#     `-t "issue #42"` are left intact. Both directions have fixtures in test 9.
+#   - a `--timeout` value that is not a literal integer (`--timeout $T`, `--timeout ${{ env.T }}`)
+#     is REFUSED, not assumed adequate. A text scan cannot resolve a variable, so the only safe
+#     verdict is a false alarm, which someone fixes by writing the literal.
+#   - an unterminated quote is reported rather than parsed through, and an unparseable workflow or
+#     package.json is a FINDING, not a skipped file.
+#   - the timeout rules themselves (exactly one flag, integer, >= floor) are the same rules
+#     check_record() applies to observed argv, so the two halves of this guard cannot drift apart.
+#
+# WHAT TESTS 7-9 STILL DO NOT SEE, stated plainly rather than left to be discovered:
+#   - a `bun test` assembled at runtime — `eval`, a command built by string concatenation, or a
+#     command living in a variable (`CMD="bun test"; $CMD`). A text scanner cannot execute the
+#     shell, and a full shell interpreter is out of scope; that route is instead closed by policy:
+#     workflows and package.json scripts write their bun command lines literally;
+#   - a `bun test` inside a *script file* invoked by a workflow. apps/web/scripts is covered by
+#     tests 2-6 (executed) and test 6 (tripwire); a script under any OTHER directory is not covered
+#     by this file at all;
+#   - which package.json a workflow's `bun run test` resolves to. It is not resolved, and does not
+#     need to be: test 8 scans EVERY package.json in the repo, so the delegate's body is checked
+#     wherever it lives. A package.json outside the repo (an action's own) is out of reach;
+#   - workflow surfaces other than `run:` — a `with: args:` handed to a container action, a `bun
+#     test` inside an `env:` default. None exist today; if one appears it is invisible here;
+#   - a heredoc BODY is skipped entirely (test.yml feeds python programs that way, and parsing them
+#     as shell produced false alarms). So a `bun test` piped INTO a shell — `bash <<EOF ... EOF` —
+#     is not seen. No such pattern exists in this repo; the fixture `heredoc-resumes` at least pins
+#     that a command after the terminator is still read, which is the failure that would matter most.
+#
+# One more thing worth stating, because it is the difference between this round and the last: the
+# fixtures in test 9 were each MUTATION-TESTED — the corresponding defence in the scanner was broken
+# on purpose and the fixture confirmed to go red. Four of the first drafts did NOT (a fixture whose
+# `${VAR#pat}` sat on its own harmless line; a delegation fixture that the direct scan flagged
+# anyway; a heredoc body whose hazards were safely double-quoted; a below-floor case that was also
+# below bun's default). Each was rewritten until its mutant failed. Asserting an expectation is not
+# the same as proving the assertion can fail — do the mutation before you believe a new fixture.
 
 set -uo pipefail
 
@@ -408,41 +482,11 @@ fi
 # ---------------------------------------------------------------------------------------------
 # Test 6: tripwire for a runner that never gets executed here.
 #
-# This is the one text check left, and it is deliberately the dumbest possible one: a literal
-# substring search, no comment stripping, no quoting rules. It cannot produce a false pass — at
-# worst it fires on the words "bun test" inside a comment, which is a false ALARM someone fixes by
-# rewording or by putting the script in package.json where it can be observed properly.
+# This is deliberately the dumbest text check in the file: a literal substring search, no comment
+# stripping, no quoting rules (tests 7-8 need a real scanner; this one does not). It cannot produce
+# a false pass — at worst it fires on the words "bun test" inside a comment, which is a false ALARM
+# someone fixes by rewording or by putting the script in package.json where it can be observed.
 # ---------------------------------------------------------------------------------------------
-echo "Test 7: no workflow runs a raw 'bun test' without a --timeout at or above the floor"
-# #1537 round 17. Tests 1-6 scan apps/web/scripts. They never saw the WORKFLOWS, which invoke
-# `bun test src/` directly for apps/mcp-server — and this guard's own SCOPE LIMIT note mentioned
-# mcp-server only to EXCLUDE it ("not apps/web's, verified"). That dismissal is what failed: on
-# 2026-08-21 `MCP Server Validation` went red with
-#     src/spec/index-builder.test.ts (fail) (unnamed) [6665.15ms]
-#       ^ a beforeEach/afterEach hook timed out for this test
-# — a 6.7s hook against bun's 5s default, on a loaded host, in a suite that passes when the host is
-# idle. Exactly the defect this file was created for, one directory over. The same raw invocation is
-# in deploy-production.yml, so a loaded PRODUCTION DEPLOY can fail the same way.
-wf_bad=0
-while IFS= read -r wf; do
-  while IFS=: read -r lineno content; do
-    case "$content" in
-      *"--timeout"*)
-        val=$(printf '%s\n' "$content" | sed -n 's/.*--timeout[ =]\{1,\}\([0-9]\{1,\}\).*/\1/p')
-        if [ -z "$val" ] || [ "$val" -lt "$TIMEOUT_FLOOR" ]; then
-          bad "$wf:$lineno runs 'bun test' with --timeout '${val:-<unparsed>}', below the ${TIMEOUT_FLOOR}ms floor"
-          wf_bad=$((wf_bad+1))
-        fi
-        ;;
-      *)
-        bad "$wf:$lineno runs a raw 'bun test' with NO --timeout, so that suite runs at bun's 5s default: $(printf '%s' "$content" | sed 's/^ *//')"
-        wf_bad=$((wf_bad+1))
-        ;;
-    esac
-  done < <(/usr/bin/grep -nE '(^|[^a-z-])bun[[:space:]]+test([[:space:]]|$)' "$wf" 2>/dev/null | /usr/bin/grep -v '^[0-9]*: *#')
-done < <(find "$REPO_ROOT/.github/workflows" -name '*.yml' 2>/dev/null | sort)
-[ "$wf_bad" -eq 0 ] && ok "no workflow invokes a raw 'bun test' below the ${TIMEOUT_FLOOR}ms floor"
-
 echo "Test 6: no unexecuted script under apps/web/scripts invokes 'bun test'"
 unverified=""
 while IFS= read -r f; do
@@ -466,6 +510,577 @@ if [ -z "$unverified" ]; then
 else
     bad "scripts invoking 'bun test' outside the observed set:"
     printf '%s' "$unverified"
+fi
+
+# ---------------------------------------------------------------------------------------------
+# THE TEXT SCANNER FOR TESTS 7-9.
+#
+# Read the "WHY TESTS 7-9 ARE ALLOWED TO PARSE TEXT" section at the top of this file before
+# changing anything below. Short version: workflow `run:` blocks and package.json `scripts` cannot
+# be observed under a PATH shim the way the runners above are, so they are read as text — but the
+# YAML/JSON layer is handled by a real parser, the shell layer fails closed, and every failure mode
+# has a fixture in test 9.
+#
+# It is one program used three ways so that a fix can never apply to the live scan but not to the
+# fixtures, or the other way round: `workflows <dir>` and `pkg <file>...` for tests 7 and 8 against
+# the real tree, and the same two modes against synthetic files for test 9.
+#
+# Output protocol (tab-separated, one record per line):
+#   FILES\t<n>\t<names>   what was actually read - the anti-vacuity signal
+#   COUNT\t<n>            how many `bun test` command lines were examined
+#   FINDING\t<label>\t<why>  a problem (this is what fails a test)
+#   INFO\t<label>\t<why>     reader context only, never a failure
+#   ERROR\t<label>\t<why>    the scanner could not run; exit 1
+# ---------------------------------------------------------------------------------------------
+SCANNER="$WORK/scan.mjs"
+cat > "$SCANNER" <<'SCANJS'
+// bun-run scanner: find `bun test` invocations in GitHub workflow `run:` blocks and in
+// package.json `scripts` values, and report any that lack an adequate --timeout.
+const FLOOR = Number(process.env.BB_TIMEOUT_FLOOR || "15000");
+const out = [];
+const emit = (kind, label, msg) => out.push(`${kind}\t${label}\t${msg}`);
+let examined = 0;
+
+// --- shell text -> command list -------------------------------------------------------------
+// Strips shell comments and joins `\`-newline continuations. Quote state is tracked across the
+// WHOLE snippet (not per line): the historical per-line stripper in this guard's rounds 1-9 reset
+// quote state at every newline, which let a line starting with `#` inside a multiline double-quoted
+// argument be read as a comment. A `#` is a comment ONLY when unquoted AND at start-of-text or
+// preceded by whitespace, so `${VAR#pat}` and `file#frag` survive.
+function strip(src) {
+  let o = "", i = 0, q = null, prevWs = true;
+  while (i < src.length) {
+    const c = src[i];
+    // A HEREDOC BODY IS NOT SHELL. .github/workflows/test.yml embeds python programs via
+    // `python3 <<'PY' ... PY`, and those bodies contain both the words "bun test" (in an error
+    // message) and unbalanced apostrophes. Parsing them as commands produces false ALARMS, not
+    // false passes, but a guard that cries wolf as the workflow grows gets deleted. So the body is
+    // skipped wholesale and scanning resumes after the terminator line. `<<<` (a here-string) is
+    // ordinary command text and is left alone.
+    if (!q && c === "<" && src[i + 1] === "<" && src[i + 2] !== "<") {
+      let j = i + 2;
+      if (src[j] === "-") j++;
+      while (src[j] === " " || src[j] === "\t") j++;
+      let dq = null, delim = "";
+      if (src[j] === "'" || src[j] === '"') { dq = src[j]; j++; }
+      while (j < src.length && (dq ? src[j] !== dq : /[A-Za-z0-9_]/.test(src[j]))) { delim += src[j]; j++; }
+      if (dq) j++;
+      if (delim !== "") {
+        // Emit the rest of the current line (the command itself), then drop lines up to the
+        // terminator. An UNTERMINATED heredoc drops the remainder, which is the fail-closed
+        // direction here: unread text cannot be reported clean, and test 8's COUNT would notice.
+        while (j < src.length && src[j] !== "\n") { o += src[j]; j++; }
+        o += "\n";
+        j++;
+        while (j < src.length) {
+          let e = src.indexOf("\n", j);
+          if (e === -1) e = src.length;
+          if (src.slice(j, e).trim() === delim) { j = e + 1; break; }
+          j = e + 1;
+        }
+        i = j; prevWs = true; continue;
+      }
+    }
+    if (q === "'") { if (c === "'") q = null; o += c; i++; prevWs = false; continue; }
+    if (q === '"') {
+      if (c === "\\" && i + 1 < src.length) { o += c + src[i + 1]; i += 2; prevWs = false; continue; }
+      if (c === '"') q = null;
+      o += c; i++; prevWs = false; continue;
+    }
+    if (c === "\\" && src[i + 1] === "\n") { o += " "; i += 2; prevWs = true; continue; }
+    if (c === "\\" && i + 1 < src.length) { o += c + src[i + 1]; i += 2; prevWs = false; continue; }
+    if (c === "'" || c === '"') { q = c; o += c; i++; prevWs = false; continue; }
+    if (c === "#" && prevWs) { while (i < src.length && src[i] !== "\n") i++; continue; }
+    o += c; prevWs = c === " " || c === "\t" || c === "\n"; i++;
+  }
+  return { text: o, unterminated: q !== null };
+}
+
+// Splits on unquoted shell separators. `&&`/`||` fall out of splitting on single `&`/`|`.
+function commands(text) {
+  const res = []; let cur = "", q = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === "\\" && q === '"') { cur += c + text[++i]; continue; } if (c === q) q = null; cur += c; continue; }
+    if (c === "\\") { cur += c + text[++i]; continue; }
+    if (c === "'" || c === '"') { q = c; cur += c; continue; }
+    // NOT split on `{`/`}`: a GitHub Actions `${{ ... }}` expression would be torn apart, and
+    // shell brace grouping is already separated by the `;` inside it. `head()` skips a stray brace.
+    if (c === "\n" || c === ";" || c === "&" || c === "|" || c === "(" || c === ")") { res.push(cur); cur = ""; continue; }
+    cur += c;
+  }
+  res.push(cur);
+  return res.filter((s) => s.trim() !== "");
+}
+
+function words(cmd) {
+  const res = []; let cur = null, q = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (q) { if (c === "\\" && q === '"') { cur += cmd[++i]; continue; } if (c === q) { q = null; continue; } cur = (cur ?? "") + c; continue; }
+    if (c === "\\") { cur = (cur ?? "") + (cmd[++i] ?? ""); continue; }
+    if (c === "'" || c === '"') { q = c; cur = cur ?? ""; continue; }
+    if (c === " " || c === "\t") { if (cur !== null) { res.push(cur); cur = null; } continue; }
+    cur = (cur ?? "") + c;
+  }
+  if (cur !== null) res.push(cur);
+  return res;
+}
+
+// Drop leading `VAR=val` assignments and transparent wrappers so `CI=1 env bun test` is still seen.
+const WRAPPERS = new Set(["env", "time", "exec", "nice", "nohup", "command", "sudo",
+  "{", "}", "!", "then", "else", "elif", "do"]);
+function head(ws) {
+  let i = 0;
+  while (i < ws.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(ws[i]) || WRAPPERS.has(ws[i]))) i++;
+  return i;
+}
+const isBun = (w) => w === "bun" || /(^|\/)bun$/.test(w);
+
+// Exactly one --timeout, an integer >= FLOOR. Mirrors check_record()'s argv rules so the text scan
+// and the observe-the-argv scan cannot disagree about what "adequate" means.
+function timeoutVerdict(args) {
+  let n = 0, val = null, set = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--timeout") { n++; if (i + 1 < args.length) { val = args[i + 1]; set = true; } else { set = false; } }
+    else if (args[i].startsWith("--timeout=")) { n++; val = args[i].slice(10); set = true; }
+  }
+  if (n === 0) return `runs with NO --timeout, so it runs at bun's 5000ms default (the CI failure this guard exists for took 9910ms)`;
+  if (n > 1) return `passes ${n} --timeout flags; bun honours the LAST, so a large leading value can mask a tiny trailing one. Pass exactly one`;
+  if (!set || val === "") return `passes --timeout with no value after it`;
+  if (!/^[0-9]+$/.test(val)) return `passes --timeout '${val}', which is not a literal integer number of milliseconds (a variable cannot be resolved by a text scan, so it is refused rather than assumed adequate)`;
+  if (Number(val) < FLOOR) return `passes --timeout ${val}, below the ${FLOOR}ms floor`;
+  return null;
+}
+
+// Scans one shell snippet. `resolve(name)` is non-null when `bun run <name>` can be followed
+// (package.json mode); it returns the delegate's snippet or undefined if the script is missing.
+function scanSnippet(snippet, label, resolve, seen) {
+  const s = strip(snippet);
+  if (s.unterminated) emit("FINDING", label, "has an unterminated quote, so this scanner cannot tell command text from string contents; it refuses to report it clean");
+  for (const cmd of commands(s.text)) {
+    const ws = words(cmd);
+    const h = head(ws);
+    if (!(ws.length > h && isBun(ws[h]))) continue;
+    const verb = ws[h + 1];
+    if (verb === "test") {
+      examined++;
+      const v = timeoutVerdict(ws.slice(h + 2));
+      if (v) emit("FINDING", label, `\`${cmd.trim()}\` ${v}`);
+      continue;
+    }
+    if (verb === "run") {
+      const target = ws[h + 2];
+      if (target === undefined) continue;
+      // `bun run ./x.ts` executes a FILE, not a package.json script. Only a bare name can be one.
+      if (/[/\\]/.test(target) || /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(target)) continue;
+      if (!resolve) {
+        // Workflow mode: which package.json a `bun run` resolves to depends on the step's
+        // working-directory, so it is not resolved here. It does not need to be: test 8 scans
+        // EVERY package.json in the repo, so the delegate's own body is checked there regardless
+        // of who invokes it. Only test* targets are worth reporting, and only for the reader.
+        if (target.startsWith("test")) emit("INFO", label, `delegates to \`bun run ${target}\`; the delegate's own body is checked by the package.json scan`);
+        continue;
+      }
+      if (seen.has(target)) { emit("FINDING", label, `\`bun run ${target}\` is a delegation cycle, so its timeout cannot be resolved`); continue; }
+      const next = resolve(target);
+      if (next === undefined) { emit("FINDING", label, `\`bun run ${target}\` delegates to a script that is not defined in this package.json, so its timeout cannot be resolved`); continue; }
+      scanSnippet(next, `${label} -> ${target}`, resolve, new Set([...seen, target]));
+    }
+  }
+}
+
+// --- run-block extraction --------------------------------------------------------------------
+// Every string value under a key named `run`, at any depth: covers jobs.*.steps[].run and the
+// `runs.steps[].run` of a composite action. Using the YAML PARSER (not a line regex) is what makes
+// block scalars (`|`), folded scalars (`>`, which fold a newline between `bun` and `test` into a
+// space) and multi-line quoted scalars visible at all.
+function runBlocks(node, path, sink) {
+  if (Array.isArray(node)) { node.forEach((v, i) => runBlocks(v, `${path}[${i}]`, sink)); return; }
+  if (node && typeof node === "object") {
+    for (const [k, v] of Object.entries(node)) {
+      if (k === "run" && typeof v === "string") sink.push({ path: `${path}.run`, text: v });
+      else runBlocks(v, `${path}.${k}`, sink);
+    }
+  }
+}
+
+const [mode, ...paths] = process.argv.slice(2);
+try {
+  if (mode === "workflows") {
+    const dir = paths[0];
+    const { readdirSync } = await import("node:fs");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".yml") || f.endsWith(".yaml")).sort();
+    if (files.length === 0) { console.log(`ERROR\t${dir}\tno *.yml or *.yaml files found`); process.exit(1); }
+    console.log(`FILES\t${files.length}\t${files.join(" ")}`);
+    for (const f of files) {
+      const p = `${dir}/${f}`;
+      let doc;
+      try { doc = Bun.YAML.parse(await Bun.file(p).text()); }
+      catch (e) { emit("FINDING", f, `is not parseable YAML (${e.message}), so its run blocks cannot be inspected`); continue; }
+      const sink = [];
+      for (const d of Array.isArray(doc) ? doc : [doc]) runBlocks(d, "", sink);
+      for (const b of sink) scanSnippet(b.text, `${f}${b.path}`, null, new Set());
+    }
+  } else if (mode === "pkg") {
+    if (paths.length === 0) { console.log("ERROR\t-\tno package.json paths given"); process.exit(1); }
+    console.log(`FILES\t${paths.length}\t${paths.join(" ")}`);
+    for (const p of paths) {
+      let scripts;
+      try { scripts = (JSON.parse(await Bun.file(p).text()).scripts) || {}; }
+      catch (e) { emit("FINDING", p, `is not parseable JSON (${e.message}), so its scripts cannot be inspected`); continue; }
+      const resolve = (name) => scripts[name];
+      for (const [name, body] of Object.entries(scripts)) {
+        if (typeof body !== "string") continue;
+        scanSnippet(body, `${p} scripts.${name}`, resolve, new Set([name]));
+      }
+    }
+  } else { console.log(`ERROR\t-\tunknown mode '${mode}'`); process.exit(1); }
+} catch (e) {
+  console.log(`ERROR\t-\t${e.message}`); process.exit(1);
+}
+console.log(`COUNT\t${examined}`);
+for (const l of [...new Set(out)]) console.log(l);
+SCANJS
+
+# run_scanner <mode> <args...> -> SCAN_RC, SCAN_OUT, SCAN_FINDINGS, SCAN_COUNT, SCAN_FILES
+run_scanner() {
+    SCAN_OUT=$(BB_TIMEOUT_FLOOR="$TIMEOUT_FLOOR" bun "$SCANNER" "$@" 2>&1)
+    SCAN_RC=$?
+    SCAN_FINDINGS=$(printf '%s\n' "$SCAN_OUT" | /usr/bin/grep '^FINDING' | sed $'s/^FINDING\t/    /; s/\t/: /')
+    SCAN_COUNT=$(printf '%s\n' "$SCAN_OUT" | sed -n $'s/^COUNT\t//p' | tail -1)
+    SCAN_FILES=$(printf '%s\n' "$SCAN_OUT" | sed -n $'s/^FILES\t//p' | tail -1)
+    [ -n "$SCAN_COUNT" ] || SCAN_COUNT=0
+}
+
+# ---------------------------------------------------------------------------------------------
+# Test 7: every `bun test` written into a workflow run: block.
+#
+# #1537 round 17. Tests 1-6 scan apps/web/scripts. They never saw the WORKFLOWS, which invoked
+# `bun test src/` directly for apps/mcp-server — and this guard's own SCOPE LIMIT note mentioned
+# mcp-server only to EXCLUDE it ("not apps/web's, verified"). That dismissal is what failed: on
+# 2026-08-21 `MCP Server Validation` went red with
+#     src/spec/index-builder.test.ts (fail) (unnamed) [6665.15ms]
+#       ^ a beforeEach/afterEach hook timed out for this test
+# — a 6.7s hook against bun's 5s default, on a loaded host, in a suite that passes when the host is
+# idle. Exactly the defect this file was created for, one directory over. The same raw invocation
+# was in deploy-production.yml, so a loaded PRODUCTION DEPLOY could have failed the same way.
+#
+# A COUNT of zero is NOT a failure here: workflows are free to invoke `bun run <script>` and let
+# test 8 check the script body, which is what this repo does today. The anti-vacuity signal for
+# this test is FILES, not COUNT - the scanner exits 1 if the workflow directory yielded no files.
+# ---------------------------------------------------------------------------------------------
+echo "Test 7: no workflow run: block executes 'bun test' without exactly one --timeout >= $TIMEOUT_FLOOR"
+run_scanner workflows "$REPO_ROOT/.github/workflows"
+if [ "$SCAN_RC" -ne 0 ]; then
+    bad "the workflow scan could not run, so its silence means nothing: $(printf '%s\n' "$SCAN_OUT" | tail -3 | tr '\n' ' ')"
+elif [ -n "$SCAN_FINDINGS" ]; then
+    bad "workflow 'bun test' invocations with an unusable timeout:"
+    printf '%s\n' "$SCAN_FINDINGS"
+else
+    ok "${SCAN_FILES%%$'\t'*} workflow file(s) parsed (.yml and .yaml); $SCAN_COUNT raw 'bun test' invocation(s), all with one --timeout >= $TIMEOUT_FLOOR"
+fi
+
+# ---------------------------------------------------------------------------------------------
+# Test 8: every `bun test` written into a package.json script, anywhere in the repo.
+#
+# This is where the five known offenders lived (apps/web's test:watch, test:integration, test:all
+# and apps/mcp-server's test, test:watch): all five ran `bun test` with no flag at all, and the
+# SCOPE LIMIT note above excused three of them on the grounds that "nothing runs them" — which was
+# true until deploy-production.yml and test.yml started running `bun run test` for mcp-server.
+#
+# `bun run <name>` is FOLLOWED into the same package.json rather than flagged (test 4 flags an
+# observed delegation because it cannot see where the flags live; here it can), so a script that
+# only composes other scripts is judged by what it ultimately executes. Unresolvable delegation —
+# a missing script, a cycle — is a FINDING, never a pass. `bun run ./x.ts` is a FILE, not a script.
+#
+# The file list is discovered, not hardcoded: every package.json in the repo outside node_modules,
+# which today is the root plus apps/* plus packages/*. A new workspace is covered automatically.
+# COUNT must be non-zero: five such scripts exist, so zero means discovery broke.
+# ---------------------------------------------------------------------------------------------
+echo "Test 8: no package.json script runs 'bun test' without exactly one --timeout >= $TIMEOUT_FLOOR"
+PKGS=()
+while IFS= read -r f; do
+    [ -n "$f" ] && PKGS+=("$f")
+done < <(find "$REPO_ROOT" -name 'package.json' -not -path '*/node_modules/*' -not -path "$REPO_ROOT/.git/*" 2>/dev/null | sort)
+
+if [ "${#PKGS[@]}" -eq 0 ]; then
+    bad "no package.json found under $REPO_ROOT outside node_modules - discovery is broken, so a clean result would be meaningless"
+else
+    run_scanner pkg "${PKGS[@]}"
+    if [ "$SCAN_RC" -ne 0 ]; then
+        bad "the package.json scan could not run, so its silence means nothing: $(printf '%s\n' "$SCAN_OUT" | tail -3 | tr '\n' ' ')"
+    elif [ -n "$SCAN_FINDINGS" ]; then
+        bad "package.json scripts running 'bun test' with an unusable timeout:"
+        printf '%s\n' "$SCAN_FINDINGS"
+    elif [ "$SCAN_COUNT" -eq 0 ]; then
+        bad "${#PKGS[@]} package.json file(s) were read but not one 'bun test' was found in any script - apps/web and apps/mcp-server both have several, so this is a broken scan, not a clean tree"
+    else
+        ok "${#PKGS[@]} package.json file(s) scanned; $SCAN_COUNT 'bun test' script(s) found, all with one --timeout >= $TIMEOUT_FLOOR"
+    fi
+fi
+
+# ---------------------------------------------------------------------------------------------
+# Test 9: the scanner's own failure modes, on synthetic fixtures.
+#
+# THIS IS THE TEST THAT MATTERS MOST IN THIS FILE. Tests 7 and 8 run against a tree that is clean,
+# so on their own they cannot distinguish a working scanner from a blind one - which is precisely
+# how the first version of test 7 shipped five demonstrated false passes (see the header). Every
+# fixture below is a command line that a human reads as safe and bun runs at 100ms or 5000ms.
+#
+# The negative controls are not decoration: they are what stops the next person from "fixing" the
+# comment stripper by deleting `#` handling wholesale, or the delegation follower by flagging every
+# `bun run`. A fixture asserted CLEAN fails just as loudly as one asserted FLAGGED.
+#
+# If you add a defence to the scanner, add a fixture here and watch it go from FLAGGED-expected-but-
+# clean to flagged. If you cannot make a fixture fail without your change, you have not fixed
+# anything.
+# ---------------------------------------------------------------------------------------------
+echo "Test 9: the tests 7-8 scanner is exercised against synthetic fixtures for each known defect"
+
+FIX="$WORK/fixtures"
+mkdir -p "$FIX"
+
+# fixture <name> <mode> <expect: flagged | clean | flagged:SUBSTRING> then the body on stdin.
+# `flagged:SUBSTRING` additionally requires the finding to CONTAIN that substring, which is how an
+# assertion can pin *how* the scanner reached the invocation and not merely that it did. Needed for
+# the delegation follower: every script is scanned directly anyway, so "did you follow `bun run`?"
+# is invisible to a plain flagged/clean assertion (verified: a mutant that stopped following still
+# passed) - only the finding's label, `scripts.test -> test:unit`, distinguishes the two.
+# For mode `wf` the body is a workflow YAML written into its own directory (so one fixture cannot
+# mask another); for mode `pkg` it is a package.json.
+fx_names=(); fx_modes=(); fx_expect=(); fx_paths=(); fx_why=()
+fixture() {
+    local name="$1" mode="$2" expect="$3" why="$4" ext="$5"
+    local dir="$FIX/$name"
+    mkdir -p "$dir"
+    cat > "$dir/$( [ "$mode" = wf ] && echo "wf.$ext" || echo package.json )"
+    fx_names+=("$name"); fx_modes+=("$mode"); fx_expect+=("$expect"); fx_paths+=("$dir"); fx_why+=("$why")
+}
+
+# defect 1 - the old scan globbed *.yml, so this real-world extension was never opened at all.
+fixture yaml-extension wf flagged "a .yaml workflow (deploy-to-staging.yaml is one) must be read too" yaml <<'FX'
+name: fixture
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - name: mcp tests
+        run: bun test src/
+FX
+
+# defect 2 - the old scan took one invocation per physical line and stopped at the first --timeout.
+fixture two-per-line wf flagged "the SECOND command on a line runs at the 5s default" yml <<'FX'
+name: fixture
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bun test --timeout 30000 src/ && bun test src/spec/
+FX
+
+# defect 3a - a `\` continuation inside a block scalar hid every following flag from a line regex.
+fixture backslash-continuation wf flagged "a command continued with a backslash is still one command" yml <<'FX'
+name: fixture
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          bun \
+            test src/
+FX
+
+# defect 3b - a folded scalar (`>`) folds the newline between `bun` and `test` into a space, so the
+# invocation exists in the shell but appears on two separate SOURCE lines.
+fixture folded-scalar wf flagged "a folded scalar splitting 'bun' from 'test' is still 'bun test'" yml <<'FX'
+name: fixture
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: >-
+          bun
+          test src/
+FX
+
+# defect 4 - the greedy sed read the number out of the trailing COMMENT and reported 30000.
+fixture inline-comment wf flagged "the real timeout is 100ms; 30000 is only in a comment" yml <<'FX'
+name: fixture
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bun test --timeout 100 # --timeout 30000
+FX
+
+# negative control for defect 4: a `#` inside a quoted string, and a `${VAR#pattern}` expansion,
+# are NOT comments. Stripping them would corrupt real command text (and did, in rounds 1-9).
+# Both hazards are on the SAME command line as the bun test on purpose. An earlier draft put the
+# `${VAR#pat}` on its own line, and a mutant that dropped the word-boundary rule still passed: the
+# truncation ate only that harmless line. A `#` hazard is only load-bearing where cutting the line
+# would change what flags the scanner sees, so the expansion sits BEFORE --timeout, where greedy
+# stripping turns this into a bare `bun test --preload` with no timeout at all.
+fixture hash-not-a-comment wf clean "quoted '#' and \${VAR#pat} must survive comment stripping" yaml <<'FX'
+name: fixture
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          bun test --preload ${PRELOAD#./} -t "issue #42 handling" --timeout 30000 src/
+FX
+
+# a --timeout whose value is a variable cannot be resolved by a text scan, so it is refused.
+fixture unresolvable-value wf flagged "a non-literal --timeout value must not be assumed adequate" yml <<'FX'
+name: fixture
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bun test --timeout "$SOME_TIMEOUT" src/
+FX
+
+# The FLOOR itself, not just "above bun's default". 6000 clears a >5000 check and would even
+# survive test 5's 5.6s probe, yet the CI failure that started #1537 took 9910ms. Without this
+# fixture a mutant that lowered the floor to 5000 passed everything, including test 9.
+fixture below-floor wf flagged "6000ms clears bun's default but not the observed 9910ms case" yml <<'FX'
+name: fixture
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bun test --timeout 6000 src/
+FX
+
+# negative control for the `--timeout=N` spelling: it must be RECOGNISED, not read as "no flag".
+fixture equals-form wf clean "--timeout=30000 is one adequate flag, not a missing one" yml <<'FX'
+name: fixture
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bun test --timeout=30000 src/
+FX
+
+# bun honours the LAST --timeout, so a large leading value must not excuse a tiny trailing one.
+fixture two-timeout-flags wf flagged "two --timeout flags: bun uses the last (100ms)" yml <<'FX'
+name: fixture
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bun test --timeout 30000 --timeout 100 src/
+FX
+
+# negative control: a heredoc body is data, not commands. Shaped after the python validator in
+# test.yml, whose body contains the words "bun test" and an unbalanced apostrophe. BOTH lines below
+# are chosen so that parsing the body as shell would produce a finding - a bare `bun test src/`
+# (no timeout) and an unterminated quote. An earlier draft of this fixture put both inside double
+# quotes, where they were harmless either way, and a mutant that removed heredoc skipping passed it.
+fixture heredoc-body wf clean "a heredoc body must not be parsed as shell" yml <<'FX'
+name: fixture
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          cat <<'DOC'
+          Reproduce locally with:
+            bun test src/
+          It's the same suite CI runs.
+          DOC
+          bun test --timeout 30000 src/
+FX
+
+# ...and scanning must RESUME after the terminator, or a heredoc anywhere earlier in a run block
+# would hide every command below it.
+fixture heredoc-resumes wf flagged "a bare 'bun test' after a heredoc terminator is still seen" yml <<'FX'
+name: fixture
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          cat <<EOF
+          bun test --timeout 30000 src/
+          EOF
+          bun test src/
+FX
+
+# defect 5 - package.json was not scanned at all; this is where all five real offenders lived.
+fixture pkg-raw pkg flagged "a package.json script running bun test with no flag" '' <<'FX'
+{ "scripts": { "test": "bun test src/" } }
+FX
+
+# delegation must be FOLLOWED, so a clean-looking wrapper cannot hide a bare invocation.
+fixture pkg-delegated-bad pkg "flagged:scripts.test -> test:unit" "delegation must be followed into the delegate's body" '' <<'FX'
+{ "scripts": { "test": "bun run test:unit", "test:unit": "bun test src/" } }
+FX
+
+# negative control: following delegation must not turn every `bun run` into a failure.
+fixture pkg-delegated-good pkg clean "a delegation whose target is adequately flagged is fine" '' <<'FX'
+{ "scripts": { "test": "bun run test:unit", "test:unit": "bun test --timeout 30000 src/" } }
+FX
+
+# negative control: `bun run <file>.ts` executes a FILE, not a package.json script, and must not be
+# reported as an unresolvable delegation (apps/mcp-server has several of these).
+fixture pkg-runs-a-file pkg clean "'bun run src/x.ts' is a file, not a missing script" '' <<'FX'
+{ "scripts": { "build": "bun run src/spec/index-builder.ts" } }
+FX
+
+# a delegation that goes nowhere is a FINDING: its timeout is unknowable, so it cannot be cleared.
+fixture pkg-missing-target pkg flagged "delegation to a script that does not exist" '' <<'FX'
+{ "scripts": { "test": "bun run test:nope" } }
+FX
+
+fx_problems=""
+fx_i=0
+while [ "$fx_i" -lt "${#fx_names[@]}" ]; do
+    fx_name="${fx_names[$fx_i]}"; fx_mode="${fx_modes[$fx_i]}"
+    fx_exp="${fx_expect[$fx_i]}"; fx_dir="${fx_paths[$fx_i]}"; fx_msg="${fx_why[$fx_i]}"
+    fx_i=$((fx_i + 1))
+
+    if [ "$fx_mode" = wf ]; then
+        run_scanner workflows "$fx_dir"
+    else
+        run_scanner pkg "$fx_dir/package.json"
+    fi
+
+    if [ "$SCAN_RC" -ne 0 ]; then
+        fx_problems+="    $fx_name: the scanner exited $SCAN_RC on this fixture: $(printf '%s\n' "$SCAN_OUT" | tail -2 | tr '\n' ' ')"$'\n'
+        continue
+    fi
+    case "$fx_exp" in
+        clean)
+            if [ -n "$SCAN_FINDINGS" ]; then
+                fx_problems+="    $fx_name: expected no findings ($fx_msg) but got: $(printf '%s' "$SCAN_FINDINGS" | tr '\n' ' ')"$'\n'
+            fi
+            ;;
+        flagged)
+            if [ -z "$SCAN_FINDINGS" ]; then
+                fx_problems+="    $fx_name: expected a FINDING and got none - the scanner is blind to this case ($fx_msg). This fixture exists because that blindness shipped once already."$'\n'
+            fi
+            ;;
+        flagged:*)
+            fx_want="${fx_exp#flagged:}"
+            if [ -z "$SCAN_FINDINGS" ]; then
+                fx_problems+="    $fx_name: expected a FINDING and got none - the scanner is blind to this case ($fx_msg). This fixture exists because that blindness shipped once already."$'\n'
+            elif ! printf '%s' "$SCAN_FINDINGS" | /usr/bin/grep -qF -- "$fx_want"; then
+                fx_problems+="    $fx_name: flagged, but no finding mentions '$fx_want', so it was not reached the way this fixture asserts ($fx_msg). Got: $(printf '%s' "$SCAN_FINDINGS" | tr '\n' ' ')"$'\n'
+            fi
+            ;;
+        *)
+            fx_problems+="    $fx_name: unknown expectation '$fx_exp' - fix the fixture table"$'\n'
+            ;;
+    esac
+done
+
+if [ -n "$fx_problems" ]; then
+    bad "scanner fixtures that did not behave as asserted:"
+    printf '%s' "$fx_problems"
+else
+    ok "all ${#fx_names[@]} fixture(s) behaved as asserted (each known false-pass is flagged; each negative control stays clean)"
 fi
 
 if [ -n "$other_invocations" ]; then
