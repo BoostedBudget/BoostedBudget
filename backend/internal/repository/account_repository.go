@@ -174,6 +174,12 @@ type AccountRepository interface {
 	// Called when the 90-day TTL expires for a disconnected/revoked item.
 	// Issue #1010: Enforce Plaid item uniqueness across all users.
 	ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error
+
+	// MarkRemovedByLinkedItemID transitions every ACTIVE account under a linked item to
+	// status='removed' with removed_at stamped, without deleting the row or destroying anything
+	// that references it (balance_snapshots, holdings, investment transactions, liability rows,
+	// savings_goals). Issue #1569: disconnecting an institution must retain history.
+	MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string) error
 }
 
 // accountRepository implements AccountRepository using PostgreSQL
@@ -1144,13 +1150,21 @@ func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID 
 		replacedAt = &now
 	}
 
+	// Set removed_at only when transitioning to removed status (Issue #1569). Required by
+	// migration 000149's accounts_removed_at_consistency CHECK: status='removed' demands
+	// removed_at IS NOT NULL, mirroring the replaced_at pairing above.
+	var removedAt *time.Time
+	if status == domain.AccountStatusRemoved {
+		removedAt = &now
+	}
+
 	query := `
 		UPDATE accounts
-		SET status = $1, replaced_at = $2, replaced_by_id = $3, updated_at = $4
-		WHERE id = $5 AND user_id = $6
+		SET status = $1, replaced_at = $2, replaced_by_id = $3, removed_at = $4, updated_at = $5
+		WHERE id = $6 AND user_id = $7
 	`
 
-	result, err := r.db.Exec(ctx, query, status, replacedAt, replacedByID, now, accountID, userID)
+	result, err := r.db.Exec(ctx, query, status, replacedAt, replacedByID, removedAt, now, accountID, userID)
 	if err != nil {
 		return err
 	}
@@ -1158,6 +1172,26 @@ func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID 
 		return ErrAccountNotFound
 	}
 	return nil
+}
+
+// MarkRemovedByLinkedItemID transitions every ACTIVE account under a linked item to
+// status='removed' with removed_at stamped, WITHOUT deleting the row or anything that
+// references it (balance_snapshots, holdings, investment transactions, liability rows,
+// savings_goals). Issue #1569: disconnecting an institution must retain its accounts'
+// financial history.
+//
+// Scoped to status = 'active' only, deliberately: an already-'replaced' or 'expired' account
+// carries a more specific terminal reason for why it stopped being active, and a blanket
+// disconnect must not overwrite that with the less specific 'removed'. Mirrors
+// ExpireAccountsByFingerprint's `AND status = 'active'` scoping above.
+func (r *accountRepository) MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string) error {
+	query := `
+		UPDATE accounts
+		SET status = 'removed', removed_at = NOW(), updated_at = NOW()
+		WHERE linked_item_id = $1 AND status = 'active'
+	`
+	_, err := r.db.Exec(ctx, query, linkedItemID)
+	return err
 }
 
 // CheckFingerprintOwnership checks if a fingerprint blind index is already held by a different user.

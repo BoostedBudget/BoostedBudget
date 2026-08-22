@@ -34,8 +34,11 @@ type Account struct {
 	UserAccountID *string `json:"user_account_id,omitempty" db:"user_account_id"` // FK to user_accounts
 
 	// Soft-delete fields for re-link handling (Issue #171)
-	Status       AccountStatus `json:"status" db:"status"`                       // 'active', 'replaced', or 'expired'
+	Status       AccountStatus `json:"status" db:"status"`                       // 'active', 'replaced', 'expired', or 'removed'
 	ReplacedAt   *time.Time    `json:"replaced_at,omitempty" db:"replaced_at"`   // When this account was replaced
+	// RemovedAt is when the user deliberately disconnected this account (status = 'removed').
+	// NULL for every other status. Issue #1569, migration 000149.
+	RemovedAt *time.Time `json:"removed_at,omitempty" db:"removed_at"`
 	// ⚠ DEAD COLUMN — never written non-NULL by any production path (#1537 round 14). Its only
 	// writer is accountRepository.UpdateStatus, and that method's sole production caller
 	// (services/account_service.go:510, the re-link soft-delete) passes a literal nil. The only other
@@ -80,6 +83,11 @@ const (
 	// AccountStatusExpired indicates the fingerprint hold was released after the 90-day TTL
 	// (Issue #1010: applies when a disconnected item's grace period expires and another user links)
 	AccountStatusExpired AccountStatus = "expired"
+	// AccountStatusRemoved indicates the user deliberately disconnected this account (Issue #1569).
+	// Distinct from AccountStatusReplaced (superseded by a re-link) and AccountStatusExpired (TTL
+	// release): 'removed' records a deliberate user action. Requires RemovedAt to be set — see
+	// migration 000149's accounts_removed_at_consistency CHECK constraint.
+	AccountStatusRemoved AccountStatus = "removed"
 )
 
 // Validate checks that the Account has all required fields and valid types

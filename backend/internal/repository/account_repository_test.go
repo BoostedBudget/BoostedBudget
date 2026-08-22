@@ -1197,12 +1197,13 @@ func TestAccountRepository_UpdateStatus(t *testing.T) {
 	userID := uuid.New().String()
 	replacedByID := uuid.New().String()
 
-	// Expect update to set status, replaced_at, and replaced_by_id
-	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id").
+	// Expect update to set status, replaced_at, replaced_by_id, and removed_at
+	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id.*removed_at").
 		WithArgs(
 			pgxmock.AnyArg(), // status
 			pgxmock.AnyArg(), // replaced_at
 			pgxmock.AnyArg(), // replaced_by_id
+			pgxmock.AnyArg(), // removed_at
 			pgxmock.AnyArg(), // updated_at
 			pgxmock.AnyArg(), // id
 			pgxmock.AnyArg(), // user_id
@@ -1226,8 +1227,9 @@ func TestAccountRepository_UpdateStatus_NotFound(t *testing.T) {
 	accountID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id").
+	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id.*removed_at").
 		WithArgs(
+			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
