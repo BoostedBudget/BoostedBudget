@@ -19,14 +19,6 @@ type mockMerchantRepo struct {
 	mock.Mock
 }
 
-func (m *mockMerchantRepo) GetOrCreateMerchants(ctx context.Context, names []string) (map[string]string, error) {
-	args := m.Called(ctx, names)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(map[string]string), args.Error(1)
-}
-
 func (m *mockMerchantRepo) GetOrCreateMerchantsWithNormalize(ctx context.Context, names []string, normalize func(string) string) (map[string]string, error) {
 	args := m.Called(ctx, names, normalize)
 	if args.Get(0) == nil {
@@ -61,14 +53,6 @@ func (m *mockMerchantOverrideRepo) Upsert(ctx context.Context, override domain.M
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.MerchantNameOverride), args.Error(1)
-}
-
-func (m *mockMerchantOverrideRepo) BulkUpsert(ctx context.Context, overrides []domain.MerchantNameOverride) ([]domain.MerchantNameOverride, error) {
-	args := m.Called(ctx, overrides)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]domain.MerchantNameOverride), args.Error(1)
 }
 
 func (m *mockMerchantOverrideRepo) GetByUserID(ctx context.Context, userID string) ([]domain.MerchantNameOverride, error) {
@@ -869,8 +853,9 @@ func TestBulkSetOverrides_CombinedEntry_NoDuplicateInResponse(t *testing.T) {
 	require.Len(t, result, 1, "combined entry must appear exactly once (BulkApply result only)")
 	assert.Equal(t, "m-A", result[0].MerchantID)
 	assert.Equal(t, target, *result[0].MergedIntoMerchantID)
-	// BulkUpsert + MergeAndFlatten must NOT be called independently (atomic via BulkApply).
-	mor.AssertNotCalled(t, "BulkUpsert")
+	// MergeAndFlatten must NOT be called independently (atomic via BulkApply).
+	// (The exported BulkUpsert was deleted in #1565 — BulkApply's display-only leg now
+	// reaches the same SQL through the unexported bulkUpsertTx, inside its own tx.)
 	mor.AssertNotCalled(t, "MergeAndFlatten")
 	mor.AssertExpectations(t)
 }

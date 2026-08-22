@@ -48,68 +48,6 @@ func TestTransactionSelectColumns(t *testing.T) {
 	})
 }
 
-// TestTransactionRepository_Create_Success tests successful transaction creation
-func TestTransactionRepository_Create_Success(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	require.NoError(t, err)
-	defer mock.Close()
-
-	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
-	ctx := context.Background()
-
-	externalID := "plaid_tx_123"
-	transaction := &domain.Transaction{
-		UserID:                "user-123",
-		AccountID:             "account-123",
-		LinkedItemID:          "item-123",
-		Source:                domain.SourcePlaid,
-		ExternalTransactionID: &externalID,
-		Amount:                -50.25,
-		Date:                  time.Now(),
-		Name:                  "Starbucks",
-	}
-
-	// Expect INSERT query (25 args: 22 base + $23 category_override_kind, $24 custom_category_override_id, $25 pfc_primary_override)
-	mock.ExpectExec("INSERT INTO transactions").
-		WithArgs(
-			pgxmock.AnyArg(), // id (UUID generated)
-			transaction.UserID,
-			transaction.AccountID,
-			transaction.LinkedItemID,
-			string(transaction.Source),
-			pgxmock.AnyArg(), // external_transaction_id (encrypted)
-			pgxmock.AnyArg(), // external_transaction_id_blind_idx
-			pgxmock.AnyArg(), // external_metadata (encrypted)
-			transaction.Amount,
-			pgxmock.AnyArg(), // date
-			pgxmock.AnyArg(), // authorized_date
-			transaction.Name,
-			pgxmock.AnyArg(), // merchant_name
-			pgxmock.AnyArg(), // pfc_primary
-			pgxmock.AnyArg(), // pfc_detailed
-			pgxmock.AnyArg(), // pfc_confidence_level
-			pgxmock.AnyArg(), // pfc_category_icon_url
-			pgxmock.AnyArg(), // payment_channel
-			transaction.Pending,
-			pgxmock.AnyArg(), // user_notes
-			pgxmock.AnyArg(), // created_at
-			pgxmock.AnyArg(), // updated_at
-			pgxmock.AnyArg(), // $23 category_override_kind (for effective_category_name CASE)
-			pgxmock.AnyArg(), // $24 custom_category_override_id
-			pgxmock.AnyArg(), // $25 pfc_primary_override
-		).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
-
-	err = repo.Create(ctx, transaction)
-	assert.NoError(t, err)
-	assert.NotEmpty(t, transaction.ID, "ID should be generated")
-	assert.False(t, transaction.CreatedAt.IsZero(), "CreatedAt should be set")
-	assert.False(t, transaction.UpdatedAt.IsZero(), "UpdatedAt should be set")
-
-	err = mock.ExpectationsWereMet()
-	assert.NoError(t, err)
-}
-
 // TestTransactionRepository_CreateBatch_Success tests batch transaction creation
 func TestTransactionRepository_CreateBatch_Success(t *testing.T) {
 	mock, err := pgxmock.NewPool()

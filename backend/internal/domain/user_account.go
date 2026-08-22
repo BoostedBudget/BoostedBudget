@@ -2,7 +2,6 @@ package domain
 
 import (
 	"errors"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -134,9 +133,6 @@ func (r *UpdateUserAccountRequest) Validate() error {
 
 	return nil
 }
-
-// userAccountHexColorRegex validates hex color format #RRGGBB (reuse from account.go)
-var userAccountHexColorRegex = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 
 // UserAccountStatus represents the valid status values for a user account
 type UserAccountStatus string

@@ -191,7 +191,9 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 		if err != nil {
 			return nil, fmt.Errorf("failed to start transaction: %w", err)
 		}
-		defer tx.Rollback(ctx) // Rollback if not committed
+		//nolint:errcheck // rollback is a no-op once Commit succeeds; on the error paths the
+		// deferred rollback is best-effort cleanup and its error has nothing to act on.
+		defer tx.Rollback(ctx)
 
 		// Step 1: Create user profile within transaction
 		if err = s.profileRepo.CreateUserTx(ctx, tx, user); err != nil {
@@ -230,8 +232,15 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 	// Step 4: Grant trial if trial granter is configured
 	if s.trialGranter != nil {
 		if err := s.trialGranter.GrantTrial(ctx, user.ID); err != nil {
-			// Log error but don't fail registration
-			// Trial granting failure shouldn't block user registration
+			// Non-fatal — a failed trial grant must not block a registration whose user
+			// row has already been committed — but never silent: the empty error branch
+			// that used to stand here made a user silently land on no trial at all with
+			// nothing recorded. Same class of gap as Step 6's audit logger (Issue #1505).
+			slog.ErrorContext(ctx, "failed to auto-grant trial to new user; user registered without a trial",
+				"clerk_user_id", clerkUserID,
+				"user_id", user.ID,
+				"error", err,
+			)
 		}
 	}
 

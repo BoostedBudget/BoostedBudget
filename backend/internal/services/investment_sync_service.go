@@ -44,10 +44,22 @@ type InvestmentSyncService interface {
 	SetAnalytics(a phclient.Analytics)
 
 	// SetCacheInvalidation wires cache generation bumping (setter injection, matching
-	// TransactionSyncService's convention). Issue #1531 Task 10b-2a-ii: GetNetWorthTrend is a
-	// cached read that folds in holdings/investment-transaction data, so a Plaid HOLDINGS or
-	// INVESTMENTS_TRANSACTIONS webhook — routed through ProcessWebhook, which calls SyncHoldings/
-	// SyncInvestmentTransactions below — must bump the synced user's cache generation once those
+	// TransactionSyncService's convention).
+	//
+	// ⚠ #1537 CORRECTION: the original rationale here — "GetNetWorthTrend is a cached read that folds
+	// in holdings/investment-transaction data" — is FALSE, and the M7 note on bumpCacheForUser below
+	// already contradicted it. GetNetWorthTrend reads balance_snapshots ONLY
+	// (analytics_service.go GetNetWorthTrend -> balanceSnapshotRepo.GetAggregatedHistory[ForHousehold]),
+	// and this service writes holdings / investment_transactions / portfolio_snapshots — none of which
+	// any cache.GetOrLoad-backed read observes. The four disposition entries that claimed
+	// ExplicitBump coverage from this bump are therefore now dispositionDerivedNoCacheImpact.
+	//
+	// The bump is KEPT deliberately: over-invalidation costs a cache miss and nothing else, and it is
+	// cheap insurance if a future cached read ever touches holdings. It is defence, not coverage — do
+	// not cite it as the reason a write is invalidated. Issue #1562 tracks the history.
+	//
+	// A Plaid HOLDINGS or INVESTMENTS_TRANSACTIONS webhook — routed through ProcessWebhook, which
+	// calls SyncHoldings/SyncInvestmentTransactions below — still bumps the synced user once those
 	// writes commit. Optional: nil is a safe no-op (every call site is nil-guarded).
 	SetCacheInvalidation(gens *cache.Generations)
 }
@@ -248,6 +260,23 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 	accountMap := make(map[string]string, len(accounts))
 	holdingUserAccountMap := make(map[string]*string, len(accounts))
 	for _, a := range accounts {
+		// #1537 (F14): the (actor, account) pair is assembled from two sources that nothing forces to
+		// agree — UserID comes from linkedItem.UserID below, while these accounts come from
+		// GetByLinkedItemID, which is keyed on linked_item_id and is NOT user-scoped. If
+		// accounts.user_id ever diverged from linked_items.user_id, every holding would carry a
+		// self-consistent-looking pair: assertActorOwnsRows would see the right actor on every row
+		// and assertRowsTargetAccount would see the right account on every row, so BOTH repository
+		// assertions pass while the write lands on someone else's account. Rejecting it here, where
+		// the two values first meet, is the only place either fact is available.
+		if a.UserID != linkedItem.UserID {
+			s.logger.Error("skipping an account that does not belong to the linked item's owner",
+				"linked_item_id", linkedItem.ID,
+				"account_id", a.ID,
+				"account_user_id", a.UserID,
+				"linked_item_user_id", linkedItem.UserID,
+			)
+			continue
+		}
 		accountMap[a.PlaidAccountID] = a.ID
 		holdingUserAccountMap[a.PlaidAccountID] = a.UserAccountID
 	}
@@ -394,6 +423,17 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 	accountMap := make(map[string]string, len(accounts))
 	userAccountMap := make(map[string]*string, len(accounts))
 	for _, a := range accounts {
+		// #1537 (F14): same guard as SyncHoldings above — see that comment for why the repository
+		// assertions cannot catch this. These rows go to UpsertBatch carrying linkedItem.UserID.
+		if a.UserID != linkedItem.UserID {
+			s.logger.Error("skipping an account that does not belong to the linked item's owner",
+				"linked_item_id", linkedItem.ID,
+				"account_id", a.ID,
+				"account_user_id", a.UserID,
+				"linked_item_user_id", linkedItem.UserID,
+			)
+			continue
+		}
 		accountMap[a.PlaidAccountID] = a.ID
 		userAccountMap[a.PlaidAccountID] = a.UserAccountID
 	}

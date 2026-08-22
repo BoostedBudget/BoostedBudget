@@ -183,11 +183,6 @@ type MockTransactionRepository struct {
 	mock.Mock
 }
 
-func (m *MockTransactionRepository) Create(ctx context.Context, transaction *domain.Transaction) error {
-	args := m.Called(ctx, transaction)
-	return args.Error(0)
-}
-
 func (m *MockTransactionRepository) CreateBatch(ctx context.Context, transactions []domain.Transaction) (map[string]bool, error) {
 	args := m.Called(ctx, transactions)
 	if args.Get(0) == nil {

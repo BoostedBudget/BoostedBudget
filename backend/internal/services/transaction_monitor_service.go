@@ -4,8 +4,6 @@ package services
 
 import (
 	"context"
-	"math"
-	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
@@ -74,40 +72,4 @@ func accountsMatch(txnAccountID string, txnUserAccountID *string, suggAccountID 
 		return txnAccountID == *suggAccountID
 	}
 	return false
-}
-
-// isMatch checks if a transaction matches a suggestion.
-func (s *transactionMonitorService) isMatch(txn *domain.Transaction, suggestion *domain.TransferSuggestion) bool {
-	// Skip if suggestion has no destination reference at all
-	if suggestion.ToAccountID == nil && suggestion.ToUserAccountID == nil {
-		return false
-	}
-
-	// Skip if suggestion is no longer pending (already matched in this batch)
-	if suggestion.Status != domain.SuggestionStatusPending {
-		return false
-	}
-
-	// 1. Check account match — chain-aware: prefer UserAccountID when available
-	if !accountsMatch(txn.AccountID, txn.UserAccountID, suggestion.ToAccountID, suggestion.ToUserAccountID) {
-		return false
-	}
-
-	// 2. Check inflow (negative amount = credit/deposit under PFCv2)
-	if !txn.IsInflow() {
-		return false
-	}
-
-	// 3. Check amount magnitude within tolerance (txn.Amount is negative for inflows under PFCv2)
-	if math.Abs(math.Abs(txn.Amount)-suggestion.Amount) > s.amountTolerance {
-		return false
-	}
-
-	// 4. Check date range (within dateRangeDays of suggestion creation)
-	dateLimit := suggestion.CreatedAt.Add(time.Duration(s.dateRangeDays) * 24 * time.Hour)
-	if txn.Date.After(dateLimit) || txn.Date.Before(suggestion.CreatedAt) {
-		return false
-	}
-
-	return true
 }

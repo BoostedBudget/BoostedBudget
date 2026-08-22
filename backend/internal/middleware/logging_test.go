@@ -11,6 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // newTestLogger creates an slog.Logger backed by a text handler writing to buf.
@@ -132,7 +133,7 @@ func TestStructuredLogging_DifferentMethods(t *testing.T) {
 
 			mw := StructuredLogging(logger)
 			h := mw(handler)
-			h(c)
+			require.NoError(t, h(c))
 
 			assert.Contains(t, logBuffer.String(), method)
 		})
@@ -154,7 +155,7 @@ func TestStructuredLogging_QueryParams(t *testing.T) {
 
 	mw := StructuredLogging(logger)
 	h := mw(handler)
-	h(c)
+	require.NoError(t, h(c))
 
 	assert.Contains(t, logBuffer.String(), "query")
 }
@@ -175,7 +176,7 @@ func TestStructuredLogging_UserAgent(t *testing.T) {
 
 	mw := StructuredLogging(logger)
 	h := mw(handler)
-	h(c)
+	require.NoError(t, h(c))
 
 	assert.Contains(t, logBuffer.String(), "Mozilla/5.0 Test")
 }
@@ -267,7 +268,7 @@ func TestStructuredLogging_SensitiveQueryParamsRedacted(t *testing.T) {
 
 	mw := StructuredLogging(logger)
 	h := mw(handler)
-	h(c)
+	require.NoError(t, h(c))
 
 	logOutput := logBuffer.String()
 	assert.NotContains(t, logOutput, "supersecret", "raw token value must not appear in logs")
@@ -290,7 +291,7 @@ func TestStructuredLogging_RemoteAddr(t *testing.T) {
 
 	mw := StructuredLogging(logger)
 	h := mw(handler)
-	h(c)
+	require.NoError(t, h(c))
 
 	logOutput := logBuffer.String()
 	assert.Contains(t, logOutput, "remote_ip")
@@ -313,7 +314,7 @@ func TestStructuredLogging_500StatusIsError(t *testing.T) {
 
 	mw := StructuredLogging(logger)
 	h := mw(handler)
-	h(c)
+	require.NoError(t, h(c))
 
 	assert.Contains(t, logBuffer.String(), "ERROR")
 }

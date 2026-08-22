@@ -87,10 +87,29 @@ func (a *AuthenticatedWithEmailInput) Resolve(ctx huma.Context) []error {
 		return errs
 	}
 
-	// Then extract email from Clerk claims
+	// Then extract email from Clerk SESSION claims.
+	//
+	// #1560 gap analysis: this is also the boundary that refuses MCP-origin callers, and the
+	// refusal is deliberate. middleware/clerk.go's MCP branch sets UserIDKey and ClerkUserIDKey but
+	// NOT ClerkClaimsKey ("claims is nil for the MCP path (OAuth token, not a session JWT)"), so
+	// every operation using this input — today profile.go and deletion.go — is session-only. That is
+	// the right default: the email resolved here is the session-verified address a GDPR deletion
+	// cancellation link is sent to, and an OAuth-scoped agent token does not establish it.
+	//
+	// The message must SAY so. It previously read "Claims not found in context", which is
+	// indistinguishable from a malformed JWT — and that ambiguity is exactly how a second 401 cause
+	// stayed hidden behind the registration-order bug #1560 fixed. Pinned by
+	// TestAuthenticatedWithEmailInput_Resolve_MCPOriginIsRefusedDiagnostically.
+	//
+	// ⚠ NOTE the consequence for the Clerk-API fallback below: it is keyed on ClerkUserIDKey, which
+	// the MCP path DOES set, so it could serve MCP callers — but this guard returns first, making
+	// that fallback unreachable for them. Whether MCP should reach profile/deletion at all is a
+	// product decision, deliberately NOT taken here; see the #1537 gap analysis.
 	claims, ok := ctx.Context().Value(ClerkClaimsKey).(*clerk.SessionClaims)
 	if !ok || claims == nil {
-		return []error{huma.Error401Unauthorized("Claims not found in context")}
+		return []error{huma.Error401Unauthorized(
+			"Clerk session claims not found in context: this operation requires a session JWT and " +
+				"cannot be served from an OAuth/MCP-origin token")}
 	}
 
 	// Extract email from custom claims (set via JWT template in Clerk)

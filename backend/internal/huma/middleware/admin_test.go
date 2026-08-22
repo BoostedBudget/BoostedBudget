@@ -175,7 +175,7 @@ func TestAdminMiddleware_QAEnvironment_AdminRole_Allows(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should allow access
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -200,7 +200,7 @@ func TestAdminMiddleware_QAEnvironment_HardcodedEmail_Allows(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should allow access without checking Clerk privateMetadata
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -225,7 +225,7 @@ func TestAdminMiddleware_QAEnvironment_NoAdminRole_Returns403(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should return 403 Forbidden
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
@@ -259,7 +259,7 @@ func TestAdminMiddleware_ProductionEnvironment_AdminRole_Allows(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should allow access — no 404, and the role check actually ran
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -286,7 +286,7 @@ func TestAdminMiddleware_ProductionEnvironment_HardcodedEmail_Allows(t *testing.
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should allow access without consulting Clerk privateMetadata
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -313,7 +313,7 @@ func TestAdminMiddleware_ProductionEnvironment_NoAdminRole_Returns403(t *testing
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should return 403 Forbidden (not 200, and not 404 either)
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
@@ -336,7 +336,7 @@ func TestAdminMiddleware_ProductionEnvironment_Unauthenticated_Returns401(t *tes
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should return 401 Unauthorized before any role lookup happens
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
@@ -363,7 +363,7 @@ func TestAdminMiddleware_ProductionEnvironment_AdminServiceError_Returns500(t *t
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should return 500 — refused, not admitted
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
@@ -390,7 +390,7 @@ func TestAdminMiddleware_DevelopmentEnvironment_AdminRole_Allows(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should allow access
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -415,7 +415,7 @@ func TestAdminMiddleware_StagingEnvironment_AdminRole_Allows(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should allow access
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -437,7 +437,7 @@ func TestAdminMiddleware_NoClerkUserID_Returns401(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should return 401 Unauthorized
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
@@ -461,7 +461,7 @@ func TestAdminMiddleware_AdminServiceError_Returns500(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should return 500 Internal Server Error
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
@@ -492,7 +492,7 @@ func TestAdminMiddleware_CheckRole_SkipsEnvironmentCheck(t *testing.T) {
 
 			resp, err := http.DefaultClient.Do(req)
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			// THEN: Should allow access (middleware skips env and role checks for this endpoint)
 			assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -518,7 +518,7 @@ func TestAdminMiddleware_CheckRole_RequiresAuthentication(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should return 401 Unauthorized
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
@@ -541,7 +541,7 @@ func TestAdminMiddleware_NonAdminEndpoint_Passthrough(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// THEN: Should allow access (admin middleware should not interfere)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)

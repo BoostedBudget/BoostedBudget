@@ -25,13 +25,6 @@ type testValidStruct struct {
 	Age   int    `json:"age" validate:"gte=0,lte=150"`
 }
 
-// testInvalidStruct is an invalid struct for testing validation
-type testInvalidStruct struct {
-	Name  string `json:"name" validate:"required"`
-	Email string `json:"email" validate:"required,email"`
-	Age   int    `json:"age" validate:"gte=0,lte=150"`
-}
-
 // TestCustomValidator_Validate_ValidStruct tests validation with a valid struct
 func TestCustomValidator_Validate_ValidStruct(t *testing.T) {
 	validator := NewValidator()

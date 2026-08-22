@@ -680,8 +680,10 @@ func TestPaddleService_ImplementsInterface(t *testing.T) {
 	service, err := NewPaddleService(cfg, logger)
 	require.NoError(t, err)
 
-	// Verify service implements PaddleService interface
-	var _ PaddleService = service
+	// Verify the concrete implementation satisfies PaddleService. NewPaddleService's
+	// return type already guarantees this for the interface value, so the assertion is
+	// made against the concrete type to make it actually meaningful.
+	var _ PaddleService = (*paddleService)(nil)
 
 	// Verify all methods are callable (compilation test)
 	ctx := context.Background()

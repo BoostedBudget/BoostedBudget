@@ -28,7 +28,6 @@ func createTestLayoutConfig() *config.DashboardLayoutConfig {
 type mockDashboardPreferencesRepository struct {
 	getByUserIDFn func(ctx context.Context, userID string) (*domain.DashboardPreferences, error)
 	upsertFn      func(ctx context.Context, prefs *domain.DashboardPreferences) error
-	deleteFn      func(ctx context.Context, userID string) error
 }
 
 func (m *mockDashboardPreferencesRepository) GetByUserID(ctx context.Context, userID string) (*domain.DashboardPreferences, error) {
@@ -43,13 +42,6 @@ func (m *mockDashboardPreferencesRepository) Upsert(ctx context.Context, prefs *
 		return m.upsertFn(ctx, prefs)
 	}
 	prefs.UpdatedAt = time.Now()
-	return nil
-}
-
-func (m *mockDashboardPreferencesRepository) Delete(ctx context.Context, userID string) error {
-	if m.deleteFn != nil {
-		return m.deleteFn(ctx, userID)
-	}
 	return nil
 }
 

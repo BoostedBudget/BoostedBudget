@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -47,9 +48,99 @@ func NewHoldingRepository(db DB) HoldingRepository {
 	return &holdingRepository{db: db}
 }
 
+// ErrReplaceTenantMismatch is returned when a ReplaceForAccount call is handed a row whose
+// UserID is not the acting user, or when no acting user_id is supplied at all (issue #1566).
+// Ownership is enforced HERE, in the repository, not delegated to caller discipline.
+var ErrReplaceTenantMismatch = errors.New("replace batch contains a row belonging to another user")
+
+// assertActorOwnsRows fails unless every element owner in owners equals userID.
+//
+// An empty actor is rejected outright: without that check the comparison below is vacuous when
+// both sides are empty (actor "" vs. element UserID ""), which would wave through a write with no
+// owner and leave the DB's own constraints as the only guard.
+//
+// An empty element owner is a mismatch too — a zero value is exactly how a foreign/unowned row
+// slips in, and treating it as "inherit the actor" would paper over the bug.
+//
+// caller names the calling method so the error is labeled correctly by every user of this helper.
+// (assertSingleTenantAccounts / assertSingleTenantOverrides hardcode their own prefixes, which
+// mislabels the error the moment a second function calls them; this parameter avoids that wart.)
+func assertActorOwnsRows(caller, userID string, owners []string) error {
+	if userID == "" {
+		return fmt.Errorf("%s: %w: no acting user_id was supplied", caller, ErrReplaceTenantMismatch)
+	}
+	for i, owner := range owners {
+		if owner != userID {
+			return fmt.Errorf("%s: %w: element %d has user_id %q, expected %q",
+				caller, ErrReplaceTenantMismatch, i, owner, userID)
+		}
+	}
+	return nil
+}
+
+// ErrReplaceAccountMismatch is returned when a ReplaceForAccount call is handed a row whose
+// AccountID is not the account being replaced, or when no account_id is supplied at all
+// (issue #1568). Distinct from ErrReplaceTenantMismatch on purpose: this is a SAME-tenant fault
+// (one of the user's own accounts overwriting another), so reporting it as "spans more than one
+// user" would send an operator hunting a cross-tenant leak that does not exist.
+var ErrReplaceAccountMismatch = errors.New("replace batch contains a row belonging to another account")
+
+// assertRowsTargetAccount fails unless every row account in rowAccounts equals accountID.
+//
+// The DELETE in every ReplaceForAccount is scoped to the scalar accountID while the INSERT writes
+// each element's own AccountID, so "replace account A with rows carrying account B" clears A and
+// attributes the data to B. Same tenant, so not a leak — but the rows silently move between the
+// user's own accounts, and nothing else in the write path notices.
+//
+// An empty accountID is rejected outright, mirroring the empty-actor rule in assertActorOwnsRows:
+// with both sides empty the comparison below is vacuous, and the tenant-scoped DELETE degenerates
+// to an empty account_id.
+//
+// An empty row account is a mismatch too — a zero value is how an unattributed row slips in.
+//
+// Not skipped for an empty slice: the delete-only path still runs a DELETE scoped by accountID.
+//
+// caller names the calling method, as in assertActorOwnsRows.
+func assertRowsTargetAccount(caller, accountID string, rowAccounts []string) error {
+	if accountID == "" {
+		return fmt.Errorf("%s: %w: no account_id was supplied", caller, ErrReplaceAccountMismatch)
+	}
+	for i, rowAccount := range rowAccounts {
+		if rowAccount != accountID {
+			return fmt.Errorf("%s: %w: element %d has account_id %q, expected %q",
+				caller, ErrReplaceAccountMismatch, i, rowAccount, accountID)
+		}
+	}
+	return nil
+}
+
 // ReplaceForAccount atomically replaces all holdings for an account.
 // Wraps DELETE + INSERT in a single transaction.
 func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) error {
+	// #1566: the DELETE below is scoped to userID but each INSERT writes holdings[i].UserID, so a
+	// foreign element would delete the actor's rows and write someone else's. Refuse loudly before
+	// any statement runs. Checked even for an empty slice: the delete-all path is itself
+	// tenant-scoped, so an empty actor is never acceptable here (unlike accountRepository.CreateBatch,
+	// where an empty slice is a genuine no-op and the early return precedes the assertion).
+	owners := make([]string, len(holdings))
+	for i := range holdings {
+		owners[i] = holdings[i].UserID
+	}
+	if err := assertActorOwnsRows("holdingRepository.ReplaceForAccount", userID, owners); err != nil {
+		return err
+	}
+
+	// #1568: the same split exists on the account axis — the DELETE uses the scalar accountID while
+	// each INSERT writes holdings[i].AccountID, so a misfiled element would clear this account and
+	// re-file the holdings under another of the user's accounts.
+	rowAccounts := make([]string, len(holdings))
+	for i := range holdings {
+		rowAccounts[i] = holdings[i].AccountID
+	}
+	if err := assertRowsTargetAccount("holdingRepository.ReplaceForAccount", accountID, rowAccounts); err != nil {
+		return err
+	}
+
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err

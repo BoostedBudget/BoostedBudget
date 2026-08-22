@@ -104,7 +104,7 @@ func newFingerprintReleaseHarness(t *testing.T) (
 	})).Run(func(args mock.Arguments) {
 		args.Get(1).(*domain.LinkedItem).ID = newItemID
 	}).Return(nil)
-	mockAccountRepo.On("CreateBatch", ctx, mock.MatchedBy(func(accounts []domain.Account) bool {
+	mockAccountRepo.On("CreateBatch", ctx, mock.Anything, mock.MatchedBy(func(accounts []domain.Account) bool {
 		return len(accounts) == 1 && accounts[0].UserID == userID
 	})).Return(nil)
 

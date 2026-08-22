@@ -36,6 +36,18 @@ type Account struct {
 	// Soft-delete fields for re-link handling (Issue #171)
 	Status       AccountStatus `json:"status" db:"status"`                       // 'active', 'replaced', or 'expired'
 	ReplacedAt   *time.Time    `json:"replaced_at,omitempty" db:"replaced_at"`   // When this account was replaced
+	// ⚠ DEAD COLUMN — never written non-NULL by any production path (#1537 round 14). Its only
+	// writer is accountRepository.UpdateStatus, and that method's sole production caller
+	// (services/account_service.go:510, the re-link soft-delete) passes a literal nil. The only other
+	// production statement touching the column (repository/profile_repository.go:1709) sets it to NULL
+	// to clear dangling FKs during DeleteUserCascade, and no migration backfills it.
+	// repository/account_repository_test.go:1095-1096 asserts a non-nil value round-trips, but that
+	// passes only because the test injects one directly — it is NOT evidence of a live writer.
+	// linked_items.replaced_by_id IS populated (services/account_service.go:492); the two same-named
+	// columns are easy to conflate. Do not build re-link chain traversal on this field without wiring
+	// the write first — see accountChainKey in services/dashboard_service.go for a baseline
+	// double-count that cannot be fixed here. Same unwired-affordance class as the dead repository
+	// methods removed in #1565.
 	ReplacedByID *string       `json:"replaced_by_id,omitempty" db:"replaced_by_id"` // UUID of replacement account
 
 	// Cross-user fingerprint fields (Issue #1010: enforce Plaid item uniqueness across users)
