@@ -295,6 +295,36 @@ func TestSavingsProgress_Balance_SetsBalanceAsOf(t *testing.T) {
 	goalRepo.AssertExpectations(t)
 }
 
+// TestSavingsProgress_Balance_DisconnectedAccount_SkipsRecompute tests that a balance-basis
+// goal pointed at a retained (non-active) account freezes current_amount rather than
+// recomputing from a frozen balance forever (Issue #1569).
+func TestSavingsProgress_Balance_DisconnectedAccount_SkipsRecompute(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
+
+	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisBalance, 5000, 1000)
+	balance := 3500.00
+	account := &domain.Account{
+		ID:             "acc1",
+		UserID:         "u1",
+		CurrentBalance: &balance,
+		Status:         domain.AccountStatusRemoved,
+		UpdatedAt:      time.Now(),
+	}
+
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
+
+	err := svc.RecomputeGoal(context.Background(), goal)
+
+	require.NoError(t, err)
+	// Neither UpdateCurrentAmount nor MarkCompleted should be called — same freeze semantics
+	// as the nil-balance case above.
+	goalRepo.AssertNotCalled(t, "UpdateCurrentAmount")
+	goalRepo.AssertNotCalled(t, "MarkCompleted")
+}
+
 // ─── account_percentage basis ─────────────────────────────────────────────────
 
 // TestSavingsProgress_AccountPercentage_ComputesCorrectly tests the percent-of-balance basis.
@@ -645,6 +675,40 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, domain.FreshnessUnknown, summary.Goals[0].Freshness)
+	})
+
+	t.Run("balance basis: freshness basis_account_disconnected when linked account is retained", func(t *testing.T) {
+		// Issue #1569: the account exists (soft-removed, not deleted) but is no longer active —
+		// its current_balance will never update again. This must be surfaced distinctly from
+		// FreshnessStale, which means "still updating, just not recently."
+		goalRepo := &mockSavingsProgressGoalRepo{}
+		contribRepo := &mockSavingsProgressContribRepo{}
+		accountRepo := &mockSavingsProgressAccountRepo{}
+		svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
+
+		recentBalance := time.Now().Add(-1 * time.Hour)
+		bal := 800.0
+		goal := &domain.SavingsGoal{
+			ID: "g5", UserID: "u1", Name: "Disconnected Goal",
+			CurrentAmount: 800.0, TargetAmount: 2000.0,
+			ProgressBasis: domain.ProgressBasisBalance, AccountID: "acct-5",
+			BalanceAsOf: &recentBalance,
+		}
+		account := &domain.Account{
+			ID: "acct-5", UserID: "u1", CurrentBalance: &bal,
+			Status: domain.AccountStatusRemoved,
+		}
+
+		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+		contribRepo.On("SumConfirmedByGoal", mock.Anything, "g5").Return(0.0, nil)
+		accountRepo.On("GetByIDAndUser", mock.Anything, "acct-5", "u1").Return(account, nil)
+
+		summary, err := svc.GetProgressSummary(context.Background(), "u1")
+
+		require.NoError(t, err)
+		require.Len(t, summary.Goals, 1)
+		assert.Equal(t, domain.FreshnessBasisAccountDisconnected, summary.Goals[0].Freshness)
+		goalRepo.AssertExpectations(t)
 	})
 
 	t.Run("portfolio totals computed correctly across multiple goals", func(t *testing.T) {
