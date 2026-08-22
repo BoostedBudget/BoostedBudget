@@ -106,6 +106,23 @@ func seedInvestmentTxn(ctx context.Context, t *testing.T, db DB, f retainedFixtu
 	return txnID
 }
 
+// seedOrphanBankingTxn inserts a banking transaction with NO user_account_id — the #1109 shape a
+// pre-relink row has when the chain key was never backfilled onto it. It cannot be resolved by the
+// active-chain leg, which is exactly what makes it a probe for this one.
+func seedOrphanBankingTxn(ctx context.Context, t *testing.T, db DB, f retainedFixture, date time.Time, name string) uuid.UUID {
+	t.Helper()
+	txnID := uuid.New()
+	ext := txnID.String()
+	_, err := db.Exec(ctx, `
+		INSERT INTO transactions (id, user_id, account_id, linked_item_id, user_account_id,
+			source, external_transaction_id, external_transaction_id_blind_idx,
+			amount, date, name, pending, pfc_primary, category_source, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, NULL, 'plaid', $5, $6, 7.00, $7, $8, false, 'FOOD_AND_DRINK', 'plaid', NOW(), NOW())
+	`, txnID, f.UserID, f.AccountID, f.LinkedItemID, ext, ext, date, name)
+	require.NoError(t, err, "seed orphan transaction")
+	return txnID
+}
+
 // disconnect soft-removes the whole chain, the way Task 2's DisconnectInstitution does. The
 // account_status_history transition is written by the trigger.
 func disconnect(ctx context.Context, t *testing.T, db DB, f retainedFixture) {
@@ -252,4 +269,192 @@ func TestUnifiedFeed_OrphanedTransactions_StayVisible(t *testing.T) {
 		[]string{"Orphaned Banking Row"}, feedNames(items),
 		"truly orphaned rows have no account to prove anything about; they belong to the user and "+
 			"must remain visible")
+}
+
+// ─── the two conditions that decide what this leg HIDES ──────────────────────────────────────
+//
+// Fix round 1: the four tests above all seed transactions the leg must SHOW, so deleting either
+// half of the predicate that restricts it left them green. A leg whose restrictions are untested
+// is a leg with no restrictions. The three tests below cover both axes — the interval's upper
+// bound, and the no-live-successor scoping — and each was mutation-checked by deleting the
+// conjunct it targets.
+
+// closeActiveIntervalAt rewrites the account's (already closed) 'active' interval so it ended at
+// `at`, and starts the terminal interval there. Done by hand because a test cannot wait 100 days
+// for the trigger to produce a genuinely old transition.
+func closeActiveIntervalAt(ctx context.Context, t *testing.T, db DB, accountID uuid.UUID, at time.Time) {
+	t.Helper()
+	ct, err := db.Exec(ctx, `
+		UPDATE account_status_history SET valid_to = $2
+		WHERE account_id = $1 AND status = 'active'`, accountID, at)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, ct.RowsAffected(), "exactly one active interval must have been closed")
+
+	_, err = db.Exec(ctx, `
+		UPDATE account_status_history SET valid_from = $2
+		WHERE account_id = $1 AND valid_to IS NULL`, accountID, at)
+	require.NoError(t, err)
+}
+
+// TestUnifiedFeed_TransactionDatedAfterTheIntervalClosed_StaysHidden falsifies the interval's
+// UPPER bound — the only condition in this leg that hides anything.
+//
+// A row dated after the account stopped being live is not history the account can vouch for: it
+// is a stale write, a mis-dated import, or a row belonging to a period the account did not cover.
+// The leg admits history, not everything that ever named the account. The control row, dated
+// inside the interval, is what makes the assertion about the BOUND rather than about the account.
+func TestUnifiedFeed_TransactionDatedAfterTheIntervalClosed_StaysHidden(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	f := seedRetainedFixture(ctx, t, tx, "ret-upper")
+	now := time.Now().UTC()
+	seedBankingTxn(ctx, t, tx, f, now.AddDate(0, 0, -200), "Inside The Interval")
+	seedBankingTxn(ctx, t, tx, f, now.AddDate(0, 0, -10), "After The Interval Closed")
+	seedInvestmentTxn(ctx, t, tx, f, now.AddDate(0, 0, -200), "Inside The Interval Buy")
+	seedInvestmentTxn(ctx, t, tx, f, now.AddDate(0, 0, -10), "After The Interval Closed Buy")
+
+	disconnect(ctx, t, tx, f)
+	// The account was live from a year ago until 100 days ago.
+	_, err = tx.Exec(ctx, `
+		UPDATE account_status_history SET valid_from = $2
+		WHERE account_id = $1 AND status = 'active'`, f.AccountID, now.AddDate(0, 0, -365))
+	require.NoError(t, err)
+	closeActiveIntervalAt(ctx, t, tx, f.AccountID, now.AddDate(0, 0, -100))
+
+	repo := NewTransactionRepository(tx, nil)
+	items, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"Inside The Interval", "Inside The Interval Buy"}, feedNames(items),
+		"only rows dated at or before the interval's close are the account's history; a row dated "+
+			"after it must stay hidden, on BOTH branches")
+}
+
+// TestUnifiedFeed_FullyDisconnectedRelinkChain_ShowsPreRelinkTransactions is the case a
+// status-list scoping ('removed','expired') silently lost, and the reason this leg keys on
+// "no live successor" instead.
+//
+// Link bank A, re-link it (A -> 'replaced', B -> 'active' on the same user_account_id), then
+// disconnect entirely (B -> 'removed'). B's rows come back through the leg. Under a status list,
+// A's PRE-RELINK rows did not: the active leg has nothing active left to find, and 'replaced' was
+// excluded. Every user who ever re-linked would have lost the older half of their history — the
+// #1569 bug displaced one chain hop back.
+func TestUnifiedFeed_FullyDisconnectedRelinkChain_ShowsPreRelinkTransactions(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	old := seedRetainedFixture(ctx, t, tx, "ret-relink-dead")
+	now := time.Now().UTC()
+	seedBankingTxn(ctx, t, tx, old, now.AddDate(0, 0, -60), "Pre-Relink Chained")
+
+	// A pre-relink row whose user_account_id was never backfilled — the #1109 orphan shape. Once
+	// the chain is fully dead there is no active sibling to resolve it either, so this leg is the
+	// only thing that can keep it visible.
+	seedOrphanBankingTxn(ctx, t, tx, old, now.AddDate(0, 0, -59), "Pre-Relink Unchained")
+
+	// The re-link: a new active account on the SAME chain key, old one marked replaced.
+	newAccountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Relinked Checking', 'depository', 'active', $5)`,
+		newAccountID, old.LinkedItemID, old.UserID, "relink-"+newAccountID.String(), old.UserAccountID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = NOW() WHERE id = $1`, old.AccountID)
+	require.NoError(t, err)
+
+	post := old
+	post.AccountID = newAccountID
+	seedBankingTxn(ctx, t, tx, post, now.AddDate(0, 0, -10), "Post-Relink")
+
+	repo := NewTransactionRepository(tx, nil)
+	live, _, err := repo.GetByUserIDKeysetUnified(ctx, old.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"Pre-Relink Chained", "Post-Relink"}, feedNames(live),
+		"sanity, and the #1109 contract: while the chain is live the unchained pre-relink row stays "+
+			"hidden and the chained one is resolved by the active sibling")
+
+	// Now the user disconnects the re-linked bank entirely.
+	_, err = tx.Exec(ctx,
+		`UPDATE accounts SET status = 'removed', removed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+		newAccountID)
+	require.NoError(t, err)
+
+	dead, _, err := repo.GetByUserIDKeysetUnified(ctx, old.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	require.NoError(t, err)
+	assert.ElementsMatch(t,
+		[]string{"Pre-Relink Chained", "Pre-Relink Unchained", "Post-Relink"}, feedNames(dead),
+		"with no active member left anywhere in the chain, EVERY retained row it owns must be "+
+			"visible — including the pre-relink ones on the 'replaced' account")
+}
+
+// TestUnifiedFeed_LiveRelinkChain_KeepsUnchainedPreRelinkRowHidden falsifies the no-live-successor
+// scoping itself. It is the same fixture as the test above, stopped one step earlier: the chain
+// still has an active member, so the leg must stay closed and #1109's decision must stand.
+//
+// Deleting the NOT EXISTS conjunct makes this test RED. It duplicates
+// TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration's orphan sub-case deliberately —
+// that test lives in another file and covers many things at once, and the condition it happens to
+// pin here is the one this predicate turns on.
+func TestUnifiedFeed_LiveRelinkChain_KeepsUnchainedPreRelinkRowHidden(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	old := seedRetainedFixture(ctx, t, tx, "ret-relink-live")
+	now := time.Now().UTC()
+	seedOrphanBankingTxn(ctx, t, tx, old, now.AddDate(0, 0, -59), "Unchained Pre-Relink Row")
+
+	newAccountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Relinked Checking', 'depository', 'active', $5)`,
+		newAccountID, old.LinkedItemID, old.UserID, "relink-live-"+newAccountID.String(), old.UserAccountID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = NOW() WHERE id = $1`, old.AccountID)
+	require.NoError(t, err)
+
+	repo := NewTransactionRepository(tx, nil)
+	items, _, err := repo.GetByUserIDKeysetUnified(ctx, old.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	require.NoError(t, err)
+	assert.Empty(t, feedNames(items),
+		"an active sibling still owns this chain, so #1109's rule holds and the historical leg must "+
+			"not fire. Widening it here would silently overturn a decision this issue does not own.")
+}
+
+// TestUnifiedFeed_ExpiredChain_TransactionsStayVisible covers the OTHER terminal state.
+// ExpireAccountsByFingerprint writes 'expired' (not 'removed') for a whole fingerprint that has
+// been disconnected past its hold, and every earlier test in this file reaches the leg via
+// 'removed' only. Under the shipped no-live-successor predicate this passes because an expired
+// chain has no active member — which is the point: the leg is keyed on successorship, so it covers
+// terminal states nobody enumerated.
+func TestUnifiedFeed_ExpiredChain_TransactionsStayVisible(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	f := seedRetainedFixture(ctx, t, tx, "ret-expired")
+	now := time.Now().UTC()
+	seedBankingTxn(ctx, t, tx, f, now.AddDate(0, 0, -120), "Expired Chain Purchase")
+	seedInvestmentTxn(ctx, t, tx, f, now.AddDate(0, 0, -120), "Expired Chain Buy")
+
+	_, err = tx.Exec(ctx,
+		`UPDATE accounts SET status = 'expired', updated_at = NOW() WHERE id = $1`, f.AccountID)
+	require.NoError(t, err)
+
+	repo := NewTransactionRepository(tx, nil)
+	items, _, err := repo.GetByUserIDKeysetUnified(ctx, f.UserID.String(), domain.TransactionFilters{}, nil, 50)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"Expired Chain Purchase", "Expired Chain Buy"}, feedNames(items),
+		"a fingerprint-expired chain is as disconnected as a removed one and its history is retained "+
+			"the same way")
 }

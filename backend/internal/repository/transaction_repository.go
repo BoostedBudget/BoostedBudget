@@ -2434,17 +2434,44 @@ func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, us
 // #1561 removed status predicates wholesale in the household analytics/history joins and had to be
 // reverted; balance_snapshot_repository.go narrates both failure modes at length.
 //
-// WHY IT IS SCOPED TO 'removed' AND 'expired' — the TERMINAL disconnection states, and not to
-// 'replaced'. Those two are what a disconnection leaves behind (MarkRemovedByLinkedItemID /
-// DeleteAccount write 'removed'; ExpireAccountsByFingerprint writes 'expired' for a whole
-// fingerprint), and a chain in either state has no active successor by construction — which is
-// exactly the case the active-chain leg cannot cover. 'replaced' is the re-link case, and it
-// already has an owner: the chain-expansion machinery of #1109/#1304, keyed on user_account_id.
-// Widening this leg to 'replaced' too would change a behaviour that machinery deliberately
-// defines — a pre-relink row whose user_account_id was never backfilled stays hidden
-// (TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration pins that) — and #1569 is not
-// the issue that gets to redefine it. The current status is used here only to SCOPE the leg to
-// terminal disconnections; the liveness answer itself still comes from the recorded intervals.
+// WHY IT IS SCOPED TO "NO LIVE SUCCESSOR" rather than to a status list. The leg fires only when
+// the account's chain has no 'active' member left — which is precisely the case the active-chain
+// leg above cannot cover, and precisely what a disconnection leaves behind.
+//
+// An earlier revision scoped it to `disc_a.status IN ('removed','expired')` instead, on the theory
+// that a 'replaced' account is always covered by its surviving active successor. That theory holds
+// only while a successor survives, which is by definition NOT true in this issue's scenario: link
+// bank A, re-link (A -> 'replaced', B -> 'active' on the same user_account_id), then disconnect
+// entirely (B -> 'removed'). B's rows come back through this leg; A's pre-relink rows do not — the
+// active leg has nothing active to find and a status list excludes 'replaced'. Every user who ever
+// re-linked would lose the older half of their history: the same failure #1569 was filed for,
+// displaced one chain hop back.
+//
+// The NOT EXISTS keys on disc_a.user_account_id, so it also preserves what #1109/#1304 decided
+// about a live re-link chain: a pre-relink row whose own user_account_id was never backfilled stays
+// hidden while an active sibling exists, because that sibling satisfies the NOT EXISTS and closes
+// the leg. TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration pins exactly that, and it
+// still passes. NULL user_account_id on disc_a itself never matches a sibling (NULL = NULL is
+// UNKNOWN), so a chainless disconnected account has no live successor and its rows are shown —
+// which is the answer we want for an account that never had a chain key at all.
+//
+// The status of disc_a is not consulted at all any more; liveness comes from the recorded
+// intervals and successorship from the chain key.
+//
+// TWO KNOWN EDGES, stated rather than discovered later:
+//
+//   - MULTI-INTERVAL ACCOUNTS. An account can have several 'active' intervals with gaps between
+//     them (deactivate, reactivate). EXISTS is satisfied by ANY of them, so a transaction dated
+//     inside a GAP is admitted by a LATER interval's valid_to. That is deliberate: this leg decides
+//     VISIBILITY of a retained row, not point-in-time liveness, and hiding a user's own transaction
+//     because their bank was briefly disconnected around that date would be the #1569 bug again in
+//     miniature. Contrast AccountFilterOptions.AsOf, which is a genuine point-in-time question and
+//     therefore bounds both ends of a single interval.
+//   - ACCOUNTS WITH NO 'active' INTERVAL AT ALL. Migration 000152's zero-length-interval guard
+//     skips the 'active' prefix when replaced_at/removed_at/updated_at is NULL or <= created_at,
+//     so such an account has only a terminal row. It satisfies neither this leg nor any as-of
+//     universe, and its transactions stay hidden. That is a backfill-data property, not a decision
+//     taken here; it is called out so the next reader does not conclude the predicate is wrong.
 //
 // WHY THERE IS NO LOWER BOUND ON THE INTERVAL. The obvious form of this predicate also asserts
 // `h.valid_from <= dateCol` — "the account was live on the transaction's own date". That is wrong
@@ -2476,7 +2503,11 @@ func retainedAccountVisibilityLeg(alias, dateCol string) string {
 		          JOIN account_status_history h
 		            ON h.account_id = disc_a.id AND h.status = 'active'
 		          WHERE disc_a.id = %s.account_id
-		            AND disc_a.status IN ('removed', 'expired')
+		            AND NOT EXISTS (
+		                SELECT 1 FROM accounts s
+		                WHERE s.user_account_id = disc_a.user_account_id
+		                  AND s.status = 'active'
+		            )
 		            AND (h.valid_to IS NULL OR (h.valid_to AT TIME ZONE 'UTC')::date >= %s)
 		      )`, alias, dateCol)
 }
