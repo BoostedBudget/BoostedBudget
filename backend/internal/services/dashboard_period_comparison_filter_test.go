@@ -198,10 +198,14 @@ func TestGetBalanceSummary_PeriodComparison_BaselineIncludesSinceInactiveAccount
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return(previous, nil)
 	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
 		mock.MatchedBy(func(opts repository.AccountFilterOptions) bool {
-			// AllStatuses is the only option that reaches 'expired'; IncludeReplaced would
-			// produce status IN ('active','replaced') and miss it entirely. IncludeHidden
-			// must be true to match GetByUserID, which does not filter is_hidden at all.
-			return opts.AllStatuses && opts.IncludeHidden && !opts.ReplacedOnly
+			// #1569: AsOf at the BASELINE cutoff, not AllStatuses. Both reach 'expired' (which
+			// IncludeReplaced would miss, producing status IN ('active','replaced')), but only
+			// AsOf answers the question actually being asked — "was this account live on that
+			// day" — and only AsOf also excludes accounts opened since. Pinning the instant is
+			// the point: an as-of read at the WRONG instant is the same lie in a new place.
+			// IncludeHidden must be true to match GetByUserID, which does not filter is_hidden.
+			return opts.AsOf != nil && opts.AsOf.Equal(defaultBaselineCutoff()) &&
+				opts.IncludeHidden && !opts.ReplacedOnly && !opts.AllStatuses
 		})).Return(allStatusAccounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -270,10 +274,11 @@ func TestGetBalanceSummaryHousehold_PeriodComparison_BaselineIncludesSinceInacti
 		mock.MatchedBy(isPrevious)).Return(previous, nil)
 	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope,
 		mock.MatchedBy(isCurrent)).Return(activeAccounts, nil)
-	// The all-statuses household map is resolved AT THE PREVIOUS CUTOFF, matching the
+	// The historical household map is resolved AT THE PREVIOUS CUTOFF, matching the
 	// baseline snapshot fetch's asOf — the joint-account fingerprint winner must be picked
-	// with the same bound on both sides (Issue #1369 gap-closure G1).
-	mockAccountRepo.On("GetForHouseholdScopeAllStatuses", ctx, requestingUserID, scope,
+	// with the same bound on both sides (Issue #1369 gap-closure G1), and since #1569 that
+	// same instant is what decides which accounts were live at all.
+	mockAccountRepo.On("GetForHouseholdScopeLiveAsOf", ctx, requestingUserID, scope,
 		mock.MatchedBy(isPrevious)).Return(allStatusAccounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -353,7 +358,8 @@ func TestGetNetWorth_PeriodComparison_BaselineIncludesSinceInactiveAccounts(t *t
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultBaselineCutoff()).Return(previous, nil)
 	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
 		mock.MatchedBy(func(opts repository.AccountFilterOptions) bool {
-			return opts.AllStatuses && opts.IncludeHidden && !opts.ReplacedOnly
+			return opts.AsOf != nil && opts.AsOf.Equal(defaultBaselineCutoff()) &&
+				opts.IncludeHidden && !opts.ReplacedOnly && !opts.AllStatuses
 		})).Return(allStatusAccounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -432,7 +438,7 @@ func TestGetNetWorthHousehold_PeriodComparison_BaselineIncludesSinceInactiveAcco
 		mock.MatchedBy(isCurrent)).Return(activeAccounts, nil)
 	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope,
 		mock.MatchedBy(isPrevious)).Return(activeAccounts, nil)
-	mockAccountRepo.On("GetForHouseholdScopeAllStatuses", ctx, requestingUserID, scope,
+	mockAccountRepo.On("GetForHouseholdScopeLiveAsOf", ctx, requestingUserID, scope,
 		mock.MatchedBy(isPrevious)).Return(allStatusAccounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -587,6 +593,8 @@ func TestGetNetWorthHousehold_PeriodComparison_AppliesAccountTypeFilterToBaselin
 	assert.InDelta(t, 25.0, result.PeriodComparison.NetWorthChangePercent, 0.001)
 
 	mockAccountRepo.AssertNotCalled(t, "GetForHouseholdScopeAllStatuses",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "GetForHouseholdScopeLiveAsOf",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -1151,7 +1159,7 @@ func TestGetBalanceSummary_PeriodComparison_LegacyNullUserAccountIDDoesNotDouble
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeAccounts, nil)
 	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
 		mock.MatchedBy(func(opts repository.AccountFilterOptions) bool {
-			return opts.AllStatuses && opts.IncludeHidden
+			return opts.AsOf != nil && opts.AsOf.Equal(defaultBaselineCutoff()) && opts.IncludeHidden
 		})).Return(allStatusAccounts, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(
 		[]domain.BalanceSnapshot{{ID: "cur", AccountID: "acct-new", UserAccountID: &stableUA,
@@ -1202,7 +1210,7 @@ func TestGetNetWorth_PeriodComparison_LegacyNullUserAccountIDDoesNotDoubleCount(
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeAccounts, nil)
 	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
 		mock.MatchedBy(func(opts repository.AccountFilterOptions) bool {
-			return opts.AllStatuses && opts.IncludeHidden
+			return opts.AsOf != nil && opts.AsOf.Equal(defaultBaselineCutoff()) && opts.IncludeHidden
 		})).Return(allStatusAccounts, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(
 		[]domain.BalanceSnapshot{{ID: "cur", AccountID: "acct-new", UserAccountID: &stableUA,

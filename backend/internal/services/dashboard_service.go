@@ -354,7 +354,12 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 	// endOfDay so a snapshot taken any time on previousDate counts, and "latest at or before the
 	// cutoff" so a user who was not synced that exact day still gets their most recent prior
 	// balance rather than no comparison at all. Issue #1537.
-	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, endOfDay(previousDate))
+	// Hoisted to a variable because the baseline account universe must be resolved at exactly
+	// this instant too — see historicalAccountMap. Reading the snapshots at one cutoff and the
+	// accounts at another is a class of bug that has already been fixed twice in the household
+	// paths (#1369 G1, #1537 round 10); sharing the value makes it unrepresentable here.
+	previousCutoff := endOfDay(previousDate)
+	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, previousCutoff)
 	if err == nil && len(previousSnapshots) > 0 {
 		// Sort descending so the dedup below keeps the LATEST snapshot per chain key.
 		// The repo already returns one row per chain, but a re-link chain can still surface twice
@@ -367,7 +372,7 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 		if filters != nil {
 			accountTypes = filters.AccountTypes
 		}
-		historicalMap, histErr := s.historicalAccountMap(ctx, userID, previousSnapshots, accountMap)
+		historicalMap, histErr := s.historicalAccountMap(ctx, userID, previousCutoff, previousSnapshots, accountMap)
 		if histErr != nil {
 			// Omit the comparison rather than report one computed over the wrong universe. This
 			// matches how the surrounding code already degrades (a failed previous-snapshot read
@@ -403,20 +408,34 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 }
 
 // historicalAccountMap returns the chain-aware account map for the personal-scope comparison
-// baseline: every status, so a snapshot belonging to a chain that has since been fully replaced or
-// expired can still be attributed to an account type. It returns an empty (non-nil-safe to read) map
-// without querying when every baseline snapshot already resolves in activeMap, which is the common
-// case — a merely re-linked chain resolves there through its user_account_id key.
+// baseline: the accounts that account_status_history records as having been LIVE at asOf, so a
+// snapshot belonging to a chain that has since been fully replaced, expired or removed can still
+// be attributed to an account type. It returns an empty (safe to read) map without querying when
+// every baseline snapshot already resolves in activeMap, which is the common case — a merely
+// re-linked chain resolves there through its user_account_id key. That short-circuit is why the
+// ordinary dashboard request still issues exactly one account query.
 //
-// AllStatuses, not IncludeReplaced: IncludeReplaced widens the filter to
-// `status IN ('active','replaced')` and so still excludes 'expired', which is precisely what
-// ExpireAccountsByFingerprint writes for the fully-disconnected chains this baseline must account
-// for. IncludeHidden is set to true to match GetByUserID, which applies no is_hidden predicate at
-// all — switching the baseline to a source that defaults to hiding hidden accounts would silently
-// change which accounts count toward it. Issue #1537.
+// asOf MUST be the same cutoff the baseline snapshot read used. The two together are one question
+// ("what was the world holding on that day"); resolving the balances at one instant and the
+// universe that interprets them at another is the #1369 G1 defect in personal clothing.
+//
+// AsOf, not AllStatuses (#1569, replacing #1537's approximation). AllStatuses removed the status
+// predicate entirely, which answers "every account that exists in any status TODAY". That
+// over-includes — an account opened AFTER asOf is in it too — and it can only ever say an account
+// exists, never that it was live then; the baseline was correct only because a
+// not-yet-opened account has no snapshot before the cutoff to contribute. account_status_history
+// records the real intervals, so the universe is now recorded truth rather than a guess that
+// happens to arrive at the right number. (IncludeReplaced was never a candidate: it produces
+// `status IN ('active','replaced')` and so misses 'expired', which is what
+// ExpireAccountsByFingerprint writes for a fully-disconnected chain.)
+//
+// IncludeHidden is true to match GetByUserID, which applies no is_hidden predicate at all —
+// a baseline source that defaults to hiding hidden accounts would silently change which accounts
+// count toward it.
 func (s *dashboardService) historicalAccountMap(
 	ctx context.Context,
 	userID string,
+	asOf time.Time,
 	baselineSnapshots []domain.BalanceSnapshot,
 	activeMap map[string]domain.Account,
 ) (map[string]domain.Account, error) {
@@ -424,11 +443,11 @@ func (s *dashboardService) historicalAccountMap(
 		return map[string]domain.Account{}, nil
 	}
 	accounts, err := s.accountRepo.GetAccountsWithInstitutionFiltered(ctx, userID, repository.AccountFilterOptions{
-		AllStatuses:   true,
+		AsOf:          &asOf,
 		IncludeHidden: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get all-status accounts for comparison baseline: %w", err)
+		return nil, fmt.Errorf("failed to get as-of-live accounts for comparison baseline: %w", err)
 	}
 	return buildChainAwareAccountMap(accounts), nil
 }
@@ -529,8 +548,8 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 
 	var periodComparison *domain.PeriodComparisonData
 	previousDate := asOfDate.AddDate(0, 0, -30)
-	// previousCutoff bounds the baseline snapshot read, and — only when the all-statuses fallback
-	// fires — the GetForHouseholdScopeAllStatuses read below.
+	// previousCutoff bounds the baseline snapshot read, and — only when the historical fallback
+	// fires — the GetForHouseholdScopeLiveAsOf read below.
 	//
 	// It is NOT shared with a prev-cutoff PRIMARY account map: unlike getNetWorthHousehold, which
 	// builds one (see the eight lines there explaining why), this path's primary lookup is the
@@ -548,7 +567,7 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 	if err == nil && len(previousSnapshots) > 0 {
 		historicalMap := map[string]domain.Account{}
 		if hasSnapshotOutsideAccountMap(previousSnapshots, accountMap) {
-			historicalAccounts, histErr := s.accountRepo.GetForHouseholdScopeAllStatuses(ctx, userID, scope, previousCutoff)
+			historicalAccounts, histErr := s.accountRepo.GetForHouseholdScopeLiveAsOf(ctx, userID, scope, previousCutoff)
 			if histErr != nil {
 				// Omit the comparison rather than compute it over the wrong universe — see the
 				// personal path's identical guard for why silence beats a false "no change".
@@ -844,7 +863,12 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 
 	// Point-in-time, not a zero-width date range — see GetBalanceSummary's baseline read for why
 	// the range form matched nothing in production (#1537).
-	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, endOfDay(previousDate))
+	// Hoisted to a variable because the baseline account universe must be resolved at exactly
+	// this instant too — see historicalAccountMap. Reading the snapshots at one cutoff and the
+	// accounts at another is a class of bug that has already been fixed twice in the household
+	// paths (#1369 G1, #1537 round 10); sharing the value makes it unrepresentable here.
+	previousCutoff := endOfDay(previousDate)
+	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForUser(ctx, userID, previousCutoff)
 	if err == nil && len(previousSnapshots) > 0 {
 		// Sort descending so the dedup below keeps the LATEST snapshot per chain key.
 		sort.Slice(previousSnapshots, func(i, j int) bool {
@@ -876,7 +900,7 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 		if filters != nil {
 			accountTypes = filters.AccountTypes
 		}
-		historicalMap, histErr := s.historicalAccountMap(ctx, userID, previousSnapshots, accountMap)
+		historicalMap, histErr := s.historicalAccountMap(ctx, userID, previousCutoff, previousSnapshots, accountMap)
 		if histErr != nil {
 			// Omit the comparison rather than report one computed over the wrong universe — the
 			// same degradation GetBalanceSummary applies, and for the same reason: reporting "no
@@ -1074,9 +1098,11 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 		// The right point in time is still not enough: GetForHouseholdScope filters
 		// `a.status = 'active'` REGARDLESS of its asOf, so a member's account disconnected since
 		// the cutoff is absent from previousAccountMap and was dropped from the baseline — the
-		// #1537 round 10 defect, in the path that round did not reach. GetForHouseholdScopeAllStatuses
-		// (added by that round for exactly this) supplies those accounts' TYPE, which is what decides
-		// assets vs liabilities; the BALANCE always comes from the snapshot row.
+		// #1537 round 10 defect, in the path that round did not reach. GetForHouseholdScopeLiveAsOf
+		// (#1569, superseding that round's GetForHouseholdScopeAllStatuses) supplies those accounts'
+		// TYPE, which is what decides assets vs liabilities; the BALANCE always comes from the
+		// snapshot row. It resolves the universe from account_status_history's recorded intervals,
+		// so — unlike all-statuses — it also excludes accounts that did not exist yet at the cutoff.
 		//
 		// Why it is user-visible: GetAggregatedHistory LEFT JOINs accounts with NO status predicate,
 		// so the net-worth history CHART already counts the since-expired account. Unfixed, the chart
@@ -1089,7 +1115,7 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 			// needs it — a chain with no active member left.
 			historicalMap := map[string]domain.Account{}
 			if hasSnapshotOutsideAccountMap(previousSnapshots, previousAccountMap) {
-				historicalAccounts, histErr := s.accountRepo.GetForHouseholdScopeAllStatuses(ctx, userID, scope, previousCutoff)
+				historicalAccounts, histErr := s.accountRepo.GetForHouseholdScopeLiveAsOf(ctx, userID, scope, previousCutoff)
 				if histErr != nil {
 					// Omit the comparison rather than compute it over the wrong universe — see the
 					// personal path's identical guard.
