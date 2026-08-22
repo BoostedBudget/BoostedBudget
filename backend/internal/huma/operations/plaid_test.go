@@ -80,6 +80,7 @@ type mockAccountServiceForPlaid struct {
 	disconnectErr error
 	reorderErr    error
 	capturedOpts  services.AccountFilterOptions
+	called        bool
 }
 
 func (m *mockAccountServiceForPlaid) LinkAccounts(ctx context.Context, userID, publicToken, institutionID, institutionName string) (*services.LinkAccountsResult, error) {
@@ -97,6 +98,7 @@ func (m *mockAccountServiceForPlaid) GetAccounts(ctx context.Context, userID str
 }
 
 func (m *mockAccountServiceForPlaid) GetAccountsFiltered(ctx context.Context, userID string, opts services.AccountFilterOptions) ([]domain.Account, error) {
+	m.called = true
 	m.capturedOpts = opts
 	if m.getErr != nil {
 		return nil, m.getErr
@@ -505,6 +507,122 @@ func TestGetAccounts_UserAccountIDExplicitStatusNotOverridden(t *testing.T) {
 	require.NotNil(t, output)
 	assert.Equal(t, "active", mockAccount.capturedOpts.StatusFilter,
 		"Explicit status should not be overridden even when user_account_id is set")
+}
+
+// TestGetAccounts_AsOfDate tests that a valid as_of_date query param (Issue #1569, Task 5B)
+// is parsed and forwarded as AccountFilterOptions.AsOf.
+func TestGetAccounts_AsOfDate(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "2026-01-15",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockAccount.capturedOpts.AsOf, "expected AsOf to be forwarded")
+	assert.Equal(t, "2026-01-15", mockAccount.capturedOpts.AsOf.Format("2006-01-02"))
+}
+
+// TestGetAccounts_AsOfDate_InvalidFormat tests that a malformed as_of_date returns a 400
+// instead of silently ignoring it.
+func TestGetAccounts_AsOfDate_InvalidFormat(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "not-a-date",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+}
+
+// TestGetAccounts_AsOfDate_ConflictWithStatusAll tests that combining as_of_date with
+// status=all is rejected at the API layer with a 400, rather than reaching the resolver's
+// ErrAccountFilterAsOfConflict (repository.AccountFilterOptions.AsOf is mutually exclusive
+// with AllStatuses/ReplacedOnly by design — see account_repository.go's
+// resolveAccountStatusScope). The API must not offer a combination that errors deeper down.
+func TestGetAccounts_AsOfDate_ConflictWithStatusAll(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "2026-01-15",
+		Status:             "all",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.False(t, mockAccount.called, "service must not be called when as_of_date conflicts with status")
+}
+
+// TestGetAccounts_AsOfDate_ConflictWithStatusReplaced mirrors the status=all case for
+// status=replaced.
+func TestGetAccounts_AsOfDate_ConflictWithStatusReplaced(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "2026-01-15",
+		Status:             "replaced",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.False(t, mockAccount.called, "service must not be called when as_of_date conflicts with status")
+}
+
+// TestGetAccounts_AsOfDate_ConflictWithIncludeReplaced tests the include_replaced=true alias,
+// which is equivalent to status=all.
+func TestGetAccounts_AsOfDate_ConflictWithIncludeReplaced(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		accounts: []domain.Account{createTestAccountForPlaid()},
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &GetAccountsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "2026-01-15",
+		IncludeReplaced:    "true",
+	}
+
+	output, err := handler.GetAccounts(context.Background(), input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.False(t, mockAccount.called, "service must not be called when as_of_date conflicts with include_replaced")
 }
 
 // TestUpdateAccount_Success tests successful account update.

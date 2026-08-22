@@ -1038,6 +1038,13 @@ type AccountFilterOptions struct {
 	// repository's AllStatuses (the genuine no-status-predicate read) today. Issue #1537.
 	StatusFilter  string
 	UserAccountID string // if set, filter to accounts with this user_account_id
+
+	// AsOf resolves the account universe as it really was at this instant, from
+	// account_status_history, instead of the current accounts.status snapshot. Mutually
+	// exclusive with a "replaced"-only StatusFilter and with the repository's AllStatuses (see
+	// repository.ErrAccountFilterAsOfConflict / resolveAccountStatusScope) — the API layer must
+	// not offer a combination that errors. Issue #1569.
+	AsOf *time.Time
 }
 
 // GetAccountsFiltered retrieves accounts with optional filters (Issue #307, #1109).
@@ -1061,6 +1068,7 @@ func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string,
 		IncludeReplaced: opts.IncludeReplaced || opts.StatusFilter == "all",
 		ReplacedOnly:    opts.StatusFilter == "replaced",
 		UserAccountID:   opts.UserAccountID,
+		AsOf:            opts.AsOf,
 	}
 
 	// Query accounts with filters using internal UUID
