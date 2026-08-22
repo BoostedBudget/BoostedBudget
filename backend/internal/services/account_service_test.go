@@ -3950,6 +3950,7 @@ func TestLinkAccounts_FingerprintCheck_BlocksAnotherUserActiveItem(t *testing.T)
 		mockUserRepo,
 		nil,
 		WithEncryptor(enc),
+		WithUserAccountService(newPermissiveUserAccountService(userID)),
 		WithAccountServiceLogger(slog.Default()),
 	)
 
@@ -4031,6 +4032,7 @@ func TestLinkAccounts_FingerprintCheck_BlocksTTLNotExpired(t *testing.T) {
 		mockUserRepo,
 		nil,
 		WithEncryptor(enc),
+		WithUserAccountService(newPermissiveUserAccountService(userID)),
 		WithAccountServiceLogger(slog.Default()),
 	)
 
@@ -4130,6 +4132,7 @@ func TestLinkAccounts_FingerprintCheck_AllowsAfterTTLExpiry(t *testing.T) {
 		mockUserRepo,
 		nil,
 		WithEncryptor(enc),
+		WithUserAccountService(newPermissiveUserAccountService(userID)),
 		WithAccountServiceLogger(slog.Default()),
 	)
 
@@ -4213,6 +4216,7 @@ func TestLinkAccounts_FingerprintCheck_AllowsSameUser(t *testing.T) {
 		mockUserRepo,
 		nil,
 		WithEncryptor(enc),
+		WithUserAccountService(newPermissiveUserAccountService(userID)),
 		WithAccountServiceLogger(slog.Default()),
 	)
 
@@ -4293,6 +4297,7 @@ func TestLinkAccounts_FingerprintCheck_RaceConditionHandled(t *testing.T) {
 		mockUserRepo,
 		nil,
 		WithEncryptor(enc),
+		WithUserAccountService(newPermissiveUserAccountService(userID)),
 		WithAccountServiceLogger(slog.Default()),
 	)
 
@@ -4375,6 +4380,7 @@ func TestLinkAccounts_FingerprintCheck_NilMaskAndSubtypeUseSentinels(t *testing.
 		mockUserRepo,
 		nil,
 		WithEncryptor(enc),
+		WithUserAccountService(newPermissiveUserAccountService(userID)),
 		WithAccountServiceLogger(slog.Default()),
 	)
 

@@ -12,6 +12,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
@@ -106,6 +107,18 @@ var (
 	// ErrNoAccountsAvailable is returned when Plaid returns zero accounts during linking
 	// Issue #668: Zero-account item prevention - prevents creating billable items with no accounts
 	ErrNoAccountsAvailable = errors.New("no accounts available from institution")
+	// ErrStableAccountIdentityUnavailable is returned when a stable user_accounts identity cannot
+	// be established for an account being linked.
+	//
+	// Issue #1569: this path used to log and CONTINUE, persisting an account with a NULL
+	// user_account_id. That is no longer survivable. Under history-retained-by-default an
+	// identity-less account is never cascade-deleted, so it lives forever as a chain member that
+	// accountChainKey cannot canonicalise — the permanent double-count seed described at
+	// dashboard_service.go:35-73 — and it blocks the accounts.user_account_id NOT NULL constraint
+	// that the retention model depends on. Refusing the link is the lesser failure: the user sees
+	// an actionable error and can retry, instead of silently acquiring an account whose history
+	// can never be tracked across a re-link.
+	ErrStableAccountIdentityUnavailable = errors.New("could not establish a stable account identity")
 )
 
 // AccountService handles account linking and management
@@ -523,33 +536,44 @@ func (s *accountService) LinkAccounts(
 	for i, plaidAccount := range plaidAccounts {
 		account := convertPlaidAccount(plaidAccount, linkedItem.ID, user.ID)
 
-		// Issue #171: Match or create user_account for stable reference across re-links
-		if s.userAccountSvc != nil {
-			accountType := string(plaidAccount.GetType())
-			accountSubtype := ""
-			if subtype, ok := plaidAccount.GetSubtypeOk(); ok && subtype != nil {
-				accountSubtype = string(*subtype)
-			}
-
-			userAccount, err := s.userAccountSvc.MatchOrCreate(
-				ctx,
-				user.ID,
-				institutionID,
-				account.Mask,
-				plaidAccount.GetName(),
-				accountType,
-				accountSubtype,
+		// Issue #171: Match or create user_account for stable reference across re-links.
+		// Issue #1569: a missing stable identity now FAILS the link — see
+		// ErrStableAccountIdentityUnavailable for why continuing is not survivable under
+		// history-retained-by-default.
+		if s.userAccountSvc == nil {
+			s.logger.Error("user_account service is not wired; refusing to link identity-less accounts",
+				"plaid_account_id", plaidAccount.GetAccountId(),
+				"user_id", user.ID,
 			)
-			if err != nil {
-				s.logger.Error("failed to match/create user_account",
-					"plaid_account_id", plaidAccount.GetAccountId(),
-					"error", err,
-				)
-				// Continue without user_account_id - transactions can still be synced
-			} else {
-				account.UserAccountID = &userAccount.ID
-			}
+			observability.AccountLinkRefusedNoStableIdentity.WithLabelValues("service_unwired").Inc()
+			return nil, fmt.Errorf("%w: user_account service unavailable", ErrStableAccountIdentityUnavailable)
 		}
+
+		accountType := string(plaidAccount.GetType())
+		accountSubtype := ""
+		if subtype, ok := plaidAccount.GetSubtypeOk(); ok && subtype != nil {
+			accountSubtype = string(*subtype)
+		}
+
+		userAccount, err := s.userAccountSvc.MatchOrCreate(
+			ctx,
+			user.ID,
+			institutionID,
+			account.Mask,
+			plaidAccount.GetName(),
+			accountType,
+			accountSubtype,
+		)
+		if err != nil {
+			s.logger.Error("failed to match/create user_account; refusing the link",
+				"plaid_account_id", plaidAccount.GetAccountId(),
+				"user_id", user.ID,
+				"error", err,
+			)
+			observability.AccountLinkRefusedNoStableIdentity.WithLabelValues("match_or_create_failed").Inc()
+			return nil, fmt.Errorf("%w: %v", ErrStableAccountIdentityUnavailable, err)
+		}
+		account.UserAccountID = &userAccount.ID
 
 		// Issue #1010: Compute fingerprint blind indices for storage
 		if s.enc != nil {

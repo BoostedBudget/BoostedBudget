@@ -115,6 +115,7 @@ func newFingerprintReleaseHarness(t *testing.T) (
 		mockUserRepo,
 		nil,
 		WithEncryptor(enc),
+		WithUserAccountService(newPermissiveUserAccountService(userID)),
 		WithAccountServiceLogger(slog.Default()),
 	)
 
