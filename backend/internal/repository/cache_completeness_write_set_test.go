@@ -71,12 +71,21 @@ var cachedReadRepoFiles = []string{
 // stays hermetic. TestDeleteCascadeMapMatchesLiveSchema (integration build tag) recomputes it from
 // the live catalogue and fails on drift, so a new FK or a changed ON DELETE action cannot silently
 // invalidate a derived disposition. Do not hand-edit: regenerate it.
+//
+// Issue #1569, migration 000150: accounts.savings_goals was widened from ON DELETE CASCADE to
+// RESTRICT (so a DELETE on accounts no longer reaches budget_categories through savings_goals —
+// RESTRICT edges are excluded entirely from this derivation's `confdeltype IN ('c','n','d')`
+// filter), and balance_snapshots.account_id changed from CASCADE to SET NULL (so recursion through
+// it stops there rather than continuing). Both "accounts" and "linked_items" (which reaches
+// budget_categories only transitively, through accounts) lost "budget_categories" from their
+// reachable-cached-tables set as a result. Regenerated against the live schema post-migration
+// (see TestDeleteCascadeMapMatchesLiveSchema, which caught the drift).
 var deleteCascadeReachesCachedTables = map[string][]string{
-	"accounts":          {"balance_snapshots", "budget_categories", "transactions"},
+	"accounts":          {"balance_snapshots", "transactions"},
 	"budgets":           {"budget_categories"},
 	"custom_categories": {"budget_categories"},
 	"households":        {"household_account_shares"},
-	"linked_items":      {"accounts", "balance_snapshots", "budget_categories", "transactions"},
+	"linked_items":      {"accounts", "balance_snapshots", "transactions"},
 	"merchants":         {"merchant_name_overrides"},
 	"savings_goals":     {"budget_categories"},
 	"user_accounts":     {"balance_snapshots", "household_account_shares"},
