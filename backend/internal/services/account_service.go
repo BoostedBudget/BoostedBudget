@@ -185,6 +185,12 @@ type AccountService interface {
 	// here directly rather than redefined, since the shape is identical and both live in this
 	// package).
 	SetCacheInvalidation(gens *cache.Generations, hh SyncCacheHouseholdLookup)
+
+	// SetAuditLogger wires the GDPR/security audit trail for account.removed and
+	// institution.disconnected entries (Issue #1569, Task 5G). Nil-safe optional dependency —
+	// see the auditLogger field's doc comment on accountService for why this takes the plain
+	// AuditLogger (Log), not AuditLogRepository's LogInTx.
+	SetAuditLogger(al AuditLogger)
 }
 
 // LinkAccountsResult contains the results of linking bank accounts
@@ -205,6 +211,17 @@ type accountService struct {
 	jobQueue       queue.JobQueue            // Issue #658: For auto-sync after linking (can be nil)
 	enc            *appcrypto.FieldEncryptor // Issue #1010: For fingerprint computation (can be nil)
 	logger         *slog.Logger
+
+	// auditLogger records account.removed / institution.disconnected entries (Issue #1569, Task
+	// 5G — nothing was audit-logged on either path before this). Nil-safe optional dependency,
+	// same setter-injection pattern as jobQueue/cacheGens: SetAuditLogger. Uses the plain
+	// AuditLogger.Log, NOT AuditLogRepository.LogInTx — LogInTx's safety rests specifically on
+	// running inside DeleteUserCascade's transaction with a NULL actor (see its own doc comment);
+	// DeleteAccount/DisconnectInstitution have no such transaction (accountRepo.UpdateStatus and
+	// MarkRemovedByLinkedItemID are already-documented standalone autocommit statements), and
+	// these are self-service, user-initiated actions — the same class RequestDeletion/
+	// CancelDeletion/RegisterUser already log via plain Log rather than LogInTx.
+	auditLogger AuditLogger
 
 	// Issue #1531 Blocker 1: cache invalidation for the dispossessed owner on fingerprint release
 	// (both optional; nil = skip that bump entirely).
@@ -724,6 +741,16 @@ func (s *accountService) DeleteAccount(ctx context.Context, accountID, userID st
 		return err
 	}
 
+	// Issue #1569, Task 5G: audit-log the removal. Non-fatal — the account is already removed by
+	// this point, so an audit-write failure must not be reported back to the caller as a failed
+	// deletion (same "already committed, don't abort" reasoning as RequestDeletion/
+	// CancelDeletion's own audit calls — see AuditLogger's doc comment).
+	if s.auditLogger != nil {
+		if auditErr := s.auditLogger.Log(ctx, "account.removed", "account", accountID); auditErr != nil {
+			logAuditFailure(ctx, auditErr, "account.removed", userID)
+		}
+	}
+
 	// Steps 4-5: Zero-account item cleanup (requires job queue)
 	if s.jobQueue != nil {
 		// Step 4: Count remaining active accounts for this linked item
@@ -1024,6 +1051,14 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 		return fmt.Errorf("failed to mark accounts removed for item %s: %w", linkedItemID, err)
 	}
 
+	// Issue #1569, Task 5G: audit-log the disconnect. Non-fatal, same reasoning as
+	// DeleteAccount's audit call above — the disconnect has already committed by this point.
+	if s.auditLogger != nil {
+		if auditErr := s.auditLogger.Log(ctx, "institution.disconnected", "linked_item", linkedItemID); auditErr != nil {
+			logAuditFailure(ctx, auditErr, "institution.disconnected", userID)
+		}
+	}
+
 	return nil
 }
 
@@ -1204,6 +1239,13 @@ func (s *accountService) SetJobQueue(jq queue.JobQueue) {
 func (s *accountService) SetCacheInvalidation(gens *cache.Generations, hh SyncCacheHouseholdLookup) {
 	s.cacheGens = gens
 	s.cacheHousehold = hh
+}
+
+// SetAuditLogger wires the GDPR/security audit trail for account.removed and
+// institution.disconnected entries. Nil-safe optional dependency (Issue #1569, Task 5G) — see
+// the auditLogger field's doc comment for why this uses Log rather than LogInTx.
+func (s *accountService) SetAuditLogger(al AuditLogger) {
+	s.auditLogger = al
 }
 
 // bumpCacheForDispossessedOwner invalidates userID's cached analytics (and, when resolvable,

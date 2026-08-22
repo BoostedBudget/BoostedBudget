@@ -543,7 +543,7 @@ func main() {
 		// Pin the real anchor and the three new fail-closed lists: the fixes must not start
 		// failing on correct code, and a guard that reports problems against today's main.go is
 		// as broken as one that reports none against a mutated one.
-		if got, want := scan.anchor, 2031; got != want {
+		if got, want := scan.anchor, 2035; got != want {
 			t.Errorf("anchor = %d (label %q), want %d — main.go's last UseMiddleware call is the "+
 				"admin middleware on line %d", got, scan.anchorLabel, want, want)
 		}
@@ -688,7 +688,7 @@ func main() {
 		if got, want := scan.anchor, 7; got != want {
 			t.Errorf("anchor = %d (label %q), want %d — the admin middleware is the LAST link in "+
 				"main.go's chain, and an anchor computed as a max over a marker list that omits it "+
-				"declares the chain complete early. main.go's real admin call is at line 2031 while "+
+				"declares the chain complete early. main.go's real admin call is at line 2035 while "+
 				"the anchor sat at 1892.", got, scan.anchorLabel, want)
 		}
 	})

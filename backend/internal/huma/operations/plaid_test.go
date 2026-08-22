@@ -140,6 +140,10 @@ func (m *mockAccountServiceForPlaid) SetCacheInvalidation(gens *cache.Generation
 	// no-op for tests
 }
 
+func (m *mockAccountServiceForPlaid) SetAuditLogger(al services.AuditLogger) {
+	// no-op for tests
+}
+
 // Helper function to create test account
 func createTestAccountForPlaid() domain.Account {
 	officialName := "Premier Checking"
