@@ -761,7 +761,111 @@ jobs:
 
       - name: Run MCP server unit tests
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
-        run: bun test --timeout 30000 src/
+        # timeout lives in apps/mcp-server/package.json — single source of truth.
+        #
+        # Output is tee'd so the count guard below can read bun's summary. `set -o pipefail` keeps
+        # bun's own exit code authoritative through the pipe — without it `tee` would mask a real
+        # test failure, which would be a strictly worse regression than the one the guard prevents.
+        # The log is removed first: this is a self-hosted runner, so nothing here is guaranteed
+        # to start empty, and a guard that verified a PREVIOUS run's summary would be worse than
+        # no guard at all.
+        run: |
+          set -o pipefail
+          rm -f "${{ runner.temp }}/mcp-unit-test-output.log"
+          bun run test 2>&1 | tee "${{ runner.temp }}/mcp-unit-test-output.log"
+
+      # Issue #1537: this job had NO coverage or count gate of any kind, so a test FILE that stops
+      # being collected — a rename, a moved directory, a `src/` layout change that slips past the
+      # `bun test ... src/` glob in apps/mcp-server/package.json — simply reports fewer tests and
+      # stays green. That is the same COLLECTION-regression shape the E2E job's `executed < floor`
+      # guard was written for (see the derivation comment on that step); this job just never had
+      # the equivalent.
+      #
+      # Floor derivation. MEASURED 2026-08-21 on bun 1.3.14: `bun run test` reports
+      # "293 pass / 0 fail" and "Ran 293 tests across 22 files." Floor 270 — 23 of headroom, ~7.8%,
+      # matching the headroom the E2E guard carries (260 against a measured 283, ~8.1%). Raise the
+      # floor when the suite grows substantially; do NOT lower it to make a red run green without
+      # first establishing WHY fewer tests ran.
+      #
+      # Counts executed test CASES, not files, on purpose. A file count cannot see `it.skip`
+      # spreading through a file, and it cannot see a single file losing half its cases; both leave
+      # the file count untouched. `executed = pass + fail` — skipped cases are by definition not
+      # executed, so counting them would let the floor be satisfied by tests that ran nothing.
+      #
+      # FAILS CLOSED. If the summary cannot be parsed at all the guard exits non-zero rather than
+      # defaulting to 0-or-pass. An unparseable summary must never read as a pass: that is the same
+      # false-confidence shape the E2E storage-state guard was fixed for, and it would sit inside
+      # the very check meant to catch silent loss.
+      - name: Guard — MCP unit suite must execute at least the floor of test cases
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
+        run: |
+          # Kept OUTSIDE the checkout: an untracked file in the workspace is exactly the kind of
+          # thing a later `git diff` drift check trips over, and this job runs one.
+          LOG="${{ runner.temp }}/mcp-unit-test-output.log"
+          if [ ! -s "$LOG" ]; then
+            echo "::error::${LOG} is missing or empty — the step above always tees bun's output to it, so this guard cannot verify anything. Fix that step rather than deleting this check."
+            exit 1
+          fi
+
+          python3 - "$LOG" 270 <<'PY'
+          import re, sys
+
+          path, floor = sys.argv[1], int(sys.argv[2])
+          raw = open(path, encoding="utf-8", errors="replace").read()
+
+          # Strip ANSI SGR codes before matching: bun colourises its summary when it thinks it has a
+          # TTY, and a colour-blind regex is exactly how a guard starts silently matching nothing.
+          text = re.sub(r"\x1b\[[0-9;]*m", "", raw)
+
+          def tail(n=20):
+              return "\n".join(text.splitlines()[-n:])
+
+          # Each `bun test` PROCESS emits exactly one of each of these lines. Requiring exactly one
+          # is what makes the guard safe against counting the wrong suite: run from the repo root
+          # instead of apps/mcp-server, `bun run test` resolves to the ROOT package.json and goes
+          # through turbo, which runs every workspace's tests and emits several such blocks with
+          # `@boostedbudget/web:test:` prefixes. Taking the last match there would silently measure
+          # the frontend suite against the MCP floor. Observed while testing this guard, hence the
+          # explicit count check rather than a `findall()[-1]`.
+          def counts(word):
+              return [int(m) for m in
+                      re.findall(rf"^\s*(\d+)\s+{word}\b", text, re.M)]
+
+          ran = re.findall(r"Ran\s+(\d+)\s+tests?\s+across\s+(\d+)\s+files?", text)
+          passes, fails, skips = counts("pass"), counts("fail"), counts("skip")
+
+          if len(ran) != 1 or len(passes) != 1 or len(fails) != 1:
+              print(f"::error::{path} does not contain exactly one bun test summary "
+                    f"(found {len(ran)} 'Ran N tests' lines, {len(passes)} 'N pass', "
+                    f"{len(fails)} 'N fail'). Either bun's output format changed, or this ran "
+                    f"somewhere other than apps/mcp-server and picked up other workspaces' suites "
+                    f"via turbo. Either way the count cannot be trusted, so this guard refuses to "
+                    f"report a pass. Fix the step or the parser — do not delete the guard.")
+              print("--- last 20 lines of the log ---")
+              print(tail())
+              sys.exit(1)
+
+          passed, failed = passes[0], fails[0]
+          skipped = skips[0] if len(skips) == 1 else 0
+          executed = passed + failed
+          ran_desc = f", bun reported 'Ran {ran[0][0]} tests across {ran[0][1]} files'"
+
+          if executed == 0:
+              print(f"::error::the MCP unit suite executed 0 test cases{ran_desc}. Nothing was "
+                    f"verified, yet the suite would otherwise report green.")
+              sys.exit(1)
+
+          if executed < floor:
+              print(f"::error::only {executed} MCP unit test cases executed ({passed} pass, "
+                    f"{failed} fail, {skipped if skipped is not None else 0} skip), below the floor "
+                    f"of {floor}{ran_desc}. Tests appear to have stopped being COLLECTED. Check the "
+                    f"`bun test ... src/` glob in apps/mcp-server/package.json and any recent file "
+                    f"moves or renames before adjusting this number.")
+              sys.exit(1)
+
+          print(f"MCP unit counts verified: {executed} test cases executed (floor {floor}) — "
+                f"{passed} pass, {failed} fail, {skipped if skipped is not None else 0} skip{ran_desc}")
+          PY
 
       - name: Typecheck MCP server
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/mcp-server
@@ -1549,6 +1653,17 @@ jobs:
       - name: Guard — frontend suite must run with an effective per-test timeout (#1537)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-frontend-test-timeout.test.sh
+
+      # Same "make test-scripts runs in no CI job" reasoning as the step above. This one asserts
+      # that the 22 hand-maintained process-isolated test paths all still EXIST and that
+      # test-conflict-files.sh and test-regular.sh still agree on them. Both runners take those
+      # paths on faith, and a stale entry in any MULTI-file group is silent: bun exits 0 having
+      # skipped the filter it could not resolve, so the file simply stops being tested while this
+      # job stays green. Runs BEFORE the suite so the failure names the stale path rather than
+      # surfacing later as unexplained pollution in an unrelated test.
+      - name: Guard — process-isolated test list must exist and stay in sync (#1537)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-isolated-test-lists.test.sh
 
       - name: Lint frontend
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
