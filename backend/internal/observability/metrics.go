@@ -690,6 +690,23 @@ var (
 		Help: "Total number of investment transactions processed by action (inserted/skipped).",
 	}, []string{"action"})
 
+	// AccountLinkRefusedNoStableIdentity counts bank links refused because no stable
+	// user_accounts identity could be established for an account (Issue #1569, Phase 0).
+	//
+	// This path used to log-and-continue, persisting an account with a NULL user_account_id.
+	// Under history-retained-by-default such a row is never cascade-deleted, so it becomes a
+	// permanent re-link double-count seed and blocks the accounts.user_account_id NOT NULL
+	// constraint the retention model rests on. Refusing is deliberate; this counter is how we
+	// find out whether the refusal ever fires in practice, since it turns a previously silent
+	// degradation into a user-visible failure.
+	//
+	// ⚠ LABEL HYGIENE: "reason" is one of a small fixed set — service_unwired |
+	// match_or_create_failed. Never a raw error string or any account/user identifier.
+	AccountLinkRefusedNoStableIdentity = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "account_link_refused_no_stable_identity_total",
+		Help: "Total bank links refused because no stable user_accounts identity could be established, by reason (service_unwired, match_or_create_failed).",
+	}, []string{"reason"})
+
 	// AccountsReplacedFiltered counts query executions that exclude replaced accounts or
 	// resolve a re-link chain (Issue #1109). The "family" label groups call sites by domain.
 	//

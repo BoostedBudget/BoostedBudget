@@ -440,6 +440,13 @@ func main() {
 	var plaidService services.PlaidService
 	// Declare accountService at package scope for Huma handler registration
 	var accountService services.AccountService
+	// Issue #1569: userAccountService must be constructed BEFORE accountService, not alongside the
+	// user-account routes further down. LinkAccounts now REFUSES to create an account without a
+	// stable user_accounts identity (ErrStableAccountIdentityUnavailable), because an identity-less
+	// account is a permanent re-link double-count seed once history is retained rather than
+	// cascade-deleted. Until this wiring existed, accountService.userAccountSvc was nil in
+	// production and EVERY linked account was written with user_account_id = NULL.
+	var userAccountService services.UserAccountService
 
 	// Authenticated routes (requires database and Clerk)
 
@@ -1283,6 +1290,10 @@ func main() {
 				appLogger.Error("Failed to initialize Plaid service", "error", err)
 			} else {
 				// Create account service with all dependencies
+				if userAccountService == nil {
+					userAccountService = services.NewUserAccountService(
+						repository.NewUserAccountRepository(db, fieldEncryptor))
+				}
 				accountService = services.NewAccountService(
 					plaidService,
 					linkedItemRepo,
@@ -1290,6 +1301,8 @@ func main() {
 					profileRepo,
 					db,
 					services.WithEncryptor(fieldEncryptor), // Issue #1010: Cross-user fingerprint checks
+					// Issue #1569: required, not optional — see the declaration comment above.
+					services.WithUserAccountService(userAccountService),
 				)
 
 				// Issue #1531 Blocker 1: wire cache invalidation for the cross-user fingerprint
@@ -2062,8 +2075,12 @@ func main() {
 		// These were registered for OpenAPI spec generation (RegisterAllRoutesForSpec)
 		// but never wired into the runtime server, so /api/v1/user-accounts 404'd even
 		// though the generated spec + MCP Worker advertised it.
-		userAccountRepo := repository.NewUserAccountRepository(db, fieldEncryptor)
-		userAccountService := services.NewUserAccountService(userAccountRepo)
+		// Issue #1569: reuse the instance wired into accountService above rather than constructing a
+		// second one, so the linking path and the routes cannot diverge.
+		if userAccountService == nil {
+			userAccountService = services.NewUserAccountService(
+				repository.NewUserAccountRepository(db, fieldEncryptor))
+		}
 		operations.RegisterUserAccountRoutes(humaAPI, operations.NewUserAccountHandler(userAccountService))
 		appLogger.Info("Huma user account routes registered")
 
