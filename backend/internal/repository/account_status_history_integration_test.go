@@ -17,6 +17,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -231,70 +233,78 @@ func TestAccountStatusHistory_BulkMultiRowUpdate_OneIntervalPerAccount(t *testin
 	}
 }
 
-// runAccountStatusHistoryBackfillSQL re-runs the exact backfill statements from migration
-// 000152_backfill_account_status_history.up.sql. It is a deliberate copy (not a shared constant)
-// because the migration is applied once, forever, against the real database at deploy time — by
-// the time this suite runs, migrations up to 000152 (including its trigger) are already applied,
-// so the ONLY way to exercise the backfill's SQL against fixture data is to run it again here,
-// scoped by NOT EXISTS exactly like the migration does. Keep this in sync with 000152's up.sql if
-// that file's backfill logic ever changes.
+// accountStatusHistoryBackfillMigrationPath points at 000152's up.sql relative to this package
+// directory (backend/internal/repository -> backend/migrations).
+const accountStatusHistoryBackfillMigrationPath = "../../migrations/000152_backfill_account_status_history.up.sql"
+
+// readAccountStatusHistoryBackfillStatements extracts the backfill INSERT statements directly out
+// of 000152_backfill_account_status_history.up.sql at test run time, instead of keeping a
+// hand-copied duplicate in this file. A hand-copied duplicate can drift silently from the real
+// migration (the migration is applied once, forever, at deploy time — nothing re-runs it, so
+// nothing would notice the two texts diverging); reading the migration's own bytes means the test
+// exercises the ACTUAL SQL Postgres will run in production, by construction, with no separate
+// "keep in sync" step to forget.
+//
+// This migration file's only comments are full-line ("--" prefixed after trimming) with no
+// inline trailing comments on SQL lines, and no statement's SQL body itself contains a literal
+// semicolon (verified: every VALUES/CASE/string-literal in this file is semicolon-free) — so
+// "drop full comment lines, then split remaining text on ';'" is a safe, simple statement
+// splitter here without needing a general SQL parser. Statements are filtered down to the ones
+// beginning with "INSERT INTO account_status_history", which excludes the trigger DDL
+// (CREATE FUNCTION / CREATE TRIGGER) that follows the backfill in the same file — re-running that
+// DDL would be harmless (guarded by IF NOT EXISTS / CREATE OR REPLACE) but is not what this
+// helper is for, so it is excluded rather than merely tolerated.
+func readAccountStatusHistoryBackfillStatements(t *testing.T) []string {
+	t.Helper()
+
+	raw, err := os.ReadFile(accountStatusHistoryBackfillMigrationPath)
+	require.NoError(t, err, "read %s to extract its backfill SQL verbatim", accountStatusHistoryBackfillMigrationPath)
+
+	var withoutComments strings.Builder
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "--") {
+			continue
+		}
+		withoutComments.WriteString(line)
+		withoutComments.WriteByte('\n')
+	}
+
+	// The backfill is entirely above the trigger section (CREATE OR REPLACE FUNCTION ...) in this
+	// file — cut there before splitting on ';', so the trigger function body's own
+	// "INSERT INTO account_status_history ... VALUES (NEW.id, ...)" (same table name prefix, but
+	// referencing NEW, which only exists inside a trigger and would fail outside one) is never
+	// mistaken for a backfill statement.
+	backfillOnly := withoutComments.String()
+	if idx := strings.Index(backfillOnly, "CREATE OR REPLACE FUNCTION"); idx != -1 {
+		backfillOnly = backfillOnly[:idx]
+	} else {
+		t.Fatalf("expected %s to contain a CREATE OR REPLACE FUNCTION marker separating backfill from trigger DDL — migration shape changed", accountStatusHistoryBackfillMigrationPath)
+	}
+
+	var statements []string
+	for _, stmt := range strings.Split(backfillOnly, ";") {
+		stmt = strings.TrimSpace(stmt)
+		if strings.HasPrefix(stmt, "INSERT INTO account_status_history") {
+			statements = append(statements, stmt)
+		}
+	}
+	require.NotEmpty(t, statements,
+		"found zero backfill INSERT statements in %s — the migration's shape or this parser's "+
+			"assumptions (full-line comments only, no embedded semicolons) no longer hold",
+		accountStatusHistoryBackfillMigrationPath)
+	return statements
+}
+
+// runAccountStatusHistoryBackfillSQL re-runs 000152's backfill INSERT statements — read live from
+// the migration file itself via readAccountStatusHistoryBackfillStatements — against whatever
+// fixture data the calling test has set up. This is necessary because migrations run once,
+// forever: by the time this suite runs, 000152 (including its trigger) is already applied, so the
+// only way to exercise the backfill logic against fresh fixture data is to execute its statements
+// again, scoped by the same per-status NOT EXISTS guards the migration itself uses.
 func runAccountStatusHistoryBackfillSQL(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 
-	statements := []string{
-		`INSERT INTO account_status_history (account_id, user_id, user_account_id, status, valid_from, valid_to, reason, provenance)
-		 SELECT a.id, a.user_id, a.user_account_id, 'active', a.created_at, NULL, 'created', 'backfilled'
-		 FROM accounts a
-		 WHERE a.status = 'active'
-		   AND NOT EXISTS (SELECT 1 FROM account_status_history h WHERE h.account_id = a.id AND h.status = 'active')`,
-
-		`INSERT INTO account_status_history (account_id, user_id, user_account_id, status, valid_from, valid_to, reason, provenance)
-		 SELECT a.id, a.user_id, a.user_account_id, 'active', a.created_at, a.replaced_at, 'created', 'backfilled'
-		 FROM accounts a
-		 WHERE a.status = 'replaced'
-		   AND a.replaced_at IS NOT NULL AND a.replaced_at > a.created_at
-		   AND NOT EXISTS (SELECT 1 FROM account_status_history h WHERE h.account_id = a.id AND h.status = 'active')`,
-
-		`INSERT INTO account_status_history (account_id, user_id, user_account_id, status, valid_from, valid_to, reason, provenance)
-		 SELECT a.id, a.user_id, a.user_account_id, 'replaced',
-		        CASE WHEN a.replaced_at IS NOT NULL AND a.replaced_at > a.created_at THEN a.replaced_at ELSE a.created_at END,
-		        NULL, 'relink', 'backfilled'
-		 FROM accounts a
-		 WHERE a.status = 'replaced'
-		   AND NOT EXISTS (SELECT 1 FROM account_status_history h WHERE h.account_id = a.id AND h.status = 'replaced')`,
-
-		`INSERT INTO account_status_history (account_id, user_id, user_account_id, status, valid_from, valid_to, reason, provenance)
-		 SELECT a.id, a.user_id, a.user_account_id, 'active', a.created_at, a.updated_at, 'created', 'backfilled'
-		 FROM accounts a
-		 WHERE a.status = 'expired'
-		   AND a.updated_at IS NOT NULL AND a.updated_at > a.created_at
-		   AND NOT EXISTS (SELECT 1 FROM account_status_history h WHERE h.account_id = a.id AND h.status = 'active')`,
-
-		`INSERT INTO account_status_history (account_id, user_id, user_account_id, status, valid_from, valid_to, reason, provenance)
-		 SELECT a.id, a.user_id, a.user_account_id, 'expired',
-		        CASE WHEN a.updated_at IS NOT NULL AND a.updated_at > a.created_at THEN a.updated_at ELSE a.created_at END,
-		        NULL, 'backfill_expired_estimated', 'backfilled'
-		 FROM accounts a
-		 WHERE a.status = 'expired'
-		   AND NOT EXISTS (SELECT 1 FROM account_status_history h WHERE h.account_id = a.id AND h.status = 'expired')`,
-
-		`INSERT INTO account_status_history (account_id, user_id, user_account_id, status, valid_from, valid_to, reason, provenance)
-		 SELECT a.id, a.user_id, a.user_account_id, 'active', a.created_at, a.removed_at, 'created', 'backfilled'
-		 FROM accounts a
-		 WHERE a.status = 'removed'
-		   AND a.removed_at IS NOT NULL AND a.removed_at > a.created_at
-		   AND NOT EXISTS (SELECT 1 FROM account_status_history h WHERE h.account_id = a.id AND h.status = 'active')`,
-
-		`INSERT INTO account_status_history (account_id, user_id, user_account_id, status, valid_from, valid_to, reason, provenance)
-		 SELECT a.id, a.user_id, a.user_account_id, 'removed',
-		        CASE WHEN a.removed_at IS NOT NULL AND a.removed_at > a.created_at THEN a.removed_at ELSE a.created_at END,
-		        NULL, 'user_disconnect', 'backfilled'
-		 FROM accounts a
-		 WHERE a.status = 'removed'
-		   AND NOT EXISTS (SELECT 1 FROM account_status_history h WHERE h.account_id = a.id AND h.status = 'removed')`,
-	}
-
-	for _, stmt := range statements {
+	for _, stmt := range readAccountStatusHistoryBackfillStatements(t) {
 		_, err := pool.Exec(ctx, stmt)
 		require.NoError(t, err)
 	}
