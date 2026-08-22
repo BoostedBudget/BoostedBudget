@@ -1507,6 +1507,7 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 	// listed entry no longer in the live schema) fails the ElementsMatch check below with a diff
 	// — telling a future developer exactly which table needs seed+assertion coverage added here.
 	expectedUserScopedFKs := []userScopedFK{
+		{Table: "account_status_history", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "accounts", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "audit_logs", Column: "user_id", DeleteRule: "SET NULL"},
 		{Table: "balance_snapshots", Column: "user_id", DeleteRule: "CASCADE"},
@@ -1661,6 +1662,10 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		VALUES ($1, $2, $3, 'Checking', 'depository') RETURNING id`,
 		item.ID, target.ID, "plaid-acct-"+suffix,
 	).Scan(&accountID))
+	// account_status_history (Issue #1569): the accounts INSERT trigger
+	// (record_account_status_change(), migration 000152) fires on this very INSERT and opens an
+	// 'active' interval with user_id = target.ID directly — no separate seed statement needed,
+	// this row IS this table's seed for the sanity check below.
 
 	execNoErr(t, ctx, pool, `
 		INSERT INTO balance_snapshots (account_id, user_id, snapshot_at, source)
