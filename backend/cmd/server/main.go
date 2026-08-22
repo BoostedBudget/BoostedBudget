@@ -1319,6 +1319,12 @@ func main() {
 				// Nothing was audit-logged on either path before this.
 				accountService.SetAuditLogger(auditLogger)
 
+				// Issue #1569, Task 6: audit-log account.history_purged / linked_item.history_purged
+				// INSIDE PurgeAccount/PurgeInstitution's own transaction, via LogInTx. auditLogger
+				// (repository.NewAuditLogRepository) satisfies both AuditLogger and
+				// AuditLogRepository, so the same instance backs both setters.
+				accountService.SetAuditLogRepository(auditLogger)
+
 				appLogger.Info("Plaid service initialized")
 				appLogger.Info("Account linking service initialized")
 

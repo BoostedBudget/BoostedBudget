@@ -76,9 +76,11 @@ type mockAccountServiceForPlaid struct {
 	getErr        error
 	linkErr       error
 	updateErr     error
-	deleteErr     error
-	disconnectErr error
-	reorderErr    error
+	disconnectAccountErr error
+	purgeAccountErr      error
+	disconnectErr        error
+	purgeInstitutionErr  error
+	reorderErr           error
 	capturedOpts  services.AccountFilterOptions
 	called        bool
 }
@@ -117,12 +119,20 @@ func (m *mockAccountServiceForPlaid) ReorderAccounts(ctx context.Context, userID
 	return m.reorderErr
 }
 
-func (m *mockAccountServiceForPlaid) DeleteAccount(ctx context.Context, accountID, userID string) error {
-	return m.deleteErr
+func (m *mockAccountServiceForPlaid) DisconnectAccount(ctx context.Context, accountID, userID string) error {
+	return m.disconnectAccountErr
+}
+
+func (m *mockAccountServiceForPlaid) PurgeAccount(ctx context.Context, accountID, userID string) error {
+	return m.purgeAccountErr
 }
 
 func (m *mockAccountServiceForPlaid) DisconnectInstitution(ctx context.Context, linkedItemID, userID string) error {
 	return m.disconnectErr
+}
+
+func (m *mockAccountServiceForPlaid) PurgeInstitution(ctx context.Context, linkedItemID, userID string) error {
+	return m.purgeInstitutionErr
 }
 
 func (m *mockAccountServiceForPlaid) ListActiveByUser(ctx context.Context, userID string) ([]domain.Account, error) {
@@ -141,6 +151,10 @@ func (m *mockAccountServiceForPlaid) SetCacheInvalidation(gens *cache.Generation
 }
 
 func (m *mockAccountServiceForPlaid) SetAuditLogger(al services.AuditLogger) {
+	// no-op for tests
+}
+
+func (m *mockAccountServiceForPlaid) SetAuditLogRepository(ar repository.AuditLogRepository) {
 	// no-op for tests
 }
 
@@ -728,38 +742,95 @@ func TestUpdatePlaidAccount_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestDeletePlaidAccount_Success tests successful account deletion.
-func TestDeletePlaidAccount_Success(t *testing.T) {
+// TestDisconnectPlaidAccount_Success tests successful account disconnection (soft, retains
+// history). Issue #1569, Task 6.
+func TestDisconnectPlaidAccount_Success(t *testing.T) {
 	mockPlaid := &mockPlaidServiceForPlaid{}
 	mockAccount := &mockAccountServiceForPlaid{}
 
 	handler := NewPlaidHandler(mockPlaid, mockAccount)
 
-	input := &DeleteAccountInput{
+	input := &DisconnectAccountInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		ID:                 "acc-123",
 	}
 
-	_, err := handler.DeleteAccount(context.Background(), input)
+	_, err := handler.DisconnectAccount(context.Background(), input)
 
 	require.NoError(t, err)
 }
 
-// TestDeletePlaidAccount_NotFound tests error when account not found for deletion.
-func TestDeletePlaidAccount_NotFound(t *testing.T) {
+// TestDisconnectPlaidAccount_NotFound tests error when account not found for disconnection.
+func TestDisconnectPlaidAccount_NotFound(t *testing.T) {
 	mockPlaid := &mockPlaidServiceForPlaid{}
 	mockAccount := &mockAccountServiceForPlaid{
-		deleteErr: repository.ErrAccountNotFound,
+		disconnectAccountErr: repository.ErrAccountNotFound,
 	}
 
 	handler := NewPlaidHandler(mockPlaid, mockAccount)
 
-	input := &DeleteAccountInput{
+	input := &DisconnectAccountInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		ID:                 "nonexistent",
 	}
 
-	_, err := handler.DeleteAccount(context.Background(), input)
+	_, err := handler.DisconnectAccount(context.Background(), input)
+
+	require.Error(t, err)
+}
+
+// TestPurgePlaidAccount_Success tests successful account purge (hard delete). Issue #1569, Task 6.
+func TestPurgePlaidAccount_Success(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &PurgeAccountInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "acc-123",
+	}
+
+	_, err := handler.PurgeAccount(context.Background(), input)
+
+	require.NoError(t, err)
+}
+
+// TestPurgePlaidAccount_NotFound tests error when account not found for purge.
+func TestPurgePlaidAccount_NotFound(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		purgeAccountErr: repository.ErrAccountNotFound,
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &PurgeAccountInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "nonexistent",
+	}
+
+	_, err := handler.PurgeAccount(context.Background(), input)
+
+	require.Error(t, err)
+}
+
+// TestPurgePlaidAccount_BlockedBySavingsGoal proves a savings goal referencing the account
+// surfaces as an error rather than silently succeeding.
+func TestPurgePlaidAccount_BlockedBySavingsGoal(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		purgeAccountErr: repository.ErrPurgeBlockedBySavingsGoal,
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &PurgeAccountInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "acc-123",
+	}
+
+	_, err := handler.PurgeAccount(context.Background(), input)
 
 	require.Error(t, err)
 }
@@ -796,6 +867,43 @@ func TestDisconnectInstitution_Error(t *testing.T) {
 	}
 
 	_, err := handler.DisconnectInstitution(context.Background(), input)
+
+	require.Error(t, err)
+}
+
+// TestPurgeInstitution_Success tests successful institution purge (hard delete). Issue #1569, Task 6.
+func TestPurgeInstitution_Success(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &PurgeInstitutionInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "item-123",
+	}
+
+	_, err := handler.PurgeInstitution(context.Background(), input)
+
+	require.NoError(t, err)
+}
+
+// TestPurgeInstitution_NotDisconnected proves purging an institution that was never disconnected
+// surfaces an error rather than silently destroying an item that might still be billing.
+func TestPurgeInstitution_NotDisconnected(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		purgeInstitutionErr: repository.ErrLinkedItemNotDisconnected,
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &PurgeInstitutionInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "item-123",
+	}
+
+	_, err := handler.PurgeInstitution(context.Background(), input)
 
 	require.Error(t, err)
 }

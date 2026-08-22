@@ -79,16 +79,37 @@
       ]
     },
     {
-      "operationId": "deleteAccount",
+      "operationId": "purgeAccount",
       "method": "DELETE",
       "path": "/api/v1/accounts/{id}",
-      "summary": "Delete account",
+      "summary": "Purge account",
       "tags": [
         "Accounts"
       ],
       "manifestClass": "read",
       "excluded": true,
-      "description": "Deletes a single account with ownership validation.",
+      "description": "Permanently destroys a single account and everything derived from it (balance history, holdings, liabilities) with ownership validation. This cannot be undone. Transactions are not destroyed. Refuses if a savings goal still references this account. Use POST .../disconnect instead to stop syncing while retaining history.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Account ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "disconnectAccount",
+      "method": "POST",
+      "path": "/api/v1/accounts/{id}/disconnect",
+      "summary": "Disconnect account",
+      "tags": [
+        "Accounts"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Stops a single account from syncing and retains its financial history. Does not destroy any data — use DELETE to permanently purge an account and its history.",
       "parameters": [
         {
           "name": "id",
@@ -2805,16 +2826,37 @@
       ]
     },
     {
-      "operationId": "disconnectInstitution",
+      "operationId": "purgeInstitution",
       "method": "DELETE",
       "path": "/api/v1/linked-items/{id}",
+      "summary": "Purge institution",
+      "tags": [
+        "Accounts"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Permanently destroys a linked item and every account under it (balance history, holdings, liabilities) with ownership validation. This cannot be undone. Transactions are not destroyed. Refuses if a savings goal still references one of its accounts, and refuses unless the institution was already disconnected. Use POST .../disconnect first.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Linked item ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "disconnectInstitution",
+      "method": "POST",
+      "path": "/api/v1/linked-items/{id}/disconnect",
       "summary": "Disconnect institution",
       "tags": [
         "Accounts"
       ],
       "manifestClass": "read",
       "excluded": true,
-      "description": "Disconnects an institution and all associated accounts.",
+      "description": "Disconnects an institution (stops Plaid sync/billing) and retains all of its accounts' financial history. Does not destroy any data — use DELETE to permanently purge the institution and its accounts.",
       "parameters": [
         {
           "name": "id",

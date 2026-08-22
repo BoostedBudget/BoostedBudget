@@ -81,7 +81,7 @@ export const getReorderAccountsMockHandler = (overrideResponse?: ReorderAccounts
   }, options)
 }
 
-export const getDeleteAccountMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+export const getPurgeAccountMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.delete('*/api/v1/accounts/:id', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {await delay(500);
   if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
@@ -103,8 +103,28 @@ export const getUpdateAccountMockHandler = (overrideResponse?: UpdateAccountOutp
   }, options)
 }
 
-export const getDisconnectInstitutionMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+export const getDisconnectAccountMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/accounts/:id/disconnect', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 204
+      })
+  }, options)
+}
+
+export const getPurgeInstitutionMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.delete('*/api/v1/linked-items/:id', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {await delay(500);
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 204
+      })
+  }, options)
+}
+
+export const getDisconnectInstitutionMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/linked-items/:id/disconnect', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
   if (typeof overrideResponse === 'function') {await overrideResponse(info); }
 
     return new HttpResponse(null,
@@ -115,7 +135,9 @@ export const getDisconnectInstitutionMockHandler = (overrideResponse?: void | ((
 export const getAccountsMock = () => [
   getGetAccountsMockHandler(),
   getReorderAccountsMockHandler(),
-  getDeleteAccountMockHandler(),
+  getPurgeAccountMockHandler(),
   getUpdateAccountMockHandler(),
+  getDisconnectAccountMockHandler(),
+  getPurgeInstitutionMockHandler(),
   getDisconnectInstitutionMockHandler()
 ]

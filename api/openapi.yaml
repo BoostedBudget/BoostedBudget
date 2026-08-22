@@ -7795,8 +7795,8 @@ paths:
         - Accounts
   /api/v1/accounts/{id}:
     delete:
-      description: Deletes a single account with ownership validation.
-      operationId: deleteAccount
+      description: Permanently destroys a single account and everything derived from it (balance history, holdings, liabilities) with ownership validation. This cannot be undone. Transactions are not destroyed. Refuses if a savings goal still references this account. Use POST .../disconnect instead to stop syncing while retaining history.
+      operationId: purgeAccount
       parameters:
         - description: Account ID
           in: path
@@ -7816,7 +7816,7 @@ paths:
           description: Error
       security:
         - clerk: []
-      summary: Delete account
+      summary: Purge account
       tags:
         - Accounts
     patch:
@@ -7852,6 +7852,32 @@ paths:
       security:
         - clerk: []
       summary: Update account
+      tags:
+        - Accounts
+  /api/v1/accounts/{id}/disconnect:
+    post:
+      description: Stops a single account from syncing and retains its financial history. Does not destroy any data — use DELETE to permanently purge an account and its history.
+      operationId: disconnectAccount
+      parameters:
+        - description: Account ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Account ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Disconnect account
       tags:
         - Accounts
   /api/v1/admin/check-role:
@@ -12099,7 +12125,33 @@ paths:
         - Analytics
   /api/v1/linked-items/{id}:
     delete:
-      description: Disconnects an institution and all associated accounts.
+      description: Permanently destroys a linked item and every account under it (balance history, holdings, liabilities) with ownership validation. This cannot be undone. Transactions are not destroyed. Refuses if a savings goal still references one of its accounts, and refuses unless the institution was already disconnected. Use POST .../disconnect first.
+      operationId: purgeInstitution
+      parameters:
+        - description: Linked item ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Linked item ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Purge institution
+      tags:
+        - Accounts
+  /api/v1/linked-items/{id}/disconnect:
+    post:
+      description: Disconnects an institution (stops Plaid sync/billing) and retains all of its accounts' financial history. Does not destroy any data — use DELETE to permanently purge the institution and its accounts.
       operationId: disconnectInstitution
       parameters:
         - description: Linked item ID

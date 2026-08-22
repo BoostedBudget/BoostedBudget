@@ -24,10 +24,19 @@ export const mockUseReorderAccounts = mock(() => ({
   reset: mockReorderAccountsReset,
 }))
 
-// === useDeleteAccount ===
-export const mockDeleteAccountMutateAsync = mock(() => Promise.resolve())
-export const mockUseDeleteAccount = mock(() => ({
-  mutateAsync: mockDeleteAccountMutateAsync,
+// === useDisconnectAccount (Issue #1569, Task 6: primary, non-destructive) ===
+export const mockDisconnectAccountMutateAsync = mock(() => Promise.resolve())
+export const mockUseDisconnectAccount = mock(() => ({
+  mutateAsync: mockDisconnectAccountMutateAsync,
+  isPending: false,
+  isError: false,
+  error: null,
+}))
+
+// === usePurgeAccount (Issue #1569, Task 6: destructive, renamed from useDeleteAccount) ===
+export const mockPurgeAccountMutateAsync = mock(() => Promise.resolve())
+export const mockUsePurgeAccount = mock(() => ({
+  mutateAsync: mockPurgeAccountMutateAsync,
   isPending: false,
   isError: false,
   error: null,
@@ -55,12 +64,24 @@ export const mockUseDisconnectInstitution = mock(() => ({
   error: null,
 }))
 
+// === usePurgeInstitution (Issue #1569, Task 6: destructive, renamed from useDisconnectInstitution's
+// old DELETE-backed behavior) ===
+export const mockPurgeInstitutionMutateAsync = mock(() => Promise.resolve())
+export const mockUsePurgeInstitution = mock(() => ({
+  mutateAsync: mockPurgeInstitutionMutateAsync,
+  isPending: false,
+  isError: false,
+  error: null,
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/accounts/accounts', () => ({
   ...RealAccountsModule,
   useGetAccounts: mockUseGetAccounts,
   useReorderAccounts: mockUseReorderAccounts,
-  useDeleteAccount: mockUseDeleteAccount,
+  useDisconnectAccount: mockUseDisconnectAccount,
+  usePurgeAccount: mockUsePurgeAccount,
   useUpdateAccount: mockUseUpdateAccount,
   useDisconnectInstitution: mockUseDisconnectInstitution,
+  usePurgeInstitution: mockUsePurgeInstitution,
 }))

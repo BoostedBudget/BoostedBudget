@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
@@ -29,6 +30,15 @@ var (
 	// status" — and there is no defensible silent winner between them, so the resolver refuses
 	// rather than picking one. Issue #1569.
 	ErrAccountFilterAsOfConflict = errors.New("AccountFilterOptions.AsOf cannot be combined with ReplacedOnly or AllStatuses")
+
+	// ErrPurgeBlockedBySavingsGoal is returned by PurgeAccount/PurgeLinkedItem when a savings
+	// goal still points at one of the accounts being purged. Migration 000150 made
+	// savings_goals.account_id ON DELETE RESTRICT specifically so this refusal is enforced by the
+	// database, not reimplemented here — this sentinel exists only to translate the resulting
+	// Postgres foreign-key-violation error (23503 on fk_savings_goals_account_id) into something
+	// the API layer can map to an actionable 409, instead of leaking a raw pgconn.PgError. Issue
+	// #1569, Task 6.
+	ErrPurgeBlockedBySavingsGoal = errors.New("a savings goal still references this account; delete the goal first")
 )
 
 // FingerprintOwnership holds information about who owns a fingerprint and the state of their linked item.
@@ -216,6 +226,31 @@ type AccountRepository interface {
 	// that references it (balance_snapshots, holdings, investment transactions, liability rows,
 	// savings_goals). Issue #1569: disconnecting an institution must retain history.
 	MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string) error
+
+	// PurgeAccount permanently and transactionally destroys accountID and every row derived from
+	// it: the account row itself, its balance_snapshots (explicit — migration 000150 made that FK
+	// SET NULL, so it does not fall out of a plain account delete), and — via
+	// ON DELETE CASCADE, unchanged since account creation — its holdings, investment_transactions,
+	// credit/mortgage/student_loan_liabilities, and account_status_history rows. Issue #1569, Task 6.
+	//
+	// transactions.account_id is ON DELETE SET NULL (migration 000035) and is deliberately left
+	// alone: purging an account must not delete the transactions the user categorized and
+	// budgeted against. transaction_repository.go's unified feed already renders a NULL
+	// account_id row (the "truly orphaned" leg), so those transactions remain visible.
+	//
+	// Refuses with ErrPurgeBlockedBySavingsGoal, doing and changing nothing, while a savings goal
+	// still references this account (migration 000150's RESTRICT constraint on
+	// fk_savings_goals_account_id) — the caller must delete the goal first. The constraint itself
+	// is the enforcement; this method only translates its violation into a domain sentinel.
+	//
+	// auditLog, when non-nil, is used to write an "account.history_purged" entry INSIDE the same
+	// transaction via LogInTx, so the entry and the destruction it describes commit or roll back
+	// together. Safe on this path specifically because the transaction never touches a users row
+	// with FOR UPDATE — see AuditLogRepository.LogInTx's doc comment for why that precondition
+	// matters.
+	//
+	// Returns ErrAccountNotFound if the account doesn't exist or isn't owned by userID.
+	PurgeAccount(ctx context.Context, accountID, userID string, auditLog AuditLogRepository) error
 }
 
 // accountRepository implements AccountRepository using PostgreSQL
@@ -794,6 +829,58 @@ func (r *accountRepository) Delete(ctx context.Context, accountID, userID string
 		return ErrAccountNotFound
 	}
 	return nil
+}
+
+// isForeignKeyViolation reports whether err is a Postgres 23503 foreign_key_violation on the
+// named constraint. Mirrors isUniqueViolation (household_repository.go) for the 23505 case —
+// translates a raw pgconn.PgError into something a caller can act on without parsing SQLSTATEs
+// itself. Issue #1569, Task 6: used to turn a RESTRICT-constraint failure during a purge into
+// ErrPurgeBlockedBySavingsGoal.
+func isForeignKeyViolation(err error, constraintName string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503" && pgErr.ConstraintName == constraintName
+}
+
+// PurgeAccount implements AccountRepository.PurgeAccount — see that method's doc comment for the
+// full contract (what gets destroyed, what survives, and why the audit write shares this
+// transaction).
+func (r *accountRepository) PurgeAccount(ctx context.Context, accountID, userID string, auditLog AuditLogRepository) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+
+	// balance_snapshots.account_id is ON DELETE SET NULL (migration 000150), so it will NOT be
+	// removed by the accounts DELETE below — it must be deleted explicitly, before the account
+	// row disappears out from under this query.
+	if _, err := tx.Exec(ctx, `DELETE FROM balance_snapshots WHERE account_id = $1`, accountID); err != nil {
+		return fmt.Errorf("purge account %s: deleting balance snapshots: %w", accountID, err)
+	}
+
+	// Deleting the account row itself CASCADEs to holdings, investment_transactions, the three
+	// liability tables, and account_status_history (all still ON DELETE CASCADE — see migration
+	// 000151's header, which anticipated exactly this explicit-purge path). transactions.account_id
+	// is ON DELETE SET NULL and is untouched: those rows survive, orphaned, and remain visible via
+	// the unified feed's NULL-account_id leg.
+	ct, err := tx.Exec(ctx, `DELETE FROM accounts WHERE id = $1 AND user_id = $2`, accountID, userID)
+	if err != nil {
+		if isForeignKeyViolation(err, "fk_savings_goals_account_id") {
+			return ErrPurgeBlockedBySavingsGoal
+		}
+		return fmt.Errorf("purge account %s: %w", accountID, err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrAccountNotFound
+	}
+
+	if auditLog != nil {
+		if err := auditLog.LogInTx(ctx, tx, "account.history_purged", "account", accountID); err != nil {
+			return fmt.Errorf("purge account %s: audit log: %w", accountID, err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // GetByIDAndUser retrieves an account by ID with ownership validation.

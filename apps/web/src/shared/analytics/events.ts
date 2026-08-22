@@ -21,6 +21,10 @@ export const ANALYTICS_EVENTS = {
   PLAID_LINK_SUCCEEDED: 'plaid_link_succeeded',
   PLAID_LINK_FAILED: 'plaid_link_failed',
   ACCOUNT_REMOVED: 'account_removed',
+  // Issue #1569, Task 6: ACCOUNT_REMOVED is fired by the disconnect (non-destructive) verb — kept
+  // as-is for continuity with existing dashboards. ACCOUNT_PURGED is the new, genuinely
+  // destructive verb and must be tracked separately.
+  ACCOUNT_PURGED: 'account_purged',
   ACCOUNT_DETAIL_VIEWED: 'account_detail_viewed',
   ACCOUNT_INVESTMENT_ACTIVITY_CLICKED: 'account_investment_activity_clicked',
 

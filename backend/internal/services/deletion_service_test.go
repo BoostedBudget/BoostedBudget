@@ -402,6 +402,23 @@ func (m *MockAuditLogger) Log(ctx context.Context, action, resourceType, resourc
 	return args.Error(0)
 }
 
+// MockAuditLogRepository implements repository.AuditLogRepository (Log + LogInTx) for testing
+// callers that need the transactional write, e.g. PurgeAccount/PurgeInstitution (Issue #1569,
+// Task 6).
+type MockAuditLogRepository struct {
+	mock.Mock
+}
+
+func (m *MockAuditLogRepository) Log(ctx context.Context, action, resourceType, resourceID string) error {
+	args := m.Called(ctx, action, resourceType, resourceID)
+	return args.Error(0)
+}
+
+func (m *MockAuditLogRepository) LogInTx(ctx context.Context, tx pgx.Tx, action, resourceType, resourceID string) error {
+	args := m.Called(ctx, tx, action, resourceType, resourceID)
+	return args.Error(0)
+}
+
 // MockWorkClaimsRepository mocks repository.WorkClaimsRepository (Issue #1413 Critical finding
 // C2) — the durable, fencing-token-guarded claim mechanism ExecuteDeletion uses for exclusivity
 // on ActionAccountDeletion, wired in via SetWorkClaimsRepo.

@@ -17,11 +17,17 @@
  * ⚠ WAS 195 total / 62 excluded: Issue #1497 item 2 added
  * recordAdminPlaidOrphanedItemOperatorResolution, excluded under the blanket admin policy. The
  * allowed/read/write/destructive figures are unchanged, which is the point of the exclusion.
- * ⚠ NOW 194 total / 61 excluded: Issue #1514 moved /metrics to an internal-only listener and
+ * ⚠ WAS 194 total / 61 excluded: Issue #1514 moved /metrics to an internal-only listener and
  * stopped registering it for spec generation, so getMetrics no longer has a spec-index entry and
  * its (excluded) manifest classification was removed. Again allowed/read/write/destructive are
  * unchanged — only an exclusion disappeared, so the public-facing "what can the AI do" numbers
  * on the /mcp page are unaffected.
+ * ⚠ NOW 196 total / 63 excluded: Issue #1569 Task 6 split the single deleteAccount /
+ * disconnectInstitution DELETE-backed verb into disconnect (non-destructive) and purge
+ * (destructive) for both accounts and linked items — net +2 operationIds (deleteAccount removed,
+ * disconnectAccount/purgeAccount/purgeInstitution added; disconnectInstitution kept, moved to
+ * POST) and net +2 exclusions, since all four new/renamed operations stay excluded under
+ * REASON_PLAID_LINKING. allowed/read/write/destructive are unchanged.
  */
 
 import { describe, expect, it } from 'bun:test'
@@ -81,11 +87,11 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
   it('documents the known baseline values (informational — the drift check above is authoritative)', () => {
     const fresh = computeCapabilitySummary(readSpecIndex())
 
-    expect(fresh.totalOperations).toBe(194)
+    expect(fresh.totalOperations).toBe(196)
     expect(fresh.allowedOperations).toBe(133)
     expect(fresh.readOperations).toBe(87)
     expect(fresh.writeOperations).toBe(46)
-    expect(fresh.excludedOperations).toBe(61)
+    expect(fresh.excludedOperations).toBe(63)
     expect(fresh.destructiveWriteOperations).toBe(9)
     expect(fresh.allowedOperations).toBe(fresh.readOperations + fresh.writeOperations)
     expect(fresh.totalOperations).toBe(fresh.allowedOperations + fresh.excludedOperations)
