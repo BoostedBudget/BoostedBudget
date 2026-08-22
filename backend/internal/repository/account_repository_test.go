@@ -600,7 +600,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id",
+		"user_account_id", "status",
 		"created_at", "updated_at",
 	}).AddRow(
 		accountID, uuid.New().String(), userID, "plaid-acc-1",
@@ -608,7 +608,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		&balance, &available, "USD",
 		strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), strPtr("💰"),
 		&displayOrder, false,
-		&userAccountID,
+		&userAccountID, domain.AccountStatusActive,
 		now, now,
 	)
 
@@ -618,7 +618,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id,
+		       user_account_id, status,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -642,6 +642,11 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 	assert.Equal(t, 1, *account.DisplayOrder)
 	assert.False(t, account.IsHidden)
 	assert.Equal(t, userAccountID, *account.UserAccountID)
+	// Issue #1569: GetByIDAndUser previously did not select `status` at all, so any caller
+	// (e.g. savings_progress_service.go) always saw the zero value regardless of the account's
+	// real status — a retained (replaced/expired/removed) account was indistinguishable from
+	// active.
+	assert.Equal(t, domain.AccountStatusActive, account.Status)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -660,7 +665,7 @@ func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
 		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id,
+		       user_account_id, status,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
