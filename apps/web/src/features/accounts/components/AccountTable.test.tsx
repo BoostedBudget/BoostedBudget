@@ -171,6 +171,35 @@ describe('AccountTable', () => {
     })
   })
 
+  describe('Closed accounts (Issue #1569: retained but no longer active)', () => {
+    it('shows a "Closed" badge for a removed account', () => {
+      const accountsWithClosed = [
+        createMockAccount({ status: 'removed', removed_at: '2026-03-01T00:00:00Z' }),
+        ...mockAccounts.slice(1),
+      ]
+
+      render(<AccountTable accounts={accountsWithClosed} />)
+
+      expect(screen.getByText('Closed')).toBeInTheDocument()
+    })
+
+    it('shows the balance as-of date for a closed account', () => {
+      const accountsWithClosed = [
+        createMockAccount({ status: 'removed', removed_at: '2026-03-01T00:00:00Z' }),
+        ...mockAccounts.slice(1),
+      ]
+
+      render(<AccountTable accounts={accountsWithClosed} />)
+
+      expect(screen.getByText(/as of/i)).toBeInTheDocument()
+    })
+
+    it('does not show a balance as-of caption for an active account', () => {
+      render(<AccountTable accounts={mockAccounts} />)
+      expect(screen.queryByText(/as of/i)).toBeNull()
+    })
+  })
+
   describe('Row Actions', () => {
     it('should call onEdit when edit button is clicked', () => {
       const onEdit = mock(() => {})

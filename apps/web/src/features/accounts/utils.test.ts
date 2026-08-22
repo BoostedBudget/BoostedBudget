@@ -6,7 +6,22 @@
  */
 
 import { describe, it, expect } from 'bun:test'
-import { getAccountTypeLabel, formatAccountBalance } from './utils'
+import { getAccountTypeLabel, formatAccountBalance, getAccountBalanceAsOfDate } from './utils'
+import type { Account } from './types'
+
+const baseAccount: Account = {
+  id: 'acc-1',
+  linked_item_id: 'item-1',
+  user_id: 'user-1',
+  plaid_account_id: 'plaid-1',
+  name: 'Test Account',
+  type: 'depository',
+  currency_code: 'USD',
+  is_hidden: false,
+  status: 'active',
+  created_at: '2025-01-01T00:00:00Z',
+  updated_at: '2025-01-01T00:00:00Z',
+}
 
 describe('getAccountTypeLabel', () => {
   describe('surface: card (default)', () => {
@@ -214,5 +229,51 @@ describe('formatAccountBalance', () => {
     it('zero balance → "$0.00"', () => {
       expect(formatAccountBalance(0, 'USD', { empty: '—' })).toBe('$0.00')
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// getAccountBalanceAsOfDate
+// ---------------------------------------------------------------------------
+
+describe('getAccountBalanceAsOfDate', () => {
+  // Issue #1569: a retained (non-active) account's current_balance is frozen at the moment it
+  // stopped being active. Callers must render that as "last known balance, as of <date>", never
+  // as a live figure. The instant differs by status — 'removed' and 'replaced' each have a
+  // dedicated timestamp; 'expired' has none, so updated_at is the best available proxy (see
+  // ExpireAccountsByFingerprint in account_repository.go, which sets only updated_at).
+
+  it('returns undefined for an active account (no freeze to report)', () => {
+    expect(getAccountBalanceAsOfDate({ ...baseAccount, status: 'active' })).toBeUndefined()
+  })
+
+  it('prefers removed_at for a removed account', () => {
+    const account: Account = {
+      ...baseAccount,
+      status: 'removed',
+      removed_at: '2026-03-01T00:00:00Z',
+      replaced_at: '2026-02-01T00:00:00Z',
+      updated_at: '2026-04-01T00:00:00Z',
+    }
+    expect(getAccountBalanceAsOfDate(account)).toBe('2026-03-01T00:00:00Z')
+  })
+
+  it('prefers replaced_at for a replaced account', () => {
+    const account: Account = {
+      ...baseAccount,
+      status: 'replaced',
+      replaced_at: '2026-02-01T00:00:00Z',
+      updated_at: '2026-04-01T00:00:00Z',
+    }
+    expect(getAccountBalanceAsOfDate(account)).toBe('2026-02-01T00:00:00Z')
+  })
+
+  it('falls back to updated_at for an expired account (no dedicated timestamp)', () => {
+    const account: Account = {
+      ...baseAccount,
+      status: 'expired',
+      updated_at: '2026-04-01T00:00:00Z',
+    }
+    expect(getAccountBalanceAsOfDate(account)).toBe('2026-04-01T00:00:00Z')
   })
 })

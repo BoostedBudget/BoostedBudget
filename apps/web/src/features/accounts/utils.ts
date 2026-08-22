@@ -6,6 +6,27 @@
  * each consumer previously produced inline.
  */
 
+import { isInactive } from './hooks/useActiveAccounts'
+import type { Account } from './types'
+
+/**
+ * Returns the instant a retained (non-active) account's balance was frozen, or `undefined` for
+ * an active account. Callers must render `current_balance` (and `available_balance`) as
+ * "last known balance, as of <date>" for any account this returns a date for — never as a live
+ * figure, since the backend stops updating that column once the account stops being active
+ * (Issue #1569).
+ *
+ * Precedence mirrors which timestamp the backend actually stamps for each status:
+ * - 'removed': `removed_at` (accountRepository.MarkRemovedByLinkedItemID / UpdateStatus)
+ * - 'replaced': `replaced_at` (accountRepository.UpdateStatus)
+ * - 'expired': no dedicated timestamp exists — ExpireAccountsByFingerprint only touches
+ *   `updated_at`, so that is the best available proxy for when the freeze happened.
+ */
+export function getAccountBalanceAsOfDate(account: Account): string | undefined {
+  if (!isInactive(account)) return undefined
+  return account.removed_at ?? account.replaced_at ?? account.updated_at
+}
+
 /**
  * Returns a human-readable account type label.
  *

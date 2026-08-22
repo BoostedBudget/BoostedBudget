@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { Edit, Trash2, EyeOff, Unplug, Building2 } from 'lucide-react'
+import { Edit, Trash2, EyeOff, Unplug, Building2, Archive } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -7,7 +7,9 @@ import type { Account } from '@boostedbudget/api-client/models'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
-import { getAccountTypeLabel, formatAccountBalance } from '../utils'
+import { getAccountTypeLabel, formatAccountBalance, getAccountBalanceAsOfDate } from '../utils'
+import { formatHistoryLabel } from '@/shared/dates/utils'
+import { isInactive } from '../hooks/useActiveAccounts'
 
 export type SortColumn = 'institution' | 'name' | 'type' | 'balance'
 export type SortDirection = 'asc' | 'desc'
@@ -133,6 +135,17 @@ export function AccountTable({
             >
               {displayName}
             </span>
+            {isInactive(row) && (
+              <Badge
+                variant="secondary"
+                size="sm"
+                className="ml-2"
+                title="This account was disconnected and is no longer active; its history is retained"
+              >
+                <Archive className="h-2.5 w-2.5" aria-hidden="true" />
+                Closed
+              </Badge>
+            )}
             {isDisconnected && (
               <Badge
                 variant="warning"
@@ -195,17 +208,27 @@ export function AccountTable({
       maxSize: 220,
       render: (row) => {
         const isNegative = row.current_balance !== undefined && row.current_balance < 0
+        const asOfDate = getAccountBalanceAsOfDate(row)
         return (
-          <span
-            className={cn(
-              'font-semibold tabular-nums',
-              isNegative
-                ? 'account-table__balance--negative text-destructive'
-                : 'account-table__balance--positive text-foreground'
+          <div className="flex flex-col items-end">
+            <span
+              className={cn(
+                'font-semibold tabular-nums',
+                isNegative
+                  ? 'account-table__balance--negative text-destructive'
+                  : 'account-table__balance--positive text-foreground'
+              )}
+            >
+              {formatAccountBalance(row.current_balance, row.currency_code, { empty: '—' })}
+            </span>
+            {/* Issue #1569: a retained account's balance is frozen at disconnect — never render
+                it as a live figure. */}
+            {asOfDate && (
+              <span className="text-xs text-muted-foreground">
+                as of {formatHistoryLabel(asOfDate, 'MMM d, yyyy')}
+              </span>
             )}
-          >
-            {formatAccountBalance(row.current_balance, row.currency_code, { empty: '—' })}
-          </span>
+          </div>
         )
       },
       filter: onBalanceRangeChange ? { type: 'range', unit: 'currency' } : undefined,

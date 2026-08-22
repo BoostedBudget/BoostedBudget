@@ -171,4 +171,26 @@ describe('AccountSummaryHeader', () => {
     expect(screen.getByTestId('badge')).toBeInTheDocument()
     expect(screen.getByText('****9999')).toBeInTheDocument()
   })
+
+  // Issue #1569: a retained (non-active) account's balance is frozen at disconnect and must
+  // never read as a live figure.
+  describe('asOfDate (frozen balance)', () => {
+    it('labels the balance "Current Balance" when asOfDate is not provided', () => {
+      render(<AccountSummaryHeader {...baseProps} />)
+      expect(screen.getByText('Current Balance')).toBeInTheDocument()
+    })
+
+    it('labels the balance "Last known balance" and shows the as-of date when asOfDate is provided', () => {
+      render(<AccountSummaryHeader {...baseProps} asOfDate="2026-03-15T00:00:00Z" />)
+      expect(screen.getByText('Last known balance')).toBeInTheDocument()
+      expect(screen.queryByText('Current Balance')).toBeNull()
+      expect(screen.getByText(/as of/i)).toBeInTheDocument()
+    })
+
+    it('still renders the balance amount with data-ph-mask when asOfDate is provided', () => {
+      render(<AccountSummaryHeader {...baseProps} asOfDate="2026-03-15T00:00:00Z" />)
+      const balanceEl = screen.getByText('$2,500.50')
+      expect(balanceEl).toHaveAttribute('data-ph-mask')
+    })
+  })
 })

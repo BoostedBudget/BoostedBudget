@@ -14,6 +14,7 @@
 
 import { AccountIconDisplay } from './AccountIconDisplay'
 import { formatAccountBalance } from '../utils'
+import { formatHistoryLabel } from '@/shared/dates/utils'
 import type { AccountIcon } from '../types'
 
 export interface AccountSummaryHeaderProps {
@@ -27,6 +28,13 @@ export interface AccountSummaryHeaderProps {
   customEmoji?: string | null
   customIcon?: string | null
   customColor?: string | null
+  /**
+   * When set, the account is retained but no longer active (Issue #1569): its balance was
+   * frozen at this instant and must never read as a live figure. Switches the "Current
+   * Balance"/"Available Balance" labels to "Last known balance"/"Last known available balance"
+   * and appends "as of <date>".
+   */
+  asOfDate?: string | null
   /**
    * Optional content rendered at the start of the institution row (before institution name).
    * AccountCard uses this for the drag handle.
@@ -50,11 +58,13 @@ export function AccountSummaryHeader({
   customEmoji,
   customIcon,
   customColor,
+  asOfDate,
   institutionRowLeadingSlot,
   institutionRowTrailingSlot,
 }: AccountSummaryHeaderProps) {
   const currentBalanceFormatted = formatAccountBalance(currentBalance, currencyCode, { empty: 'N/A' })
   const availableBalanceFormatted = formatAccountBalance(availableBalance, currencyCode, { empty: 'N/A' })
+  const asOfLabel = asOfDate ? formatHistoryLabel(asOfDate, 'MMM d, yyyy') : null
 
   return (
     <>
@@ -106,18 +116,25 @@ export function AccountSummaryHeader({
         {/* Balance rows */}
         <div className="mt-4 flex flex-col gap-3">
           <div className="flex justify-between items-center">
-            <span className="text-sm text-muted-foreground">Current Balance</span>
+            <span className="text-sm text-muted-foreground">
+              {asOfLabel ? 'Last known balance' : 'Current Balance'}
+            </span>
             <span className="text-lg font-semibold text-primary" data-ph-mask>
               {currentBalanceFormatted}
             </span>
           </div>
           {availableBalance !== undefined && availableBalance !== currentBalance && (
             <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Available Balance</span>
+              <span className="text-sm text-muted-foreground">
+                {asOfLabel ? 'Last known available balance' : 'Available Balance'}
+              </span>
               <span className="text-lg font-semibold text-primary" data-ph-mask>
                 {availableBalanceFormatted}
               </span>
             </div>
+          )}
+          {asOfLabel && (
+            <p className="text-xs text-muted-foreground text-right m-0">as of {asOfLabel}</p>
           )}
         </div>
       </div>

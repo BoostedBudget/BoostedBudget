@@ -1,5 +1,5 @@
 import { useId } from 'react'
-import { Pencil, EyeOff, GripVertical, Unplug } from 'lucide-react'
+import { Pencil, EyeOff, GripVertical, Unplug, Archive } from 'lucide-react'
 import { Link } from 'react-router'
 import { cn } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
@@ -7,7 +7,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AccountSummaryHeader } from './components/AccountSummaryHeader'
 import type { Account } from './types'
-import { getAccountTypeLabel } from './utils'
+import { getAccountTypeLabel, getAccountBalanceAsOfDate } from './utils'
+import { isInactive } from './hooks/useActiveAccounts'
 
 interface AccountCardProps {
   account: Account
@@ -42,6 +43,12 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
   // Check if the linked item is disconnected — this can mean the subscription lapsed (#679/#680)
   // OR that orphan cleanup removed the Plaid item successfully; status alone can't tell which.
   const isDisconnected = linked_item_status === 'disconnected'
+
+  // Issue #1569: a retained (non-active) account — replaced, expired, or deliberately
+  // disconnected. Distinct from isDisconnected above: that's about the linked ITEM's
+  // subscription state; this is about the ACCOUNT's own status.
+  const isClosed = isInactive(account)
+  const balanceAsOfDate = getAccountBalanceAsOfDate(account)
 
   // Display name: nickname > official_name > name
   const displayName = nickname || official_name || name
@@ -93,9 +100,16 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
             customEmoji={custom_emoji}
             customIcon={custom_icon}
             customColor={custom_color}
+            asOfDate={balanceAsOfDate}
             institutionRowTrailingSlot={
-              (isDisconnected || is_hidden) ? (
+              (isDisconnected || is_hidden || isClosed) ? (
                 <>
+                  {isClosed && (
+                    <Badge variant="secondary" title="This account was disconnected and is no longer active; its history is retained">
+                      <Archive className="h-3 w-3" />
+                      <span>Closed</span>
+                    </Badge>
+                  )}
                   {isDisconnected && (
                     <Badge variant="warning" title="This connection is no longer active">
                       <Unplug className="h-3 w-3" />
