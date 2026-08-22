@@ -116,12 +116,20 @@ components:
           type: string
         plaid_account_id:
           type: string
+        removed_at:
+          format: date-time
+          type: string
         replaced_at:
           format: date-time
           type: string
         replaced_by_id:
           type: string
         status:
+          enum:
+            - active
+            - replaced
+            - expired
+            - removed
           type: string
         subtype:
           type: string
@@ -7711,12 +7719,12 @@ paths:
           schema:
             description: If 'true', includes hidden accounts
             type: string
-        - description: "Filter by account status: 'active' (default), 'replaced', or 'all'"
+        - description: "Filter by account status: 'active' (default), 'replaced', 'expired', 'removed', or 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter)"
           explode: false
           in: query
           name: status
           schema:
-            description: "Filter by account status: 'active' (default), 'replaced', or 'all'"
+            description: "Filter by account status: 'active' (default), 'replaced', 'expired', 'removed', or 'all' (active+replaced — a misnomer inherited from history, see AccountFilterOptions.StatusFilter)"
             type: string
         - description: If 'true', equivalent to status=all (backward-compat alias)
           explode: false
@@ -7731,6 +7739,13 @@ paths:
           name: user_account_id
           schema:
             description: When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set.
+            type: string
+        - description: Get accounts as of a specific date (YYYY-MM-DD) — which accounts were live that day. Cannot be combined with status=all, status=replaced, or include_replaced=true.
+          explode: false
+          in: query
+          name: as_of_date
+          schema:
+            description: Get accounts as of a specific date (YYYY-MM-DD) — which accounts were live that day. Cannot be combined with status=all, status=replaced, or include_replaced=true.
             type: string
       responses:
         "200":

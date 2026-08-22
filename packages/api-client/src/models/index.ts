@@ -39,6 +39,7 @@ export * from './account';
 export * from './accountBalanceDetail';
 export * from './accountGainLoss';
 export * from './accountOrder';
+export * from './accountStatus';
 export * from './accountTypeBalance';
 export * from './accountTypeInfo';
 export * from './accountTypesResponse';
