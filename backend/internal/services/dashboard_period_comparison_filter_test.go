@@ -1159,7 +1159,8 @@ func TestGetBalanceSummary_PeriodComparison_LegacyNullUserAccountIDDoesNotDouble
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeAccounts, nil)
 	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
 		mock.MatchedBy(func(opts repository.AccountFilterOptions) bool {
-			return opts.AsOf != nil && opts.AsOf.Equal(defaultBaselineCutoff()) && opts.IncludeHidden
+			return opts.AsOf != nil && opts.AsOf.Equal(defaultBaselineCutoff()) &&
+				opts.IncludeHidden && !opts.AllStatuses
 		})).Return(allStatusAccounts, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(
 		[]domain.BalanceSnapshot{{ID: "cur", AccountID: "acct-new", UserAccountID: &stableUA,
@@ -1210,7 +1211,8 @@ func TestGetNetWorth_PeriodComparison_LegacyNullUserAccountIDDoesNotDoubleCount(
 	mockAccountRepo.On("GetByUserID", ctx, userID).Return(activeAccounts, nil)
 	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
 		mock.MatchedBy(func(opts repository.AccountFilterOptions) bool {
-			return opts.AsOf != nil && opts.AsOf.Equal(defaultBaselineCutoff()) && opts.IncludeHidden
+			return opts.AsOf != nil && opts.AsOf.Equal(defaultBaselineCutoff()) &&
+				opts.IncludeHidden && !opts.AllStatuses
 		})).Return(allStatusAccounts, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, defaultCurrentCutoff()).Return(
 		[]domain.BalanceSnapshot{{ID: "cur", AccountID: "acct-new", UserAccountID: &stableUA,
