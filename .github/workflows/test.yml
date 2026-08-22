@@ -806,13 +806,25 @@ jobs:
       #   2. Re-measure locally: `cd apps/mcp-server && bun run test`, read "N pass".
       #   3. Set the floor to roughly N minus 8% and update the MEASURED line above with the new
       #      number and date, in the SAME commit as the deletion so review sees both together.
-      # The `270` literal lives in the `python3 - "$LOG" 270` line below — that is the only place
-      # to edit. The FILE count needs no such upkeep: it is enumerated from disk at run time.
+      # The `270` case floor and the `22` FILE floor both live on the `python3 - "$LOG" 270 22`
+      # line below — that is the only place to edit either. The file floor's own maintenance rules
+      # are on the FILE_FLOOR block inside the script; the two floors are tuned independently.
       #
       # Counts executed test CASES, not files, on purpose. A file count cannot see `it.skip`
       # spreading through a file, and it cannot see a single file losing half its cases; both leave
       # the file count untouched. `executed = pass + fail` — skipped cases are by definition not
       # executed, so counting them would let the floor be satisfied by tests that ran nothing.
+      #
+      # ⚠ HONEST LIMIT of the 270 case floor: its 23 cases of headroom are also 23 cases of
+      # TOLERATED genuine loss. A single `if (false) it(...)`, a `describe.skip` over a handful of
+      # cases, or one small file losing its assertions drops the executed count by less than 23 and
+      # the gate stays green — the file count is untouched, so the cross-check and the FILE_FLOOR
+      # below see nothing either. That is ACCEPTED HEADROOM, not a bug to chase: a zero-headroom
+      # case floor would go red on every ordinary refactor that merges or reshapes cases, and a
+      # floor that is edited every week stops being read. The gate catches a whole file leaving the
+      # suite (exactly, via FILE_FLOOR and the equality cross-check) and catches large-scale case
+      # loss (via 270). It does NOT catch a handful of cases quietly switching themselves off.
+      # This paragraph exists so the file says that plainly instead of implying a tighter gate.
       #
       # FAILS CLOSED. If the summary cannot be parsed at all the guard exits non-zero rather than
       # defaulting to 0-or-pass. An unparseable summary must never read as a pass: that is the same
@@ -829,10 +841,10 @@ jobs:
             exit 1
           fi
 
-          python3 - "$LOG" 270 <<'PY'
+          python3 - "$LOG" 270 22 <<'PY'
           import os, re, sys
 
-          path, floor = sys.argv[1], int(sys.argv[2])
+          path, floor, file_floor = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
           raw = open(path, encoding="utf-8", errors="replace").read()
 
           # Strip ANSI SGR codes before matching: bun colourises its summary when it thinks it has a
@@ -877,6 +889,14 @@ jobs:
           # case floor.
           # MEASURED on bun 1.3.14: "across N files" counts every matched file, including one whose
           # tests are all `it.skip` and one that is empty — so equality is the right relation.
+          #
+          # Equality ALONE is not enough, which is why FILE_FLOOR follows it. Equality compares two
+          # numbers that move TOGETHER: rename a test file out of the recognised suffix set —
+          # `src/index.test.ts` -> `src/index-checks.ts` — and bun stops collecting it AND the walk
+          # below stops counting it. MEASURED 2026-08-21: 293/22 becomes 292/21, the two still
+          # agree, 292 still clears 270, and the gate reports a pass with a whole test file gone
+          # from the suite. Renaming the 19-case src/sandbox/host-proxy.test.ts the same way gave
+          # 274/21 — also green. The absolute floor below is the only thing that sees that.
           stems = ("test", "spec")
           exts = ("js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts")
           suffixes = tuple(f"{sep}{stem}.{ext}"
@@ -890,6 +910,40 @@ jobs:
               print(f"::error::no test files found under {os.path.abspath('src')} — this guard "
                     f"cannot cross-check bun's file count against anything, so it refuses to "
                     f"report a pass. Is the working-directory right?")
+              sys.exit(1)
+
+          # PINNED floor on the NUMBER of test files. HARD-CODED ON PURPOSE, and this is the whole
+          # point: the only job this number has is to NOTICE that the count went down, so it can
+          # never be derived from the current count. A floor computed at run time from the same walk
+          # it is checking would be circular — it would equal the count every single time, including
+          # the run where a file vanished, and would report a pass forever. The pinned literal is a
+          # record of what a HUMAN last confirmed, which is the only thing a drop can be measured
+          # against. (Local precedent: scripts/__tests__/check-isolated-test-lists.test.sh pins its
+          # 22 isolated paths the same way, for the same reason.)
+          #
+          # MEASURED 2026-08-21 on bun 1.3.14: 22 test files under apps/mcp-server/src. Floor 22 —
+          # ZERO headroom, deliberately. Any headroom here would defeat the check outright, because
+          # the failure being guarded against is losing ONE file; a floor of 21 would wave through
+          # exactly the regression this was added for. Adding test files only raises the real count,
+          # so this stays green as the suite grows and never needs a raise for growth.
+          #
+          # RE-TUNE BY HAND when a test file is DELETED OR MERGED ON PURPOSE. It will go red, and
+          # that is correct — a floor that moved on its own would catch nothing. Procedure: confirm
+          # the file was removed in this change rather than silently dropped from collection (check
+          # `git log -p` / `git status` for a rename into a name the `bun test ... src/` glob misses
+          # and the suffix list above does not match), then set this literal to the new count and
+          # update the MEASURED line, in the SAME commit as the deletion so review sees both.
+          # The literal lives in the `python3 - "$LOG" 270 22` invocation above.
+          if len(on_disk) < file_floor:
+              print(f"::error::only {len(on_disk)} test files exist under {os.path.abspath('src')}, "
+                    f"below the pinned floor of {file_floor}. A test file has LEFT THE SUITE. Note "
+                    f"that bun's 'across N files' count agrees with this number, so the cross-check "
+                    f"below cannot see this on its own — a test file renamed out of the recognised "
+                    f"suffix set stops being collected AND stops being counted. Check recent renames "
+                    f"and moves. If the removal was intentional, re-pin this floor by hand (see the "
+                    f"comment above this check). Files on disk:")
+              for f in sorted(on_disk):
+                  print(f"  {f}")
               sys.exit(1)
 
           ran_files = int(ran[0][1])
