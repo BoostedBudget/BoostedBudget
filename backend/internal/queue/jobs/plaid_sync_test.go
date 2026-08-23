@@ -124,11 +124,6 @@ func (m *MockLinkedItemRepository) Delete(ctx context.Context, id string) error 
 	return args.Error(0)
 }
 
-func (m *MockLinkedItemRepository) DeleteByUser(ctx context.Context, id, userID string) error {
-	args := m.Called(ctx, id, userID)
-	return args.Error(0)
-}
-
 func (m *MockLinkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog repository.AuditLogRepository) error {
 	args := m.Called(ctx, linkedItemID, userID, auditLog)
 	return args.Error(0)

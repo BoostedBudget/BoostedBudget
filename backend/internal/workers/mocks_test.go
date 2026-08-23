@@ -93,11 +93,6 @@ func (m *MockLinkedItemRepository) GetByIDAndUser(ctx context.Context, id, userI
 	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
-func (m *MockLinkedItemRepository) DeleteByUser(ctx context.Context, id, userID string) error {
-	args := m.Called(ctx, id, userID)
-	return args.Error(0)
-}
-
 func (m *MockLinkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog repository.AuditLogRepository) error {
 	args := m.Called(ctx, linkedItemID, userID, auditLog)
 	return args.Error(0)

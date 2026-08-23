@@ -172,11 +172,6 @@ func (m *MockLinkedItemRepository) GetByIDAndUser(ctx context.Context, id, userI
 	return args.Get(0).(*domain.LinkedItem), args.Error(1)
 }
 
-func (m *MockLinkedItemRepository) DeleteByUser(ctx context.Context, id, userID string) error {
-	args := m.Called(ctx, id, userID)
-	return args.Error(0)
-}
-
 // Issue #1569, Task 6: permanently destroy a linked item and every account under it.
 func (m *MockLinkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID, userID string, auditLog repository.AuditLogRepository) error {
 	args := m.Called(ctx, linkedItemID, userID, auditLog)
@@ -303,11 +298,6 @@ func (m *MockAccountRepository) CountByUserID(ctx context.Context, userID string
 	return args.Int(0), args.Error(1)
 }
 
-func (m *MockAccountRepository) Delete(ctx context.Context, accountID, userID string) error {
-	args := m.Called(ctx, accountID, userID)
-	return args.Error(0)
-}
-
 func (m *MockAccountRepository) GetByIDAndUser(ctx context.Context, accountID, userID string) (*domain.Account, error) {
 	args := m.Called(ctx, accountID, userID)
 	if args.Get(0) == nil {
@@ -406,14 +396,6 @@ func (m *MockAccountRepository) GetByUserAccountIDAndUser(ctx context.Context, u
 }
 
 func (m *MockAccountRepository) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
-	args := m.Called(ctx, requestingUserID, scope, asOf)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]domain.Account), args.Error(1)
-}
-
-func (m *MockAccountRepository) GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
 	args := m.Called(ctx, requestingUserID, scope, asOf)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

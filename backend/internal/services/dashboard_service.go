@@ -1099,7 +1099,7 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 		// `a.status = 'active'` REGARDLESS of its asOf, so a member's account disconnected since
 		// the cutoff is absent from previousAccountMap and was dropped from the baseline — the
 		// #1537 round 10 defect, in the path that round did not reach. GetForHouseholdScopeLiveAsOf
-		// (#1569, superseding that round's GetForHouseholdScopeAllStatuses) supplies those accounts'
+		// (#1569, superseding that round's since-removed all-statuses household read) supplies those accounts'
 		// TYPE, which is what decides assets vs liabilities; the BALANCE always comes from the
 		// snapshot row. It resolves the universe from account_status_history's recorded intervals,
 		// so — unlike all-statuses — it also excludes accounts that did not exist yet at the cutoff.

@@ -130,23 +130,12 @@ type AccountRepository interface {
 	// gap-closure G1). Issue #1369 — Phase 5.
 	GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error)
 
-	// GetForHouseholdScopeAllStatuses is GetForHouseholdScope without the
-	// `a.status = 'active'` predicate: it returns every chain member (active, replaced AND
-	// expired) of every account shared into the household. Household aggregation of a PAST
-	// instant needs it, because GetForHouseholdScope filters to active REGARDLESS of its asOf
-	// argument — so a household account disconnected since asOf is missing from its result and
-	// its historical snapshot cannot be attributed to an account type. Same asOf contract as
-	// GetForHouseholdScope: it must match the asOf of the GetSnapshotsAsOfForHousehold call it
-	// is paired with. Callers must NOT use this for a "current" figure — the product rule is
-	// that current totals include only linked/active accounts. Issue #1537.
-	GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error)
-
 	// GetForHouseholdScopeLiveAsOf is GetForHouseholdScope with the `a.status = 'active'`
 	// predicate REPLACED by recorded liveness at asOf (account_status_history), rather than
 	// removed. It is the correct source for a household baseline "as of" a past date and
-	// supersedes GetForHouseholdScopeAllStatuses for that job: all-statuses answers "ever
-	// existed", which wrongly admits accounts opened AFTER asOf, while this answers "was live
-	// then". Same asOf contract as GetForHouseholdScope — it must match the asOf of the
+	// It answers "was live then", rather than the "ever existed" universe #1537's
+	// since-removed all-statuses variant produced, which wrongly admitted accounts opened
+	// AFTER asOf. Same asOf contract as GetForHouseholdScope — it must match the asOf of the
 	// GetSnapshotsAsOfForHousehold call it is paired with. Callers must NOT use this for a
 	// "current" figure: the product rule is that current totals include only linked/active
 	// accounts, and passing asOf=now here would readmit an account removed moments ago.
@@ -165,15 +154,6 @@ type AccountRepository interface {
 	// Used for zero-account item detection and cleanup.
 	// Issue #668: Plaid Item Management for Cost Optimization
 	CountActiveByLinkedItemID(ctx context.Context, linkedItemID string) (int, error)
-
-	// Delete removes an account from the database with ownership validation.
-	// The account is only deleted if both the account ID and user ID match (WHERE id = $1 AND user_id = $2).
-	// This prevents users from deleting accounts they don't own.
-	//
-	// Returns ErrAccountNotFound if:
-	//   - The account doesn't exist
-	//   - The account exists but belongs to a different user (ownership check fails)
-	Delete(ctx context.Context, accountID, userID string) error
 
 	// GetByIDAndUser retrieves an account by ID with ownership validation.
 	// Returns ErrAccountNotFound if the account doesn't exist or belongs to a different user.
@@ -586,22 +566,16 @@ func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requesting
 	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, householdActiveOnly)
 }
 
-// GetForHouseholdScopeAllStatuses is GetForHouseholdScope with the status predicate removed,
-// so a chain that has since been replaced or expired in its entirety still resolves. See the
-// interface doc for when that is the correct universe and when it is not. Issue #1537.
-func (r *accountRepository) GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
-	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, householdAllStatuses)
-}
-
 // GetForHouseholdScopeLiveAsOf is GetForHouseholdScope with the unconditional `a.status = 'active'`
 // predicate REPLACED by recorded liveness at asOf, read from account_status_history.
 //
 // This is the method GetForHouseholdScope's asOf argument always implied but never delivered: that
 // read threads asOf into the joint-account dedup CTE and then filters on CURRENT status anyway, so
 // a member's account disconnected since the cutoff is absent from a universe that claims to be
-// "as of" a date before the disconnection. GetForHouseholdScopeAllStatuses was #1537's workaround
-// for that (take every status and let the snapshot decide); this is the recorded answer, and it
-// additionally EXCLUDES accounts that did not exist yet at asOf, which all-statuses could not.
+// "as of" a date before the disconnection. #1537's workaround was an all-statuses variant (take
+// every status and let the snapshot decide); this is the recorded answer, and it additionally
+// EXCLUDES accounts that did not exist yet at asOf, which all-statuses could not — which is why
+// that variant was removed rather than kept beside this one.
 // Issue #1569.
 func (r *accountRepository) GetForHouseholdScopeLiveAsOf(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
 	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, householdLiveAsOf)
@@ -610,22 +584,19 @@ func (r *accountRepository) GetForHouseholdScopeLiveAsOf(ctx context.Context, re
 // householdStatusFilter selects which account statuses a household-scope read returns. It is a
 // typed flag rather than a SQL fragment on purpose: this helper used to take the WHERE clause
 // itself as a string and splice it in, which was safe only for as long as every call site was
-// inspected and stayed a compile-time literal. A closed two-value type makes an injected
+// inspected and stayed a compile-time literal. A closed, finite type makes an injected
 // predicate impossible by construction, not merely absent today. Issue #1537.
 type householdStatusFilter int
 
 const (
 	// householdActiveOnly restricts to `a.status = 'active'` (GetForHouseholdScope).
 	householdActiveOnly householdStatusFilter = iota
-	// householdAllStatuses applies no status predicate, so active, replaced AND expired chain
-	// members resolve (GetForHouseholdScopeAllStatuses).
-	householdAllStatuses
 	// householdLiveAsOf restricts to accounts that account_status_history records as having been
 	// 'active' at the query's asOf instant (GetForHouseholdScopeLiveAsOf). Issue #1569.
 	householdLiveAsOf
 )
 
-// statusClause renders the SQL predicate for this filter, appended after `WHERE TRUE`. These three
+// statusClause renders the SQL predicate for this filter, appended after `WHERE TRUE`. These
 // strings are the only status SQL any household-scope read can produce.
 //
 // householdLiveAsOf binds $4 — NOT a newly appended argument. getForHouseholdScope already appends
@@ -634,8 +605,6 @@ const (
 // as well would double-bind it and shift every other placeholder. Issue #1569.
 func (f householdStatusFilter) statusClause() string {
 	switch f {
-	case householdAllStatuses:
-		return ""
 	case householdLiveAsOf:
 		return accountLiveAsOfPredicate("a", 4)
 	default:
@@ -825,30 +794,6 @@ func (r *accountRepository) CountActiveByLinkedItemID(ctx context.Context, linke
 	}
 
 	return count, nil
-}
-
-// Delete removes an account from the database with ownership validation.
-//
-// Security: This method validates ownership via the WHERE clause (id AND user_id must match).
-// A user can only delete accounts they own. If the account doesn't exist or belongs to
-// a different user, the DELETE will affect 0 rows and ErrAccountNotFound is returned.
-//
-// Use case: Called when a user manually deletes an individual account from the UI.
-// Note: For institution-level deletion, use LinkedItemRepository.Delete which CASCADE deletes all accounts.
-func (r *accountRepository) Delete(ctx context.Context, accountID, userID string) error {
-	query := `
-		DELETE FROM accounts
-		WHERE id = $1 AND user_id = $2
-	`
-
-	ct, err := r.db.Exec(ctx, query, accountID, userID)
-	if err != nil {
-		return err
-	}
-	if ct.RowsAffected() == 0 {
-		return ErrAccountNotFound
-	}
-	return nil
 }
 
 // isForeignKeyViolation reports whether err is a Postgres 23503 foreign_key_violation on the

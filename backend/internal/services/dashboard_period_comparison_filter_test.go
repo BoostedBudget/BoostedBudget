@@ -303,7 +303,8 @@ func TestGetBalanceSummaryHousehold_PeriodComparison_BaselineIncludesSinceInacti
 // TestGetBalanceSummary_PeriodComparison_BaselineIncludesSinceInactiveAccounts. Issue #1537.
 //
 // Round 10 fixed the historical-universe defect in GetBalanceSummary and getBalanceSummaryHousehold
-// and built two instruments to do it (historicalAccountMap and GetForHouseholdScopeAllStatuses) —
+// and built two instruments to do it (historicalAccountMap and an all-statuses household read,
+// since superseded by GetForHouseholdScopeLiveAsOf) —
 // and then did not apply either to the two net-worth paths, which have the identical defect. This
 // test covers the personal one: GetNetWorth's baseline loop reuses the accountMap built from
 // GetByUserID (`status = 'active'`, and a "now"-shaped map at that) and `continue`s on a miss, so a
@@ -592,8 +593,6 @@ func TestGetNetWorthHousehold_PeriodComparison_AppliesAccountTypeFilterToBaselin
 	assert.InDelta(t, 200.00, result.PeriodComparison.NetWorthChange, 0.001)
 	assert.InDelta(t, 25.0, result.PeriodComparison.NetWorthChangePercent, 0.001)
 
-	mockAccountRepo.AssertNotCalled(t, "GetForHouseholdScopeAllStatuses",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockAccountRepo.AssertNotCalled(t, "GetForHouseholdScopeLiveAsOf",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }

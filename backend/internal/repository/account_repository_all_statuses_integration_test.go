@@ -1,6 +1,6 @@
 // account_repository_all_statuses_integration_test.go — DB-backed behavior for the two
 // all-statuses account reads added by #1537 round 10:
-// AccountFilterOptions.AllStatuses and AccountRepository.GetForHouseholdScopeAllStatuses.
+// AccountFilterOptions.AllStatuses.
 //
 // These exist because the whole point of the change is a SQL status predicate, and the two
 // instruments that LOOK like they already do this job do not:
@@ -22,7 +22,6 @@ package repository_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -116,66 +115,6 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_AllStatuses_Honour
 	require.NoError(t, err)
 	assert.Empty(t, withoutHidden,
 		"AllStatuses must widen the status predicate only — the is_hidden clause still applies")
-}
-
-func TestAccountRepository_GetForHouseholdScopeAllStatuses_IncludesExpiredMemberAccount(t *testing.T) {
-	pool := setupHouseholdSchemaDB(t)
-	ctx := context.Background()
-	repo := repository.NewAccountRepository(pool, newTestFieldEncryptor(t))
-
-	owner, member, hh, ownerAcct, memberAcct := setupTwoMemberSharedHousehold(t, pool)
-	// The member's shared account has since been fully disconnected: no active chain member left.
-	setAccountStatus(t, pool, memberAcct.AccountID, domain.AccountStatusExpired)
-
-	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
-	asOf := time.Now().UTC()
-
-	activeOnly, err := repo.GetForHouseholdScope(ctx, owner, scope, asOf)
-	require.NoError(t, err)
-	activeIDs := make(map[string]bool, len(activeOnly))
-	for _, a := range activeOnly {
-		activeIDs[a.ID] = true
-	}
-	assert.True(t, activeIDs[ownerAcct.AccountID])
-	assert.False(t, activeIDs[memberAcct.AccountID],
-		"GetForHouseholdScope stays active-only — passing a past asOf does not widen it, which is "+
-			"the whole reason the AllStatuses variant exists")
-
-	all, err := repo.GetForHouseholdScopeAllStatuses(ctx, owner, scope, asOf)
-	require.NoError(t, err)
-	allIDs := make(map[string]bool, len(all))
-	for _, a := range all {
-		allIDs[a.ID] = true
-	}
-	assert.True(t, allIDs[ownerAcct.AccountID], "the still-active owner account must remain")
-	assert.True(t, allIDs[memberAcct.AccountID],
-		"the member's since-expired shared account must be reachable, so its historical snapshot "+
-			"can still be attributed to an account type")
-}
-
-// TestAccountRepository_GetForHouseholdScopeAllStatuses_StillEnforcesHouseholdScope guards the
-// obvious way to get this wrong: dropping the status predicate must not drop the household
-// membership/visibility predicates with it.
-func TestAccountRepository_GetForHouseholdScopeAllStatuses_StillEnforcesHouseholdScope(t *testing.T) {
-	pool := setupHouseholdSchemaDB(t)
-	ctx := context.Background()
-	repo := repository.NewAccountRepository(pool, newTestFieldEncryptor(t))
-
-	owner, member, hh, _, _ := setupTwoMemberSharedHousehold(t, pool)
-
-	// An outsider's expired account, shared into no household at all.
-	outsider := insertTestUser(t, pool)
-	outsiderAcct := setupHouseholdMemberAccount(t, pool, outsider)
-	setAccountStatus(t, pool, outsiderAcct.AccountID, domain.AccountStatusExpired)
-
-	all, err := repo.GetForHouseholdScopeAllStatuses(ctx, owner,
-		&domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}},
-		time.Now().UTC())
-	require.NoError(t, err)
-	for _, a := range all {
-		assert.NotEqual(t, outsiderAcct.AccountID, a.ID,
-			"an account outside the household must never appear, regardless of status")
-	}
 }
 
 // TestAccountRepository_GetAccountsWithInstitutionFiltered_AllStatuses_DoesNotFireReplacedCanary
