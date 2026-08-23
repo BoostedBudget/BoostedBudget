@@ -105,6 +105,15 @@ const captureHoldingSnapshotsSQL = `
 
 // captureHoldingSnapshots records one account's post-replace position SET. db is expected to be
 // the pgx.Tx that just performed the replace, so both halves and the replace commit together.
+//
+// Deliberately carries NO liveness filter, unlike the whole-user form below. Checked in review
+// round 2 and found unreachable rather than merely unlikely: the only caller is
+// holdingRepository.ReplaceForAccount, which a sync reaches only for accounts
+// GetByLinkedItemID returned, and that method filters status = 'active' — and the
+// account_status_history trigger keeps an active account's interval OPEN (valid_to IS NULL),
+// which satisfies the overlap test for any day. Adding the filter here would be dead code that
+// implies a reachable case. Recorded so the next reader does not re-derive it; if
+// GetByLinkedItemID is ever widened, this becomes reachable and the filter must be added.
 func captureHoldingSnapshots(ctx context.Context, db DB, accountID, userID string) error {
 	day, err := serverUTCDate(ctx, db)
 	if err != nil {
@@ -159,6 +168,13 @@ const accountLiveOnDateClause = `
 // rebuilds those aggregates FROM these rows.
 //
 // $1 = user_id, $2 = as_of_date.
+//
+// The mark-absent half deliberately omits the liveness clause its paired INSERT carries: it only
+// ever touches rows that ALREADY exist for this day, and a row exists for a terminal account only
+// if a capture put it there while the account was still live that same day — in which case the
+// account overlaps the day and the INSERT re-observes it anyway, so nothing is marked. Checked in
+// review round 2; no failing case could be constructed. Adding the clause would be a no-op that
+// implies one exists.
 const markHoldingSnapshotsAbsentForUserSQL = `
 	UPDATE holding_snapshots hs
 	SET present = FALSE, captured_at = now()
