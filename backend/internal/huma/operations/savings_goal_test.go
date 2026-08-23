@@ -11,6 +11,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,6 +26,10 @@ type mockSavingsGoalService struct {
 	getGoalsErr error
 	updateErr   error
 	deleteErr   error
+	purgeErr    error
+	// purgeCalls records (userID, goalID) for each PurgeGoal call, so the handler test can prove
+	// the route reaches the service rather than merely returning 204. Issue #1569, Task 8.
+	purgeCalls [][2]string
 }
 
 func (m *mockSavingsGoalService) CreateGoal(ctx context.Context, userID string, req *domain.CreateSavingsGoalRequest) (*domain.SavingsGoal, error) {
@@ -65,6 +70,13 @@ func (m *mockSavingsGoalService) UpdateGoal(ctx context.Context, userID, goalID 
 func (m *mockSavingsGoalService) DeleteGoal(ctx context.Context, userID, goalID string) error {
 	return m.deleteErr
 }
+
+func (m *mockSavingsGoalService) PurgeGoal(ctx context.Context, userID, goalID string) error {
+	m.purgeCalls = append(m.purgeCalls, [2]string{userID, goalID})
+	return m.purgeErr
+}
+
+func (m *mockSavingsGoalService) SetAuditLogRepository(_ repository.AuditLogRepository) {}
 
 func (m *mockSavingsGoalService) SetBudgetRepo(_ services.GoalAutoCreateBudgetRepo) {}
 

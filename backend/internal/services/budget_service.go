@@ -64,6 +64,11 @@ type BudgetService interface {
 	// Issue #1300, Codex C1 (IDOR protection).
 	SetGoalOwnershipChecker(r GoalOwnershipChecker)
 
+	// SetAuditLogRepository wires the budget.deleted / budget_category.deleted audit entries,
+	// written INSIDE the repository's own tombstone transaction via LogInTx. Nil-safe optional
+	// dependency. Issue #1569, Task 8.
+	SetAuditLogRepository(ar repository.AuditLogRepository)
+
 	// BackfillManagedCategories creates missing managed savings categories for all
 	// active goals across all active budgets, skipping tombstoned (budget, goal) pairs.
 	// Idempotent — the unique index no-ops on duplicates. Called on sync and as an
@@ -84,6 +89,9 @@ type budgetService struct {
 	// savings_goal_id in a savings-kind request belongs to the authenticated user
 	// before persisting (IDOR protection — Issue #1300, Codex C1).
 	goalOwnershipChecker GoalOwnershipChecker
+	// auditLogRepo records budget.deleted / budget_category.deleted entries inside the
+	// repository's tombstone transaction (Issue #1569 Task 8). Nil-safe optional dependency.
+	auditLogRepo repository.AuditLogRepository
 }
 
 // NewBudgetService creates a new BudgetService instance.
@@ -517,8 +525,9 @@ func (s *budgetService) DeleteBudget(ctx context.Context, userID, budgetID strin
 		return domain.ErrBudgetNotFound
 	}
 
-	// Delete the budget (cascade deletes categories)
-	if err := s.budgetRepo.Delete(ctx, budgetID, userID); err != nil {
+	// Tombstone the budget and its categories. rollover_history and budget_period_events are
+	// retained; see BudgetRepository.Delete.
+	if err := s.budgetRepo.Delete(ctx, budgetID, userID, s.auditLogRepo); err != nil {
 		s.logger.Error("failed to delete budget",
 			slog.String("budget_id", budgetID),
 			slog.String("error", err.Error()),
@@ -716,7 +725,7 @@ func (s *budgetService) DeleteCategory(ctx context.Context, userID, budgetID, ca
 	}
 
 	// Delete first, only tombstone after confirmed deletion to avoid orphan tombstones (Codex C6)
-	if err := s.budgetRepo.DeleteCategory(ctx, categoryID, budgetID); err != nil {
+	if err := s.budgetRepo.DeleteCategory(ctx, categoryID, budgetID, s.auditLogRepo); err != nil {
 		s.logger.Error("failed to delete budget category",
 			slog.String("category_id", categoryID),
 			slog.String("error", err.Error()),
@@ -788,6 +797,11 @@ func (s *budgetService) GetAvailableCategories(ctx context.Context, userID strin
 // SetGoalRepo wires the optional active-goal repository for carry-forward and backfill.
 func (s *budgetService) SetGoalRepo(r ActiveGoalRepo) {
 	s.goalRepo = r
+}
+
+// SetAuditLogRepository wires the optional audit-log repository. See the interface method.
+func (s *budgetService) SetAuditLogRepository(ar repository.AuditLogRepository) {
+	s.auditLogRepo = ar
 }
 
 // SetGoalOwnershipChecker wires the optional ownership checker used by AddCategory to

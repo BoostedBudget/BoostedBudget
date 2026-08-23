@@ -161,8 +161,8 @@ func TestGetBalanceSummary_Success(t *testing.T) {
 
 	// Check period comparison
 	assert.NotNil(t, result.PeriodComparison)
-	assert.Equal(t, 3800.00, result.PeriodComparison.PreviousBalance) // 1400 + 2400
-	assert.Equal(t, 200.00, result.PeriodComparison.ChangeAmount)     // 4000 - 3800
+	assert.Equal(t, 3800.00, result.PeriodComparison.PreviousBalance)    // 1400 + 2400
+	assert.Equal(t, 200.00, result.PeriodComparison.ChangeAmount)        // 4000 - 3800
 	assert.InDelta(t, 5.26, result.PeriodComparison.ChangePercent, 0.01) // (200/3800)*100
 
 	mockSnapshotRepo.AssertExpectations(t)
@@ -650,9 +650,9 @@ func TestGetNetWorth_OnlyAssets(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, 10000.00, result.NetWorth)        // 3000 + 7000
-	assert.Equal(t, 10000.00, result.TotalAssets)     // All assets
-	assert.Equal(t, 0.00, result.TotalLiabilities)    // No liabilities
+	assert.Equal(t, 10000.00, result.NetWorth)     // 3000 + 7000
+	assert.Equal(t, 10000.00, result.TotalAssets)  // All assets
+	assert.Equal(t, 0.00, result.TotalLiabilities) // No liabilities
 	assert.Contains(t, result.ByCategory, "assets")
 	assert.NotContains(t, result.ByCategory, "liabilities") // No liabilities category
 
@@ -695,10 +695,10 @@ func TestGetNetWorth_OnlyLiabilities(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, -25000.00, result.NetWorth)         // 0 - 25000 = -25000
-	assert.Equal(t, 0.00, result.TotalAssets)           // No assets
-	assert.Equal(t, 25000.00, result.TotalLiabilities)  // 5000 + 20000
-	assert.NotContains(t, result.ByCategory, "assets")  // No assets category
+	assert.Equal(t, -25000.00, result.NetWorth)        // 0 - 25000 = -25000
+	assert.Equal(t, 0.00, result.TotalAssets)          // No assets
+	assert.Equal(t, 25000.00, result.TotalLiabilities) // 5000 + 20000
+	assert.NotContains(t, result.ByCategory, "assets") // No assets category
 	assert.Contains(t, result.ByCategory, "liabilities")
 
 	mockSnapshotRepo.AssertExpectations(t)
@@ -1277,15 +1277,15 @@ func TestGetBalanceSummary_PreviousPeriodChainDedup(t *testing.T) {
 	// Two previous-period snapshots for the SAME logical account (one per chain member).
 	// If both are summed the result is 1000; correct dedup gives 500.
 	prevSnapReplaced := domain.BalanceSnapshot{
-		ID:            "prev-replaced",
-		AccountID:     "account-replaced",
-		UserAccountID: &stableUA,
+		ID:             "prev-replaced",
+		AccountID:      "account-replaced",
+		UserAccountID:  &stableUA,
 		CurrentBalance: &prevBalanceReplaced,
 	}
 	prevSnapActive := domain.BalanceSnapshot{
-		ID:            "prev-active",
-		AccountID:     "account-active",
-		UserAccountID: &stableUA,
+		ID:             "prev-active",
+		AccountID:      "account-active",
+		UserAccountID:  &stableUA,
 		CurrentBalance: &prevBalanceActive,
 	}
 
@@ -1340,15 +1340,15 @@ func TestGetNetWorth_PreviousPeriodChainDedup(t *testing.T) {
 	}
 
 	prevSnapReplaced := domain.BalanceSnapshot{
-		ID:            "prev-replaced",
-		AccountID:     "account-replaced",
-		UserAccountID: &stableUA,
+		ID:             "prev-replaced",
+		AccountID:      "account-replaced",
+		UserAccountID:  &stableUA,
 		CurrentBalance: &prevBalance,
 	}
 	prevSnapActive := domain.BalanceSnapshot{
-		ID:            "prev-active",
-		AccountID:     "account-active",
-		UserAccountID: &stableUA,
+		ID:             "prev-active",
+		AccountID:      "account-active",
+		UserAccountID:  &stableUA,
 		CurrentBalance: &prevBalance,
 	}
 

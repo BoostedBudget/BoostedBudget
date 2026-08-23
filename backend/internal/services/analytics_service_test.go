@@ -11,22 +11,22 @@ import (
 
 // mockAnalyticsRepository is a mock implementation for testing
 type mockAnalyticsRepository struct {
-	getCashFlowAggregationFn            func(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error)
-	getCashFlowGroupedFn                func(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error)
-	getSpendingByCategoryFn             func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error)
-	getSpendingByMerchantFn             func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error)
-	getSpendingTrendsFn                 func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error)
-	getCategoryTotalForPeriodFn         func(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error)
-	getTopExpenseFn                     func(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseRow, error)
-	getAverageMonthlySpendFn            func(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error)
-	getRecurringSubscriptionsFn         func(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error)
-	getSavingsRateForPeriodFn           func(ctx context.Context, userID string, startDate time.Time, endDate time.Time, scope *domain.HouseholdScope) (*domain.SavingsRateRow, error)
-	getMonthOverMonthSpendingFn         func(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error)
-	getLargestTransactionsForPeriodFn   func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error)
-	getCategoryBreakdownForMerchantFn   func(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
-	getIncomeSourceBreakdownFn          func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.IncomeSourceRow, error)
-	getUnusualSpendFn                   func(ctx context.Context, userID string, baselineStart, startDate, endDate time.Time, sigmaThreshold float64) ([]domain.UnusualSpendRow, error)
-	getBudgetVsActualFn                 func(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error)
+	getCashFlowAggregationFn          func(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error)
+	getCashFlowGroupedFn              func(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error)
+	getSpendingByCategoryFn           func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error)
+	getSpendingByMerchantFn           func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error)
+	getSpendingTrendsFn               func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingTrendRow, error)
+	getCategoryTotalForPeriodFn       func(ctx context.Context, userID string, category string, startDate time.Time, endDate time.Time) (*domain.CategoryTotalRow, error)
+	getTopExpenseFn                   func(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseRow, error)
+	getAverageMonthlySpendFn          func(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error)
+	getRecurringSubscriptionsFn       func(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error)
+	getSavingsRateForPeriodFn         func(ctx context.Context, userID string, startDate time.Time, endDate time.Time, scope *domain.HouseholdScope) (*domain.SavingsRateRow, error)
+	getMonthOverMonthSpendingFn       func(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error)
+	getLargestTransactionsForPeriodFn func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error)
+	getCategoryBreakdownForMerchantFn func(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
+	getIncomeSourceBreakdownFn        func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.IncomeSourceRow, error)
+	getUnusualSpendFn                 func(ctx context.Context, userID string, baselineStart, startDate, endDate time.Time, sigmaThreshold float64) ([]domain.UnusualSpendRow, error)
+	getBudgetVsActualFn               func(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error)
 }
 
 func (m *mockAnalyticsRepository) GetCashFlowAggregation(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
@@ -1830,7 +1830,7 @@ func TestAnalyticsService_GetUnusualSpend(t *testing.T) {
 
 // mockBalanceSnapshotRepository implements the minimal interface needed for testing GetNetWorthTrend.
 type mockBalanceSnapshotRepository struct {
-	getAggregatedHistoryFn           func(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error)
+	getAggregatedHistoryFn             func(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error)
 	getAggregatedHistoryForHouseholdFn func(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error)
 }
 

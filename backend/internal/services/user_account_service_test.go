@@ -467,7 +467,7 @@ func TestUserAccountService_MatchOrCreate_DifferentInstitution_CreatesNew(t *tes
 	ctx := context.Background()
 	userID := "user-123"
 	institutionID := "ins_chase" // Different institution
-	mask := "1234"              // Same mask as existing BoA account
+	mask := "1234"               // Same mask as existing BoA account
 
 	// No match for Chase with this mask
 	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).Return(nil, nil)
@@ -950,10 +950,10 @@ func TestUserAccountService_UpdateCustomization_PartialUpdate(t *testing.T) {
 	mockRepo.On("Update", ctx, mock.AnythingOfType("*domain.UserAccount")).
 		Run(func(args mock.Arguments) {
 			ua := args.Get(1).(*domain.UserAccount)
-			assert.Equal(t, newNickname, *ua.Nickname)       // Updated
-			assert.Equal(t, "#FF0000", *ua.CustomColor)      // Preserved
-			assert.Equal(t, "bank", *ua.CustomIcon)          // Preserved
-			assert.False(t, ua.IsHidden)                     // Preserved
+			assert.Equal(t, newNickname, *ua.Nickname)  // Updated
+			assert.Equal(t, "#FF0000", *ua.CustomColor) // Preserved
+			assert.Equal(t, "bank", *ua.CustomIcon)     // Preserved
+			assert.False(t, ua.IsHidden)                // Preserved
 		}).Return(nil)
 
 	// Execute

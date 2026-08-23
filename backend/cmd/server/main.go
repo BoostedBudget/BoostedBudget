@@ -810,6 +810,9 @@ func main() {
 		// Issue #1300: Wire IDOR ownership checker so AddCategory validates savings_goal_id
 		// belongs to the authenticated user before persisting (Codex C1).
 		budgetService.SetGoalOwnershipChecker(savingsGoalRepo)
+		// Issue #1569 Task 8: budget.deleted / budget_category.deleted audit entries, written
+		// inside the tombstone's own transaction via LogInTx.
+		budgetService.SetAuditLogRepository(repository.NewAuditLogRepository(db))
 		savingsGoalService.SetBudgetRepo(budgetRepo)
 		// Issue #1300 M13: Wire progress recomputer so CreateGoal initialises
 		// current_amount per progress_basis immediately after goal creation.
@@ -851,6 +854,9 @@ func main() {
 		boostService.SetSavingsGoalRepo(savingsGoalRepo)
 		boostService.SetAccountRepo(accountRepo)
 		boostService.SetBudgetRepo(budgetRepo) // #1270: category ownership validation
+		// Issue #1569 Task 8: boost.deleted audit entry, written inside the tombstone's own
+		// transaction via LogInTx.
+		boostService.SetAuditLogRepository(repository.NewAuditLogRepository(db))
 		appLogger.Info("Boost service initialized")
 
 		// Issue #37: Boost Execution Service

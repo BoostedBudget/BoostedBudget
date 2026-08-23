@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -534,11 +534,11 @@ func TestBoostExecutionService(t *testing.T) {
 		}
 
 		return &domain.Boost{
-			ID:       "rule-1",
-			UserID:   userID,
-			Name:     "Test Rule",
-			Enabled:  true,
-			Priority: 1,
+			ID:        "rule-1",
+			UserID:    userID,
+			Name:      "Test Rule",
+			Enabled:   true,
+			Priority:  1,
 			BoostType: boostType,
 			TriggerConfig: domain.TriggerConfig{
 				Type:  triggerType,
@@ -684,11 +684,11 @@ func TestProcessEventTrigger(t *testing.T) {
 		boostRepo := &mockBoostsRepository{
 			boosts: []*domain.Boost{
 				{
-					ID:       "rule-1",
-					UserID:   userID,
-					Name:     "Test Rule",
-					Enabled:  true,
-					Priority: 1,
+					ID:        "rule-1",
+					UserID:    userID,
+					Name:      "Test Rule",
+					Enabled:   true,
+					Priority:  1,
 					BoostType: domain.BoostTypeTransferSuggestion,
 					TriggerConfig: domain.TriggerConfig{
 						Type:  domain.TriggerTypeEvent,
@@ -757,13 +757,13 @@ func TestGetExecutionHistory(t *testing.T) {
 			executions: []*domain.BoostExecution{
 				{
 					ID:        "exec-1",
-					BoostID:    "rule-1",
+					BoostID:   "rule-1",
 					Status:    domain.ExecutionStatusCompleted,
 					StartedAt: now.Add(-1 * time.Hour),
 				},
 				{
 					ID:        "exec-2",
-					BoostID:    "rule-1",
+					BoostID:   "rule-1",
 					Status:    domain.ExecutionStatusCompleted,
 					StartedAt: now,
 				},
@@ -786,9 +786,9 @@ func TestGetExecutionHistory(t *testing.T) {
 
 // Mock boosts repository for testing.
 type mockBoostsRepository struct {
-	boosts        []*domain.Boost
+	boosts              []*domain.Boost
 	createError         error
-	eventTriggerBoosts   []*domain.Boost
+	eventTriggerBoosts  []*domain.Boost
 	incrementExecCalled bool
 	updateSuccessCalled bool
 }
@@ -866,7 +866,7 @@ func (m *mockBoostsRepository) Update(ctx context.Context, boost *domain.Boost) 
 	return domain.ErrBoostNotFound
 }
 
-func (m *mockBoostsRepository) Delete(ctx context.Context, id string) error {
+func (m *mockBoostsRepository) Delete(ctx context.Context, id, userID string, auditLog repository.AuditLogRepository) error {
 	for i, r := range m.boosts {
 		if r.ID == id {
 			m.boosts = append(m.boosts[:i], m.boosts[i+1:]...)
@@ -1008,7 +1008,11 @@ func (m *mockSavingsGoalRepository) Update(ctx context.Context, goal *domain.Sav
 	return domain.ErrSavingsGoalNotFound
 }
 
-func (m *mockSavingsGoalRepository) Delete(ctx context.Context, id, userID string) error {
+func (m *mockSavingsGoalRepository) PurgeGoal(ctx context.Context, id, userID string, auditLog repository.AuditLogRepository) error {
+	return m.Delete(ctx, id, userID, auditLog)
+}
+
+func (m *mockSavingsGoalRepository) Delete(ctx context.Context, id, userID string, auditLog repository.AuditLogRepository) error {
 	for i, g := range m.goals {
 		if g.ID == id {
 			m.goals = append(m.goals[:i], m.goals[i+1:]...)
@@ -1070,11 +1074,11 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		actionsJSON, _ := json.Marshal(action)
 
 		return &domain.Boost{
-			ID:       "rule-savings-1",
-			UserID:   userID,
-			Name:     "Savings Goal Contribution",
-			Enabled:  true,
-			Priority: 1,
+			ID:        "rule-savings-1",
+			UserID:    userID,
+			Name:      "Savings Goal Contribution",
+			Enabled:   true,
+			Priority:  1,
 			BoostType: domain.BoostTypeSavingsGoal,
 			TriggerConfig: domain.TriggerConfig{
 				Type:  domain.TriggerTypeEvent,
@@ -1253,7 +1257,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 			UserID:         userID,
 			Name:           "Bad Savings Rule",
 			Enabled:        true,
-			BoostType:       domain.BoostTypeSavingsGoal,
+			BoostType:      domain.BoostTypeSavingsGoal,
 			TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 			ConditionLogic: "AND",
 			Actions:        actionsJSON,
@@ -1375,7 +1379,7 @@ func TestBoostExecutionService_SavingsGoal_NilRepo_ReturnsError(t *testing.T) {
 		UserID:         userID,
 		Name:           "Savings Goal Rule",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeSavingsGoal,
+		BoostType:      domain.BoostTypeSavingsGoal,
 		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: domain.EventBudgetPeriodEnd},
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
@@ -1430,7 +1434,7 @@ func TestProcessEventTrigger_BatchContinuesAfterBoostFailure(t *testing.T) {
 		UserID:         userID,
 		Name:           "Failing Rule",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeSavingsGoal,
+		BoostType:      domain.BoostTypeSavingsGoal,
 		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: domain.EventBudgetPeriodEnd},
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
@@ -1449,7 +1453,7 @@ func TestProcessEventTrigger_BatchContinuesAfterBoostFailure(t *testing.T) {
 		UserID:         userID,
 		Name:           "Succeeding Rule",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: domain.EventBudgetPeriodEnd},
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
@@ -1541,11 +1545,11 @@ func TestBoostTestExecution(t *testing.T) {
 		})
 
 		return &domain.Boost{
-			ID:       "rule-1",
-			UserID:   userID,
-			Name:     "Test Transfer Rule",
-			Enabled:  true,
-			Priority: 1,
+			ID:        "rule-1",
+			UserID:    userID,
+			Name:      "Test Transfer Rule",
+			Enabled:   true,
+			Priority:  1,
 			BoostType: domain.BoostTypeTransferSuggestion,
 			TriggerConfig: domain.TriggerConfig{
 				Type:  domain.TriggerTypeEvent,
@@ -1567,11 +1571,11 @@ func TestBoostTestExecution(t *testing.T) {
 		})
 
 		return &domain.Boost{
-			ID:       "rule-2",
-			UserID:   userID,
-			Name:     "Budget Alert Rule",
-			Enabled:  true,
-			Priority: 1,
+			ID:        "rule-2",
+			UserID:    userID,
+			Name:      "Budget Alert Rule",
+			Enabled:   true,
+			Priority:  1,
 			BoostType: domain.BoostTypeBudgetAlert,
 			TriggerConfig: domain.TriggerConfig{
 				Type:  domain.TriggerTypeEvent,
@@ -1989,11 +1993,11 @@ func TestBoostExecutionService_ExpiresAt(t *testing.T) {
 		})
 
 		boost := &domain.Boost{
-			ID:       "rule-expires-test",
-			UserID:   userID,
-			Name:     "Transfer Rule",
-			Enabled:  true,
-			Priority: 1,
+			ID:        "rule-expires-test",
+			UserID:    userID,
+			Name:      "Transfer Rule",
+			Enabled:   true,
+			Priority:  1,
 			BoostType: domain.BoostTypeTransferSuggestion,
 			TriggerConfig: domain.TriggerConfig{
 				Type:  domain.TriggerTypeEvent,
@@ -2051,11 +2055,11 @@ func TestBoostExecutionService_ExpiresAt(t *testing.T) {
 		})
 
 		boost := &domain.Boost{
-			ID:       "rule-savings-expires",
-			UserID:   userID,
-			Name:     "Savings Goal Rule",
-			Enabled:  true,
-			Priority: 1,
+			ID:        "rule-savings-expires",
+			UserID:    userID,
+			Name:      "Savings Goal Rule",
+			Enabled:   true,
+			Priority:  1,
 			BoostType: domain.BoostTypeSavingsGoal,
 			TriggerConfig: domain.TriggerConfig{
 				Type:  domain.TriggerTypeEvent,
@@ -2367,7 +2371,7 @@ func TestBoostTestExecution_DottedFieldPreviewShowsActual(t *testing.T) {
 	})
 	boost := &domain.Boost{
 		ID: "rule-dotted", UserID: "u", Name: "dotted", Enabled: true, Priority: 1,
-		BoostType:      domain.BoostTypeTransferSuggestion,
+		BoostType:     domain.BoostTypeTransferSuggestion,
 		TriggerConfig: domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 		// UI-built dotted field — backend emits flat "remaining"
 		Conditions: []domain.BoostCondition{
@@ -2501,7 +2505,7 @@ func TestFlatActionJSON_ValidateAndExecuteConsistency(t *testing.T) {
 				UserID:         userID,
 				Name:           "Flat Action Rule",
 				Enabled:        true,
-				BoostType:       tc.boostType,
+				BoostType:      tc.boostType,
 				TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 				ConditionLogic: "AND",
 				Conditions:     []domain.BoostCondition{},
@@ -2595,7 +2599,7 @@ func TestExecuteBoost_PartialFieldAction_ReturnsError(t *testing.T) {
 				UserID:         userID,
 				Name:           "Partial Boost",
 				Enabled:        true,
-				BoostType:       tc.boostType,
+				BoostType:      tc.boostType,
 				TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 				ConditionLogic: "AND",
 				Conditions:     []domain.BoostCondition{},
@@ -2642,7 +2646,7 @@ func TestTransferExcess_ValidateAndExecute(t *testing.T) {
 			UserID:         userID,
 			Name:           "Excess Savings",
 			Enabled:        true,
-			BoostType:       domain.BoostTypeTransferSuggestion,
+			BoostType:      domain.BoostTypeTransferSuggestion,
 			TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
 			ConditionLogic: "AND",
 			Conditions:     []domain.BoostCondition{},
@@ -2729,10 +2733,10 @@ func TestExecuteSavingsGoal_RejectsMismatchedOwner(t *testing.T) {
 		"amount":          100.0,
 	})
 	boost := &domain.Boost{
-		ID:      "attacker-rule-id",
-		UserID:  attackerUserID, // ← attacker's boost, references owner's goal
-		Name:    "attacker boost",
-		Enabled: true,
+		ID:        "attacker-rule-id",
+		UserID:    attackerUserID, // ← attacker's boost, references owner's goal
+		Name:      "attacker boost",
+		Enabled:   true,
 		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -2871,10 +2875,10 @@ func TestExecuteTransferSuggestion_ChainResolverIDOR(t *testing.T) {
 		"amount":               100.0,
 	})
 	boost := &domain.Boost{
-		ID:       "attacker-rule",
-		UserID:   attackerUserID,
-		Name:     "chain resolver idor boost",
-		Enabled:  true,
+		ID:        "attacker-rule",
+		UserID:    attackerUserID,
+		Name:      "chain resolver idor boost",
+		Enabled:   true,
 		BoostType: domain.BoostTypeTransferSuggestion,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -3040,10 +3044,10 @@ func TestExecuteBoost_PartialScopedConditionDoesNotBrick(t *testing.T) {
 		"threshold_value":       80,
 	})
 	boost := &domain.Boost{
-		ID:       "rule-legacy-partial",
-		UserID:   "test-user-id",
-		Name:     "Legacy Partial Boost",
-		Enabled:  true,
+		ID:        "rule-legacy-partial",
+		UserID:    "test-user-id",
+		Name:      "Legacy Partial Boost",
+		Enabled:   true,
 		BoostType: domain.BoostTypeBudgetAlert,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -3161,11 +3165,11 @@ func TestProcessEventTrigger_SkipsRuleBoundToOtherBudget(t *testing.T) {
 	boostRepo := &mockBoostsRepository{
 		boosts: []*domain.Boost{
 			{
-				ID:       "rule-budget-scope",
-				UserID:   userID,
-				Name:     "Category Rule for Budget X",
-				Enabled:  true,
-				Priority: 1,
+				ID:        "rule-budget-scope",
+				UserID:    userID,
+				Name:      "Category Rule for Budget X",
+				Enabled:   true,
+				Priority:  1,
 				BoostType: domain.BoostTypeTransferSuggestion,
 				TriggerConfig: domain.TriggerConfig{
 					Type:  domain.TriggerTypeEvent,
@@ -3213,11 +3217,11 @@ func TestProcessEventTrigger_FiresRuleBoundToMatchingBudget(t *testing.T) {
 	boostRepo := &mockBoostsRepository{
 		boosts: []*domain.Boost{
 			{
-				ID:       "rule-budget-match",
-				UserID:   userID,
-				Name:     "Category Rule for Budget X",
-				Enabled:  true,
-				Priority: 1,
+				ID:        "rule-budget-match",
+				UserID:    userID,
+				Name:      "Category Rule for Budget X",
+				Enabled:   true,
+				Priority:  1,
 				BoostType: domain.BoostTypeTransferSuggestion,
 				TriggerConfig: domain.TriggerConfig{
 					Type:  domain.TriggerTypeEvent,
@@ -3269,11 +3273,11 @@ func TestProcessEventTrigger_UnscopedRuleFiresForAnyBudget(t *testing.T) {
 	boostRepo := &mockBoostsRepository{
 		boosts: []*domain.Boost{
 			{
-				ID:       "rule-unscoped",
-				UserID:   userID,
-				Name:     "Unscoped Budget Rule",
-				Enabled:  true,
-				Priority: 1,
+				ID:        "rule-unscoped",
+				UserID:    userID,
+				Name:      "Unscoped Budget Rule",
+				Enabled:   true,
+				Priority:  1,
 				BoostType: domain.BoostTypeTransferSuggestion,
 				TriggerConfig: domain.TriggerConfig{
 					Type:  domain.TriggerTypeEvent,
@@ -3292,7 +3296,7 @@ func TestProcessEventTrigger_UnscopedRuleFiresForAnyBudget(t *testing.T) {
 	service := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	eventData := map[string]interface{}{
-		domain.EventDataKeyBudgetID: "budget-any",
+		domain.EventDataKeyBudgetID:    "budget-any",
 		domain.EventDataKeyPercentUsed: 75.0,
 	}
 
@@ -3321,11 +3325,11 @@ func TestProcessEventTrigger_ORLogicDoesNotEscapeBudgetScope(t *testing.T) {
 	boostRepo := &mockBoostsRepository{
 		boosts: []*domain.Boost{
 			{
-				ID:       "rule-or-escape",
-				UserID:   userID,
-				Name:     "OR Rule With Budget Scope",
-				Enabled:  true,
-				Priority: 1,
+				ID:        "rule-or-escape",
+				UserID:    userID,
+				Name:      "OR Rule With Budget Scope",
+				Enabled:   true,
+				Priority:  1,
 				BoostType: domain.BoostTypeTransferSuggestion,
 				TriggerConfig: domain.TriggerConfig{
 					Type:  domain.TriggerTypeEvent,
@@ -3668,4 +3672,3 @@ func TestBoostExecutionService_GetExecutionHistoryWithFilter_WithStatusFilter(t 
 		assert.Equal(t, domain.ExecutionStatusCompleted, r.Status)
 	}
 }
-

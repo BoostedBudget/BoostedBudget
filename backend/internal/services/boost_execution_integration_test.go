@@ -152,7 +152,7 @@ func buildCategoryScopedBoostReq(t *testing.T, budgetID, categoryID, fromAccount
 	t.Helper()
 	return &domain.CreateBoostRequest{
 		Name:           "test-cat-rule-" + uuid.New().String()[:8],
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		Priority:       1,
 		ConditionLogic: "AND",
 		TriggerConfig: domain.TriggerConfig{
@@ -345,7 +345,7 @@ func TestBoostExecution_CategoryScoped_Integration(t *testing.T) {
 		// Two conditions: one scoped to Budget X / Cat C, one to Budget Y / Cat D.
 		req := &domain.CreateBoostRequest{
 			Name:           "multi-budget-rule-" + uuid.New().String()[:8],
-			BoostType:       domain.BoostTypeTransferSuggestion,
+			BoostType:      domain.BoostTypeTransferSuggestion,
 			Priority:       1,
 			ConditionLogic: "AND",
 			TriggerConfig: domain.TriggerConfig{

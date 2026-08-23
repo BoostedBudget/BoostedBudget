@@ -40,7 +40,6 @@ func (m *MockTransactionRepository) TombstoneByExternalID(ctx context.Context, s
 	return "", args.Error(1)
 }
 
-
 func (m *MockTransactionRepository) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.Transaction, error) {
 	args := m.Called(ctx, userID, limit, offset)
 	if args.Get(0) == nil {
@@ -522,7 +521,6 @@ func TestTransactionService_ListTransactions_DefaultsLimit(t *testing.T) {
 	assert.Equal(t, 50, result.Limit)
 	mockRepo.AssertExpectations(t)
 }
-
 
 // TestTransactionService_GetDistinctPlaidCategories_Success tests successful retrieval of Plaid categories
 func TestTransactionService_GetDistinctPlaidCategories_Success(t *testing.T) {
