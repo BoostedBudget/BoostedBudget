@@ -227,6 +227,15 @@ const portfolioRepairUsersPerRun = 200
 // job uses for its own work: that one joins a.status = 'active' and so skips a user who has
 // disconnected every institution, whose recorded curve is the one most likely to be wrong.
 func (w *PortfolioSnapshotWorker) repairRecordedHistory(ctx context.Context, jobID int64) {
+	// Nil-guarded for the same reason HoldingSnapshotRepo beside it is: this is now the FIRST
+	// statement in Work, so it moved the earliest possible nil dereference ahead of holdingRepo's.
+	// cmd/server/periodic_jobs_test.go builds this worker with empty deps. Unreachable in the wired
+	// server, which always supplies the repository — but the symmetry is free and the asymmetry was
+	// a trap laid for whoever calls Work on a zero-valued worker next.
+	if w.snapshotRepo == nil {
+		return
+	}
+
 	userIDs, err := w.snapshotRepo.UserIDsWithUnexaminedSnapshots(ctx, portfolioRepairUsersPerRun)
 	if err != nil {
 		w.logger.Error("#1569 portfolio history repair: could not enumerate users; skipping this run",
@@ -250,9 +259,13 @@ func (w *PortfolioSnapshotWorker) repairRecordedHistory(ctx context.Context, job
 		total.Merge(summary)
 	}
 
+	// cap_reached is the backlog signal. Without it this line reads identically whether the pass
+	// drained the queue or merely took the first 200 of thousands — which is how the starving
+	// version of the enumeration looked like a healthy one every single day.
 	w.logger.Info("#1569 portfolio history repair pass complete",
 		"job_id", jobID,
 		"users", len(userIDs),
+		"cap_reached", len(userIDs) >= portfolioRepairUsersPerRun,
 		"failed_users", failed,
 		"days_examined", total.Examined,
 		"days_repaired", total.Repaired,

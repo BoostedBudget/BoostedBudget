@@ -16,6 +16,7 @@ package repository
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
 
@@ -594,4 +595,212 @@ func TestPortfolioRepair_RefusedDayThatLaterGainsCoverage_KeepsLedgerAndRowInAgr
 	assert.Nil(t, l2.repairedTotalValue)
 	assert.InDelta(t, 4242.0, after.totalValue, 0.001,
 		"the ledger says this day was refused; the row must still be the refused one, not a silent rewrite behind a stale verdict")
+}
+
+// ── Fix round 1 ───────────────────────────────────────────────────────────────────────────────
+
+// F1: no user can be starved by the per-run cap.
+//
+// The repair pass is NOT one-shot: every day each user's newly-past portfolio_snapshots row becomes
+// an unexamined day, so every user re-enters the enumeration daily and the cap is a standing queue.
+// Under the original ORDER BY user_id, above `limit` users the same lowest-sorted uuids refilled the
+// cap on every run and everyone after them was never examined — while the job logged a full,
+// successful pass each time.
+//
+// This simulates the steady state directly: examine whoever the enumeration returns, then hand every
+// already-examined user a new past day, and repeat. The assertion is about the user whose uuid sorts
+// LAST — the one a uuid ordering can never reach.
+func TestPortfolioRepair_EnumerationCannotStarveAUserBeyondTheCap(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Neutralise anything already committed in the shared database: this test reasons about the
+	// GLOBAL enumeration, so any other user owing a verdict would occupy cap slots forever (nothing
+	// here examines them) and starve this fixture regardless of the ordering under test.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO portfolio_snapshot_repairs
+			(user_id, snapshot_date, outcome, reason, expected_account_count, observed_account_count,
+			 previous_total_value, previous_total_cost_basis, previous_total_gain_loss)
+		SELECT ps.user_id, ps.snapshot_date, 'verified', 'pre-existing row neutralised by the F1 fixture',
+		       0, 0, 0, 0, 0
+		FROM portfolio_snapshots ps
+		WHERE ps.snapshot_date < (now() AT TIME ZONE 'UTC')::date
+		ON CONFLICT (user_id, snapshot_date) DO NOTHING`)
+	require.NoError(t, err)
+
+	const userCount = 210 // > the 200-per-run cap the daily job uses
+	const cap = 200
+
+	// One cohort of users, all owing the SAME oldest day, so uuid is the only tiebreak on run 1 —
+	// the exact shape that pinned the head of the queue before.
+	var mine []string
+	rows, err := tx.Query(ctx, `
+		WITH new_users AS (
+			INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+			SELECT gen_random_uuid(), 'test|f1-' || g::text || '-' || gen_random_uuid()::text,
+			       'f1-' || g::text || '-' || gen_random_uuid()::text || '@example.com',
+			       'premium', 'active', 'iad'
+			FROM generate_series(1, $1::int) g
+			RETURNING id
+		), seeded AS (
+			INSERT INTO portfolio_snapshots (user_id, snapshot_date, total_value)
+			SELECT id, (now() AT TIME ZONE 'UTC')::date - 10, 1 FROM new_users
+			RETURNING user_id
+		)
+		SELECT user_id::text FROM seeded`, userCount)
+	require.NoError(t, err)
+	for rows.Next() {
+		var id string
+		require.NoError(t, rows.Scan(&id))
+		mine = append(mine, id)
+	}
+	rows.Close()
+	require.NoError(t, rows.Err())
+	require.Len(t, mine, userCount)
+
+	sort.Strings(mine)
+	lastSorted := mine[len(mine)-1]
+
+	repo := NewPortfolioSnapshotRepository(tx)
+	examined := map[string]bool{}
+
+	// ceil(210/200) = 2 runs is the bound the ordering promises; give it a little slack so a
+	// failure reads as "starved", not "needed one more run".
+	for run := 1; run <= 4 && !examined[lastSorted]; run++ {
+		ids, err := repo.UserIDsWithUnexaminedSnapshots(ctx, cap)
+		require.NoError(t, err)
+		require.NotEmpty(t, ids, "run %d found nobody owing a verdict, which cannot be true here", run)
+		require.LessOrEqual(t, len(ids), cap)
+
+		for _, id := range ids {
+			_, err := repo.RepairUserFromHistory(ctx, id)
+			require.NoError(t, err)
+			examined[id] = true
+		}
+
+		// The next day arrives: every examined user gains one new past day. This is what makes the
+		// queue standing rather than draining, and it is what the uuid ordering could not survive.
+		_, err = tx.Exec(ctx, `
+			INSERT INTO portfolio_snapshots (user_id, snapshot_date, total_value)
+			SELECT u, (now() AT TIME ZONE 'UTC')::date - $2::int, 1
+			FROM unnest($1::uuid[]) u
+			ON CONFLICT (user_id, snapshot_date) DO NOTHING`, ids, 9-run)
+		require.NoError(t, err)
+	}
+
+	assert.True(t, examined[lastSorted],
+		"the highest-sorted user must be reached within ceil(N/cap) runs; under ORDER BY user_id the "+
+			"lowest 200 uuids refill the cap every run and this user is never examined at all")
+}
+
+// F2: the two refusals are different facts, and the ledger must not report one as the other.
+//
+// A day whose only rows belong to an account that was NOT live on it yields expected = observed = 0,
+// which is the same arithmetic as a day that was never captured — but "no rows for this day" is
+// FALSE about that data. The ledger's entire justification is that an operator can learn why.
+func TestPortfolioRepair_RowsExcludedByLiveness_AreNotReportedAsNoRowsAtAll(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, deadAccount, secA := seedInvestmentFixture(ctx, t, tx, "repair-f2")
+	day := dayUTC(ctx, t, tx, 14)
+	_, err = tx.Exec(ctx, `
+		UPDATE account_status_history ash
+		SET valid_from = (((now() AT TIME ZONE 'UTC')::date)::timestamp AT TIME ZONE 'UTC') - INTERVAL '40 days',
+		    valid_to   = (((now() AT TIME ZONE 'UTC')::date)::timestamp AT TIME ZONE 'UTC') - INTERVAL '30 days'
+		WHERE ash.account_id = $1 AND ash.valid_to IS NULL`, deadAccount)
+	require.NoError(t, err)
+
+	seedHoldingSnapshot(ctx, t, tx, userID, deadAccount, secA, day, true, f64(1000), f64(1200))
+	seedPortfolioSnapshot(ctx, t, tx, userID, day, 1200, 1000, 200, f64(20))
+
+	repo := NewPortfolioSnapshotRepository(tx)
+	sum, err := repo.RepairUserFromHistory(ctx, userID.String())
+	require.NoError(t, err)
+	assert.Equal(t, 1, sum.RefusedNoCoverage, "the refusal itself is right — nothing may be counted")
+
+	after := readPortfolioSnapshot(ctx, t, tx, userID, day)
+	assert.InDelta(t, 1200.0, after.totalValue, 0.001, "and the day is still left alone")
+
+	l, ok := readLedger(ctx, t, tx, userID, day)
+	require.True(t, ok)
+	assert.Contains(t, l.reason, "none belongs to an account recorded live on it",
+		"rows DO exist for this day; saying they do not tells an operator something untrue about their own data")
+	assert.NotContains(t, l.reason, "no holding_snapshots rows at all")
+}
+
+// F3: Examined must mean days examined.
+//
+// It used to be counted from the ledger INSERT's RETURNING, which drops any row ON CONFLICT DO
+// NOTHING swallows. Counted from the decided set instead.
+//
+// ⚠ Read the honest limit of this test before trusting it. With the candidate gate in place the two
+// countings CANNOT diverge: a day with a ledger row is not a candidate, so no INSERT ever conflicts,
+// and both counts equal the candidate count. A first draft of this test planted a ledger row and
+// asserted 0, which is true under either counting and pinned nothing — the mutation survived it.
+//
+// The divergence is only reachable when the gate is gone, which is exactly mutation P5, and that is
+// where the fix is really pinned: with the gate removed, SecondRunChangesNothing now reports
+// examined = 3 and FAILS, where under the old counting it reported 0 and passed. Measured both ways.
+// What remains here is the contract itself — the number means candidate days — asserted across a
+// fixture with more than one of them so an off-by-one or a per-outcome mix-up would show.
+func TestPortfolioRepair_ExaminedCountsEveryCandidateDay(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secA := seedInvestmentFixture(ctx, t, tx, "repair-f3")
+	backdateLiveness(ctx, t, tx, accountID, 30)
+
+	// Four candidate days: one repaired, one verified, one refused for no coverage, and one already
+	// carrying a verdict — which is NOT a candidate and must not be counted.
+	repaired := dayUTC(ctx, t, tx, 15)
+	verified := dayUTC(ctx, t, tx, 16)
+	refused := dayUTC(ctx, t, tx, 17)
+	alreadyJudged := dayUTC(ctx, t, tx, 18)
+
+	seedHoldingSnapshot(ctx, t, tx, userID, accountID, secA, repaired, true, f64(100), f64(150))
+	seedPortfolioSnapshot(ctx, t, tx, userID, repaired, 1, 1, 0, nil)
+
+	seedHoldingSnapshot(ctx, t, tx, userID, accountID, secA, verified, true, f64(100), f64(150))
+	seedPortfolioSnapshot(ctx, t, tx, userID, verified, 150, 100, 50, f64(50))
+
+	seedPortfolioSnapshot(ctx, t, tx, userID, refused, 999, 999, 0, nil)
+
+	seedPortfolioSnapshot(ctx, t, tx, userID, alreadyJudged, 5, 5, 0, nil)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO portfolio_snapshot_repairs
+			(user_id, snapshot_date, outcome, reason, expected_account_count, observed_account_count,
+			 previous_total_value, previous_total_cost_basis, previous_total_gain_loss)
+		VALUES ($1, $2::date, 'verified', 'planted by the F3 fixture', 1, 1, 5, 5, 0)`, userID, alreadyJudged)
+	require.NoError(t, err)
+
+	repo := NewPortfolioSnapshotRepository(tx)
+	sum, err := repo.RepairUserFromHistory(ctx, userID.String())
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, sum.Examined, "three candidate days; the day already carrying a verdict is not one")
+	assert.Equal(t, 1, sum.Repaired)
+	assert.Equal(t, 1, sum.Verified)
+	assert.Equal(t, 1, sum.RefusedNoCoverage)
+	assert.Equal(t, sum.Repaired+sum.Verified+sum.RefusedNoCoverage+sum.RefusedPartialCoverage,
+		sum.Examined, "the per-outcome counts must account for every examined day, with none left over")
+
+	// The verified day must not have been written at all.
+	l, ok := readLedger(ctx, t, tx, userID, verified)
+	require.True(t, ok)
+	assert.Equal(t, domain.PortfolioRepairOutcomeVerified, l.outcome)
+	require.NotNil(t, l.repairedTotalValue, "a verified day records the reconstruction it agreed with")
+	assert.InDelta(t, 150.0, *l.repairedTotalValue, 0.001)
 }

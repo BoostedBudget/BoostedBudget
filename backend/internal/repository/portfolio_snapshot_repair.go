@@ -155,6 +155,12 @@ decided AS (
            COALESCE(rb.total_cost_basis, 0) AS new_total_cost_basis,
            COALESCE(rb.total_gain_loss, 0) AS new_total_gain_loss,
            rb.total_gain_loss_pct AS new_total_gain_loss_pct,
+           -- F2: rows can exist for a day and still be excluded by liveness, which is a DIFFERENT
+           -- fact from "this day was never captured" and must not be reported as the same one.
+           -- Deliberately NOT restricted to live accounts — that is the whole point of it.
+           EXISTS (
+               SELECT 1 FROM holding_snapshots hs
+               WHERE hs.user_id = $1::uuid AND hs.as_of_date = c.snapshot_date) AS any_rows_that_day,
            CASE
                WHEN NOT EXISTS (SELECT 1 FROM observed o WHERE o.snapshot_date = c.snapshot_date)
                    THEN 'refused_no_coverage'
@@ -188,25 +194,27 @@ updated AS (
           (d.new_total_value, d.new_total_cost_basis, d.new_total_gain_loss, d.new_total_gain_loss_pct)
     RETURNING ps.snapshot_date
 ),
-ledger AS (
-    INSERT INTO portfolio_snapshot_repairs (
-        user_id, snapshot_date, outcome, reason,
-        expected_account_count, observed_account_count,
-        previous_total_value, previous_total_cost_basis,
-        previous_total_gain_loss, previous_total_gain_loss_pct,
-        repaired_total_value, repaired_total_cost_basis,
-        repaired_total_gain_loss, repaired_total_gain_loss_pct)
-    SELECT d.user_id, d.snapshot_date,
+-- F3: the verdict for EVERY candidate day, computed here rather than inferred from the ledger's
+-- RETURNING. The summary is counted from this CTE, so "examined" means days examined — it no
+-- longer silently under-reports whenever ON CONFLICT DO NOTHING fires.
+final AS (
+    SELECT d.*,
         CASE
             WHEN d.verdict <> 'repairable' THEN d.verdict
             WHEN u.snapshot_date IS NOT NULL THEN 'repaired'
             ELSE 'verified'
-        END,
+        END AS outcome,
         CASE
+            -- F2: two different refusals, and telling an operator the wrong one about their own
+            -- data defeats the entire justification for keeping this ledger.
+            WHEN d.verdict = 'refused_no_coverage' AND d.any_rows_that_day THEN
+                'holding_snapshots rows exist for this day, but none belongs to an account recorded '
+                || 'live on it (account_status_history overlap), so there is nothing this repair may '
+                || 'count: unreconstructable, left untouched rather than zeroed'
             WHEN d.verdict = 'refused_no_coverage' THEN
-                'no holding_snapshots rows for this day: unreconstructable, left untouched rather '
-                || 'than zeroed (the day may predate the history tables, or a partial sync may have '
-                || 'skipped every account with no daily sweep behind it)'
+                'no holding_snapshots rows at all for this day: unreconstructable, left untouched '
+                || 'rather than zeroed (the day may predate the history tables, or a partial sync may '
+                || 'have skipped every account with no daily sweep behind it)'
             WHEN d.verdict = 'refused_partial_coverage' THEN
                 format('partial coverage: %s of %s live holdings-bearing accounts have rows for this '
                     || 'day, so a rebuild would under-report by an amount nothing downstream could '
@@ -216,21 +224,31 @@ ledger AS (
             ELSE
                 format('stored aggregate already matched the holding_snapshots reconstruction across '
                     || '%s covered account(s); nothing written', d.observed_count)
-        END,
-        d.expected_count, d.observed_count,
-        d.prev_total_value, d.prev_total_cost_basis, d.prev_total_gain_loss, d.prev_total_gain_loss_pct,
-        -- The accepted reconstruction. NULL on a refusal, where none was accepted — repeating the
-        -- previous value there would read like a write that never happened.
-        CASE WHEN d.verdict = 'repairable' THEN d.new_total_value END,
-        CASE WHEN d.verdict = 'repairable' THEN d.new_total_cost_basis END,
-        CASE WHEN d.verdict = 'repairable' THEN d.new_total_gain_loss END,
-        CASE WHEN d.verdict = 'repairable' THEN d.new_total_gain_loss_pct END
+        END AS reason
     FROM decided d
     LEFT JOIN updated u ON u.snapshot_date = d.snapshot_date
+),
+ledger AS (
+    INSERT INTO portfolio_snapshot_repairs (
+        user_id, snapshot_date, outcome, reason,
+        expected_account_count, observed_account_count,
+        previous_total_value, previous_total_cost_basis,
+        previous_total_gain_loss, previous_total_gain_loss_pct,
+        repaired_total_value, repaired_total_cost_basis,
+        repaired_total_gain_loss, repaired_total_gain_loss_pct)
+    SELECT f.user_id, f.snapshot_date, f.outcome, f.reason,
+        f.expected_count, f.observed_count,
+        f.prev_total_value, f.prev_total_cost_basis, f.prev_total_gain_loss, f.prev_total_gain_loss_pct,
+        -- The accepted reconstruction. NULL on a refusal, where none was accepted — repeating the
+        -- previous value there would read like a write that never happened.
+        CASE WHEN f.verdict = 'repairable' THEN f.new_total_value END,
+        CASE WHEN f.verdict = 'repairable' THEN f.new_total_cost_basis END,
+        CASE WHEN f.verdict = 'repairable' THEN f.new_total_gain_loss END,
+        CASE WHEN f.verdict = 'repairable' THEN f.new_total_gain_loss_pct END
+    FROM final f
     ON CONFLICT (user_id, snapshot_date) DO NOTHING
-    RETURNING outcome
 )
-SELECT outcome, count(*)::int FROM ledger GROUP BY outcome
+SELECT outcome, count(*)::int FROM final GROUP BY outcome
 `
 
 // RepairUserFromHistory repairs one user's unexamined past portfolio_snapshots days. See the
@@ -264,21 +282,40 @@ func (r *portfolioSnapshotRepository) RepairUserFromHistory(ctx context.Context,
 	return summary, nil
 }
 
-// UserIDsWithUnexaminedSnapshots enumerates users the repair still owes a verdict.
+// UserIDsWithUnexaminedSnapshots enumerates users the repair still owes a verdict, MOST BEHIND
+// FIRST, capped at limit.
 //
 // It enumerates from portfolio_snapshots, NOT from holdings. GetDistinctUserIDsWithHoldings — the
 // enumeration the daily job uses for its own work — joins a.status = 'active' and therefore skips
 // a user who has disconnected every institution. That user's recorded curve is precisely the one
 // most likely to be wrong, because the aggregate that was written while a wrong liveness predicate
 // was live is still on disk and no sync will ever revisit it.
+//
+// ⚠ THE ORDER IS THE WHOLE DESIGN, and an earlier version of it starved people.
+//
+// This pass is NOT one-shot. Every day, each user's newly-past portfolio_snapshots row becomes an
+// unexamined day, so every user re-enters this enumeration daily and the cap is a real queue rather
+// than a first-run convenience. Ordering by user_id, as the first version did, made that queue
+// unfair in the worst possible way: above `limit` users, the same lowest-sorted uuids refilled the
+// cap on every single run and everyone sorted after them was NEVER examined — while the job logged
+// a full, successful pass each time. Not corruption (unexamined means untouched), but a silent
+// permanent gap in the population.
+//
+// Ordering by each user's OLDEST unexamined day makes starvation impossible rather than unlikely: a
+// user just examined has only today-adjacent days left and sorts LAST, while anyone skipped keeps an
+// older day and rises to the head. With N users and a cap of L, every user is reached at least once
+// every ceil(N/L) runs, and their backlog is drained in full when they are. user_id is the tiebreak
+// only — ties are broken out of the tied cohort as its members are examined, so it cannot pin a
+// subset at the head.
 const userIDsWithUnexaminedSnapshotsSQL = `
-	SELECT DISTINCT ps.user_id::text
+	SELECT ps.user_id::text
 	FROM portfolio_snapshots ps
 	WHERE ps.snapshot_date < (now() AT TIME ZONE 'UTC')::date
 	  AND NOT EXISTS (
 	      SELECT 1 FROM portfolio_snapshot_repairs r
 	      WHERE r.user_id = ps.user_id AND r.snapshot_date = ps.snapshot_date)
-	ORDER BY 1
+	GROUP BY ps.user_id
+	ORDER BY MIN(ps.snapshot_date) ASC, ps.user_id
 	LIMIT $1::int
 `
 
