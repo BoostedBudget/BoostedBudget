@@ -80,7 +80,8 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 			COUNT(*)                               AS holding_count,
 			COALESCE(SUM(h.institution_value), 0)  AS total_value
 		FROM holdings h
-		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
+		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
 		LEFT JOIN securities sec ON sec.id = h.security_id
 		WHERE h.user_id = $1
 		GROUP BY COALESCE(sec.type, 'unknown')`
@@ -97,7 +98,8 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 			COALESCE(SUM(GREATEST(a.current_balance, 0)), 0) AS total_value
 		FROM accounts a
 		WHERE a.user_id = $1
-		  AND a.status = 'active'
+		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		  AND ` + currentStateAccountLeg("a") + `
 		  AND a.type = 'depository'`
 	}
 
@@ -113,7 +115,8 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 			COALESCE(SUM(ABS(a.current_balance)), 0) AS total_value
 		FROM accounts a
 		WHERE a.user_id = $1
-		  AND a.status = 'active'
+		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		  AND ` + currentStateAccountLeg("a") + `
 		  AND a.type IN ('credit', 'loan')`
 	}
 
@@ -184,7 +187,8 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 			COUNT(*)                              AS holding_count,
 			COALESCE(SUM(h.institution_value), 0) AS total_value
 		FROM holdings h
-		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
+		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
 		WHERE h.user_id = $1
 		GROUP BY a.id, a.name`
 
@@ -201,7 +205,8 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 			GREATEST(COALESCE(a.current_balance, 0), 0) AS total_value
 		FROM accounts a
 		WHERE a.user_id = $1
-		  AND a.status = 'active'
+		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		  AND ` + currentStateAccountLeg("a") + `
 		  AND a.type = 'depository'`
 	}
 
@@ -216,7 +221,8 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 			COALESCE(ABS(a.current_balance), 0)   AS total_value
 		FROM accounts a
 		WHERE a.user_id = $1
-		  AND a.status = 'active'
+		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		  AND ` + currentStateAccountLeg("a") + `
 		  AND a.type IN ('credit', 'loan')`
 	}
 
@@ -373,7 +379,8 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 					ELSE NULL
 				END                                                                           AS total_gain_loss
 			FROM holdings h
-			JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
+			-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+			JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
 			JOIN securities sec ON sec.id = h.security_id
 			WHERE h.user_id = $1
 			  AND h.institution_price IS NOT NULL
@@ -478,7 +485,8 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 			-- Matches GetPortfolioSummary totalCostBasis and snapshot Upsert total_cost_basis.
 			COALESCE(SUM(h.cost_basis), 0) AS cost_basis_all
 		FROM holdings h
-		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
+		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
 		WHERE h.user_id = $1
 		GROUP BY h.account_id
 	`
@@ -542,6 +550,17 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 // The income set (domain.IncomeSubtypes) is wider than the display "dividend" bucket —
 // it includes reinvested dividends/interest. Plaid stores income (cash credits) as negative
 // amounts; the query negates them so returned TotalAmount values are positive magnitudes.
+//
+// UNIVERSE: EVENT, not current-state (#1569 T12). Every other query in this file asks "what does
+// this portfolio look like NOW" and is therefore scoped to live accounts (see
+// currentStateAccountLeg in account_liveness_sql.go for why). This one does not: it asks what
+// income was RECEIVED over a closed date range. A dividend paid in March is a fact about March,
+// and disconnecting the brokerage in June cannot un-pay it — so this query carries
+// retainedAccountVisibilityLeg, exactly as investmentTransactionRepository.GetByUserID does over
+// the same rows. Before T12 it did not, and the two disagreed: the investments feed listed the
+// dividend while the income total silently dropped it. TotalIncome went 120.00 -> 0.00 on a
+// disconnection with no transaction deleted. Pinned by
+// TestRetentionUniverses_DisconnectedBrokerage_Integration.
 func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userID string, start, end time.Time) (*domain.IncomeSummary, error) {
 	// Build IN clause for the income subtype set.
 	subtypes := domain.IncomeSubtypes
@@ -575,14 +594,15 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 			COUNT(*)                     AS count,
 			COALESCE(-SUM(it.amount), 0) AS total_amount
 		FROM investment_transactions it
-		JOIN accounts a ON a.id = it.account_id AND a.status = 'active'
+		JOIN accounts a ON a.id = it.account_id
 		WHERE it.user_id = $1
+		  AND (a.status = 'active'%s)
 		  AND it.date >= $2::date
 		  AND it.date <= $3::date
 		  AND it.subtype IN (%s)
 		GROUP BY income_type
 		ORDER BY total_amount DESC
-	`, inClause)
+	`, retainedAccountVisibilityLeg("it", "it.date"), inClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
