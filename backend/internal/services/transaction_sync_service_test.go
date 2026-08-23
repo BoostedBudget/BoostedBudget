@@ -438,7 +438,7 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 		HasMore:    true,
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page0", 0).Return(plaidResp1, nil)
-	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page1").Return(nil).Once()
+	// #1570: page 1's cursor is NOT persisted. The cursor advances once, after storage.
 
 	// Page 2: has_more=false
 	plaidResp2 := &plaid.TransactionsSyncResponse{
@@ -465,6 +465,11 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 	assert.Len(t, result.Modified, 1) // txn-mod-1
 	assert.Len(t, result.Removed, 1)  // txn-rem-1
 	assert.Equal(t, "cursor-page2", result.NewCursor)
+
+	// #1570: exactly ONE cursor write, carrying the final page's cursor. Persisting page 1's cursor
+	// mid-loop is what used to strand page 1's rows behind an advanced cursor when storage failed.
+	assert.Equal(t, []string{"cursor-page2"}, persistedCursors(mockLinkedItemRepo))
+	mockLinkedItemRepo.AssertNotCalled(t, "UpdateCursor", ctx, linkedItem.ID, "cursor-page1")
 
 	mockPlaidService.AssertExpectations(t)
 	mockLinkedItemRepo.AssertExpectations(t)
@@ -548,7 +553,7 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 		HasMore:    true,
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-start", 0).Return(plaidResp1, nil)
-	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page1").Return(nil).Once()
+	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Page 2 fails
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-page1", 0).
@@ -563,19 +568,27 @@ func TestSyncTransactions_PlaidErrorSubsequentPage(t *testing.T) {
 	assert.Len(t, result.Added, 1) // Got page 1 data
 	assert.Contains(t, err.Error(), "sync failed on page 2")
 
-	// Cursor was updated after page 1, so retry can resume from page 2
+	// #1570: the cursor must NOT have moved. Page 1's rows were never stored (the worker discards
+	// `result` on error), so persisting page 1's cursor would lose them permanently — Plaid does not
+	// re-deliver past a stored cursor. Leaving it put means the retry re-fetches page 1 and page 2.
+	assert.Empty(t, persistedCursors(mockLinkedItemRepo))
 	mockLinkedItemRepo.AssertExpectations(t)
 }
 
-// TestSyncTransactions_CursorUpdateError tests cursor update failure
+// TestSyncTransactions_CursorUpdateError tests cursor update failure.
+//
+// #1570: the cursor write now happens AFTER storage, so this exercises the one remaining failure
+// mode of the boundary — rows are already durable and the cursor could not be advanced. The sync
+// must report the error; the next run re-delivers those rows and CreateBatch upserts them.
 func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockPlaidService := new(MockPlaidService)
+	mockAccountRepo := new(MockAccountRepository)
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
 		nil,
-		nil,
+		mockAccountRepo,
 		nil, // profileRepo - not needed for these tests
 		nil, // balanceSnapshotRepo - not needed for these tests
 		mockPlaidService,
@@ -603,6 +616,9 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "existing-cursor", 0).Return(plaidResp, nil)
 
+	// Storage runs first and succeeds (no accounts mapped, so the row is skipped rather than written).
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+
 	// Cursor update fails
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-new").
 		Return(errors.New("database connection error"))
@@ -614,7 +630,7 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 	assert.Error(t, err)
 	assert.NotNil(t, result)
 	assert.Len(t, result.Added, 1) // Got transaction data
-	assert.Contains(t, err.Error(), "failed to update cursor on page 1")
+	assert.Contains(t, err.Error(), "failed to update cursor after storage")
 
 	mockLinkedItemRepo.AssertExpectations(t)
 }
@@ -1976,9 +1992,14 @@ func (m *mockProfileRepoForCursorTests) UpdateUserEmailTx(ctx context.Context, t
 // Plaid Staging Validation - Cursor handling edge cases
 // ============================================================================
 
-// TestSyncTransactions_CursorPersistsAfterTxnStorageFailure verifies that the cursor
-// is persisted even when transaction storage fails. This ensures resumability.
-func TestSyncTransactions_CursorPersistsAfterTxnStorageFailure(t *testing.T) {
+// TestSyncTransactions_CursorHeldBackWhenTxnStorageFails verifies that the cursor is NOT persisted
+// when transaction storage fails.
+//
+// #1570 INVERTED THIS TEST. It used to assert the opposite ("cursor persists even when storage
+// fails ... ensures resumability"), which was precisely the data-loss bug: resuming from an
+// advanced cursor means Plaid never re-delivers the rows that failed to store, so they are gone
+// permanently. Real resumability is holding the cursor back until storage has committed.
+func TestSyncTransactions_CursorHeldBackWhenTxnStorageFails(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup mocks
@@ -2031,8 +2052,8 @@ func TestSyncTransactions_CursorPersistsAfterTxnStorageFailure(t *testing.T) {
 	plaidResponse.SetHasMore(false)
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", existingCursor, 0).Return(plaidResponse, nil)
 
-	// Mock: Cursor update SUCCEEDS (this is the critical part)
-	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", newCursor).Return(nil)
+	// Mock: cursor update would succeed if called — the point is that it must NOT be called.
+	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Mock: Transaction storage FAILS
 	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, errors.New("database connection lost"))
@@ -2044,10 +2065,13 @@ func TestSyncTransactions_CursorPersistsAfterTxnStorageFailure(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "database connection lost")
 
-	// Assert: But cursor was still updated (critical for resumability)
-	mockLinkedItemRepo.AssertCalled(t, "UpdateCursor", ctx, "linked-item-123", newCursor)
+	// Assert: the cursor was NOT advanced — the rows never reached the database, so advancing past
+	// them would destroy them (Plaid does not re-deliver behind a stored cursor).
+	assert.Empty(t, persistedCursors(mockLinkedItemRepo))
+	mockLinkedItemRepo.AssertNotCalled(t, "UpdateCursor", ctx, "linked-item-123", newCursor)
 
-	// Assert: Partial results were returned (transactions that failed to store)
+	// Assert: Partial results were returned (transactions that failed to store). NewCursor is the
+	// in-memory cursor the run reached; it is deliberately NOT what was persisted.
 	assert.NotNil(t, result)
 	assert.Equal(t, newCursor, result.NewCursor)
 }
