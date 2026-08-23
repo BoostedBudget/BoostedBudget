@@ -584,10 +584,11 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockPlaidService := new(MockPlaidService)
 	mockAccountRepo := new(MockAccountRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
 	service := NewTransactionSyncService(
 		nil,
 		mockLinkedItemRepo,
-		nil,
+		mockTransactionRepo,
 		mockAccountRepo,
 		nil, // profileRepo - not needed for these tests
 		nil, // balanceSnapshotRepo - not needed for these tests
@@ -610,14 +611,18 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 
 	// Mock Plaid API success
 	plaidResp := &plaid.TransactionsSyncResponse{
-		Added:      []plaid.Transaction{{TransactionId: "txn-1"}},
+		Added:      []plaid.Transaction{{TransactionId: "txn-1", AccountId: "plaid-acc-1", Amount: 5.00, Date: "2024-03-01", Name: "Stored"}},
 		NextCursor: "cursor-new",
 		HasMore:    false,
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "existing-cursor", 0).Return(plaidResp, nil)
 
-	// Storage runs first and succeeds (no accounts mapped, so the row is skipped rather than written).
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	// Storage runs first and genuinely COMMITS the row — that is the situation this test is about:
+	// durable rows plus a cursor that could not be advanced. An empty account list would skip the
+	// row and make the test vacuous.
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).
+		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: linkedItem.UserID}}, nil)
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(map[string]bool{"txn-1": true}, nil)
 
 	// Cursor update fails
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-new").
@@ -631,6 +636,10 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Len(t, result.Added, 1) // Got transaction data
 	assert.Contains(t, err.Error(), "failed to update cursor after storage")
+
+	// The row really was written before the cursor write failed — otherwise this test would be
+	// exercising nothing. The next run re-delivers it and CreateBatch upserts it.
+	assert.Equal(t, 1, storedExternalIDs(mockTransactionRepo)["txn-1"])
 
 	mockLinkedItemRepo.AssertExpectations(t)
 }
