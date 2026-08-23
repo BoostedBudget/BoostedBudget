@@ -83,11 +83,30 @@ const (
 	// AccountStatusExpired indicates the fingerprint hold was released after the 90-day TTL
 	// (Issue #1010: applies when a disconnected item's grace period expires and another user links)
 	AccountStatusExpired AccountStatus = "expired"
-	// AccountStatusRemoved indicates the user deliberately disconnected this account (Issue #1569).
-	// Distinct from AccountStatusReplaced (superseded by a re-link) and AccountStatusExpired (TTL
-	// release): 'removed' records a deliberate user action. Requires RemovedAt to be set — see
-	// migration 000149's accounts_removed_at_consistency CHECK constraint.
+	// AccountStatusRemoved indicates the account is no longer connected. It has TWO causes as of
+	// Issue #1569 Task 5 — the user deliberately disconnected it, or Plaid stopped returning it
+	// (the bank closed it) — distinguished by RemovalReason, NOT by this status. Distinct from
+	// AccountStatusReplaced (superseded by a re-link) and AccountStatusExpired (TTL release).
+	// Requires RemovedAt to be set — see migration 000149's accounts_removed_at_consistency CHECK.
 	AccountStatusRemoved AccountStatus = "removed"
+)
+
+// RemovalReason records WHO removed an account, for rows with status 'removed'. It exists because
+// exactly one decision depends on it: automatic restore (Issue #1569 Task 5, fix round 2).
+//
+// ⚠ Only RemovalReasonProviderAbsent may ever be auto-restored. A user disconnect must never be
+// undone by a sync — the user asked for the account to be gone, and resurrecting it because the
+// bank still reports it would invert this issue's whole principle. An UNSET reason (NULL in the
+// column, "" here) is NOT provider-removed and NOT restorable: every pre-migration-000154 'removed'
+// row predates the provider path, so it was a user disconnect.
+type RemovalReason string
+
+const (
+	// RemovalReasonUserDisconnect: the user asked, via DisconnectAccount or DisconnectInstitution.
+	RemovalReasonUserDisconnect RemovalReason = "user_disconnect"
+	// RemovalReasonProviderAbsent: a confirmed-complete Plaid /accounts/get stopped returning this
+	// account, i.e. the bank closed it. The only reason eligible for automatic restore.
+	RemovalReasonProviderAbsent RemovalReason = "provider_absent"
 )
 
 // Validate checks that the Account has all required fields and valid types

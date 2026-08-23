@@ -50,14 +50,15 @@ func reconcileTestAccount(id, plaidID string) domain.Account {
 // TestReconcileRemovedAccounts_AbsentFromCompleteResponse_MarksRemoved is the core behaviour:
 // Plaid enumerated the item's accounts successfully and this one was not among them, so the bank
 // closed it. It transitions to 'removed' through the EXISTING soft-remove write path
-// (UpdateStatus, which stamps removed_at and lets the history trigger close the interval), and
+// (MarkRemovedByProvider — the same statement as UpdateStatus, stamping removed_at and letting the
+// history trigger close the interval, plus removed_reason='provider_absent'), and
 // the removal is audit-logged so "why did this disappear?" has an answer.
 func TestReconcileRemovedAccounts_AbsentFromCompleteResponse_MarksRemoved(t *testing.T) {
 	accountRepo := &MockAccountRepository{}
 	audit := &MockAuditLogger{}
 	svc := reconcileTestService(accountRepo, audit)
 
-	accountRepo.On("UpdateStatus", mock.Anything, "acct-gone", "user-1", domain.AccountStatusRemoved, (*string)(nil)).
+	accountRepo.On("MarkRemovedByProvider", mock.Anything, "acct-gone", "user-1").
 		Return(nil).Once()
 	audit.On("Log", mock.Anything, "account.removed_by_provider", "account", "acct-gone").Return(nil).Once()
 
@@ -71,7 +72,7 @@ func TestReconcileRemovedAccounts_AbsentFromCompleteResponse_MarksRemoved(t *tes
 	accountRepo.AssertExpectations(t)
 	audit.AssertExpectations(t)
 	// The still-present account is never touched.
-	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, "acct-live", mock.Anything, mock.Anything, mock.Anything)
+	accountRepo.AssertNotCalled(t, "MarkRemovedByProvider", mock.Anything, "acct-live", mock.Anything)
 }
 
 // TestReconcileRemovedAccounts_StillPresent_StaysActive — brief test 4.
@@ -90,7 +91,7 @@ func TestReconcileRemovedAccounts_StillPresent_StaysActive(t *testing.T) {
 	})
 
 	assert.Equal(t, 0, removed)
-	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	accountRepo.AssertNotCalled(t, "MarkRemovedByProvider", mock.Anything, mock.Anything, mock.Anything)
 	audit.AssertNotCalled(t, "Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -99,7 +100,8 @@ func TestReconcileRemovedAccounts_StillPresent_StaysActive(t *testing.T) {
 // An errored, throttled, or degraded /accounts/get can come back with an empty `accounts` array.
 // Read as "Plaid enumerated everything and none of your accounts exist any more," that sweeps a
 // user's ENTIRE portfolio to 'removed' in one run and zeroes their net worth. It must mark
-// NOTHING. Note the mock carries no UpdateStatus expectation at all: any call is a hard failure.
+// NOTHING. Note the mock carries no MarkRemovedByProvider expectation at all: any call is a hard
+// failure.
 func TestReconcileRemovedAccounts_ZeroAccountsResponse_MarksNothing(t *testing.T) {
 	for name, roster := range map[string]PlaidAccountRoster{
 		"nil accounts":   PlaidAccountRosterFrom(nil, nil),
@@ -118,7 +120,7 @@ func TestReconcileRemovedAccounts_ZeroAccountsResponse_MarksNothing(t *testing.T
 			})
 
 			assert.Equal(t, 0, removed, "a zero-account response must never sweep a portfolio to removed")
-			accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			accountRepo.AssertNotCalled(t, "MarkRemovedByProvider", mock.Anything, mock.Anything, mock.Anything)
 			audit.AssertNotCalled(t, "Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		})
 	}
@@ -139,12 +141,12 @@ func TestReconcileRemovedAccounts_ErroredResponse_MarksNothing(t *testing.T) {
 	})
 
 	assert.Equal(t, 0, removed)
-	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	accountRepo.AssertNotCalled(t, "MarkRemovedByProvider", mock.Anything, mock.Anything, mock.Anything)
 	audit.AssertNotCalled(t, "Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestReconcileRemovedAccounts_AlreadyDisconnected_NotReTransitioned — brief test 5. Task 2 gave
-// UpdateStatus a status guard: it refuses a non-active row with ErrAccountAlreadyRemoved (the
+// the removal statement a status guard: it refuses a non-active row with ErrAccountAlreadyRemoved (the
 // idempotency case) or ErrAccountAlreadyDisconnected ('replaced'/'expired' — a more specific
 // terminal reason this sweep must not overwrite). Reconciliation cooperates: it swallows both,
 // audit-logs NEITHER (nothing happened to log), and keeps going for the remaining accounts.
@@ -153,11 +155,11 @@ func TestReconcileRemovedAccounts_AlreadyDisconnected_NotReTransitioned(t *testi
 	audit := &MockAuditLogger{}
 	svc := reconcileTestService(accountRepo, audit)
 
-	accountRepo.On("UpdateStatus", mock.Anything, "acct-replaced", "user-1", domain.AccountStatusRemoved, (*string)(nil)).
+	accountRepo.On("MarkRemovedByProvider", mock.Anything, "acct-replaced", "user-1").
 		Return(repository.ErrAccountAlreadyDisconnected).Once()
-	accountRepo.On("UpdateStatus", mock.Anything, "acct-already", "user-1", domain.AccountStatusRemoved, (*string)(nil)).
+	accountRepo.On("MarkRemovedByProvider", mock.Anything, "acct-already", "user-1").
 		Return(repository.ErrAccountAlreadyRemoved).Once()
-	accountRepo.On("UpdateStatus", mock.Anything, "acct-gone", "user-1", domain.AccountStatusRemoved, (*string)(nil)).
+	accountRepo.On("MarkRemovedByProvider", mock.Anything, "acct-gone", "user-1").
 		Return(nil).Once()
 	audit.On("Log", mock.Anything, "account.removed_by_provider", "account", "acct-gone").Return(nil).Once()
 
@@ -193,7 +195,7 @@ func TestReconcileRemovedAccounts_ForeignAccountSkipped(t *testing.T) {
 	removed := svc.reconcileRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{foreign})
 
 	assert.Equal(t, 0, removed)
-	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	accountRepo.AssertNotCalled(t, "MarkRemovedByProvider", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestReconcileRemovedAccounts_BlankPlaidAccountID_Skipped: a row with no plaid_account_id can
@@ -208,7 +210,7 @@ func TestReconcileRemovedAccounts_BlankPlaidAccountID_Skipped(t *testing.T) {
 	})
 
 	assert.Equal(t, 0, removed)
-	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	accountRepo.AssertNotCalled(t, "MarkRemovedByProvider", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestReconcileRemovedAccounts_AuditFailureIsNonFatal: the account is already removed by the time
@@ -219,7 +221,7 @@ func TestReconcileRemovedAccounts_AuditFailureIsNonFatal(t *testing.T) {
 	audit := &MockAuditLogger{}
 	svc := reconcileTestService(accountRepo, audit)
 
-	accountRepo.On("UpdateStatus", mock.Anything, mock.Anything, "user-1", domain.AccountStatusRemoved, (*string)(nil)).
+	accountRepo.On("MarkRemovedByProvider", mock.Anything, mock.Anything, "user-1").
 		Return(nil).Twice()
 	audit.On("Log", mock.Anything, "account.removed_by_provider", "account", mock.Anything).
 		Return(errors.New("audit db down")).Twice()
@@ -242,7 +244,7 @@ func TestReconcileRemovedAccounts_NilAuditLogger_NoPanic(t *testing.T) {
 	accountRepo := &MockAccountRepository{}
 	svc := reconcileTestService(accountRepo, nil)
 
-	accountRepo.On("UpdateStatus", mock.Anything, "acct-gone", "user-1", domain.AccountStatusRemoved, (*string)(nil)).
+	accountRepo.On("MarkRemovedByProvider", mock.Anything, "acct-gone", "user-1").
 		Return(nil).Once()
 
 	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-live"}}, nil)
@@ -262,9 +264,9 @@ func TestReconcileRemovedAccounts_UpdateFailureDoesNotStopThePass(t *testing.T) 
 	audit := &MockAuditLogger{}
 	svc := reconcileTestService(accountRepo, audit)
 
-	accountRepo.On("UpdateStatus", mock.Anything, "acct-fail", "user-1", domain.AccountStatusRemoved, (*string)(nil)).
+	accountRepo.On("MarkRemovedByProvider", mock.Anything, "acct-fail", "user-1").
 		Return(errors.New("deadlock detected")).Once()
-	accountRepo.On("UpdateStatus", mock.Anything, "acct-ok", "user-1", domain.AccountStatusRemoved, (*string)(nil)).
+	accountRepo.On("MarkRemovedByProvider", mock.Anything, "acct-ok", "user-1").
 		Return(nil).Once()
 	audit.On("Log", mock.Anything, "account.removed_by_provider", "account", "acct-ok").Return(nil).Once()
 
@@ -309,7 +311,7 @@ func TestReconcileRemovedAccounts_RefusesToRemoveEveryAccountOfAnItem(t *testing
 	})
 
 	assert.Equal(t, 0, removed, "an all-item sweep must be refused outright")
-	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	accountRepo.AssertNotCalled(t, "MarkRemovedByProvider", mock.Anything, mock.Anything, mock.Anything)
 	audit.AssertNotCalled(t, "Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -329,7 +331,7 @@ func TestReconcileRemovedAccounts_SingleAccountItemIsNotExempt(t *testing.T) {
 	})
 
 	assert.Equal(t, 0, removed)
-	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	accountRepo.AssertNotCalled(t, "MarkRemovedByProvider", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestReconcileRemovedAccounts_BoundIsAllOrNothingNotAMajority proves the bound is exactly the
@@ -340,8 +342,8 @@ func TestReconcileRemovedAccounts_BoundIsAllOrNothingNotAMajority(t *testing.T) 
 	audit := &MockAuditLogger{}
 	svc := reconcileTestService(accountRepo, audit)
 
-	accountRepo.On("UpdateStatus", mock.Anything, "acct-a", "user-1", domain.AccountStatusRemoved, (*string)(nil)).Return(nil).Once()
-	accountRepo.On("UpdateStatus", mock.Anything, "acct-b", "user-1", domain.AccountStatusRemoved, (*string)(nil)).Return(nil).Once()
+	accountRepo.On("MarkRemovedByProvider", mock.Anything, "acct-a", "user-1").Return(nil).Once()
+	accountRepo.On("MarkRemovedByProvider", mock.Anything, "acct-b", "user-1").Return(nil).Once()
 	audit.On("Log", mock.Anything, "account.removed_by_provider", "account", mock.Anything).Return(nil).Twice()
 
 	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-c"}}, nil)
@@ -373,7 +375,7 @@ func TestReconcileRemovedAccounts_ForeignAccountDoesNotUnlockTheBound(t *testing
 	})
 
 	assert.Equal(t, 0, removed)
-	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	accountRepo.AssertNotCalled(t, "MarkRemovedByProvider", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestReconcileRemovedAccounts_MetricRecordsOutcomes: a mass sweep must be visible in metrics, not
@@ -390,7 +392,7 @@ func TestReconcileRemovedAccounts_MetricRecordsOutcomes(t *testing.T) {
 	// A genuine removal, with a survivor so the bound does not trip.
 	accountRepo := &MockAccountRepository{}
 	svc := reconcileTestService(accountRepo, nil)
-	accountRepo.On("UpdateStatus", mock.Anything, "acct-gone", "user-1", domain.AccountStatusRemoved, (*string)(nil)).Return(nil).Once()
+	accountRepo.On("MarkRemovedByProvider", mock.Anything, "acct-gone", "user-1").Return(nil).Once()
 	svc.reconcileRemovedAccounts(context.Background(), reconcileTestItem(),
 		PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-live"}}, nil),
 		[]domain.Account{
@@ -418,4 +420,163 @@ func TestReconcileRemovedAccounts_MetricRecordsOutcomes(t *testing.T) {
 	assert.Equal(t, float64(3), read("refused_full_item_sweep")-beforeRefused,
 		"the refusal counter must record the SIZE of the sweep it prevented")
 	assert.Equal(t, float64(1), read("skipped_incomplete_response")-beforeSkipped)
+}
+
+// ---------------------------------------------------------------------------
+// Fix round 2: auto-restore of provider-removed accounts.
+//
+// A removal used to be permanent — nothing else in this codebase writes an account back to
+// 'active'. If Plaid starts returning an account we marked removed, the removal was wrong (or the
+// closure was reversed) and the honest current state is 'active'. The one thing this must never do
+// is resurrect an account the USER disconnected.
+// ---------------------------------------------------------------------------
+
+func removedTestAccount(id, plaidID string) domain.Account {
+	a := reconcileTestAccount(id, plaidID)
+	a.Status = domain.AccountStatusRemoved
+	return a
+}
+
+// TestRestoreProviderRemovedAccounts_ReappearedAccountIsRestored: the happy path — restored via the
+// repository's guarded write, and audit-logged under an action distinct from both removal actions.
+func TestRestoreProviderRemovedAccounts_ReappearedAccountIsRestored(t *testing.T) {
+	accountRepo := &MockAccountRepository{}
+	audit := &MockAuditLogger{}
+	svc := reconcileTestService(accountRepo, audit)
+
+	accountRepo.On("RestoreProviderRemovedAccount", mock.Anything, "acct-back", "user-1").Return(nil).Once()
+	audit.On("Log", mock.Anything, "account.restored_by_provider", "account", "acct-back").Return(nil).Once()
+
+	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-back"}}, nil)
+	restored := svc.restoreProviderRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
+		removedTestAccount("acct-back", "plaid-back"),
+	})
+
+	assert.Equal(t, 1, restored)
+	accountRepo.AssertExpectations(t)
+	audit.AssertExpectations(t)
+}
+
+// TestRestoreProviderRemovedAccounts_UserDisconnectedIsNotRestored is THE dangerous direction.
+//
+// The user asked for this account to be gone; the bank still reporting it is not a counter-argument.
+// At this layer the repository is the authority (it re-checks removed_reason in SQL under FOR
+// UPDATE and answers ErrAccountNotRestorable), so what this test pins is that the service HONOURS
+// that refusal: no retry, no fallback to another write path, and — critically — no audit entry
+// claiming a restore that did not happen. The SQL predicate itself is pinned by the integration
+// test, which is where a mutation can actually reach it.
+func TestRestoreProviderRemovedAccounts_UserDisconnectedIsNotRestored(t *testing.T) {
+	accountRepo := &MockAccountRepository{}
+	audit := &MockAuditLogger{}
+	svc := reconcileTestService(accountRepo, audit)
+
+	accountRepo.On("RestoreProviderRemovedAccount", mock.Anything, "acct-user-removed", "user-1").
+		Return(repository.ErrAccountNotRestorable).Once()
+
+	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-user-removed"}}, nil)
+	restored := svc.restoreProviderRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
+		removedTestAccount("acct-user-removed", "plaid-user-removed"),
+	})
+
+	assert.Equal(t, 0, restored)
+	accountRepo.AssertExpectations(t)
+	audit.AssertNotCalled(t, "Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	// No second attempt through any other door.
+	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	accountRepo.AssertNumberOfCalls(t, "RestoreProviderRemovedAccount", 1)
+}
+
+// TestRestoreProviderRemovedAccounts_PartialRosterRestoresNothing: an account "reappearing" in a
+// partial or errored response proves nothing, exactly as its absence proves nothing on the removal
+// side. Note the account IS in the payload — only the roster's completeness differs.
+func TestRestoreProviderRemovedAccounts_PartialRosterRestoresNothing(t *testing.T) {
+	for name, roster := range map[string]PlaidAccountRoster{
+		"errored call":   PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-back"}}, errors.New("plaid: 500")),
+		"empty accounts": PlaidAccountRosterFrom(nil, nil),
+		"blank ids only": PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: ""}}, nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			accountRepo := &MockAccountRepository{}
+			svc := reconcileTestService(accountRepo, nil)
+
+			restored := svc.restoreProviderRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
+				removedTestAccount("acct-back", "plaid-back"),
+			})
+
+			assert.Equal(t, 0, restored)
+			accountRepo.AssertNotCalled(t, "RestoreProviderRemovedAccount", mock.Anything, mock.Anything, mock.Anything)
+		})
+	}
+}
+
+// TestRestoreProviderRemovedAccounts_StillAbsentIsLeftAlone: a removed account Plaid still does not
+// return stays removed, and is not even asked about.
+func TestRestoreProviderRemovedAccounts_StillAbsentIsLeftAlone(t *testing.T) {
+	accountRepo := &MockAccountRepository{}
+	svc := reconcileTestService(accountRepo, nil)
+
+	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-other"}}, nil)
+	restored := svc.restoreProviderRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
+		removedTestAccount("acct-gone", "plaid-gone"),
+	})
+
+	assert.Equal(t, 0, restored)
+	accountRepo.AssertNotCalled(t, "RestoreProviderRemovedAccount", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestRestoreProviderRemovedAccounts_ActiveAccountsAreNotTouched: only 'removed' rows are
+// candidates. An active account Plaid returns is simply normal.
+func TestRestoreProviderRemovedAccounts_ActiveAccountsAreNotTouched(t *testing.T) {
+	accountRepo := &MockAccountRepository{}
+	svc := reconcileTestService(accountRepo, nil)
+
+	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-live"}}, nil)
+	restored := svc.restoreProviderRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
+		reconcileTestAccount("acct-live", "plaid-live"),
+	})
+
+	assert.Equal(t, 0, restored)
+	accountRepo.AssertNotCalled(t, "RestoreProviderRemovedAccount", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestRestoreProviderRemovedAccounts_ForeignAccountIsNotRestored: the ownership guard, mirroring
+// the removal side — GetByLinkedItemIDIncludingRetained is not user-scoped.
+func TestRestoreProviderRemovedAccounts_ForeignAccountIsNotRestored(t *testing.T) {
+	accountRepo := &MockAccountRepository{}
+	svc := reconcileTestService(accountRepo, nil)
+
+	foreign := removedTestAccount("acct-foreign", "plaid-back")
+	foreign.UserID = "user-2"
+
+	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-back"}}, nil)
+	restored := svc.restoreProviderRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{foreign})
+
+	assert.Equal(t, 0, restored)
+	accountRepo.AssertNotCalled(t, "RestoreProviderRemovedAccount", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestRestoreProviderRemovedAccounts_WriteFailureIsNonFatal: a transient failure must not abort the
+// pass, and must not be audit-logged as a restore.
+func TestRestoreProviderRemovedAccounts_WriteFailureIsNonFatal(t *testing.T) {
+	accountRepo := &MockAccountRepository{}
+	audit := &MockAuditLogger{}
+	svc := reconcileTestService(accountRepo, audit)
+
+	accountRepo.On("RestoreProviderRemovedAccount", mock.Anything, "acct-fail", "user-1").
+		Return(errors.New("deadlock detected")).Once()
+	accountRepo.On("RestoreProviderRemovedAccount", mock.Anything, "acct-ok", "user-1").Return(nil).Once()
+	audit.On("Log", mock.Anything, "account.restored_by_provider", "account", "acct-ok").Return(nil).Once()
+
+	roster := PlaidAccountRosterFrom([]plaid.AccountBase{
+		{AccountId: "plaid-fail"},
+		{AccountId: "plaid-ok"},
+	}, nil)
+	restored := svc.restoreProviderRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
+		removedTestAccount("acct-fail", "plaid-fail"),
+		removedTestAccount("acct-ok", "plaid-ok"),
+	})
+
+	assert.Equal(t, 1, restored)
+	accountRepo.AssertExpectations(t)
+	audit.AssertNumberOfCalls(t, "Log", 1)
 }

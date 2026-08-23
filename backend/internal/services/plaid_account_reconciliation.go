@@ -136,7 +136,11 @@ func (s *transactionSyncService) reconcileRemovedAccounts(
 	// Pass 2: write.
 	removed := 0
 	for _, account := range candidates {
-		if err := s.accountRepo.UpdateStatus(ctx, account.ID, account.UserID, domain.AccountStatusRemoved, nil); err != nil {
+		// MarkRemovedByProvider, not UpdateStatus: same statement, same guards, but it stamps
+		// removed_reason = 'provider_absent'. That column is the ONLY thing that later lets
+		// restoreProviderRemovedAccounts tell this removal apart from a user disconnect, and a
+		// user disconnect must never be auto-restored (Issue #1569 Task 5, fix round 2).
+		if err := s.accountRepo.MarkRemovedByProvider(ctx, account.ID, account.UserID); err != nil {
 			switch {
 			case errors.Is(err, repository.ErrAccountAlreadyRemoved):
 				// Already in the exact state this pass wants (a concurrent disconnect, or a
@@ -181,4 +185,133 @@ func (s *transactionSyncService) reconcileRemovedAccounts(
 	}
 
 	return removed
+}
+
+// auditActionAccountRestoredByProvider is the audit action for an automatic restore: an account
+// this product had marked removed because Plaid stopped returning it has reappeared. Distinct from
+// BOTH removal actions, so the trail reads as a sequence a human can follow —
+// account.removed_by_provider then account.restored_by_provider — rather than a state that changed
+// itself.
+const auditActionAccountRestoredByProvider = "account.restored_by_provider"
+
+// restoreProviderRemovedAccounts is the inverse of reconcileRemovedAccounts, and the reason that
+// function's removals are no longer permanent. Issue #1569, Task 5, fix round 2.
+//
+// The hole it closes: nothing anywhere else in this codebase writes an account back to 'active'.
+// There is no un-remove endpoint, no UI, and MatchOrCreate resolves user_accounts rather than
+// creating account rows — so before this, a wrongly-removed account was out of current net worth
+// forever, silently. A bank that reports an account again did not close it; the removal was wrong,
+// or the closure was reversed. Either way the honest current state is 'active'.
+//
+// ⚠ THE ONE THING THIS MUST NEVER DO is resurrect an account the USER disconnected. The user asked
+// for it gone; the bank continuing to report it is not a counter-argument. Two independent things
+// enforce that, and the second one is the real guarantee:
+//
+//  1. this function only considers rows whose removed_reason is 'provider_absent' (a NULL reason —
+//     every 'removed' row predating migration 000154 — is NOT provider-removed and is skipped); and
+//  2. accountRepo.RestoreProviderRemovedAccount re-checks the same predicate in SQL under FOR
+//     UPDATE and refuses with ErrAccountNotRestorable otherwise. The service filter is an
+//     optimisation; the repository's is the authorisation. A bug in this loop cannot resurrect a
+//     user disconnect.
+//
+// Only ever runs on a confirmed-complete roster: an account "reappearing" in a partial or errored
+// response proves nothing, exactly as its absence proves nothing on the removal side. There is
+// deliberately no all-or-nothing bound here (the removal side has one) — restoring is the recovery
+// direction, and a mass restore returns accounts to the state they were in before, which is at
+// worst a re-removal on the next complete sync rather than an unrecoverable loss.
+//
+// ⚠ FLAPPING: DELIBERATELY NOT GUARDED. An account oscillating between present and absent would
+// churn account_status_history intervals (two per cycle) and make net worth wobble. No guard is
+// applied, and that is a judgement, not an oversight:
+//
+//   - Every guard that would stop the churn works by refusing to restore after N cycles — which
+//     converts a churn problem into a PERMANENCE problem, the exact defect this function exists to
+//     close, and it would strand the account in whichever phase the cap happened to fall on.
+//   - The churn is bounded per run: at most one transition per account per sync, and each one is an
+//     honest record of what the provider actually reported at that moment. A flapping history is a
+//     true account of a flapping bank feed.
+//   - It is already detectable: `removed` and `restored` climbing together on
+//     plaid_provider_account_removal_total is precisely the flapping signature, and a persistent
+//     one is a provider incident to escalate rather than something to paper over in this loop.
+//
+// If flapping is ever observed in practice, the right fix is upstream (a stability window on the
+// REMOVAL side — require an account to be absent from N consecutive complete rosters before
+// removing it), not a cap on recovery. That would be a change to reconcileRemovedAccounts, not
+// here.
+//
+// Returns the number of accounts restored.
+func (s *transactionSyncService) restoreProviderRemovedAccounts(
+	ctx context.Context,
+	linkedItem *domain.LinkedItem,
+	roster PlaidAccountRoster,
+	retainedAccounts []domain.Account,
+) int {
+	if !roster.Complete() {
+		return 0
+	}
+
+	restored := 0
+	for _, account := range retainedAccounts {
+		if account.Status != domain.AccountStatusRemoved || account.PlaidAccountID == "" {
+			continue
+		}
+		// Ownership guard, same as the removal side: GetByLinkedItemIDIncludingRetained is keyed on
+		// linked_item_id and is NOT user-scoped.
+		if account.UserID != linkedItem.UserID {
+			s.logger.Error("skipping restore of an account that does not belong to the linked item's owner",
+				"linked_item_id", linkedItem.ID,
+				"account_id", account.ID,
+				"account_user_id", account.UserID,
+				"linked_item_user_id", linkedItem.UserID,
+			)
+			continue
+		}
+		// Asked in the POSITIVE, deliberately. `Present` is the safe question — a false answer
+		// means "Plaid did not mention this account", which is UNKNOWN — and here a false answer
+		// leads to doing nothing at all. Writing it as `if !Present { continue }` would be the same
+		// behaviour but the same SHAPE as the catastrophic loop the AST guard exists to catch, and
+		// a reader scanning for that shape should not have to work out which of the two this is.
+		if roster.Present(account.PlaidAccountID) && s.restoreReappearedAccount(ctx, linkedItem, account) {
+			restored++
+		}
+	}
+
+	return restored
+}
+
+// restoreReappearedAccount performs one restore and reports whether the account actually changed
+// state. Split out of restoreProviderRemovedAccounts so that the decision loop above stays a short
+// list of filters — see that function for the safety argument.
+func (s *transactionSyncService) restoreReappearedAccount(
+	ctx context.Context,
+	linkedItem *domain.LinkedItem,
+	account domain.Account,
+) bool {
+	if err := s.accountRepo.RestoreProviderRemovedAccount(ctx, account.ID, account.UserID); err != nil {
+		if errors.Is(err, repository.ErrAccountNotRestorable) {
+			// The routine answer, not a failure: a user-disconnected account (or a legacy row with
+			// no recorded cause) that the bank still reports. Staying removed is correct.
+			observability.PlaidProviderAccountRemoval.WithLabelValues("restore_declined_not_provider").Inc()
+			s.logger.Debug("account reappeared but is not a provider-initiated removal, leaving it removed",
+				"account_id", account.ID, "item_id", linkedItem.ID)
+			return false
+		}
+		observability.PlaidProviderAccountRemoval.WithLabelValues("restore_failed").Inc()
+		s.logger.Warn("failed to restore a provider-removed account that reappeared (will retry next sync)",
+			"account_id", account.ID, "item_id", linkedItem.ID, "error", err)
+		return false
+	}
+
+	observability.PlaidProviderAccountRemoval.WithLabelValues("restored").Inc()
+	s.logger.Info("restored account: Plaid is returning it again after we marked it removed",
+		"account_id", account.ID,
+		"item_id", linkedItem.ID,
+	)
+
+	if s.auditLogger != nil {
+		if auditErr := s.auditLogger.Log(ctx, auditActionAccountRestoredByProvider, "account", account.ID); auditErr != nil {
+			logAuditFailure(ctx, auditErr, auditActionAccountRestoredByProvider, account.UserID)
+		}
+	}
+	return true
 }

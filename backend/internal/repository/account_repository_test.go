@@ -1137,13 +1137,16 @@ func TestAccountRepository_UpdateStatus(t *testing.T) {
 		WithArgs(accountID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"status"}).AddRow("active"))
 
-	// Expect update to set status, replaced_at, replaced_by_id, and removed_at
-	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id.*removed_at").
+	// Expect update to set status, replaced_at, replaced_by_id, removed_at and removed_reason
+	// (Issue #1569 Task 5: the cause is stamped in the same statement as removed_at, so the two
+	// can never disagree — migration 000154's accounts_removed_reason_valid CHECK requires it).
+	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id.*removed_at.*removed_reason").
 		WithArgs(
 			pgxmock.AnyArg(), // status
 			pgxmock.AnyArg(), // replaced_at
 			pgxmock.AnyArg(), // replaced_by_id
 			pgxmock.AnyArg(), // removed_at
+			pgxmock.AnyArg(), // removed_reason
 			pgxmock.AnyArg(), // updated_at
 			pgxmock.AnyArg(), // id
 			pgxmock.AnyArg(), // user_id

@@ -387,6 +387,17 @@ func (m *MockAccountRepository) MarkRemovedByLinkedItemID(ctx context.Context, l
 	return args.Error(0)
 }
 
+// Issue #1569 Task 5: the provider-initiated removal and its inverse, auto-restore.
+func (m *MockAccountRepository) MarkRemovedByProvider(ctx context.Context, accountID, userID string) error {
+	args := m.Called(ctx, accountID, userID)
+	return args.Error(0)
+}
+
+func (m *MockAccountRepository) RestoreProviderRemovedAccount(ctx context.Context, accountID, userID string) error {
+	args := m.Called(ctx, accountID, userID)
+	return args.Error(0)
+}
+
 // Issue #1569, Task 6: permanently destroy an account and everything derived from it.
 func (m *MockAccountRepository) PurgeAccount(ctx context.Context, accountID, userID string, auditLog repository.AuditLogRepository) error {
 	args := m.Called(ctx, accountID, userID, auditLog)

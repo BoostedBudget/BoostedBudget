@@ -738,12 +738,20 @@ var (
 	// but matched none of ours. `skipped_incomplete_response` increments once per reconciliation
 	// pass declined because the response could not certify anything.
 	//
+	// The inverse direction is counted here too (fix round 2): `restored` when a provider-removed
+	// account reappears in a confirmed-complete roster and goes back to 'active', and
+	// `restore_declined_not_provider` when a reappearing account is left removed because the USER
+	// disconnected it (or its cause predates migration 000154). A steadily climbing pair of
+	// `removed` and `restored` for the same population is the flapping signal — see
+	// restoreProviderRemovedAccounts for why no state-changing flap guard is applied.
+	//
 	// ⚠ LABEL HYGIENE: "outcome" is one of a small fixed set — removed | refused_full_item_sweep |
-	// skipped_incomplete_response | already_terminal | write_failed. Never a raw error string or
-	// any account/user identifier.
+	// skipped_incomplete_response | already_terminal | write_failed | restored |
+	// restore_declined_not_provider | restore_failed. Never a raw error string or any account/user
+	// identifier.
 	PlaidProviderAccountRemoval = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "plaid_provider_account_removal_total",
-		Help: "Total accounts affected by provider-initiated (bank-closed) account reconciliation, by outcome (removed, refused_full_item_sweep, skipped_incomplete_response, already_terminal, write_failed).",
+		Help: "Total accounts affected by provider-initiated (bank-closed) account reconciliation, by outcome (removed, refused_full_item_sweep, skipped_incomplete_response, already_terminal, write_failed, restored, restore_declined_not_provider, restore_failed).",
 	}, []string{"outcome"})
 
 	// AccountsReplacedFiltered counts query executions that exclude replaced accounts or
