@@ -344,6 +344,11 @@ components:
           type: string
         pfc_primary_override_display:
           type: string
+        reversed:
+          type: boolean
+        reversed_at:
+          format: date-time
+          type: string
         reviewed:
           type: boolean
         reviewed_at:
@@ -6344,6 +6349,13 @@ components:
           type: string
         date:
           format: date-time
+          type: string
+        deleted_at:
+          format: date-time
+          type: string
+        deleted_by:
+          type: string
+        deleted_reason:
           type: string
         effective_category_name:
           type: string
@@ -13685,6 +13697,13 @@ paths:
           name: reviewed
           schema:
             description: "Filter by review state: true (reviewed), false (unreviewed inbox), omit for both"
+            type: string
+        - description: "Include transactions the bank REVERSED after they posted (default false). Reversed rows are returned with reversed=true and reversed_at set, and MUST be rendered distinctly — an unlabelled reversal reads as a live transaction. Transactions removed while still pending are never returned, by any value of this flag: their posted twin is already in the feed. Issue #1569."
+          explode: false
+          in: query
+          name: include_reversed
+          schema:
+            description: "Include transactions the bank REVERSED after they posted (default false). Reversed rows are returned with reversed=true and reversed_at set, and MUST be rendered distinctly — an unlabelled reversal reads as a live transaction. Transactions removed while still pending are never returned, by any value of this flag: their posted twin is already in the feed. Issue #1569."
             type: string
         - description: "Filter by category origin (comma-separated): plaid, rule, manual"
           explode: false
