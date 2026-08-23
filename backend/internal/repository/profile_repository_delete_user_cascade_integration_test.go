@@ -1697,7 +1697,7 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 
 	execNoErr(t, ctx, pool, `
 		INSERT INTO liability_statements (user_id, account_id, liability_type, as_of_date, details)
-		VALUES ($1, $2, 'credit', CURRENT_DATE, '{}'::jsonb)`, target.ID, accountID)
+		VALUES ($1, $2, 'credit', CURRENT_DATE, '{"last_statement_balance": 100, "aprs": []}'::jsonb)`, target.ID, accountID)
 
 	execNoErr(t, ctx, pool, `
 		INSERT INTO investment_transactions (user_id, account_id, plaid_investment_transaction_id, type, name, amount, date)

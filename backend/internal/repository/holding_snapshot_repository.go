@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -11,41 +12,83 @@ import (
 //
 // holdingRepository.ReplaceForAccount DELETEs an account's holdings and re-INSERTs them on every
 // sync, so `holdings` can only ever answer "what is held right now". This file adds the "what was
-// held then" half. Two properties are deliberate and load-bearing:
+// held then" half. Three properties are deliberate and load-bearing:
 //
 //  1. holdings keeps its replace semantics EXACTLY as they were. Soft-deleting holdings instead
 //     was ruled out twice: every SUM(h.institution_value) would need a filter (one miss
 //     double-counts a portfolio), and portfolio_snapshot_repository.go's Upsert re-derives a PAST
 //     day's total from the live holdings rows — moving them would send those recomputes to zero.
-//  2. The capture runs inside ReplaceForAccount's OWN transaction, after its INSERTs. So the
+//
+//  2. The sync capture runs inside ReplaceForAccount's OWN transaction, after its INSERTs. So the
 //     history row is derived from the committed current state, and a rolled-back replace leaves
 //     no history behind either. There is no window in which the two disagree.
+//
+//  3. A capture is a SET, not a list of additions. Fix round 1: an INSERT ... SELECT alone is a
+//     positive-only record — it can say "this position existed" and has no way to say "and
+//     nothing else". A confirmed-complete liquidation therefore selected zero rows, wrote
+//     nothing, and left an EARLIER capture the same day standing as that day's answer (measured:
+//     live holdings 0, day's history 5000.00). So every capture now runs two statements: mark
+//     every row it did not re-observe for that (account, UTC day) present = false, then upsert
+//     the ones it did as present = true. Nothing is deleted — an absent row keeps its last known
+//     values — and reconstruction filters on present.
 
-// captureHoldingSnapshotsSQL records the account's post-replace holdings as one row per security
-// for today's UTC calendar day.
+// serverUTCDate reads the UTC calendar date from the SERVER, not the Go process.
+//
+// Every capture takes its as_of_date from here and passes it as a parameter, for two reasons.
+// (a) It cannot drift with the session TimeZone the way a bare date cast would — production is
+// only UTC because NewPool pins it (the #1461 lesson), and a psql session or a migration inherits
+// no such pin. (b) portfolio_snapshot_worker.go pairs a capture with a portfolio_snapshots upsert
+// and MUST file both under the same day; taking the aggregate's day from the Go clock and the
+// rows' day from the server meant that across UTC midnight — with the ~16 ms host/container skew
+// this project already documents — the aggregate and the rows behind it landed on DIFFERENT days,
+// which is the precise failure the pairing exists to prevent.
+func serverUTCDate(ctx context.Context, db DB) (time.Time, error) {
+	var d time.Time
+	if err := db.QueryRow(ctx, `SELECT (now() AT TIME ZONE 'UTC')::date`).Scan(&d); err != nil {
+		return time.Time{}, err
+	}
+	return d, nil
+}
+
+// markHoldingSnapshotsAbsentForAccountSQL is half one of a capture: everything recorded for this
+// account on this UTC day that the account no longer holds stopped being held. Covers both a
+// security sold between two same-day captures and a confirmed-complete liquidation (in which case
+// it marks the whole day's row set absent and the INSERT below adds nothing).
+//
+// $1 = account_id, $2 = user_id, $3 = as_of_date.
+const markHoldingSnapshotsAbsentForAccountSQL = `
+	UPDATE holding_snapshots hs
+	SET present = FALSE, captured_at = now()
+	WHERE hs.account_id = $1
+	  AND hs.user_id = $2
+	  AND hs.as_of_date = $3::date
+	  AND hs.present
+	  AND NOT EXISTS (
+	      SELECT 1 FROM holdings h
+	      WHERE h.account_id = hs.account_id
+	        AND h.security_id = hs.security_id
+	        AND h.user_id = hs.user_id
+	  )
+`
+
+// captureHoldingSnapshotsSQL is half two: record what the account DOES hold.
 //
 // Grain: (account_id, security_id, as_of_date). A second capture on the same day UPDATEs that
 // day's row rather than appending, so the table grows with elapsed days, not with sync frequency.
-// captured_at is refreshed on every write and is what makes a same-day overwrite reconstructible:
-// all rows from one capture share the transaction timestamp, so MAX(captured_at) per
-// (account_id, as_of_date) names that day's FINAL position set and leaves behind any security
-// sold between two captures on the same day.
+// present = TRUE is re-asserted on conflict so a security that goes away and comes back the same
+// day reads correctly.
 //
-// as_of_date is computed as (now() AT TIME ZONE 'UTC')::date INSIDE the statement rather than
-// passed in, so it cannot drift with the session TimeZone (the #1461 lesson: production is only
-// UTC because NewPool pins it, and a psql session or a migration inherits no such pin).
-//
-// $1 = account_id, $2 = user_id. Both are required: the enclosing DELETE/INSERT pair is scoped to
-// the same pair, so scoping the capture identically keeps it from reaching a foreign row.
+// $1 = account_id, $2 = user_id, $3 = as_of_date. accountID and userID both scope it, matching the
+// enclosing DELETE/INSERT pair, so the capture cannot reach a foreign row.
 const captureHoldingSnapshotsSQL = `
 	INSERT INTO holding_snapshots (
 		user_id, account_id, user_account_id, security_id,
-		as_of_date, captured_at,
+		as_of_date, captured_at, present,
 		quantity, cost_basis, institution_value, institution_price
 	)
 	SELECT
 		h.user_id, h.account_id, h.user_account_id, h.security_id,
-		(now() AT TIME ZONE 'UTC')::date, now(),
+		$3::date, now(), TRUE,
 		h.quantity, h.cost_basis, h.institution_value, h.institution_price
 	FROM holdings h
 	WHERE h.account_id = $1 AND h.user_id = $2
@@ -53,71 +96,137 @@ const captureHoldingSnapshotsSQL = `
 		user_id           = EXCLUDED.user_id,
 		user_account_id   = EXCLUDED.user_account_id,
 		captured_at       = EXCLUDED.captured_at,
+		present           = TRUE,
 		quantity          = EXCLUDED.quantity,
 		cost_basis        = EXCLUDED.cost_basis,
 		institution_value = EXCLUDED.institution_value,
 		institution_price = EXCLUDED.institution_price
 `
 
-// captureHoldingSnapshots runs captureHoldingSnapshotsSQL on db, which is expected to be the
-// pgx.Tx that just performed the replace.
+// captureHoldingSnapshots records one account's post-replace position SET. db is expected to be
+// the pgx.Tx that just performed the replace, so both halves and the replace commit together.
 func captureHoldingSnapshots(ctx context.Context, db DB, accountID, userID string) error {
-	_, err := db.Exec(ctx, captureHoldingSnapshotsSQL, accountID, userID)
+	day, err := serverUTCDate(ctx, db)
+	if err != nil {
+		return err
+	}
+	if _, err := db.Exec(ctx, markHoldingSnapshotsAbsentForAccountSQL, accountID, userID, day); err != nil {
+		return err
+	}
+	_, err = db.Exec(ctx, captureHoldingSnapshotsSQL, accountID, userID, day)
 	return err
 }
 
-// captureHoldingSnapshotsForUserSQL is the whole-user form of the statement above, and exists for
-// one reason: portfolio_snapshot_worker.go upserts a portfolio_snapshots aggregate for EVERY user
-// with holdings once a day, whether or not anything synced that day. A per-account capture that
-// only fires on a sync would therefore leave days that have an aggregate and no rows behind it —
-// and task 11 rebuilds those aggregates FROM these rows. Capturing here keeps holding_snapshots a
-// day-for-day row-level decomposition of portfolio_snapshots instead of a sparse subset of it.
+// accountLiveOnDateClause is the SAME liveness question portfolio_snapshot_repository.go's Upsert
+// asks, and it is here for the same reason: the two must agree, because task 11 rebuilds those
+// aggregates from these rows.
 //
-// Same grain, same conflict handling, same in-statement UTC date as the per-account form. $1 =
-// user_id.
-const captureHoldingSnapshotsForUserSQL = `
+// Fix round 1, Critical 1: the whole-user capture below used to be a bare
+// `WHERE h.user_id = $1` with no join to accounts at all. Accounts are SOFT-removed and the only
+// DELETE FROM holdings lives in ReplaceForAccount (which runs only for accounts a sync reaches),
+// so a disconnected account's holdings live on indefinitely — and the daily sweep re-captured them
+// every single day. Measured with one active account (1000) and one disconnected ten days ago
+// whose holdings are retained (500): the history summed to 1500.00 over 2 rows while Upsert wrote
+// 1000.00 over 1. A rebuild from that would inflate the user's portfolio curve by every
+// institution they have ever left, permanently and growing.
+//
+// Note the shape of the hole it hid in: GetDistinctUserIDsWithHoldings joins a.status = 'active',
+// so a user whose accounts are ALL terminal is skipped entirely — but a user with even one active
+// account had ALL their terminal accounts captured. A single-account fixture cannot see that.
+//
+// "Live on the date" means the recorded 'active' interval OVERLAPS the calendar day, not "active
+// at midnight" and not "active right now": an account linked earlier the same day has valid_from
+// after midnight, and an account disconnected earlier today was genuinely live for part of it (and
+// Upsert counts it for today, so this must too). $1 is the date parameter.
+const accountLiveOnDateClause = `
+	EXISTS (
+	    SELECT 1 FROM account_status_history ash
+	    WHERE ash.account_id = h.account_id
+	      AND ash.status = 'active'
+	      -- Explicitly UTC, mirroring Upsert: "$n::date + INTERVAL '1 day'" is a timestamp
+	      -- WITHOUT time zone and would otherwise resolve against the SESSION TimeZone. The lower
+	      -- bound needs the ::timestamp step first — a bare "date AT TIME ZONE 'UTC'" casts to
+	      -- timestamptz in the session zone and reads it back out as UTC wall time, the opposite
+	      -- of what is wanted.
+	      AND ash.valid_from < ($DATE::date + INTERVAL '1 day') AT TIME ZONE 'UTC'
+	      AND (ash.valid_to IS NULL OR ash.valid_to > ($DATE::date)::timestamp AT TIME ZONE 'UTC')
+	)`
+
+// markHoldingSnapshotsAbsentForUserSQL / captureHoldingSnapshotsForUserSQL are the whole-user form,
+// and exist for one reason: portfolio_snapshot_worker.go upserts a portfolio_snapshots aggregate
+// for EVERY user with holdings once a day, whether or not anything synced. A capture that only
+// fired on a sync would leave days that have an aggregate and no rows behind it — and task 11
+// rebuilds those aggregates FROM these rows.
+//
+// $1 = user_id, $2 = as_of_date.
+const markHoldingSnapshotsAbsentForUserSQL = `
+	UPDATE holding_snapshots hs
+	SET present = FALSE, captured_at = now()
+	WHERE hs.user_id = $1::uuid
+	  AND hs.as_of_date = $2::date
+	  AND hs.present
+	  AND NOT EXISTS (
+	      SELECT 1 FROM holdings h
+	      WHERE h.account_id = hs.account_id
+	        AND h.security_id = hs.security_id
+	        AND h.user_id = hs.user_id
+	  )
+`
+
+var captureHoldingSnapshotsForUserSQL = `
 	INSERT INTO holding_snapshots (
 		user_id, account_id, user_account_id, security_id,
-		as_of_date, captured_at,
+		as_of_date, captured_at, present,
 		quantity, cost_basis, institution_value, institution_price
 	)
 	SELECT
 		h.user_id, h.account_id, h.user_account_id, h.security_id,
-		(now() AT TIME ZONE 'UTC')::date, now(),
+		$2::date, now(), TRUE,
 		h.quantity, h.cost_basis, h.institution_value, h.institution_price
 	FROM holdings h
 	WHERE h.user_id = $1::uuid
+	  AND ` + strings.ReplaceAll(accountLiveOnDateClause, "$DATE", "$2") + `
 	ON CONFLICT (account_id, security_id, as_of_date) DO UPDATE SET
 		user_id           = EXCLUDED.user_id,
 		user_account_id   = EXCLUDED.user_account_id,
 		captured_at       = EXCLUDED.captured_at,
+		present           = TRUE,
 		quantity          = EXCLUDED.quantity,
 		cost_basis        = EXCLUDED.cost_basis,
 		institution_value = EXCLUDED.institution_value,
 		institution_price = EXCLUDED.institution_price
 `
 
-// HoldingSnapshotRepository reads the history captureHoldingSnapshots writes.
-//
-// Read-only on purpose: the only writer is the capture above, inside the replace's transaction.
-// Nothing here changes any existing read path — task 12 owns holdings/liability read consistency
-// and task 11 owns rebuilding portfolio_snapshots from these rows.
-type HoldingSnapshotRepository interface {
-	// CaptureForUser records every holding this user currently has into today's UTC row set.
-	// Called by the daily portfolio snapshot job so a day with no Plaid sync still gets rows.
-	// Idempotent: re-running it the same day refreshes that day's rows rather than appending.
-	CaptureForUser(ctx context.Context, userID string) error
+// accountLiveOnDateClause carries a $DATE placeholder rather than a hard-coded parameter number
+// so it can stay ONE piece of shared text — it must not drift from the liveness question Upsert
+// asks — while callers that number their parameters differently can still use it. Substituted with
+// strings.ReplaceAll at package init, on a compile-time constant, so there is no user input path.
 
-	// GetFinalCapturesForUserOnDate returns the user's positions as of the LAST capture of each
-	// account on the given UTC calendar day. This is the reconstruction primitive task 11 needs:
-	// SUMming institution_value / cost_basis over the result reproduces the same aggregate
-	// portfolio_snapshot_repository.go's Upsert computes from live holdings, but for a day whose
-	// live holdings have since been replaced.
-	GetFinalCapturesForUserOnDate(ctx context.Context, userID string, asOf time.Time) ([]domain.HoldingSnapshot, error)
+// HoldingSnapshotRepository reads the history the captures write, and exposes the whole-user
+// capture the daily job needs.
+type HoldingSnapshotRepository interface {
+	// CaptureForUser records the user's positions for today's UTC day, restricted to accounts
+	// that were live at some point during that day — the same restriction Upsert applies. Returns
+	// the SERVER's UTC date it filed the rows under, so the caller can file its aggregate under
+	// exactly the same day rather than under the Go process's idea of today.
+	//
+	// Idempotent within the day: re-running refreshes that day's rows rather than appending.
+	CaptureForUser(ctx context.Context, userID string) (time.Time, error)
+
+	// GetForUserOnDate returns the user's PRESENT positions on the given UTC calendar day — the
+	// reconstruction primitive task 11 needs. SUMming institution_value / cost_basis over the
+	// result reproduces the aggregate portfolio_snapshot_repository.go's Upsert computes from live
+	// holdings, for a day whose live holdings have since been replaced.
+	//
+	// ⚠ Pass a UTC-located time.Time. pgx binds a time.Time's own calendar day, so a value located
+	// in, say, America/New_York at 21:00 binds as that local date even though the instant is
+	// already the next day in UTC.
+	GetForUserOnDate(ctx context.Context, userID string, asOf time.Time) ([]domain.HoldingSnapshot, error)
 
 	// GetByAccountDateRange returns every retained row for one account across a UTC date range,
-	// oldest first. Independent of the account's CURRENT status, so a disconnected brokerage's
-	// history stays queryable.
+	// oldest first, INCLUDING rows marked absent — it is the history browser, not the
+	// reconstruction primitive, and an absent row is a fact worth showing. Independent of the
+	// account's CURRENT status, so a disconnected brokerage's history stays queryable.
 	GetByAccountDateRange(ctx context.Context, accountID string, start, end time.Time) ([]domain.HoldingSnapshot, error)
 }
 
@@ -129,32 +238,48 @@ func NewHoldingSnapshotRepository(db DB) HoldingSnapshotRepository {
 	return &holdingSnapshotRepository{db: db}
 }
 
-func (r *holdingSnapshotRepository) CaptureForUser(ctx context.Context, userID string) error {
-	_, err := r.db.Exec(ctx, captureHoldingSnapshotsForUserSQL, userID)
-	return err
+func (r *holdingSnapshotRepository) CaptureForUser(ctx context.Context, userID string) (time.Time, error) {
+	// Both halves in one transaction: a mark-absent that committed without its matching insert
+	// would read as a liquidation that did not happen.
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	day, err := serverUTCDate(ctx, tx)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if _, err := tx.Exec(ctx, markHoldingSnapshotsAbsentForUserSQL, userID, day); err != nil {
+		return time.Time{}, err
+	}
+	if _, err := tx.Exec(ctx, captureHoldingSnapshotsForUserSQL, userID, day); err != nil {
+		return time.Time{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return time.Time{}, err
+	}
+	return day, nil
 }
 
 const holdingSnapshotColumns = `
 	hs.id, hs.user_id, hs.account_id, hs.user_account_id, hs.security_id,
-	hs.as_of_date, hs.captured_at,
+	hs.as_of_date, hs.captured_at, hs.present,
 	hs.quantity, hs.cost_basis, hs.institution_value, hs.institution_price,
 	hs.created_at, hs.updated_at`
 
-func (r *holdingSnapshotRepository) GetFinalCapturesForUserOnDate(ctx context.Context, userID string, asOf time.Time) ([]domain.HoldingSnapshot, error) {
-	// The correlated MAX is per (account_id, as_of_date), NOT per user: two accounts synced
-	// minutes apart on the same day have different captured_at values, and a user-wide MAX would
-	// silently drop the account that was captured first.
+func (r *holdingSnapshotRepository) GetForUserOnDate(ctx context.Context, userID string, asOf time.Time) ([]domain.HoldingSnapshot, error) {
+	// No MAX(captured_at) selection any more, and that is a simplification the presence marker
+	// bought: a capture marks what it did not observe absent, so the present rows for a
+	// (account, day) ARE that day's last capture by construction. There is no dedup rule for a
+	// reader to get wrong.
 	query := `
 		SELECT` + holdingSnapshotColumns + `
 		FROM holding_snapshots hs
 		WHERE hs.user_id = $1::uuid
 		  AND hs.as_of_date = $2::date
-		  AND hs.captured_at = (
-		      SELECT MAX(hs2.captured_at)
-		      FROM holding_snapshots hs2
-		      WHERE hs2.account_id = hs.account_id
-		        AND hs2.as_of_date = hs.as_of_date
-		  )
+		  AND hs.present
 		ORDER BY hs.account_id, hs.security_id
 	`
 	return r.queryHoldingSnapshots(ctx, query, userID, asOf)
@@ -184,7 +309,7 @@ func (r *holdingSnapshotRepository) queryHoldingSnapshots(ctx context.Context, q
 		s := domain.HoldingSnapshot{}
 		if err := rows.Scan(
 			&s.ID, &s.UserID, &s.AccountID, &s.UserAccountID, &s.SecurityID,
-			&s.AsOfDate, &s.CapturedAt,
+			&s.AsOfDate, &s.CapturedAt, &s.Present,
 			&s.Quantity, &s.CostBasis, &s.InstitutionValue, &s.InstitutionPrice,
 			&s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
