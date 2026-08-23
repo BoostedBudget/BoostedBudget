@@ -89,30 +89,17 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 		  -- rewrite history the user already saw — the portfolio curve retroactively falls for
 		  -- a day nothing changed on. Under retention the holdings rows still exist, so the
 		  -- correct question is recorded liveness at ANY POINT DURING the snapshot's calendar
-		  -- date, read from account_status_history's half-open [valid_from, valid_to) intervals
-		  -- (only status = 'active' counts live; valid_to IS NULL means still current). The
-		  -- overlap test below — not "live at midnight of the snapshot date" — matters for the
+		  -- date, read from account_status_history's half-open [valid_from, valid_to) intervals.
+		  -- The overlap test — not "live at midnight of the snapshot date" — matters for the
 		  -- ordinary (non-recompute) write too: a same-day daily upsert for an account linked
 		  -- earlier that same day has valid_from AFTER midnight, so a midnight-instant check
-		  -- would wrongly exclude it. Overlap with the calendar day [snapshot_date,
-		  -- snapshot_date + 1) is what "live on that date" actually means. Issue #1569.
-		  AND EXISTS (
-		      SELECT 1 FROM account_status_history ash
-		      WHERE ash.account_id = a.id
-		        AND ash.status = 'active'
-		        -- Explicitly UTC (#1569 F4): "$2::date + INTERVAL '1 day'" yields a timestamp
-		        -- WITHOUT time zone, which Postgres resolves against the SESSION TimeZone when
-		        -- compared to a timestamptz. Production is correct only because NewPool pins
-		        -- TimeZone=UTC (the #1461 lesson) — an implicit dependency this query must not
-		        -- carry. AT TIME ZONE 'UTC' makes it self-contained, which also matters because
-		        -- a migration or a psql session does NOT inherit that pin. The lower bound needs
-		        -- the explicit ::timestamp step: a bare "date AT TIME ZONE 'UTC'" casts the date
-		        -- to timestamptz FIRST (in the session zone) and then reads it out as UTC wall
-		        -- time — the opposite of what is wanted — whereas "date + INTERVAL" is already
-		        -- a timestamp without time zone and needs no such nudge.
-		        AND ash.valid_from < ($2::date + INTERVAL '1 day') AT TIME ZONE 'UTC'
-		        AND (ash.valid_to IS NULL OR ash.valid_to > ($2::date)::timestamp AT TIME ZONE 'UTC')
-		  )
+		  -- would wrongly exclude it. Issue #1569.
+		  --
+		  -- ⚠ This is no longer a copy. It is rendered from the SAME accountLiveOnDateClause the
+		  -- holdings capture and the portfolio repair render (account_liveness_sql.go). Task 10's
+		  -- review measured what the two-copy version cost: a valid_to > → >= edit on the
+		  -- history copy alone left the whole integration package green. Do not re-inline it.
+		  AND ` + accountLiveOnDateSQL("a.id", "$2") + `
 		ON CONFLICT (user_id, snapshot_date) DO UPDATE SET
 			total_value       = EXCLUDED.total_value,
 			total_cost_basis  = EXCLUDED.total_cost_basis,

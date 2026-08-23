@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -126,41 +125,6 @@ func captureHoldingSnapshots(ctx context.Context, db DB, accountID, userID strin
 	return err
 }
 
-// accountLiveOnDateClause is the SAME liveness question portfolio_snapshot_repository.go's Upsert
-// asks, and it is here for the same reason: the two must agree, because task 11 rebuilds those
-// aggregates from these rows.
-//
-// Fix round 1, Critical 1: the whole-user capture below used to be a bare
-// `WHERE h.user_id = $1` with no join to accounts at all. Accounts are SOFT-removed and the only
-// DELETE FROM holdings lives in ReplaceForAccount (which runs only for accounts a sync reaches),
-// so a disconnected account's holdings live on indefinitely — and the daily sweep re-captured them
-// every single day. Measured with one active account (1000) and one disconnected ten days ago
-// whose holdings are retained (500): the history summed to 1500.00 over 2 rows while Upsert wrote
-// 1000.00 over 1. A rebuild from that would inflate the user's portfolio curve by every
-// institution they have ever left, permanently and growing.
-//
-// Note the shape of the hole it hid in: GetDistinctUserIDsWithHoldings joins a.status = 'active',
-// so a user whose accounts are ALL terminal is skipped entirely — but a user with even one active
-// account had ALL their terminal accounts captured. A single-account fixture cannot see that.
-//
-// "Live on the date" means the recorded 'active' interval OVERLAPS the calendar day, not "active
-// at midnight" and not "active right now": an account linked earlier the same day has valid_from
-// after midnight, and an account disconnected earlier today was genuinely live for part of it (and
-// Upsert counts it for today, so this must too). $1 is the date parameter.
-const accountLiveOnDateClause = `
-	EXISTS (
-	    SELECT 1 FROM account_status_history ash
-	    WHERE ash.account_id = h.account_id
-	      AND ash.status = 'active'
-	      -- Explicitly UTC, mirroring Upsert: "$n::date + INTERVAL '1 day'" is a timestamp
-	      -- WITHOUT time zone and would otherwise resolve against the SESSION TimeZone. The lower
-	      -- bound needs the ::timestamp step first — a bare "date AT TIME ZONE 'UTC'" casts to
-	      -- timestamptz in the session zone and reads it back out as UTC wall time, the opposite
-	      -- of what is wanted.
-	      AND ash.valid_from < ($DATE::date + INTERVAL '1 day') AT TIME ZONE 'UTC'
-	      AND (ash.valid_to IS NULL OR ash.valid_to > ($DATE::date)::timestamp AT TIME ZONE 'UTC')
-	)`
-
 // markHoldingSnapshotsAbsentForUserSQL / captureHoldingSnapshotsForUserSQL are the whole-user form,
 // and exist for one reason: portfolio_snapshot_worker.go upserts a portfolio_snapshots aggregate
 // for EVERY user with holdings once a day, whether or not anything synced. A capture that only
@@ -201,7 +165,7 @@ var captureHoldingSnapshotsForUserSQL = `
 		h.quantity, h.cost_basis, h.institution_value, h.institution_price
 	FROM holdings h
 	WHERE h.user_id = $1::uuid
-	  AND ` + strings.ReplaceAll(accountLiveOnDateClause, "$DATE", "$2") + `
+	  AND ` + accountLiveOnDateSQL("h.account_id", "$2") + `
 	ON CONFLICT (account_id, security_id, as_of_date) DO UPDATE SET
 		user_id           = EXCLUDED.user_id,
 		user_account_id   = EXCLUDED.user_account_id,
@@ -213,10 +177,11 @@ var captureHoldingSnapshotsForUserSQL = `
 		institution_price = EXCLUDED.institution_price
 `
 
-// accountLiveOnDateClause carries a $DATE placeholder rather than a hard-coded parameter number
-// so it can stay ONE piece of shared text — it must not drift from the liveness question Upsert
-// asks — while callers that number their parameters differently can still use it. Substituted with
-// strings.ReplaceAll at package init, on a compile-time constant, so there is no user input path.
+// The liveness predicate above is rendered from accountLiveOnDateSQL (account_liveness_sql.go) —
+// the SAME string portfolio_snapshot_repository.go's Upsert and the portfolio repair render. It
+// carries placeholders rather than hard-coded parameter numbers so callers that number their
+// parameters differently can still share one piece of text. Substituted at package init on a
+// compile-time constant, so there is no user input path.
 
 // HoldingSnapshotRepository reads the history the captures write, and exposes the whole-user
 // capture the daily job needs.
