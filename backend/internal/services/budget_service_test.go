@@ -2008,9 +2008,9 @@ func TestBudgetService_CreateBudget_RejectsCrossUserCustomCategory(t *testing.T)
 		},
 	}
 
-	// GetNamesByIDs is user-scoped; a category owned by someone else is simply absent
-	// from the returned map.
-	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
+	// GetLiveNamesByIDs is user-scoped AND tombstone-filtered (#1569 Task 9); a category owned
+	// by someone else is simply absent from the returned map.
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
 		Return(map[string]string{}, nil)
 
 	budget, err := service.CreateBudget(ctx, userID, req)
@@ -2044,7 +2044,7 @@ func TestBudgetService_AddCategory_RejectsCrossUserCustomCategory(t *testing.T) 
 	}
 
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
 		Return(map[string]string{}, nil)
 
 	category, err := service.AddCategory(ctx, userID, budgetID, req)

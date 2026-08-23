@@ -442,6 +442,10 @@ func TestCategorizationRuleService_CreateRule_PopulatesTargetCustomCategoryDispl
 	catID := "cat-uuid-create"
 
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.CategorizationRule")).Return(nil)
+	// CreateRule validates through the LIVE variant (#1569 Task 9) and enriches the response
+	// through the tombstone-blind one.
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{catID}).
+		Return(map[string]string{catID: "Travel"}, nil)
 	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{catID}).
 		Return(map[string]string{catID: "Travel"}, nil)
 
@@ -589,8 +593,9 @@ func TestCategorizationRuleService_CreateRule_RejectsCrossUserCustomCategory(t *
 	req.TargetPFCPrimary = nil
 	req.TargetCustomCategoryID = &otherUsersCategoryID
 
-	// GetNamesByIDs is user-scoped; a category owned by someone else is absent from the map.
-	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
+	// GetLiveNamesByIDs is user-scoped AND tombstone-filtered (#1569 Task 9); a category owned
+	// by someone else is absent from the map.
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
 		Return(map[string]string{}, nil)
 
 	rule, err := service.CreateRule(ctx, userID, req)
@@ -627,7 +632,7 @@ func TestCategorizationRuleService_UpdateRule_RejectsCrossUserCustomCategory(t *
 	}
 
 	mockRepo.On("GetByID", ctx, ruleID).Return(existingRule, nil)
-	mockCategoryRepo.On("GetNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
+	mockCategoryRepo.On("GetLiveNamesByIDs", ctx, userID, []string{otherUsersCategoryID}).
 		Return(map[string]string{}, nil)
 
 	req := &domain.UpdateCategorizationRuleRequest{

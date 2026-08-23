@@ -194,8 +194,11 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 
 	// Issue #1540: reject a "custom" category referencing another user's custom_categories
 	// row before persisting anything — the same IDOR protection the loop above gives
-	// SavingsGoalID. GetNamesByIDs is already user-scoped (custom_category_repository.go);
-	// any requested ID absent from the returned map is not owned by the caller.
+	// SavingsGoalID. GetLiveNamesByIDs is user-scoped AND tombstone-filtered
+	// (custom_category_repository.go); any requested ID absent from the returned map is either
+	// not owned by the caller or has been deleted. Issue #1569 Task 9 moved this off
+	// GetNamesByIDs, which deliberately still resolves tombstoned names for DISPLAY — attaching
+	// a new budget line to a deleted category would put it back in front of the user.
 	var customCategoryIDs []string
 	for _, catReq := range req.Categories {
 		if catReq.CustomCategoryID != nil {
@@ -211,7 +214,7 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 			// behaviour) or silently skip the ownership check (would reopen the #1540 IDOR).
 			return nil, fmt.Errorf("custom category repository not configured: cannot validate custom_category_id")
 		}
-		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, customCategoryIDs)
+		names, err := s.customCategoryRepo.GetLiveNamesByIDs(ctx, userID, customCategoryIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -575,10 +578,11 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		}
 	}
 
-	// IDOR check for custom categories: verify the category belongs to the user (Issue #1540).
-	// Mirrors the savings-goal check above and CreateBudget's batched version.
+	// IDOR check for custom categories: verify the category belongs to the user (Issue #1540)
+	// and is still live (Issue #1569 Task 9). Mirrors the savings-goal check above and
+	// CreateBudget's batched version.
 	if req.CustomCategoryID != nil {
-		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, []string{*req.CustomCategoryID})
+		names, err := s.customCategoryRepo.GetLiveNamesByIDs(ctx, userID, []string{*req.CustomCategoryID})
 		if err != nil {
 			return nil, err
 		}

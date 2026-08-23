@@ -634,7 +634,11 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 		if filters.RollUpChildren {
 			clause += fmt.Sprintf(
 				" AND t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-					"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s)))",
+					"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s)))"+
+					" /* tombstone-exempt: HISTORY FILTER (#1569 Task 9). Analytics answer questions"+
+					" about the past. A report scoped to a category the user has since deleted must"+
+					" still return the spend that happened in it; filtering here would quietly"+
+					" restate a closed month. */",
 				idList, idList,
 			)
 		} else {
@@ -645,7 +649,9 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 			// live — namespace it the same way, without the parent_id OR-widening.
 			clause += fmt.Sprintf(
 				" AND t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-					"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND id::text IN (%s))",
+					"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND id::text IN (%s))"+
+					" /* tombstone-exempt: HISTORY FILTER (#1569 Task 9) — same as the RollUpChildren"+
+					" branch above, without the parent_id widening. */",
 				idList,
 			)
 		}

@@ -766,6 +766,9 @@ func main() {
 		// Issue #345: Tag and category services
 		userTagService := services.NewUserTagService(userTagRepo)
 		customCategoryService := services.NewCustomCategoryService(customCategoryRepo)
+		// Issue #1569 Task 9: the category delete is a tombstone now, and writes a
+		// custom_category.deleted audit entry inside its own transaction.
+		customCategoryService.SetAuditLogRepository(repository.NewAuditLogRepository(db))
 		// Issue #346: Categorization rules services
 		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo, customCategoryRepo)
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
