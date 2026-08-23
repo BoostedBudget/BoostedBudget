@@ -88,3 +88,60 @@ func TestPortfolioSnapshot_Upsert_RecomputingPastDayAfterAccountRemoved_KeepsSam
 	require.InDelta(t, 5000.0, after.TotalValue, 0.001,
 		"the holding must still be counted — dropping to 0 is the bug this test guards against")
 }
+
+// TestPortfolioSnapshot_Upsert_OverlapBoundaryIsUTC_RegardlessOfSessionTimeZone pins the #1569 F4
+// fix: the day-overlap comparison must mean UTC, not "whatever the session's TimeZone happens to
+// be".
+//
+// "$2::date + INTERVAL '1 day'" produces a timestamp WITHOUT time zone, and "$2::date" compared to
+// a timestamptz is cast using the SESSION zone — so before the fix this query was correct only
+// because database.NewPool pins TimeZone=UTC (the #1461 lesson). That is an invisible dependency:
+// a psql session, or this SQL moved into a migration, does not inherit the pin.
+//
+// The probe is a chain whose 'active' interval closes EXACTLY at snapshotDate 00:00:00 UTC. Under
+// the half-open rule the account was NOT live on snapshotDate, so its holding must be excluded. Run
+// under a UTC+14 session, the pre-fix expression reads the lower bound as snapshotDate 00:00+14
+// (i.e. 14 hours EARLIER in UTC), the interval then appears to extend past it, and the holding is
+// wrongly counted. Verified: reverting either AT TIME ZONE 'UTC' makes this fail.
+func TestPortfolioSnapshot_Upsert_OverlapBoundaryIsUTC_RegardlessOfSessionTimeZone(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// A session zone as far from UTC as Postgres offers, so a session-relative reading of the
+	// boundary lands on the other side of it.
+	_, err = tx.Exec(ctx, `SET LOCAL TimeZone = 'Pacific/Kiritimati'`) // UTC+14
+	require.NoError(t, err, "set a non-UTC session zone")
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "psnap-tz")
+
+	holdingID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+		VALUES ($1, $2, $3, $4, 10, 4000.00, 5000.00)
+	`, holdingID, userID, accountID, secID)
+	require.NoError(t, err, "seed holding")
+
+	now := time.Now().UTC()
+	snapshotDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -5)
+
+	// The account was live from 30 days ago until EXACTLY snapshotDate 00:00:00 UTC — the instant
+	// the day begins. [valid_from, valid_to) is half-open, so it was not live on that day at all.
+	ct, err := tx.Exec(ctx, `
+		UPDATE account_status_history
+		SET valid_from = $2, valid_to = $3
+		WHERE account_id = $1 AND status = 'active' AND valid_to IS NULL`,
+		accountID, now.AddDate(0, 0, -30), snapshotDate)
+	require.NoError(t, err, "close the active interval on the day boundary")
+	require.EqualValues(t, 1, ct.RowsAffected())
+
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), snapshotDate)
+	require.NoError(t, err)
+	require.InDelta(t, 0.0, snap.TotalValue, 0.001,
+		"the active interval ends at the first instant of snapshotDate, so the holding must be "+
+			"excluded — a non-zero total here means the boundary was resolved in the session's "+
+			"zone rather than UTC")
+}
