@@ -269,6 +269,7 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		LEFT JOIN (
 			SELECT user_id, COUNT(*) as count
 			FROM transactions
+			WHERE deleted_at IS NULL
 			GROUP BY user_id
 		) t ON t.user_id = u.id
 		LEFT JOIN (
@@ -277,7 +278,6 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 			GROUP BY user_id
 		) b ON b.user_id = u.id
 		WHERE u.id = $1 AND u.is_deleted = FALSE
-		  AND deleted_at IS NULL
 	`
 
 	var detail domain.AdminUserDetail

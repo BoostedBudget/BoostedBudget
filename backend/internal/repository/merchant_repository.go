@@ -248,12 +248,12 @@ func (r *MerchantRepository) GetDuplicateSuggestions(ctx context.Context, userID
                COALESCE(m.normalized_name, m.name) AS normalized_name,
                COALESCE(NULLIF(os.display_name, ''), m.normalized_name, m.name) AS effective_display_name,
                (SELECT COUNT(*) FROM transactions t2
-                WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1::uuid AND NOT t2.pending) AS transaction_count,
-                  AND t2.deleted_at IS NULL
+                WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1::uuid AND NOT t2.pending
+                  AND t2.deleted_at IS NULL) AS transaction_count,
                COALESCE(
                    (SELECT SUM(ABS(t2.amount)) FROM transactions t2
-                    WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1::uuid AND NOT t2.pending),
-                      AND t2.deleted_at IS NULL
+                    WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1::uuid AND NOT t2.pending
+                      AND t2.deleted_at IS NULL),
                    0
                )                                     AS total_spend,
                os.merchant_id IS NOT NULL            AS has_override,
