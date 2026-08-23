@@ -504,6 +504,19 @@ describe('HoldingsTable', () => {
       expect(screen.getByText(/retained/i)).toBeDefined()
     })
 
+    // Fix round 1 (I4). The first draft told the user "the positions we last confirmed are kept
+    // on record". They ARE kept — in holding_snapshots — but nothing reads that table: zero
+    // non-test callers, no service method, no endpoint, no UI. Promising the user data no
+    // surface can show them is #1569's own complaint pointed the other way, so the notice now
+    // claims only what it can deliver: the TRANSACTIONS are visible, and the positions stop.
+    it('promises the user nothing it cannot actually show them', () => {
+      const { container } = render(<HoldingsTable accountId="acct-closed" />)
+      const text = container.textContent ?? ''
+      expect(text).not.toMatch(/positions .*(kept on record|last confirmed)/i)
+      // What IS reachable today: the account's transactions.
+      expect(text).toMatch(/transactions/i)
+    })
+
     it('leaves a live account on the ordinary empty state', () => {
       render(<HoldingsTable accountId="acct-alpha" />)
       expect(screen.getByText(/no holdings synced yet/i)).toBeDefined()

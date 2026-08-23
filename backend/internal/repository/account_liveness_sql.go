@@ -90,9 +90,19 @@ func accountLiveOnDateSQL(accountExpr, dateExpr string) string {
 //
 //	`holding_snapshots`, `liability_statements` (tasks 6/10). These DO carry an as_of_date, are
 //	append-only, and their readers (GetByAccountDateRange) are deliberately independent of the
-//	account's current status. This universe is what makes the current-state ruling a ROUTING
-//	decision rather than data loss: the disconnected brokerage's last confirmed position is still
-//	on record and still queryable, just answered by a query that can say WHEN it was true.
+//	account's current status, so a disconnected brokerage's last confirmed position is RETAINED
+//	and answerable by a query that can say when it was true.
+//
+//	⚠ AS OF TASK 12 THAT QUERY HAS NO CALLER. GetByAccountDateRange has zero non-test callers on
+//	both tables, and neither repository is referenced anywhere in internal/services or
+//	internal/huma — only main.go's wiring and the worker that WRITES the rows. This universe is
+//	currently written and never read. Do not describe it as something a user can reach; it is a
+//	table with rows in it and no way out.
+//
+//	The current-state ruling above does NOT depend on that. It stands on its own ground: an
+//	unlabelled stale position would inflate net worth permanently, whether or not a history
+//	surface exists. What the missing surface costs is the CONSOLATION — "hidden here, visible
+//	there" is not yet true, only "hidden here, retained there".
 //
 // The one query T12 moved across the line is investmentAnalyticsRepository.IncomeSummary: it
 // aggregates investment_transactions over a closed date range — an event question — but was
@@ -103,11 +113,11 @@ func accountLiveOnDateSQL(accountExpr, dateExpr string) string {
 // test, before and after a disconnection, so the boundary cannot drift without a failure.
 //
 // WHAT WOULD CHANGE THIS RULING. Not an opinion — a capability. If a current-state read ever
-// gains a way to LABEL a row with the date it was last confirmed (the holding_snapshots data
-// exists for this; only an API surface and a UI treatment are missing), then "show the last
-// confirmed position, as of 2025-06-04" becomes expressible and is strictly better than hiding
-// it. Until a caller can render that label, widening the read only produces an unlabelled stale
-// number, which is the thing this ruling refuses.
+// gains a way to LABEL a row with the date it was last confirmed, then "show the last confirmed
+// position, as of 2025-06-04" becomes expressible and is strictly better than hiding it. The
+// DATA for that already exists in holding_snapshots; the service method, the endpoint and the UI
+// do not. Until a caller can render that label, widening the read only produces an unlabelled
+// stale number, which is the thing this ruling refuses.
 func currentStateAccountLeg(alias string) string {
 	return alias + ".status = 'active'"
 }

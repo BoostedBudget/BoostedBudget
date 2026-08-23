@@ -38,6 +38,7 @@ export function TransactionReversedFilter({
         <Switch
           id="include-reversed-switch"
           aria-label="Show reversed transactions"
+          aria-describedby="include-reversed-hint"
           checked={includeReversed}
           onCheckedChange={onChange}
           disabled={disabled}

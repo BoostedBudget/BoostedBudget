@@ -197,6 +197,27 @@ export function isInvestmentRow(t: FeedRow): t is InvestmentActivity {
 }
 
 /**
+ * Issue #1569: a row the provider withdrew while it was STILL PENDING.
+ *
+ * This is not a reversal and must render nowhere. Its posted twin is already in the feed, so
+ * showing it double-counts the same money against a total the user may have reconciled — the one
+ * failure mode in this issue worth a redundant client-side check.
+ *
+ * The backend gates it twice (the query never selects `provider_removed_pending`, and
+ * Transaction.Reversed() returns false for it), and
+ * TestTombstone_SettledPendingIsNeverSurfaced_Integration pins that. This is a THIRD gate, added
+ * after measuring what the UI actually did when one was fed in anyway: reversed badge shown,
+ * pending badge suppressed by the reversed branch, amount rendered — indistinguishable from an
+ * ordinary posted reversal sitting next to the transaction it duplicates.
+ *
+ * It deliberately does NOT try to re-derive which tombstone class a row belongs to; it keys on
+ * the one combination the API contract says cannot occur, and refuses to render it.
+ */
+export function isSettledPending(t: FeedRow): boolean {
+  return !isInvestmentRow(t) && t.reversed === true && t.pending === true
+}
+
+/**
  * Optional filters for querying transactions
  * All fields are optional - null/undefined means no filter
  */

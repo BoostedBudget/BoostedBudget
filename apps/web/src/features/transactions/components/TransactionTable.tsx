@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { ReadOnlyGuard } from '@/auth'
 import type { Transaction, FeedRow } from '../types'
-import { isInvestmentRow } from '../types'
+import { isInvestmentRow, isSettledPending } from '../types'
 import { ActivityTypeChip } from '@/shared/components/ActivityTypeChip'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor, DEFAULT_CATEGORY_COLOR } from '@/lib/category-colors'
@@ -82,7 +82,9 @@ export interface TransactionTableProps {
  * Investment rows never carry the flag.
  */
 function isReversedRow(row: FeedRow): boolean {
-  return !isInvestmentRow(row) && row.reversed === true
+  // `!row.pending` is belt-and-braces against a settled pending (see isSettledPending). Such a
+  // row is dropped before it reaches here, but the predicate must be safe on its own if reused.
+  return !isInvestmentRow(row) && row.reversed === true && !row.pending
 }
 
 export function TransactionTable({
@@ -121,6 +123,15 @@ export function TransactionTable({
     columnVisibility,
     onColumnVisibilityChange,
   } = useTablePreferences('transactions', [...TRANSACTION_COLUMN_IDS])
+
+  // #1569 T12 fix round 1 (I2). Last line of defence: a settled pending is dropped before it can
+  // be rendered. It is already dropped upstream in useInfiniteTransactions, and twice more in the
+  // backend — this guard is here because THIS component is what turns a row into a visible
+  // amount, and the cost of the check is one predicate against the cost of double-counting money.
+  const visibleRows = useMemo(
+    () => transactions.filter((row) => !isSettledPending(row)),
+    [transactions],
+  )
 
   const pfcDetailedOptions = useMemo(() => getPfcDetailedFilterOptions(), [])
 
@@ -330,8 +341,13 @@ export function TransactionTable({
               className={cn(
                 'font-semibold tabular-nums',
                 // The strike-through is ADDITIONAL to the badge below, never instead of it:
-                // WCAG 2.1 AA, information is not carried by styling alone.
-                reversed && 'line-through text-muted-foreground',
+                // information is not carried by styling alone.
+                //
+                // text-foreground, NOT text-muted-foreground: muted is 4.73:1 on light card with
+                // no margin to spare, and the most important number on a reversed row must not be
+                // the least readable thing on it. At full foreground it is 19.79:1 light /
+                // 17.16:1 dark — the same as any other amount.
+                reversed && 'line-through text-foreground',
                 !reversed && (isOutflow(row.amount)
                   ? 'transaction-table__amount--debit text-destructive'
                   : row.amount < 0
@@ -363,7 +379,7 @@ export function TransactionTable({
 
   return (
     <DataTable<FeedRow>
-      data={transactions}
+      data={visibleRows}
       columns={columns}
       rowKey={(row) => row.id}
       sort={sort}
@@ -382,11 +398,16 @@ export function TransactionTable({
       rowClassName={(row) =>
         cn(
           onRowClick && 'transaction-table__row--clickable',
-          // Muted rather than tinted red: a reversal is a correction, not an error the user
-          // has to act on. Destructive affordances should feel deliberate, not alarming.
-          isReversedRow(row) && 'opacity-70',
-          !isReversedRow(row) && row.pending &&
-            'bg-warning/10 hover:bg-warning/20'
+          // A reversed row carries NO row-level treatment, and that is a contrast decision.
+          // The first version used `opacity-70`. Rows have no background of their own (DataTable
+          // is bg-card), so the opacity composited straight onto the ground and took every cell
+          // with it: the struck amount fell to 2.71:1 in light and 4.02:1 on dark card, against a
+          // 4.5:1 floor — 14px BOLD is not WCAG "large text" — and the row's icon buttons fell
+          // below 1.4.11's 3:1. Tuning the value was rejected in favour of removing it: with no
+          // row treatment at all, a reversed row composites on exactly the same ground as every
+          // other row, so nothing here can regress a ratio. "Undone" is carried by the
+          // strike-through and the Reversed badge, which is where it belongs.
+          row.pending && 'bg-warning/10 hover:bg-warning/20'
         )
       }
       className={cn(loading && 'transaction-table--loading', className)}

@@ -45,6 +45,11 @@ import {
   mockUseGetSavingsGoals,
   mockUseGetActiveSavingsGoals,
 } from '@/test/mocks/savings-goals-api'
+import {
+  mockUseGetDeletedSavingsGoals,
+  mockUsePurgeSavingsGoal,
+  mockPurgeSavingsGoalMutateAsync,
+} from '@/test/mocks/savings-goals-api'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import {
   mockUseGetSpendingByMerchant,
@@ -111,6 +116,9 @@ const { TransactionTable } = await import('@/features/transactions/components/Tr
 const { AccountsPage } = await import('@/features/accounts/AccountsPage')
 const { NetWorthPage } = await import('@/features/net-worth/NetWorthPage')
 const { SavingsPage } = await import('@/features/savings/SavingsPage')
+const { DeletedGoalsPanel } = await import(
+  '@/features/savings/components/DeletedGoalsPanel'
+)
 const { ProfilePage } = await import('@/features/profile/ProfilePage')
 const { CategoryEditor } = await import('@/features/categories/components/CategoryEditor')
 const { BudgetsPage } = await import('@/features/budgets/components/BudgetsPage')
@@ -2953,5 +2961,109 @@ describe('PII coverage — Round 21 (#1514 fix round 5): account-deletion cancel
       { value: SENTINEL_TOKEN, fieldDescription: 'account_deletion.cancellation_token (capability, #1514 round 5)' },
     ]
     expect(scanForUnmaskedPII(container, sentinels)).toEqual([])
+  })
+})
+
+// ── #1569 Task 12 fix round 1 (I3) ────────────────────────────────────────────────────────────
+//
+// This gate is a hand-written per-surface list, so a new surface is invisible to it until someone
+// adds one. Task 12 shipped two and added neither. Worse, the existing "Savings page" block could
+// not have reached DeletedGoalsPanel even by accident: the panel's query mock defaults to
+// `data: undefined`, and the disclosure starts collapsed.
+
+describe('PII coverage — #1569 T12: DeletedGoalsPanel (deleted savings goals + purge dialog)', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUsePurgeSavingsGoal.mockReturnValue({
+      mutateAsync: mockPurgeSavingsGoalMutateAsync,
+      isPending: false,
+      isError: false,
+      error: null,
+    } as unknown as ReturnType<typeof mockUsePurgeSavingsGoal>)
+    mockUseGetDeletedSavingsGoals.mockReturnValue({
+      data: [
+        {
+          id: 'goal-pii-1',
+          user_id: 'user-1',
+          name: SENTINEL_GOAL_NAME,
+          target_amount: 44444.44,
+          current_amount: 33333.33,
+          currency_code: 'USD',
+          account_id: 'acct-1',
+          is_completed: false,
+          created_at: '2025-01-01T00:00:00Z',
+          updated_at: '2025-06-01T00:00:00Z',
+          deleted_at: '2025-06-01T00:00:00Z',
+        },
+      ],
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve(null)),
+    } as unknown as ReturnType<typeof mockUseGetDeletedSavingsGoals>)
+  })
+
+  const sentinels: PIISentinel[] = [
+    { value: SENTINEL_GOAL_NAME, fieldDescription: 'deleted savings goal name (#1569 T12)' },
+  ]
+
+  test('goal name and saved/target amounts are masked in the expanded list', async () => {
+    const user = userEvent.setup()
+    render(<DeletedGoalsPanel />, { wrapper: createWrapper() })
+    await user.click(screen.getByRole('button', { name: /deleted goals/i }))
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  // The confirmation dialog repeats the goal name, and it is the surface a user stares at while
+  // deciding to destroy hand-logged money — exactly when a replay would be watched back.
+  test('the purge confirmation dialog masks the goal name it repeats', async () => {
+    const user = userEvent.setup()
+    render(<DeletedGoalsPanel />, { wrapper: createWrapper() })
+    await user.click(screen.getByRole('button', { name: /deleted goals/i }))
+    await user.click(screen.getByRole('button', { name: /delete permanently/i }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^delete forever$/i })).toBeInTheDocument()
+    )
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+describe('PII coverage — #1569 T12: TransactionTable reversed rows', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  const reversedRow = {
+    source: 'banking' as const,
+    id: 'txn-pii-reversed',
+    user_id: 'user-1',
+    account_id: 'acct-1',
+    amount: 77777.77,
+    date: '2025-03-11',
+    name: SENTINEL_MERCHANT,
+    merchant_name: SENTINEL_MERCHANT,
+    pending: false,
+    reversed: true,
+    reversed_at: '2025-03-14T09:00:00Z',
+    created_at: '2025-03-11T00:00:00Z',
+    updated_at: '2025-03-11T00:00:00Z',
+  }
+
+  // A reversal adds a badge, a strike-through and a data-reversed marker to the amount cell. The
+  // marker is a bare boolean on purpose — attributes are recorded verbatim by session replay and
+  // no mask covers them — and this is what will notice if that ever stops being true.
+  test('a reversed row leaks neither its amount nor its merchant', async () => {
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_MERCHANT, fieldDescription: 'merchant on a reversed transaction (#1569 T12)' },
+    ]
+    render(
+      <TransactionTable
+        transactions={[reversedRow]}
+        accountsMap={{}}
+      />,
+      { wrapper: createWrapper() }
+    )
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 })
