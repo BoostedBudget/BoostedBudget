@@ -55,3 +55,59 @@ const accountLiveOnDateClause = `
 func accountLiveOnDateSQL(accountExpr, dateExpr string) string {
 	return strings.NewReplacer("$ACCOUNT", accountExpr, "$DATE", dateExpr).Replace(accountLiveOnDateClause)
 }
+
+// ─── #1569 T12: THE THREE RETENTION UNIVERSES ────────────────────────────────────────────────
+//
+// Tasks 1-11 replaced deletion with retention. That answer is deliberately NOT "show every
+// retained row in every query", and the line between them had been drawn implicitly, one query at
+// a time, by whoever wrote each one. Task 12's brief called that out correctly: the defect was
+// never that a disconnected brokerage's holdings are hidden — it is that nobody had CHOSEN it.
+// So it is chosen here, once, and every site that participates points back at this comment.
+//
+// EVENT universe — a dated thing that HAPPENED.
+//
+//	`transactions`, `investment_transactions`. The row asserts "on 2025-03-14, 120.00 moved".
+//	That is true forever; disconnecting the account in June cannot un-pay a March dividend.
+//	Reads here are status-agnostic (banking analytics) or carry retainedAccountVisibilityLeg
+//	(transaction_repository.go), which re-admits a row whose whole account chain has gone
+//	terminal. Hiding these IS #1569's bug — the user paid for their own history.
+//
+// CURRENT-STATE universe — what is held / owed RIGHT NOW.
+//
+//	`holdings`, `credit_liabilities`, `mortgage_liabilities`, `student_loan_liabilities`. These
+//	are REPLACE-semantics tables (holdingRepository.ReplaceForAccount deletes and re-inserts on
+//	every sync), and the row carries NO as-of date. It is therefore only ever meaningful as an
+//	assertion about the present. Once the account is terminal, nobody is confirming it any more:
+//	the position may have been liquidated at the old broker, the loan may have been paid off, and
+//	the price is frozen at whatever it was on disconnection day. Surfacing such a row through
+//	GetByUserID or an allocation total would state a stale figure as a live one — and it would do
+//	so permanently and invisibly, inflating net worth by an amount that never changes again.
+//	That is a different lie from the one #1569 was filed about, not a smaller one.
+//	Reads here therefore keep currentStateAccountLeg. This is the ruling, not the status quo
+//	surviving by default.
+//
+// HISTORICAL-STATE universe — what was held / owed THEN.
+//
+//	`holding_snapshots`, `liability_statements` (tasks 6/10). These DO carry an as_of_date, are
+//	append-only, and their readers (GetByAccountDateRange) are deliberately independent of the
+//	account's current status. This universe is what makes the current-state ruling a ROUTING
+//	decision rather than data loss: the disconnected brokerage's last confirmed position is still
+//	on record and still queryable, just answered by a query that can say WHEN it was true.
+//
+// The one query T12 moved across the line is investmentAnalyticsRepository.IncomeSummary: it
+// aggregates investment_transactions over a closed date range — an event question — but was
+// scoped like a current-state one, so a disconnection silently zeroed a historical income total
+// while the investments feed over the SAME rows still listed the dividend. See its doc comment.
+//
+// TestRetentionUniverses_DisconnectedBrokerage_Integration asserts all three universes in one
+// test, before and after a disconnection, so the boundary cannot drift without a failure.
+//
+// WHAT WOULD CHANGE THIS RULING. Not an opinion — a capability. If a current-state read ever
+// gains a way to LABEL a row with the date it was last confirmed (the holding_snapshots data
+// exists for this; only an API surface and a UI treatment are missing), then "show the last
+// confirmed position, as of 2025-06-04" becomes expressible and is strictly better than hiding
+// it. Until a caller can render that label, widening the read only produces an unlabelled stale
+// number, which is the thing this ruling refuses.
+func currentStateAccountLeg(alias string) string {
+	return alias + ".status = 'active'"
+}
