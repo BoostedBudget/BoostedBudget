@@ -374,10 +374,14 @@ func (m *MockAccountRepository) CheckFingerprintOwnership(ctx context.Context, f
 	return args.Get(0).(*repository.FingerprintOwnership), args.Error(1)
 }
 
-// Issue #1010: Expire accounts by fingerprint to release uniqueness constraint
-func (m *MockAccountRepository) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error {
+// Issue #1010: Expire accounts by fingerprint to release uniqueness constraint. Issue #1569 Task 6:
+// now returns the expired account IDs for audit logging.
+func (m *MockAccountRepository) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) ([]string, error) {
 	args := m.Called(ctx, fingerprintBlindIdx)
-	return args.Error(0)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
 }
 
 // Issue #1569: transition every active account under a linked item to 'removed' with removed_at
@@ -4654,7 +4658,7 @@ func TestLinkAccounts_FingerprintCheck_AllowsAfterTTLExpiry(t *testing.T) {
 		}, nil)
 
 	// Persistent fingerprint expired → release it
-	mockAccountRepo.On("ExpireAccountsByFingerprint", ctx, expectedPersistentBlind).Return(nil)
+	mockAccountRepo.On("ExpireAccountsByFingerprint", ctx, expectedPersistentBlind).Return(nil, nil)
 
 	// Fallback fingerprint not owned by anyone
 	mockAccountRepo.On("CheckFingerprintOwnership", ctx, expectedFallbackBlind, userID).

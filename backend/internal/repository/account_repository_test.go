@@ -1462,25 +1462,59 @@ func TestAccountRepository_CheckFingerprintOwnership_NullItemStatus_NoError(t *t
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestAccountRepository_ExpireAccountsByFingerprint verifies that accounts matching
-// a fingerprint are marked as 'expired' to release the DB uniqueness constraint.
+// TestAccountRepository_ExpireAccountsByFingerprint verifies that accounts matching a fingerprint
+// are marked as 'expired' (stamping expired_at, Issue #1569 Task 6) to release the DB uniqueness
+// constraint, and that the caller gets back the IDs of every account actually flipped — the
+// repository's own RETURNING, not a second SELECT — so the service layer can audit-log each one.
 func TestAccountRepository_ExpireAccountsByFingerprint(t *testing.T) {
 	mock, repo := setupAccountMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
 	fingerprint := "test-fingerprint-blind-idx"
+	expiredID1 := uuid.New().String()
+	expiredID2 := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`
+	mock.ExpectQuery(regexp.QuoteMeta(`
 		UPDATE accounts
-		SET status = 'expired', updated_at = NOW()
+		SET status = 'expired', expired_at = NOW(), updated_at = NOW()
 		WHERE (persistent_account_id_blind_idx = $1 OR fallback_fingerprint_blind_idx = $1)
 		  AND status = 'active'
-	`)).WithArgs(fingerprint).WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+		RETURNING id
+	`)).WithArgs(fingerprint).WillReturnRows(
+		pgxmock.NewRows([]string{"id"}).AddRow(expiredID1).AddRow(expiredID2),
+	)
 
-	err := repo.ExpireAccountsByFingerprint(ctx, fingerprint)
+	expiredIDs, err := repo.ExpireAccountsByFingerprint(ctx, fingerprint)
 
 	assert.NoError(t, err)
+	assert.ElementsMatch(t, []string{expiredID1, expiredID2}, expiredIDs,
+		"must return every account the UPDATE actually flipped, via RETURNING, so the service can audit-log each one")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_ExpireAccountsByFingerprint_NoMatch verifies a no-op (nothing active
+// matches the fingerprint) returns an empty slice and no error, not a sentinel or a panic — a bulk
+// statement has no single "current status" to compare against, so silent success is correct here.
+func TestAccountRepository_ExpireAccountsByFingerprint_NoMatch(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	fingerprint := "unclaimed-fingerprint-blind-idx"
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		UPDATE accounts
+		SET status = 'expired', expired_at = NOW(), updated_at = NOW()
+		WHERE (persistent_account_id_blind_idx = $1 OR fallback_fingerprint_blind_idx = $1)
+		  AND status = 'active'
+		RETURNING id
+	`)).WithArgs(fingerprint).WillReturnRows(pgxmock.NewRows([]string{"id"}))
+
+	expiredIDs, err := repo.ExpireAccountsByFingerprint(ctx, fingerprint)
+
+	assert.NoError(t, err)
+	assert.Empty(t, expiredIDs)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

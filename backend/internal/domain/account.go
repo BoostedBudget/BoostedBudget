@@ -57,6 +57,17 @@ type Account struct {
 	// out of scope for this task. Surfacing "your bank closed this account" to a user is worth
 	// doing; it is not this.
 	RemovedReason *string `json:"-" db:"removed_reason"`
+	// ExpiredAt is when the 90-day fingerprint TTL was released, moving this account to
+	// status = 'expired' (AccountRepository.ExpireAccountsByFingerprint). NULL for every other
+	// status. Issue #1569 Task 6, migration 000155.
+	//
+	// Not serialised (`json:"-"`), same reasoning as RemovedReason above: domain.Account IS an API
+	// response type (huma/operations/plaid.go), and this branch's task is a data-correctness fix
+	// (add the timestamp, audit the write, stop the false-cause interval), not a new user-facing
+	// field. No production path currently reads this back into the struct either — it is written
+	// by ExpireAccountsByFingerprint's UPDATE and otherwise exists for the same reason removed_at/
+	// replaced_at do: a durable, queryable record of when a terminal transition happened.
+	ExpiredAt *time.Time `json:"-" db:"expired_at"`
 	// ⚠ DEAD COLUMN — never written non-NULL by any production path (#1537 round 14). Its only
 	// writer is accountRepository.UpdateStatus, and that method's sole production caller
 	// (services/account_service.go:510, the re-link soft-delete) passes a literal nil. The only other

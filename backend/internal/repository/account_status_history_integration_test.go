@@ -347,22 +347,26 @@ func TestAccountStatusHistory_Backfill_Shapes(t *testing.T) {
 	expiredUpdatedAt := created.Add(60 * 24 * time.Hour)
 	removedAt := created.Add(70 * 24 * time.Hour)
 
-	insertHistoricalAccount := func(status string, updatedAt time.Time, replacedAtVal, removedAtVal *time.Time) string {
+	insertHistoricalAccount := func(status string, updatedAt time.Time, replacedAtVal, removedAtVal, expiredAtVal *time.Time) string {
 		var id string
 		require.NoError(t, pool.QueryRow(ctx, `
 			INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type, status,
-			                       created_at, updated_at, replaced_at, removed_at)
-			VALUES ($1, $2, $3, 'Test', 'depository', $4, $5, $6, $7, $8)
+			                       created_at, updated_at, replaced_at, removed_at, expired_at)
+			VALUES ($1, $2, $3, 'Test', 'depository', $4, $5, $6, $7, $8, $9)
 			RETURNING id`,
-			item.ID, userID, "plaid-bf-"+suffix+"-"+status, status, created, updatedAt, replacedAtVal, removedAtVal,
+			item.ID, userID, "plaid-bf-"+suffix+"-"+status, status, created, updatedAt, replacedAtVal, removedAtVal, expiredAtVal,
 		).Scan(&id))
 		return id
 	}
 
-	activeID := insertHistoricalAccount("active", created, nil, nil)
-	replacedID := insertHistoricalAccount("replaced", created, &replacedAt, nil)
-	expiredID := insertHistoricalAccount("expired", expiredUpdatedAt, nil, nil)
-	removedID := insertHistoricalAccount("removed", created, nil, &removedAt)
+	activeID := insertHistoricalAccount("active", created, nil, nil, nil)
+	replacedID := insertHistoricalAccount("replaced", created, &replacedAt, nil, nil)
+	// expired_at = expiredUpdatedAt here mirrors migration 000155's own backfill (expired_at :=
+	// updated_at for pre-existing 'expired' rows) — this fixture simulates a row that predates
+	// BOTH 000152's history backfill and 000155's expired_at column, so by the time this test runs
+	// against a fully-migrated schema, expired_at must already carry that same backfilled value.
+	expiredID := insertHistoricalAccount("expired", expiredUpdatedAt, nil, nil, &expiredUpdatedAt)
+	removedID := insertHistoricalAccount("removed", created, nil, &removedAt, nil)
 
 	// Sanity: disabling the trigger actually worked — no rows exist yet for these accounts.
 	require.Empty(t, ashIntervalsFor(t, ctx, pool, activeID))
@@ -509,5 +513,75 @@ func TestAccountStatusHistory_HalfOpenBoundary_LiveAtStartNotAtEnd(t *testing.T)
 	if justBeforeT2.After(t1) {
 		assert.True(t, ashLiveAt(t, ctx, pool, accountID, "active", justBeforeT2))
 		assert.False(t, ashLiveAt(t, ctx, pool, accountID, "removed", justBeforeT2))
+	}
+}
+
+// TestAccountStatusHistory_ExpireAccountsByFingerprint_RecordsHonestReasonAndExpiredAt is Issue
+// #1569 Task 6's core assertion: the cross-user fingerprint-release path writes an account_status_
+// history interval that is (a) actually reachable (the accounts row got expired_at stamped, not
+// just status flipped) and (b) honest about the cause. The trigger derives 'fingerprint_expiry' for
+// every active->expired transition (migration 000153) — true regardless of WHICH user's link
+// triggered the release, unlike the neutralised 'removed' label the same migration introduced for
+// active->removed (which really does have two distinct, indistinguishable causes). This test pins
+// that 'fingerprint_expiry' is what actually lands, not a placeholder nobody checked, and that the
+// bulk statement (no user_id predicate — deliberate, see ExpireAccountsByFingerprint's doc comment)
+// still writes it correctly across two DIFFERENT users' accounts sharing one fingerprint.
+func TestAccountStatusHistory_ExpireAccountsByFingerprint_RecordsHonestReasonAndExpiredAt(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	ctx := context.Background()
+	profileRepo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	accountRepo := NewAccountRepository(pool, enc)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	blindIdx := "ash-fp-test-" + suffix
+
+	// Two DIFFERENT users, each with an account sharing the SAME fingerprint — the cross-user
+	// collision ExpireAccountsByFingerprint exists to resolve. No user_id predicate should stop
+	// either from being expired by one call.
+	dispossessedUserID := createMarkDisconnectedFixtureUser(t, ctx, pool, profileRepo, suffix+"-a")
+	dispossessedItem := createMarkDisconnectedFixtureItem(t, ctx, linkedItemRepo, dispossessedUserID, suffix+"-a")
+	dispossessedAccountID := insertAshFixtureAccount(t, ctx, pool, dispossessedItem.ID, dispossessedUserID, "plaid-fp-a-"+suffix)
+
+	otherUserID := createMarkDisconnectedFixtureUser(t, ctx, pool, profileRepo, suffix+"-b")
+	otherItem := createMarkDisconnectedFixtureItem(t, ctx, linkedItemRepo, otherUserID, suffix+"-b")
+	otherAccountID := insertAshFixtureAccount(t, ctx, pool, otherItem.ID, otherUserID, "plaid-fp-b-"+suffix)
+
+	// unique_persistent_account_id_active and unique_fallback_fingerprint_active (migration 000062)
+	// each independently forbid two ACTIVE rows sharing the same value in that ONE column — so two
+	// simultaneously-active rows can only share one fingerprint VALUE across the two DIFFERENT
+	// columns the OR matches, not the same column twice. This is exactly the multi-row case in
+	// production: one account matched via its persistent_account_id, another via its (separately
+	// unique) fallback_fingerprint.
+	_, err := pool.Exec(ctx,
+		`UPDATE accounts SET persistent_account_id_blind_idx = $2 WHERE id = $1`, dispossessedAccountID, blindIdx)
+	require.NoError(t, err, "seed persistent fingerprint blind index")
+	_, err = pool.Exec(ctx,
+		`UPDATE accounts SET fallback_fingerprint_blind_idx = $2 WHERE id = $1`, otherAccountID, blindIdx)
+	require.NoError(t, err, "seed fallback fingerprint blind index")
+
+	expiredIDs, err := accountRepo.ExpireAccountsByFingerprint(ctx, blindIdx)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{dispossessedAccountID, otherAccountID}, expiredIDs,
+		"both users' accounts sharing the fingerprint must be expired by one call — no user_id predicate")
+
+	for _, accountID := range []string{dispossessedAccountID, otherAccountID} {
+		var status string
+		var expiredAt *time.Time
+		require.NoError(t, pool.QueryRow(ctx,
+			`SELECT status, expired_at FROM accounts WHERE id = $1`, accountID).Scan(&status, &expiredAt))
+		assert.Equal(t, "expired", status)
+		require.NotNil(t, expiredAt, "expired_at must be stamped (migration 000155)")
+
+		intervals := ashIntervalsFor(t, ctx, pool, accountID)
+		require.Len(t, intervals, 2, "one closed active interval, one open expired interval")
+		assert.Equal(t, "active", intervals[0].Status)
+		assert.Equal(t, "expired", intervals[1].Status)
+		require.NotNil(t, intervals[1].Reason)
+		assert.Equal(t, "fingerprint_expiry", *intervals[1].Reason,
+			"the interval must record the true, actor-independent cause — never a placeholder or a "+
+				"false claim about which user did this")
+		assert.Nil(t, intervals[1].ValidTo, "the expired interval must be the current open one")
 	}
 }

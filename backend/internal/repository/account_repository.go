@@ -280,11 +280,13 @@ type AccountRepository interface {
 	// Issue #1010: Enforce Plaid item uniqueness across all users.
 	CheckFingerprintOwnership(ctx context.Context, fingerprintBlindIdx, excludeUserID string) (*FingerprintOwnership, error)
 
-	// ExpireAccountsByFingerprint marks all active accounts matching a fingerprint as 'expired'.
-	// This releases the partial UNIQUE index constraint so a new user can link the same account.
-	// Called when the 90-day TTL expires for a disconnected/revoked item.
-	// Issue #1010: Enforce Plaid item uniqueness across all users.
-	ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error
+	// ExpireAccountsByFingerprint marks all active accounts matching a fingerprint as 'expired',
+	// stamping expired_at. This releases the partial UNIQUE index constraint so a new user can link
+	// the same account. Called when the 90-day TTL expires for a disconnected/revoked item. Returns
+	// the IDs of every account it actually flipped, so the caller can audit-log each one — see the
+	// implementation's doc comment for why this is cross-user by design and carries no user_id
+	// predicate. Issue #1010 (original), Issue #1569 Task 6 (expired_at + audit trail).
+	ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) ([]string, error)
 
 	// MarkRemovedByLinkedItemID transitions every ACTIVE account under a linked item to
 	// status='removed' with removed_at stamped, without deleting the row or destroying anything
@@ -1723,16 +1725,48 @@ func (r *accountRepository) CheckFingerprintOwnership(ctx context.Context, finge
 	return &ownership, nil
 }
 
-// ExpireAccountsByFingerprint marks all active accounts matching a fingerprint as 'expired'.
-// This releases the partial UNIQUE index constraint so a new user can link the same account.
+// ExpireAccountsByFingerprint marks all active accounts matching a fingerprint as 'expired'. This
+// releases the partial UNIQUE index constraint so a new user can link the same account.
 // Issue #1010: Enforce Plaid item uniqueness across all users.
-func (r *accountRepository) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error {
+//
+// ⚠ CROSS-USER BY DESIGN, WITH NO user_id PREDICATE. The whole point of this method is to release a
+// fingerprint another user's dormant accounts are holding, so it must reach rows the acting caller
+// does not own. Do not add a user scope — see services/account_service.go's checkFingerprintOwnership,
+// the sole caller, which looks up the owning fingerprint EXCLUDING the acting user precisely so this
+// bulk UPDATE can act on the other user's rows.
+//
+// Stamps expired_at (Issue #1569 Task 6, migration 000155) — the timestamp 'expired' lacked while
+// 'replaced'/'removed' each had one, forcing 000152's account_status_history backfill to approximate
+// with updated_at. Returns the IDs of every account this call actually flipped (via RETURNING, not a
+// second SELECT — no window for a concurrent write to desync the two), so the caller can write one
+// audit_logs entry per affected account. Empty/nil, not an error, when nothing matched (already
+// non-active, or the fingerprint is unclaimed) — mirrors UpdateStatus's per-row idempotency guard in
+// spirit, but as a bulk statement there is no single "current status" to compare against or a
+// sentinel to return for, so a no-op is silent success rather than an error.
+func (r *accountRepository) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) ([]string, error) {
 	query := `
 		UPDATE accounts
-		SET status = 'expired', updated_at = NOW()
+		SET status = 'expired', expired_at = NOW(), updated_at = NOW()
 		WHERE (persistent_account_id_blind_idx = $1 OR fallback_fingerprint_blind_idx = $1)
 		  AND status = 'active'
+		RETURNING id
 	`
-	_, err := r.db.Exec(ctx, query, fingerprintBlindIdx)
-	return err
+	rows, err := r.db.Query(ctx, query, fingerprintBlindIdx)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var expiredIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		expiredIDs = append(expiredIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return expiredIDs, nil
 }

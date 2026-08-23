@@ -78,8 +78,8 @@ func (m *mockAccountRepositoryForChainResolver) UpdateStatus(ctx context.Context
 func (m *mockAccountRepositoryForChainResolver) CheckFingerprintOwnership(ctx context.Context, fingerprintBlindIdx, excludeUserID string) (*repository.FingerprintOwnership, error) {
 	return nil, nil
 }
-func (m *mockAccountRepositoryForChainResolver) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) error {
-	return nil
+func (m *mockAccountRepositoryForChainResolver) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) ([]string, error) {
+	return nil, nil
 }
 func (m *mockAccountRepositoryForChainResolver) MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string) error {
 	return nil
