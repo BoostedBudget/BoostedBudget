@@ -308,14 +308,16 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 	// account-level error/status field, and item.error is documented as populated only by
 	// /item/get). An account absent from this set was not returned by Plaid on this call at all;
 	// zero holdings for it below is then a partial/degraded response, not a confirmed liquidation.
-	presentPlaidAccountIDs := PlaidResponseAccountIDs(resp.Accounts)
+	// (Task 5 reshaped the return value into PlaidAccountRoster — see plaid_completeness.go. This
+	// gate is unchanged: Present is the same plain membership test the bare set gave.)
+	roster := PlaidAccountRosterFrom(resp.Accounts, nil)
 
 	// For each internal account, replace holdings atomically
 	for plaidAccountID, internalAccountID := range accountMap {
 		plaidHoldings := holdingsByAccount[plaidAccountID] // empty if liquidated OR response is partial for this account
 
 		if len(plaidHoldings) == 0 {
-			if _, complete := presentPlaidAccountIDs[plaidAccountID]; !complete {
+			if !roster.Present(plaidAccountID) {
 				observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("holdings").Inc()
 				s.logger.Warn("skipping holdings clear: account absent from Plaid's holdings response, preserving existing rows",
 					"account_id", internalAccountID,
