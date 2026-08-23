@@ -30,8 +30,9 @@ import (
 //
 // ⚠ The blank write must stay legal on ONE path: the PlaidErrorInvalidCursor branch resets the
 // cursor to "" deliberately, to force exactly that full re-sync. TestSyncTransactions_InvalidCursor…
-// pins it, and it must keep passing — which is why the guard belongs at the per-page update site and
-// NOT inside UpdateCursor.
+// pins it, and it must keep passing — which is why the guard belongs at the cursor-selection site in
+// the pagination loop and NOT inside UpdateCursor. (#1570 moved the WRITE to a single post-storage
+// call; the guard stayed in the loop, where it decides what that write will carry.)
 func TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor(t *testing.T) {
 	ctx := context.Background()
 
@@ -192,7 +193,9 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping(t
 // fix missed, and it is the third time this branch has traded one failure mode for a worse one.
 // Issue #1537 round 11.
 //
-// THE LOSS. `UpdateCursor` runs INSIDE the pagination loop (per page), while storage happens AFTER it.
+// THE LOSS (as it stood in round 11 — #1570 has since removed the per-page write entirely; this
+// paragraph describes the world the break-instead-of-error decision was made in).
+// `UpdateCursor` ran INSIDE the pagination loop (per page), while storage happens AFTER it.
 // So on a two-page sync where page 1 succeeds and page 2 returns has_more=true with an empty cursor:
 //
 //	1. page 1's transactions are appended to `result` and page 1's cursor is PERSISTED;

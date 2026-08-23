@@ -38,20 +38,23 @@ type TransactionSyncService interface {
 	// SyncTransactions fetches transactions from Plaid using TransactionsSync API.
 	// Handles cursor-based pagination until has_more=false, aggregating all results.
 	//
-	// CRITICAL: Updates cursor after EACH page (not at end) to enable resumability.
-	// If sync fails on page N, cursor is already at page N-1, so retry continues from there.
+	// CRITICAL (#1570): the cursor is persisted ONCE, after the transaction-storage steps commit —
+	// never per page. Advancing per page was a data-loss window, because Plaid does not re-deliver
+	// rows the stored cursor has moved past and the worker discards the result on error.
 	//
 	// Process:
 	// 1. Get plaintext access token (decrypted by repository layer on read)
 	// 2. Loop: call PlaidService.TransactionsSync with cursor
 	// 3. Aggregate Added/Modified/Removed from each page
-	// 4. Update cursor in database IMMEDIATELY after each page
-	// 5. Continue until has_more=false
+	// 4. Continue until has_more=false
+	// 5. Store the aggregated pages, THEN persist the furthest cursor reached
 	//
-	// Returns aggregated results from ALL pages fetched. On error mid-pagination,
-	// returns partial results with error (cursor already updated for resumability).
+	// Returns aggregated results from ALL pages fetched. On any error before the cursor write, the
+	// stored cursor is left where the run started, so the next run re-fetches everything and
+	// re-upserts it.
 	//
-	// Issue #260: Pagination is resumable on mid-sync errors
+	// Issue #260: Pagination is resumable on mid-sync errors. Issue #1570: resumability means
+	// resuming from the last STORED position, not the last fetched one.
 	SyncTransactions(
 		ctx context.Context,
 		linkedItem *domain.LinkedItem,
@@ -335,7 +338,7 @@ func (s *transactionSyncService) ProcessWebhook(ctx context.Context, webhook *do
 	}
 
 	// Call SyncTransactions to fetch and process transactions from Plaid
-	// This handles: decryption, pagination, cursor updates per page
+	// This handles: decryption, pagination, storage, and the single post-storage cursor advance
 	result, err := s.SyncTransactions(ctx, linkedItem)
 	if err != nil {
 		// Classify error to determine retry strategy
@@ -418,6 +421,12 @@ func (s *transactionSyncService) SyncTransactions(
 	}
 
 	// Step 5: Pagination loop - continue until has_more=false
+	//
+	// #1570 (closed under #1569): pendingCursor is the furthest REAL cursor Plaid hands us during
+	// this run. It is held here and persisted exactly once, after the storage steps below commit —
+	// see the storage-before-cursor contract documented after this loop. It starts empty, meaning
+	// "nothing earned yet, leave the stored cursor alone".
+	pendingCursor := ""
 	hasMore := true
 	pageCount := 0
 
@@ -444,8 +453,12 @@ func (s *transactionSyncService) SyncTransactions(
 				// Return error to trigger retry with empty cursor
 				return result, fmt.Errorf("cursor reset, will retry full sync: %w", err)
 			}
-			// Return partial results with error
-			// Cursor already updated for pages that succeeded
+			// Return partial results with error.
+			//
+			// #1570: the cursor has NOT been advanced for the pages that already succeeded — it is
+			// written once, after storage, at the end of this function. So the worker discarding
+			// `result` here loses nothing durable: the next run re-fetches from the last
+			// known-good position and re-upserts.
 			return result, fmt.Errorf("sync failed on page %d: %w", pageCount, err)
 		}
 
@@ -454,14 +467,17 @@ func (s *transactionSyncService) SyncTransactions(
 		result.Modified = append(result.Modified, resp.Modified...)
 		result.Removed = append(result.Removed, resp.Removed...)
 
-		// CRITICAL: Update cursor IMMEDIATELY for resumability
-		// If next page fails, we can resume from this cursor
+		// Advance the cursor IN MEMORY only (#1570). `cursor` is what the NEXT request must carry;
+		// `pendingCursor` is what we will durably write, once, if and only if storage commits. This
+		// used to call UpdateCursor per page for resumability, which was the data-loss window: the
+		// storage steps run after this loop, so a per-page write made every failure in between
+		// permanent — Plaid does not re-deliver rows the stored cursor has moved past.
 		//
-		// Issue #1537: a BLANK next_cursor must never be persisted here. An empty stored cursor sends
-		// the next run down the no-cursor branch above, which applies initial-sync historical options
-		// and asks Plaid for the whole configured window again — so one blank write turns every
-		// subsequent incremental sync into a full re-sync through CreateBatch. Skipping the write
-		// leaves the last known-good cursor in place, which is the correct resume point.
+		// Issue #1537: a BLANK next_cursor must never become the persisted cursor. An empty stored
+		// cursor sends the next run down the no-cursor branch above, which applies initial-sync
+		// historical options and asks Plaid for the whole configured window again — so one blank
+		// write turns every subsequent incremental sync into a full re-sync through CreateBatch.
+		// Leaving pendingCursor at the last real value keeps the correct resume point.
 		//
 		// This guard belongs HERE and not inside UpdateCursor: the PlaidErrorInvalidCursor branch
 		// above writes "" on purpose, precisely to force that full re-sync when Plaid tells us the
@@ -489,21 +505,23 @@ func (s *transactionSyncService) SyncTransactions(
 			// job retry with the cursor we still hold, which is exactly what we want.
 			if resp.GetHasMore() {
 				// #1537 round 11: the round-10 version returned an error here unconditionally, which
-				// LOST DATA on any multi-page sync. UpdateCursor runs per page (below), while storage
-				// happens after this loop — and the worker discards `result` on error. So page 1's
-				// transactions were thrown away while page 1's cursor had already been persisted, and
-				// /transactions/sync does not re-deliver them. That was a REGRESSION against the
-				// pre-round-9 code, which reset the cursor, looped, and stored everything.
+				// LOST DATA on any multi-page sync, because UpdateCursor then ran per page while
+				// storage happened after this loop and the worker discards `result` on error. #1570
+				// removed the per-page write, so an error here would no longer lose rows — but
+				// breaking is still strictly better than erroring: it STORES pages 1..N instead of
+				// throwing them away and making the next run re-fetch all of them.
 				//
-				// The cursor already points at the page we cannot fetch, so the lossless move depends
-				// on whether we got anything this run:
+				// What we do next depends on whether we got anything this run:
 				if pageCount > 1 {
 					// Progress made: pages 1..N are ALL kept — page N's rows were appended above,
-					// BEFORE this guard. The cursor still points at page N-1, so the next sync
-					// re-fetches page N and re-runs the whole post-pagination tail against it.
+					// BEFORE this guard. Page N handed us no cursor, so pendingCursor still holds
+					// page N-1's; once storage commits we persist that, and the next sync re-fetches
+					// page N and re-runs the whole post-pagination tail against it.
 					//
 					// #1537 T93(a): an earlier version of this comment claimed "no loss and no
 					// duplicate rows". Only the first half is right, and only for TRANSACTION rows.
+					// Since #1570 this note is load-bearing rather than incidental: re-delivery is
+					// now the normal consequence of ANY sync failure, not just of this branch.
 					// What re-fetching page N is actually idempotent in:
 					//   - added: transactionRepo.CreateBatch is ON CONFLICT (source,
 					//     external_transaction_id_blind_idx, user_id) DO UPDATE — re-upsert, no dupe.
@@ -556,12 +574,8 @@ func (s *transactionSyncService) SyncTransactions(
 				"page", pageCount,
 			)
 		} else {
-			err = s.linkedItemRepo.UpdateCursor(ctx, linkedItem.ID, newCursor)
-			if err != nil {
-				// Cursor update failed - return partial results with error
-				return result, fmt.Errorf("failed to update cursor on page %d: %w", pageCount, err)
-			}
 			cursor = newCursor
+			pendingCursor = newCursor
 		}
 
 		// Check if more pages exist
@@ -580,24 +594,31 @@ func (s *transactionSyncService) SyncTransactions(
 	// Pagination finished. NOTE this is reached on TWO paths, and the difference matters: either
 	// has_more went false (every page fetched), or #1537 round 11's guard broke out early because
 	// Plaid promised more pages while sending no cursor to fetch them with. In the second case the
-	// pages already fetched ARE stored and the persisted cursor is consistent with them, so the next
-	// sync resumes correctly — but this is NOT a complete sync, and an earlier version of this comment
-	// said "All pages fetched successfully", which my own break made false.
+	// pages already fetched ARE stored and the cursor persisted below is consistent with them, so
+	// the next sync resumes correctly — but this is NOT a complete sync, and an earlier version of
+	// this comment said "All pages fetched successfully", which my own break made false.
 	//
-	// #1537 T93(c) — KNOWN, UNFIXED DATA-LOSS WINDOW between here and the storage steps below.
-	// UpdateCursor is called PER PAGE inside the loop above, but nothing has been stored yet. So
-	// every error return between this point and the end of Step 8 loses the rows for the pages
-	// whose cursors were already persisted: the worker (queue/jobs/plaid_sync.go) discards `result`
-	// entirely on a non-nil error, and /transactions/sync will not re-deliver rows the cursor has
-	// moved past. Concretely, the triggers are:
-	//   1. buildAccountMaps failing (accountRepo.GetByLinkedItemID error) — loses EVERY page.
-	//   2. processAddedTransactions / processModifiedTransactions failing — loses the rows after
-	//      the failure point (Modified commits one Update per row and returns on the first error).
-	// The narrow fix is NOT to add a retry here: it is to stop persisting the cursor per page and
-	// only advance it after storage commits, since Plaid re-delivers everything from the old cursor
-	// and CreateBatch upserts (see the T93(a) note above for exactly what re-delivery is safe for).
-	// That changes cursor semantics for every multi-page sync, so it is tracked as issue #1570
-	// rather than folded into #1537. Do not delete this note without closing #1570.
+	// ── #1570 STORAGE-BEFORE-CURSOR CONTRACT (the guarantee; read before moving anything) ────────
+	// Nothing has been written to linked_items.cursor yet. `pendingCursor` holds the furthest real
+	// cursor Plaid returned this run, and it is persisted by the SINGLE UpdateCursor call after
+	// Step 8, only once every transaction-storage step has committed. Consequences:
+	//   - Any error return before that call leaves the stored cursor exactly where the run started,
+	//     so the next run re-fetches every page from the last known-good position. No page can be
+	//     stranded behind an advanced cursor any more.
+	//   - Re-delivery is therefore the NORMAL consequence of a failed sync, not a rare edge. See
+	//     the T93(a) note in the pagination loop for exactly what re-delivery is idempotent in:
+	//     transaction rows are (CreateBatch upserts); balance snapshots, the worker's sync metrics
+	//     and boost-rule executions are not.
+	//   - If the UpdateCursor call itself fails, the rows are already durable and the next run
+	//     re-delivers and re-upserts them. That is the safe direction of the two.
+	//   - NOT atomic, and does not need to be: Steps 6/7/8 are three independent non-transactional
+	//     writes (Modified is one Update per row). A partial failure therefore leaves some rows
+	//     durable AND the cursor unmoved — the over-delivery direction, which CreateBatch/Update
+	//     absorb by upserting. The guarantee is one-directional: the cursor advances only if EVERY
+	//     storage step returned nil, never the reverse.
+	// The whole run's pages are held in memory until storage — unchanged by #1570, since the loop
+	// already accumulated every page into `result`; only the cursor write moved.
+	// ─────────────────────────────────────────────────────────────────────────────────────────────
 	result.NewCursor = cursor
 	s.logger.Info("sync complete",
 		"item_id", linkedItem.ID,
@@ -648,8 +669,9 @@ func (s *transactionSyncService) SyncTransactions(
 	// Issue #171: Also builds userAccountMap for stable UserAccountID reference
 	accountMap, userAccountMap, err := s.buildAccountMaps(ctx, linkedItem.ID)
 	if err != nil {
-		// Return successful sync result but log storage error
-		// Webhook can retry storage on next sync
+		// #1570: this returns an ERROR (an earlier comment here claimed "successful sync result",
+		// which was never true). It is also the failure that used to lose every page of a
+		// multi-page sync; the cursor has not moved, so the next run re-fetches all of them.
 		s.logger.Error("failed to build account maps", "item_id", linkedItem.ID, "error", err)
 		return result, fmt.Errorf("failed to build account maps: %w", err)
 	}
@@ -687,6 +709,19 @@ func (s *transactionSyncService) SyncTransactions(
 	}
 
 	s.logger.Info("transaction storage complete", "item_id", linkedItem.ID)
+
+	// #1570: THE cursor advance. Every transaction-storage step above has committed, so it is now
+	// safe to tell Plaid we have consumed these pages. This is deliberately placed before the
+	// non-fatal tail (balance snapshots, savings, budget recalc, correlation): those steps cannot
+	// fail the sync, so blocking the cursor on them would only cause pointless re-delivery.
+	// pendingCursor is empty when Plaid returned no real cursor this run (see the #1537 blank-cursor
+	// guard) — in that case the stored cursor is left exactly as it was.
+	if pendingCursor != "" {
+		if err := s.linkedItemRepo.UpdateCursor(ctx, linkedItem.ID, pendingCursor); err != nil {
+			s.logger.Error("failed to advance cursor after storage", "item_id", linkedItem.ID, "error", err)
+			return result, fmt.Errorf("failed to update cursor after storage: %w", err)
+		}
+	}
 
 	// ========================================================================
 	// Issue #353: Create Balance Snapshots
