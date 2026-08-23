@@ -12,7 +12,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router'
-import { TransactionsPage, computeEffectiveSort } from './TransactionsPage'
+import { TransactionsPage, computeEffectiveSort, buildAccountOptions } from './TransactionsPage'
+import type { Account } from '../accounts/types'
 import { isInvestmentRow } from './types'
 import type { Transaction, InvestmentActivity, FeedRow } from './types'
 import type { SortState } from '@/shared/components/DataTable'
@@ -528,13 +529,66 @@ describe('TransactionsPage', () => {
     })
   })
 
-  describe('Account filtering (Issue #1109)', () => {
-    it('excludes replaced accounts from account filter options', async () => {
+  describe('buildAccountOptions (Issue #1569, Task 3)', () => {
+    const makeAccount = (overrides: Partial<Account>): Account => ({
+      id: 'acc-default',
+      user_id: 'user-1',
+      linked_item_id: 'item-1',
+      plaid_account_id: 'plaid-1',
+      name: 'Test Account',
+      type: 'depository',
+      subtype: 'checking',
+      currency_code: 'USD',
+      is_hidden: false,
+      status: 'active',
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+      ...overrides,
+    })
+
+    it('labels an active account with no suffix', () => {
+      const options = buildAccountOptions([makeAccount({ id: 'a1', name: 'Checking', status: 'active' })])
+      expect(options).toEqual([{ value: 'a1', label: 'Checking', masked: true }])
+    })
+
+    it('appends "(Closed)" to a removed account so it is not mistaken for a live one', () => {
+      const options = buildAccountOptions([makeAccount({ id: 'a1', name: 'Old Checking', status: 'removed' })])
+      expect(options).toEqual([{ value: 'a1', label: 'Old Checking (Closed)', masked: true }])
+    })
+
+    it('appends "(Closed)" to a replaced account', () => {
+      const options = buildAccountOptions([makeAccount({ id: 'a1', name: 'Old Checking', status: 'replaced' })])
+      expect(options[0].label).toBe('Old Checking (Closed)')
+    })
+
+    it('appends "(Closed)" to an expired account', () => {
+      const options = buildAccountOptions([makeAccount({ id: 'a1', name: 'Old Checking', status: 'expired' })])
+      expect(options[0].label).toBe('Old Checking (Closed)')
+    })
+
+    it('lists active accounts before closed ones regardless of input order', () => {
+      const options = buildAccountOptions([
+        makeAccount({ id: 'closed-1', name: 'Old Checking', status: 'removed' }),
+        makeAccount({ id: 'active-1', name: 'Primary Checking', status: 'active' }),
+      ])
+      expect(options.map((o) => o.value)).toEqual(['active-1', 'closed-1'])
+    })
+
+    it('prefers nickname over name, closed or active', () => {
+      const options = buildAccountOptions([
+        makeAccount({ id: 'a1', name: 'Checking', nickname: 'My Fun Money', status: 'removed' }),
+      ])
+      expect(options[0].label).toBe('My Fun Money (Closed)')
+    })
+  })
+
+  describe('Account filtering (Issue #1109, widened in #1569 Task 3)', () => {
+    it('requests all account statuses so retained (closed) accounts are resolvable', async () => {
       mockUseGetAccounts.mockReturnValue({
         data: {
           accounts: [
             { id: 'active-1', name: 'Primary Checking', status: 'active' },
-            { id: 'replaced-1', name: 'Old Checking', status: 'replaced' },
+            { id: 'removed-1', name: 'Old Checking', status: 'removed' },
           ],
         },
         isLoading: false,
@@ -548,10 +602,74 @@ describe('TransactionsPage', () => {
         expect(screen.getByText(/transactions loaded/i)).toBeInTheDocument()
       })
 
-      // The account map and options should only include active accounts
-      // This is a smoke test — the real assertion is that we can render without error
-      // when a replaced account is present in the API response
-      expect(screen.queryByText('Old Checking')).not.toBeInTheDocument()
+      // useAllAccounts must request the full universe of statuses, not the
+      // active-only default — otherwise a retained account can never be
+      // resolved to a name or offered in the filter dropdown.
+      expect(mockUseGetAccounts).toHaveBeenCalledWith({ status: 'all_statuses' }, undefined)
+    })
+
+    it('offers a removed account in the filter dropdown, labeled as closed, and lets the user filter by it', async () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: {
+          accounts: [
+            { id: 'active-1', name: 'Primary Checking', status: 'active' },
+            { id: 'removed-1', name: 'Old Checking', status: 'removed' },
+          ],
+        },
+        isLoading: false,
+        error: null,
+      })
+
+      const Wrapper = createWrapper()
+      const { default: userEvent } = await import('@testing-library/user-event')
+      const user = userEvent.setup()
+      render(<TransactionsPage />, { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(screen.getByText(/transactions loaded/i)).toBeInTheDocument()
+      })
+
+      const filterButtons = screen.getAllByRole('button', { name: /filter by account/i })
+      await user.click(filterButtons[0])
+
+      // Active account has no suffix; the removed account is labeled "(Closed)"
+      // so the user cannot mistake it for a live account.
+      expect(screen.getByRole('checkbox', { name: /^primary checking$/i })).toBeInTheDocument()
+      const closedCheckbox = screen.getByRole('checkbox', { name: /old checking \(closed\)/i })
+      expect(closedCheckbox).toBeInTheDocument()
+
+      await user.click(closedCheckbox)
+      // Filtering by the closed account is wired through the same
+      // handleAccountFilterChange path as an active account — no dead end.
+      expect(closedCheckbox).toBeChecked()
+    })
+
+    it('resolves a replaced account and an expired account to their names too, not just removed', async () => {
+      mockUseGetAccounts.mockReturnValue({
+        data: {
+          accounts: [
+            { id: 'replaced-1', name: 'Replaced Checking', status: 'replaced' },
+            { id: 'expired-1', name: 'Expired Checking', status: 'expired' },
+          ],
+        },
+        isLoading: false,
+        error: null,
+      })
+
+      const Wrapper = createWrapper()
+      const { default: userEvent } = await import('@testing-library/user-event')
+      const user = userEvent.setup()
+      render(<TransactionsPage />, { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(screen.getByText(/transactions loaded/i)).toBeInTheDocument()
+      })
+
+      const filterButtons = screen.getAllByRole('button', { name: /filter by account/i })
+      await user.click(filterButtons[0])
+
+      expect(screen.getByRole('checkbox', { name: /replaced checking \(closed\)/i })).toBeInTheDocument()
+      expect(screen.getByRole('checkbox', { name: /expired checking \(closed\)/i })).toBeInTheDocument()
     })
   })
 
