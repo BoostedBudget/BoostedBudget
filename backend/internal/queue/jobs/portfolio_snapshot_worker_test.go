@@ -94,6 +94,17 @@ func newTestPortfolioSnapshotJob(args PortfolioSnapshotArgs) *river.Job[Portfoli
 	}
 }
 
+// newMockSnapshotRepo builds a snapshot-repo mock that tolerates, but does not require, the
+// #1569 Task 11 repair pass Work runs before it writes today's aggregate. Tests that are about the
+// repair itself construct the mock directly and set strict expectations.
+func newMockSnapshotRepo() *mockSnapshotRepo {
+	m := new(mockSnapshotRepo)
+	m.On("UserIDsWithUnexaminedSnapshots", mock.Anything, mock.Anything).Return([]string{}, nil).Maybe()
+	m.On("RepairUserFromHistory", mock.Anything, mock.Anything).
+		Return(domain.PortfolioRepairSummary{}, nil).Maybe()
+	return m
+}
+
 // --- Tests ---
 
 func TestPortfolioSnapshotArgs_Kind(t *testing.T) {
@@ -102,7 +113,7 @@ func TestPortfolioSnapshotArgs_Kind(t *testing.T) {
 
 func TestNewPortfolioSnapshotWorker_NilLogger_DoesNotPanic(t *testing.T) {
 	holdingRepo := new(mockHoldingRepo)
-	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo := newMockSnapshotRepo()
 
 	// Passing nil Logger should not panic; the constructor falls back to slog.Default()
 	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
@@ -116,7 +127,7 @@ func TestNewPortfolioSnapshotWorker_NilLogger_DoesNotPanic(t *testing.T) {
 
 func TestNewPortfolioSnapshotWorker_WithLogger(t *testing.T) {
 	holdingRepo := new(mockHoldingRepo)
-	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo := newMockSnapshotRepo()
 
 	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
 		HoldingRepo:  holdingRepo,
@@ -134,7 +145,7 @@ func TestPortfolioSnapshotWorker_Work_NoUsers(t *testing.T) {
 	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).
 		Return([]string{}, nil)
 
-	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo := newMockSnapshotRepo()
 
 	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
 		HoldingRepo:  holdingRepo,
@@ -158,7 +169,7 @@ func TestPortfolioSnapshotWorker_Work_Success(t *testing.T) {
 	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).
 		Return([]string{"user-1"}, nil)
 
-	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo := newMockSnapshotRepo()
 	// Match any snapshotDate since it's computed inside Work as time.Now().UTC().Truncate(24h)
 	snapshotRepo.On("Upsert", ctx, "user-1", mock.AnythingOfType("time.Time")).
 		Return(&domain.PortfolioSnapshot{}, nil)
@@ -186,7 +197,7 @@ func TestPortfolioSnapshotWorker_Work_EnumerateError(t *testing.T) {
 	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).
 		Return(nil, dbErr)
 
-	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo := newMockSnapshotRepo()
 
 	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
 		HoldingRepo:  holdingRepo,
@@ -211,7 +222,7 @@ func TestPortfolioSnapshotWorker_Work_UpsertError(t *testing.T) {
 	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).
 		Return([]string{"user-1", "user-2"}, nil)
 
-	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo := newMockSnapshotRepo()
 	// Both upserts fail
 	snapshotRepo.On("Upsert", ctx, mock.AnythingOfType("string"), mock.AnythingOfType("time.Time")).
 		Return((*domain.PortfolioSnapshot)(nil), upsertErr)
@@ -314,7 +325,7 @@ func TestPortfolioSnapshotWorker_Work_CapturesHoldingHistoryForEveryUser(t *test
 	holdingRepo := new(mockHoldingRepo)
 	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).Return([]string{"user-1", "user-2"}, nil)
 
-	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo := newMockSnapshotRepo()
 	snapshotRepo.On("Upsert", ctx, mock.Anything, mock.AnythingOfType("time.Time")).
 		Return(&domain.PortfolioSnapshot{}, nil)
 
@@ -348,7 +359,7 @@ func TestPortfolioSnapshotWorker_Work_CaptureError_SkipsThatAggregateButStillPro
 	holdingRepo := new(mockHoldingRepo)
 	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).Return([]string{"user-1", "user-2"}, nil)
 
-	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo := newMockSnapshotRepo()
 	snapshotRepo.On("Upsert", ctx, mock.Anything, mock.AnythingOfType("time.Time")).
 		Return(&domain.PortfolioSnapshot{}, nil)
 
@@ -382,7 +393,7 @@ func TestPortfolioSnapshotWorker_Work_NilHoldingSnapshotRepo_DoesNotPanic(t *tes
 	holdingRepo := new(mockHoldingRepo)
 	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).Return([]string{"user-1"}, nil)
 
-	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo := newMockSnapshotRepo()
 	snapshotRepo.On("Upsert", ctx, "user-1", mock.AnythingOfType("time.Time")).
 		Return(&domain.PortfolioSnapshot{}, nil)
 
@@ -393,4 +404,91 @@ func TestPortfolioSnapshotWorker_Work_NilHoldingSnapshotRepo_DoesNotPanic(t *tes
 	})
 
 	require.NoError(t, worker.Work(ctx, newTestPortfolioSnapshotJob(PortfolioSnapshotArgs{TriggerSource: "test"})))
+}
+
+// ── #1569 Task 11: the repair pass the daily job drives ───────────────────────────────────────
+
+// The repair has to be driven by SOMETHING, and this job is where it belongs: it already runs
+// daily, it already holds the snapshot repository, and the repair is bounded and ledger-gated so a
+// second run over the same days is a no-op. What it must NOT do is take its user list from
+// GetDistinctUserIDsWithHoldings — that enumeration joins a.status = 'active' and therefore skips
+// exactly the users whose recorded curve is most likely to be wrong.
+func TestPortfolioSnapshotWorker_Work_RepairsEveryUserTheLedgerStillOwesAVerdict(t *testing.T) {
+	ctx := context.Background()
+
+	holdingRepo := new(mockHoldingRepo)
+	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).Return([]string{"user-with-holdings"}, nil)
+
+	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo.On("UserIDsWithUnexaminedSnapshots", ctx, portfolioRepairUsersPerRun).
+		Return([]string{"user-with-holdings", "user-who-disconnected-everything"}, nil)
+	snapshotRepo.On("RepairUserFromHistory", ctx, "user-with-holdings").
+		Return(domain.PortfolioRepairSummary{Examined: 2, Repaired: 1, RefusedNoCoverage: 1}, nil)
+	snapshotRepo.On("RepairUserFromHistory", ctx, "user-who-disconnected-everything").
+		Return(domain.PortfolioRepairSummary{Examined: 1, Repaired: 1}, nil)
+	snapshotRepo.On("Upsert", ctx, "user-with-holdings", mock.Anything).
+		Return(&domain.PortfolioSnapshot{}, nil)
+
+	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
+		HoldingRepo:  holdingRepo,
+		SnapshotRepo: snapshotRepo,
+		Logger:       slog.Default(),
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestPortfolioSnapshotJob(PortfolioSnapshotArgs{})))
+	snapshotRepo.AssertExpectations(t)
+	snapshotRepo.AssertCalled(t, "RepairUserFromHistory", ctx, "user-who-disconnected-everything")
+}
+
+// A repair failure must not fail the job. The aggregate write is this job's contract; the repair
+// is a catch-up pass that retries by construction, because a day it did not examine is still
+// unexamined tomorrow. Failing the job would make River retry the capture and the aggregate too,
+// and would eventually dead-letter a job whose actual work succeeded.
+func TestPortfolioSnapshotWorker_Work_RepairFailure_DoesNotFailTheJobOrStopTheAggregates(t *testing.T) {
+	ctx := context.Background()
+
+	holdingRepo := new(mockHoldingRepo)
+	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).Return([]string{"user-1"}, nil)
+
+	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo.On("UserIDsWithUnexaminedSnapshots", ctx, portfolioRepairUsersPerRun).
+		Return([]string{"user-1", "user-2"}, nil)
+	snapshotRepo.On("RepairUserFromHistory", ctx, "user-1").
+		Return(domain.PortfolioRepairSummary{}, assert.AnError)
+	snapshotRepo.On("RepairUserFromHistory", ctx, "user-2").
+		Return(domain.PortfolioRepairSummary{Examined: 1, Verified: 1}, nil)
+	snapshotRepo.On("Upsert", ctx, "user-1", mock.Anything).Return(&domain.PortfolioSnapshot{}, nil)
+
+	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
+		HoldingRepo:  holdingRepo,
+		SnapshotRepo: snapshotRepo,
+		Logger:       slog.Default(),
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestPortfolioSnapshotJob(PortfolioSnapshotArgs{})),
+		"one user's repair failure must not fail the daily aggregate job")
+	snapshotRepo.AssertCalled(t, "RepairUserFromHistory", ctx, "user-2")
+	snapshotRepo.AssertCalled(t, "Upsert", ctx, "user-1", mock.Anything)
+}
+
+func TestPortfolioSnapshotWorker_Work_RepairEnumerationFailure_StillWritesTheAggregates(t *testing.T) {
+	ctx := context.Background()
+
+	holdingRepo := new(mockHoldingRepo)
+	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).Return([]string{"user-1"}, nil)
+
+	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo.On("UserIDsWithUnexaminedSnapshots", ctx, portfolioRepairUsersPerRun).
+		Return([]string(nil), assert.AnError)
+	snapshotRepo.On("Upsert", ctx, "user-1", mock.Anything).Return(&domain.PortfolioSnapshot{}, nil)
+
+	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
+		HoldingRepo:  holdingRepo,
+		SnapshotRepo: snapshotRepo,
+		Logger:       slog.Default(),
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestPortfolioSnapshotJob(PortfolioSnapshotArgs{})))
+	snapshotRepo.AssertNotCalled(t, "RepairUserFromHistory", mock.Anything, mock.Anything)
+	snapshotRepo.AssertCalled(t, "Upsert", ctx, "user-1", mock.Anything)
 }
