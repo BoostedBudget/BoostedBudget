@@ -75,6 +75,17 @@ type GetSavingsGoalsOutput struct {
 	Body []*domain.SavingsGoal
 }
 
+// GetDeletedSavingsGoalsInput represents the input for listing deleted savings goals.
+// Issue #1569, Task 12.
+type GetDeletedSavingsGoalsInput struct {
+	inputs.AuthenticatedInput
+}
+
+// GetDeletedSavingsGoalsOutput represents the response for listing deleted savings goals.
+type GetDeletedSavingsGoalsOutput struct {
+	Body []*domain.SavingsGoal
+}
+
 // GetActiveSavingsGoalsInput represents the input for getting active savings goals.
 type GetActiveSavingsGoalsInput struct {
 	inputs.AuthenticatedInput
@@ -221,6 +232,23 @@ func (h *SavingsGoalHandler) GetGoals(ctx context.Context, input *GetSavingsGoal
 	return &GetSavingsGoalsOutput{Body: goals}, nil
 }
 
+// GetDeletedGoals handles GET /api/v1/savings-goals/deleted requests.
+//
+// The counterpart to POST /savings-goals/{id}/purge (Task 8). That endpoint refuses unless the
+// goal is already deleted, which made it unreachable: no other read in the codebase can return a
+// tombstoned goal, so nothing could tell a client which ids satisfy the precondition. Issue
+// #1569, Task 12.
+func (h *SavingsGoalHandler) GetDeletedGoals(ctx context.Context, input *GetDeletedSavingsGoalsInput) (*GetDeletedSavingsGoalsOutput, error) {
+	goals, err := h.service.GetDeletedGoals(ctx, input.UserID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	if goals == nil {
+		goals = []*domain.SavingsGoal{}
+	}
+	return &GetDeletedSavingsGoalsOutput{Body: goals}, nil
+}
+
 // GetActiveGoals handles GET /api/v1/savings-goals/active requests.
 // Retrieves all active (not completed) savings goals for the authenticated user.
 func (h *SavingsGoalHandler) GetActiveGoals(ctx context.Context, input *GetActiveSavingsGoalsInput) (*GetActiveSavingsGoalsOutput, error) {
@@ -331,6 +359,17 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Tags:        []string{"Savings Goals"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetActiveGoals)
+
+	// GET /api/v1/savings-goals/deleted - List deleted goals (must be before :id route)
+	huma.Register(api, huma.Operation{
+		OperationID: "getDeletedSavingsGoals",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/savings-goals/deleted",
+		Summary:     "Get deleted savings goals",
+		Description: "Lists savings goals the user has deleted. Deleting a goal retains it and every contribution logged against it (Issue #1569); this endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at.",
+		Tags:        []string{"Savings Goals"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetDeletedGoals)
 
 	// GET /api/v1/savings-goals/progress-summary - Basis-aware progress analytics (must be before :id route)
 	huma.Register(api, huma.Operation{

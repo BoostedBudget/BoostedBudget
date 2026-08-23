@@ -219,6 +219,9 @@ export const ANALYTICS_EVENTS = {
   // Issue #1569 T12: the user opted in/out of bank-reversed transactions. Worth measuring —
   // if nobody ever turns it on, the retention it exposes is invisible in practice.
   REVERSED_TRANSACTIONS_FILTER_TOGGLED: 'reversed_transactions_filter_toggled',
+  // Issue #1569 T12: a deleted savings goal was erased for good, destroying hand-logged
+  // contributions. Deliberately carries no goal identity — it is a rate, not a record.
+  SAVINGS_GOAL_PURGED: 'savings_goal_purged',
   INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED: 'investment_activity_type_filter_applied',
   INVESTMENT_DETAIL_DRAWER_OPENED: 'investment_detail_drawer_opened',
 

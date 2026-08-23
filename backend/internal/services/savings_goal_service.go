@@ -53,6 +53,11 @@ type SavingsGoalService interface {
 	CreateGoal(ctx context.Context, userID string, req *domain.CreateSavingsGoalRequest) (*domain.SavingsGoal, error)
 	GetGoal(ctx context.Context, userID, goalID string) (*domain.SavingsGoal, error)
 	GetGoals(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
+
+	// GetDeletedGoals lists the user's deleted (tombstoned) goals so the UI can show what was
+	// retained and offer PurgeGoal on it. Without this the purge endpoint has no reachable
+	// precondition. Issue #1569, Task 12.
+	GetDeletedGoals(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
 	GetActiveGoals(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
 	UpdateGoal(ctx context.Context, userID, goalID string, req *domain.UpdateSavingsGoalRequest) (*domain.SavingsGoal, error)
 	// DeleteGoal tombstones a savings goal. It is NOT destructive: every
@@ -304,6 +309,16 @@ func (s *savingsGoalService) GetGoal(ctx context.Context, userID, goalID string)
 	}
 
 	return goal, nil
+}
+
+// GetDeletedGoals retrieves the user's tombstoned savings goals, newest deletion first.
+//
+// Deliberately does NOT recompute progress or hydrate accounts the way the live listing does: a
+// deleted goal is a historical record, and recomputing a balance-based current_amount for one
+// would state a figure that has kept moving since the user stopped tracking it. The stored values
+// are what the goal looked like when it was deleted, which is what the purge screen should show.
+func (s *savingsGoalService) GetDeletedGoals(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
+	return s.goalRepo.GetDeletedByUserID(ctx, userID)
 }
 
 // GetGoals retrieves all savings goals for a user.

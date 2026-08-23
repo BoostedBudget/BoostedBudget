@@ -19,6 +19,7 @@ import type { SavingsGoal } from './types'
 import { SavingsAggregateHeader } from './components/SavingsAggregateHeader'
 import { SavingsFiltersBar } from './components/SavingsFiltersBar'
 import { SavingsGoalsGrid } from './components/SavingsGoalsGrid'
+import { DeletedGoalsPanel } from './components/DeletedGoalsPanel'
 import { CreateSavingsGoalDialog } from './components/CreateSavingsGoalDialog'
 import { UpdateSavingsGoalDialog } from './components/UpdateSavingsGoalDialog'
 
@@ -196,6 +197,9 @@ export function SavingsPage() {
         onContributionChanged={() => void refetch()}
       />
 
+      {/* #1569 T12 gap 2: what deletion kept, and the only way to actually reclaim it. */}
+      <DeletedGoalsPanel onPurged={() => void refetch()} />
+
       <CreateSavingsGoalDialog
         isOpen={activeDialog === 'create'}
         onCancel={() => setActiveDialog('none')}
@@ -219,8 +223,8 @@ export function SavingsPage() {
         title="Delete savings goal"
         description={
           deletingGoal
-            ? <>Are you sure you want to delete &ldquo;<span data-ph-mask>{deletingGoal.name}</span>&rdquo;? This cannot be undone.</>
-            : 'Are you sure you want to delete this goal?'
+            ? <>Remove &ldquo;<span data-ph-mask>{deletingGoal.name}</span>&rdquo; from your goals? Nothing is thrown away — every contribution you logged is kept, and you can erase the goal for good later from &ldquo;Deleted goals&rdquo;.</>
+            : 'Remove this goal from your list? Nothing is thrown away.'
         }
         variant="destructive"
         confirmButtonText="Delete"

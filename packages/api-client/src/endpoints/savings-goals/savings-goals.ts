@@ -361,6 +361,99 @@ export function useGetActiveSavingsGoals<TData = Awaited<ReturnType<typeof getAc
 
 
 /**
+ * Lists savings goals the user has deleted. Deleting a goal retains it and every contribution logged against it (Issue #1569); this endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at.
+ * @summary Get deleted savings goals
+ */
+export const getDeletedSavingsGoals = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<SavingsGoal[] | null>(
+      {url: `/api/v1/savings-goals/deleted`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetDeletedSavingsGoalsQueryKey = () => {
+    return [
+    `/api/v1/savings-goals/deleted`
+    ] as const;
+    }
+
+
+export const getGetDeletedSavingsGoalsQueryOptions = <TData = Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetDeletedSavingsGoalsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDeletedSavingsGoals>>> = ({ signal }) => getDeletedSavingsGoals(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetDeletedSavingsGoalsQueryResult = NonNullable<Awaited<ReturnType<typeof getDeletedSavingsGoals>>>
+export type GetDeletedSavingsGoalsQueryError = ErrorType<ErrorModel>
+
+
+export function useGetDeletedSavingsGoals<TData = Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDeletedSavingsGoals>>,
+          TError,
+          Awaited<ReturnType<typeof getDeletedSavingsGoals>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetDeletedSavingsGoals<TData = Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDeletedSavingsGoals>>,
+          TError,
+          Awaited<ReturnType<typeof getDeletedSavingsGoals>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetDeletedSavingsGoals<TData = Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get deleted savings goals
+ */
+
+export function useGetDeletedSavingsGoals<TData = Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDeletedSavingsGoals>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetDeletedSavingsGoalsQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
  * Returns basis-aware savings progress for all active goals plus portfolio totals. Each goal exposes progress_basis, computed_from, freshness, and confirmed_contributions_total so AI/MCP consumers can interpret mixed-basis current_amount values correctly (Issue #1300 Codex C11).
  * @summary Get savings progress summary
  */

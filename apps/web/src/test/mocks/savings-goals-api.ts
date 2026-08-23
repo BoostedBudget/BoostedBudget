@@ -39,6 +39,23 @@ export const mockUseGetActiveSavingsGoals = mock(() => ({
   refetch: mockActiveSavingsGoalsRefetch,
 }))
 
+// #1569 Task 12: deleted-goals listing + purge.
+export const mockDeletedSavingsGoalsRefetch = mock(() => Promise.resolve(null as any))
+export const mockUseGetDeletedSavingsGoals = mock(() => ({
+  data: undefined,
+  isLoading: false,
+  error: null,
+  refetch: mockDeletedSavingsGoalsRefetch,
+}))
+export const mockPurgeSavingsGoalMutateAsync = mock(() => Promise.resolve(undefined))
+export const mockUsePurgeSavingsGoal = mock(() => ({
+  mutateAsync: mockPurgeSavingsGoalMutateAsync,
+  isPending: false,
+  isError: false,
+  error: null,
+}))
+export const mockGetGetDeletedSavingsGoalsQueryKey = mock(() => ['getDeletedSavingsGoals'])
+
 export const mockUseGetSavingsGoal = mock(() => ({
   data: undefined,
   isLoading: false,
@@ -116,6 +133,9 @@ mock.module('@boostedbudget/api-client/endpoints/savings-goals/savings-goals', (
   useGetSavingsGoals: mockUseGetSavingsGoals,
   useGetActiveSavingsGoals: mockUseGetActiveSavingsGoals,
   useGetSavingsGoal: mockUseGetSavingsGoal,
+  useGetDeletedSavingsGoals: mockUseGetDeletedSavingsGoals,
+  usePurgeSavingsGoal: mockUsePurgeSavingsGoal,
+  getGetDeletedSavingsGoalsQueryKey: mockGetGetDeletedSavingsGoalsQueryKey,
   useCreateSavingsGoal: mockUseCreateSavingsGoal,
   useUpdateSavingsGoal: mockUseUpdateSavingsGoal,
   useDeleteSavingsGoal: mockUseDeleteSavingsGoal,
