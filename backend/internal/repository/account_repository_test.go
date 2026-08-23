@@ -338,28 +338,28 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
-		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
 		"created_at", "updated_at", "institution_name",
 	}).
 		AddRow(
 			uuid.New().String(), linkedItemID1, userID, "plaid-acc-1",
 			"Chase Checking", strPtr("Chase Total Checking®"), "depository", strPtr("checking"), strPtr("1234"),
 			&bal1, &avail1, "USD",
-			"active", nil, nil, nil,
+			"active", nil, nil, nil, nil,
 			time.Now(), time.Now(), "Chase",
 		).
 		AddRow(
 			uuid.New().String(), linkedItemID1, userID, "plaid-acc-2",
 			"Chase Savings", strPtr("Chase Savings℠"), "depository", strPtr("savings"), strPtr("5678"),
 			&bal2, &avail2, "USD",
-			"active", nil, nil, nil,
+			"active", nil, nil, nil, nil,
 			time.Now(), time.Now(), "Chase",
 		).
 		AddRow(
 			uuid.New().String(), linkedItemID2, userID, "plaid-acc-3",
 			"Wells Fargo Checking", nil, "depository", strPtr("checking"), strPtr("9012"),
 			&bal3, &avail3, "USD",
-			"active", nil, nil, nil,
+			"active", nil, nil, nil, nil,
 			time.Now(), time.Now(), "Wells Fargo",
 		)
 
@@ -367,7 +367,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -417,7 +417,7 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
-		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
 		"created_at", "updated_at", "institution_name",
 	})
 
@@ -425,7 +425,7 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -462,13 +462,13 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
-		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
 		"created_at", "updated_at", "institution_name",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "plaid-acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&bal, &bal, "USD",
-		"active", nil, nil, nil,
+		"active", nil, nil, nil, nil,
 		time.Now(), time.Now(), "Chase",
 	)
 	// Note: expired account not in rows — DB filters it via WHERE a.status != 'expired'
@@ -477,7 +477,7 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -628,7 +628,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status",
+		"user_account_id", "status", "removed_at",
 		"created_at", "updated_at",
 	}).AddRow(
 		accountID, uuid.New().String(), userID, "plaid-acc-1",
@@ -636,7 +636,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		&balance, &available, "USD",
 		strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), strPtr("💰"),
 		&displayOrder, false,
-		&userAccountID, domain.AccountStatusActive,
+		&userAccountID, domain.AccountStatusActive, nil,
 		now, now,
 	)
 
@@ -646,7 +646,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id, status,
+		       user_account_id, status, removed_at,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -693,7 +693,7 @@ func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
 		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id, status,
+		       user_account_id, status, removed_at,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -907,7 +907,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
@@ -916,7 +916,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			&bal1, &avail1, "USD",
 			strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), nil,
 			&order0, false,
-			nil, "active", nil, nil,
+			nil, "active", nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
 		AddRow(
@@ -925,7 +925,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 			&bal2, &avail2, "USD",
 			nil, nil, nil, nil,
 			&order1, false,
-			nil, "active", nil, nil,
+			nil, "active", nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		)
 
@@ -937,7 +937,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -980,7 +980,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
@@ -989,7 +989,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			&bal1, &avail1, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
-			nil, "active", nil, nil,
+			nil, "active", nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
 		AddRow(
@@ -998,7 +998,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 			&bal2, &avail2, "USD",
 			strPtr("Closed Account"), nil, nil, nil,
 			nil, true, // This one is hidden
-			nil, "active", nil, nil,
+			nil, "active", nil, nil, nil,
 			now, now, strPtr("Bank of America"), strPtr("active"),
 		)
 
@@ -1010,7 +1010,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -1576,13 +1576,13 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesReplaced(t *testin
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
-		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"status", "user_account_id", "replaced_by_id", "replaced_at", "removed_at",
 		"created_at", "updated_at", "institution_name",
 	}).AddRow(
 		uuid.New().String(), uuid.New().String(), userID, "plaid-acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&bal, &bal, "USD",
-		"active", nil, nil, nil,
+		"active", nil, nil, nil, nil,
 		time.Now(), time.Now(), "Chase",
 	)
 
@@ -1590,7 +1590,7 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesReplaced(t *testin
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -1703,7 +1703,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
@@ -1712,7 +1712,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 			&bal1, &avail1, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
-			nil, "active", nil, nil,
+			nil, "active", nil, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		).
 		AddRow(
@@ -1721,7 +1721,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 			&bal2, &avail2, "USD",
 			nil, nil, nil, nil,
 			nil, false,
-			nil, "replaced", &replacedAt, nil,
+			nil, "replaced", &replacedAt, nil, nil,
 			now, now, strPtr("Chase"), strPtr("active"),
 		)
 	// Note: expired account is NOT included in the mock result rows.
@@ -1733,7 +1733,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -1781,7 +1781,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "replaced_at", "replaced_by_id",
+		"user_account_id", "status", "replaced_at", "replaced_by_id", "removed_at",
 		"created_at", "updated_at", "institution_name", "linked_item_status",
 	}).
 		AddRow(
@@ -1790,7 +1790,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 			nil, nil, "USD",
 			nil, nil, nil, nil,
 			&order0, false,
-			nil, "active", nil, nil,
+			nil, "active", nil, nil, nil,
 			now, now, nil, nil, // l.institution_name = NULL, l.status = NULL
 		)
 
@@ -1800,7 +1800,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id

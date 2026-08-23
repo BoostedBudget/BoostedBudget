@@ -136,3 +136,70 @@ func TestAccountRepository_MarkRemovedByLinkedItemID_Integration_PreservesBalanc
 	).Scan(&snapshotStillThere))
 	assert.Equal(t, 1, snapshotStillThere, "the balance_snapshot must survive the institution-level disconnect")
 }
+
+// TestAccountRepository_Reads_Integration_ReturnRemovedAt is the falsifiability test for the
+// write-only-column bug: accounts.removed_at was STAMPED by UpdateStatus/MarkRemovedByLinkedItemID
+// but never SELECTed by any read, so domain.Account.RemovedAt was always nil, `omitempty` dropped
+// it from the API response, and the frontend's getAccountBalanceAsOfDate precedence
+// (removed_at ?? replaced_at ?? updated_at) always fell through to updated_at — a column the
+// update_accounts_updated_at trigger bumps on ANY later write. The "as of <date>" label on a
+// frozen balance would then drift forward and claim a staler figure was fresher than it is.
+//
+// It deliberately goes through the REAL repository reads rather than a mock: the frontend tests
+// pass today only because their fixtures hand-seed removed_at, which is exactly the blind spot
+// that hid this. The updated_at bump below is what makes the assertion non-trivial — with the
+// SELECT columns removed, RemovedAt is nil and every assertion here fails.
+func TestAccountRepository_Reads_Integration_ReturnRemovedAt(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	ctx := context.Background()
+	profileRepo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	accountRepo := NewAccountRepository(pool, enc)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := createMarkDisconnectedFixtureUser(t, ctx, pool, profileRepo, suffix)
+	item := createMarkDisconnectedFixtureItem(t, ctx, linkedItemRepo, userID, suffix)
+
+	var accountID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'Frozen Checking', 'depository')
+		RETURNING id`,
+		item.ID, userID, "plaid-acct-removedat-"+suffix).Scan(&accountID))
+
+	require.NoError(t, accountRepo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil))
+
+	var stamped time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT removed_at FROM accounts WHERE id = $1`, accountID).Scan(&stamped))
+
+	// Bump updated_at AFTER the removal, the way any later write (a nickname edit, a
+	// display-order shuffle, the balance writer) does via the migration-000007 trigger. If a read
+	// drops removed_at, the frontend silently labels the frozen balance with THIS timestamp.
+	_, err := pool.Exec(ctx, `UPDATE accounts SET nickname = 'touched' WHERE id = $1`, accountID)
+	require.NoError(t, err)
+
+	byID, err := accountRepo.GetByIDAndUser(ctx, accountID, userID)
+	require.NoError(t, err)
+	require.NotNil(t, byID.RemovedAt,
+		"GetByIDAndUser must return removed_at — without it the API omits the field entirely")
+	assert.WithinDuration(t, stamped, *byID.RemovedAt, time.Second)
+	assert.True(t, byID.RemovedAt.Before(byID.UpdatedAt),
+		"the fixture must actually exercise the drift: updated_at is now later than removed_at")
+
+	listed, err := accountRepo.GetAccountsWithInstitutionFiltered(ctx, userID,
+		AccountFilterOptions{AllStatuses: true, IncludeHidden: true})
+	require.NoError(t, err)
+	var found *domain.Account
+	for i := range listed {
+		if listed[i].ID == accountID {
+			found = &listed[i]
+		}
+	}
+	require.NotNil(t, found, "the removed account must be reachable through the accounts-page read")
+	require.NotNil(t, found.RemovedAt,
+		"GetAccountsWithInstitutionFiltered backs the accounts page — the surface that renders the "+
+			"'as of <date>' label — so it must carry removed_at")
+	assert.WithinDuration(t, stamped, *found.RemovedAt, time.Second)
+}
