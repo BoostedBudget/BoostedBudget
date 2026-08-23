@@ -160,6 +160,7 @@ func (r *MerchantRepository) ListMerchants(ctx context.Context, userID string) (
         LEFT   JOIN merchant_name_overrides mno_t
                ON mno_t.merchant_id = COALESCE(o.merged_into_merchant_id, t.merchant_id) AND mno_t.user_id = $1::uuid
         WHERE  t.user_id = $1::uuid
+          AND t.deleted_at IS NULL
           AND  t.merchant_id IS NOT NULL
           AND  t.pending = false
         GROUP  BY COALESCE(o.merged_into_merchant_id, t.merchant_id), m2.id
@@ -208,6 +209,7 @@ func (r *MerchantRepository) GetDuplicateSuggestions(ctx context.Context, userID
             FROM   transactions t
             JOIN   merchants m ON m.id = t.merchant_id
             WHERE  t.user_id = $1::uuid
+              AND t.deleted_at IS NULL
               AND  t.merchant_id IS NOT NULL
               AND  t.pending = false
               AND  m.normalized_name IS NOT NULL
@@ -247,9 +249,11 @@ func (r *MerchantRepository) GetDuplicateSuggestions(ctx context.Context, userID
                COALESCE(NULLIF(os.display_name, ''), m.normalized_name, m.name) AS effective_display_name,
                (SELECT COUNT(*) FROM transactions t2
                 WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1::uuid AND NOT t2.pending) AS transaction_count,
+                  AND t2.deleted_at IS NULL
                COALESCE(
                    (SELECT SUM(ABS(t2.amount)) FROM transactions t2
                     WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1::uuid AND NOT t2.pending),
+                      AND t2.deleted_at IS NULL
                    0
                )                                     AS total_spend,
                os.merchant_id IS NOT NULL            AS has_override,

@@ -133,7 +133,7 @@ func (r *savingsContributionRepository) Insert(ctx context.Context, userID strin
 	// Verify transaction ownership if an optional link was supplied.
 	if contrib.TransactionID != nil {
 		if err := r.db.QueryRow(ctx,
-			`SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2`,
+			`SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
 			*contrib.TransactionID, userID,
 		).Scan(&dummy); err != nil {
 			if err == pgx.ErrNoRows {
@@ -222,7 +222,7 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 
 	// Step 1: Lock the transaction row, verify ownership, and get its magnitude.
 	var txnMagnitude float64
-	lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`
+	lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`
 	if err = tx.QueryRow(ctx, lockQuery, transactionID, userID).Scan(&txnMagnitude); err != nil {
 		if err == pgx.ErrNoRows {
 			err = domain.ErrContributionNotFound
@@ -312,7 +312,7 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 
 	// Step 1: Lock the transaction row, verify ownership, and get its magnitude.
 	var txnMagnitude float64
-	lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`
+	lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`
 	if err = tx.QueryRow(ctx, lockQuery, transactionID, userID).Scan(&txnMagnitude); err != nil {
 		if err == pgx.ErrNoRows {
 			err = domain.ErrContributionNotFound
@@ -407,7 +407,7 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 
 	// Step 1: Verify transaction ownership (no lock — proposed rows are best-effort).
 	var txnExists int
-	txnCheckQuery := `SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2`
+	txnCheckQuery := `SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
 	if err := r.db.QueryRow(ctx, txnCheckQuery, transactionID, userID).Scan(&txnExists); err != nil {
 		if err == pgx.ErrNoRows {
 			return domain.ErrContributionNotFound
@@ -582,7 +582,7 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 	// Step 1: If transaction-linked, re-check allocation capacity (Codex C2).
 	if contrib.TransactionID != nil {
 		var txnMagnitude float64
-		lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`
+		lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`
 		if err = tx.QueryRow(ctx, lockQuery, *contrib.TransactionID, userID).Scan(&txnMagnitude); err != nil {
 			if err == pgx.ErrNoRows {
 				err = domain.ErrContributionNotFound

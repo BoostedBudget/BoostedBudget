@@ -277,6 +277,7 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 			GROUP BY user_id
 		) b ON b.user_id = u.id
 		WHERE u.id = $1 AND u.is_deleted = FALSE
+		  AND deleted_at IS NULL
 	`
 
 	var detail domain.AdminUserDetail
