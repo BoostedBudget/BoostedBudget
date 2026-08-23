@@ -2714,6 +2714,8 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			t.reviewed,
 			t.reviewed_at,
 			t.tags,
+			t.deleted_at,
+			t.deleted_reason,
 			NULL::text,
 			NULL::text,
 			NULL::text,
@@ -2797,6 +2799,8 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			NULL::bool,
 			NULL::timestamptz,
 			NULL::jsonb,
+			NULL::timestamptz,   -- deleted_at: investment_transactions has no tombstone (#1569 task 10)
+			NULL::text,          -- deleted_reason
 			it.security_id::text,
 			sec.ticker_symbol,
 			sec.name,
@@ -2869,6 +2873,8 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			effectivePFCPrimary, effectivePFCDetailed  *string
 			effectiveCategoryName                      *string
 			reviewed                                   *bool
+			deletedAt                                  *time.Time
+			deletedReason                              *string
 			reviewedAt                                 *time.Time
 			tagsJSON                                   []byte
 			securityID, tickerSymbol, securityName     *string
@@ -2890,6 +2896,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			&effectivePFCPrimary, &effectivePFCDetailed, &effectiveCategoryName,
 			&reviewed, &reviewedAt,
 			&tagsJSON,
+			&deletedAt, &deletedReason,
 			&securityID, &tickerSymbol, &securityName,
 			&invType, &invSubtype,
 			&invQuantity, &invPrice, &invFees,
@@ -2935,6 +2942,21 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			InvestmentQuantity:    invQuantity,
 			InvestmentPrice:       invPrice,
 			InvestmentFees:        invFees,
+		}
+
+		// #1569: a row with deleted_at set reached this feed only because the caller opted in via
+		// TransactionFilters.IncludeReversed, and transactionTombstoneCondition admits exactly one
+		// reason. Reversed is set on every banking row (false for live ones) so a client can
+		// branch on presence rather than absence; investment rows leave it nil, matching how
+		// Pending and Reviewed are already handled.
+		if sourceDisc == domain.FeedSourceBanking {
+			isReversed := deletedAt != nil &&
+				deletedReason != nil &&
+				domain.TransactionDeletedReason(*deletedReason) == domain.TxnDeletedProviderRemovedPosted
+			item.Reversed = &isReversed
+			if isReversed {
+				item.ReversedAt = deletedAt
+			}
 		}
 
 		// Normalize ActivityType from raw Plaid type/subtype for investment rows.

@@ -69,6 +69,8 @@ export interface ActivityItem {
   pfc_primary_display?: string;
   pfc_primary_override?: string;
   pfc_primary_override_display?: string;
+  reversed?: boolean;
+  reversed_at?: string;
   reviewed?: boolean;
   reviewed_at?: string;
   security_id?: string;

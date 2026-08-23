@@ -47,6 +47,9 @@ export interface Transaction {
   custom_category_override_display?: string;
   custom_category_override_id?: string;
   date: string;
+  deleted_at?: string;
+  deleted_by?: string;
+  deleted_reason?: string;
   effective_category_name?: string;
   effective_merchant_name?: string;
   effective_pfc_detailed?: string;
