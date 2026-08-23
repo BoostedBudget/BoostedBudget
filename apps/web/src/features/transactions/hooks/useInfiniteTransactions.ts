@@ -55,6 +55,10 @@ function flattenFilters(filters: TransactionFiltersState): Record<string, string
     // Issue #1299: Investment activity canonicalization rules:
     // 1. include_investment_activity defaults true — omit when true (or undefined), send 'false' only when explicitly disabled
     ...(filters.include_investment_activity === false && { include_investment_activity: 'false' }),
+    // Issue #1569 T12: reversals are opt-in. Sent ONLY when explicitly true — `false` is the
+    // server default and stays off the wire, so the omitted and the declined cases produce the
+    // same request and therefore the same React Query cache entry.
+    ...(filters.include_reversed === true && { include_reversed: 'true' }),
     // 2. activity_types: only send when investment activity is included AND types are selected; sort for stable cache key
     ...(filters.include_investment_activity !== false && filters.activity_types?.length && {
       activity_types: [...filters.activity_types].sort().join(','),

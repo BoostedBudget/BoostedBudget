@@ -89,3 +89,63 @@ describe('TransactionFilterPanel - Bug #1193 layout fix', () => {
     expect(screen.getByRole('button', { name: /pending/i })).toBeInTheDocument()
   })
 })
+
+// ── #1569 T12 gap 1: the reversed-transactions opt-in ─────────────────────────────────────
+describe('TransactionFilterPanel — reversed transactions (#1569 T12)', () => {
+  beforeEach(() => setViewportWidth(1280))
+  afterEach(() => setViewportWidth(0))
+
+  const expand = () => fireEvent.click(screen.getByRole('button', { name: /Filters/i }))
+
+  it('offers the opt-in, switched off, because reversals are hidden by default', () => {
+    render(<TransactionFilterPanel {...defaultProps} onIncludeReversedChange={() => {}} />)
+    expand()
+
+    const toggle = screen.getByRole('switch', { name: /reversed/i })
+    expect(toggle).toBeInTheDocument()
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('reflects an opted-in filter as switched on', () => {
+    render(
+      <TransactionFilterPanel
+        {...defaultProps}
+        filters={{ include_reversed: true }}
+        onIncludeReversedChange={() => {}}
+      />,
+    )
+    expand()
+
+    expect(screen.getByRole('switch', { name: /reversed/i }).getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('reports the opt-in as an active filter, so the user can see it is on', () => {
+    render(
+      <TransactionFilterPanel
+        {...defaultProps}
+        filters={{ include_reversed: true }}
+        onIncludeReversedChange={() => {}}
+      />,
+    )
+    // The collapsed header carries a count badge; opting in must move it off zero.
+    expect(screen.getByText('1')).toBeInTheDocument()
+  })
+
+  it('does not count as an active filter when off', () => {
+    render(<TransactionFilterPanel {...defaultProps} onIncludeReversedChange={() => {}} />)
+    expect(screen.queryByText('1')).not.toBeInTheDocument()
+  })
+
+  it('notifies the page when the user opts in', () => {
+    let received: boolean | undefined
+    render(
+      <TransactionFilterPanel
+        {...defaultProps}
+        onIncludeReversedChange={(v: boolean) => { received = v }}
+      />,
+    )
+    expand()
+    fireEvent.click(screen.getByRole('switch', { name: /reversed/i }))
+    expect(received).toBe(true)
+  })
+})

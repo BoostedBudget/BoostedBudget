@@ -8,6 +8,7 @@
 export { TransactionAmountFilter } from './TransactionAmountFilter'
 export { TransactionDateFilter } from './TransactionDateFilter'
 export { TransactionInvestmentFilter } from './TransactionInvestmentFilter'
+export { TransactionReversedFilter } from './TransactionReversedFilter'
 export { TransactionStatusFilter } from './TransactionStatusFilter'
 export { TransactionTypeFilter } from './TransactionTypeFilter'
 export { FilterPill } from './FilterPill'

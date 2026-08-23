@@ -216,6 +216,9 @@ export const ANALYTICS_EVENTS = {
 
   // Unified investment feed (#1299)
   INVESTMENT_ACTIVITY_FILTER_TOGGLED: 'investment_activity_filter_toggled',
+  // Issue #1569 T12: the user opted in/out of bank-reversed transactions. Worth measuring —
+  // if nobody ever turns it on, the retention it exposes is invisible in practice.
+  REVERSED_TRANSACTIONS_FILTER_TOGGLED: 'reversed_transactions_filter_toggled',
   INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED: 'investment_activity_type_filter_applied',
   INVESTMENT_DETAIL_DRAWER_OPENED: 'investment_detail_drawer_opened',
 
