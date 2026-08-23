@@ -404,7 +404,7 @@ func (r *customCategoryRepository) GetCategoryUsage(ctx context.Context, userID,
 	usage := &domain.CategoryUsage{}
 
 	if err := r.db.QueryRow(ctx,
-		`SELECT COUNT(*) FROM transactions WHERE user_id = $1 AND custom_category_override_id = $2`,
+		`SELECT COUNT(*) FROM transactions WHERE user_id = $1 AND custom_category_override_id = $2 AND deleted_at IS NULL`,
 		userID, categoryID,
 	).Scan(&usage.TransactionCount); err != nil {
 		return nil, err

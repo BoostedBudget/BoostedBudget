@@ -38,6 +38,10 @@ var transactionSelectColumns = []string{
 	"custom_category_override_id", "category_source", "category_override_date",
 	"effective_pfc_primary", "effective_pfc_detailed", "effective_category_name",
 	"reviewed", "reviewed_at",
+	// Tombstone provenance (#1569). Appended LAST on purpose: transactionSelectColumns and
+	// scanTransactionDestSliceWithState are positionally coupled, and appending to both tails
+	// keeps every existing offset unchanged.
+	"deleted_at", "deleted_reason", "deleted_by",
 }
 
 var transactionSelectExpr = strings.Join(transactionSelectColumns, ", ")
@@ -555,6 +559,7 @@ func (r *transactionRepository) GetByUserID(ctx context.Context, userID string, 
 		SELECT %s
 		FROM transactions
 		WHERE user_id = $1
+		  AND deleted_at IS NULL
 		ORDER BY date DESC, created_at DESC
 		LIMIT $2 OFFSET $3
 	`, transactionSelectExpr)
@@ -575,7 +580,8 @@ func (r *transactionRepository) GetByAccountID(ctx context.Context, accountID st
 	query := fmt.Sprintf(`
 		SELECT %s
 		FROM transactions
-		WHERE (
+		WHERE deleted_at IS NULL
+		  AND (
 			user_account_id = (SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL)
 			OR (account_id = $1 AND user_account_id IS NULL)
 		)
@@ -597,6 +603,7 @@ func (r *transactionRepository) GetBySource(ctx context.Context, source domain.T
 		SELECT %s
 		FROM transactions
 		WHERE source = $1 AND user_id = $2
+		  AND deleted_at IS NULL
 		ORDER BY date DESC, created_at DESC
 	`, transactionSelectExpr)
 
@@ -635,6 +642,8 @@ func (r *transactionRepository) GetByUserIDWithFilters(ctx context.Context, user
 
 	// Build complete query with dynamic WHERE clause
 	query := fmt.Sprintf(`
+		-- tombstone-exempt: buildWhereClause emits transactionTombstoneCondition("t", ...) into
+		-- the interpolated WHERE below, unconditionally and before any optional filter (#1569).
 		SELECT %s
 		FROM transactions t
 		%s
@@ -672,6 +681,8 @@ func (r *transactionRepository) CountByUserID(ctx context.Context, userID string
 
 	// Build COUNT query
 	query := fmt.Sprintf(`
+		-- tombstone-exempt: buildWhereClause emits transactionTombstoneCondition("t", ...) into
+		-- the interpolated WHERE below, unconditionally and before any optional filter (#1569).
 		SELECT COUNT(*)
 		FROM transactions t
 		%s
@@ -694,85 +705,21 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 		SELECT %s
 		FROM transactions
 		WHERE source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3
+		  AND deleted_at IS NULL
 	`, transactionSelectExpr)
 
 	var tx domain.Transaction
-	var sourceStr string
-	var metaStr *string
-	var tagsJSON []byte
-	var tagsSourceJSON []byte
-	var categorySource sql.NullString
+	dest, state := r.scanTransactionDestSliceWithState(&tx)
 
-	err := r.db.QueryRow(ctx, query, string(source), r.enc.BlindIndex(externalID), userID).Scan(
-		&tx.ID,
-		&tx.UserID,
-		&tx.AccountID,
-		&tx.LinkedItemID,
-		&sourceStr,
-		&tx.ExternalTransactionID,
-		&metaStr,
-		&tx.Amount,
-		&tx.Date,
-		&tx.AuthorizedDate,
-		&tx.Name,
-		&tx.MerchantName,
-		&tx.MerchantID,
-		&tx.PFCPrimary,
-		&tx.PFCDetailed,
-		&tx.PFCConfidenceLevel,
-		&tx.PFCCategoryIconURL,
-		&tx.PaymentChannel,
-		&tx.Pending,
-		&tx.UserNotes,
-		&tx.CreatedAt,
-		&tx.UpdatedAt,
-		&tagsJSON,
-		&tagsSourceJSON,
-		&tx.CategoryOverrideKind,
-		&tx.PFCPrimaryOverride,
-		&tx.PFCDetailedOverride,
-		&tx.CustomCategoryOverrideID,
-		&categorySource,
-		&tx.CategoryOverrideDate,
-		&tx.EffectivePFCPrimary,
-		&tx.EffectivePFCDetailed,
-		&tx.EffectiveCategoryName,
-		&tx.Reviewed,
-		&tx.ReviewedAt,
-	)
-
+	err := r.db.QueryRow(ctx, query, string(source), r.enc.BlindIndex(externalID), userID).Scan(dest...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrTransactionNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get transaction by external ID: %w", err)
 	}
-
-	tx.Source = domain.TransactionSource(sourceStr)
-	tx.ExternalMetadata = metaStr
-
-	// Decrypt PII fields
-	if err := r.decryptTransactionPIIFields(&tx); err != nil {
-		return nil, fmt.Errorf("failed to decrypt transaction: %w", err)
-	}
-
-	// Parse tags from JSONB
-	if tagsJSON != nil {
-		if err := json.Unmarshal(tagsJSON, &tx.Tags); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal tags: %w", err)
-		}
-	}
-
-	// Parse tags_source from JSONB
-	if tagsSourceJSON != nil {
-		if err := json.Unmarshal(tagsSourceJSON, &tx.TagsSource); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal tags_source: %w", err)
-		}
-	}
-
-	// Set category source
-	if categorySource.Valid {
-		tx.CategorySourceField = domain.CategorySource(categorySource.String)
+	if err := r.postScanTransactionState(&tx, state); err != nil {
+		return nil, err
 	}
 
 	return &tx, nil
@@ -808,6 +755,33 @@ func buildOrderBy(filters domain.TransactionFilters) string {
 	return fmt.Sprintf("ORDER BY %s %s, t.id ASC", desc.expr, dir)
 }
 
+// transactionTombstoneCondition renders the #1569 tombstone predicate for a transactions reference
+// aliased `alias` (pass "" for an unaliased `FROM transactions`).
+//
+// DEFAULT: `deleted_at IS NULL` — every tombstone hidden, whatever its reason.
+//
+// includeReversed widens it by exactly ONE reason, provider_removed_posted: a transaction the bank
+// withdrew after it had posted. It never admits provider_removed_pending, and that asymmetry is the
+// entire design. A pending row the provider removed has a posted twin already in the table;
+// admitting it would double-count real money. A posted row the provider removed has no twin, and
+// hiding it silently changes a month the user already reconciled.
+//
+// The reason value is interpolated, not parameterised, because buildWhereClause's callers number
+// their placeholders positionally and an extra $N here would shift every subsequent one. It is a
+// compile-time constant from domain, never user input — there is no injection surface. (The same
+// pattern is already used for the status literals in retainedAccountVisibilityLeg.)
+func transactionTombstoneCondition(alias string, includeReversed bool) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	if includeReversed {
+		return fmt.Sprintf("(%sdeleted_at IS NULL OR %sdeleted_reason = '%s')",
+			prefix, prefix, domain.TxnDeletedProviderRemovedPosted)
+	}
+	return prefix + "deleted_at IS NULL"
+}
+
 func buildWhereClause(userID string, filters domain.TransactionFilters) (string, []interface{}) {
 	var conditions []string
 	var args []interface{}
@@ -817,6 +791,12 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 	conditions = append(conditions, fmt.Sprintf("t.user_id = $%d::uuid", argIndex))
 	args = append(args, userID)
 	argIndex++
+
+	// #1569: unconditional tombstone gate. It is added HERE, immediately after tenancy and before
+	// any optional filter, so that no future `if filters.X != nil` branch can be written in a way
+	// that skips it. Every caller of buildWhereClause therefore inherits it:
+	// GetByUserIDWithFilters, CountByUserID and GetByUserIDKeyset.
+	conditions = append(conditions, transactionTombstoneCondition("t", filters.IncludeReversed))
 
 	if filters.AccountID != nil {
 		subq := fmt.Sprintf(
@@ -1065,85 +1045,26 @@ func (r *transactionRepository) enrichEffectiveMerchantNames(ctx context.Context
 	return nil
 }
 
-// scanTransactions scans SQL rows into Transaction structs
+// scanTransactions scans SQL rows into Transaction structs.
+//
+// It delegates to scanTransactionDestSliceWithState/postScanTransactionState rather than repeating
+// the destination list. Until #1569 it kept a SECOND, hand-maintained copy of that list, and the
+// two silently disagreed the moment a column was appended to transactionSelectColumns: the keyset
+// path scanned 38 values while this path scanned 35, and only the mock-backed test noticed.
+// TestTransactionSelectColumns pins the column order against the shared helper, which is now
+// genuinely the only place the order is written down.
 func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transaction, error) {
 	var transactions []domain.Transaction
 
 	for rows.Next() {
 		var tx domain.Transaction
-		var source string
-		var metaStr *string
-		var tagsJSON []byte
-		var tagsSourceJSON []byte
-		var categorySource sql.NullString
+		dest, state := r.scanTransactionDestSliceWithState(&tx)
 
-		err := rows.Scan(
-			&tx.ID,
-			&tx.UserID,
-			&tx.AccountID,
-			&tx.LinkedItemID,
-			&source,
-			&tx.ExternalTransactionID,
-			&metaStr,
-			&tx.Amount,
-			&tx.Date,
-			&tx.AuthorizedDate,
-			&tx.Name,
-			&tx.MerchantName,
-			&tx.MerchantID,
-			&tx.PFCPrimary,
-			&tx.PFCDetailed,
-			&tx.PFCConfidenceLevel,
-			&tx.PFCCategoryIconURL,
-			&tx.PaymentChannel,
-			&tx.Pending,
-			&tx.UserNotes,
-			&tx.CreatedAt,
-			&tx.UpdatedAt,
-			&tagsJSON,
-			&tagsSourceJSON,
-			&tx.CategoryOverrideKind,
-			&tx.PFCPrimaryOverride,
-			&tx.PFCDetailedOverride,
-			&tx.CustomCategoryOverrideID,
-			&categorySource,
-			&tx.CategoryOverrideDate,
-			&tx.EffectivePFCPrimary,
-			&tx.EffectivePFCDetailed,
-			&tx.EffectiveCategoryName,
-			&tx.Reviewed,
-			&tx.ReviewedAt,
-		)
-
-		if err != nil {
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("failed to scan transaction: %w", err)
 		}
-
-		tx.Source = domain.TransactionSource(source)
-		tx.ExternalMetadata = metaStr
-
-		// Decrypt PII fields
-		if err := r.decryptTransactionPIIFields(&tx); err != nil {
-			return nil, fmt.Errorf("failed to decrypt transaction: %w", err)
-		}
-
-		// Parse tags from JSONB
-		if tagsJSON != nil {
-			if err := json.Unmarshal(tagsJSON, &tx.Tags); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal tags: %w", err)
-			}
-		}
-
-		// Parse tags_source from JSONB
-		if tagsSourceJSON != nil {
-			if err := json.Unmarshal(tagsSourceJSON, &tx.TagsSource); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal tags_source: %w", err)
-			}
-		}
-
-		// Set category source
-		if categorySource.Valid {
-			tx.CategorySourceField = domain.CategorySource(categorySource.String)
+		if err := r.postScanTransactionState(&tx, state); err != nil {
+			return nil, err
 		}
 
 		transactions = append(transactions, tx)
@@ -1166,6 +1087,7 @@ type transactionScanState struct {
 	tagsJSON       []byte
 	tagsSourceJSON []byte
 	categorySource sql.NullString
+	deletedReason  *string
 }
 
 // scanTransactionDestSliceWithState returns both the scan destination slice and the intermediate
@@ -1208,6 +1130,9 @@ func (r *transactionRepository) scanTransactionDestSliceWithState(tx *domain.Tra
 		&tx.EffectiveCategoryName,
 		&tx.Reviewed,
 		&tx.ReviewedAt,
+		&tx.DeletedAt,
+		&s.deletedReason,
+		&tx.DeletedBy,
 	}
 	return dest, s
 }
@@ -1237,6 +1162,16 @@ func (r *transactionRepository) postScanTransactionState(tx *domain.Transaction,
 		tx.CategorySourceField = domain.CategorySource(s.categorySource.String)
 	}
 
+	// #1569: deleted_reason is scanned as a plain string and narrowed here rather than scanned
+	// straight into *domain.TransactionDeletedReason, matching how `source` and `category_source`
+	// are handled a few lines up.
+	if s.deletedReason != nil {
+		reason := domain.TransactionDeletedReason(*s.deletedReason)
+		tx.DeletedReason = &reason
+	} else {
+		tx.DeletedReason = nil
+	}
+
 	return nil
 }
 
@@ -1246,85 +1181,21 @@ func (r *transactionRepository) GetByID(ctx context.Context, id string) (*domain
 		SELECT %s
 		FROM transactions
 		WHERE id = $1
+		  AND deleted_at IS NULL
 	`, transactionSelectExpr)
 
 	var tx domain.Transaction
-	var source string
-	var metaStr *string
-	var tagsJSON []byte
-	var tagsSourceJSON []byte
-	var categorySource sql.NullString
+	dest, state := r.scanTransactionDestSliceWithState(&tx)
 
-	err := r.db.QueryRow(ctx, query, id).Scan(
-		&tx.ID,
-		&tx.UserID,
-		&tx.AccountID,
-		&tx.LinkedItemID,
-		&source,
-		&tx.ExternalTransactionID,
-		&metaStr,
-		&tx.Amount,
-		&tx.Date,
-		&tx.AuthorizedDate,
-		&tx.Name,
-		&tx.MerchantName,
-		&tx.MerchantID,
-		&tx.PFCPrimary,
-		&tx.PFCDetailed,
-		&tx.PFCConfidenceLevel,
-		&tx.PFCCategoryIconURL,
-		&tx.PaymentChannel,
-		&tx.Pending,
-		&tx.UserNotes,
-		&tx.CreatedAt,
-		&tx.UpdatedAt,
-		&tagsJSON,
-		&tagsSourceJSON,
-		&tx.CategoryOverrideKind,
-		&tx.PFCPrimaryOverride,
-		&tx.PFCDetailedOverride,
-		&tx.CustomCategoryOverrideID,
-		&categorySource,
-		&tx.CategoryOverrideDate,
-		&tx.EffectivePFCPrimary,
-		&tx.EffectivePFCDetailed,
-		&tx.EffectiveCategoryName,
-		&tx.Reviewed,
-		&tx.ReviewedAt,
-	)
-
+	err := r.db.QueryRow(ctx, query, id).Scan(dest...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrTransactionNotFound
+	}
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrTransactionNotFound
-		}
 		return nil, fmt.Errorf("failed to get transaction by ID: %w", err)
 	}
-
-	tx.Source = domain.TransactionSource(source)
-	tx.ExternalMetadata = metaStr
-
-	// Decrypt PII fields
-	if err := r.decryptTransactionPIIFields(&tx); err != nil {
-		return nil, fmt.Errorf("failed to decrypt transaction: %w", err)
-	}
-
-	// Parse tags from JSONB
-	if tagsJSON != nil {
-		if err := json.Unmarshal(tagsJSON, &tx.Tags); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal tags: %w", err)
-		}
-	}
-
-	// Parse tags_source from JSONB
-	if tagsSourceJSON != nil {
-		if err := json.Unmarshal(tagsSourceJSON, &tx.TagsSource); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal tags_source: %w", err)
-		}
-	}
-
-	// Set category source
-	if categorySource.Valid {
-		tx.CategorySourceField = domain.CategorySource(categorySource.String)
+	if err := r.postScanTransactionState(&tx, state); err != nil {
+		return nil, err
 	}
 
 	return &tx, nil
@@ -1492,6 +1363,7 @@ func (r *transactionRepository) GetReviewSummary(ctx context.Context, userID str
 				COALESCE(effective_category_name, pfc_primary, 'Uncategorized') AS cat_display
 			FROM transactions
 			WHERE user_id = $1%s
+			  AND deleted_at IS NULL
 		),
 		summary AS (
 			SELECT
@@ -1589,6 +1461,7 @@ func (r *transactionRepository) GetDistinctPlaidCategories(ctx context.Context, 
 		SELECT DISTINCT pfc_primary as cat
 		FROM transactions
 		WHERE user_id = $1
+		  AND deleted_at IS NULL
 		  AND pfc_primary IS NOT NULL
 		  AND pfc_primary != ''
 		ORDER BY cat
@@ -1629,6 +1502,7 @@ func (r *transactionRepository) GetIncomeSumByCategory(ctx context.Context, user
 		SELECT COALESCE(ABS(SUM(amount)), 0)
 		FROM transactions
 		WHERE user_id = $1
+		  AND deleted_at IS NULL
 		  AND amount < 0
 		  AND date BETWEEN $2 AND $3
 		  AND effective_pfc_primary = $4
@@ -1649,6 +1523,7 @@ func (r *transactionRepository) GetIncomeSumByTag(ctx context.Context, userID st
 		SELECT COALESCE(ABS(SUM(amount)), 0)
 		FROM transactions
 		WHERE user_id = $1
+		  AND deleted_at IS NULL
 		  AND amount < 0
 		  AND date BETWEEN $2 AND $3
 		  AND tags ? $4
@@ -1729,6 +1604,7 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount > 0
+			  AND deleted_at IS NULL
 			  AND date BETWEEN $2 AND $3
 			  AND (%s)
 		`, catClause)
@@ -1739,6 +1615,7 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount > 0
+			  AND deleted_at IS NULL
 			  AND date BETWEEN $2 AND $3
 			  AND tags ?| $4
 		`
@@ -1751,6 +1628,7 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount > 0
+			  AND deleted_at IS NULL
 			  AND date BETWEEN $2 AND $3
 			  AND (%s)
 			  AND tags ?| $%d
@@ -1765,6 +1643,7 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 			SELECT COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount > 0
+			  AND deleted_at IS NULL
 			  AND date BETWEEN $2 AND $3
 			  AND (
 				(%s)
@@ -1804,6 +1683,7 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount > 0
+			  AND deleted_at IS NULL
 			  AND date BETWEEN $2 AND $3
 			  AND (%s)
 		`, catClause)
@@ -1814,6 +1694,7 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount > 0
+			  AND deleted_at IS NULL
 			  AND date BETWEEN $2 AND $3
 			  AND tags ?| $4
 		`
@@ -1826,6 +1707,7 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount > 0
+			  AND deleted_at IS NULL
 			  AND date BETWEEN $2 AND $3
 			  AND (%s)
 			  AND tags ?| $%d
@@ -1840,6 +1722,7 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
 			FROM transactions
 			WHERE user_id = $1 AND amount > 0
+			  AND deleted_at IS NULL
 			  AND date BETWEEN $2 AND $3
 			  AND (
 				(%s)
@@ -1913,7 +1796,7 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 	}
 
 	// Get total count and sum
-	countQuery := fmt.Sprintf(`SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM transactions WHERE %s`, whereClause)
+	countQuery := fmt.Sprintf(`SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM transactions WHERE deleted_at IS NULL AND %s`, whereClause)
 	var totalCount int
 	var totalAmount float64
 	if err := r.db.QueryRow(ctx, countQuery, allBaseArgs...).Scan(&totalCount, &totalAmount); err != nil {
@@ -1926,6 +1809,7 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 		SELECT %s
 		FROM transactions
 		WHERE %s
+		  AND deleted_at IS NULL
 		ORDER BY date DESC, created_at DESC
 		LIMIT $%d OFFSET $%d
 	`, transactionSelectExpr, whereClause, pagArgOffset, pagArgOffset+1)
@@ -1947,23 +1831,16 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 // GetByUserAccountID retrieves all transactions for a specific user_account.
 // Issue #171: Provides stable queries across re-links since user_account_id survives re-links.
 //
-// NOTE: This SELECT includes user_account_id at position 5 (34 columns total).
-// Columns 1-4 and 6-34 must stay in sync with transactionSelectColumns.
+// NOTE: This SELECT includes user_account_id at position 5. Everything either side of it is
+// transactionSelectColumns itself, so the two cannot drift apart (#1569).
 func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) {
-	query := `
-		SELECT id, user_id, account_id, linked_item_id, user_account_id,
-			   source, external_transaction_id, external_metadata,
-			   amount, date, authorized_date, name, merchant_name, merchant_id,
-			   pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
-			   created_at, updated_at, tags, tags_source,
-			   category_override_kind, pfc_primary_override, pfc_detailed_override,
-			   custom_category_override_id, category_source, category_override_date,
-			   effective_pfc_primary, effective_pfc_detailed, effective_category_name,
-			   reviewed, reviewed_at
+	query := fmt.Sprintf(`
+		SELECT id, user_id, account_id, linked_item_id, user_account_id, %s
 		FROM transactions
 		WHERE user_id = $1 AND user_account_id = $2
+		  AND deleted_at IS NULL
 		ORDER BY date DESC, created_at DESC
-	`
+	`, strings.Join(transactionSelectColumns[4:], ", "))
 
 	rows, err := r.db.Query(ctx, query, userID, userAccountID)
 	if err != nil {
@@ -1975,80 +1852,23 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 
 	for rows.Next() {
 		var tx domain.Transaction
-		var source string
-		var metaStr *string
-		var tagsJSON []byte
-		var tagsSourceJSON []byte
-		var categorySource sql.NullString
+		shared, state := r.scanTransactionDestSliceWithState(&tx)
 
-		err := rows.Scan(
-			&tx.ID,
-			&tx.UserID,
-			&tx.AccountID,
-			&tx.LinkedItemID,
-			&tx.UserAccountID,
-			&source,
-			&tx.ExternalTransactionID,
-			&metaStr,
-			&tx.Amount,
-			&tx.Date,
-			&tx.AuthorizedDate,
-			&tx.Name,
-			&tx.MerchantName,
-			&tx.MerchantID,
-			&tx.PFCPrimary,
-			&tx.PFCDetailed,
-			&tx.PFCConfidenceLevel,
-			&tx.PFCCategoryIconURL,
-			&tx.PaymentChannel,
-			&tx.Pending,
-			&tx.UserNotes,
-			&tx.CreatedAt,
-			&tx.UpdatedAt,
-			&tagsJSON,
-			&tagsSourceJSON,
-			&tx.CategoryOverrideKind,
-			&tx.PFCPrimaryOverride,
-			&tx.PFCDetailedOverride,
-			&tx.CustomCategoryOverrideID,
-			&categorySource,
-			&tx.CategoryOverrideDate,
-			&tx.EffectivePFCPrimary,
-			&tx.EffectivePFCDetailed,
-			&tx.EffectiveCategoryName,
-			&tx.Reviewed,
-			&tx.ReviewedAt,
-		)
+		// user_account_id is projected at position 5, between linked_item_id and source, so the
+		// destination slice is the shared one with &tx.UserAccountID spliced in at the same index.
+		// Splicing beats a hand-written copy of the list: #1569 appended three columns to
+		// transactionSelectColumns and the two hand-maintained copies that existed then
+		// (scanTransactions, GetByExternalID) both silently went out of sync.
+		dest := make([]any, 0, len(shared)+1)
+		dest = append(dest, shared[:4]...)
+		dest = append(dest, &tx.UserAccountID)
+		dest = append(dest, shared[4:]...)
 
-		if err != nil {
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("failed to scan transaction: %w", err)
 		}
-
-		tx.Source = domain.TransactionSource(source)
-		tx.ExternalMetadata = metaStr
-
-		// Decrypt PII fields
-		if err := r.decryptTransactionPIIFields(&tx); err != nil {
-			return nil, fmt.Errorf("failed to decrypt transaction: %w", err)
-		}
-
-		// Parse tags from JSONB
-		if tagsJSON != nil {
-			if err := json.Unmarshal(tagsJSON, &tx.Tags); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal tags: %w", err)
-			}
-		}
-
-		// Parse tags_source from JSONB
-		if tagsSourceJSON != nil {
-			if err := json.Unmarshal(tagsSourceJSON, &tx.TagsSource); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal tags_source: %w", err)
-			}
-		}
-
-		// Set category source
-		if categorySource.Valid {
-			tx.CategorySourceField = domain.CategorySource(categorySource.String)
+		if err := r.postScanTransactionState(&tx, state); err != nil {
+			return nil, err
 		}
 
 		transactions = append(transactions, tx)
@@ -2185,6 +2005,8 @@ func (r *transactionRepository) GetByUserIDKeyset(
 	limitPlaceholder := len(args)
 
 	query := fmt.Sprintf(`
+		-- tombstone-exempt: buildWhereClause emits transactionTombstoneCondition("t", ...) into
+		-- the interpolated WHERE below, unconditionally and before any optional filter (#1569).
 		SELECT %s%s
 		FROM transactions t
 		%s
@@ -2329,6 +2151,7 @@ func (r *transactionRepository) GetInflowTransactionsForAccount(
 		SELECT t.id::text, ABS(t.amount) AS magnitude, t.date::text
 		FROM transactions t
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND (
 		      t.user_account_id = (SELECT user_account_id FROM accounts WHERE id = $2 AND user_account_id IS NOT NULL)
 		      OR (t.account_id = $2 AND t.user_account_id IS NULL)
@@ -2370,6 +2193,7 @@ func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, us
 		SELECT id, user_id, account_id, user_account_id, amount, date, pending
 		FROM transactions
 		WHERE user_id = $1
+		  AND deleted_at IS NULL
 		  AND amount < 0
 		  AND pending = false
 		  AND date >= $2
@@ -2852,6 +2676,13 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		FROM transactions t
 		%s
 		WHERE t.user_id = $1::uuid
+		  -- tombstone-exempt: transactionTombstoneCondition("t", filters.IncludeReversed) is
+		  -- interpolated at the %%s immediately below. It is placed HERE, ahead of the account
+		  -- visibility disjunction, because retainedAccountVisibilityLeg deliberately WIDENS which
+		  -- accounts' rows are visible (a fully disconnected chain keeps its history, #1569 task 2)
+		  -- — so without this gate the one query that most needs to hide tombstones is the one most
+		  -- likely to surface them.
+		  AND %s
 		  -- Chain-expansion active-account filter: include pre-relink rows whose
 		  -- account_id is replaced, as long as an active account shares the same
 		  -- user_account_id (the stable chain key set at insert time — Issue #1109).
@@ -2954,6 +2785,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		LIMIT $%d
 	`,
 		bankingMerchantJoins,
+		transactionTombstoneCondition("t", filters.IncludeReversed),
 		retainedAccountVisibilityLeg("t", "t.date"),
 		bankingAcctFilter, bankingDateFilter, bankingSearchFilter, bankingExtraFilter, bankingCursorFilter, bankingActivityFilter,
 		retainedAccountVisibilityLeg("it", "it.date"),

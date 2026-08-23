@@ -173,7 +173,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_Success(t *testing.
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// Step 1: lock query returns transaction magnitude (with user_id check).
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(txnAmount))
 
@@ -213,7 +213,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_TransactionNotFound
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// Step 1: lock fails — transaction not found for this user.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -244,7 +244,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_OverAllocated(t *te
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// Step 1: transaction magnitude is 500.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(500.0))
 
@@ -280,7 +280,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_ExactCapacity(t *te
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// Step 1: transaction lock with user_id check.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(500.0))
 
@@ -551,7 +551,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_CrossUserTransactio
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// Transaction lock fails: transaction.user_id != userID → ErrNoRows.
-	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -583,7 +583,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_OwnershipCheckSucce
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	// Transaction lock — now requires user_id check.
-	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE`)).
 		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(txnAmount))
 
@@ -709,7 +709,7 @@ func TestSavingsContributionRepository_UpsertProposedFromTransaction_C3Guard(t *
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
 		WithArgs(goalID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`)).
 		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 

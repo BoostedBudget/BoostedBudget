@@ -112,6 +112,7 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.pending = false
@@ -164,6 +165,7 @@ func (r *analyticsRepository) getCashFlowAggregationHousehold(ctx context.Contex
 		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.pending = false
 	`, householdAccountsCTE())
@@ -227,6 +229,7 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.pending = false
@@ -312,6 +315,7 @@ func (r *analyticsRepository) getCashFlowGroupedHousehold(ctx context.Context, r
 		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.pending = false
 	`, householdAccountsCTE(), truncInterval)
@@ -680,6 +684,7 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -745,6 +750,7 @@ func (r *analyticsRepository) getSpendingByCategoryHousehold(ctx context.Context
 		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.amount > 0
 		  AND t.pending = false
@@ -800,6 +806,7 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 		LEFT JOIN accounts a ON t.account_id = a.id
 		` + merchantSortJoins + `
 		WHERE t.user_id = $1::uuid
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -862,7 +869,8 @@ func (r *analyticsRepository) getSpendingByMerchantHousehold(ctx context.Context
 		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		` + merchantSortJoins + `
-		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		WHERE t.deleted_at IS NULL
+		  AND t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		  AND t.date <= $5
 		  AND t.amount > 0
 		  AND t.pending = false
@@ -921,6 +929,7 @@ func (r *analyticsRepository) GetSpendingTrends(ctx context.Context, userID stri
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -972,6 +981,7 @@ func (r *analyticsRepository) getSpendingTrendsHousehold(ctx context.Context, re
 		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.amount > 0
 		  AND t.pending = false
@@ -1014,6 +1024,7 @@ func (r *analyticsRepository) GetCategoryTotalForPeriod(ctx context.Context, use
 			COUNT(*)                   as transaction_count
 		FROM transactions t
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -1046,6 +1057,7 @@ func (r *analyticsRepository) GetTopExpense(ctx context.Context, userID string, 
 			t.date
 		FROM transactions t
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -1086,6 +1098,7 @@ func (r *analyticsRepository) GetAverageMonthlySpend(ctx context.Context, userID
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -1115,6 +1128,7 @@ func (r *analyticsRepository) getAverageMonthlySpendHousehold(ctx context.Contex
 		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.amount > 0
 		  AND t.pending = false
@@ -1145,6 +1159,7 @@ func (r *analyticsRepository) GetRecurringSubscriptions(ctx context.Context, use
 				) AS prev_date
 			FROM transactions t
 			WHERE t.user_id = $1
+			  AND t.deleted_at IS NULL
 			  AND t.amount > 0
 			  AND t.pending = false
 			  AND t.date >= $2
@@ -1221,6 +1236,7 @@ func (r *analyticsRepository) GetSavingsRateForPeriod(ctx context.Context, userI
 			COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS expenses
 		FROM transactions t
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.pending = false
@@ -1246,6 +1262,7 @@ func (r *analyticsRepository) getSavingsRateForPeriodHousehold(ctx context.Conte
 		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.pending = false
 	`, householdAccountsCTE())
@@ -1290,6 +1307,7 @@ func (r *analyticsRepository) GetMonthOverMonthSpending(ctx context.Context, use
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.amount > 0
 		  AND t.pending = false
@@ -1349,6 +1367,7 @@ func (r *analyticsRepository) getMonthOverMonthSpendingHousehold(ctx context.Con
 		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		  AND t.deleted_at IS NULL
 		  AND t.amount > 0
 		  AND t.pending = false
 		  %s
@@ -1394,6 +1413,7 @@ func (r *analyticsRepository) GetLargestTransactionsForPeriod(ctx context.Contex
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -1439,6 +1459,7 @@ func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Contex
 		LEFT JOIN accounts a ON t.account_id = a.id
 		%s
 		WHERE t.user_id = $1::uuid
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -1487,6 +1508,7 @@ func (r *analyticsRepository) GetIncomeSourceBreakdown(ctx context.Context, user
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount < 0
@@ -1533,6 +1555,7 @@ func (r *analyticsRepository) getIncomeSourceBreakdownHousehold(ctx context.Cont
 		JOIN accounts a ON t.account_id = a.id
 		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
 		WHERE t.date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		  AND t.deleted_at IS NULL
 		  AND t.date <= $5
 		  AND t.amount < 0
 		  AND t.pending = false
@@ -1579,6 +1602,7 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 				COUNT(*)                                                    AS sample_count
 			FROM transactions t
 			WHERE t.user_id = $1
+			  AND t.deleted_at IS NULL
 			  AND t.date >= $2
 			  AND t.date < $3
 			  AND t.amount > 0
@@ -1598,6 +1622,7 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 		FROM transactions t
 		JOIN baseline b ON (%s) = b.category
 		WHERE t.user_id = $1
+		  AND t.deleted_at IS NULL
 		  AND t.date >= $3
 		  AND t.date <= $4
 		  AND t.amount > 0

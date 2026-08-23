@@ -662,7 +662,7 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 		LEFT JOIN accounts     from_acc ON from_acc.id = ts.from_account_id     AND from_acc.user_id = ts.user_id
 		LEFT JOIN user_accounts from_ua ON from_ua.id  = ts.from_user_account_id AND from_ua.user_id = ts.user_id
 		LEFT JOIN boosts       r        ON r.id         = ts.boost_id
-		LEFT JOIN transactions txn      ON txn.id       = ts.matched_transaction_id
+		LEFT JOIN transactions txn      ON txn.id       = ts.matched_transaction_id AND txn.deleted_at IS NULL
 	`
 
 	var query string
