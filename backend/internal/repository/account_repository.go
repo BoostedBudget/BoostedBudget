@@ -48,14 +48,24 @@ var (
 	// 6, fix round 1.
 	ErrAccountNotDisconnected = errors.New("account must be disconnected before it can be purged")
 
-	// ErrAccountAlreadyDisconnected is returned by UpdateStatus when the account is no longer
-	// 'active'. Mirrors ErrAccountNotDisconnected's naming (purge wants NOT active; this wants
-	// active) for the same reason: a second disconnect, or a re-link's replace step racing another
-	// writer, must not re-stamp removed_at/replaced_at over a row that already recorded a terminal
-	// status — that would rewrite the "as of <date>" label users see, and (for an already-'replaced'
-	// row) would null out replaced_at/replaced_by_id, destroying the re-link chain. Issue #1569,
-	// Task 2.
+	// ErrAccountAlreadyDisconnected is returned by UpdateStatus when the account has a DIFFERENT
+	// terminal status than the one being requested — currently 'replaced' or 'expired' when the
+	// caller asked for 'removed' (or vice versa). This is NOT the idempotency case: a genuinely
+	// different transition already happened, so the caller's assumption about the account's state
+	// is wrong and a 409 is the right, unambiguous answer. Mirrors ErrAccountNotDisconnected's
+	// naming (purge wants NOT active; this wants active) and the purge path's established
+	// lock-then-check-then-409 shape. Issue #1569, Task 2.
 	ErrAccountAlreadyDisconnected = errors.New("account is already disconnected")
+
+	// ErrAccountAlreadyRemoved is returned by UpdateStatus specifically when the account is
+	// already 'removed' — the idempotency case, distinguished from ErrAccountAlreadyDisconnected
+	// (fix round 1 of Task 2, per code review): a repeat disconnect's desired end state (removed)
+	// is already the account's actual state, so the caller's intent is already satisfied. Callers
+	// that consider 'removed' their own terminal goal (DisconnectAccount) should treat this as
+	// idempotent success — NOT re-run the write. Nothing gets touched either way: this sentinel is
+	// returned from inside the same lock-then-check path as ErrAccountAlreadyDisconnected, before
+	// any UPDATE is issued, so removed_at/replaced_at/replaced_by_id all stay exactly as they were.
+	ErrAccountAlreadyRemoved = errors.New("account is already removed")
 )
 
 // FingerprintOwnership holds information about who owns a fingerprint and the state of their linked item.
@@ -1455,9 +1465,13 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 // for the no-op status transition — so the true disconnect date survived only in
 // account_status_history, which nothing reads for the "as of <date>" label. Worse, transitioning an
 // already-'replaced' account to 'removed' nulled its replaced_at/replaced_by_id, destroying the
-// re-link chain. Returns ErrAccountAlreadyDisconnected instead of silently no-op'ing or
-// re-writing: a repeat disconnect is a 409, matching the purge path's already-shipped
-// ErrAccountNotDisconnected precondition-check-then-409 shape (see PurgeAccount, same file).
+// re-link chain. Never silently no-ops or re-writes: refuses instead, via one of two distinct
+// sentinels (fix round 1 of Task 2) depending on what the row's current status actually is —
+// ErrAccountAlreadyRemoved when it is already 'removed' (the idempotency case: the caller's
+// desired end state is already reality, so DisconnectAccount treats this as success, not an
+// error), or ErrAccountAlreadyDisconnected when it is 'replaced'/'expired' (a genuinely different
+// transition already happened, so this is a hard 409 — matching the purge path's already-shipped
+// ErrAccountNotDisconnected precondition-check-then-409 shape; see PurgeAccount, same file).
 func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string) error {
 	now := time.Now()
 
@@ -1479,6 +1493,14 @@ func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID 
 		return fmt.Errorf("update account %s status: %w", accountID, err)
 	}
 	if currentStatus != string(domain.AccountStatusActive) {
+		// 'removed' is the idempotency case (fix round 1 of Task 2): the account is already in
+		// the one terminal state DisconnectAccount itself would produce, so return the distinct
+		// sentinel that lets that caller treat this as "already done" rather than an error.
+		// 'replaced'/'expired' are a genuinely different transition — ErrAccountAlreadyDisconnected
+		// stays a hard refusal for those.
+		if currentStatus == string(domain.AccountStatusRemoved) {
+			return ErrAccountAlreadyRemoved
+		}
 		return ErrAccountAlreadyDisconnected
 	}
 
