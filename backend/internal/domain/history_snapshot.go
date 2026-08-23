@@ -27,6 +27,11 @@ type HoldingSnapshot struct {
 	// (account_id, as_of_date) identifies that day's FINAL position set — which is what excludes
 	// a security that was sold between two captures on the same day.
 	CapturedAt time.Time `json:"captured_at" db:"captured_at"`
+	// Present is FALSE once a capture for this (account, as_of_date) stopped observing this
+	// security — sold between two same-day captures, or cleared by a confirmed-complete Plaid
+	// response. The row is kept rather than deleted so its last known values survive; any
+	// reconstruction of a day's positions MUST filter on it.
+	Present bool `json:"present" db:"present"`
 
 	Quantity         float64  `json:"quantity" db:"quantity"`
 	CostBasis        *float64 `json:"cost_basis,omitempty" db:"cost_basis"`
@@ -58,6 +63,9 @@ type LiabilityStatement struct {
 
 	AsOfDate   time.Time `json:"as_of_date" db:"as_of_date"`
 	CapturedAt time.Time `json:"captured_at" db:"captured_at"`
+	// Present is FALSE once the delete-on-absence path cleared this liability on this UTC day.
+	// Details is deliberately left intact so the APR schedule survives the clear.
+	Present bool `json:"present" db:"present"`
 
 	IsOverdue              *bool      `json:"is_overdue,omitempty" db:"is_overdue"`
 	LastPaymentAmount      *float64   `json:"last_payment_amount,omitempty" db:"last_payment_amount"`

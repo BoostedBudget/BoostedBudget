@@ -81,7 +81,7 @@ func TestHistorySnapshot_HoldingsReplace_CapturesHistoryWithoutChangingCurrentSt
 	// portfolio_snapshots row — which account, which security, as-of when, and the values.
 	snapRepo := NewHoldingSnapshotRepository(tx)
 	day := todayUTC(ctx, t, tx)
-	snaps, err := snapRepo.GetFinalCapturesForUserOnDate(ctx, userID.String(), day)
+	snaps, err := snapRepo.GetForUserOnDate(ctx, userID.String(), day)
 	require.NoError(t, err)
 	require.Len(t, snaps, 1, "the replace must have captured exactly one history row for today")
 
@@ -105,8 +105,8 @@ func TestHistorySnapshot_HoldingsReplace_CapturesHistoryWithoutChangingCurrentSt
 // Two captures on the SAME UTC day must collapse onto one row per security (the table grows with
 // elapsed days, not with sync frequency), and the day must still resolve to the SECOND capture's
 // position set — including dropping a security that was sold between the two. That second half is
-// the whole reason captured_at exists: the sold security's row is not deleted (nothing here is),
-// it simply keeps the earlier captured_at and so falls outside the day's final capture.
+// what `present` is for: the sold security's row is not deleted (nothing here is), it is marked
+// absent, keeping its last known values while falling out of the day's answer.
 
 func TestHistorySnapshot_SecondCaptureSameDay_ResolvesToTheLaterPositionSet(t *testing.T) {
 	pool := connectTestDB(t)
@@ -132,18 +132,6 @@ func TestHistorySnapshot_SecondCaptureSameDay_ResolvesToTheLaterPositionSet(t *t
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secB.String(), Quantity: 4, InstitutionValue: f64(400)},
 	}))
 
-	// The two captures must land on distinguishable transaction timestamps. now() is the
-	// TRANSACTION timestamp, so both ReplaceForAccount calls inside this one outer test
-	// transaction would otherwise share it — they each open their own tx via tx.Begin (a
-	// savepoint here), and Postgres gives a subtransaction its parent's now(). Advance the
-	// recorded captured_at by hand to model two syncs at different times of the same day; the
-	// PRODUCTION path gets distinct values for free because each sync is its own top-level
-	// transaction.
-	_, err = tx.Exec(ctx,
-		`UPDATE holding_snapshots SET captured_at = captured_at - INTERVAL '1 hour' WHERE account_id = $1`,
-		accountID)
-	require.NoError(t, err)
-
 	// Capture 2: secB sold, secA revalued.
 	require.NoError(t, repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secA.String(), Quantity: 10, InstitutionValue: f64(6000)},
@@ -157,22 +145,33 @@ func TestHistorySnapshot_SecondCaptureSameDay_ResolvesToTheLaterPositionSet(t *t
 		`SELECT COUNT(*) FROM holding_snapshots WHERE account_id = $1 AND as_of_date = $2`,
 		accountID, day).Scan(&rowsForDay))
 	assert.Equal(t, 2, rowsForDay,
-		"one row per (security, day): the re-capture must UPDATE secA's row rather than append, and must not delete secB's")
+		"one row per (security, day): the re-capture must UPDATE secA's row rather than append, and must not DELETE secB's")
 
-	// …but the day resolves to capture 2's position set.
+	// secB's retained row still carries what was last known about it — the point of marking
+	// absent rather than deleting.
+	var bPresent bool
+	var bValue *float64
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT present, institution_value FROM holding_snapshots WHERE account_id = $1 AND security_id = $2 AND as_of_date = $3`,
+		accountID, secB, day).Scan(&bPresent, &bValue))
+	assert.False(t, bPresent, "the security sold between the two captures must be marked absent")
+	require.NotNil(t, bValue)
+	assert.Equal(t, float64(400), *bValue, "an absent row keeps its last known values; it is not blanked")
+
+	// …and the day resolves to capture 2's position set.
 	snapRepo := NewHoldingSnapshotRepository(tx)
-	snaps, err := snapRepo.GetFinalCapturesForUserOnDate(ctx, userID.String(), day)
+	snaps, err := snapRepo.GetForUserOnDate(ctx, userID.String(), day)
 	require.NoError(t, err)
-	require.Len(t, snaps, 1, "the day's FINAL capture held only secA — the security sold earlier that day must not be counted twice")
+	require.Len(t, snaps, 1, "the day's final capture held only secA — the security sold earlier that day must not be counted")
 	assert.Equal(t, secA.String(), snaps[0].SecurityID)
 	require.NotNil(t, snaps[0].InstitutionValue)
 	assert.Equal(t, float64(6000), *snaps[0].InstitutionValue,
 		"the surviving security's row must carry the LATER capture's value")
 }
 
-// GetFinalCapturesForUserOnDate takes MAX(captured_at) per (account, day), not per user. Two
-// accounts synced at different times on the same day must BOTH appear; a user-wide MAX would
-// silently drop whichever was captured first — a portfolio that loses an institution.
+// A per-account capture must not disturb any OTHER account's rows for the same day. Both accounts
+// synced on the same day must appear; an absence-marking pass scoped too widely would silently
+// drop whichever was captured first — a portfolio that loses an institution.
 func TestHistorySnapshot_FinalCapturesPerDay_KeepsEveryAccountSyncedAtDifferentTimes(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -194,19 +193,15 @@ func TestHistorySnapshot_FinalCapturesPerDay_KeepsEveryAccountSyncedAtDifferentT
 	require.NoError(t, repo.ReplaceForAccount(ctx, accountA.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountA.String(), SecurityID: secID.String(), Quantity: 1, InstitutionValue: f64(100)},
 	}))
-	// Age account A's capture so the two accounts have genuinely different captured_at values.
-	_, err = tx.Exec(ctx,
-		`UPDATE holding_snapshots SET captured_at = captured_at - INTERVAL '2 hours' WHERE account_id = $1`, accountA)
-	require.NoError(t, err)
 
 	require.NoError(t, repo.ReplaceForAccount(ctx, accountB.String(), userID.String(), []domain.Holding{
 		{UserID: userID.String(), AccountID: accountB.String(), SecurityID: secID.String(), Quantity: 2, InstitutionValue: f64(200)},
 	}))
 
 	snapRepo := NewHoldingSnapshotRepository(tx)
-	snaps, err := snapRepo.GetFinalCapturesForUserOnDate(ctx, userID.String(), todayUTC(ctx, t, tx))
+	snaps, err := snapRepo.GetForUserOnDate(ctx, userID.String(), todayUTC(ctx, t, tx))
 	require.NoError(t, err)
-	require.Len(t, snaps, 2, "both accounts' final captures must survive — MAX(captured_at) is per account, not per user")
+	require.Len(t, snaps, 2, "both accounts' captures must survive — capturing one account must not mark the other's rows absent")
 
 	total := 0.0
 	for _, s := range snaps {
@@ -288,7 +283,7 @@ func TestHistorySnapshot_PortfolioSnapshotUpsert_UnchangedByTheCapture(t *testin
 
 	// And the history the capture wrote reproduces the same aggregate — the contract task 11 is
 	// being handed. If these two ever disagree, task 11's rebuild rewrites the user's past.
-	snaps, err := NewHoldingSnapshotRepository(tx).GetFinalCapturesForUserOnDate(ctx, userID.String(), day)
+	snaps, err := NewHoldingSnapshotRepository(tx).GetForUserOnDate(ctx, userID.String(), day)
 	require.NoError(t, err)
 	rebuilt := 0.0
 	for _, s := range snaps {
@@ -443,7 +438,7 @@ func TestHistorySnapshot_StudentLoanLiabilityReplace_CapturesStatement(t *testin
 
 // The delete-on-absence path is the highest-frequency destroyer in the census. When it fires, the
 // current row goes — and the retained statement must not. This is the liability half of the thesis.
-func TestHistorySnapshot_LiabilityClear_DestroysCurrentRowButNotHistory(t *testing.T) {
+func TestHistorySnapshot_LiabilityClear_MarksTodayAbsentButKeepsTheRecord(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
 
@@ -460,6 +455,15 @@ func TestHistorySnapshot_LiabilityClear_DestroysCurrentRowButNotHistory(t *testi
 		APRs:                 []domain.CreditLiabilityAPR{{RatePercentage: 21.24, RateType: "purchase_apr"}},
 	}))
 
+	day := todayUTC(ctx, t, tx)
+
+	// A statement from an EARLIER day, so this test can prove the clear is scoped to today.
+	yesterday := day.AddDate(0, 0, -1)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO liability_statements (user_id, account_id, liability_type, as_of_date, last_statement_balance, details)
+		VALUES ($1, $2, 'credit', $3, 888, '{"aprs": []}'::jsonb)`, userID, accountID, yesterday)
+	require.NoError(t, err)
+
 	// Plaid confirms the liability is gone → delete-only clear.
 	require.NoError(t, repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), nil))
 
@@ -468,18 +472,30 @@ func TestHistorySnapshot_LiabilityClear_DestroysCurrentRowButNotHistory(t *testi
 		`SELECT COUNT(*) FROM credit_liabilities WHERE account_id = $1`, accountID).Scan(&liveRows))
 	require.Equal(t, 0, liveRows, "precondition: the clear really did remove current state")
 
-	day := todayUTC(ctx, t, tx)
-	stmts, err := NewLiabilityStatementRepository(tx).GetByAccountDateRange(ctx, accountID.String(), "", day, day)
+	stmts, err := NewLiabilityStatementRepository(tx).GetByAccountDateRange(
+		ctx, accountID.String(), "", yesterday, day)
 	require.NoError(t, err)
-	require.Len(t, stmts, 1, "the clear must not erase the retained statement — that is the whole point of T6")
-	require.NotNil(t, stmts[0].LastStatementBalance)
-	assert.Equal(t, 999.0, *stmts[0].LastStatementBalance)
+	require.Len(t, stmts, 2, "the clear must not erase any retained statement — that is the whole point of T6")
+
+	// Yesterday is untouched: the liability really did exist then, and saying otherwise would be
+	// a lie about a day that already happened.
+	assert.Equal(t, yesterday.Format("2006-01-02"), stmts[0].AsOfDate.Format("2006-01-02"))
+	assert.True(t, stmts[0].Present, "an earlier day must not be rewritten by today's clear")
+
+	// Today records the absence — WITHOUT throwing away what was known.
+	today := stmts[1]
+	assert.Equal(t, day.Format("2006-01-02"), today.AsOfDate.Format("2006-01-02"))
+	assert.False(t, today.Present,
+		"Critical 2: today's row must say the liability stopped being reported, not keep asserting it exists")
+	require.NotNil(t, today.LastStatementBalance)
+	assert.Equal(t, 999.0, *today.LastStatementBalance, "the absent row keeps its values")
 
 	var details struct {
 		APRs []map[string]any `json:"aprs"`
 	}
-	require.NoError(t, json.Unmarshal(stmts[0].Details, &details))
-	assert.Len(t, details.APRs, 1, "the APR schedule the clear wiped from current state survives in history")
+	require.NoError(t, json.Unmarshal(today.Details, &details))
+	assert.Len(t, details.APRs, 1,
+		"the APR schedule the clear wiped from current state survives here — marking absent must not erase it")
 }
 
 // ── The daily job's capture: a day with no Plaid sync still gets rows ─────────────────────────
@@ -510,13 +526,16 @@ func TestHistorySnapshot_CaptureForUser_RecordsADayWithNoSyncAndMatchesTheAggreg
 	snapRepo := NewHoldingSnapshotRepository(tx)
 	day := todayUTC(ctx, t, tx)
 
-	before, err := snapRepo.GetFinalCapturesForUserOnDate(ctx, userID.String(), day)
+	before, err := snapRepo.GetForUserOnDate(ctx, userID.String(), day)
 	require.NoError(t, err)
 	require.Empty(t, before, "precondition: nothing has captured this day yet, so the assertion below is not vacuous")
 
-	require.NoError(t, snapRepo.CaptureForUser(ctx, userID.String()))
+	capturedDay, err := snapRepo.CaptureForUser(ctx, userID.String())
+	require.NoError(t, err)
+	assert.Equal(t, day.Format("2006-01-02"), capturedDay.Format("2006-01-02"),
+		"CaptureForUser returns the SERVER's day so the caller files its aggregate under the same one")
 
-	after, err := snapRepo.GetFinalCapturesForUserOnDate(ctx, userID.String(), day)
+	after, err := snapRepo.GetForUserOnDate(ctx, userID.String(), day)
 	require.NoError(t, err)
 	require.Len(t, after, 1)
 	assert.Equal(t, float64(3), after[0].Quantity)
@@ -529,7 +548,8 @@ func TestHistorySnapshot_CaptureForUser_RecordsADayWithNoSyncAndMatchesTheAggreg
 		"the captured rows must sum to the aggregate the daily job writes for the same day")
 
 	// Idempotent within the day: a second run refreshes the same row rather than appending.
-	require.NoError(t, snapRepo.CaptureForUser(ctx, userID.String()))
+	_, err = snapRepo.CaptureForUser(ctx, userID.String())
+	require.NoError(t, err)
 	var rowsForDay int
 	require.NoError(t, tx.QueryRow(ctx,
 		`SELECT COUNT(*) FROM holding_snapshots WHERE user_id = $1 AND as_of_date = $2`,
@@ -552,7 +572,8 @@ func TestHistorySnapshot_CaptureForUser_AfterASyncCapture_RefreshesTheSameDayRow
 		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(), Quantity: 5, InstitutionValue: f64(500)},
 	}))
 
-	require.NoError(t, NewHoldingSnapshotRepository(tx).CaptureForUser(ctx, userID.String()))
+	_, err = NewHoldingSnapshotRepository(tx).CaptureForUser(ctx, userID.String())
+	require.NoError(t, err)
 
 	day := todayUTC(ctx, t, tx)
 	var rowsForDay int
@@ -560,4 +581,195 @@ func TestHistorySnapshot_CaptureForUser_AfterASyncCapture_RefreshesTheSameDayRow
 		`SELECT COUNT(*) FROM holding_snapshots WHERE user_id = $1 AND as_of_date = $2`,
 		userID, day).Scan(&rowsForDay))
 	assert.Equal(t, 1, rowsForDay, "the sync capture and the daily capture share one grain — they must collide, not accumulate")
+}
+
+// ── Fix round 1, Critical 1: the daily capture must apply the SAME liveness test as Upsert ────
+//
+// Reproduces the reviewer's measurement. Accounts are soft-removed and the only DELETE FROM
+// holdings lives in ReplaceForAccount (which a sync only reaches for accounts Plaid returns), so a
+// disconnected account's holdings live on indefinitely. The daily sweep used to be a bare
+// `WHERE h.user_id = $1` and re-captured them every day:
+//
+//	GetForUserOnDate SUM | 1500.00 | 2 rows      <- before
+//	Upsert total_value   | 1000.00 | 1 row
+//
+// A task-11 rebuild from that would inflate the curve by every institution the user has ever left,
+// permanently and growing. Note the fixture shape that matters: ONE active account plus one
+// terminal one. A single-active-account fixture cannot see this, because
+// GetDistinctUserIDsWithHoldings skips users whose accounts are ALL terminal.
+func TestHistorySnapshot_CaptureForUser_ExcludesAccountsNotLiveOnTheDay(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, linkedItemID, activeAccount, secID := seedInvestmentFixture(ctx, t, tx, "hist-liveness")
+
+	goneAccount := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, 'Old Brokerage', 'investment', 'active')`,
+		goneAccount, linkedItemID, userID, "hist-liveness-gone-"+goneAccount.String())
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, 10, 1000.00), ($1, $4, $3, 5, 500.00)`,
+		userID, activeAccount, secID, goneAccount)
+	require.NoError(t, err)
+
+	// The second account was disconnected ten days ago. Its account_status_history 'active'
+	// interval is closed then; its holdings are RETAINED, which is the whole point of #1569 and
+	// is exactly why a bare user-scoped capture kept picking them up.
+	tenDaysAgo := time.Now().UTC().AddDate(0, 0, -10)
+	// valid_from is backdated too: the fixture's interval is created by the accounts INSERT
+	// trigger and opens at test time, and chk_ash_interval requires valid_to > valid_from.
+	ct, err := tx.Exec(ctx, `
+		UPDATE account_status_history SET valid_from = $2::timestamptz - INTERVAL '30 days', valid_to = $2::timestamptz
+		WHERE account_id = $1 AND status = 'active' AND valid_to IS NULL`, goneAccount, tenDaysAgo)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, ct.RowsAffected(), "the trigger-created 'active' interval must exist to close")
+	_, err = tx.Exec(ctx,
+		`UPDATE accounts SET status = 'removed', removed_at = $2 WHERE id = $1`, goneAccount, tenDaysAgo)
+	require.NoError(t, err)
+
+	// Precondition: the retained holdings really are still there, so this is not vacuous.
+	var liveHoldingRows int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM holdings WHERE account_id = $1`, goneAccount).Scan(&liveHoldingRows))
+	require.Equal(t, 1, liveHoldingRows, "the disconnected account's holdings are retained — that is #1569's whole thesis")
+
+	snapRepo := NewHoldingSnapshotRepository(tx)
+	day, err := snapRepo.CaptureForUser(ctx, userID.String())
+	require.NoError(t, err)
+
+	snaps, err := snapRepo.GetForUserOnDate(ctx, userID.String(), day)
+	require.NoError(t, err)
+
+	captured := 0.0
+	for _, s := range snaps {
+		require.NotNil(t, s.InstitutionValue)
+		captured += *s.InstitutionValue
+		assert.NotEqual(t, goneAccount.String(), s.AccountID,
+			"an account that was not live on this day must not be captured for it")
+	}
+
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), day)
+	require.NoError(t, err)
+
+	assert.Len(t, snaps, 1)
+	assert.Equal(t, 1000.0, captured, "Critical 1: was 1500.00 — the disconnected institution was being re-captured daily")
+	assert.Equal(t, snap.TotalValue, captured,
+		"the capture and Upsert must ask the SAME liveness question, or a task-11 rebuild rewrites the curve")
+}
+
+// ── Fix round 1, Critical 2: a confirmed liquidation must not leave the morning standing ──────
+//
+// Reproduces the reviewer's measurement. The morning sync records 5000; in the afternoon a
+// confirmed-complete Plaid response clears the account. INSERT ... SELECT selects zero rows, so
+// before the fix nothing was written and the morning capture remained the day's answer:
+//
+//	live_total          | 0        <- what Upsert writes
+//	history_final_total | 5000.00  <- what the reconstruction returned
+//
+// It never self-healed: the daily sweep also selected zero rows. Task 11 would have restored a
+// portfolio the user had actually liquidated.
+func TestHistorySnapshot_ConfirmedLiquidation_ZeroesTheDayRatherThanKeepingTheMorning(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-liquidation")
+	repo := NewHoldingRepository(tx)
+
+	// Morning sync.
+	require.NoError(t, repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
+		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(), Quantity: 10, InstitutionValue: f64(5000)},
+	}))
+
+	snapRepo := NewHoldingSnapshotRepository(tx)
+	day := todayUTC(ctx, t, tx)
+	morning, err := snapRepo.GetForUserOnDate(ctx, userID.String(), day)
+	require.NoError(t, err)
+	require.Len(t, morning, 1, "precondition: the morning really was recorded, so the afternoon assertion is not vacuous")
+
+	// Afternoon: Plaid returns the account with zero holdings. The T1 roster gate has already
+	// confirmed the response is complete, so this reaches the repository as a genuine liquidation.
+	require.NoError(t, repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{}))
+
+	var liveTotal float64
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT COALESCE(SUM(institution_value), 0) FROM holdings WHERE user_id = $1`, userID).Scan(&liveTotal))
+	require.Equal(t, 0.0, liveTotal, "precondition: current state really is empty")
+
+	afternoon, err := snapRepo.GetForUserOnDate(ctx, userID.String(), day)
+	require.NoError(t, err)
+	historyTotal := 0.0
+	for _, s := range afternoon {
+		require.NotNil(t, s.InstitutionValue)
+		historyTotal += *s.InstitutionValue
+	}
+	assert.Empty(t, afternoon, "Critical 2: the morning capture must not still be returned as the day's positions")
+	assert.Equal(t, 0.0, historyTotal, "Critical 2: was 5000.00 against a live total of 0")
+
+	// Upsert agrees, which is the property task 11 depends on.
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), day)
+	require.NoError(t, err)
+	assert.Equal(t, snap.TotalValue, historyTotal)
+
+	// The record is retained, not deleted: the row still says what was held this morning.
+	var present bool
+	var value *float64
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT present, institution_value FROM holding_snapshots WHERE account_id = $1 AND as_of_date = $2`,
+		accountID, day).Scan(&present, &value))
+	assert.False(t, present)
+	require.NotNil(t, value)
+	assert.Equal(t, 5000.0, *value, "marking absent must not blank the values — a liquidation is history, not an erasure")
+
+	// And it does not self-unheal: the daily sweep must reach the same answer.
+	sweepDay, err := snapRepo.CaptureForUser(ctx, userID.String())
+	require.NoError(t, err)
+	afterSweep, err := snapRepo.GetForUserOnDate(ctx, userID.String(), sweepDay)
+	require.NoError(t, err)
+	assert.Empty(t, afterSweep, "the daily sweep must not resurrect the liquidated position")
+}
+
+// An earlier day must survive both absence-marking paths untouched. This is the immutability claim
+// the whole task rests on, and both fixes are UPDATEs that could in principle reach too far.
+func TestHistorySnapshot_AbsenceMarking_LeavesEarlierDaysAlone(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-priorday")
+
+	day := todayUTC(ctx, t, tx)
+	yesterday := day.AddDate(0, 0, -1)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holding_snapshots (user_id, account_id, security_id, as_of_date, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 10, 5000.00)`, userID, accountID, secID, yesterday)
+	require.NoError(t, err)
+
+	repo := NewHoldingRepository(tx)
+	// Today: the account holds nothing at all. Both the per-account capture and the whole-user
+	// sweep run their absence-marking pass.
+	require.NoError(t, repo.ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{}))
+	_, err = NewHoldingSnapshotRepository(tx).CaptureForUser(ctx, userID.String())
+	require.NoError(t, err)
+
+	snaps, err := NewHoldingSnapshotRepository(tx).GetForUserOnDate(ctx, userID.String(), yesterday)
+	require.NoError(t, err)
+	require.Len(t, snaps, 1, "yesterday must still read as held — a past day is immutable")
+	assert.True(t, snaps[0].Present)
+	require.NotNil(t, snaps[0].InstitutionValue)
+	assert.Equal(t, 5000.0, *snaps[0].InstitutionValue)
 }

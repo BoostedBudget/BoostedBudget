@@ -80,6 +80,12 @@ func (r *creditLiabilityRepository) ReplaceForAccount(ctx context.Context, accou
 
 	// nil means delete-only (clear stale data when Plaid no longer reports this liability)
 	if liability == nil {
+		// #1569 T6 fix round 1: record the absence rather than leaving today's earlier statement
+		// standing as the day's answer. Flips `present` only — the row keeps its details (the APR schedule this very DELETE just wiped) so
+		// the clear is preserved as history rather than erasing it. Earlier days are untouched.
+		if err := markLiabilityStatementAbsent(ctx, tx, accountID, userID, domain.LiabilityTypeCredit); err != nil {
+			return err
+		}
 		return tx.Commit(ctx)
 	}
 

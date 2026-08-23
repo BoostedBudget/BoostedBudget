@@ -275,11 +275,13 @@ type mockHoldingSnapshotRepo struct {
 	mock.Mock
 }
 
-func (m *mockHoldingSnapshotRepo) CaptureForUser(ctx context.Context, userID string) error {
-	return m.Called(ctx, userID).Error(0)
+func (m *mockHoldingSnapshotRepo) CaptureForUser(ctx context.Context, userID string) (time.Time, error) {
+	args := m.Called(ctx, userID)
+	day, _ := args.Get(0).(time.Time)
+	return day, args.Error(1)
 }
 
-func (m *mockHoldingSnapshotRepo) GetFinalCapturesForUserOnDate(ctx context.Context, userID string, asOf time.Time) ([]domain.HoldingSnapshot, error) {
+func (m *mockHoldingSnapshotRepo) GetForUserOnDate(ctx context.Context, userID string, asOf time.Time) ([]domain.HoldingSnapshot, error) {
 	panic("not implemented")
 }
 
@@ -303,9 +305,12 @@ func TestPortfolioSnapshotWorker_Work_CapturesHoldingHistoryForEveryUser(t *test
 	snapshotRepo.On("Upsert", ctx, mock.Anything, mock.AnythingOfType("time.Time")).
 		Return(&domain.PortfolioSnapshot{}, nil)
 
+	// The day comes back from the SERVER via the capture, and the aggregate must be filed under
+	// exactly that day — not under the Go process's idea of today.
+	serverDay := time.Date(2031, 3, 4, 0, 0, 0, 0, time.UTC)
 	historyRepo := new(mockHoldingSnapshotRepo)
-	historyRepo.On("CaptureForUser", ctx, "user-1").Return(nil)
-	historyRepo.On("CaptureForUser", ctx, "user-2").Return(nil)
+	historyRepo.On("CaptureForUser", ctx, "user-1").Return(serverDay, nil)
+	historyRepo.On("CaptureForUser", ctx, "user-2").Return(serverDay, nil)
 
 	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
 		HoldingRepo:         holdingRepo,
@@ -317,12 +322,14 @@ func TestPortfolioSnapshotWorker_Work_CapturesHoldingHistoryForEveryUser(t *test
 	require.NoError(t, worker.Work(ctx, newTestPortfolioSnapshotJob(PortfolioSnapshotArgs{TriggerSource: "test"})))
 	historyRepo.AssertExpectations(t)
 	snapshotRepo.AssertExpectations(t)
+	snapshotRepo.AssertCalled(t, "Upsert", ctx, "user-1", serverDay)
+	snapshotRepo.AssertCalled(t, "Upsert", ctx, "user-2", serverDay)
 }
 
 // A capture failure loses a day of history, which is the exact loss this task exists to stop — so
 // it fails the job and lets River retry, the same way an upsert failure does. It must NOT abort
 // the remaining users: one user's failure has never stopped the rest here.
-func TestPortfolioSnapshotWorker_Work_CaptureError_FailsJobButStillProcessesEveryUser(t *testing.T) {
+func TestPortfolioSnapshotWorker_Work_CaptureError_SkipsThatAggregateButStillProcessesOtherUsers(t *testing.T) {
 	ctx := context.Background()
 
 	holdingRepo := new(mockHoldingRepo)
@@ -333,8 +340,8 @@ func TestPortfolioSnapshotWorker_Work_CaptureError_FailsJobButStillProcessesEver
 		Return(&domain.PortfolioSnapshot{}, nil)
 
 	historyRepo := new(mockHoldingSnapshotRepo)
-	historyRepo.On("CaptureForUser", ctx, "user-1").Return(errors.New("capture blew up"))
-	historyRepo.On("CaptureForUser", ctx, "user-2").Return(nil)
+	historyRepo.On("CaptureForUser", ctx, "user-1").Return(time.Time{}, errors.New("capture blew up"))
+	historyRepo.On("CaptureForUser", ctx, "user-2").Return(time.Now().UTC().Truncate(24*time.Hour), nil)
 
 	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
 		HoldingRepo:         holdingRepo,
@@ -346,7 +353,10 @@ func TestPortfolioSnapshotWorker_Work_CaptureError_FailsJobButStillProcessesEver
 	err := worker.Work(ctx, newTestPortfolioSnapshotJob(PortfolioSnapshotArgs{TriggerSource: "test"}))
 	require.Error(t, err)
 	historyRepo.AssertExpectations(t)
-	// user-2 was still reached — both the capture and the upsert.
+	// user-1's aggregate is SKIPPED: writing it anyway would manufacture the very state the
+	// capture exists to prevent — a portfolio_snapshots row with no rows behind it.
+	snapshotRepo.AssertNotCalled(t, "Upsert", ctx, "user-1", mock.Anything)
+	// …and user-2 is still reached, both halves. One user's failure never aborts the rest.
 	snapshotRepo.AssertCalled(t, "Upsert", ctx, "user-2", mock.AnythingOfType("time.Time"))
 }
 

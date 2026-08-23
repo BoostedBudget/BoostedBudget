@@ -54,12 +54,16 @@ func TestHoldingRepository_ReplaceForAccount_DeletesOldInsertNew(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holdings`)).
 		WithArgs(anyArgs(11)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
-	// #1569 T6: the append-only history capture runs inside this SAME transaction, after the
-	// replace, and is purely additive — the DELETE/INSERT expectations above are unchanged, which
-	// is the point. (pgxmock only asserts the query TEXT; that this statement actually executes
-	// against Postgres is covered by history_snapshot_integration_test.go.)
+	// #1569 T6 fix round 1: the capture reads its UTC day from the SERVER (see serverUTCDate —
+	// the aggregate and its rows must be filed under the same day across UTC midnight), then runs
+	// as a SET: mark what it no longer observes absent, then upsert what it does.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT (now() AT TIME ZONE 'UTC')::date`)).
+		WillReturnRows(pgxmock.NewRows([]string{"date"}).AddRow(time.Now().UTC().Truncate(24 * time.Hour)))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE holding_snapshots`)).
+		WithArgs(accountID, userID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_snapshots`)).
-		WithArgs(accountID, userID).
+		WithArgs(accountID, userID, pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -83,12 +87,16 @@ func TestHoldingRepository_ReplaceForAccount_EmptyHoldings(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM holdings`)).
 		WithArgs(accountID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 3))
-	// #1569 T6: the append-only history capture runs inside this SAME transaction, after the
-	// replace, and is purely additive — the DELETE/INSERT expectations above are unchanged, which
-	// is the point. (pgxmock only asserts the query TEXT; that this statement actually executes
-	// against Postgres is covered by history_snapshot_integration_test.go.)
+	// #1569 T6 fix round 1: the capture reads its UTC day from the SERVER (see serverUTCDate —
+	// the aggregate and its rows must be filed under the same day across UTC midnight), then runs
+	// as a SET: mark what it no longer observes absent, then upsert what it does.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT (now() AT TIME ZONE 'UTC')::date`)).
+		WillReturnRows(pgxmock.NewRows([]string{"date"}).AddRow(time.Now().UTC().Truncate(24 * time.Hour)))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE holding_snapshots`)).
+		WithArgs(accountID, userID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_snapshots`)).
-		WithArgs(accountID, userID).
+		WithArgs(accountID, userID, pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 

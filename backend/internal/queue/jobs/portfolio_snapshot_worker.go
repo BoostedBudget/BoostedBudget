@@ -114,27 +114,41 @@ func (w *PortfolioSnapshotWorker) Work(ctx context.Context, job *river.Job[Portf
 		return nil
 	}
 
-	// Step 2: Upsert snapshot for each user (today UTC, idempotent).
-	today := time.Now().UTC().Truncate(24 * time.Hour)
+	// Step 2: Capture the row-level history and upsert the aggregate for each user (today UTC,
+	// idempotent).
+	//
+	// goClockToday is only the fallback for a build where the history repository is not wired.
+	// When it IS wired, the day comes back from CaptureForUser — i.e. from the SERVER — and the
+	// aggregate is filed under that same day. Taking the aggregate's day from the Go clock while
+	// the rows took theirs from Postgres meant that across UTC midnight, with the ~16 ms
+	// host/container skew this project already documents, the aggregate and the rows behind it
+	// landed on DIFFERENT days: precisely the "aggregate with no rows behind it" state this
+	// capture exists to prevent.
+	goClockToday := time.Now().UTC().Truncate(24 * time.Hour)
 	var failCount int
 	for _, userID := range userIDs {
-		// #1569 T6: record the row-level history FIRST, so it exists for the aggregate written
-		// just below rather than only when the aggregate happens to succeed. This is the only
-		// writer of holding_snapshots on a day nothing synced, and task 11 rebuilds these
-		// aggregates from those rows — a day with an aggregate and no rows behind it is a day
-		// task 11 cannot repair. A failure here loses a day of history, which is exactly the loss
-		// this task exists to stop, so it counts as a job failure and River retries (the capture
-		// is idempotent within the UTC day). It does not abort the remaining users.
+		today := goClockToday
+
+		// #1569 T6: record the row-level history FIRST and SKIP the aggregate if it fails. A
+		// failure here loses a day of history — the exact loss this task exists to stop — so it
+		// counts as a job failure and River retries (the capture is idempotent within the UTC
+		// day). Writing the aggregate anyway would manufacture the very state the capture is
+		// here to prevent: a portfolio_snapshots row with nothing behind it for task 11 to
+		// rebuild from. One user's failure never aborts the rest.
 		if w.holdingSnapshotRepo != nil {
-			if capErr := w.holdingSnapshotRepo.CaptureForUser(ctx, userID); capErr != nil {
-				w.logger.Error("holding snapshot capture failed for user",
+			capturedDay, capErr := w.holdingSnapshotRepo.CaptureForUser(ctx, userID)
+			if capErr != nil {
+				w.logger.Error("holding snapshot capture failed for user; skipping this user's aggregate",
 					"job_id", job.ID,
 					"user_id", userID,
 					"error", capErr,
 				)
 				failCount++
+				continue
 			}
+			today = capturedDay
 		}
+
 		if _, upsertErr := w.snapshotRepo.Upsert(ctx, userID, today); upsertErr != nil {
 			w.logger.Error("portfolio snapshot upsert failed for user",
 				"job_id", job.ID,
