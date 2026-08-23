@@ -97,6 +97,48 @@ export interface UseActiveAccountsResult {
  * }
  * ```
  */
+export interface UseAllAccountsResult {
+  /** All accounts regardless of status (active, replaced, expired, removed), or undefined while loading */
+  accounts: Account[] | undefined
+  isLoading: boolean
+  isError: boolean
+  error: Error | null
+  refetch: () => Promise<void>
+}
+
+/**
+ * React Query hook that wraps `useGetAccounts` with `status: 'all_statuses'`,
+ * returning the full universe of accounts (active, replaced, expired,
+ * removed) unfiltered.
+ *
+ * Use this — not `useActiveAccounts` — for a **display/lookup** path that
+ * must resolve a retained (non-active) account's name, e.g. an id→name map
+ * for transaction or investment-activity history (Issue #1569, Task 3). The
+ * backend deliberately returns a disconnected account's transactions, and a
+ * lookup built from `useActiveAccounts` alone renders them as "Unknown
+ * account" and offers no way to filter to them.
+ *
+ * Do NOT use this for a **selection** path — a picker where the user chooses
+ * an account to act on (e.g. "transfer to", "contribute to goal from"). A
+ * closed account must never be offered there; use `useActiveAccounts` for
+ * those.
+ *
+ * @param opts - Optional query params forwarded to `useGetAccounts`. Callers
+ * may override `status` explicitly; it defaults to `'all_statuses'` here.
+ */
+export function useAllAccounts(opts?: GetAccountsParams): UseAllAccountsResult {
+  const query = useGetAccounts({ status: 'all_statuses', ...opts }, undefined)
+  const data = query.data as GetAccountsOutputBody | undefined
+
+  return {
+    accounts: data?.accounts ?? undefined,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    error: query.error as Error | null,
+    refetch: async () => { await query.refetch() },
+  }
+}
+
 export function useActiveAccounts(opts?: GetAccountsParams): UseActiveAccountsResult {
   const { user, isLoaded: clerkLoaded } = useUser()
   const query = useGetAccounts(opts, undefined)

@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
-import { filterActiveAccounts, isInactive, isReplaced, useActiveAccounts } from './useActiveAccounts'
+import { filterActiveAccounts, isInactive, isReplaced, useActiveAccounts, useAllAccounts } from './useActiveAccounts'
 import type { Account } from '@boostedbudget/api-client/models'
 import {
   mockUseGetAccounts,
@@ -422,5 +422,90 @@ describe('useActiveAccounts', () => {
       renderHook(() => useActiveAccounts(), { wrapper: createWrapper() })
     })
     expect(sessionStorage.getItem('ph_acct_replaced_filtered:user-beta')).toBe('1')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// useAllAccounts hook (Issue #1569, Task 3)
+// ---------------------------------------------------------------------------
+
+describe('useAllAccounts', () => {
+  beforeEach(() => {
+    mockUseGetAccounts.mockClear()
+    mockRefetchAccounts.mockClear()
+  })
+
+  it('requests status: all_statuses by default', () => {
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+
+    renderHook(() => useAllAccounts(), { wrapper: createWrapper() })
+
+    expect(mockUseGetAccounts).toHaveBeenCalledWith({ status: 'all_statuses' }, undefined)
+  })
+
+  it('lets a caller override status explicitly', () => {
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+
+    renderHook(() => useAllAccounts({ status: 'active' }), { wrapper: createWrapper() })
+
+    expect(mockUseGetAccounts).toHaveBeenCalledWith({ status: 'active' }, undefined)
+  })
+
+  it('returns replaced, expired, and removed accounts unfiltered, alongside active ones', () => {
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [activeAccount, replacedAccount, expiredAccount, removedAccount] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+
+    const { result } = renderHook(() => useAllAccounts(), { wrapper: createWrapper() })
+
+    expect(result.current.accounts).toHaveLength(4)
+    expect(result.current.accounts?.map((a) => a.id).sort()).toEqual(
+      ['acc-active', 'acc-expired', 'acc-removed', 'acc-replaced']
+    )
+  })
+
+  it('preserves loading state', () => {
+    mockUseGetAccounts.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+
+    const { result } = renderHook(() => useAllAccounts(), { wrapper: createWrapper() })
+
+    expect(result.current.isLoading).toBe(true)
+    expect(result.current.accounts).toBeUndefined()
+  })
+
+  it('returns undefined accounts when backend returns null accounts', () => {
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: null, total_count: 0 },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+
+    const { result } = renderHook(() => useAllAccounts(), { wrapper: createWrapper() })
+
+    expect(result.current.accounts).toBeUndefined()
   })
 })
