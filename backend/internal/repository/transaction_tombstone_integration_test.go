@@ -373,12 +373,25 @@ func TestTombstone_SettledPendingIsNeverSurfaced_Integration(t *testing.T) {
 
 	items, _, err := f.repo.GetByUserIDKeysetUnified(ctx, f.userID, filters, nil, 100)
 	require.NoError(t, err)
-	feedIDs := map[string]bool{}
+	feed := map[string]*domain.ActivityItem{}
 	for _, it := range items {
-		feedIDs[it.ID] = true
+		feed[it.ID] = it
 	}
-	assert.False(t, feedIDs[f.pendingTxnID], "the unified feed must not surface a settled pending either")
-	assert.True(t, feedIDs[f.postedTxnID], "the unified feed must be able to surface a posted reversal")
+	assert.NotContains(t, feed, f.pendingTxnID, "the unified feed must not surface a settled pending either")
+	require.Contains(t, feed, f.postedTxnID, "the unified feed must be able to surface a posted reversal")
+
+	// The feed is what the transactions list endpoint actually returns, so the reversal has to be
+	// LABELLED here, not merely present. An unlabelled reversal in a list reads as a live
+	// transaction, which is worse than hiding it.
+	require.NotNil(t, feed[f.postedTxnID].Reversed)
+	assert.True(t, *feed[f.postedTxnID].Reversed)
+	assert.NotNil(t, feed[f.postedTxnID].ReversedAt, "reversed_at is when the provider withdrew it")
+	require.Contains(t, feed, f.liveTxnID)
+	require.NotNil(t, feed[f.liveTxnID].Reversed)
+	assert.False(t, *feed[f.liveTxnID].Reversed,
+		"a live banking row must carry reversed=false, not an absent field: a client branching on "+
+			"presence would otherwise treat every live row as unknown")
+	assert.Nil(t, feed[f.liveTxnID].ReversedAt)
 }
 
 // TestTombstone_IsIdempotent_Integration. #1570's storage-before-cursor contract makes re-delivery
