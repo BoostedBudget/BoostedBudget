@@ -661,6 +661,20 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 		LEFT JOIN user_accounts to_ua   ON to_ua.id    = ts.to_user_account_id  AND to_ua.user_id    = ts.user_id
 		LEFT JOIN accounts     from_acc ON from_acc.id = ts.from_account_id     AND from_acc.user_id = ts.user_id
 		LEFT JOIN user_accounts from_ua ON from_ua.id  = ts.from_user_account_id AND from_ua.user_id = ts.user_id
+		-- tombstone-exempt: boosts r is DELIBERATELY unfiltered, and this is a decision, not an
+		-- omission. r contributes exactly one thing to this query -- r.name AS boost_name, the
+		-- provenance line "this suggestion was proposed by <boost>". A transfer suggestion is a
+		-- historical record; naming the automation that produced it stays true after the user
+		-- deletes that automation, and blanking it would be the same destroy-the-explanation
+		-- failure #1569 exists to end. Nothing else about r reaches the caller, so a tombstoned
+		-- boost cannot leak back into any list, count or action surface through this join.
+		--
+		-- ⚠ THIS IS A DELIBERATE BEHAVIOUR CHANGE, and it is the only one Task 8 makes outside the
+		-- four delete paths themselves. fk_transfer_suggestions_boost_id is ON DELETE SET NULL, so
+		-- under the OLD hard delete, deleting a boost NULLed ts.boost_id and boost_name went blank
+		-- on every suggestion it had ever produced. Under the tombstone the link survives and the
+		-- name keeps rendering. Pinned, in both halves, by
+		-- TestConfigTombstone_DeletedBoostKeepsItsSuggestionsProvenance_Integration.
 		LEFT JOIN boosts       r        ON r.id         = ts.boost_id
 		LEFT JOIN transactions txn      ON txn.id       = ts.matched_transaction_id AND txn.deleted_at IS NULL
 	`

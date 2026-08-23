@@ -15,6 +15,7 @@ package repository
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -416,6 +417,74 @@ func TestConfigTombstone_DeletingABoostKeepsItsExecutions_Integration(t *testing
 	assert.Equal(t, []string{"boost.deleted"}, f.auditActions(t, ctx, f.boostID))
 }
 
+// TestConfigTombstone_DeletedBoostKeepsItsSuggestionsProvenance_Integration pins the ONE deliberate
+// behaviour change Task 8 makes outside the four delete paths themselves, and pins BOTH halves of
+// it so neither can drift silently.
+//
+// fk_transfer_suggestions_boost_id is ON DELETE SET NULL. Under the OLD hard delete, deleting a
+// boost NULLed transfer_suggestions.boost_id, and every suggestion that boost had ever produced
+// lost its provenance line: "proposed by <boost>" went blank. Under the tombstone the link
+// survives and the name keeps rendering.
+//
+// That is RULED CORRECT, not tolerated. A transfer suggestion is a historical record; naming the
+// automation that produced it stays true after the user deletes that automation, and blanking it
+// was itself a small instance of the destroy-the-explanation failure #1569 exists to end. The
+// unfiltered `LEFT JOIN boosts r` in GetByUserIDStatuses therefore carries an explicit
+// `-- tombstone-exempt:` comment; before fix round 1 it carried nothing and was waved through by
+// the loose guard.
+//
+// The containment argument, which is what makes the exemption safe rather than merely intended:
+// r contributes exactly one expression to that query (r.name AS boost_name), so a tombstoned boost
+// cannot re-enter any list, count or action surface through this join. Asserted below by reading
+// the boost back through its OWN repository and finding nothing.
+func TestConfigTombstone_DeletedBoostKeepsItsSuggestionsProvenance_Integration(t *testing.T) {
+	f := seedConfigTombstoneFixture(t)
+	ctx := context.Background()
+
+	suggestionID := uuid.New().String()
+	_, err := f.tx.Exec(ctx, `
+		INSERT INTO transfer_suggestions
+			(id, user_id, boost_id, boost_execution_id, from_account_id, to_account_id,
+			 amount, currency_code, reason, source, status)
+		VALUES ($1, $2, $3, $4, $5, $5, 125.00, 'USD', 'Round up', 'boost', 'pending')
+	`, suggestionID, f.userID, f.boostID, f.boostExecID, f.accountID)
+	require.NoError(t, err, "seed transfer_suggestion")
+
+	suggestionRepo := NewTransferSuggestionRepository(f.tx)
+
+	before, _, err := suggestionRepo.GetByUserIDStatuses(ctx, f.userID, nil, 50, 0)
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	require.NotNil(t, before[0].BoostName, "the provenance must be present BEFORE the delete, or "+
+		"the assertion after it proves nothing")
+	require.Equal(t, "Round Up To Savings", *before[0].BoostName)
+
+	require.NoError(t, f.boostRepo.Delete(ctx, f.boostID, f.userID, f.auditRepo))
+
+	// Half one: the FK link SURVIVES, where the old hard delete would have SET NULL'd it.
+	var boostID *string
+	require.NoError(t, f.tx.QueryRow(ctx,
+		`SELECT boost_id FROM transfer_suggestions WHERE id = $1`, suggestionID).Scan(&boostID))
+	require.NotNil(t, boostID,
+		"ON DELETE SET NULL must not have fired — that is precisely what the tombstone prevents")
+	assert.Equal(t, f.boostID, *boostID)
+
+	// Half two: the rendered provenance is still there.
+	after, _, err := suggestionRepo.GetByUserIDStatuses(ctx, f.userID, nil, 50, 0)
+	require.NoError(t, err)
+	require.Len(t, after, 1, "the suggestion itself is unaffected by the boost's deletion")
+	require.NotNil(t, after[0].BoostName,
+		"a suggestion must still be able to say which automation proposed it")
+	assert.Equal(t, "Round Up To Savings", *after[0].BoostName)
+
+	// Containment: the boost is reachable ONLY as that one name. It is gone from its own surface.
+	live, err := f.boostRepo.GetByUserID(ctx, f.userID)
+	require.NoError(t, err)
+	assert.Empty(t, live, "the exemption must not let a tombstoned boost back into any boost list")
+	_, err = f.boostRepo.GetByID(ctx, f.boostID)
+	assert.ErrorIs(t, err, domain.ErrBoostNotFound)
+}
+
 func TestConfigTombstone_BoostDeleteRefusesAnotherUsersBoost_Integration(t *testing.T) {
 	f := seedConfigTombstoneFixture(t)
 	ctx := context.Background()
@@ -560,11 +629,42 @@ func TestConfigTombstone_GDPRErasureStillDestroysTombstonedRows_Integration(t *t
 		f.count(t, ctx, `SELECT COUNT(*) FROM savings_goal_contributions WHERE savings_goal_id = $1`, f.goalID),
 		"the contributions must be present BEFORE erasure, or the assertion below proves nothing")
 
-	// This is the shape of GDPR erasure: one DELETE FROM users, and the FK graph does the rest.
-	// savings_goals.user_id / boosts.user_id / budgets.user_id are all ON DELETE CASCADE, and the
-	// tombstone columns changed none of them.
-	_, err := f.tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, f.userID)
+	// THE PRODUCTION PATH, not a hand-written `DELETE FROM users`. An approximation would only
+	// re-assert what the FK graph does; the thing worth pinning is that ProfileRepository's real
+	// cascade -- the method a right-to-be-forgotten request actually runs -- still destroys these
+	// rows after Task 8 gave four of their tables a soft delete. A future change to
+	// DeleteUserCascade that started respecting deleted_at would break this test, and would break
+	// nothing if the test issued its own DELETE.
+	profileRepo := NewProfileRepository(f.tx, newTestFieldEncryptor(t))
+
+	// DeleteUserCascade's C2 guard refuses while any linked_items row still owes Plaid-side
+	// cleanup (`plaid_removed_at IS NULL`). The fixture seeds a live item, so mark it cleaned --
+	// this is the state the deletion worker reaches before it calls the cascade, not a bypass.
+	_, err := f.tx.Exec(ctx,
+		`UPDATE linked_items SET plaid_removed_at = NOW() WHERE user_id = $1`, f.userID)
+	require.NoError(t, err)
+
+	// Put the user in the USER-REQUESTED authorisation state -- an outstanding, already-due
+	// deletion request. That is the literal right-to-be-forgotten path, and the one this test is
+	// about; the other branch DeleteUserCascade accepts is retention expiry, which is a different
+	// question. expectedDeletionRequestedAt must be the value the caller observed, so it is read
+	// back rather than assumed.
+	var requestedAt time.Time
+	require.NoError(t, f.tx.QueryRow(ctx, `
+		UPDATE users
+		SET deletion_requested_at = NOW() - INTERVAL '31 days',
+		    deletion_scheduled_at = NOW() - INTERVAL '1 day'
+		WHERE id = $1
+		RETURNING deletion_requested_at
+	`, f.userID).Scan(&requestedAt))
+
+	deleted, affectedOwners, err := profileRepo.DeleteUserCascade(ctx, f.userID, &requestedAt)
 	require.NoError(t, err, "erasure must not be blocked by anything this task added")
+	require.True(t, deleted,
+		"the cascade reported a legitimate skip rather than running — the assertions below would "+
+			"then be vacuous (they would pass against a cascade that did nothing if the rows had "+
+			"never existed, and this test would stop testing erasure at all)")
+	assert.Empty(t, affectedOwners, "no other user's rows are involved in this fixture")
 
 	for _, probe := range []struct {
 		what string
