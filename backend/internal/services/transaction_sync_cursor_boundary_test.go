@@ -308,3 +308,117 @@ func TestSyncTransactions_PageFetchFailure_LeavesCursorUnadvanced(t *testing.T) 
 
 	mockPlaidService.AssertExpectations(t)
 }
+
+// TestSyncTransactions_ModifiedStorageFailure_LeavesCursorUnadvanced covers Step 7, the partial-commit
+// step the contract comment names explicitly: processModifiedTransactions commits one Update PER ROW
+// and returns on the first failure, so a 2-of-3 commit is possible. The cursor must not move.
+func TestSyncTransactions_ModifiedStorageFailure_LeavesCursorUnadvanced(t *testing.T) {
+	ctx := context.Background()
+
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo,
+		nil, nil, mockPlaidService, nil, nil, nil, nil, nil, nil,
+	)
+
+	startCursor := "cursor-0"
+	linkedItem := &domain.LinkedItem{
+		ID:          "linked-item-modfail",
+		UserID:      "user-modfail",
+		ItemID:      "plaid-item-modfail",
+		AccessToken: "access-token",
+		Cursor:      &startCursor,
+	}
+
+	page := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{},
+		Modified: []plaid.Transaction{
+			{TransactionId: "txn-mod-1", AccountId: "plaid-acc-1", Amount: 1.00, Date: "2024-03-01", Name: "Mod one"},
+			{TransactionId: "txn-mod-2", AccountId: "plaid-acc-1", Amount: 2.00, Date: "2024-03-02", Name: "Mod two"},
+		},
+		Removed: []plaid.RemovedTransaction{},
+	}
+	page.SetNextCursor("cursor-1")
+	page.SetHasMore(false)
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", startCursor, 0).Return(page, nil).Once()
+
+	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-modfail").
+		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-modfail"}}, nil)
+	mockTransactionRepo.On("GetByExternalID", mock.Anything, domain.SourcePlaid, mock.Anything, "user-modfail").
+		Return(&domain.Transaction{ID: "existing"}, nil)
+	// Row 1 commits, row 2 fails — the partial-commit shape.
+	mockTransactionRepo.On("Update", mock.Anything, mock.Anything).Return(nil).Once()
+	mockTransactionRepo.On("Update", mock.Anything, mock.Anything).Return(errors.New("update failed on row 2")).Once()
+	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	_, err := service.SyncTransactions(ctx, linkedItem)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to process modified transactions")
+
+	assert.Empty(t, persistedCursors(mockLinkedItemRepo),
+		"Step 7 committed row 1 and failed on row 2. Advancing the cursor would strand row 2's "+
+			"modification forever; holding it back re-delivers both and re-applies row 1 idempotently.")
+
+	mockPlaidService.AssertExpectations(t)
+}
+
+// TestSyncTransactions_RemovedDeleteError_StillAdvancesCursor pins Step 8 as it actually behaves,
+// which is NOT symmetric with Steps 6 and 7.
+//
+// processRemovedTransactions returns nil on EVERY path: a genuine DeleteByExternalID database error
+// is Warn'd and counted as "skipped" for idempotency, so Step 8 can never gate the cursor. This test
+// exists so the asymmetry is pinned rather than assumed — it is residual path (4) in the
+// storage-before-cursor contract comment. The failure direction is safe for #1569 (the row stays
+// visible rather than vanishing), and task 7 converts this path to tombstones. If someone later makes
+// this path return an error, this test fails and points them at the contract comment.
+func TestSyncTransactions_RemovedDeleteError_StillAdvancesCursor(t *testing.T) {
+	ctx := context.Background()
+
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo,
+		nil, nil, mockPlaidService, nil, nil, nil, nil, nil, nil,
+	)
+
+	startCursor := "cursor-0"
+	linkedItem := &domain.LinkedItem{
+		ID:          "linked-item-remfail",
+		UserID:      "user-remfail",
+		ItemID:      "plaid-item-remfail",
+		AccessToken: "access-token",
+		Cursor:      &startCursor,
+	}
+
+	page := &plaid.TransactionsSyncResponse{
+		Added:    []plaid.Transaction{},
+		Modified: []plaid.Transaction{},
+		Removed:  []plaid.RemovedTransaction{{TransactionId: stringPtr("txn-rem-1")}},
+	}
+	page.SetNextCursor("cursor-1")
+	page.SetHasMore(false)
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", startCursor, 0).Return(page, nil).Once()
+
+	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-remfail").
+		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-remfail"}}, nil)
+	mockTransactionRepo.On("DeleteByExternalID", mock.Anything, domain.SourcePlaid, "txn-rem-1", "user-remfail").
+		Return(errors.New("deadlock detected")).Once()
+	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	_, err := service.SyncTransactions(ctx, linkedItem)
+	require.NoError(t, err, "processRemovedTransactions swallows delete errors and returns nil")
+
+	assert.Equal(t, []string{"cursor-1"}, persistedCursors(mockLinkedItemRepo),
+		"Step 8 cannot gate the cursor: the delete error was swallowed, so the sync 'succeeded' and "+
+			"the cursor advanced past a removal that was never applied. Safe for #1569 (the row is "+
+			"retained, not destroyed); tracked as residual path (4) and owned by task 7.")
+
+	mockPlaidService.AssertExpectations(t)
+}

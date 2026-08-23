@@ -616,6 +616,19 @@ func (s *transactionSyncService) SyncTransactions(
 	//     durable AND the cursor unmoved — the over-delivery direction, which CreateBatch/Update
 	//     absorb by upserting. The guarantee is one-directional: the cursor advances only if EVERY
 	//     storage step returned nil, never the reverse.
+	//   - RESIDUAL, and the reason this is not "zero rows can ever be missed": the storage steps
+	//     have log-and-continue paths that skip a row and still return nil, so the cursor advances
+	//     past rows that were never written. There are four:
+	//       1. processAddedTransactions — a row whose Plaid account_id is not in accountMap is
+	//          Warn'd and skipped (the `!found` skip; owned by task 1b, deliberately untouched);
+	//       2. processAddedTransactions — if that skipped ALL of them, it returns nil early;
+	//       3. processModifiedTransactions — GetByExternalID miss: the modification is dropped;
+	//       4. processRemovedTransactions — a genuine DeleteByExternalID DB error is Warn'd and
+	//          counted as skipped, so the removal is never applied and the row stays visible.
+	//     Every one of these fails toward RETAINING a row (an un-imported row, a stale edit, an
+	//     un-deleted row) rather than destroying one, which is the safe side of #1569's governing
+	//     principle. They are residual scope, not part of this contract: 1b owns (1)/(2) and task 7
+	//     converts (4) to tombstones. Do not "fix" (4) here — that work is already assigned.
 	// The whole run's pages are held in memory until storage — unchanged by #1570, since the loop
 	// already accumulated every page into `result`; only the cursor write moved.
 	// ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -642,9 +655,11 @@ func (s *transactionSyncService) SyncTransactions(
 	// "Attempted", not "guaranteed": generation.Bump swallows a failed Redis SET — it logs an error
 	// and records a metric, but returns nothing, so the caller cannot know, and a household lookup failure leaves the household generation alone — so a bump can be
 	// requested and not happen. This closes the code path, not the infrastructure.
-	// It does NOT guarantee a bump for writes made before this point (the pagination loop's
-	// UpdateCursor calls, which touch no cached-read table) nor for the non-fatal post-storage
-	// steps, which are reached only after cacheBumpNeeded is already true.
+	// It does NOT guarantee a bump for the non-fatal post-storage steps, which are reached only
+	// after cacheBumpNeeded is already true. (This used to also except "the pagination loop's
+	// UpdateCursor calls"; #1570 deleted those — the single cursor write now happens after the
+	// storage steps, inside the region the defer already covers, and still touches no cached-read
+	// table.)
 	//
 	// The flag is armed BEFORE each write is attempted, not after it succeeds (#1537 T92). It used
 	// to be armed after: processModifiedTransactions commits one transactionRepo.Update PER ROW
@@ -1194,8 +1209,11 @@ func (s *transactionSyncService) processRemovedTransactions(
 // Uses a 5-minute deduplication window to REDUCE excessive snapshots. Not prevent: the
 // GetLatestByAccountID check and the Create are separate statements, and webhook processing takes no
 // linked-item lock (the sync worker does, FOR UPDATE), so two concurrent paths can both see no recent
-// snapshot and both insert. It bounds SEQUENTIAL duplication only — see #1570. while allowing
-// multiple snapshots per day for high-frequency syncs.
+// snapshot and both insert. It bounds SEQUENTIAL duplication only, while allowing multiple
+// snapshots per day for high-frequency syncs. (This used to end "— see #1570.", mid-sentence and
+// pointing at the cursor issue, which never covered concurrent snapshot inserts. #1569 closed
+// #1570, so the dangling pointer is removed rather than left to send the next reader somewhere
+// irrelevant; the concurrency gap itself is unchanged and still untracked.)
 //
 // Error Handling:
 //   - Logs warnings but doesn't fail the entire sync
