@@ -188,6 +188,13 @@ export function AccountsPage() {
     }
   }
 
+  // DISCONNECT ONLY (Issue #1569 F5). This counts ACTIVE accounts under the item and asks whether
+  // the one being acted on is the last of them — which is only meaningful when that account is
+  // itself still active, i.e. on the disconnect path. It mirrors the backend's own trigger for
+  // stopping the Plaid item: accountService.cleanupAfterAccountRemoval schedules item cleanup when
+  // CountActiveByLinkedItemID drops to zero. Do NOT reuse it for the purge dialog: a purge target
+  // is by definition inactive, so it is never in this count, and purging it cannot change the
+  // active count at all.
   function isLastAccountForItem(account: Account): boolean {
     const allAccounts = accountsData?.accounts ?? []
     const activeAccountsForItem = allAccounts.filter(
@@ -224,7 +231,6 @@ export function AccountsPage() {
     const displayName = account.nickname || account.official_name || account.name
     const maskPart = account.mask ? ` (...${account.mask})` : ''
     const isInvestment = account.type === 'investment'
-    const isLast = isLastAccountForItem(account)
     return (
       <span>
         You are about to permanently delete <strong data-ph-mask>{displayName}{maskPart}</strong> and all of its balance history, holdings, and liabilities.
@@ -236,11 +242,6 @@ export function AccountsPage() {
         )}
         <br />Your bank transactions will NOT be deleted — if another connection to this same account exists, they will continue to appear there; otherwise they remain visible with no linked account.
         <br />If a savings goal still tracks this account, the purge will be refused until you delete or re-link that goal.
-        {isLast && (
-          <>
-            <br />The bank connection to <strong data-ph-mask>{account.institution_name}</strong> will also be disconnected.
-          </>
-        )}
       </span>
     )
   }

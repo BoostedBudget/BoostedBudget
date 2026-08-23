@@ -573,6 +573,42 @@ describe('AccountsPage', () => {
       expect(desc.textContent).toContain('savings goal')
     })
 
+    // Issue #1569 F5: the purge dialog used to end with "The bank connection to <bank> will also
+    // be disconnected", gated on isLastAccountForItem — a predicate that counts ACTIVE accounts.
+    // A purge target is by definition inactive, so it is never in that count, and the branch fired
+    // only when some OTHER account under the item was still active: the exact opposite of what the
+    // sentence says. It was also untrue on its own terms — PurgeAccount's item cleanup keys on
+    // "no ACTIVE accounts remain", which a purge of an already-inactive account cannot change. The
+    // branch is gone; this pins that it does not come back.
+    it('does not claim the bank connection will be disconnected, in either item shape', () => {
+      const openPurgeDialog = () => {
+        fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+        fireEvent.click(screen.getAllByText('Delete from history')[0])
+        return screen.getByTestId('dialog-description')
+      }
+
+      // Sole account under the item.
+      const { unmount } = renderAccountsPage()
+      expect(openPurgeDialog().textContent).not.toContain('bank connection')
+      unmount()
+
+      // Another, still-ACTIVE account under the same item — the shape that used to make the
+      // inverted predicate fire.
+      mockUseGetAccounts.mockReturnValue({
+        data: {
+          accounts: [
+            closedAccount,
+            { ...closedAccount, id: 'acc-2', name: 'Chase Savings', status: 'active', removed_at: undefined },
+          ],
+        },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+      renderAccountsPage()
+      expect(openPurgeDialog().textContent).not.toContain('bank connection')
+    })
+
     // Fix round 1, IMPORTANT 3: the backend's actionable 409 detail (e.g.
     // repository.ErrPurgeBlockedBySavingsGoal's mapped message) lives at
     // `err.response.data.detail`, not `err.message` (axios's `.message` for an HTTP error is the
