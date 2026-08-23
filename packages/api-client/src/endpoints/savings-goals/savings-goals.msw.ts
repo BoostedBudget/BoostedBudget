@@ -210,6 +210,16 @@ export const getUpdateSavingsGoalMockHandler = (overrideResponse?: SavingsGoal |
       })
   }, options)
 }
+
+export const getPurgeSavingsGoalMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/savings-goals/:id/purge', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 204
+      })
+  }, options)
+}
 export const getSavingsGoalsMock = () => [
   getGetSavingsGoalsMockHandler(),
   getCreateSavingsGoalMockHandler(),
@@ -222,5 +232,6 @@ export const getSavingsGoalsMock = () => [
   getRejectSavingsGoalContributionMockHandler(),
   getDeleteSavingsGoalMockHandler(),
   getGetSavingsGoalMockHandler(),
-  getUpdateSavingsGoalMockHandler()
+  getUpdateSavingsGoalMockHandler(),
+  getPurgeSavingsGoalMockHandler()
 ]
