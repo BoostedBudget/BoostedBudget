@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -777,6 +778,32 @@ func TestDisconnectPlaidAccount_NotFound(t *testing.T) {
 	_, err := handler.DisconnectAccount(context.Background(), input)
 
 	require.Error(t, err)
+}
+
+// TestDisconnectPlaidAccount_AlreadyDisconnected asserts, at the handler level, the API behaviour
+// chosen for a repeat disconnect (Issue #1569, Task 2): the handler must propagate
+// repository.ErrAccountAlreadyDisconnected unchanged, which internal/huma/errors.mapper.go maps to
+// a 409 Conflict — the same precondition-check-then-409 shape as PurgeAccount's
+// ErrAccountNotDisconnected, rather than silently swallowing the repeat call as idempotent success.
+func TestDisconnectPlaidAccount_AlreadyDisconnected(t *testing.T) {
+	mockPlaid := &mockPlaidServiceForPlaid{}
+	mockAccount := &mockAccountServiceForPlaid{
+		disconnectAccountErr: repository.ErrAccountAlreadyDisconnected,
+	}
+
+	handler := NewPlaidHandler(mockPlaid, mockAccount)
+
+	input := &DisconnectAccountInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "acc-123",
+	}
+
+	_, err := handler.DisconnectAccount(context.Background(), input)
+
+	require.Error(t, err)
+	statusErr, ok := err.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
 }
 
 // TestPurgePlaidAccount_Success tests successful account purge (hard delete). Issue #1569, Task 6.

@@ -137,6 +137,147 @@ func TestAccountRepository_MarkRemovedByLinkedItemID_Integration_PreservesBalanc
 	assert.Equal(t, 1, snapshotStillThere, "the balance_snapshot must survive the institution-level disconnect")
 }
 
+// TestAccountRepository_UpdateStatus_Integration_RepeatDisconnectDoesNotMoveRemovedAt is the
+// Task 2 regression test: a second UpdateStatus(..., AccountStatusRemoved, nil) call against an
+// already-'removed' account must refuse the write (ErrAccountAlreadyDisconnected) rather than
+// re-stamping removed_at to now(). Before the guard, the second call unconditionally re-set
+// removed_at even though the history trigger correctly wrote no new account_status_history row for
+// the no-op status transition — so the "last known balance, as of <date>" label silently drifted
+// forward to today every time a user hit disconnect twice.
+func TestAccountRepository_UpdateStatus_Integration_RepeatDisconnectDoesNotMoveRemovedAt(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	ctx := context.Background()
+	profileRepo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	accountRepo := NewAccountRepository(pool, enc)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := createMarkDisconnectedFixtureUser(t, ctx, pool, profileRepo, suffix)
+	item := createMarkDisconnectedFixtureItem(t, ctx, linkedItemRepo, userID, suffix)
+
+	var accountID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'Test Checking', 'depository')
+		RETURNING id`,
+		item.ID, userID, "plaid-acct-repeat-"+suffix).Scan(&accountID))
+
+	require.NoError(t, accountRepo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil))
+
+	var firstRemovedAt time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT removed_at FROM accounts WHERE id = $1`, accountID).Scan(&firstRemovedAt))
+
+	// Backdate removed_at to prove the SECOND call cannot move it forward. Six months, matching the
+	// bug report's "claims it was disconnected today instead of six months ago."
+	sixMonthsAgo := time.Now().AddDate(0, -6, 0)
+	_, err := pool.Exec(ctx, `UPDATE accounts SET removed_at = $1 WHERE id = $2`, sixMonthsAgo, accountID)
+	require.NoError(t, err)
+
+	err = accountRepo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil)
+	require.ErrorIs(t, err, ErrAccountAlreadyDisconnected,
+		"a repeat disconnect must be refused, not silently re-applied")
+
+	var removedAtAfterRepeat time.Time
+	var status string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status, removed_at FROM accounts WHERE id = $1`, accountID).Scan(&status, &removedAtAfterRepeat))
+	assert.Equal(t, "removed", status)
+	assert.WithinDuration(t, sixMonthsAgo, removedAtAfterRepeat, time.Second,
+		"the second disconnect call must NOT move removed_at forward")
+}
+
+// TestAccountRepository_UpdateStatus_Integration_DoesNotClobberReplacedChainMetadata is the Task 2
+// regression test for the "worse" bug: calling UpdateStatus(..., AccountStatusRemoved, nil) against
+// an account that is already 'replaced' (part of a re-link chain) must not overwrite its terminal
+// status, and must not null out replaced_at/replaced_by_id.
+func TestAccountRepository_UpdateStatus_Integration_DoesNotClobberReplacedChainMetadata(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	ctx := context.Background()
+	profileRepo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	accountRepo := NewAccountRepository(pool, enc)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := createMarkDisconnectedFixtureUser(t, ctx, pool, profileRepo, suffix)
+	item := createMarkDisconnectedFixtureItem(t, ctx, linkedItemRepo, userID, suffix)
+
+	var oldAccountID, newAccountID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'Old Checking', 'depository') RETURNING id`,
+		item.ID, userID, "plaid-old-"+suffix).Scan(&oldAccountID))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'New Checking', 'depository') RETURNING id`,
+		item.ID, userID, "plaid-new-"+suffix).Scan(&newAccountID))
+
+	require.NoError(t, accountRepo.UpdateStatus(ctx, oldAccountID, userID, domain.AccountStatusReplaced, &newAccountID))
+
+	var replacedAtBefore time.Time
+	var replacedByIDBefore string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT replaced_at, replaced_by_id FROM accounts WHERE id = $1`, oldAccountID,
+	).Scan(&replacedAtBefore, &replacedByIDBefore))
+	require.Equal(t, newAccountID, replacedByIDBefore)
+
+	err := accountRepo.UpdateStatus(ctx, oldAccountID, userID, domain.AccountStatusRemoved, nil)
+	require.ErrorIs(t, err, ErrAccountAlreadyDisconnected,
+		"a disconnect against an already-replaced account must be refused")
+
+	var status string
+	var replacedAtAfter time.Time
+	var replacedByIDAfter *string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status, replaced_at, replaced_by_id FROM accounts WHERE id = $1`, oldAccountID,
+	).Scan(&status, &replacedAtAfter, &replacedByIDAfter))
+	assert.Equal(t, "replaced", status, "the terminal 'replaced' status must not be overwritten with 'removed'")
+	assert.WithinDuration(t, replacedAtBefore, replacedAtAfter, time.Second)
+	require.NotNil(t, replacedByIDAfter, "replaced_by_id must survive — this is the re-link chain metadata")
+	assert.Equal(t, newAccountID, *replacedByIDAfter)
+}
+
+// TestAccountRepository_UpdateStatus_Integration_FirstDisconnectStillWritesHistory pins the
+// happy path: the FIRST disconnect must still work exactly as before the Task 2 guard, and the
+// history trigger (migration 000152, `WHEN (OLD.status IS DISTINCT FROM NEW.status)`) must still
+// fire and record the active->removed transition interval.
+func TestAccountRepository_UpdateStatus_Integration_FirstDisconnectStillWritesHistory(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	ctx := context.Background()
+	profileRepo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	accountRepo := NewAccountRepository(pool, enc)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := createMarkDisconnectedFixtureUser(t, ctx, pool, profileRepo, suffix)
+	item := createMarkDisconnectedFixtureItem(t, ctx, linkedItemRepo, userID, suffix)
+
+	var accountID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'Test Checking', 'depository')
+		RETURNING id`,
+		item.ID, userID, "plaid-acct-firstdisc-"+suffix).Scan(&accountID))
+
+	require.NoError(t, accountRepo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil))
+
+	var status string
+	var removedAt *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status, removed_at FROM accounts WHERE id = $1`, accountID).Scan(&status, &removedAt))
+	assert.Equal(t, "removed", status)
+	require.NotNil(t, removedAt)
+
+	var historyCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM account_status_history WHERE account_id = $1 AND status = 'removed'`,
+		accountID).Scan(&historyCount))
+	assert.Equal(t, 1, historyCount, "the first disconnect must still write its history interval")
+}
+
 // TestAccountRepository_Reads_Integration_ReturnRemovedAt is the falsifiability test for the
 // write-only-column bug: accounts.removed_at was STAMPED by UpdateStatus/MarkRemovedByLinkedItemID
 // but never SELECTed by any read, so domain.Account.RemovedAt was always nil, `omitempty` dropped

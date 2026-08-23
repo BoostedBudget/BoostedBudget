@@ -1059,6 +1059,42 @@ func TestDisconnectAccount_Success(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 }
 
+// TestDisconnectAccount_AlreadyDisconnected pins the chosen API behaviour for a repeat disconnect
+// (Issue #1569, Task 2): the service propagates repository.ErrAccountAlreadyDisconnected unchanged
+// — it does not swallow it as idempotent success, and does not run the post-removal cleanup steps
+// (they would be meaningless: nothing actually changed).
+func TestDisconnectAccount_AlreadyDisconnected(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		jobQueue:    nil,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{
+		ID:           accountID,
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).
+		Return(repository.ErrAccountAlreadyDisconnected)
+
+	err := service.DisconnectAccount(ctx, accountID, userID)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, repository.ErrAccountAlreadyDisconnected)
+	mockAccountRepo.AssertExpectations(t)
+	// CountActiveByLinkedItemID and the rest of cleanupAfterAccountRemoval must NOT run — asserted
+	// implicitly: MockAccountRepository would fail on an unexpected call it has no .On() for.
+}
+
 // TestDisconnectAccount_LogsAuditEntry tests that a successful DeleteAccount records an
 // "account.removed" audit entry (Issue #1569, Task 5G — nothing was audit-logged on account
 // deletion before this).

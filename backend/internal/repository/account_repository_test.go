@@ -1120,7 +1120,9 @@ func TestAccountRepository_GetByUserAccountAndStatus_MultipleAccounts(t *testing
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestAccountRepository_UpdateStatus tests updating account status for soft-delete
+// TestAccountRepository_UpdateStatus tests updating account status for soft-delete. Issue #1569,
+// Task 2: UpdateStatus now locks and checks the row's CURRENT status before writing, so the mock
+// must satisfy the SELECT ... FOR UPDATE precondition check (returning 'active') before the UPDATE.
 func TestAccountRepository_UpdateStatus(t *testing.T) {
 	mock, repo := setupAccountMockDB(t)
 	defer mock.Close()
@@ -1129,6 +1131,11 @@ func TestAccountRepository_UpdateStatus(t *testing.T) {
 	accountID := uuid.New().String()
 	userID := uuid.New().String()
 	replacedByID := uuid.New().String()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT status FROM accounts WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+		WithArgs(accountID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"status"}).AddRow("active"))
 
 	// Expect update to set status, replaced_at, replaced_by_id, and removed_at
 	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id.*removed_at").
@@ -1142,6 +1149,7 @@ func TestAccountRepository_UpdateStatus(t *testing.T) {
 			pgxmock.AnyArg(), // user_id
 		).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
 	// Execute
 	err := repo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusReplaced, &replacedByID)
@@ -1151,7 +1159,8 @@ func TestAccountRepository_UpdateStatus(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestAccountRepository_UpdateStatus_NotFound tests updating status for non-existent account
+// TestAccountRepository_UpdateStatus_NotFound tests updating status for non-existent account: the
+// row-lock SELECT itself finds no matching row.
 func TestAccountRepository_UpdateStatus_NotFound(t *testing.T) {
 	mock, repo := setupAccountMockDB(t)
 	defer mock.Close()
@@ -1160,17 +1169,11 @@ func TestAccountRepository_UpdateStatus_NotFound(t *testing.T) {
 	accountID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mock.ExpectExec("UPDATE accounts.*SET.*status.*replaced_at.*replaced_by_id.*removed_at").
-		WithArgs(
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-		).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT status FROM accounts WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+		WithArgs(accountID, userID).
+		WillReturnError(pgx.ErrNoRows)
+	mock.ExpectRollback()
 
 	// Execute
 	err := repo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusReplaced, nil)
@@ -1179,6 +1182,39 @@ func TestAccountRepository_UpdateStatus_NotFound(t *testing.T) {
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrAccountNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_UpdateStatus_AlreadyNonActive is the RED test for Issue #1569, Task 2: a
+// row that is no longer 'active' (already removed, replaced, or expired) must refuse the write
+// entirely — no UPDATE statement should even be issued — rather than re-stamping removed_at/
+// replaced_at or clobbering an already-terminal status. Covers both the repeat-disconnect case
+// (status='removed') and the already-replaced case the brief calls out separately.
+func TestAccountRepository_UpdateStatus_AlreadyNonActive(t *testing.T) {
+	for _, currentStatus := range []string{"removed", "replaced", "expired"} {
+		t.Run(currentStatus, func(t *testing.T) {
+			mock, repo := setupAccountMockDB(t)
+			defer mock.Close()
+
+			ctx := context.Background()
+			accountID := uuid.New().String()
+			userID := uuid.New().String()
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT status FROM accounts WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+				WithArgs(accountID, userID).
+				WillReturnRows(pgxmock.NewRows([]string{"status"}).AddRow(currentStatus))
+			mock.ExpectRollback()
+			// Deliberately NO mock.ExpectExec for the UPDATE — issuing it at all would be the bug.
+
+			// Execute
+			err := repo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil)
+
+			// Assert
+			assert.Error(t, err)
+			assert.ErrorIs(t, err, ErrAccountAlreadyDisconnected)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 // ============================================================================

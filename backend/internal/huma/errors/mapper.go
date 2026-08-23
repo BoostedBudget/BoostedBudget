@@ -144,6 +144,8 @@ func MapError(err error) error {
 		return huma.Error409Conflict("A savings goal still references this account. Delete the goal first, then try again.")
 	case errors.Is(err, repository.ErrAccountNotDisconnected):
 		return huma.Error409Conflict("This account must be disconnected before it can be purged.")
+	case errors.Is(err, repository.ErrAccountAlreadyDisconnected):
+		return huma.Error409Conflict("This account has already been disconnected.")
 	// GAP AW: idempotency key reused for a different operation — RFC 7231 / Stripe semantics.
 	case errors.Is(err, repository.ErrIdempotencyKeyConflict):
 		return huma.Error409Conflict("This idempotency key was already used for a different operation. Use a new key to perform a different request.")
