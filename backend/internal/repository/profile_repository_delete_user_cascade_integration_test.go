@@ -1532,6 +1532,8 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		{Table: "notifications", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "paddle_transactions", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "portfolio_snapshots", Column: "user_id", DeleteRule: "CASCADE"},
+		// #1569 Task 11: the ledger of which portfolio_snapshots days the repair examined.
+		{Table: "portfolio_snapshot_repairs", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "privacy_settings", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "referral_codes", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "referrals", Column: "referred_id", DeleteRule: "CASCADE"},
@@ -1709,6 +1711,13 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		VALUES ($1, 'Test Goal', 1000, $2, 'manual')`, target.ID, accountID)
 
 	execNoErr(t, ctx, pool, `INSERT INTO portfolio_snapshots (user_id, snapshot_date) VALUES ($1, CURRENT_DATE)`, target.ID)
+
+	execNoErr(t, ctx, pool, `
+		INSERT INTO portfolio_snapshot_repairs
+			(user_id, snapshot_date, outcome, reason, expected_account_count, observed_account_count,
+			 previous_total_value, previous_total_cost_basis, previous_total_gain_loss)
+		VALUES ($1, CURRENT_DATE - 1, 'refused_no_coverage', 'seeded by the cascade fixture', 0, 0, 0, 0, 0)`,
+		target.ID)
 
 	// merchants -> merchant_name_overrides (Issue #1440: this FK did not exist before migration
 	// 000128 — the one gap the coordinator's own schema audit missed; see this task's report).

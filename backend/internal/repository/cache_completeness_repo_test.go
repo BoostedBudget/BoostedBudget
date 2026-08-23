@@ -173,6 +173,7 @@ var repoMethodDispositions = map[string]repoMethodDisposition{
 	"InvestmentTransactionRepository.UpsertBatch":                         {dispositionDerivedNoCacheImpact, ""},
 	"LinkedItemRepository.UpdateInvestmentsLastSyncedDate":                {dispositionDerivedNoCacheImpact, ""},
 	"PortfolioSnapshotRepository.Upsert":                                  {dispositionDerivedNoCacheImpact, ""},
+	"PortfolioSnapshotRepository.RepairUserFromHistory":                    {dispositionDerivedNoCacheImpact, ""},
 	"CreditLiabilityRepository.ReplaceForAccount":                         {dispositionExplicitBump, "services/liability_sync_service.go SyncLiabilities — bumpCacheForUser runs after."},
 	"MortgageLiabilityRepository.ReplaceForAccount":                       {dispositionExplicitBump, "services/liability_sync_service.go SyncLiabilities — bumpCacheForUser runs after."},
 	"StudentLoanLiabilityRepository.ReplaceForAccount":                    {dispositionExplicitBump, "services/liability_sync_service.go SyncLiabilities — bumpCacheForUser runs after."},

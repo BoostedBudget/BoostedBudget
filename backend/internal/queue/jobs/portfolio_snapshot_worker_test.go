@@ -67,6 +67,19 @@ func (m *mockSnapshotRepo) GetLatestBefore(ctx context.Context, userID string, d
 	panic("not implemented")
 }
 
+// #1569 Task 11: the repair pass the daily job runs before it writes today's aggregate.
+func (m *mockSnapshotRepo) RepairUserFromHistory(ctx context.Context, userID string) (domain.PortfolioRepairSummary, error) {
+	args := m.Called(ctx, userID)
+	sum, _ := args.Get(0).(domain.PortfolioRepairSummary)
+	return sum, args.Error(1)
+}
+
+func (m *mockSnapshotRepo) UserIDsWithUnexaminedSnapshots(ctx context.Context, limit int) ([]string, error) {
+	args := m.Called(ctx, limit)
+	ids, _ := args.Get(0).([]string)
+	return ids, args.Error(1)
+}
+
 // --- helpers ---
 
 func newTestPortfolioSnapshotJob(args PortfolioSnapshotArgs) *river.Job[PortfolioSnapshotArgs] {

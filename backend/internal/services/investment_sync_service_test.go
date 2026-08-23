@@ -111,6 +111,20 @@ func (m *MockPortfolioSnapshotRepository) GetLatestBefore(ctx context.Context, u
 	return args.Get(0).(*domain.PortfolioSnapshot), args.Error(1)
 }
 
+// #1569 Task 11: the coverage-limited repair of past portfolio_snapshots days. Not exercised by
+// the sync service, which only ever writes TODAY.
+func (m *MockPortfolioSnapshotRepository) RepairUserFromHistory(ctx context.Context, userID string) (domain.PortfolioRepairSummary, error) {
+	args := m.Called(ctx, userID)
+	sum, _ := args.Get(0).(domain.PortfolioRepairSummary)
+	return sum, args.Error(1)
+}
+
+func (m *MockPortfolioSnapshotRepository) UserIDsWithUnexaminedSnapshots(ctx context.Context, limit int) ([]string, error) {
+	args := m.Called(ctx, limit)
+	ids, _ := args.Get(0).([]string)
+	return ids, args.Error(1)
+}
+
 type MockInvestmentTransactionRepository struct {
 	mock.Mock
 }

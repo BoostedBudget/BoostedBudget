@@ -27,6 +27,14 @@ type PortfolioSnapshotRepository interface {
 	// the given date (used for day-change calculation). Returns nil (no error) when no prior
 	// snapshot exists.
 	GetLatestBefore(ctx context.Context, userID string, date time.Time) (*domain.PortfolioSnapshot, error)
+
+	// RepairUserFromHistory rebuilds this user's PAST portfolio_snapshots rows from
+	// holding_snapshots — see portfolio_snapshot_repair.go.
+	RepairUserFromHistory(ctx context.Context, userID string) (domain.PortfolioRepairSummary, error)
+
+	// UserIDsWithUnexaminedSnapshots lists users with at least one past portfolio_snapshots day
+	// the repair has not examined yet, newest-owing first, capped at limit.
+	UserIDsWithUnexaminedSnapshots(ctx context.Context, limit int) ([]string, error)
 }
 
 type portfolioSnapshotRepository struct {
