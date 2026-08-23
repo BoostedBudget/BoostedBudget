@@ -182,10 +182,20 @@ func (s *investmentSyncService) ProcessWebhook(ctx context.Context, webhook *dom
 	case "HOLDINGS":
 		var holdingResult *domain.HoldingSyncResult
 		holdingResult, err = s.SyncHoldings(ctx, linkedItem)
-		if err == nil && holdingResult != nil && len(holdingResult.Errors) > 0 {
-			// Partial failure: some accounts skipped due to unmapped securities.
-			// Existing holdings are preserved but not updated — trigger retry.
-			err = fmt.Errorf("holdings sync partial failure: %v", holdingResult.Errors)
+		if err == nil && holdingResult != nil {
+			switch {
+			case len(holdingResult.Errors) > 0:
+				// Partial failure: some accounts skipped due to unmapped securities.
+				// Existing holdings are preserved but not updated — trigger retry.
+				err = fmt.Errorf("holdings sync partial failure: %v", holdingResult.Errors)
+			case len(holdingResult.SkippedIncomplete) > 0:
+				// Issue #1569 Task 4: some accounts were absent from Plaid's response
+				// (partial/incomplete), so their clear was skipped to preserve existing
+				// holdings. Retry so a transient partial response gets a chance to complete —
+				// this does NOT suppress the portfolio snapshot (see the snapshot gate in
+				// SyncHoldings, which checks Errors only).
+				err = fmt.Errorf("holdings sync incomplete: %v", holdingResult.SkippedIncomplete)
+			}
 		}
 	case "INVESTMENTS_TRANSACTIONS":
 		_, err = s.SyncInvestmentTransactions(ctx, linkedItem)
@@ -311,7 +321,14 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 					"account_id", internalAccountID,
 					"item_id", linkedItem.ID,
 				)
-				result.Errors = append(result.Errors, fmt.Sprintf("account %s: skipped holdings clear, account absent from Plaid's response (partial/incomplete)", plaidAccountID))
+				// Issue #1569 Task 4 fix round 1: this MUST be its own field, not result.Errors.
+				// Errors gates the portfolio snapshot upsert below — an account Plaid has
+				// permanently stopped returning (closed accounts are never re-reported, per
+				// AccountBase.AccountId's doc comment) would otherwise suppress this user's
+				// snapshot forever, even though the preserved holdings are exactly what the
+				// snapshot should be summing. SkippedIncomplete still drives the ProcessWebhook
+				// retry decision below without touching the snapshot gate.
+				result.SkippedIncomplete = append(result.SkippedIncomplete, fmt.Sprintf("account %s: skipped holdings clear, account absent from Plaid's response (partial/incomplete)", plaidAccountID))
 				continue
 			}
 		}
@@ -380,9 +397,16 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 	}
 
 	// Issue #138: Upsert portfolio snapshot from committed holdings state.
-	// Skip when accounts were skipped (partial sync must not become a day-change baseline).
-	// Each per-item webhook recomputes the full-user aggregate via aggregate-at-write SQL,
-	// so concurrent multi-institution syncs converge to the correct total.
+	// Skip when accounts were skipped due to a real correctness problem — result.Errors, i.e.
+	// unmapped securities — a partial sync in that sense must not become a day-change baseline.
+	// Each per-item webhook recomputes the full-user aggregate via aggregate-at-write SQL, so
+	// concurrent multi-institution syncs converge to the correct total.
+	//
+	// Deliberately NOT gated on result.SkippedIncomplete (Issue #1569 Task 4 fix round 1): an
+	// account Plaid has permanently stopped returning is a stable state, not a repeated failure,
+	// and its holdings were correctly PRESERVED, not lost — they are exactly the rows this
+	// snapshot should be summing. Gating on SkippedIncomplete would suppress the snapshot forever
+	// for that account instead of just for one retriable sync.
 	if len(result.Errors) == 0 && s.portfolioSnapshotRepo != nil {
 		snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
 		if _, snapErr := s.portfolioSnapshotRepo.Upsert(ctx, linkedItem.UserID, snapshotDate); snapErr != nil {

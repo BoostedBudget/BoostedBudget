@@ -8,7 +8,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/plaid/plaid-go/v23/plaid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -696,6 +698,8 @@ func TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesCreditLia
 	svc, deps := setupLiabilitySyncService(t)
 	ctx := context.Background()
 
+	before := testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("credit_liability"))
+
 	plaidAccountID := "plaid-cc-partial"
 	internalAccountID := uuid.New().String()
 	userID := uuid.New().String()
@@ -723,6 +727,8 @@ func TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesCreditLia
 	assert.Equal(t, 0, result.AccountsProcessed)
 	// The credit clear must NEVER be called for this account — existing rows are preserved.
 	deps.creditRepo.AssertNotCalled(t, "ReplaceForAccount", ctx, internalAccountID, userID, (*domain.CreditLiability)(nil))
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("credit_liability")),
+		"a refactor that silently drops the .Inc() call must be visible here, not just in the log line")
 }
 
 // TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesMortgageLiability mirrors
@@ -731,6 +737,8 @@ func TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesCreditLia
 func TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesMortgageLiability(t *testing.T) {
 	svc, deps := setupLiabilitySyncService(t)
 	ctx := context.Background()
+
+	before := testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("mortgage_liability"))
 
 	plaidAccountID := "plaid-mort-partial"
 	internalAccountID := uuid.New().String()
@@ -755,6 +763,7 @@ func TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesMortgageL
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.AccountsProcessed)
 	deps.mortgageRepo.AssertNotCalled(t, "ReplaceForAccount", ctx, internalAccountID, userID, (*domain.MortgageLiability)(nil))
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("mortgage_liability")))
 }
 
 // TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesStudentLoanLiability mirrors
@@ -762,6 +771,8 @@ func TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesMortgageL
 func TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesStudentLoanLiability(t *testing.T) {
 	svc, deps := setupLiabilitySyncService(t)
 	ctx := context.Background()
+
+	before := testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("student_loan_liability"))
 
 	plaidAccountID := "plaid-sl-partial"
 	internalAccountID := uuid.New().String()
@@ -786,6 +797,7 @@ func TestLiabilitySyncService_SyncLiabilities_PartialResponse_PreservesStudentLo
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.AccountsProcessed)
 	deps.studentLoanRepo.AssertNotCalled(t, "ReplaceForAccount", ctx, internalAccountID, userID, (*domain.StudentLoanLiability)(nil))
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("student_loan_liability")))
 }
 
 // TestLiabilitySyncService_SyncLiabilities_PartialResponse_MixedAccounts verifies per-account
