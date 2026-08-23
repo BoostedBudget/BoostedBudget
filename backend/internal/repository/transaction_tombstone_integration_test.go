@@ -117,12 +117,12 @@ func seedTombstoneFixture(t *testing.T) *tombstoneFixture {
 			UserAccountID: &f.userAccountID,
 			Source:        domain.SourcePlaid, ExternalTransactionID: &f.postedExtID,
 			Amount: 99.00, Date: date, Name: "Posted Groceries", Pending: false,
-			UserNotes:                &notes,
-			CategoryOverrideKind:     &overrideKind,
-			PFCPrimaryOverride:       &overridePrimary,
-			CategorySourceField:      domain.CategorySourceManual,
-			Reviewed:                 true,
-			ReviewedAt:               &reviewedAt,
+			UserNotes:            &notes,
+			CategoryOverrideKind: &overrideKind,
+			PFCPrimaryOverride:   &overridePrimary,
+			CategorySourceField:  domain.CategorySourceManual,
+			Reviewed:             true,
+			ReviewedAt:           &reviewedAt,
 		},
 		{
 			ID: f.liveTxnID, UserID: f.userID, AccountID: f.accountID, LinkedItemID: f.linkedItemID,
@@ -158,6 +158,33 @@ func seedTombstoneFixture(t *testing.T) *tombstoneFixture {
 	require.NoError(t, err, "seed rule_execution_history")
 
 	return f
+}
+
+// disconnectChain soft-removes the fixture's only account, leaving its user_account chain with no
+// 'active' member. That is precisely the state retainedAccountVisibilityLeg exists for: the unified
+// feed's active-chain legs both go dark and the historical leg takes over, WIDENING the set of rows
+// the feed is willing to return.
+//
+// It exists because of a round-1 review finding: TestTombstone_HiddenFromEveryRead_Integration
+// asserted, in a comment, that the unified feed is the query most able to resurrect a tombstone —
+// while running it against an 'active' account, where that leg never fires at all. The comment was
+// describing a code path the test did not execute.
+func (f *tombstoneFixture) disconnectChain(t *testing.T, ctx context.Context) {
+	t.Helper()
+	// The account_status_history row the leg reads is written by migration 000151/000152's trigger,
+	// so this deliberately does not hand-write one — the test sees the rows production will have.
+	_, err := f.tx.Exec(ctx,
+		`UPDATE accounts SET status = 'removed', removed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+		f.accountID)
+	require.NoError(t, err, "soft-remove account")
+
+	var liveSuccessors int
+	require.NoError(t, f.tx.QueryRow(ctx, `
+		SELECT COUNT(*) FROM accounts WHERE user_account_id = $1 AND status = 'active'
+	`, f.userAccountID).Scan(&liveSuccessors))
+	require.Zero(t, liveSuccessors,
+		"the retained leg only fires when the chain has NO live successor; if this is non-zero the "+
+			"test is not exercising the leg it claims to")
 }
 
 func (f *tombstoneFixture) tombstoneBoth(t *testing.T, ctx context.Context) {
@@ -323,6 +350,14 @@ func TestTombstone_HiddenFromEveryRead_Integration(t *testing.T) {
 	assert.Equal(t, 1, count, "CountByUserID must agree with the list it paginates, or the UI shows "+
 		"a page count for rows it will never render")
 
+	// CountByUserID is the number the UI paginates against, so it has to move WITH the list when
+	// the caller opts into reversals — and by exactly one, never two.
+	reversedCount, err := f.repo.CountByUserID(ctx, f.userID, domain.TransactionFilters{IncludeReversed: true})
+	require.NoError(t, err)
+	assert.Equal(t, 2, reversedCount,
+		"include_reversed must admit the posted reversal into the count (live + reversal), and the "+
+			"settled pending into neither")
+
 	_, err = f.repo.GetByID(ctx, f.postedTxnID)
 	assert.ErrorIs(t, err, ErrTransactionNotFound, "GetByID must not resolve a tombstoned row")
 
@@ -341,6 +376,62 @@ func TestTombstone_HiddenFromEveryRead_Integration(t *testing.T) {
 		"the review inbox counts rows the user can act on; the two tombstoned rows are not among "+
 			"them, and the tombstoned POSTED row was reviewed=true anyway — only the live control "+
 			"row is genuinely unreviewed")
+}
+
+// TestTombstone_HiddenFromTheRetainedVisibilityLeg_Integration is the variant that makes the
+// previous test's stated rationale real (round-1 finding M-3).
+//
+// retainedAccountVisibilityLeg (#1569 task 2) deliberately WIDENS the unified feed: once a
+// user_account chain has no 'active' member, rows that both active legs would hide come back, so
+// that disconnecting a bank does not erase its history from the UI. That makes the feed the single
+// query most able to resurrect a tombstone — and the leg does not fire at all against the 'active'
+// account the sibling test uses, so it was asserting a claim it never executed.
+//
+// Here the chain is disconnected first. The leg fires (proved by the live control row still being
+// returned — under the pre-task-2 predicate it would have vanished too), and the tombstones must
+// still be excluded.
+func TestTombstone_HiddenFromTheRetainedVisibilityLeg_Integration(t *testing.T) {
+	ctx := context.Background()
+	f := seedTombstoneFixture(t)
+	f.tombstoneBoth(t, ctx)
+	f.disconnectChain(t, ctx)
+
+	items, _, err := f.repo.GetByUserIDKeysetUnified(ctx, f.userID, domain.TransactionFilters{}, nil, 100)
+	require.NoError(t, err)
+
+	feed := map[string]bool{}
+	for _, it := range items {
+		feed[it.ID] = true
+	}
+
+	require.True(t, feed[f.liveTxnID],
+		"the retained leg must be the thing returning this row — the account is 'removed' and its "+
+			"chain has no active member, so both active legs are dark. If this fails, the test is "+
+			"not exercising the leg and the exclusions below prove nothing")
+	assert.False(t, feed[f.pendingTxnID],
+		"a settled pending must stay hidden even when the retained leg has widened the feed")
+	assert.False(t, feed[f.postedTxnID],
+		"a posted reversal must stay hidden by default even when the retained leg has widened the feed")
+
+	// And the opt-in still behaves the same way through the widened leg.
+	withReversals, _, err := f.repo.GetByUserIDKeysetUnified(
+		ctx, f.userID, domain.TransactionFilters{IncludeReversed: true}, nil, 100)
+	require.NoError(t, err)
+	optIn := map[string]bool{}
+	for _, it := range withReversals {
+		optIn[it.ID] = true
+	}
+	assert.True(t, optIn[f.postedTxnID], "the reversal is still surfacable on a disconnected chain")
+	assert.False(t, optIn[f.pendingTxnID], "the settled pending is surfacable nowhere, ever")
+
+	// The keyset and filter paths share buildWhereClause but NOT the retained leg; asserted here
+	// too so the disconnected state is covered on every list the UI can reach.
+	byFilters, err := f.repo.GetByUserIDWithFilters(ctx, f.userID, domain.TransactionFilters{}, 100, 0)
+	require.NoError(t, err)
+	for _, tr := range byFilters {
+		assert.NotEqual(t, f.pendingTxnID, tr.ID)
+		assert.NotEqual(t, f.postedTxnID, tr.ID)
+	}
 }
 
 // TestTombstone_SettledPendingIsNeverSurfaced_Integration. IncludeReversed is the ONLY door out of
@@ -472,12 +563,29 @@ func TestTombstone_GDPRErasureStillDestroysIt_Integration(t *testing.T) {
 	f := seedTombstoneFixture(t)
 	f.tombstoneBoth(t, ctx)
 
-	// DeleteUserCascade re-points cross-user references first; none exist in this fixture, so the
-	// `DELETE FROM users` it ends with is the whole of the erasure for these rows.
-	_, err := f.tx.Exec(ctx, `UPDATE transactions SET user_account_id = NULL WHERE user_id = $1`, f.userID)
-	require.NoError(t, err)
-	_, err = f.tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, f.userID)
-	require.NoError(t, err, "erasure must not be blocked by a tombstoned row")
+	// Round-1 finding M-6: this used to hand-replicate DeleteUserCascade's
+	// `UPDATE transactions SET user_account_id = NULL` prep and then issue its own
+	// `DELETE FROM users`, which proved the FK GRAPH and not the erasure. The production method is
+	// called instead, so the thing under test is what actually runs in production.
+	//
+	// Two of its guards need satisfying, neither related to tombstones: the eligibility re-check
+	// wants deletion_requested_at to match exactly what the caller observed, and the C2 guard
+	// refuses to proceed while any linked_item still needs Plaid-side cleanup.
+	requestedAt := time.Now().Add(-31 * 24 * time.Hour).UTC().Truncate(time.Microsecond)
+	_, err := f.tx.Exec(ctx, `
+		UPDATE users SET deletion_requested_at = $1, deletion_scheduled_at = $1 WHERE id = $2
+	`, requestedAt, f.userID)
+	require.NoError(t, err, "mark the user for deletion")
+	_, err = f.tx.Exec(ctx,
+		`UPDATE linked_items SET plaid_removed_at = NOW() WHERE user_id = $1`, f.userID)
+	require.NoError(t, err, "satisfy the C2 un-cleaned-Plaid-item guard")
+
+	profileRepo := NewProfileRepository(f.tx, newTestFieldEncryptor(t))
+	deleted, _, err := profileRepo.DeleteUserCascade(ctx, f.userID, &requestedAt)
+	require.NoError(t, err, "erasure must not be blocked or broken by a tombstoned row")
+	require.True(t, deleted,
+		"the cascade must actually run; a guard abort returns (false, nil, nil) and would make "+
+			"every assertion below pass for the wrong reason")
 
 	var txnRows int
 	require.NoError(t, f.tx.QueryRow(ctx,

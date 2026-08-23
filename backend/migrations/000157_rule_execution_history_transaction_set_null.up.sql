@@ -20,7 +20,12 @@
 -- categorization_rules(id) ON DELETE CASCADE (000020:159), whose own user_id -> users(id) is also
 -- ON DELETE CASCADE (000020:95). That two-hop path does not involve transaction_id, so flipping
 -- this FK cannot leave an erased user's execution rows behind. Pinned by
--- TestDeleteUserCascade_ErasesRuleExecutionHistory_Integration.
+-- TestTombstone_GDPRErasureStillDestroysIt_Integration, which asserts zero rule_execution_history
+-- rows after the erasure (repository/transaction_tombstone_integration_test.go).
+--
+-- The SET NULL behaviour itself is pinned by TestTombstone_RuleExecutionHistorySurvives_Integration
+-- in the same file: the audit row is intact after a tombstone and NULL-but-present after a genuine
+-- hard delete.
 --
 -- No Go code reads or writes this table today (`grep -rn 'rule_execution_history\|RuleExecution'
 -- backend --include='*.go'` returns nothing outside migrations). The flip is schema-only, and the
@@ -34,9 +39,12 @@
 -- =============================================================================
 
 -- Dropping NOT NULL is the point of this migration, not an accident: SET NULL cannot fire against
--- a NOT NULL column. Nothing reads this table in Go (see the header), so there is no client to
--- break; the schema is the only consumer. Squawk's ban-drop-not-null is suppressed for this
--- reason in .squawk.toml (this version honours no per-statement ignore comment).
+-- a NOT NULL column. squawk's ban-drop-not-null exists to warn that this breaks existing clients;
+-- rule_execution_history has none -- `grep -rn "rule_execution_history\|RuleExecution" backend
+-- --include="*.go"` matches only migrations -- so the rule is suppressed for THIS STATEMENT ONLY.
+-- The directive must sit on its own line immediately above the statement; a trailing
+-- `; -- squawk-ignore ...` on the same line is NOT honoured.
+-- squawk-ignore ban-drop-not-null
 ALTER TABLE rule_execution_history ALTER COLUMN transaction_id DROP NOT NULL;
 
 -- =============================================================================

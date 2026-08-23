@@ -24,10 +24,12 @@
 --
 -- Reads default-exclude every tombstone regardless of reason; surfacing a reversal is opt-in
 -- (domain.TransactionFilters.IncludeReversed). See repository/transaction_repository.go
--- transactionTombstoneFilter and the guard test TestNoTransactionReadForgetsTheTombstoneFilter.
+-- transactionTombstoneCondition and the guard test TestNoTransactionReadForgetsTheTombstoneFilter.
 --
 -- GDPR: a tombstoned row is still a row. transactions.user_id -> users(id) ON DELETE CASCADE is
--- untouched, so erasure still destroys it. Pinned by TestDeleteUserCascade_ErasesTombstonedTransactions.
+-- untouched, so erasure still destroys it. Pinned by
+-- TestTombstone_GDPRErasureStillDestroysIt_Integration
+-- (repository/transaction_tombstone_integration_test.go).
 --
 -- Idempotent: IF NOT EXISTS on every column and index, pg_constraint guards on both CHECKs.
 

@@ -169,8 +169,14 @@ type Transaction struct {
 	// A caller that opts into reversals (TransactionFilters.IncludeReversed) receives rows with
 	// DeletedReason == TxnDeletedProviderRemovedPosted; Reversed() is the predicate to render on.
 	DeletedAt     *time.Time                `json:"deleted_at,omitempty" db:"deleted_at"`
-	DeletedReason *TransactionDeletedReason `json:"deleted_reason,omitempty" db:"deleted_reason"`
-	DeletedBy     *string                   `json:"deleted_by,omitempty" db:"deleted_by"`
+	DeletedReason *TransactionDeletedReason `json:"deleted_reason,omitempty" db:"deleted_reason" enum:"provider_removed_pending,provider_removed_posted"`
+
+	// DeletedBy is `json:"-"` ON PURPOSE. It is an internal ACTOR label ("plaid_sync"), not a user
+	// or anything a client can act on, and the reason a client actually needs is already in
+	// DeletedReason. Serialising it would put an operational implementation detail into
+	// api/openapi.yaml, where it becomes a contract we have to keep. It stays on the struct because
+	// the scan path populates it and the integration tests assert provenance was recorded.
+	DeletedBy *string `json:"-" db:"deleted_by"`
 
 	// Effective category columns (denormalized, generated or app-maintained)
 	EffectivePFCPrimary   *string `json:"effective_pfc_primary,omitempty" db:"effective_pfc_primary"`

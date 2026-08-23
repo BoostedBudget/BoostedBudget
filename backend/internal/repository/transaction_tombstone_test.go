@@ -17,7 +17,7 @@ import (
 // These are pgxmock tests, so they pin the STATEMENT — that it is an UPDATE, that it is scoped by
 // the blind index rather than the plaintext external id, and that it refuses to touch an already
 // tombstoned row. They cannot pin what the CASE expression actually evaluates to against real data;
-// TestTombstoneByExternalID_*_Integration does that, because pgxmock asserts query strings and
+// TestTombstone_*_Integration (transaction_tombstone_integration_test.go) does that, because pgxmock asserts query strings and
 // never semantics.
 
 func TestTombstoneByExternalID_UpdatesRatherThanDeletes(t *testing.T) {

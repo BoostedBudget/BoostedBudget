@@ -537,3 +537,138 @@ func TestSessionDateCast_Integration_UsesUTCCalendarDay(t *testing.T) {
 		"::date (the same session-timezone-dependent cast CURRENT_DATE uses) must resolve to the "+
 			"UTC calendar day on integrationDB's pool — got %v, want %v", gotDate.UTC(), wantUTCDay)
 }
+
+// =============================================================================
+// (d) Tombstone-aware ownership probes — Issue #1569 round 1, finding M-1
+// =============================================================================
+
+// Insert, InsertManualFromTransaction and ConfirmContribution each carry a
+// `SELECT ... FROM transactions WHERE id = $1 AND user_id = $2 [AND deleted_at IS NULL] [FOR UPDATE]`
+// ownership/capacity probe that #1569 edited. All three were executed by NO integration test — the
+// round-1 report claimed otherwise and was wrong. The #1569 edits to this file were made by a
+// scripted pass that produced three syntactically invalid queries elsewhere in the package, so
+// "it compiles" was never evidence these parse.
+//
+// These tests do two things: execute the real SQL, and pin the tombstone behaviour that edit
+// introduced — a transaction the provider removed can no longer back a savings contribution.
+// ErrContributionNotFound is the right answer there: the money the contribution was derived from
+// is no longer part of the ledger, and silently keeping the link would let a reversed transfer go
+// on counting toward a goal.
+
+func TestSavingsContributionRepository_Integration_Insert_RejectsTombstonedTransaction(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -50.0)
+
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	live := &domain.SavingsGoalContribution{
+		SavingsGoalID: goalID,
+		TransactionID: &txnID,
+		Amount:        10.0,
+		Source:        "manual",
+		Status:        "confirmed",
+		OccurredOn:    time.Now().Format("2006-01-02"),
+	}
+	require.NoError(t, repo.Insert(ctx, userID, live),
+		"baseline: the probe must parse and accept a live transaction")
+
+	tombstoneTransaction(t, pool, txnID)
+
+	tombstoned := &domain.SavingsGoalContribution{
+		SavingsGoalID: goalID,
+		TransactionID: &txnID,
+		Amount:        5.0,
+		Source:        "manual",
+		Status:        "confirmed",
+		OccurredOn:    time.Now().Format("2006-01-02"),
+	}
+	err := repo.Insert(ctx, userID, tombstoned)
+	assert.ErrorIs(t, err, domain.ErrContributionNotFound,
+		"a provider-removed transaction must not be linkable as a contribution")
+}
+
+func TestSavingsContributionRepository_Integration_InsertManualFromTransaction_RejectsTombstoned(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -80.0)
+
+	repo := repository.NewSavingsContributionRepository(pool)
+	occurredOn := time.Now().Format("2006-01-02")
+
+	created, err := repo.InsertManualFromTransaction(ctx, userID, goalID, txnID, 20.0, occurredOn)
+	require.NoError(t, err, "baseline: the FOR UPDATE capacity probe must parse against a live row")
+	require.NotNil(t, created)
+
+	tombstoneTransaction(t, pool, txnID)
+
+	_, err = repo.InsertManualFromTransaction(ctx, userID, goalID, txnID, 20.0, occurredOn)
+	assert.ErrorIs(t, err, domain.ErrContributionNotFound,
+		"remaining capacity on a removed transaction is not capacity")
+}
+
+func TestSavingsContributionRepository_Integration_ConfirmContribution_RejectsTombstoned(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -120.0)
+
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	proposed := &domain.SavingsGoalContribution{
+		SavingsGoalID: goalID,
+		TransactionID: &txnID,
+		Amount:        30.0,
+		Source:        "confirmed_transfer",
+		Status:        "proposed",
+		OccurredOn:    time.Now().Format("2006-01-02"),
+	}
+	require.NoError(t, repo.Insert(ctx, userID, proposed))
+
+	confirmed, err := repo.ConfirmContribution(ctx, userID, proposed.ID)
+	require.NoError(t, err, "baseline: ConfirmContribution's FOR UPDATE probe must parse")
+	require.NotNil(t, confirmed)
+	assert.Equal(t, "confirmed", confirmed.Status)
+
+	// A second proposed row on the same transaction — necessarily on a DIFFERENT goal, because
+	// unique_contribution_per_goal_per_transaction allows only one per (goal, transaction) — then
+	// tombstone the transaction under it.
+	secondGoalID := seedIntegrationGoal(t, pool, userID, accountID)
+	second := &domain.SavingsGoalContribution{
+		SavingsGoalID: secondGoalID,
+		TransactionID: &txnID,
+		Amount:        10.0,
+		Source:        "confirmed_transfer",
+		Status:        "proposed",
+		OccurredOn:    time.Now().Format("2006-01-02"),
+	}
+	require.NoError(t, repo.Insert(ctx, userID, second))
+
+	tombstoneTransaction(t, pool, txnID)
+
+	_, err = repo.ConfirmContribution(ctx, userID, second.ID)
+	assert.ErrorIs(t, err, domain.ErrContributionNotFound,
+		"confirming a contribution whose transaction the provider removed must fail rather than "+
+			"silently counting reversed money toward a goal")
+}
+
+// tombstoneTransaction applies the #1569 tombstone directly, so these tests do not depend on the
+// Plaid sync path to reach the state they are about.
+func tombstoneTransaction(t *testing.T, pool *pgxpool.Pool, txnID string) {
+	t.Helper()
+	ct, err := pool.Exec(context.Background(), `
+		UPDATE transactions
+		SET deleted_at = NOW(), deleted_reason = 'provider_removed_posted', deleted_by = 'plaid_sync'
+		WHERE id = $1
+	`, txnID)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, ct.RowsAffected(), "fixture must actually be tombstoned")
+}

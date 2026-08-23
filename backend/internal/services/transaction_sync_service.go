@@ -639,17 +639,28 @@ func (s *transactionSyncService) SyncTransactions(
 	//     storage step returned nil, never the reverse.
 	//   - RESIDUAL, and the reason this is not "zero rows can ever be missed": the storage steps
 	//     still have log-and-continue paths that skip a row and return nil, so the cursor can
-	//     advance past a row that was never written. TWO REMAIN, both in
-	//     processAddedTransactions, and both narrowed to near-unreachable by task 1b:
-	//       1. a row whose Plaid account_id is not in accountMap is Warn'd and skipped (the
-	//          `!found` skip). buildAccountMaps now loads ALL statuses
+	//     advance past a row that was never written. FOUR REMAIN — the enumeration below was
+	//     wrong in its first #1569 revision, which claimed two and named only
+	//     processAddedTransactions; processModifiedTransactions has its own pair, structurally
+	//     identical, and missing them is how residual (3) survived a round:
+	//       1. processAddedTransactions — a row whose Plaid account_id is not in accountMap is
+	//          Warn'd and skipped (the `!found` skip). buildAccountMaps now loads ALL statuses
 	//          (GetByLinkedItemIDIncludingRetained), not just 'active', so this fires only if
 	//          Plaid names a plaid_account_id with no accounts row AT ALL for this
 	//          linked_item_id — not merely a non-active one;
-	//       2. if that skipped every row in the page, the function returns nil early; same
-	//          narrowing as (1), for the same reason.
-	//     Both fail toward RETAINING (an un-imported row) rather than destroying, which is the
-	//     safe side of #1569's governing principle.
+	//       2. processAddedTransactions — if that skipped every row in the page, the function
+	//          returns nil early; same narrowing as (1), for the same reason;
+	//       3. processModifiedTransactions — a row that is BOTH unmappable and not stored. Same
+	//          narrowing as (1): there is no account to insert under and no row to update. The
+	//          unmappable-but-STORED case is no longer a skip at all — the stored row supplies the
+	//          identity and the edit is applied (see UNMAPPABLE ACCOUNTS on that function);
+	//       4. processModifiedTransactions — MapPlaidTransactionBase rejects the payload itself
+	//          (malformed provider data). Deliberately NOT an error return: re-delivery cannot fix
+	//          a payload, so aborting would wedge this item's sync permanently.
+	//     Every one fails toward RETAINING (an un-imported row, or a stored row left unchanged)
+	//     rather than destroying, which is the safe side of #1569's governing principle.
+	//     processRemovedTransactions also skips a `removed` entry whose transaction_id is nil; that
+	//     is not in this list because a nil id identifies no row, so there is nothing to miss.
 	//
 	//     TWO OTHERS WERE CLOSED BY #1569 TASK 7 and are recorded here because this comment is
 	//     where the next reader will look for them:
@@ -1068,14 +1079,31 @@ func (s *transactionSyncService) processAddedTransactions(
 // CRITICAL: Preserves user_notes field from existing transaction.
 //
 // Process:
-//  1. Map Plaid transaction to domain.Transaction
-//  2. Fetch existing transaction by external_transaction_id
-//  3. Preserve user_notes from existing transaction
-//  4. Call Update with new data + preserved user_notes + existing ID
+//  1. Fetch the existing transaction by external_transaction_id (BEFORE mapping — see UNMAPPABLE
+//     ACCOUNTS below; the stored row is a source of account identity, so the map must not get to
+//     veto an edit to a row we already hold)
+//  2. Map the Plaid payload to domain.Transaction
+//  3. Preserve user_notes from the existing transaction
+//  4. Call Update with the new data + preserved user_notes + existing ID
 //
-// Graceful error handling:
-//   - Skips transactions with unmapped accounts (logs warning)
-//   - Returns error if Update or the missing-row upsert fails
+// Error handling: a lookup failure, an Update failure and a missing-row upsert failure all return,
+// so the cursor stays where the run started. Exactly two paths log and continue, both narrated
+// below (UNMAPPABLE ACCOUNTS), and neither can lose an edit to a transaction we already store.
+//
+// UNMAPPABLE ACCOUNTS. mapPlaidTransaction fails for two unrelated reasons, and until #1569 round 1
+// both were flattened into one `Warn; skippedCount++; continue` that returned nil — structurally
+// the same defect as residual (3), just reached one branch earlier:
+//
+//   - the Plaid account_id is not in accountMap. If the transaction IS stored, its own row already
+//     records account_id / linked_item_id / user_account_id, so the payload is remapped with
+//     MapPlaidTransactionBase and that identity re-attached; the edit lands. Only when the row is
+//     ALSO absent is there nothing to insert under, and that case is narrowed the same way task 1b
+//     narrowed processAddedTransactions': buildAccountMaps loads every status
+//     (GetByLinkedItemIDIncludingRetained), so it needs Plaid to name a plaid_account_id with no
+//     accounts row AT ALL for this linked_item_id.
+//   - MapPlaidTransactionBase itself fails — a malformed payload, e.g. an unparseable date. Skipped
+//     and logged on purpose: re-delivery cannot fix a payload, so returning an error would wedge
+//     this item's sync forever, and the failure direction is RETAINING the stored row unchanged.
 //
 // MISSING ROWS — residual (3) of the #1570 STORAGE-BEFORE-CURSOR CONTRACT. A `modified` entry whose
 // row GetByExternalID cannot find used to be Warn'd and DROPPED, and the cursor then advanced past
@@ -1095,8 +1123,9 @@ func (s *transactionSyncService) processAddedTransactions(
 // (source, external_transaction_id_blind_idx, user_id) — the tombstoned row itself — and its SET
 // list names neither deleted_at, deleted_reason nor deleted_by, so the conflict path refreshes the
 // provider-owned fields and leaves the tombstone exactly as it was. No new row is inserted either,
-// because the unique index the arbiter uses does not exclude tombstoned rows. Verified by
-// TestProcessModified_MissingTombstonedRow_DoesNotResurrect.
+// because the unique index the arbiter uses does not exclude tombstoned rows. Verified against a
+// real database by TestTombstone_UpsertDoesNotResurrect_Integration
+// (repository/transaction_tombstone_integration_test.go).
 //
 // CreateBatch also preserves user_notes, category_override_kind, tags and tags_source on conflict,
 // which is the same "sync overwrites provider fields, never user work" contract the Update branch
@@ -1115,6 +1144,7 @@ func (s *transactionSyncService) processModifiedTransactions(
 	successCount := 0
 	skippedCount := 0
 	upsertedCount := 0
+	recoveredCount := 0
 
 	// Issue #1163: Batch-upsert merchants for modified transactions (best-effort)
 	// Build domain txns temporarily just to use shared upsertMerchants helper
@@ -1127,17 +1157,56 @@ func (s *transactionSyncService) processModifiedTransactions(
 	merchantIDs := s.upsertMerchants(ctx, modifiedDomainTxns)
 
 	for _, plaidTxn := range modified {
-		// Map Plaid transaction to domain.Transaction (new data from Plaid)
-		newTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap, userAccountMap)
-		if err != nil {
-			s.logger.Warn("skipping modified transaction", "transaction_id", plaidTxn.TransactionId, "error", err)
-			skippedCount++
-			continue
+		// LOOK UP FIRST, MAP SECOND. The order is load-bearing (#1569 round 1). Mapping first meant
+		// an unmappable Plaid account_id discarded the modification before anything even checked
+		// whether we already HELD that transaction — the same "Warn, skip, return nil, cursor
+		// advances" shape as residual (3), applied to a row that exists. The stored row is itself a
+		// perfectly good source of account identity, so it is consulted before the map can veto.
+		existingTxn, lookupErr := s.transactionRepo.GetByExternalID(ctx, domain.SourcePlaid, plaidTxn.TransactionId, linkedItem.UserID)
+		if lookupErr != nil && !errors.Is(lookupErr, repository.ErrTransactionNotFound) {
+			// A real lookup failure is NOT the missing-row case and must not be absorbed: the
+			// cursor would advance past a modification nobody applied.
+			return fmt.Errorf("failed to look up modified transaction %s: %w", plaidTxn.TransactionId, lookupErr)
 		}
 
-		// Fetch existing transaction to preserve user_notes
-		existingTxn, err := s.transactionRepo.GetByExternalID(ctx, domain.SourcePlaid, plaidTxn.TransactionId, linkedItem.UserID)
-		if errors.Is(err, repository.ErrTransactionNotFound) {
+		newTxn, err := s.mapPlaidTransaction(ctx, plaidTxn, linkedItem.ID, linkedItem.UserID, accountMap, userAccountMap)
+		if err != nil {
+			if existingTxn == nil {
+				// Nothing stored AND nothing mappable: there is no account_id to insert under and
+				// no row to update. This is the ONLY remaining log-and-continue path in this
+				// function, and it is narrowed exactly as processAddedTransactions' equivalent is
+				// by task 1b's GetByLinkedItemIDIncludingRetained — it needs Plaid to name a
+				// plaid_account_id with no accounts row at all for this linked_item_id.
+				s.logger.Warn("skipping modified transaction: not stored and not mappable",
+					"transaction_id", plaidTxn.TransactionId, "error", err)
+				skippedCount++
+				continue
+			}
+
+			// We hold the row. Rebuild from the provider payload alone and re-attach the identity
+			// the stored row already proves, rather than losing the edit.
+			base, baseErr := MapPlaidTransactionBase(plaidTxn)
+			if baseErr != nil {
+				// The payload itself is malformed (e.g. an unparseable date). Re-delivery cannot
+				// fix that, so returning an error here would wedge this item's sync permanently.
+				// Logged and skipped deliberately, and it fails toward RETAINING the stored row
+				// unchanged rather than destroying anything.
+				s.logger.Warn("skipping modified transaction: provider payload cannot be mapped",
+					"transaction_id", plaidTxn.TransactionId, "error", baseErr)
+				skippedCount++
+				continue
+			}
+			externalID := plaidTxn.GetTransactionId()
+			base.UserID = linkedItem.UserID
+			base.ExternalTransactionID = &externalID
+			base.AccountID = existingTxn.AccountID
+			base.LinkedItemID = existingTxn.LinkedItemID
+			base.UserAccountID = existingTxn.UserAccountID
+			newTxn = base
+			recoveredCount++
+		}
+
+		if existingTxn == nil {
 			// Residual (3): no live row to update. Upsert instead of dropping the edit — see the
 			// MISSING ROWS note on this function for why, and for why this cannot resurrect a
 			// tombstone.
@@ -1157,11 +1226,6 @@ func (s *transactionSyncService) processModifiedTransactions(
 				"transaction_id", plaidTxn.TransactionId)
 			upsertedCount++
 			continue
-		}
-		if err != nil {
-			// A real lookup failure is NOT the missing-row case and must not be absorbed: the
-			// cursor would advance past a modification nobody applied.
-			return fmt.Errorf("failed to look up modified transaction %s: %w", plaidTxn.TransactionId, err)
 		}
 
 		// CRITICAL: Preserve user_notes from existing transaction
@@ -1186,7 +1250,8 @@ func (s *transactionSyncService) processModifiedTransactions(
 	}
 
 	s.logger.Info("updated modified transactions",
-		"updated", successCount, "upserted", upsertedCount, "skipped", skippedCount)
+		"updated", successCount, "upserted", upsertedCount,
+		"identity_recovered_from_stored_row", recoveredCount, "skipped", skippedCount)
 	return nil
 }
 

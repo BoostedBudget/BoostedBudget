@@ -32,6 +32,7 @@
  */
 import type { Account } from './account';
 import type { TagSource } from './tagSource';
+import type { TransactionDeletedReason } from './transactionDeletedReason';
 
 export interface Transaction {
   /** A URL to the JSON Schema for this object. */
@@ -48,8 +49,7 @@ export interface Transaction {
   custom_category_override_id?: string;
   date: string;
   deleted_at?: string;
-  deleted_by?: string;
-  deleted_reason?: string;
+  deleted_reason?: TransactionDeletedReason;
   effective_category_name?: string;
   effective_merchant_name?: string;
   effective_pfc_detailed?: string;
