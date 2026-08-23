@@ -117,14 +117,29 @@ export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
     refetchOnWindowFocus: false,
   });
 
-  // #1569 T12 (I2): a settled pending is dropped at the boundary, so it reaches NO consumer —
-  // not the table, not the card view, not a future one. See isSettledPending for why the client
-  // re-checks something the backend already gates twice.
+  // #1569 T12 (I2): a settled pending is dropped here, so it reaches no consumer of THIS hook —
+  // not the table, not the card view, not a future one. useBudgetTransactions reads transactions
+  // by a separate path this does not cover; that path never sends include_reversed, so the row
+  // cannot reach it today, but do not read this as a global guarantee. See isSettledPending for
+  // why the client re-checks something the backend already gates twice.
+  //
+  // The drop is logged because a row arriving here means a backend regression: the API contract
+  // says this combination cannot occur. Silently hiding it would make that regression invisible
+  // rather than merely harmless.
   const transactions: FeedRow[] = useMemo(
     () =>
       (query.data?.pages.flatMap((p) => p.transactions ?? []) ?? [])
         .map(toFeedRow)
-        .filter((row) => !isSettledPending(row)),
+        .filter((row) => {
+          if (isSettledPending(row)) {
+            console.warn(
+              '[#1569] dropped a settled-pending transaction the API should never have returned',
+              { id: row.id },
+            );
+            return false;
+          }
+          return true;
+        }),
     [query.data],
   );
 

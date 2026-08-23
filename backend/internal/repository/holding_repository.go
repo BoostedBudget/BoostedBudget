@@ -217,7 +217,7 @@ func (r *holdingRepository) GetByUserID(ctx context.Context, userID string) ([]d
 		FROM holdings
 		JOIN accounts a ON a.id = holdings.account_id
 		WHERE holdings.user_id = $1
-		  -- -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		  -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		  AND ` + currentStateAccountLeg("a") + `
 		ORDER BY holdings.account_id, holdings.security_id
 	`
@@ -375,7 +375,7 @@ func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userI
 			sec.institution_price, sec.institution_price_as_of,
 			sec.close_price, sec.close_price_as_of
 		FROM holdings h
-		-- -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		JOIN accounts a ON a.id = h.account_id AND `+currentStateAccountLeg("a")+`
 		LEFT JOIN securities sec ON sec.id = h.security_id
 		WHERE h.user_id = $1
@@ -428,7 +428,7 @@ func (r *holdingRepository) GetDistinctUserIDsWithHoldings(ctx context.Context) 
 	query := `
 		SELECT DISTINCT h.user_id::text
 		FROM holdings h
-		-- -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + `
 		ORDER BY h.user_id::text
 	`
