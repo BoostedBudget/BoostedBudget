@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
 // Issue #1570 (closed under #1569): the sync used to persist the Plaid cursor PER PAGE, inside the
@@ -366,16 +367,21 @@ func TestSyncTransactions_ModifiedStorageFailure_LeavesCursorUnadvanced(t *testi
 	mockPlaidService.AssertExpectations(t)
 }
 
-// TestSyncTransactions_RemovedDeleteError_StillAdvancesCursor pins Step 8 as it actually behaves,
-// which is NOT symmetric with Steps 6 and 7.
+// TestSyncTransactions_RemovedTombstoneError_HoldsCursor is the inversion of what this test used to
+// assert, and the inversion is the point (#1569 task 7, residual path (4)).
 //
-// processRemovedTransactions returns nil on EVERY path: a genuine DeleteByExternalID database error
-// is Warn'd and counted as "skipped" for idempotency, so Step 8 can never gate the cursor. This test
-// exists so the asymmetry is pinned rather than assumed — it is residual path (4) in the
-// storage-before-cursor contract comment. The failure direction is safe for #1569 (the row stays
-// visible rather than vanishing), and task 7 converts this path to tombstones. If someone later makes
-// this path return an error, this test fails and points them at the contract comment.
-func TestSyncTransactions_RemovedDeleteError_StillAdvancesCursor(t *testing.T) {
+// It used to pin Step 8 as DELIBERATELY asymmetric with Steps 6 and 7: processRemovedTransactions
+// returned nil on every path, so a genuine database failure was Warn'd, counted as "skipped", and
+// the cursor advanced anyway. Plaid does not re-deliver a removal the stored cursor has moved past,
+// so that row stayed visible forever and nothing recorded that anything had gone wrong. The
+// asymmetry was tolerated only because the old failure direction was "row stays" rather than "row
+// vanishes", which is the safe side of #1569's governing principle — not because it was correct.
+//
+// Step 8 now gates the cursor like its siblings: a real error aborts, the cursor stays where the
+// run started, and Plaid re-delivers the whole page. Re-delivery is idempotent —
+// TombstoneByExternalID reports ErrTransactionNotFound for a row that is already tombstoned, which
+// the caller treats as success.
+func TestSyncTransactions_RemovedTombstoneError_HoldsCursor(t *testing.T) {
 	ctx := context.Background()
 
 	mockPlaidService := new(MockPlaidService)
@@ -408,17 +414,66 @@ func TestSyncTransactions_RemovedDeleteError_StillAdvancesCursor(t *testing.T) {
 
 	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-remfail").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-remfail"}}, nil)
-	mockTransactionRepo.On("DeleteByExternalID", mock.Anything, domain.SourcePlaid, "txn-rem-1", "user-remfail").
-		Return(errors.New("deadlock detected")).Once()
+	mockTransactionRepo.On("TombstoneByExternalID", mock.Anything, domain.SourcePlaid, "txn-rem-1", "user-remfail", domain.TxnDeletedByPlaidSync).
+		Return(domain.TransactionDeletedReason(""), errors.New("deadlock detected")).Once()
 	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	_, err := service.SyncTransactions(ctx, linkedItem)
-	require.NoError(t, err, "processRemovedTransactions swallows delete errors and returns nil")
+	require.Error(t, err, "a genuine tombstone failure must abort the sync, not be absorbed")
+	assert.Contains(t, err.Error(), "deadlock detected",
+		"the underlying database error must survive to the caller, not be flattened into a generic failure")
+
+	assert.Empty(t, persistedCursors(mockLinkedItemRepo),
+		"the cursor must stay where the run started: advancing it would move Plaid past a removal "+
+			"that was never applied, and Plaid never re-delivers it (#1569 residual path (4))")
+
+	mockPlaidService.AssertExpectations(t)
+}
+
+// TestSyncTransactions_RemovedAlreadyTombstoned_AdvancesCursor is the other half: the idempotent
+// case must NOT be mistaken for the failure case above, or every re-delivered page would wedge the
+// cursor permanently. ErrTransactionNotFound means "there is no live row to tombstone" — the row
+// was never stored, or an earlier run already tombstoned it — and the sync is complete either way.
+func TestSyncTransactions_RemovedAlreadyTombstoned_AdvancesCursor(t *testing.T) {
+	ctx := context.Background()
+
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewTransactionSyncService(
+		nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo,
+		nil, nil, mockPlaidService, nil, nil, nil, nil, nil, nil,
+	)
+
+	startCursor := "cursor-0"
+	linkedItem := &domain.LinkedItem{
+		ID:          "linked-item-remidem",
+		UserID:      "user-remidem",
+		ItemID:      "plaid-item-remidem",
+		AccessToken: "access-token",
+		Cursor:      &startCursor,
+	}
+
+	page := &plaid.TransactionsSyncResponse{
+		Removed: []plaid.RemovedTransaction{{TransactionId: stringPtr("txn-rem-1")}},
+	}
+	page.SetNextCursor("cursor-1")
+	page.SetHasMore(false)
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", startCursor, 0).Return(page, nil).Once()
+
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-remidem").
+		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-remidem"}}, nil)
+	mockTransactionRepo.On("TombstoneByExternalID", mock.Anything, domain.SourcePlaid, "txn-rem-1", "user-remidem", domain.TxnDeletedByPlaidSync).
+		Return(domain.TransactionDeletedReason(""), repository.ErrTransactionNotFound).Once()
+	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	_, err := service.SyncTransactions(ctx, linkedItem)
+	require.NoError(t, err, "an already-tombstoned row is the idempotent case, not a failure")
 
 	assert.Equal(t, []string{"cursor-1"}, persistedCursors(mockLinkedItemRepo),
-		"Step 8 cannot gate the cursor: the delete error was swallowed, so the sync 'succeeded' and "+
-			"the cursor advanced past a removal that was never applied. Safe for #1569 (the row is "+
-			"retained, not destroyed); tracked as residual path (4) and owned by task 7.")
+		"nothing was left undone, so the cursor must advance")
 
 	mockPlaidService.AssertExpectations(t)
 }

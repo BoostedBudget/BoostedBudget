@@ -120,7 +120,8 @@ func TestPlaidSyncProvider_SyncForLinkedItem_WithRemovedTransactions(t *testing.
 	// Setup expectations
 	linkedItemRepo.On("GetByID", ctx, linkedItemID).Return(linkedItem, nil)
 	plaidClient.On("TransactionsSync", ctx, "encrypted-token", (*string)(nil)).Return(syncResp, nil)
-	txnRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, txnID, "user-123").Return(nil)
+	txnRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, txnID, "user-123", domain.TxnDeletedByPlaidSync).
+		Return(domain.TxnDeletedProviderRemovedPosted, nil)
 	emitter.On("Emit", ctx, mock.MatchedBy(func(e events.TransactionEvent) bool {
 		return e.Type == events.EventTypeRemoved &&
 			e.UserID == "user-123" &&
@@ -364,8 +365,8 @@ func TestPlaidSyncProvider_SyncForLinkedItem_DeleteError(t *testing.T) {
 	// Setup expectations
 	linkedItemRepo.On("GetByID", ctx, linkedItemID).Return(linkedItem, nil)
 	plaidClient.On("TransactionsSync", ctx, "encrypted-token", (*string)(nil)).Return(syncResp, nil)
-	txnRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, txnID, "user-123").
-		Return(errors.New("database error"))
+	txnRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, txnID, "user-123", domain.TxnDeletedByPlaidSync).
+		Return(domain.TransactionDeletedReason(""), errors.New("database error"))
 
 	// Execute
 	count, err := provider.SyncForLinkedItem(ctx, linkedItemID)

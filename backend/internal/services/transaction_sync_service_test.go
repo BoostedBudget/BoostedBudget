@@ -454,7 +454,7 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 	// Issue #261: Mock account repository for transaction storage
 	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// Mock deletion of removed transaction
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID).Return(nil)
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID, domain.TxnDeletedByPlaidSync).Return(domain.TxnDeletedProviderRemovedPosted, nil)
 
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
@@ -1277,7 +1277,14 @@ func TestProcessModifiedTransactions_NewTransactionNoUserNotes(t *testing.T) {
 	mockTransactionRepo.AssertExpectations(t)
 }
 
-// TestProcessModifiedTransactions_TransactionNotFound tests handling when transaction doesn't exist yet
+// TestProcessModifiedTransactions_TransactionNotFound pins #1569 residual (3): a modification whose
+// row is not in the database is UPSERTED, not dropped.
+//
+// It used to be Warn'd and skipped, and the cursor then advanced past it, so the edit was lost for
+// good — Plaid does not re-deliver a modification the stored cursor is past. A missing row is
+// evidence an earlier sync failed to store it (before #1570 moved the cursor write after storage, a
+// partial page failure advanced the cursor over rows that were never written), not evidence the
+// transaction is not ours.
 func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 	// Setup
 	mockTransactionRepo := new(MockTransactionRepository)
@@ -1321,16 +1328,57 @@ func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 		},
 	}
 
-	// GetByExternalID returns error (not found)
 	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-new", userID).
-		Return(nil, errors.New("transaction not found"))
+		Return(nil, repository.ErrTransactionNotFound)
 
-	// Execute
+	var upserted []domain.Transaction
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).
+		Run(func(args mock.Arguments) {
+			upserted = args.Get(1).([]domain.Transaction)
+		}).
+		Return(map[string]bool{}, nil).Once()
+
 	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
 
-	// Assert - should continue despite not finding transaction (log warning)
-	assert.NoError(t, err) // Gracefully skip
-	// Update should NOT be called for not-found transaction
+	assert.NoError(t, err)
+	mockTransactionRepo.AssertNotCalled(t, "Update")
+	require.Len(t, upserted, 1, "the modification must reach the database as an upsert, not be dropped")
+	assert.Equal(t, "plaid-txn-new", *upserted[0].ExternalTransactionID)
+	assert.NotEmpty(t, upserted[0].ID,
+		"CreateBatch keys BatchRuleApplication records off pre-assigned IDs, so the upsert must carry one")
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessModifiedTransactions_LookupFailureIsNotSwallowed separates residual (3)'s idempotent
+// case from a real one. "Row not found" is a decision to upsert; a connection failure is not, and
+// treating the two alike would let the cursor advance past a modification nobody applied — the same
+// silent loss residual (3) exists to end, arriving through the error branch instead.
+func TestProcessModifiedTransactions_LookupFailureIsNotSwallowed(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, mockTransactionRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-123", UserID: "user-456"}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+	modified := []plaid.Transaction{{
+		TransactionId: "plaid-txn-boom",
+		AccountId:     "plaid-acc-1",
+		Amount:        1.00,
+		Date:          "2024-01-15",
+		Name:          "Boom",
+	}}
+
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-boom", "user-456").
+		Return(nil, errors.New("connection reset by peer"))
+
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
+
+	require.Error(t, err, "a lookup failure is not the missing-row case and must abort the sync")
+	assert.Contains(t, err.Error(), "connection reset by peer")
+	mockTransactionRepo.AssertNotCalled(t, "CreateBatch")
 	mockTransactionRepo.AssertNotCalled(t, "Update")
 }
 
@@ -1417,9 +1465,9 @@ func TestProcessRemovedTransactions_Success(t *testing.T) {
 	}
 
 	// Mock: DeleteByExternalID called for each transaction
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-1", userID).Return(nil)
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-2", userID).Return(nil)
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-3", userID).Return(nil)
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-1", userID, domain.TxnDeletedByPlaidSync).Return(domain.TxnDeletedProviderRemovedPosted, nil)
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-2", userID, domain.TxnDeletedByPlaidSync).Return(domain.TxnDeletedProviderRemovedPosted, nil)
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "plaid-txn-removed-3", userID, domain.TxnDeletedByPlaidSync).Return(domain.TxnDeletedProviderRemovedPosted, nil)
 
 	// Execute
 	err := service.processRemovedTransactions(ctx, removed, linkedItem)
@@ -1465,8 +1513,8 @@ func TestProcessRemovedTransactions_IdempotentNotFound(t *testing.T) {
 
 	// Mock: DeleteByExternalID returns "not found" error
 	// This is OK - transaction already deleted (idempotent)
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "plaid-txn-not-found", userID).
-		Return(errors.New("transaction not found"))
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "plaid-txn-not-found", userID, domain.TxnDeletedByPlaidSync).
+		Return(domain.TransactionDeletedReason(""), repository.ErrTransactionNotFound)
 
 	// Execute
 	err := service.processRemovedTransactions(ctx, removed, linkedItem)
@@ -1512,7 +1560,7 @@ func TestProcessRemovedTransactions_EmptySlice(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	// DeleteByExternalID should NOT be called
-	mockTransactionRepo.AssertNotCalled(t, "DeleteByExternalID")
+	mockTransactionRepo.AssertNotCalled(t, "TombstoneByExternalID")
 }
 
 // TestProcessRemovedTransactions_NilTransactionID tests handling of nil transaction_id (should skip)
@@ -1551,7 +1599,7 @@ func TestProcessRemovedTransactions_NilTransactionID(t *testing.T) {
 	// Assert - should succeed but skip nil transaction
 	assert.NoError(t, err)
 	// DeleteByExternalID should NOT be called for nil ID
-	mockTransactionRepo.AssertNotCalled(t, "DeleteByExternalID")
+	mockTransactionRepo.AssertNotCalled(t, "TombstoneByExternalID")
 }
 
 // ============================================================================
@@ -3835,8 +3883,8 @@ func TestSyncTransactions_DeleteManagedContribsBeforeTransactionRemoval(t *testi
 	mockCleaner.On("DeleteManagedForTransaction", ctx, internalTxnID).Return(nil)
 
 	// DeleteByExternalID is called after the contribution cleanup
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-1").
-		Return(nil)
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-1", domain.TxnDeletedByPlaidSync).
+		Return(domain.TxnDeletedProviderRemovedPosted, nil)
 
 	result, err := svc.SyncTransactions(ctx, linkedItem)
 
@@ -3888,8 +3936,8 @@ func TestSyncTransactions_DeleteManagedContribNonFatalOnError(t *testing.T) {
 	// DeleteManagedForTransaction errors — removal must still proceed
 	mockCleaner.On("DeleteManagedForTransaction", ctx, internalTxnID).Return(errors.New("db error"))
 	// Transaction delete still happens despite contribution cleanup error
-	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-nf").
-		Return(nil)
+	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-nf", domain.TxnDeletedByPlaidSync).
+		Return(domain.TransactionDeletedReason(""), repository.ErrTransactionNotFound)
 
 	result, err := svc.SyncTransactions(ctx, linkedItem)
 

@@ -361,13 +361,18 @@ func TestSyncTransactions_ModifiedOnlyPartialCommitStillBumpsCache(t *testing.T)
 			"This also proves the deferred bump runs on an error return.")
 }
 
-// TestSyncTransactions_RemovedOnlyPartialCommitStillBumpsCache is the Removed-only twin — and it
-// PASSED at HEAD, before the arm-before-write fix. Finding: the T92 brief's claim that the
-// Removed arm can be skipped by a mid-step failure is FALSE. processRemovedTransactions treats a
-// failed DeleteByExternalID as "already deleted", logs it, and continues; it returns nil on every
-// path, so `if err != nil { return }` at the Removed step is unreachable and the flag was always
-// armed. Kept as a characterization guard: if that function ever starts propagating a per-row
-// delete error, this test fails unless the flag is armed first.
+// TestSyncTransactions_RemovedOnlyPartialCommitStillBumpsCache is the Removed-only twin.
+//
+// HISTORY, because the reason it passes has changed. It PASSED at HEAD before the arm-before-write
+// fix, and the finding recorded here was that the T92 brief's claim — that the Removed arm can be
+// skipped by a mid-step failure — was FALSE, because processRemovedTransactions swallowed every
+// per-row error and returned nil unconditionally.
+//
+// #1569 task 7 made that swallow a real error return (residual path (4)), so the arm IS now
+// reachable-past, and this test is no longer a characterization of an unreachable branch: it is a
+// live guard. Row 1's tombstone commits, row 2 fails, SyncTransactions returns an error — and the
+// generation must still move, because a committed write that no cache bump follows serves stale
+// financial data for the namespace TTL.
 func TestSyncTransactions_RemovedOnlyPartialCommitStillBumpsCache(t *testing.T) {
 	resp := &plaid.TransactionsSyncResponse{
 		Added:    []plaid.Transaction{}, // CRITICAL: no prior successful step
@@ -382,20 +387,22 @@ func TestSyncTransactions_RemovedOnlyPartialCommitStillBumpsCache(t *testing.T) 
 	service, txnRepo, linkedItem, c := newSingleStepSyncHarness(t, "removed-only", resp)
 	ctx := context.Background()
 
-	txnRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID).Return(nil).Once()
-	txnRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "txn-rem-2", linkedItem.UserID).
-		Return(errors.New("delete failed on row 2")).Once()
+	txnRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID, domain.TxnDeletedByPlaidSync).Return(domain.TxnDeletedProviderRemovedPosted, nil).Once()
+	txnRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "txn-rem-2", linkedItem.UserID, domain.TxnDeletedByPlaidSync).
+		Return(domain.TransactionDeletedReason(""), errors.New("delete failed on row 2")).Once()
 
 	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
 	require.NoError(t, err)
 
 	_, syncErr := service.SyncTransactions(ctx, linkedItem)
-	_ = syncErr
+	require.Error(t, syncErr,
+		"since #1569 a genuine per-row tombstone failure propagates; if this stops being an error "+
+			"the residual-(4) fix has been undone")
 
 	postGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
 	require.NoError(t, err)
 	assert.NotEqual(t, preGen, postGen,
-		"row 1's delete COMMITTED; the generation must move regardless of row 2's outcome")
+		"row 1's tombstone COMMITTED; the generation must move regardless of row 2's outcome")
 }
 
 // TestSyncTransactions_AddedOnlyFailureStillBumpsCache is the Added-only twin. CreateBatch is a
