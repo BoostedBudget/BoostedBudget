@@ -222,13 +222,41 @@ func TestAccountRepository_CountByUserID(t *testing.T) {
 		SELECT COUNT(*)
 		FROM accounts
 		WHERE user_id = $1
-		AND status != 'expired'
+		AND status NOT IN ('expired', 'removed')
 	`)).WithArgs(userID).WillReturnRows(rows)
 
 	// Execute
 	count, err := repo.CountByUserID(ctx, userID)
 
 	// Assert
+	assert.NoError(t, err)
+	assert.Equal(t, expectedCount, count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAccountRepository_CountByUserID_ExcludesRemoved verifies that a retained 'removed' account
+// (Issue #1569: accounts are retained rather than deleted) does not count towards a user's account
+// quota, same as 'expired' already does not. Before this fix the query only excluded 'expired', so
+// a removed-but-retained account still counted.
+func TestAccountRepository_CountByUserID_ExcludesRemoved(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	expectedCount := 2 // 2 active, 1 removed — removed must not count
+
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(expectedCount)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		FROM accounts
+		WHERE user_id = $1
+		AND status NOT IN ('expired', 'removed')
+	`)).WithArgs(userID).WillReturnRows(rows)
+
+	count, err := repo.CountByUserID(ctx, userID)
+
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCount, count)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -1644,7 +1672,7 @@ func TestAccountRepository_CountByUserID_ExcludesExpired(t *testing.T) {
 		SELECT COUNT(*)
 		FROM accounts
 		WHERE user_id = $1
-		AND status != 'expired'
+		AND status NOT IN ('expired', 'removed')
 	`)).WithArgs(userID).WillReturnRows(rows)
 
 	count, err := repo.CountByUserID(ctx, userID)
