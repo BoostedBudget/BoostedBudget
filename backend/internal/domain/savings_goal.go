@@ -432,6 +432,13 @@ var (
 	ErrSavingsGoalNotFound      = errors.New("savings goal not found")
 	ErrSavingsGoalAlreadyExists = errors.New("savings goal with this name already exists")
 
+	// ErrSavingsGoalNotDeleted is returned by the purge path when the goal is still live.
+	// Purging is the second half of a two-step: DELETE /savings-goals/{id} tombstones the goal and
+	// keeps every contribution; POST /savings-goals/{id}/purge is what actually destroys them, and
+	// it refuses on a goal the user has not already deleted. Same precondition shape as
+	// repository.ErrAccountNotDisconnected on the account purge (Issue #1569, Task 6). Issue #1569.
+	ErrSavingsGoalNotDeleted = errors.New("savings goal must be deleted before it can be purged")
+
 	// ErrContributionNotFound is returned when a savings_goal_contribution is not found.
 	ErrContributionNotFound = errors.New("savings goal contribution not found")
 	// ErrContributionOverAllocated is returned when adding a contribution would exceed

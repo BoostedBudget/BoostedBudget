@@ -1676,10 +1676,11 @@ func (r *analyticsRepository) GetBudgetVsActual(ctx context.Context, userID, per
 			COALESCE(SUM(bc.allocated_amount), 0) AS allocated_amount,
 			COALESCE(SUM(bc.spent_amount), 0)     AS spent_amount
 		FROM budgets b
-		LEFT JOIN budget_categories bc ON bc.budget_id = b.id
+		LEFT JOIN budget_categories bc ON bc.budget_id = b.id AND bc.deleted_at IS NULL
 		WHERE b.user_id = $1
 		  AND b.is_active = true
 		  AND b.period = $2
+		  AND b.deleted_at IS NULL
 		GROUP BY b.id, b.name, b.period
 		ORDER BY b.name ASC
 	`

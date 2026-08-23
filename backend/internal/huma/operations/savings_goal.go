@@ -114,6 +114,13 @@ type DeleteSavingsGoalInput struct {
 	ID string `path:"id" doc:"Savings goal ID"`
 }
 
+// PurgeSavingsGoalInput represents the input for permanently destroying an already-deleted
+// savings goal and every contribution under it. Issue #1569, Task 8.
+type PurgeSavingsGoalInput struct {
+	inputs.AuthenticatedInput
+	ID string `path:"id" doc:"Savings goal ID"`
+}
+
 // GetSavingsProgressSummaryInput represents the input for the progress-summary analytics endpoint.
 type GetSavingsProgressSummaryInput struct {
 	inputs.AuthenticatedInput
@@ -263,6 +270,17 @@ func (h *SavingsGoalHandler) DeleteGoal(ctx context.Context, input *DeleteSaving
 	return nil, nil
 }
 
+// PurgeGoal handles POST /api/v1/savings-goals/:id/purge requests.
+// Permanently destroys an already-deleted goal and every contribution under it. Issue #1569,
+// Task 8: DELETE is now non-destructive, and this is the second, explicit step that actually
+// erases — it returns 409 on a goal the user has not deleted first.
+func (h *SavingsGoalHandler) PurgeGoal(ctx context.Context, input *PurgeSavingsGoalInput) (*struct{}, error) {
+	if err := h.service.PurgeGoal(ctx, input.UserID, input.ID); err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	return nil, nil
+}
+
 // GetProgressSummary handles GET /api/v1/savings-goals/progress-summary requests.
 // Returns basis-aware savings progress for all active goals plus portfolio totals.
 // Tagged Analytics so MCP/LLM consumers get a single-round-trip aggregate (Codex C11).
@@ -355,9 +373,21 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Method:        http.MethodDelete,
 		Path:          "/api/v1/savings-goals/{id}",
 		Summary:       "Delete savings goal",
-		Description:   "Removes a savings goal from the user's collection.",
+		Description:   "Removes a savings goal from the user's collection. Does NOT destroy any data — every contribution logged against the goal is retained. Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its contributions.",
 		Tags:          []string{"Savings Goals"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteGoal)
+
+	// POST /api/v1/savings-goals/:id/purge - Purge savings goal (Issue #1569, Task 8)
+	huma.Register(api, huma.Operation{
+		OperationID:   "purgeSavingsGoal",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/savings-goals/{id}/purge",
+		Summary:       "Purge savings goal",
+		Description:   "Permanently destroys a savings goal and every contribution logged against it — including amounts the user entered by hand, which no provider can supply again. This cannot be undone. Refuses with 409 unless the goal has already been deleted (DELETE /savings-goals/{id} first); that two-step is the confirmation.",
+		Tags:          []string{"Savings Goals"},
+		Security:      []map[string][]string{{"clerk": {}}},
+		DefaultStatus: http.StatusNoContent,
+	}, handler.PurgeGoal)
 }

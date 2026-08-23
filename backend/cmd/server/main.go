@@ -819,6 +819,11 @@ func main() {
 		if phClient != nil {
 			savingsGoalService.SetAnalytics(phClient)
 		}
+		// Issue #1569 Task 8: savings_goal.deleted / savings_goal.history_purged audit entries,
+		// written inside the repository's own transaction via LogInTx. Declared later in this
+		// function as `auditLogger`, so a fresh AuditLogRepository is constructed here rather than
+		// reordering the wiring; both wrap the same pool and hold no state.
+		savingsGoalService.SetAuditLogRepository(repository.NewAuditLogRepository(db))
 
 		// Issue #138: Investment read services — DB-only, no Plaid dependency.
 		// Initialized here (outside the Plaid block) so investment route handlers

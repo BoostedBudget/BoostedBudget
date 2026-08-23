@@ -141,7 +141,7 @@ func (r *savingsContributionRepository) Insert(ctx context.Context, userID strin
 	// Verify goal ownership (Codex C1 / IDOR guard) — mirrors UpsertFromTransaction.
 	var dummy int
 	if err := r.db.QueryRow(ctx,
-		`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`,
+		`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
 		contrib.SavingsGoalID, userID,
 	).Scan(&dummy); err != nil {
 		if err == pgx.ErrNoRows {
@@ -232,7 +232,7 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 
 	// Step 0: Verify goal ownership (Codex C1 / G7 ownership guard).
 	var dummy int
-	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`
+	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
 	if err = tx.QueryRow(ctx, goalCheckQuery, goalID, userID).Scan(&dummy); err != nil {
 		if err == pgx.ErrNoRows {
 			err = domain.ErrSavingsGoalNotFound
@@ -322,7 +322,7 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 
 	// Step 0: Verify goal ownership (Codex C1 / G7 ownership guard).
 	var dummy int
-	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`
+	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
 	if err = tx.QueryRow(ctx, goalCheckQuery, goalID, userID).Scan(&dummy); err != nil {
 		if err == pgx.ErrNoRows {
 			err = domain.ErrSavingsGoalNotFound
@@ -417,7 +417,7 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 ) error {
 	// Step 0: Verify goal ownership.
 	var dummy int
-	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`
+	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
 	if err := r.db.QueryRow(ctx, goalCheckQuery, goalID, userID).Scan(&dummy); err != nil {
 		if err == pgx.ErrNoRows {
 			return domain.ErrSavingsGoalNotFound
@@ -467,7 +467,7 @@ func (r *savingsContributionRepository) SumConfirmedByGoal(ctx context.Context, 
 	query := `
 		SELECT COALESCE(SUM(c.amount), 0)
 		FROM savings_goal_contributions c
-		JOIN savings_goals g ON g.id = c.savings_goal_id
+		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
 		WHERE c.savings_goal_id = $1
 		  AND g.user_id = $2
 		  AND c.status = 'confirmed'
@@ -485,7 +485,7 @@ func (r *savingsContributionRepository) SumConfirmedByGoalInPeriod(ctx context.C
 	query := `
 		SELECT COALESCE(SUM(c.amount), 0)
 		FROM savings_goal_contributions c
-		JOIN savings_goals g ON g.id = c.savings_goal_id
+		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
 		WHERE c.savings_goal_id = $1
 		  AND g.user_id = $2
 		  AND c.status = 'confirmed'
@@ -528,7 +528,7 @@ type scannable interface {
 func (r *savingsContributionRepository) ListByGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error) {
 	query := `SELECT ` + contributionSelectColsJoined + `
 		FROM savings_goal_contributions c
-		JOIN savings_goals g ON g.id = c.savings_goal_id
+		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
 		WHERE c.savings_goal_id = $1
 		  AND g.user_id = $2
 		ORDER BY c.occurred_on DESC, c.created_at DESC`
@@ -574,7 +574,7 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 	fetchQuery := `
 		SELECT ` + contributionSelectColsJoined + `
 		FROM savings_goal_contributions c
-		JOIN savings_goals g ON g.id = c.savings_goal_id
+		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
 		WHERE c.id = $1 AND g.user_id = $2
 		FOR UPDATE OF c
 	`
@@ -658,6 +658,7 @@ func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, 
 		WHERE c.id = $1
 		  AND c.savings_goal_id = g.id
 		  AND g.user_id = $2
+		  AND g.deleted_at IS NULL
 	`
 	result, err := r.db.Exec(ctx, query, id, userID)
 	if err != nil {
@@ -682,6 +683,7 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 		WHERE c.id = $1
 		  AND c.savings_goal_id = g.id
 		  AND g.user_id = $2
+		  AND g.deleted_at IS NULL
 		  AND c.status = 'proposed'
 		RETURNING c.id, c.savings_goal_id, c.transaction_id, c.amount, c.source, c.status,
 			c.managed_by_reconciliation, c.confirmed_by_user,
@@ -699,7 +701,7 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 			var exists int
 			checkQuery := `
 				SELECT 1 FROM savings_goal_contributions c
-				JOIN savings_goals g ON g.id = c.savings_goal_id
+				JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NULL
 				WHERE c.id = $1 AND g.user_id = $2
 			`
 			if chkErr := r.db.QueryRow(ctx, checkQuery, id, userID).Scan(&exists); chkErr != nil {
