@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
 )
 
 // TestLinkedItemRepository_PurgeLinkedItem_Integration_RefusesUntilDisconnected proves the
@@ -102,4 +102,161 @@ func TestLinkedItemRepository_PurgeLinkedItem_Integration_ClearsDanglingReplaced
 	require.NoError(t, pool.QueryRow(ctx, `SELECT replaced_by_id FROM accounts WHERE id = $1`, oldAccountID).Scan(&oldAccountReplacedBy))
 	assert.Nil(t, oldAccountReplacedBy, "the older account's dangling replaced_by_id must be nulled, not left pointing at a deleted row")
 
+}
+
+// TestLinkedItemRepository_PurgeLinkedItem_Integration_RemovesAllAccountsAndDerivedRows proves the
+// institution-level purge destroys EVERY account under the item, not just one — fix round 2
+// finding: the account-level suite proved the single-account case seven ways, but PurgeLinkedItem
+// itself (which fans out over N accounts) had no test proving it doesn't stop after the first.
+func TestLinkedItemRepository_PurgeLinkedItem_Integration_RemovesAllAccountsAndDerivedRows(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	repo := NewLinkedItemRepository(pool, newTestFieldEncryptor(t))
+
+	f := seedRetainedFixture(ctx, t, pool, "purge-item-all-"+uuid.New().String())
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+
+	secondAccountID := uuid.New()
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, 'Second Account', 'depository', 'active')
+		RETURNING id
+	`, secondAccountID, f.LinkedItemID, f.UserID, "plaid-acct-second-"+uuid.New().String()).Scan(&secondAccountID))
+	second := retainedFixture{UserID: f.UserID, LinkedItemID: f.LinkedItemID, AccountID: secondAccountID, UserAccountID: f.UserAccountID}
+
+	snap1 := seedBalanceSnapshot(ctx, t, pool, f)
+	hold1 := seedHolding(ctx, t, pool, f)
+	liab1 := seedCreditLiability(ctx, t, pool, f)
+	inv1 := seedInvestmentTransaction(ctx, t, pool, f)
+
+	snap2 := seedBalanceSnapshot(ctx, t, pool, second)
+	hold2 := seedHolding(ctx, t, pool, second)
+	liab2 := seedCreditLiability(ctx, t, pool, second)
+	inv2 := seedInvestmentTransaction(ctx, t, pool, second)
+
+	require.NoError(t, repo.MarkPlaidRemoved(ctx, []string{f.LinkedItemID.String()}))
+
+	err := repo.PurgeLinkedItem(ctx, f.LinkedItemID.String(), f.UserID.String(), nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, countRows(ctx, t, pool, "linked_items", "id", f.LinkedItemID), "item must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "accounts", "id", f.AccountID), "first account must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "accounts", "id", secondAccountID), "second account must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "balance_snapshots", "id", snap1), "first account's balance_snapshot must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "balance_snapshots", "id", snap2), "second account's balance_snapshot must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "holdings", "id", hold1), "first account's holding must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "holdings", "id", hold2), "second account's holding must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "credit_liabilities", "id", liab1), "first account's liability must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "credit_liabilities", "id", liab2), "second account's liability must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "investment_transactions", "id", inv1), "first account's investment transaction must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "investment_transactions", "id", inv2), "second account's investment transaction must be gone")
+}
+
+// TestLinkedItemRepository_PurgeLinkedItem_Integration_SavingsGoalOnAnyAccountRollsBackWholeItem
+// proves the transactional property that matters most for this feature: a savings goal on ANY ONE
+// account under the item must refuse the WHOLE purge, and the refusal must leave the item, BOTH
+// accounts, and their derived rows completely intact — a partial institution purge (some accounts
+// destroyed, the goal-referenced one and the item itself surviving) would be the worst outcome
+// this feature could produce. Mutation-checked (see task-6-report.md for the round-2 fix-round
+// verification transcript): temporarily short-circuited the transaction to commit before the
+// constraint could fire, confirmed this test goes RED, then restored.
+func TestLinkedItemRepository_PurgeLinkedItem_Integration_SavingsGoalOnAnyAccountRollsBackWholeItem(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	repo := NewLinkedItemRepository(pool, newTestFieldEncryptor(t))
+
+	f := seedRetainedFixture(ctx, t, pool, "purge-item-goal-"+uuid.New().String())
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+
+	secondAccountID := uuid.New()
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, 'Second Account', 'depository', 'active')
+		RETURNING id
+	`, secondAccountID, f.LinkedItemID, f.UserID, "plaid-acct-second-"+uuid.New().String()).Scan(&secondAccountID))
+	second := retainedFixture{UserID: f.UserID, LinkedItemID: f.LinkedItemID, AccountID: secondAccountID, UserAccountID: f.UserAccountID}
+
+	// The goal references the SECOND account only — proving the RESTRICT on ANY account under the
+	// item blocks the whole purge, not just a purge targeting that specific account.
+	snap1 := seedBalanceSnapshot(ctx, t, pool, f)
+	seedSavingsGoal(ctx, t, pool, second)
+
+	require.NoError(t, repo.MarkPlaidRemoved(ctx, []string{f.LinkedItemID.String()}))
+
+	err := repo.PurgeLinkedItem(ctx, f.LinkedItemID.String(), f.UserID.String(), nil)
+	require.ErrorIs(t, err, ErrPurgeBlockedBySavingsGoal)
+
+	assert.Equal(t, 1, countRows(ctx, t, pool, "linked_items", "id", f.LinkedItemID),
+		"the refused purge must roll back — the item must still exist")
+	assert.Equal(t, 1, countRows(ctx, t, pool, "accounts", "id", f.AccountID),
+		"the refused purge must roll back — the first (non-goal) account must still exist")
+	assert.Equal(t, 1, countRows(ctx, t, pool, "accounts", "id", secondAccountID),
+		"the refused purge must roll back — the goal-referenced account must still exist")
+	assert.Equal(t, 1, countRows(ctx, t, pool, "balance_snapshots", "id", snap1),
+		"the refused purge must roll back — the first account's balance_snapshot must still exist")
+}
+
+// TestLinkedItemRepository_PurgeLinkedItem_Integration_BankTransactionsSurviveAcrossAllAccounts
+// proves banking transactions on EVERY account under a purged item survive with account_id AND
+// linked_item_id set NULL — the same guarantee TestAccountRepository_PurgeAccount_Integration_
+// TransactionsSurvive proves at the single-account level, extended to the institution-level fan-out.
+func TestLinkedItemRepository_PurgeLinkedItem_Integration_BankTransactionsSurviveAcrossAllAccounts(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	repo := NewLinkedItemRepository(pool, newTestFieldEncryptor(t))
+
+	f := seedRetainedFixture(ctx, t, pool, "purge-item-txn-"+uuid.New().String())
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+
+	secondAccountID := uuid.New()
+	secondUserAccountID := uuid.New()
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
+		VALUES ($1, $2, $3, 'depository') RETURNING id
+	`, secondUserAccountID, f.UserID, "second-inst-"+secondUserAccountID.String()).Scan(&secondUserAccountID))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Second Account', 'depository', 'active', $5)
+		RETURNING id
+	`, secondAccountID, f.LinkedItemID, f.UserID, "plaid-acct-second-"+uuid.New().String(), secondUserAccountID).Scan(&secondAccountID))
+	second := retainedFixture{UserID: f.UserID, LinkedItemID: f.LinkedItemID, AccountID: secondAccountID, UserAccountID: secondUserAccountID}
+
+	txn1 := seedBankingTxn(ctx, t, pool, f, time.Now(), "First Account Coffee")
+	txn2 := seedBankingTxn(ctx, t, pool, second, time.Now(), "Second Account Coffee")
+
+	require.NoError(t, repo.MarkPlaidRemoved(ctx, []string{f.LinkedItemID.String()}))
+	require.NoError(t, repo.PurgeLinkedItem(ctx, f.LinkedItemID.String(), f.UserID.String(), nil))
+
+	for _, txnID := range []uuid.UUID{txn1, txn2} {
+		var accountIDAfter, linkedItemIDAfter *uuid.UUID
+		require.NoError(t, pool.QueryRow(ctx,
+			`SELECT account_id, linked_item_id FROM transactions WHERE id = $1`, txnID,
+		).Scan(&accountIDAfter, &linkedItemIDAfter))
+		assert.Nil(t, accountIDAfter, "transaction %s must survive with account_id set NULL", txnID)
+		assert.Nil(t, linkedItemIDAfter, "transaction %s must survive with linked_item_id set NULL", txnID)
+	}
+}
+
+// TestLinkedItemRepository_PurgeLinkedItem_Integration_WritesAuditRowInSameTransaction mirrors
+// TestAccountRepository_PurgeAccount_Integration_WritesAuditRowInSameTransaction at the
+// institution level: the linked_item.history_purged entry must commit in the SAME transaction as
+// the destruction it describes, via AuditLogRepository.LogInTx.
+func TestLinkedItemRepository_PurgeLinkedItem_Integration_WritesAuditRowInSameTransaction(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	repo := NewLinkedItemRepository(pool, newTestFieldEncryptor(t))
+	auditLog := NewAuditLogRepository(pool)
+
+	f := seedRetainedFixture(ctx, t, pool, "purge-item-audit-"+uuid.New().String())
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+
+	require.NoError(t, repo.MarkPlaidRemoved(ctx, []string{f.LinkedItemID.String()}))
+	require.NoError(t, repo.PurgeLinkedItem(ctx, f.LinkedItemID.String(), f.UserID.String(), auditLog))
+
+	var count int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM audit_logs WHERE action = 'linked_item.history_purged' AND resource_type = 'linked_item' AND resource_id = $1`,
+		f.LinkedItemID.String(),
+	).Scan(&count))
+	assert.Equal(t, 1, count, "a linked_item.history_purged audit entry must be written")
 }
