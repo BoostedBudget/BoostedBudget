@@ -13130,7 +13130,7 @@ paths:
         - Contributions
   /api/v1/savings-goals/{id}:
     delete:
-      description: Removes a savings goal from the user's collection.
+      description: Removes a savings goal from the user's collection. Does NOT destroy any data — every contribution logged against the goal is retained. Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its contributions.
       operationId: deleteSavingsGoal
       parameters:
         - description: Savings goal ID
@@ -13216,6 +13216,32 @@ paths:
       security:
         - clerk: []
       summary: Update savings goal
+      tags:
+        - Savings Goals
+  /api/v1/savings-goals/{id}/purge:
+    post:
+      description: Permanently destroys a savings goal and every contribution logged against it — including amounts the user entered by hand, which no provider can supply again. This cannot be undone. Refuses with 409 unless the goal has already been deleted (DELETE /savings-goals/{id} first); that two-step is the confirmation.
+      operationId: purgeSavingsGoal
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Purge savings goal
       tags:
         - Savings Goals
   /api/v1/savings-impact/aggregate:

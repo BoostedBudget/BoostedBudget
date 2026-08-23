@@ -805,7 +805,7 @@ export const useRejectSavingsGoalContribution = <TError = ErrorType<ErrorModel>,
       return useMutation(getRejectSavingsGoalContributionMutationOptions(options), queryClient);
     }
     /**
- * Removes a savings goal from the user's collection.
+ * Removes a savings goal from the user's collection. Does NOT destroy any data — every contribution logged against the goal is retained. Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its contributions.
  * @summary Delete savings goal
  */
 export const deleteSavingsGoal = (
@@ -1025,4 +1025,67 @@ export const useUpdateSavingsGoal = <TError = ErrorType<ErrorModel>,
         TContext
       > => {
       return useMutation(getUpdateSavingsGoalMutationOptions(options), queryClient);
+    }
+    /**
+ * Permanently destroys a savings goal and every contribution logged against it — including amounts the user entered by hand, which no provider can supply again. This cannot be undone. Refuses with 409 unless the goal has already been deleted (DELETE /savings-goals/{id} first); that two-step is the confirmation.
+ * @summary Purge savings goal
+ */
+export const purgeSavingsGoal = (
+    id: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<void>(
+      {url: `/api/v1/savings-goals/${id}/purge`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+
+export const getPurgeSavingsGoalMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof purgeSavingsGoal>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof purgeSavingsGoal>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['purgeSavingsGoal'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof purgeSavingsGoal>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  purgeSavingsGoal(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PurgeSavingsGoalMutationResult = NonNullable<Awaited<ReturnType<typeof purgeSavingsGoal>>>
+
+    export type PurgeSavingsGoalMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Purge savings goal
+ */
+export const usePurgeSavingsGoal = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof purgeSavingsGoal>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof purgeSavingsGoal>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getPurgeSavingsGoalMutationOptions(options), queryClient);
     }
