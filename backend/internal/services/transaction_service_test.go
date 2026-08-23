@@ -32,10 +32,14 @@ func (m *MockTransactionRepository) Update(ctx context.Context, transaction *dom
 	return args.Error(0)
 }
 
-func (m *MockTransactionRepository) DeleteByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) error {
-	args := m.Called(ctx, source, externalID, userID)
-	return args.Error(0)
+func (m *MockTransactionRepository) TombstoneByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string, deletedBy string) (domain.TransactionDeletedReason, error) {
+	args := m.Called(ctx, source, externalID, userID, deletedBy)
+	if r, ok := args.Get(0).(domain.TransactionDeletedReason); ok {
+		return r, args.Error(1)
+	}
+	return "", args.Error(1)
 }
+
 
 func (m *MockTransactionRepository) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.Transaction, error) {
 	args := m.Called(ctx, userID, limit, offset)

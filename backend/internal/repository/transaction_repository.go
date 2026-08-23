@@ -68,9 +68,31 @@ type TransactionRepository interface {
 	// Update updates an existing transaction
 	Update(ctx context.Context, transaction *domain.Transaction) error
 
-	// DeleteByExternalID deletes a transaction by its provider-specific ID
-	// Used when providers report transactions as removed
-	DeleteByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) error
+	// TombstoneByExternalID marks a provider-removed transaction as deleted WITHOUT destroying
+	// it, and reports which class of removal it turned out to be. Issue #1569.
+	//
+	// It replaces the DeleteByExternalID hard delete that used to serve Plaid's `removed` array.
+	// That delete was the last unrecoverable destroyer of user-authored work in the sync path:
+	// category overrides, tags, notes and `reviewed` state have no other copy anywhere, no user
+	// action was involved in triggering it, and migration 000020's CASCADE took the
+	// rule_execution_history trail with it.
+	//
+	// The reason is decided IN SQL from the row's own `pending` column, not by the caller, so
+	// there is no read-then-write window in which a pending row posts between the two statements
+	// and gets classified as the wrong kind of removal.
+	//
+	// Returns ErrTransactionNotFound when no LIVE row matched — either the transaction was never
+	// stored or it is already tombstoned. Both are the idempotent case, and callers rely on being
+	// able to tell them apart from a real database failure: #1570's storage-before-cursor
+	// contract makes re-delivery of an already-processed removal the NORMAL outcome of a failed
+	// sync, while a genuine failure must abort before the cursor advances.
+	TombstoneByExternalID(
+		ctx context.Context,
+		source domain.TransactionSource,
+		externalID string,
+		userID string,
+		deletedBy string,
+	) (domain.TransactionDeletedReason, error)
 
 	// GetByUserID retrieves transactions for a specific user with pagination
 	GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.Transaction, error)
@@ -534,23 +556,50 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 	return nil
 }
 
-// DeleteByExternalID deletes a transaction by its provider-specific ID
-func (r *transactionRepository) DeleteByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string) error {
-	query := `
-		DELETE FROM transactions
-		WHERE source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3
-	`
+// TombstoneByExternalID marks a provider-removed transaction as deleted instead of destroying it.
+//
+// WHY THE REASON IS COMPUTED IN SQL. The caller has no reliable way to know whether the row was
+// pending: reading it first and then updating leaves a window in which the same row posts (the
+// pending -> posted transition is exactly what generates these removals in the first place), and
+// the classification decides visibility for good. `CASE WHEN pending` inside the UPDATE reads the
+// value the statement is about to overwrite, under the row lock the UPDATE already holds.
+//
+// WHY `deleted_at IS NULL` IS IN THE WHERE. Without it a re-delivered removal would restamp
+// deleted_at and deleted_by on an already-tombstoned row, moving the recorded time away from when
+// the removal actually happened, and would report success for work it did not do. With it, a
+// repeat is zero rows, which surfaces as ErrTransactionNotFound — the same signal as "never stored"
+// and, for the caller, the same correct response.
+//
+// updated_at is deliberately NOT touched: it tracks provider-data changes, and nothing about the
+// transaction's own data changed here. deleted_at is the timestamp for this event.
+func (r *transactionRepository) TombstoneByExternalID(
+	ctx context.Context,
+	source domain.TransactionSource,
+	externalID string,
+	userID string,
+	deletedBy string,
+) (domain.TransactionDeletedReason, error) {
+	query := fmt.Sprintf(`
+		UPDATE transactions
+		SET deleted_at     = NOW(),
+		    deleted_by     = $4,
+		    deleted_reason = CASE WHEN pending THEN '%s' ELSE '%s' END
+		WHERE source = $1
+		  AND external_transaction_id_blind_idx = $2
+		  AND user_id = $3
+		  AND deleted_at IS NULL
+		RETURNING deleted_reason
+	`, domain.TxnDeletedProviderRemovedPending, domain.TxnDeletedProviderRemovedPosted)
 
-	ct, err := r.db.Exec(ctx, query, string(source), r.enc.BlindIndex(externalID), userID)
+	var reason string
+	err := r.db.QueryRow(ctx, query, string(source), r.enc.BlindIndex(externalID), userID, deletedBy).Scan(&reason)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrTransactionNotFound
+	}
 	if err != nil {
-		return fmt.Errorf("failed to delete transaction: %w", err)
+		return "", fmt.Errorf("failed to tombstone transaction: %w", err)
 	}
-
-	if ct.RowsAffected() == 0 {
-		return ErrTransactionNotFound
-	}
-
-	return nil
+	return domain.TransactionDeletedReason(reason), nil
 }
 
 // GetByUserID retrieves transactions for a specific user with pagination

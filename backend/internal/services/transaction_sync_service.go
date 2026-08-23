@@ -543,9 +543,13 @@ func (s *transactionSyncService) SyncTransactions(
 					//   - added: transactionRepo.CreateBatch is ON CONFLICT (source,
 					//     external_transaction_id_blind_idx, user_id) DO UPDATE — re-upsert, no dupe.
 					//   - modified: Update keyed on the existing row's id — same final contents, but
-					//     it rewrites updated_at, and if the row has since been DELETED the path skips
-					//     it rather than recreating it, so the modification is silently dropped.
-					//   - removed: DeleteByExternalID tolerates an already-deleted row.
+					//     it rewrites updated_at. Since #1569 a row the lookup cannot find is
+					//     UPSERTED through CreateBatch rather than dropped, so re-delivery of a
+					//     modification for a never-stored row now converges instead of losing it.
+					//   - removed: TombstoneByExternalID reports ErrTransactionNotFound for an
+					//     already-tombstoned row, which the caller treats as success, and its
+					//     `deleted_at IS NULL` guard keeps the recorded deleted_at/deleted_by at the
+					//     first removal rather than restamping them on every re-delivery.
 					// What it is NOT idempotent in (all verified, all downstream of storage):
 					//   - balance_snapshots: balanceSnapshotRepository.Create is a plain INSERT with
 					//     NO ON CONFLICT, and snapshot_at is a fresh time.Now() per run, so a re-run
@@ -634,23 +638,32 @@ func (s *transactionSyncService) SyncTransactions(
 	//     absorb by upserting. The guarantee is one-directional: the cursor advances only if EVERY
 	//     storage step returned nil, never the reverse.
 	//   - RESIDUAL, and the reason this is not "zero rows can ever be missed": the storage steps
-	//     have log-and-continue paths that skip a row and still return nil, so the cursor advances
-	//     past rows that were never written. There are four:
-	//       1. processAddedTransactions — a row whose Plaid account_id is not in accountMap is
-	//          Warn'd and skipped (the `!found` skip). Task 1b made buildAccountMaps load ALL
-	//          statuses (GetByLinkedItemIDIncludingRetained), not just 'active', so this branch
-	//          is now LARGELY UNREACHABLE for any account this sync has ever seen — it fires
-	//          only if Plaid names a plaid_account_id with no accounts row at all for this
-	//          linked_item_id, not merely a non-active one;
-	//       2. processAddedTransactions — if that skipped ALL of them, it returns nil early; same
-	//          "largely unreachable" narrowing as (1), for the same reason;
-	//       3. processModifiedTransactions — GetByExternalID miss: the modification is dropped;
-	//       4. processRemovedTransactions — a genuine DeleteByExternalID DB error is Warn'd and
-	//          counted as skipped, so the removal is never applied and the row stays visible.
-	//     Every one of these fails toward RETAINING a row (an un-imported row, a stale edit, an
-	//     un-deleted row) rather than destroying one, which is the safe side of #1569's governing
-	//     principle. (3) and (4) are residual scope, not part of this contract: task 7 converts
-	//     (4) to tombstones. Do not "fix" (3)/(4) here — that work is already assigned.
+	//     still have log-and-continue paths that skip a row and return nil, so the cursor can
+	//     advance past a row that was never written. TWO REMAIN, both in
+	//     processAddedTransactions, and both narrowed to near-unreachable by task 1b:
+	//       1. a row whose Plaid account_id is not in accountMap is Warn'd and skipped (the
+	//          `!found` skip). buildAccountMaps now loads ALL statuses
+	//          (GetByLinkedItemIDIncludingRetained), not just 'active', so this fires only if
+	//          Plaid names a plaid_account_id with no accounts row AT ALL for this
+	//          linked_item_id — not merely a non-active one;
+	//       2. if that skipped every row in the page, the function returns nil early; same
+	//          narrowing as (1), for the same reason.
+	//     Both fail toward RETAINING (an un-imported row) rather than destroying, which is the
+	//     safe side of #1569's governing principle.
+	//
+	//     TWO OTHERS WERE CLOSED BY #1569 TASK 7 and are recorded here because this comment is
+	//     where the next reader will look for them:
+	//       (3) processModifiedTransactions used to DROP a modification whose row GetByExternalID
+	//           could not find. It now UPSERTS it through CreateBatch, and a lookup error that is
+	//           NOT ErrTransactionNotFound aborts instead of being absorbed. See the MISSING ROWS
+	//           note on that function for why an upsert cannot resurrect a tombstone.
+	//       (4) processRemovedTransactions used to Warn-and-continue on a genuine
+	//           DeleteByExternalID database error while still returning nil, so the cursor
+	//           advanced past a removal that was never applied and Plaid never re-delivered it.
+	//           The hard delete is gone entirely — the path tombstones now — and a real failure
+	//           returns an error, leaving the cursor where the run started. Only
+	//           ErrTransactionNotFound (nothing live to tombstone) is still treated as success,
+	//           because re-delivery makes that the normal case rather than an exception.
 	// The whole run's pages are held in memory until storage — unchanged by #1570, since the loop
 	// already accumulated every page into `result`; only the cursor write moved.
 	// ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -1062,9 +1075,32 @@ func (s *transactionSyncService) processAddedTransactions(
 //
 // Graceful error handling:
 //   - Skips transactions with unmapped accounts (logs warning)
-//   - Skips transactions not found in database (logs warning)
-//   - Continues processing even if some transactions fail
-//   - Returns error only if Update call fails
+//   - Returns error if Update or the missing-row upsert fails
+//
+// MISSING ROWS — residual (3) of the #1570 STORAGE-BEFORE-CURSOR CONTRACT. A `modified` entry whose
+// row GetByExternalID cannot find used to be Warn'd and DROPPED, and the cursor then advanced past
+// it, so the edit was lost permanently: Plaid does not re-deliver a modification the stored cursor
+// has moved past.
+//
+// It is now UPSERTED through the same CreateBatch the `added` path uses. The justification is that
+// a missing row is not evidence the transaction does not belong to the user — it is evidence an
+// EARLIER sync failed to store it. Before #1570 moved the cursor write after storage, a partial
+// page failure advanced the cursor over rows that were never written; every one of those rows can
+// still arrive here as a `modified`. Dropping the edit leaves the user permanently missing a
+// transaction the bank has told us about twice.
+//
+// It cannot resurrect a tombstone, and that was the specific risk worth checking rather than
+// assuming. GetByExternalID now filters `deleted_at IS NULL`, so a TOMBSTONED row also lands in
+// this branch. CreateBatch's ON CONFLICT arbiter is
+// (source, external_transaction_id_blind_idx, user_id) — the tombstoned row itself — and its SET
+// list names neither deleted_at, deleted_reason nor deleted_by, so the conflict path refreshes the
+// provider-owned fields and leaves the tombstone exactly as it was. No new row is inserted either,
+// because the unique index the arbiter uses does not exclude tombstoned rows. Verified by
+// TestProcessModified_MissingTombstonedRow_DoesNotResurrect.
+//
+// CreateBatch also preserves user_notes, category_override_kind, tags and tags_source on conflict,
+// which is the same "sync overwrites provider fields, never user work" contract the Update branch
+// below implements by hand.
 func (s *transactionSyncService) processModifiedTransactions(
 	ctx context.Context,
 	modified []plaid.Transaction,
@@ -1078,6 +1114,7 @@ func (s *transactionSyncService) processModifiedTransactions(
 
 	successCount := 0
 	skippedCount := 0
+	upsertedCount := 0
 
 	// Issue #1163: Batch-upsert merchants for modified transactions (best-effort)
 	// Build domain txns temporarily just to use shared upsertMerchants helper
@@ -1100,10 +1137,31 @@ func (s *transactionSyncService) processModifiedTransactions(
 
 		// Fetch existing transaction to preserve user_notes
 		existingTxn, err := s.transactionRepo.GetByExternalID(ctx, domain.SourcePlaid, plaidTxn.TransactionId, linkedItem.UserID)
-		if err != nil {
-			s.logger.Warn("modified transaction not found in database", "transaction_id", plaidTxn.TransactionId, "error", err)
-			skippedCount++
+		if errors.Is(err, repository.ErrTransactionNotFound) {
+			// Residual (3): no live row to update. Upsert instead of dropping the edit — see the
+			// MISSING ROWS note on this function for why, and for why this cannot resurrect a
+			// tombstone.
+			if newTxn.ID == "" {
+				newTxn.ID = uuid.New().String()
+			}
+			if newTxn.MerchantName != nil && merchantIDs != nil {
+				if id, ok := merchantIDs[*newTxn.MerchantName]; ok {
+					newTxn.MerchantID = &id
+				}
+			}
+			if _, upsertErr := s.transactionRepo.CreateBatch(ctx, []domain.Transaction{*newTxn}); upsertErr != nil {
+				return fmt.Errorf("failed to upsert modified transaction %s with no stored row: %w",
+					plaidTxn.TransactionId, upsertErr)
+			}
+			s.logger.Info("upserted modified transaction that had no stored row",
+				"transaction_id", plaidTxn.TransactionId)
+			upsertedCount++
 			continue
+		}
+		if err != nil {
+			// A real lookup failure is NOT the missing-row case and must not be absorbed: the
+			// cursor would advance past a modification nobody applied.
+			return fmt.Errorf("failed to look up modified transaction %s: %w", plaidTxn.TransactionId, err)
 		}
 
 		// CRITICAL: Preserve user_notes from existing transaction
@@ -1127,7 +1185,8 @@ func (s *transactionSyncService) processModifiedTransactions(
 		successCount++
 	}
 
-	s.logger.Info("updated modified transactions", "updated", successCount, "skipped", skippedCount)
+	s.logger.Info("updated modified transactions",
+		"updated", successCount, "upserted", upsertedCount, "skipped", skippedCount)
 	return nil
 }
 
@@ -1174,15 +1233,26 @@ func (s *transactionSyncService) detectAndUpsertProposedContributions(ctx contex
 	return nil
 }
 
-// processRemovedTransactions deletes transactions that Plaid reports as removed.
-// Uses hard delete (no soft-delete/deleted_at column exists).
+// processRemovedTransactions TOMBSTONES the transactions Plaid reports as removed. Issue #1569.
 //
-// Idempotent: If transaction already deleted, logs warning but continues.
+// It used to hard-delete them. That was the last unrecoverable destroyer of user-authored work in
+// this codebase: a `removed` entry arrives with no user action behind it, and the DELETE took the
+// user's category overrides, tags, notes and `reviewed` state with it, plus the
+// rule_execution_history rows behind migration 000020's CASCADE. The row is now retained and
+// marked, and the reason (settled pending vs. posted reversal) is decided in SQL from the row's own
+// `pending` column — see TransactionRepository.TombstoneByExternalID.
 //
-// Graceful error handling:
-//   - Skips transactions with nil transaction_id (logs warning)
-//   - Continues processing even if delete fails for some transactions
-//   - Treats "not found" errors as success (idempotent)
+// ERROR HANDLING, and this is residual (4) of the #1570 STORAGE-BEFORE-CURSOR CONTRACT:
+//
+//   - a nil transaction_id is skipped and counted (nothing identifies a row to act on);
+//   - ErrTransactionNotFound is the IDEMPOTENT case — the row was never stored, or a re-delivery
+//     already tombstoned it — and is skipped and counted;
+//   - ANY OTHER error aborts the whole function. It used to be Warn'd and swallowed, with the
+//     function still returning nil, which let the cursor advance past a removal that had not been
+//     applied. Plaid never re-delivers a removal the stored cursor has moved past, so that row
+//     stayed visible forever with no trace of the discrepancy. Failing here leaves the cursor
+//     where the run started and the whole page is re-delivered, which CreateBatch/Update/
+//     TombstoneByExternalID all absorb idempotently.
 func (s *transactionSyncService) processRemovedTransactions(
 	ctx context.Context,
 	removed []plaid.RemovedTransaction,
@@ -1193,8 +1263,9 @@ func (s *transactionSyncService) processRemovedTransactions(
 		return nil
 	}
 
-	successCount := 0
+	tombstonedCount := 0
 	skippedCount := 0
+	reversalCount := 0
 
 	for _, removedTxn := range removed {
 		// Skip transactions with nil ID
@@ -1217,20 +1288,31 @@ func (s *transactionSyncService) processRemovedTransactions(
 			// If GetByExternalID fails (already deleted or not found), skip — nothing to clean.
 		}
 
-		// Delete transaction (hard delete)
-		err := s.transactionRepo.DeleteByExternalID(ctx, domain.SourcePlaid, *removedTxn.TransactionId, linkedItem.UserID)
-		if err != nil {
-			// Log warning but continue (idempotent - may already be deleted)
-			s.logger.Warn("failed to delete transaction (may already be deleted)", "transaction_id", *removedTxn.TransactionId, "error", err)
-			// Count as skipped rather than failure for idempotency
+		reason, err := s.transactionRepo.TombstoneByExternalID(
+			ctx, domain.SourcePlaid, *removedTxn.TransactionId, linkedItem.UserID, domain.TxnDeletedByPlaidSync)
+		switch {
+		case errors.Is(err, repository.ErrTransactionNotFound):
+			// Idempotent: never stored, or a re-delivery of a removal already applied.
+			s.logger.Debug("removed transaction has no live row to tombstone (idempotent)",
+				"transaction_id", *removedTxn.TransactionId)
 			skippedCount++
 			continue
+		case err != nil:
+			// Residual (4): a real database failure must NOT be absorbed. Returning here holds
+			// the cursor at the run's starting position so Plaid re-delivers this removal.
+			return fmt.Errorf("failed to tombstone removed transaction %s: %w", *removedTxn.TransactionId, err)
 		}
 
-		successCount++
+		tombstonedCount++
+		if reason == domain.TxnDeletedProviderRemovedPosted {
+			reversalCount++
+		}
 	}
 
-	s.logger.Info("deleted removed transactions", "deleted", successCount, "skipped", skippedCount)
+	s.logger.Info("tombstoned removed transactions",
+		"tombstoned", tombstonedCount,
+		"posted_reversals", reversalCount,
+		"skipped", skippedCount)
 	return nil
 }
 

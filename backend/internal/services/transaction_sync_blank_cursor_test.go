@@ -283,8 +283,8 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 	mockTransactionRepo.On("GetByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-mod", "user-multipage").
 		Return(&domain.Transaction{ID: "existing-mod", ExternalTransactionID: stringPtr("txn-page2-mod")}, nil).Maybe()
 	mockTransactionRepo.On("Update", mock.Anything, mock.Anything).Return(nil).Maybe()
-	mockTransactionRepo.On("DeleteByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-rem", "user-multipage").
-		Return(nil).Maybe()
+	mockTransactionRepo.On("TombstoneByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-rem", "user-multipage", domain.TxnDeletedByPlaidSync).
+		Return(domain.TxnDeletedProviderRemovedPosted, nil).Maybe()
 
 	result, err := service.SyncTransactions(ctx, linkedItem)
 
@@ -318,7 +318,7 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 			"the break, so dropping it here would be silent loss of the last page")
 	// The page-2 modify/delete are what the break branch actually commits beyond page 1.
 	mockTransactionRepo.AssertCalled(t, "Update", mock.Anything, mock.Anything)
-	mockTransactionRepo.AssertCalled(t, "DeleteByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-rem", "user-multipage")
+	mockTransactionRepo.AssertCalled(t, "TombstoneByExternalID", mock.Anything, domain.SourcePlaid, "txn-page2-rem", "user-multipage", domain.TxnDeletedByPlaidSync)
 
 	// ------------------------------------------------------------------
 	// T97 second sync: the cursor lags one page, so Plaid re-delivers page 2. This is the

@@ -159,29 +159,6 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestTransactionRepository_DeleteByExternalID_Success tests transaction deletion
-func TestTransactionRepository_DeleteByExternalID_Success(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	require.NoError(t, err)
-	defer mock.Close()
-
-	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
-	ctx := context.Background()
-
-	externalID := "plaid_tx_123"
-	userID := "user-123"
-
-	// Expect DELETE query using blind index (not raw externalID)
-	mock.ExpectExec("DELETE FROM transactions").
-		WithArgs(string(domain.SourcePlaid), pgxmock.AnyArg(), userID).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
-
-	err = repo.DeleteByExternalID(ctx, domain.SourcePlaid, externalID, userID)
-	assert.NoError(t, err)
-
-	err = mock.ExpectationsWereMet()
-	assert.NoError(t, err)
-}
 
 // TestTransactionRepository_GetByUserID_Success tests retrieving transactions by user
 func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
