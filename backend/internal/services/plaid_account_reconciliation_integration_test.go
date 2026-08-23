@@ -140,6 +140,38 @@ func TestReconcileRemovedAccounts_Integration_PlaidDroppedAccountLeavesCurrentNe
 		closedID).Scan(&historyCount))
 	assert.Equal(t, 1, historyCount)
 
+	// 2a. The PRIOR 'active' interval was CLOSED, and closed exactly where the new one opens.
+	//     uq_ash_open proves at most one open interval implicitly; assert it directly, because
+	//     "one removed row exists" is equally true of a table that left the active interval open
+	//     and now silently claims the account was in two states at once.
+	var activeValidTo, removedValidFrom *time.Time
+	var removedValidTo *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT valid_to FROM account_status_history WHERE account_id = $1 AND status = 'active'`,
+		closedID).Scan(&activeValidTo))
+	require.NotNil(t, activeValidTo, "the prior active interval must be closed, not left open")
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT valid_from, valid_to FROM account_status_history WHERE account_id = $1 AND status = 'removed'`,
+		closedID).Scan(&removedValidFrom, &removedValidTo))
+	assert.True(t, activeValidTo.Equal(*removedValidFrom),
+		"no gap, no overlap: active.valid_to (%v) must equal removed.valid_from (%v)",
+		activeValidTo, removedValidFrom)
+	assert.Nil(t, removedValidTo, "the removed interval is the current one and must stay open")
+
+	// 2b. Migration 000153: the recorded `reason` must NOT be a false claim about CAUSE. The
+	//     trigger derives it from the status transition alone and cannot tell a bank closure from
+	//     a user disconnect, so it records the neutral 'removed'. Before 000153 this exact write
+	//     was stamped 'user_disconnect' — a plainly false statement about a Plaid-initiated
+	//     removal, sitting inside the very table this branch exists to make trustworthy.
+	var reason *string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT reason FROM account_status_history WHERE account_id = $1 AND status = 'removed'`,
+		closedID).Scan(&reason))
+	require.NotNil(t, reason)
+	assert.Equal(t, "removed", *reason)
+	assert.NotEqual(t, "user_disconnect", *reason,
+		"the history table must not claim a bank-initiated closure was a user disconnect")
+
 	var liveHistoryCount int
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM account_status_history WHERE account_id = $1 AND status = 'removed'`,

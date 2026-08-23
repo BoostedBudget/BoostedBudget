@@ -85,3 +85,38 @@ func TestPlaidAccountRoster_ConfirmedAbsent(t *testing.T) {
 	assert.False(t, roster.ConfirmedAbsent("acct-1"))
 	assert.False(t, roster.ConfirmedAbsent(""), "a blank plaid_account_id proves nothing")
 }
+
+// TestPlaidAccountRoster_ConfirmedAbsentIn is the affordance that means no caller ever has to
+// hand-write "known accounts minus what Plaid returned" — the loop that, written naively against
+// an empty or errored response, marks every account removed.
+func TestPlaidAccountRoster_ConfirmedAbsentIn(t *testing.T) {
+	known := []string{"acct-1", "acct-gone", "acct-2", "acct-gone"}
+
+	t.Run("complete roster reports only the provably gone, once each", func(t *testing.T) {
+		roster := PlaidAccountRosterFrom([]plaid.AccountBase{
+			{AccountId: "acct-1"},
+			{AccountId: "acct-2"},
+		}, nil)
+		assert.Equal(t, []string{"acct-gone"}, roster.ConfirmedAbsentIn(known))
+	})
+
+	t.Run("empty response reports nothing", func(t *testing.T) {
+		assert.Empty(t, PlaidAccountRosterFrom(nil, nil).ConfirmedAbsentIn(known),
+			"a zero-account response must not report every known account as gone")
+	})
+
+	t.Run("errored call reports nothing", func(t *testing.T) {
+		roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "acct-1"}}, errors.New("plaid: 500"))
+		assert.Empty(t, roster.ConfirmedAbsentIn(known))
+	})
+
+	t.Run("blank ids are never reported gone", func(t *testing.T) {
+		roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "acct-1"}}, nil)
+		assert.Empty(t, roster.ConfirmedAbsentIn([]string{""}))
+	})
+
+	t.Run("nothing known, nothing gone", func(t *testing.T) {
+		roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "acct-1"}}, nil)
+		assert.Empty(t, roster.ConfirmedAbsentIn(nil))
+	})
+}

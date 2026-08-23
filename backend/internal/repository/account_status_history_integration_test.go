@@ -142,7 +142,12 @@ func TestAccountStatusHistory_StatusChange_ClosesOldOpensNewWithNoGapOrOverlap(t
 		"old.valid_to must equal new.valid_from exactly: no gap, no overlap (got old.valid_to=%v new.valid_from=%v)",
 		oldIv.ValidTo, newIv.ValidFrom)
 	require.NotNil(t, newIv.Reason)
-	assert.Equal(t, "user_disconnect", *newIv.Reason)
+	// Migration 000153 (Issue #1569 Task 5): the label for active -> removed is the neutral
+	// 'removed', NOT 'user_disconnect'. Two writers produce this transition — the user's own
+	// disconnect and provider-initiated reconciliation when a bank closes an account — and a
+	// trigger sees a status change, never an intent. The CAUSE lives in audit_logs
+	// (account.removed vs account.removed_by_provider).
+	assert.Equal(t, "removed", *newIv.Reason)
 }
 
 // TestAccountStatusHistory_SameValueUpdate_WritesNothing is brief assertion 3: an UPDATE that
