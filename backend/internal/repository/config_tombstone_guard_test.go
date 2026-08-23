@@ -25,19 +25,29 @@ import (
 // across the repository, database and analytics packages, and reviewing them by eye is exactly the
 // enumeration that goes stale the first time someone adds a query.
 //
-// THE RULE — deliberately identical to TestNoTransactionReadForgetsTheTombstoneFilter, which is the
-// same guard for transactions. Any STATEMENT in non-test Go source under internal/ whose string
-// literals, taken together, contain `FROM <table>` or `JOIN <table>` for one of the four (a
-// DELETE's own FROM excepted — that is a write) must also contain either:
+// THE RULE — the same mechanism as TestNoTransactionReadForgetsTheTombstoneFilter, which is this
+// guard for transactions. The check is PER REFERENCE, not per statement. For every FROM, JOIN or
+// USING reference to one of the four tables in non-test Go source under internal/ (a DELETE's own
+// FROM excepted — that is a write), the enclosing statement must contain either:
 //
-//   - the predicate `deleted_at IS NULL`, or
+//   - a predicate `<alias>.deleted_at IS NULL` qualified to THAT reference's alias, or
 //   - the token `tombstone-exempt:` followed by a written reason.
 //
-// Syntactic, not semantic: it cannot tell a correct predicate from a misplaced one. Its job is to
-// make FORGETTING impossible; getting it RIGHT is what the behavioural tests are for.
+// Per-reference is load-bearing, and this is not hypothetical. The original form asked only whether
+// the statement contained the substring `deleted_at IS NULL` anywhere. That let
+// transfer_suggestion_repository.go's GetByUserIDStatuses join `boosts` with NO predicate and still
+// pass, because an adjacent `transactions` join — added by a different task — carried the string.
+// A live read was returning tombstoned boosts while this guard was green. The transaction guard had
+// the identical weakness, latent: a mutation that strips the transactions predicate while adding an
+// accounts one passes the old form and fails this one.
 //
-// Mutation-checked: deleting `AND deleted_at IS NULL` from any one of the audited queries turns
-// this test RED with that file and line named.
+// Still syntactic, not semantic: it cannot tell a correct predicate from one in the wrong clause,
+// and `tombstone-exempt:` is statement-scoped, so one comment excuses every reference in that
+// statement (no statement today joins two audited tables). Its job is to make FORGETTING
+// impossible; getting it RIGHT is what the behavioural tests are for.
+//
+// Mutation-checked: deleting `AND <alias>.deleted_at IS NULL` from any one of the audited queries
+// turns this test RED with that file, line and alias named.
 var configTombstoneTables = []string{
 	"savings_goals",
 	"boosts",
