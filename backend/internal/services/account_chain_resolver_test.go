@@ -57,9 +57,6 @@ func (m *mockAccountRepositoryForChainResolver) CountByUserID(ctx context.Contex
 func (m *mockAccountRepositoryForChainResolver) CountActiveByLinkedItemID(ctx context.Context, linkedItemID string) (int, error) {
 	return 0, nil
 }
-func (m *mockAccountRepositoryForChainResolver) Delete(ctx context.Context, accountID, userID string) error {
-	return nil
-}
 func (m *mockAccountRepositoryForChainResolver) GetByIDAndUser(ctx context.Context, accountID, userID string) (*domain.Account, error) {
 	return nil, nil
 }
@@ -92,10 +89,6 @@ func (m *mockAccountRepositoryForChainResolver) GetByUserAccountIDAndUser(ctx co
 }
 
 func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
-	return nil, nil
-}
-
-func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScopeAllStatuses(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
 	return nil, nil
 }
 

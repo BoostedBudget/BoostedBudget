@@ -101,9 +101,7 @@ func TestHouseholdScopeQuery_LiveAsOf(t *testing.T) {
 		"the as-of variant must REPLACE the unconditional active predicate, not sit beside it")
 	assert.Equal(t, 1, strings.Count(q, "account_status_history"))
 
-	// The two pre-existing variants are unchanged.
+	// The active-only variant is unchanged.
 	assert.Contains(t, householdScopeQuery(householdActiveOnly), "a.status = 'active'")
 	assert.NotContains(t, householdScopeQuery(householdActiveOnly), "account_status_history")
-	assert.NotContains(t, householdScopeQuery(householdAllStatuses), "a.status = 'active'")
-	assert.NotContains(t, householdScopeQuery(householdAllStatuses), "account_status_history")
 }

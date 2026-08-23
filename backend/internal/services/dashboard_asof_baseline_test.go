@@ -217,8 +217,6 @@ func TestGetBalanceSummaryHousehold_Baseline_RequestsLivenessAtBaselineCutoff(t 
 	assert.Equal(t, 1000.00, result.TotalBalance)
 	assert.Equal(t, 2000.00, result.PeriodComparison.PreviousBalance)
 	assert.InDelta(t, -50.0, result.PeriodComparison.ChangePercent, 0.001)
-	mockAccountRepo.AssertNotCalled(t, "GetForHouseholdScopeAllStatuses",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockAccountRepo.AssertExpectations(t)
 }
 
@@ -265,7 +263,5 @@ func TestGetNetWorthHousehold_Baseline_RequestsLivenessAtBaselineCutoff(t *testi
 	assert.Equal(t, 1000.00, result.NetWorth)
 	assert.Equal(t, 2000.00, result.PeriodComparison.PreviousNetWorth)
 	assert.InDelta(t, -50.0, result.PeriodComparison.NetWorthChangePercent, 0.001)
-	mockAccountRepo.AssertNotCalled(t, "GetForHouseholdScopeAllStatuses",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockAccountRepo.AssertExpectations(t)
 }

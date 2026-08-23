@@ -96,18 +96,6 @@ type LinkedItemRepository interface {
 	// Returns ErrLinkedItemNotFound if the item doesn't exist or belongs to a different user.
 	GetByIDAndUser(ctx context.Context, id, userID string) (*domain.LinkedItem, error)
 
-	// DeleteByUser removes a linked item with ownership validation.
-	// The item is only deleted if both the item ID and user ID match (WHERE id = $1 AND user_id = $2)
-	// AND no accounts still reference it — mirroring sibling method Delete's guard (Issue #1569):
-	// accounts.linked_item_id is ON DELETE CASCADE, so deleting while accounts remain would
-	// CASCADE-delete them and their balance/holdings/liability history.
-	//
-	// Returns ErrLinkedItemNotFound if:
-	//   - The item doesn't exist
-	//   - The item exists but belongs to a different user (ownership check fails)
-	//   - The item exists and is owned, but at least one account still references it
-	DeleteByUser(ctx context.Context, id, userID string) error
-
 	// PurgeLinkedItem permanently and transactionally destroys the linked item and every account
 	// under it: balance_snapshots for those accounts (explicit — SET NULL, migration 000150), then
 	// the linked_items row itself, which CASCADEs to its accounts (fk_accounts_linked_item_id,
@@ -789,47 +777,6 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 	}
 
 	return &item, nil
-}
-
-// DeleteByUser removes a linked item with ownership validation.
-//
-// Security: This method validates ownership via the WHERE clause (id AND user_id must match).
-// A user can only delete items they own. If the item doesn't exist or belongs to
-// a different user, the DELETE will affect 0 rows and ErrLinkedItemNotFound is returned.
-//
-// Issue #1569: guarded with the same `NOT EXISTS (SELECT 1 FROM accounts ...)` predicate its
-// sibling Delete already carries — see that method's doc comment for why: accounts.linked_item_id
-// is ON DELETE CASCADE, so deleting a linked_items row while accounts still reference it would
-// CASCADE-delete those accounts and, through them, their balance_snapshots/holdings/investment
-// transactions/liability rows. A row blocked by this predicate returns the same
-// ErrLinkedItemNotFound as a genuinely-missing/not-owned row (RowsAffected() == 0 either way);
-// callers must retire an item's accounts (see DisconnectInstitution) before this can delete it.
-//
-// Use case: this method is not called from the disconnect flow as of Issue #1569 — see
-// DisconnectInstitution in account_service.go, which now retains the row (marked 'disconnected')
-// and its accounts (marked 'removed') instead of deleting either. It remains exported/guarded as
-// defense in depth for any other caller.
-func (r *linkedItemRepository) DeleteByUser(ctx context.Context, id, userID string) error {
-	query := `
-		DELETE FROM linked_items
-		WHERE id = $1 AND user_id = $2
-		AND NOT EXISTS (SELECT 1 FROM accounts WHERE linked_item_id = $1)
-	`
-
-	ct, err := r.db.Exec(ctx, query, id, userID)
-	if err != nil {
-		return err
-	}
-
-	// Check if any rows were affected (validates ownership, existence, AND the accounts guard)
-	if ct.RowsAffected() == 0 {
-		// Item not found, user doesn't own it, OR accounts still reference it (all three cases
-		// return the same error for security — an accounts-guard block should not be
-		// distinguishable from "not found" to a caller probing for other users' items).
-		return ErrLinkedItemNotFound
-	}
-
-	return nil
 }
 
 // PurgeLinkedItem implements LinkedItemRepository.PurgeLinkedItem — see that method's doc comment
