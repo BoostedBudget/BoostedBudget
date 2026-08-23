@@ -86,6 +86,7 @@ export function TransactionsPage() {
     setCustomDateRange,
     setStatusFilter,
     setIncludeInvestmentActivity,
+    setIncludeReversed,
     setActivityTypes,
   } = useTransactionFilters()
 
@@ -220,6 +221,12 @@ export function TransactionsPage() {
     trackEvent(ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_FILTER_TOGGLED, { enabled })
   }, [setIncludeInvestmentActivity, trackEvent])
 
+  // Issue #1569 T12: reversals are opt-in, so the toggle is a user decision worth recording.
+  const handleIncludeReversedChange = useCallback((enabled: boolean) => {
+    setIncludeReversed(enabled)
+    trackEvent(ANALYTICS_EVENTS.REVERSED_TRANSACTIONS_FILTER_TOGGLED, { enabled })
+  }, [setIncludeReversed, trackEvent])
+
   const handleActivityTypesChange = useCallback((types: ActivityType[]) => {
     setActivityTypes(types)
     trackEvent(ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED, { count: types.length })
@@ -309,6 +316,7 @@ export function TransactionsPage() {
         onStatusFilterChange={setStatusFilter}
         onIncludeInvestmentActivityChange={handleIncludeInvestmentChange}
         onActivityTypesChange={handleActivityTypesChange}
+        onIncludeReversedChange={handleIncludeReversedChange}
         onClearAll={clearAllFilters}
         disabled={isLoading}
       />

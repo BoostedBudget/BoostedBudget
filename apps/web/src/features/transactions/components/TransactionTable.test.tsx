@@ -825,4 +825,75 @@ describe('TransactionTable', () => {
       expect(onCategorize).not.toHaveBeenCalled()
     })
   })
+  // ── #1569 T12 gap 1: reversed transactions ────────────────────────────────────────────
+  //
+  // The API can express "the bank withdrew this after it posted" and, until now, nothing in
+  // apps/web consumed it. An unlabelled reversal sitting in the list is WORSE than a hidden one
+  // — it reads as a live transaction. WCAG 2.1 AA: the state carries a text label, not a tint.
+  describe('reversed transactions (#1569 T12)', () => {
+    const reversedRow: BankingTransaction = {
+      ...mockBankingRow,
+      id: 'bank-reversed',
+      name: 'DUPLICATE CHARGE',
+      merchant_name: 'Contoso',
+      reversed: true,
+      reversed_at: '2025-03-14T09:00:00Z',
+    }
+
+    const renderRows = (rows: FeedRow[]) =>
+      render(<TransactionTable transactions={rows} accountsMap={mockAccounts} />)
+
+    it('labels a reversed row in words, not by colour alone', () => {
+      renderRows([reversedRow])
+      expect(screen.getByText('Reversed')).toBeInTheDocument()
+    })
+
+    it('does not label an ordinary posted row', () => {
+      renderRows([mockBankingRow])
+      expect(screen.queryByText('Reversed')).not.toBeInTheDocument()
+    })
+
+    it('does not label a row whose reversed flag is explicitly false', () => {
+      renderRows([{ ...mockBankingRow, reversed: false }])
+      expect(screen.queryByText('Reversed')).not.toBeInTheDocument()
+    })
+
+    it('gives the row an accessible reversed state for screen readers', () => {
+      const { container } = renderRows([reversedRow])
+      expect(container.querySelector('[data-reversed="true"]')).not.toBeNull()
+    })
+
+    // The amount is struck through so the row reads as undone at a glance. The strike is
+    // ADDITIONAL to the label, never instead of it.
+    it('strikes through the amount of a reversed row', () => {
+      const { container } = renderRows([reversedRow])
+      expect(container.querySelector('.line-through')).not.toBeNull()
+    })
+
+    it('does not strike through an ordinary row', () => {
+      const { container } = renderRows([mockBankingRow])
+      expect(container.querySelector('.line-through')).toBeNull()
+    })
+
+    // ⚠ DataTable masks only the columns named in maskedColumnIds, and NOTHING masks an
+    // attribute — session replay records those verbatim. The reversed marker must therefore be
+    // structural (a boolean) and must never carry the amount or the merchant.
+    it('leaks no financial detail into the attributes session replay records verbatim', () => {
+      const { container } = renderRows([reversedRow])
+      const marked = container.querySelector('[data-reversed="true"]')
+      expect(marked).not.toBeNull()
+      if (!marked) return
+      for (const attr of Array.from(marked.attributes)) {
+        expect(attr.value).not.toContain('45.99')
+        expect(attr.value).not.toContain('Contoso')
+        expect(attr.value).not.toContain('DUPLICATE CHARGE')
+      }
+    })
+
+    it('keeps the amount cell inside the masked column set', () => {
+      const { container } = renderRows([reversedRow])
+      const amountCell = container.querySelector('td[data-ph-mask]')
+      expect(amountCell).not.toBeNull()
+    })
+  })
 })

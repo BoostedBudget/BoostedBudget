@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react'
-import { Edit, Tag, Clock } from 'lucide-react'
+import { Edit, Tag, Clock, Undo2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { ReadOnlyGuard } from '@/auth'
@@ -66,6 +66,23 @@ export interface TransactionTableProps {
   hasMore?: boolean
   /** Infinite scroll: whether a fetch is in progress */
   isFetchingMore?: boolean
+}
+
+/**
+ * Issue #1569 T12. A row the PROVIDER withdrew after it had already posted.
+ *
+ * `reversed` is only ever present when the request opted in (include_reversed); every read
+ * excludes tombstoned rows otherwise. A transaction removed while still PENDING is a different
+ * class and is never returned at all, by any value of that flag — its posted twin is already in
+ * the feed, so showing both would double-count the same money. The backend enforces that twice
+ * (at the query and in Transaction.Reversed()); this predicate deliberately does not try to
+ * re-derive it, because a client-side guess about which tombstone class a row belongs to would
+ * be a second, weaker copy of a rule that already has two.
+ *
+ * Investment rows never carry the flag.
+ */
+function isReversedRow(row: FeedRow): boolean {
+  return !isInvestmentRow(row) && row.reversed === true
 }
 
 export function TransactionTable({
@@ -303,21 +320,33 @@ export function TransactionTable({
       maxSize: 200,
       render: (row) => {
         const isInvestment = isInvestmentRow(row)
+        const reversed = isReversedRow(row)
         return (
-          <div className="flex flex-col items-end gap-1">
+          // data-reversed is STRUCTURAL on purpose. Session replay records attribute values
+          // verbatim and no mask can cover them, so this marker carries a boolean and nothing
+          // else — never the amount, the merchant, or the reversal date.
+          <div className="flex flex-col items-end gap-1" data-reversed={reversed ? 'true' : undefined}>
             <span
               className={cn(
                 'font-semibold tabular-nums',
-                isOutflow(row.amount)
+                // The strike-through is ADDITIONAL to the badge below, never instead of it:
+                // WCAG 2.1 AA, information is not carried by styling alone.
+                reversed && 'line-through text-muted-foreground',
+                !reversed && (isOutflow(row.amount)
                   ? 'transaction-table__amount--debit text-destructive'
                   : row.amount < 0
                     ? 'transaction-table__amount--credit text-success'
-                    : 'text-foreground'
+                    : 'text-foreground')
               )}
             >
               {formatTransactionAmount(row.amount).text}
             </span>
-            {isInvestment ? (
+            {reversed ? (
+              <Badge variant="outline" size="sm">
+                <Undo2 className="h-2.5 w-2.5" aria-hidden="true" />
+                Reversed
+              </Badge>
+            ) : isInvestment ? (
               <Badge variant="info" size="sm">Investment</Badge>
             ) : row.pending ? (
               <Badge variant="warning" size="sm">
@@ -353,7 +382,10 @@ export function TransactionTable({
       rowClassName={(row) =>
         cn(
           onRowClick && 'transaction-table__row--clickable',
-          row.pending &&
+          // Muted rather than tinted red: a reversal is a correction, not an error the user
+          // has to act on. Destructive affordances should feel deliberate, not alarming.
+          isReversedRow(row) && 'opacity-70',
+          !isReversedRow(row) && row.pending &&
             'bg-warning/10 hover:bg-warning/20'
         )
       }

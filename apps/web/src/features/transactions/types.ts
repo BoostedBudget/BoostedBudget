@@ -124,6 +124,18 @@ export interface BankingTransaction {
   tags?: string[] | null
   data_source?: string | null
   sort_date?: string
+  /**
+   * Issue #1569: the PROVIDER withdrew this transaction after it had already POSTED — a bank
+   * reversal or correction. Only ever true when the request set include_reversed; the API
+   * excludes tombstoned rows otherwise.
+   *
+   * A row removed while still PENDING is a different thing entirely and never appears here at
+   * any value of the flag: its posted twin is already in the feed, so surfacing it would
+   * double-count the same money. Two independent backend gates enforce that (the query and
+   * Transaction.Reversed()); there is no client parameter that can ask for one.
+   */
+  reversed?: boolean | null
+  reversed_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -207,6 +219,14 @@ export interface TransactionFilters {
   // Issue #1299: Investment transactions in unified feed
   include_investment_activity?: boolean // default: true (absence means true)
   activity_types?: ActivityType[] // Filter by investment activity type
+  /**
+   * Issue #1569: opt in to transactions the bank REVERSED after they posted. Default false, and
+   * that default is the decision, not caution — an unrequested tombstoned row landing in a list
+   * the user has already reconciled is the same silent change this issue exists to stop.
+   * Serialized only when true (canonicalization: `false` is the default and stays out of the URL
+   * and off the wire).
+   */
+  include_reversed?: boolean
 }
 
 /**
