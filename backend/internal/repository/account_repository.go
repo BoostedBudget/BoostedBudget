@@ -727,7 +727,7 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
-		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -761,6 +761,7 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 			&account.UserAccountID,
 			&account.ReplacedByID,
 			&account.ReplacedAt,
+			&account.RemovedAt,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 			&account.InstitutionName,
@@ -947,7 +948,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id, status,
+		       user_account_id, status, removed_at,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -960,7 +961,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 		&account.DisplayOrder, &account.IsHidden,
-		&account.UserAccountID, &account.Status,
+		&account.UserAccountID, &account.Status, &account.RemovedAt,
 		&account.CreatedAt, &account.UpdatedAt,
 	)
 
@@ -1252,7 +1253,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
-		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
+		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
 		       a.created_at, a.updated_at, l.institution_name, l.status
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
@@ -1283,7 +1284,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 			&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 			&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 			&account.DisplayOrder, &account.IsHidden,
-			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID,
+			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID, &account.RemovedAt,
 			&account.CreatedAt, &account.UpdatedAt, &institutionNameRaw, &linkedItemStatusRaw,
 		)
 		if err != nil {
