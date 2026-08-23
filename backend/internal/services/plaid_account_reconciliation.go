@@ -207,12 +207,23 @@ const auditActionAccountRestoredByProvider = "account.restored_by_provider"
 // for it gone; the bank continuing to report it is not a counter-argument. Two independent things
 // enforce that, and the second one is the real guarantee:
 //
-//  1. this function only considers rows whose removed_reason is 'provider_absent' (a NULL reason —
-//     every 'removed' row predating migration 000154 — is NOT provider-removed and is skipped); and
+//  1. this function only considers rows whose Account.RemovedReason is 'provider_absent'. A NULL
+//     reason (every 'removed' row predating migration 000154) and a 'user_disconnect' one are both
+//     skipped WITHOUT a repository call at all; and
 //  2. accountRepo.RestoreProviderRemovedAccount re-checks the same predicate in SQL under FOR
-//     UPDATE and refuses with ErrAccountNotRestorable otherwise. The service filter is an
-//     optimisation; the repository's is the authorisation. A bug in this loop cannot resurrect a
-//     user disconnect.
+//     UPDATE and refuses with ErrAccountNotRestorable otherwise.
+//
+// The repository's check is the AUTHORISATION — it is what makes the guarantee true even if this
+// loop is bypassed or buggy, and it is the one the mutation tests target. The filter here is a
+// second layer and an optimisation: without it, every account a user ever disconnected but still
+// holds at the bank would take a SELECT ... FOR UPDATE round trip on every single sync, forever,
+// to be told no every time.
+//
+// ⚠ The filter depends on Account.RemovedReason actually being populated, which exactly one read
+// does (GetByLinkedItemIDIncludingRetained — the sync's own read, and this function's only caller's
+// source). If a future caller passes accounts from a different query, RemovedReason is nil, this
+// filter skips everything, and nothing is restored: the failure mode of the missing data is
+// "restores stop happening", never "a user disconnect gets undone".
 //
 // Only ever runs on a confirmed-complete roster: an account "reappearing" in a partial or errored
 // response proves nothing, exactly as its absence proves nothing on the removal side. There is
@@ -253,6 +264,11 @@ func (s *transactionSyncService) restoreProviderRemovedAccounts(
 	restored := 0
 	for _, account := range retainedAccounts {
 		if account.Status != domain.AccountStatusRemoved || account.PlaidAccountID == "" {
+			continue
+		}
+		// Layer 1 of the two described above. nil (an unrecorded cause) is NOT provider-removed.
+		if account.RemovedReason == nil || *account.RemovedReason != string(domain.RemovalReasonProviderAbsent) {
+			observability.PlaidProviderAccountRemoval.WithLabelValues("restore_declined_not_provider").Inc()
 			continue
 		}
 		// Ownership guard, same as the removal side: GetByLinkedItemIDIncludingRetained is keyed on

@@ -1640,23 +1640,28 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuse
 	balance := 1500.50
 	available := 1450.25
 
+	// removed_reason is selected by THIS read alone (Issue #1569 Task 5): it is the only caller
+	// that needs the cause, because it feeds the provider-restore decision.
 	rows := pgxmock.NewRows([]string{
 		"id", "linked_item_id", "user_id", "plaid_account_id",
 		"name", "official_name", "type", "subtype", "mask",
 		"current_balance", "available_balance", "currency_code",
 		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"removed_reason",
 		"created_at", "updated_at",
 	}).AddRow(
 		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-active",
 		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
 		&balance, &available, "USD",
 		"active", nil, nil, nil,
+		nil,
 		now, now,
 	).AddRow(
 		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-removed",
 		"Removed Card", nil, "credit", strPtr("credit card"), strPtr("5678"),
 		nil, nil, "USD",
 		"removed", nil, nil, nil,
+		strPtr("provider_absent"),
 		now, now,
 	)
 
@@ -1665,6 +1670,7 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuse
 		       name, official_name, type, subtype, mask,
 		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
+		       removed_reason,
 		       created_at, updated_at
 		FROM accounts
 		WHERE linked_item_id = $1
@@ -1678,6 +1684,11 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuse
 	assert.Equal(t, "Active Checking", accounts[0].Name)
 	assert.Equal(t, "Removed Card", accounts[1].Name)
 	assert.Equal(t, domain.AccountStatusRemoved, accounts[1].Status)
+	// The scan target must line up: the removal cause reaches the domain object, and an active
+	// account's NULL stays nil rather than shifting a neighbouring column into it.
+	assert.Nil(t, accounts[0].RemovedReason)
+	require.NotNil(t, accounts[1].RemovedReason)
+	assert.Equal(t, "provider_absent", *accounts[1].RemovedReason)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -467,6 +467,20 @@ func TestRestore_Integration_UserDisconnectedAccountIsNeverRestored(t *testing.T
 		`SELECT COUNT(*) FROM audit_logs WHERE action = $1 AND resource_id = $2`,
 		auditActionAccountRestoredByProvider, f.accountID).Scan(&auditCount))
 	assert.Equal(t, 0, auditCount)
+
+	// ⚠ AND NOW WITHOUT THE SERVICE. Since fix round 3 the service recognises the cause itself and
+	// never calls the repository for this account, so everything above would also pass if the SQL
+	// predicate were deleted. Call the repository DIRECTLY — bypassing the service filter exactly
+	// as a future caller with a differently-shaped account read would — and require the refusal to
+	// come from the database. This assertion, not the ones above, is the guarantee.
+	err := f.accountRepo.RestoreProviderRemovedAccount(ctx, f.accountID, f.userID)
+	assert.ErrorIs(t, err, repository.ErrAccountNotRestorable,
+		"the SQL gate must refuse a user disconnect even when nothing filtered it first")
+
+	status, reason = f.statusAndReason(t)
+	assert.Equal(t, "removed", status, "the direct call must not have changed anything either")
+	require.NotNil(t, reason)
+	assert.Equal(t, "user_disconnect", *reason)
 }
 
 // TestRestore_Integration_NullRemovedReasonIsNotRestorable pins the backfill decision: every

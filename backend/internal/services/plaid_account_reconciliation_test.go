@@ -431,9 +431,30 @@ func TestReconcileRemovedAccounts_MetricRecordsOutcomes(t *testing.T) {
 // is resurrect an account the USER disconnected.
 // ---------------------------------------------------------------------------
 
+// removedTestAccount is a PROVIDER-removed account: status 'removed' with the cause recorded, which
+// is the only shape eligible for restore. Use userRemovedTestAccount or legacyRemovedTestAccount for
+// the two ineligible shapes.
 func removedTestAccount(id, plaidID string) domain.Account {
 	a := reconcileTestAccount(id, plaidID)
 	a.Status = domain.AccountStatusRemoved
+	reason := string(domain.RemovalReasonProviderAbsent)
+	a.RemovedReason = &reason
+	return a
+}
+
+// userRemovedTestAccount is an account the USER disconnected. It must never be restored.
+func userRemovedTestAccount(id, plaidID string) domain.Account {
+	a := removedTestAccount(id, plaidID)
+	reason := string(domain.RemovalReasonUserDisconnect)
+	a.RemovedReason = &reason
+	return a
+}
+
+// legacyRemovedTestAccount is a 'removed' row written before migration 000154: no recorded cause.
+// NULL is read as "not provider-removed", the safe direction.
+func legacyRemovedTestAccount(id, plaidID string) domain.Account {
+	a := removedTestAccount(id, plaidID)
+	a.RemovedReason = nil
 	return a
 }
 
@@ -460,30 +481,73 @@ func TestRestoreProviderRemovedAccounts_ReappearedAccountIsRestored(t *testing.T
 // TestRestoreProviderRemovedAccounts_UserDisconnectedIsNotRestored is THE dangerous direction.
 //
 // The user asked for this account to be gone; the bank still reporting it is not a counter-argument.
-// At this layer the repository is the authority (it re-checks removed_reason in SQL under FOR
-// UPDATE and answers ErrAccountNotRestorable), so what this test pins is that the service HONOURS
-// that refusal: no retry, no fallback to another write path, and — critically — no audit entry
-// claiming a restore that did not happen. The SQL predicate itself is pinned by the integration
-// test, which is where a mutation can actually reach it.
+// The service now recognises the cause itself and never even asks the repository — which is both the
+// second layer of the guarantee and the reason a user who disconnected an account they still hold at
+// the bank does not pay a SELECT ... FOR UPDATE round trip on every sync forever.
+//
+// ⚠ This test pins the OPTIMISATION AND SECOND LAYER, not the guarantee. The guarantee is the SQL
+// predicate, and it is pinned by TestRestore_Integration_UserDisconnectedAccountIsNeverRestored plus
+// TestRestoreProviderRemovedAccounts_RepositoryStillRefusesWhenTheServiceFilterIsBypassed below —
+// deleting the service filter must not be enough to resurrect anything.
 func TestRestoreProviderRemovedAccounts_UserDisconnectedIsNotRestored(t *testing.T) {
 	accountRepo := &MockAccountRepository{}
 	audit := &MockAuditLogger{}
 	svc := reconcileTestService(accountRepo, audit)
 
-	accountRepo.On("RestoreProviderRemovedAccount", mock.Anything, "acct-user-removed", "user-1").
-		Return(repository.ErrAccountNotRestorable).Once()
-
 	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-user-removed"}}, nil)
 	restored := svc.restoreProviderRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
-		removedTestAccount("acct-user-removed", "plaid-user-removed"),
+		userRemovedTestAccount("acct-user-removed", "plaid-user-removed"),
+	})
+
+	assert.Equal(t, 0, restored)
+	accountRepo.AssertNotCalled(t, "RestoreProviderRemovedAccount", mock.Anything, mock.Anything, mock.Anything)
+	// No second attempt through any other door either.
+	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	audit.AssertNotCalled(t, "Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestRestoreProviderRemovedAccounts_LegacyNullReasonIsNotRestored: a 'removed' row from before
+// migration 000154 has no recorded cause. NULL means "not provider-removed" — not eligible, and not
+// worth a round trip to be told so.
+func TestRestoreProviderRemovedAccounts_LegacyNullReasonIsNotRestored(t *testing.T) {
+	accountRepo := &MockAccountRepository{}
+	svc := reconcileTestService(accountRepo, nil)
+
+	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-legacy"}}, nil)
+	restored := svc.restoreProviderRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
+		legacyRemovedTestAccount("acct-legacy", "plaid-legacy"),
+	})
+
+	assert.Equal(t, 0, restored)
+	accountRepo.AssertNotCalled(t, "RestoreProviderRemovedAccount", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestRestoreProviderRemovedAccounts_RepositoryStillRefusesWhenTheServiceFilterIsBypassed is the
+// test that would survive the service filter being deleted, mis-implemented, or fed accounts from a
+// query that does not populate RemovedReason.
+//
+// It simulates precisely that: an account whose in-memory RemovedReason SAYS 'provider_absent' while
+// the database disagrees, so the service filter waves it through and the repository is the only
+// thing left. The repository answers ErrAccountNotRestorable and the service must honour that —
+// no retry, no other write path, and above all no audit entry claiming a restore that never
+// happened. The real SQL behind that answer is pinned in the integration suite.
+func TestRestoreProviderRemovedAccounts_RepositoryStillRefusesWhenTheServiceFilterIsBypassed(t *testing.T) {
+	accountRepo := &MockAccountRepository{}
+	audit := &MockAuditLogger{}
+	svc := reconcileTestService(accountRepo, audit)
+
+	accountRepo.On("RestoreProviderRemovedAccount", mock.Anything, "acct-stale", "user-1").
+		Return(repository.ErrAccountNotRestorable).Once()
+
+	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-stale"}}, nil)
+	restored := svc.restoreProviderRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
+		removedTestAccount("acct-stale", "plaid-stale"), // in-memory cause says provider; the DB will not
 	})
 
 	assert.Equal(t, 0, restored)
 	accountRepo.AssertExpectations(t)
-	audit.AssertNotCalled(t, "Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-	// No second attempt through any other door.
-	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	accountRepo.AssertNumberOfCalls(t, "RestoreProviderRemovedAccount", 1)
+	audit.AssertNotCalled(t, "Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestRestoreProviderRemovedAccounts_PartialRosterRestoresNothing: an account "reappearing" in a
