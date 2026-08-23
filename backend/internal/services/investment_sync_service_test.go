@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/plaid/plaid-go/v23/plaid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -448,11 +450,15 @@ func TestInvestmentSyncService_SyncHoldings_EmptyHoldings(t *testing.T) {
 // #1569 Task 4 fix: an account with no holdings in the response AND absent from the response's
 // `accounts` array (the only per-account completeness signal Plaid exposes, see
 // plaid_completeness.go) must NOT be treated as "fully liquidated." Existing holdings rows must
-// be preserved, and the sync must surface an error so the caller (ProcessWebhook) retries instead
-// of silently accepting a partial response as final.
+// be preserved, and the sync must surface the skip on SkippedIncomplete (NOT Errors — fix round
+// 1 caught that Errors also gates the portfolio snapshot upsert, and a permanently-absent account
+// would otherwise suppress the user's snapshot forever) so the caller (ProcessWebhook) retries
+// instead of silently accepting a partial response as final.
 func TestInvestmentSyncService_SyncHoldings_PartialResponse_PreservesHoldings(t *testing.T) {
 	svc, deps := setupInvestmentSyncService(t)
 	ctx := context.Background()
+
+	before := testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("holdings"))
 
 	internalAccountID := uuid.New().String()
 	plaidAccountID := "plaid-acct-partial-holdings"
@@ -483,9 +489,14 @@ func TestInvestmentSyncService_SyncHoldings_PartialResponse_PreservesHoldings(t 
 	// ReplaceForAccount must NEVER be called for this account — existing holdings are preserved.
 	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount", ctx, internalAccountID, userID, []domain.Holding{})
 	assert.Equal(t, 0, result.AccountsProcessed)
-	// A partial response must surface as an error so ProcessWebhook retries.
-	require.Len(t, result.Errors, 1)
-	assert.Contains(t, result.Errors[0], plaidAccountID)
+	// A partial response must surface on SkippedIncomplete (so ProcessWebhook still retries) —
+	// but NOT on Errors, which gates the portfolio snapshot upsert.
+	assert.Empty(t, result.Errors, "a partial/incomplete response is not a correctness failure — "+
+		"putting it on Errors would suppress the portfolio snapshot")
+	require.Len(t, result.SkippedIncomplete, 1)
+	assert.Contains(t, result.SkippedIncomplete[0], plaidAccountID)
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("holdings")),
+		"a refactor that silently drops the .Inc() call must be visible here, not just in the log line")
 }
 
 // TestInvestmentSyncService_SyncHoldings_UnmappedAccount verifies that holdings for
@@ -1357,6 +1368,56 @@ func TestInvestmentSyncService_ProcessWebhook_HoldingsPartialFailure(t *testing.
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "partial failure")
 	// Webhook must NOT be marked as processed
+	assert.False(t, webhook.Processed)
+	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount")
+}
+
+// TestInvestmentSyncService_ProcessWebhook_HoldingsSkippedIncomplete verifies that when
+// SyncHoldings skips an account's clear because it's absent from Plaid's response (Issue #1569
+// Task 4 — result.SkippedIncomplete, NOT result.Errors), ProcessWebhook still returns an error so
+// the job retries. This is a DIFFERENT code path from the unmapped-security test above — that one
+// hits result.Errors, this one hits the newer result.SkippedIncomplete branch added in fix round 1.
+func TestInvestmentSyncService_ProcessWebhook_HoldingsSkippedIncomplete(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	itemID := "item-skipped-001"
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem(itemID, userID)
+
+	internalAccountID := uuid.New().String()
+	plaidAccountID := "plaid-acct-absent"
+	holdingsCode := "DEFAULT_UPDATE"
+
+	webhook := &domain.WebhookEvent{
+		ID:          "wh-skipped",
+		WebhookType: "HOLDINGS",
+		WebhookCode: &holdingsCode,
+		ItemID:      &itemID,
+	}
+
+	deps.webhookRepo.On("Update", ctx, mock.Anything).Return(nil)
+	deps.linkedItemRepo.On("GetByItemID", ctx, itemID).Return(linkedItem, nil)
+	// The account is absent from `accounts` entirely and has no holdings in the response.
+	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
+		[]plaid.AccountBase{},
+		[]plaid.Holding{},
+		[]plaid.Security{},
+		makeMinimalPlaidItem(),
+		"req-skipped",
+	)
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(holdingsResp, nil)
+	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).Return(map[string]string{}, nil)
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+
+	err := svc.ProcessWebhook(ctx, webhook)
+
+	// ProcessWebhook must return an error so the job retries — the SkippedIncomplete branch,
+	// not the Errors branch.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "incomplete")
 	assert.False(t, webhook.Processed)
 	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount")
 }
