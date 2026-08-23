@@ -8,6 +8,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/events"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -140,6 +141,55 @@ func TestPlaidSyncProvider_SyncForLinkedItem_WithRemovedTransactions(t *testing.
 	txnRepo.AssertExpectations(t)
 	plaidClient.AssertExpectations(t)
 	emitter.AssertExpectations(t)
+}
+
+// TestPlaidSyncProvider_RemovedAlreadyTombstoned_IsNotAFailure keeps this provider CONVERGENT with
+// services/transactionSyncService.processRemovedTransactions (#1569 task 7). Both paths hard-deleted
+// before; both tombstone now, and both must treat "no live row to tombstone" as the idempotent case
+// rather than as a failure — otherwise a re-delivered page wedges the sync permanently.
+//
+// This provider is not wired into production (see the banner in plaid_sync_provider.go). The test
+// exists because the two implementations are kept in sync by nothing, and a divergence here would
+// silently un-fix #1569 the day the multi-provider abstraction is used.
+func TestPlaidSyncProvider_RemovedAlreadyTombstoned_IsNotAFailure(t *testing.T) {
+	linkedItemRepo := new(MockLinkedItemRepository)
+	txnRepo := new(MockTransactionRepository)
+	plaidClient := new(MockPlaidClient)
+	emitter := new(MockEventEmitter)
+
+	provider := NewPlaidSyncProvider(linkedItemRepo, txnRepo, plaidClient, emitter)
+	ctx := context.Background()
+
+	const linkedItemID = "item-idem"
+	const txnID = "plaid-txn-already-tombstoned"
+	const nextCursor = "cursor-idem"
+
+	linkedItem := &domain.LinkedItem{
+		ID: linkedItemID, UserID: "user-123", ItemID: "plaid-item-idem", AccessTokenEncrypted: "encrypted-token",
+	}
+	removedTxn := plaid.RemovedTransaction{}
+	removedTxn.SetTransactionId(txnID)
+
+	syncResp := &plaid.TransactionsSyncResponse{
+		Removed:    []plaid.RemovedTransaction{removedTxn},
+		NextCursor: nextCursor,
+		HasMore:    false,
+	}
+
+	linkedItemRepo.On("GetByID", ctx, linkedItemID).Return(linkedItem, nil)
+	plaidClient.On("TransactionsSync", ctx, "encrypted-token", (*string)(nil)).Return(syncResp, nil)
+	txnRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, txnID, "user-123", domain.TxnDeletedByPlaidSync).
+		Return(domain.TransactionDeletedReason(""), repository.ErrTransactionNotFound)
+	emitter.On("Emit", ctx, mock.Anything).Return(nil)
+	linkedItemRepo.On("UpdateCursor", ctx, linkedItemID, nextCursor).Return(nil)
+
+	count, err := provider.SyncForLinkedItem(ctx, linkedItemID)
+
+	assert.NoError(t, err, "an already-tombstoned row must not fail the page")
+	assert.Equal(t, 1, count)
+
+	txnRepo.AssertExpectations(t)
+	linkedItemRepo.AssertExpectations(t)
 }
 
 // TestPlaidSyncProvider_SyncForLinkedItem_WithPagination tests multi-page sync
