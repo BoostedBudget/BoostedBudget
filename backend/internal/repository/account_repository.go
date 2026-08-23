@@ -782,13 +782,20 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 }
 
 // CountByUserID counts the total number of accounts for a user.
-// Excludes accounts with status='expired' (Issue #1010: TTL-released fingerprints).
+// Excludes accounts with status='expired' (Issue #1010: TTL-released fingerprints) and
+// status='removed' (Issue #1569: accounts are retained rather than deleted, so a removed account
+// still has a row here and must be excluded from the count the same way an expired one already is).
+//
+// NOTE (#1569, Task 6): this method has NO production caller today — the only real subscription
+// limit in this codebase is transaction_history_days (config/subscription_tiers.yaml); there is no
+// account-count entitlement. This fix is hygiene against a future caller that would otherwise
+// silently over-count retained accounts, not a fix to a live bug.
 func (r *accountRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
 	query := `
 		SELECT COUNT(*)
 		FROM accounts
 		WHERE user_id = $1
-		AND status != 'expired'
+		AND status NOT IN ('expired', 'removed')
 	`
 
 	var count int
