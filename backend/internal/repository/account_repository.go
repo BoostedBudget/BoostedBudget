@@ -47,6 +47,15 @@ var (
 	// (linked_item_repository.go) for the same reason at the institution level. Issue #1569, Task
 	// 6, fix round 1.
 	ErrAccountNotDisconnected = errors.New("account must be disconnected before it can be purged")
+
+	// ErrAccountAlreadyDisconnected is returned by UpdateStatus when the account is no longer
+	// 'active'. Mirrors ErrAccountNotDisconnected's naming (purge wants NOT active; this wants
+	// active) for the same reason: a second disconnect, or a re-link's replace step racing another
+	// writer, must not re-stamp removed_at/replaced_at over a row that already recorded a terminal
+	// status — that would rewrite the "as of <date>" label users see, and (for an already-'replaced'
+	// row) would null out replaced_at/replaced_by_id, destroying the re-link chain. Issue #1569,
+	// Task 2.
+	ErrAccountAlreadyDisconnected = errors.New("account is already disconnected")
 )
 
 // FingerprintOwnership holds information about who owns a fingerprint and the state of their linked item.
@@ -1437,8 +1446,41 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 
 // UpdateStatus updates an account's status and soft-delete fields with ownership validation.
 // Issue #171: Plaid Re-Link Handling
+//
+// Scoped to a currently-'active' row, enforced via SELECT ... FOR UPDATE before the write
+// (Issue #1569, Task 2) — mirrors MarkRemovedByLinkedItemID's `AND status = 'active'` scoping,
+// which this method was the inconsistent outlier against. Without the guard, a REPEAT call (a
+// second disconnect, or a re-link's replace step racing another writer) unconditionally re-stamped
+// removed_at/replaced_at = now() even though the history trigger correctly wrote no new history row
+// for the no-op status transition — so the true disconnect date survived only in
+// account_status_history, which nothing reads for the "as of <date>" label. Worse, transitioning an
+// already-'replaced' account to 'removed' nulled its replaced_at/replaced_by_id, destroying the
+// re-link chain. Returns ErrAccountAlreadyDisconnected instead of silently no-op'ing or
+// re-writing: a repeat disconnect is a 409, matching the purge path's already-shipped
+// ErrAccountNotDisconnected precondition-check-then-409 shape (see PurgeAccount, same file).
 func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string) error {
 	now := time.Now()
+
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+
+	var currentStatus string
+	err = tx.QueryRow(ctx,
+		`SELECT status FROM accounts WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+		accountID, userID,
+	).Scan(&currentStatus)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrAccountNotFound
+		}
+		return fmt.Errorf("update account %s status: %w", accountID, err)
+	}
+	if currentStatus != string(domain.AccountStatusActive) {
+		return ErrAccountAlreadyDisconnected
+	}
 
 	// Set replaced_at only when transitioning to replaced status
 	var replacedAt *time.Time
@@ -1460,14 +1502,15 @@ func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID 
 		WHERE id = $6 AND user_id = $7
 	`
 
-	result, err := r.db.Exec(ctx, query, status, replacedAt, replacedByID, removedAt, now, accountID, userID)
+	result, err := tx.Exec(ctx, query, status, replacedAt, replacedByID, removedAt, now, accountID, userID)
 	if err != nil {
 		return err
 	}
 	if result.RowsAffected() == 0 {
 		return ErrAccountNotFound
 	}
-	return nil
+
+	return tx.Commit(ctx)
 }
 
 // MarkRemovedByLinkedItemID transitions every ACTIVE account under a linked item to
