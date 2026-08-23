@@ -90,6 +90,13 @@ type TransactionSyncService interface {
 	// this setter are unaffected — see SyncTransactions' final bumpCacheForSync call, which is a
 	// true no-op when cacheGens is nil.
 	SetCacheInvalidation(gens *cache.Generations, hh SyncCacheHouseholdLookup)
+
+	// SetAuditLogger wires the audit trail for Plaid-initiated account removals
+	// (account.removed_by_provider). Issue #1569 Task 5: when a bank closes an account, Plaid stops
+	// returning it and the sync soft-removes it — a user who later asks "why did this disappear?"
+	// deserves an entry saying so, exactly as the user-initiated disconnect path writes one.
+	// Optional (nil = skip the audit write), matching every other optional wiring setter here.
+	SetAuditLogger(al AuditLogger)
 }
 
 // SyncCacheHouseholdLookup resolves the household (if any) a synced user belongs to, so
@@ -166,6 +173,10 @@ type transactionSyncService struct {
 	// Issue #1531 Task 10b-2: cache invalidation wiring (both optional; nil = skip)
 	cacheGens      *cache.Generations       // mints/bumps generation tokens; nil when cache disabled/not wired
 	cacheHousehold SyncCacheHouseholdLookup // resolves a synced user's household; nil = user-scope bump only
+	// Issue #1569 Task 5: records account.removed_by_provider when a bank closes an account and
+	// Plaid stops returning it. Optional (nil = no audit entry, same nil-safe shape as every other
+	// setter-injected dependency here); wired by SetAuditLogger.
+	auditLogger AuditLogger
 }
 
 // NewTransactionSyncService creates a new TransactionSyncService instance
@@ -241,6 +252,12 @@ func (s *transactionSyncService) SetSavingsDetectionServices(
 func (s *transactionSyncService) SetCacheInvalidation(gens *cache.Generations, hh SyncCacheHouseholdLookup) {
 	s.cacheGens = gens
 	s.cacheHousehold = hh
+}
+
+// SetAuditLogger wires the audit trail for Plaid-initiated account removals. See the interface
+// method's doc comment. Issue #1569 Task 5.
+func (s *transactionSyncService) SetAuditLogger(al AuditLogger) {
+	s.auditLogger = al
 }
 
 // bumpCacheForSync invalidates userID's cached analytics (and, when resolvable, their
@@ -1255,7 +1272,11 @@ func (s *transactionSyncService) createBalanceSnapshots(
 
 	plaidAccounts := accountsResp.GetAccounts()
 	if len(plaidAccounts) == 0 {
-		s.logger.Info("no accounts returned from Plaid, skipping balance snapshots", "item_id", linkedItem.ID)
+		// Issue #1569 Task 5: this early return is also the outermost of the three guards against
+		// the zero-account sweep — nothing downstream, reconciliation included, runs on a response
+		// that named no accounts. (The other two: PlaidAccountRosterFrom marks such a roster
+		// incomplete, and reconcileRemovedAccounts refuses an incomplete roster.)
+		s.logger.Info("no accounts returned from Plaid, skipping balance snapshots and account reconciliation", "item_id", linkedItem.ID)
 		return nil
 	}
 
@@ -1264,6 +1285,14 @@ func (s *transactionSyncService) createBalanceSnapshots(
 	if err != nil {
 		return fmt.Errorf("failed to get internal accounts: %w", err)
 	}
+
+	// Step 2b (Issue #1569 Task 5): reverse-direction reconciliation. Everything else in this
+	// function walks PLAID's accounts and looks up internal ones, so an account the bank closed —
+	// which Plaid simply stops returning — is never visited and keeps a frozen balance in CURRENT
+	// net worth forever. Walk the other way first and soft-remove what this response proves is
+	// gone. `err` is nil here (the fetch above returned early otherwise), which is exactly what the
+	// second argument asserts. Non-fatal: snapshots must still be written either way.
+	s.reconcileRemovedAccounts(ctx, linkedItem, PlaidAccountRosterFrom(plaidAccounts, nil), internalAccounts)
 
 	// Build map: plaid_account_id -> internal account
 	accountMap := make(map[string]domain.Account)
