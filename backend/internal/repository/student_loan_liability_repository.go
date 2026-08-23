@@ -240,6 +240,14 @@ func (r *studentLoanLiabilityRepository) ReplaceForAccount(ctx context.Context, 
 		return err
 	}
 
+	// #1569 T6: capture the committed row into liability_statements, in this same transaction and
+	// IN ADDITION to the replace above. `details` is to_jsonb() of the row as stored, so the
+	// encrypted columns are copied AS CIPHERTEXT (see the mortgage repository's identical note).
+	// The delete-only path returns earlier and captures nothing, leaving recorded days intact.
+	if err := captureStudentLoanLiabilityStatement(ctx, tx, accountID, userID); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 

@@ -54,6 +54,13 @@ func TestHoldingRepository_ReplaceForAccount_DeletesOldInsertNew(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holdings`)).
 		WithArgs(anyArgs(11)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// #1569 T6: the append-only history capture runs inside this SAME transaction, after the
+	// replace, and is purely additive — the DELETE/INSERT expectations above are unchanged, which
+	// is the point. (pgxmock only asserts the query TEXT; that this statement actually executes
+	// against Postgres is covered by history_snapshot_integration_test.go.)
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_snapshots`)).
+		WithArgs(accountID, userID).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{holding})
@@ -76,6 +83,13 @@ func TestHoldingRepository_ReplaceForAccount_EmptyHoldings(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM holdings`)).
 		WithArgs(accountID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 3))
+	// #1569 T6: the append-only history capture runs inside this SAME transaction, after the
+	// replace, and is purely additive — the DELETE/INSERT expectations above are unchanged, which
+	// is the point. (pgxmock only asserts the query TEXT; that this statement actually executes
+	// against Postgres is covered by history_snapshot_integration_test.go.)
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holding_snapshots`)).
+		WithArgs(accountID, userID).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	err := repo.ReplaceForAccount(ctx, accountID, userID, []domain.Holding{})

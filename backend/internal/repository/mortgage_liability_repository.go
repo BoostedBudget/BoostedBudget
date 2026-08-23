@@ -180,6 +180,15 @@ func (r *mortgageLiabilityRepository) ReplaceForAccount(ctx context.Context, acc
 		return err
 	}
 
+	// #1569 T6: capture the committed row into liability_statements, in this same transaction and
+	// IN ADDITION to the replace above. `details` is to_jsonb() of the row as stored, so the
+	// address/account-number columns are copied AS CIPHERTEXT — same ciphertext, same database,
+	// decryptable by the same FieldEncryptor; the capture never handles plaintext. The delete-only
+	// path returns earlier and captures nothing, leaving already-recorded days intact.
+	if err := captureMortgageLiabilityStatement(ctx, tx, accountID, userID); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 

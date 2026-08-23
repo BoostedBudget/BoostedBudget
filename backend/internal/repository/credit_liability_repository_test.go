@@ -69,6 +69,13 @@ func TestCreditLiabilityRepository_ReplaceForAccount_Success(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO credit_liability_aprs`)).
 		WithArgs(anyArgs(8)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// #1569 T6: the append-only history capture runs inside this SAME transaction, after the
+	// replace, and is purely additive — the DELETE/INSERT expectations above are unchanged, which
+	// is the point. (pgxmock only asserts the query TEXT; that this statement actually executes
+	// against Postgres is covered by history_snapshot_integration_test.go.)
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO liability_statements`)).
+		WithArgs(accountID, userID).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	err := repo.ReplaceForAccount(ctx, accountID, userID, liability)
@@ -99,6 +106,13 @@ func TestCreditLiabilityRepository_ReplaceForAccount_NoAPRs(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO credit_liabilities`)).
 		WithArgs(anyArgs(13)...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// #1569 T6: the append-only history capture runs inside this SAME transaction, after the
+	// replace, and is purely additive — the DELETE/INSERT expectations above are unchanged, which
+	// is the point. (pgxmock only asserts the query TEXT; that this statement actually executes
+	// against Postgres is covered by history_snapshot_integration_test.go.)
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO liability_statements`)).
+		WithArgs(accountID, userID).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
