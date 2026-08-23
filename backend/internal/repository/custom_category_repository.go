@@ -596,11 +596,25 @@ func (r *customCategoryRepository) DeleteWithReassignment(ctx context.Context, u
 	}
 
 	// 4. Tombstone the budget lines instead of letting the FK cascade hard-delete them.
+	//
+	// Scoped through the owning budget rather than by custom_category_id alone. The CASCADE it
+	// replaces had no user predicate either, and #1540 guarantees a budget_categories row's
+	// custom_category_id belongs to the budget's own owner -- but that is an argument from an
+	// application invariant, and this statement can now stand on its own.
 	if _, err := tx.Exec(ctx, `
 		UPDATE budget_categories
-		SET deleted_at = NOW(), deleted_reason = $2, deleted_by = $3, updated_at = NOW()
-		WHERE custom_category_id = $1 AND deleted_at IS NULL
-	`, categoryID, domain.SoftDeleteReasonParent, domain.SoftDeletedByUser); err != nil {
+		SET deleted_at = NOW(), deleted_reason = $3, deleted_by = $4, updated_at = NOW()
+		WHERE custom_category_id = $2
+		  AND deleted_at IS NULL
+		  AND budget_id IN (
+		    -- tombstone-exempt: OWNERSHIP SCOPING, not a listing (#1569 Task 9). This subquery
+		    -- exists to answer "whose budget is this line on", and a TOMBSTONED budget is still
+		    -- the same user's. Adding b.deleted_at IS NULL would silently skip any live budget
+		    -- line hanging off a deleted budget, leaving it pointing at a deleted category --
+		    -- the opposite of what this step is for.
+		    SELECT b.id FROM budgets b WHERE b.user_id = $1
+		  )
+	`, userID, categoryID, domain.SoftDeleteReasonParent, domain.SoftDeletedByUser); err != nil {
 		return fmt.Errorf("failed to tombstone budget categories: %w", err)
 	}
 
