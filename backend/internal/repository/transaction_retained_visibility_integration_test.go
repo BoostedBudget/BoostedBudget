@@ -458,3 +458,91 @@ func TestUnifiedFeed_ExpiredChain_TransactionsStayVisible(t *testing.T) {
 		"a fingerprint-expired chain is as disconnected as a removed one and its history is retained "+
 			"the same way")
 }
+
+// invTxnNames flattens the investments-page result the same way feedNames does for the feed.
+func invTxnNames(txns []domain.InvestmentTransaction) []string {
+	names := make([]string, 0, len(txns))
+	for _, t := range txns {
+		names = append(names, t.Name)
+	}
+	return names
+}
+
+// TestDisconnectedChain_InvestmentTransactions_VisibleOnBothSurfaces closes the divergence this
+// branch itself created.
+//
+// The historical leg was added to BOTH branches of GetByUserIDKeysetUnified (the activity feed)
+// but to neither read behind the investments page — investmentTransactionRepository.GetByUserIDKeyset
+// (ListInvestmentTransactions) nor GetByUserID. Before Task 2 both surfaces agreed on "empty",
+// because a disconnect CASCADE-deleted the rows; afterwards the same investment transaction is
+// listed in the activity feed and missing from the investments page, which is a worse state than
+// either surface alone. The two reads must answer the same question.
+func TestDisconnectedChain_InvestmentTransactions_VisibleOnBothSurfaces(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	f := seedRetainedFixture(ctx, t, tx, "ret-inv-both")
+	txnDate := time.Now().UTC().AddDate(0, 0, -10)
+	seedInvestmentTxn(ctx, t, tx, f, txnDate, "Buy Before Disconnect")
+
+	txnRepo := NewTransactionRepository(tx, nil)
+	invRepo := NewInvestmentTransactionRepository(tx)
+
+	keysetBefore, _, err := invRepo.GetByUserIDKeyset(ctx, f.UserID.String(),
+		domain.InvestmentTransactionFilters{}, nil, 50)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Buy Before Disconnect"}, invTxnNames(keysetBefore),
+		"sanity: the investments page lists the row while the chain is active")
+
+	disconnect(ctx, t, tx, f)
+
+	feed, _, err := txnRepo.GetByUserIDKeysetUnified(ctx, f.UserID.String(),
+		domain.TransactionFilters{}, nil, 50)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Buy Before Disconnect"}, feedNames(feed),
+		"sanity: the activity feed already retains it — that is the surface this branch fixed")
+
+	keysetAfter, _, err := invRepo.GetByUserIDKeyset(ctx, f.UserID.String(),
+		domain.InvestmentTransactionFilters{}, nil, 50)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Buy Before Disconnect"}, invTxnNames(keysetAfter),
+		"ListInvestmentTransactions backs the investments page — it must not disagree with the feed")
+
+	offsetAfter, err := invRepo.GetByUserID(ctx, f.UserID.String(), 50, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Buy Before Disconnect"}, invTxnNames(offsetAfter),
+		"the offset-paginated read must agree with the keyset one; two answers to one question is "+
+			"how this divergence appeared in the first place")
+}
+
+// TestDisconnectedChain_InvestmentTransactions_DoNotLeakAcrossUsers is the tenancy guard for the
+// leg added above: it keys on it.account_id and adds no user predicate of its own, exactly like the
+// feed's, so ownership rests entirely on the outer it.user_id = $1.
+func TestDisconnectedChain_InvestmentTransactions_DoNotLeakAcrossUsers(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	victim := seedRetainedFixture(ctx, t, tx, "ret-inv-victim")
+	other := seedRetainedFixture(ctx, t, tx, "ret-inv-other")
+	txnDate := time.Now().UTC().AddDate(0, 0, -10)
+	seedInvestmentTxn(ctx, t, tx, victim, txnDate, "Victim Buy")
+
+	disconnect(ctx, t, tx, victim)
+
+	invRepo := NewInvestmentTransactionRepository(tx)
+
+	keyset, _, err := invRepo.GetByUserIDKeyset(ctx, other.UserID.String(),
+		domain.InvestmentTransactionFilters{}, nil, 50)
+	require.NoError(t, err)
+	assert.Empty(t, invTxnNames(keyset), "another user's disconnected-account rows must stay invisible")
+
+	offset, err := invRepo.GetByUserID(ctx, other.UserID.String(), 50, 0)
+	require.NoError(t, err)
+	assert.Empty(t, invTxnNames(offset), "another user's disconnected-account rows must stay invisible")
+}
