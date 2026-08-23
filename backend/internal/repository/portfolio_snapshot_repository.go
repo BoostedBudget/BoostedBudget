@@ -79,8 +79,30 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 			NOW(),
 			NOW()
 		FROM holdings h
-		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
+		JOIN accounts a ON a.id = h.account_id
 		WHERE h.user_id = $1::uuid
+		  -- Was this account LIVE ON snapshotDate, not "is it active right now"? A plain
+		  -- a.status = 'active' answers the wrong question for this query: Upsert re-derives
+		  -- and re-writes a PAST day's total every time it runs (upsert keyed on
+		  -- (user_id, snapshot_date)), so once an account is later removed, recomputing that
+		  -- same past day with a current-status predicate would drop its holdings and silently
+		  -- rewrite history the user already saw — the portfolio curve retroactively falls for
+		  -- a day nothing changed on. Under retention the holdings rows still exist, so the
+		  -- correct question is recorded liveness at ANY POINT DURING the snapshot's calendar
+		  -- date, read from account_status_history's half-open [valid_from, valid_to) intervals
+		  -- (only status = 'active' counts live; valid_to IS NULL means still current). The
+		  -- overlap test below — not "live at midnight of the snapshot date" — matters for the
+		  -- ordinary (non-recompute) write too: a same-day daily upsert for an account linked
+		  -- earlier that same day has valid_from AFTER midnight, so a midnight-instant check
+		  -- would wrongly exclude it. Overlap with the calendar day [snapshot_date,
+		  -- snapshot_date + 1) is what "live on that date" actually means. Issue #1569.
+		  AND EXISTS (
+		      SELECT 1 FROM account_status_history ash
+		      WHERE ash.account_id = a.id
+		        AND ash.status = 'active'
+		        AND ash.valid_from < $2::date + INTERVAL '1 day'
+		        AND (ash.valid_to IS NULL OR ash.valid_to > $2::date)
+		  )
 		ON CONFLICT (user_id, snapshot_date) DO UPDATE SET
 			total_value       = EXCLUDED.total_value,
 			total_cost_basis  = EXCLUDED.total_cost_basis,
