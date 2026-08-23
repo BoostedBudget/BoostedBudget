@@ -70,9 +70,25 @@ const FIXTURE_ACCOUNT = {
 type PageArg = Parameters<typeof mockAuthDependencies>[0]
 
 /** Mock the savings-goals endpoints with the given list body. GET = list, POST = 201, PUT/PATCH = 200, DELETE = 204. */
+/**
+ * Issue #1569 T12: SavingsPage now also calls GET /api/v1/savings-goals/deleted for the
+ * DeletedGoalsPanel. The `**\/api/v1/savings-goals**` glob below matches that path too, so
+ * without this branch every one of these fixtures would be served back as a list of DELETED
+ * goals and the panel would render the user's live goals as things they had thrown away — and,
+ * in the tests that count GET calls, would consume a fetch the assertion is counting.
+ * Returns an empty listing so the panel renders nothing, which is the state these tests assume.
+ */
+function isDeletedGoalsRequest(url: string): boolean {
+  return new URL(url).pathname.endsWith('/savings-goals/deleted')
+}
+
 async function mockSavingsGoals(page: PageArg, body: unknown) {
   await page.route('**/api/v1/savings-goals**', (route) => {
     const method = route.request().method()
+    if (isDeletedGoalsRequest(route.request().url())) {
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      return
+    }
     if (method === 'GET') {
       route.fulfill({
         status: 200,
@@ -297,6 +313,10 @@ test.describe('Savings Page - Create Flow', () => {
     let callCount = 0
     await page.route('**/api/v1/savings-goals**', (route) => {
       const method = route.request().method()
+    if (isDeletedGoalsRequest(route.request().url())) {
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      return
+    }
       if (method === 'GET') {
         callCount++
         const body = callCount === 1 ? EMPTY_GOALS_RESPONSE : [NEW_GOAL]
@@ -367,6 +387,10 @@ test.describe('Savings Page - Edit Flow', () => {
     let fetchCount = 0
     await page.route('**/api/v1/savings-goals**', (route) => {
       const method = route.request().method()
+    if (isDeletedGoalsRequest(route.request().url())) {
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      return
+    }
       if (method === 'GET') {
         fetchCount++
         const goals = fetchCount === 1
@@ -434,7 +458,11 @@ test.describe('Savings Page - Delete Flow', () => {
     await expect(dialog).toBeVisible()
     // toContainText concatenates descendant text nodes, so the data-ph-mask <span>
     // wrap around the goal name does not split the match.
-    await expect(dialog).toContainText(/are you sure you want to delete/i)
+    // #1569 T12: the copy changed and had to. Deleting a goal RETAINS it and every
+    // contribution logged against it (task 8), so "This cannot be undone" was false — and it was
+    // the reason no user would ever go looking for the Deleted goals section that reclaims them.
+    await expect(dialog).toContainText(/remove/i)
+    await expect(dialog).toContainText(/nothing is thrown away/i)
     await expect(dialog).toContainText('Vacation Fund')
   })
 
@@ -444,6 +472,10 @@ test.describe('Savings Page - Delete Flow', () => {
     let fetchCount = 0
     await page.route('**/api/v1/savings-goals**', (route) => {
       const method = route.request().method()
+    if (isDeletedGoalsRequest(route.request().url())) {
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      return
+    }
       if (method === 'GET') {
         fetchCount++
         const goals = fetchCount === 1
