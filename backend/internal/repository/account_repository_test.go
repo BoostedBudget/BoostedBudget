@@ -1185,12 +1185,13 @@ func TestAccountRepository_UpdateStatus_NotFound(t *testing.T) {
 }
 
 // TestAccountRepository_UpdateStatus_AlreadyNonActive is the RED test for Issue #1569, Task 2: a
-// row that is no longer 'active' (already removed, replaced, or expired) must refuse the write
-// entirely — no UPDATE statement should even be issued — rather than re-stamping removed_at/
-// replaced_at or clobbering an already-terminal status. Covers both the repeat-disconnect case
-// (status='removed') and the already-replaced case the brief calls out separately.
+// row that is no longer 'active' (already replaced or expired — a GENUINELY different transition
+// than the one being requested) must refuse the write entirely — no UPDATE statement should even
+// be issued — rather than clobbering an already-terminal status or its chain metadata.
+// 'removed' is deliberately NOT covered here: fix round 1 split it into the idempotency case
+// (ErrAccountAlreadyRemoved), covered separately below.
 func TestAccountRepository_UpdateStatus_AlreadyNonActive(t *testing.T) {
-	for _, currentStatus := range []string{"removed", "replaced", "expired"} {
+	for _, currentStatus := range []string{"replaced", "expired"} {
 		t.Run(currentStatus, func(t *testing.T) {
 			mock, repo := setupAccountMockDB(t)
 			defer mock.Close()
@@ -1215,6 +1216,36 @@ func TestAccountRepository_UpdateStatus_AlreadyNonActive(t *testing.T) {
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
+}
+
+// TestAccountRepository_UpdateStatus_AlreadyRemoved is the RED test for fix round 1 of Task 2: an
+// already-'removed' row is the IDEMPOTENCY case, not a hard refusal — UpdateStatus must return the
+// distinct ErrAccountAlreadyRemoved sentinel (so DisconnectAccount can treat it as success) while
+// still never issuing the UPDATE.
+func TestAccountRepository_UpdateStatus_AlreadyRemoved(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT status FROM accounts WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+		WithArgs(accountID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"status"}).AddRow("removed"))
+	mock.ExpectRollback()
+	// Deliberately NO mock.ExpectExec for the UPDATE — idempotent success must still mean no write.
+
+	// Execute
+	err := repo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil)
+
+	// Assert
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrAccountAlreadyRemoved)
+	assert.NotErrorIs(t, err, ErrAccountAlreadyDisconnected,
+		"the idempotency case must NOT also satisfy the hard-refusal sentinel")
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // ============================================================================

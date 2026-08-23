@@ -139,11 +139,17 @@ func TestAccountRepository_MarkRemovedByLinkedItemID_Integration_PreservesBalanc
 
 // TestAccountRepository_UpdateStatus_Integration_RepeatDisconnectDoesNotMoveRemovedAt is the
 // Task 2 regression test: a second UpdateStatus(..., AccountStatusRemoved, nil) call against an
-// already-'removed' account must refuse the write (ErrAccountAlreadyDisconnected) rather than
-// re-stamping removed_at to now(). Before the guard, the second call unconditionally re-set
-// removed_at even though the history trigger correctly wrote no new account_status_history row for
-// the no-op status transition — so the "last known balance, as of <date>" label silently drifted
-// forward to today every time a user hit disconnect twice.
+// already-'removed' account must refuse the write (ErrAccountAlreadyRemoved — the idempotency
+// sentinel, fix round 1) rather than re-stamping removed_at to now(). Before the guard, the second
+// call unconditionally re-set removed_at even though the history trigger correctly wrote no new
+// account_status_history row for the no-op status transition — so the "last known balance, as of
+// <date>" label silently drifted forward to today every time a user hit disconnect twice.
+//
+// This test is at the REPOSITORY layer: UpdateStatus itself still refuses to write and returns an
+// error sentinel regardless of which status it refuses for. The SERVICE-layer decision to treat
+// ErrAccountAlreadyRemoved specifically as idempotent success lives in
+// TestDisconnectAccount_Integration_RepeatDisconnectIsIdempotentSuccessWithNoWrite
+// (internal/services/account_service_disconnect_idempotent_integration_test.go).
 func TestAccountRepository_UpdateStatus_Integration_RepeatDisconnectDoesNotMoveRemovedAt(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -176,8 +182,8 @@ func TestAccountRepository_UpdateStatus_Integration_RepeatDisconnectDoesNotMoveR
 	require.NoError(t, err)
 
 	err = accountRepo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil)
-	require.ErrorIs(t, err, ErrAccountAlreadyDisconnected,
-		"a repeat disconnect must be refused, not silently re-applied")
+	require.ErrorIs(t, err, ErrAccountAlreadyRemoved,
+		"a repeat disconnect must refuse the write at the repository layer")
 
 	var removedAtAfterRepeat time.Time
 	var status string
@@ -237,6 +243,56 @@ func TestAccountRepository_UpdateStatus_Integration_DoesNotClobberReplacedChainM
 	assert.WithinDuration(t, replacedAtBefore, replacedAtAfter, time.Second)
 	require.NotNil(t, replacedByIDAfter, "replaced_by_id must survive — this is the re-link chain metadata")
 	assert.Equal(t, newAccountID, *replacedByIDAfter)
+}
+
+// TestAccountRepository_UpdateStatus_Integration_ExpiredIsAlsoAHardRefusal is fix round 1's other
+// half: an already-'expired' account is a genuinely different transition than 'removed', same as
+// already-'replaced', so it must ALSO get ErrAccountAlreadyDisconnected (409), not the idempotency
+// sentinel — and its status/updated_at must be left untouched.
+func TestAccountRepository_UpdateStatus_Integration_ExpiredIsAlsoAHardRefusal(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	ctx := context.Background()
+	profileRepo := NewProfileRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	accountRepo := NewAccountRepository(pool, enc)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := createMarkDisconnectedFixtureUser(t, ctx, pool, profileRepo, suffix)
+	item := createMarkDisconnectedFixtureItem(t, ctx, linkedItemRepo, userID, suffix)
+
+	var accountID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, 'Expired Checking', 'depository')
+		RETURNING id`,
+		item.ID, userID, "plaid-acct-expired-"+suffix).Scan(&accountID))
+
+	// Force the account into 'expired'. Deliberately does NOT try to pin updated_at to a specific
+	// past instant: migration 000007's update_accounts_updated_at trigger re-stamps updated_at to
+	// NOW() on ANY UPDATE, including this seeding one, so the only meaningful assertion is that the
+	// REFUSED UpdateStatus call below does not move it again from whatever the trigger just set.
+	_, err := pool.Exec(ctx, `UPDATE accounts SET status = 'expired' WHERE id = $1`, accountID)
+	require.NoError(t, err)
+
+	var updatedAtBefore time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT updated_at FROM accounts WHERE id = $1`, accountID).Scan(&updatedAtBefore))
+
+	err = accountRepo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil)
+	require.ErrorIs(t, err, ErrAccountAlreadyDisconnected,
+		"an already-expired account must be a hard refusal, not the idempotency case")
+
+	var status string
+	var updatedAtAfter time.Time
+	var removedAtAfter *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status, updated_at, removed_at FROM accounts WHERE id = $1`, accountID,
+	).Scan(&status, &updatedAtAfter, &removedAtAfter))
+	assert.Equal(t, "expired", status, "the terminal 'expired' status must not be overwritten with 'removed'")
+	assert.WithinDuration(t, updatedAtBefore, updatedAtAfter, time.Second,
+		"the refused call must not touch updated_at either — it must issue no UPDATE at all")
+	assert.Nil(t, removedAtAfter, "removed_at must stay unset — an expired account was never disconnected by a user")
 }
 
 // TestAccountRepository_UpdateStatus_Integration_FirstDisconnectStillWritesHistory pins the

@@ -769,7 +769,12 @@ func (s *accountService) GetAccounts(ctx context.Context, userID string) ([]doma
 // Issue #668: Zero-account item detection and cleanup - proactively remove Plaid items
 // when all accounts are deleted to stop unnecessary billing.
 //
-// Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it.
+// Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it, and
+// repository.ErrAccountAlreadyDisconnected if the account is already 'replaced' or 'expired' — a
+// genuinely different transition already happened, so 409 is the right answer. A REPEAT disconnect
+// on an account that is already 'removed' is deliberately NOT an error (fix round 1 of Task 2,
+// Issue #1569): the caller's desired end state is already reality, so this returns nil — idempotent
+// success, matching this endpoint's DefaultStatus of 204 with no distinguishable body either way.
 func (s *accountService) DisconnectAccount(ctx context.Context, accountID, userID string) error {
 	// Step 1: Get the account to retrieve linked_item_id before soft-removing it
 	account, err := s.accountRepo.GetByIDAndUser(ctx, accountID, userID)
@@ -785,6 +790,15 @@ func (s *accountService) DisconnectAccount(ctx context.Context, accountID, userI
 	// pointed at it. Retaining the row means that history now survives a single-account removal,
 	// matching the institution-level DisconnectInstitution behavior below.
 	if err := s.accountRepo.UpdateStatus(ctx, accountID, userID, domain.AccountStatusRemoved, nil); err != nil {
+		// Idempotency case, not an error (fix round 1 of Task 2): the account is ALREADY exactly
+		// what this call wants it to be. Return success immediately — no audit log (nothing
+		// happened to log), no cleanup pass below (nothing changed for it to react to). Critically,
+		// this must NOT fall through to a retried UpdateStatus call: the whole point of the
+		// repository guard is that a repeat disconnect never writes, and "success" here must mean
+		// that too, not a second attempt that happens to look different.
+		if errors.Is(err, repository.ErrAccountAlreadyRemoved) {
+			return nil
+		}
 		return err
 	}
 

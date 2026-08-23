@@ -1059,10 +1059,11 @@ func TestDisconnectAccount_Success(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 }
 
-// TestDisconnectAccount_AlreadyDisconnected pins the chosen API behaviour for a repeat disconnect
-// (Issue #1569, Task 2): the service propagates repository.ErrAccountAlreadyDisconnected unchanged
-// — it does not swallow it as idempotent success, and does not run the post-removal cleanup steps
-// (they would be meaningless: nothing actually changed).
+// TestDisconnectAccount_AlreadyDisconnected pins the chosen API behaviour for an account that is
+// already 'replaced' or 'expired' (Issue #1569, Task 2): this is a GENUINELY different transition
+// than the one being requested, not the idempotency case, so the service propagates
+// repository.ErrAccountAlreadyDisconnected unchanged — a 409, not idempotent success — and does not
+// run the post-removal cleanup steps (they would be meaningless: nothing actually changed).
 func TestDisconnectAccount_AlreadyDisconnected(t *testing.T) {
 	mockAccountRepo := &MockAccountRepository{}
 
@@ -1090,6 +1091,43 @@ func TestDisconnectAccount_AlreadyDisconnected(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, repository.ErrAccountAlreadyDisconnected)
+	mockAccountRepo.AssertExpectations(t)
+	// CountActiveByLinkedItemID and the rest of cleanupAfterAccountRemoval must NOT run — asserted
+	// implicitly: MockAccountRepository would fail on an unexpected call it has no .On() for.
+}
+
+// TestDisconnectAccount_AlreadyRemoved_IsIdempotentSuccess pins fix round 1 of Task 2: a repeat
+// disconnect on an account that is already 'removed' is the IDEMPOTENCY case — the caller's
+// desired end state is already reality — so the service must return nil, not
+// repository.ErrAccountAlreadyRemoved, and must NOT run any post-removal cleanup step (nothing
+// changed, so nothing to react to; a naive "success" implementation could re-run UpdateStatus or
+// the cleanup pass instead of returning immediately, which this test also rules out).
+func TestDisconnectAccount_AlreadyRemoved_IsIdempotentSuccess(t *testing.T) {
+	mockAccountRepo := &MockAccountRepository{}
+
+	service := &accountService{
+		accountRepo: mockAccountRepo,
+		jobQueue:    nil,
+	}
+
+	ctx := context.Background()
+	accountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+
+	account := &domain.Account{
+		ID:           accountID,
+		LinkedItemID: linkedItemID,
+		UserID:       userID,
+	}
+
+	mockAccountRepo.On("GetByIDAndUser", ctx, accountID, userID).Return(account, nil)
+	mockAccountRepo.On("UpdateStatus", ctx, accountID, userID, domain.AccountStatusRemoved, (*string)(nil)).
+		Return(repository.ErrAccountAlreadyRemoved)
+
+	err := service.DisconnectAccount(ctx, accountID, userID)
+
+	require.NoError(t, err, "a repeat disconnect on an already-removed account must be idempotent success")
 	mockAccountRepo.AssertExpectations(t)
 	// CountActiveByLinkedItemID and the rest of cleanupAfterAccountRemoval must NOT run — asserted
 	// implicitly: MockAccountRepository would fail on an unexpected call it has no .On() for.
