@@ -1280,19 +1280,41 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		return nil
 	}
 
-	// Step 2: Get internal account IDs (map Plaid account_id -> internal UUID)
-	internalAccounts, err := s.accountRepo.GetByLinkedItemID(ctx, linkedItem.ID)
+	// Step 2: Get this item's accounts. INCLUDING RETAINED (Issue #1569 Task 5, fix round 2): the
+	// restore pass below has to see 'removed' rows, since those are the only candidates for coming
+	// back. The active subset is split out immediately and is what the snapshot loop and the
+	// removal pass use, so neither's behaviour changes — in particular, a removed account must
+	// still accrue NO balance snapshots, which is what keeps a user-disconnected account from
+	// quietly resuming data collection because the bank still reports it.
+	allAccounts, err := s.accountRepo.GetByLinkedItemIDIncludingRetained(ctx, linkedItem.ID)
 	if err != nil {
 		return fmt.Errorf("failed to get internal accounts: %w", err)
 	}
+	internalAccounts := make([]domain.Account, 0, len(allAccounts))
+	for _, account := range allAccounts {
+		if account.Status == domain.AccountStatusActive {
+			internalAccounts = append(internalAccounts, account)
+		}
+	}
+
+	// `err` is nil here (the fetch above returned early otherwise), which is exactly what the
+	// roster's second argument asserts.
+	roster := PlaidAccountRosterFrom(plaidAccounts, nil)
 
 	// Step 2b (Issue #1569 Task 5): reverse-direction reconciliation. Everything else in this
 	// function walks PLAID's accounts and looks up internal ones, so an account the bank closed —
 	// which Plaid simply stops returning — is never visited and keeps a frozen balance in CURRENT
-	// net worth forever. Walk the other way first and soft-remove what this response proves is
-	// gone. `err` is nil here (the fetch above returned early otherwise), which is exactly what the
-	// second argument asserts. Non-fatal: snapshots must still be written either way.
-	s.reconcileRemovedAccounts(ctx, linkedItem, PlaidAccountRosterFrom(plaidAccounts, nil), internalAccounts)
+	// net worth forever. Walk the other way and soft-remove what this response proves is gone.
+	// Non-fatal: snapshots must still be written either way.
+	s.reconcileRemovedAccounts(ctx, linkedItem, roster, internalAccounts)
+
+	// Step 2c (fix round 2): the inverse. An account we marked removed because Plaid stopped
+	// returning it, which Plaid is now returning again, was not closed after all — and nothing
+	// else in this codebase ever writes an account back to 'active'. Runs on `allAccounts`
+	// (the retained rows are the whole point) and NEVER touches a user-disconnected account; see
+	// restoreProviderRemovedAccounts. Ordering is deliberate: removal first, so an account absent
+	// from this response cannot be removed and restored in the same pass.
+	s.restoreProviderRemovedAccounts(ctx, linkedItem, roster, allAccounts)
 
 	// Build map: plaid_account_id -> internal account
 	accountMap := make(map[string]domain.Account)

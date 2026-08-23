@@ -66,6 +66,17 @@ var (
 	// returned from inside the same lock-then-check path as ErrAccountAlreadyDisconnected, before
 	// any UPDATE is issued, so removed_at/replaced_at/replaced_by_id all stay exactly as they were.
 	ErrAccountAlreadyRemoved = errors.New("account is already removed")
+
+	// ErrAccountNotRestorable is returned by RestoreProviderRemovedAccount when the row is not a
+	// provider-initiated removal: it is not 'removed' at all, or it is 'removed' with
+	// removed_reason 'user_disconnect' or NULL. Issue #1569 Task 5, fix round 2.
+	//
+	// This is an EXPECTED, routine outcome, not a failure: every sync asks the question of every
+	// retained account under an item, and most answers are no. Callers log it at debug and move on.
+	// It exists as a distinct sentinel so that "we declined to restore" can never be mistaken for
+	// "the restore failed" — the difference matters, because one of them means a user disconnect
+	// was correctly honoured.
+	ErrAccountNotRestorable = errors.New("account is not restorable: not a provider-initiated removal")
 )
 
 // FingerprintOwnership holds information about who owns a fingerprint and the state of their linked item.
@@ -237,6 +248,31 @@ type AccountRepository interface {
 	//
 	// Returns ErrAccountNotFound if account doesn't exist or user doesn't own it.
 	UpdateStatus(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string) error
+
+	// MarkRemovedByProvider soft-removes an account because Plaid stopped returning it from a
+	// confirmed-complete /accounts/get — i.e. the bank closed it. Issue #1569 Task 5.
+	//
+	// Identical to UpdateStatus(..., AccountStatusRemoved, nil) in every respect (same active-only
+	// FOR UPDATE guard, same two refusal sentinels) EXCEPT that it stamps
+	// removed_reason = 'provider_absent' instead of 'user_disconnect'. That single column is what
+	// makes RestoreProviderRemovedAccount able to tell the two removals apart, and it is why this
+	// is a separate method rather than a flag: a caller must choose a cause by choosing a method,
+	// so no future call site can remove an account without saying who did it.
+	MarkRemovedByProvider(ctx context.Context, accountID, userID string) error
+
+	// RestoreProviderRemovedAccount returns a PROVIDER-removed account to 'active', clearing
+	// removed_at and removed_reason. Issue #1569 Task 5, fix round 2: a bank-closed account that
+	// reappears in a later confirmed-complete roster was not closed after all, and nothing else in
+	// this codebase ever writes an account back to 'active'.
+	//
+	// ⚠ THE PREDICATE IS THE SAFETY PROPERTY, AND IT LIVES IN SQL. The UPDATE matches only
+	// `status = 'removed' AND removed_reason = 'provider_absent'`. A user-disconnected row
+	// ('user_disconnect') and a legacy row (NULL — SQL equality is false for NULL, so no extra
+	// clause is needed) are both refused with ErrAccountNotRestorable. Callers may pre-filter for
+	// efficiency, but they are not trusted to: auto-resurrecting an account the user deliberately
+	// disconnected would invert the whole principle of Issue #1569, so the check is enforced here,
+	// under the same FOR UPDATE lock as the write.
+	RestoreProviderRemovedAccount(ctx context.Context, accountID, userID string) error
 
 	// CheckFingerprintOwnership checks if a fingerprint blind index is already held by a different user.
 	// Returns ownership info (user, linked item, item status) if another user owns the fingerprint.
@@ -1473,6 +1509,24 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 // transition already happened, so this is a hard 409 — matching the purge path's already-shipped
 // ErrAccountNotDisconnected precondition-check-then-409 shape; see PurgeAccount, same file).
 func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string) error {
+	// The user-initiated cause. Every existing caller of UpdateStatus that transitions to 'removed'
+	// is a user disconnect (DisconnectAccount); the provider path uses MarkRemovedByProvider, which
+	// is the same statement with the other cause. Issue #1569 Task 5, fix round 2.
+	return r.updateStatusWithRemovalReason(ctx, accountID, userID, status, replacedByID, domain.RemovalReasonUserDisconnect)
+}
+
+// MarkRemovedByProvider implements AccountRepository.MarkRemovedByProvider — see that method's doc
+// comment. Deliberately a thin alias over the same statement UpdateStatus uses, so the two removal
+// causes cannot drift apart on locking, guard behaviour, or which columns they stamp.
+func (r *accountRepository) MarkRemovedByProvider(ctx context.Context, accountID, userID string) error {
+	return r.updateStatusWithRemovalReason(ctx, accountID, userID, domain.AccountStatusRemoved, nil, domain.RemovalReasonProviderAbsent)
+}
+
+// updateStatusWithRemovalReason is the single implementation behind UpdateStatus and
+// MarkRemovedByProvider. removalReason is stamped ONLY when transitioning to 'removed'; every other
+// transition writes NULL, which keeps migration 000154's accounts_removed_reason_valid CHECK
+// satisfied by construction rather than by each caller remembering.
+func (r *accountRepository) updateStatusWithRemovalReason(ctx context.Context, accountID, userID string, status domain.AccountStatus, replacedByID *string, removalReason domain.RemovalReason) error {
 	now := time.Now()
 
 	tx, err := r.db.Begin(ctx)
@@ -1513,18 +1567,80 @@ func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID 
 	// Set removed_at only when transitioning to removed status (Issue #1569). Required by
 	// migration 000149's accounts_removed_at_consistency CHECK: status='removed' demands
 	// removed_at IS NOT NULL, mirroring the replaced_at pairing above.
+	//
+	// removed_reason is stamped in the same breath, and NULLed for every other transition —
+	// migration 000154's accounts_removed_reason_valid CHECK requires the two to agree, and pairing
+	// them in one statement is what makes that impossible to violate. Issue #1569 Task 5.
 	var removedAt *time.Time
+	var removedReason *string
 	if status == domain.AccountStatusRemoved {
 		removedAt = &now
+		reason := string(removalReason)
+		removedReason = &reason
 	}
 
 	query := `
 		UPDATE accounts
-		SET status = $1, replaced_at = $2, replaced_by_id = $3, removed_at = $4, updated_at = $5
-		WHERE id = $6 AND user_id = $7
+		SET status = $1, replaced_at = $2, replaced_by_id = $3, removed_at = $4, removed_reason = $5, updated_at = $6
+		WHERE id = $7 AND user_id = $8
 	`
 
-	result, err := tx.Exec(ctx, query, status, replacedAt, replacedByID, removedAt, now, accountID, userID)
+	result, err := tx.Exec(ctx, query, status, replacedAt, replacedByID, removedAt, removedReason, now, accountID, userID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return ErrAccountNotFound
+	}
+
+	return tx.Commit(ctx)
+}
+
+// RestoreProviderRemovedAccount implements AccountRepository.RestoreProviderRemovedAccount — read
+// that method's doc comment for the safety argument before touching the predicate below.
+//
+// Shaped exactly like updateStatusWithRemovalReason: SELECT ... FOR UPDATE, decide, then write, all
+// in one transaction, so a concurrent disconnect cannot slip between the check and the UPDATE and
+// have this method resurrect an account the user removed a millisecond ago.
+func (r *accountRepository) RestoreProviderRemovedAccount(ctx context.Context, accountID, userID string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+
+	var currentStatus string
+	var removedReason *string
+	err = tx.QueryRow(ctx,
+		`SELECT status, removed_reason FROM accounts WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+		accountID, userID,
+	).Scan(&currentStatus, &removedReason)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrAccountNotFound
+		}
+		return fmt.Errorf("restore account %s: %w", accountID, err)
+	}
+
+	// ⚠ The one check that matters. NULL (a legacy 'removed' row, written before migration 000154)
+	// and 'user_disconnect' both land here, and both are refused: a user disconnect must never be
+	// undone by a sync, and a row whose cause was never recorded cannot be proven to be anything
+	// else. Only an explicit 'provider_absent' passes.
+	if currentStatus != string(domain.AccountStatusRemoved) ||
+		removedReason == nil ||
+		*removedReason != string(domain.RemovalReasonProviderAbsent) {
+		return ErrAccountNotRestorable
+	}
+
+	// Clearing removed_at alongside the status is required by migration 000149's
+	// accounts_removed_at_consistency CHECK read in the other direction: a non-'removed' row with a
+	// stamped removed_at would be a lie about current state even where the constraint tolerates it.
+	// removed_reason goes with it, per 000154's own CHECK.
+	result, err := tx.Exec(ctx, `
+		UPDATE accounts
+		SET status = 'active', removed_at = NULL, removed_reason = NULL, updated_at = $1
+		WHERE id = $2 AND user_id = $3
+	`, time.Now(), accountID, userID)
 	if err != nil {
 		return err
 	}
@@ -1546,9 +1662,13 @@ func (r *accountRepository) UpdateStatus(ctx context.Context, accountID, userID 
 // disconnect must not overwrite that with the less specific 'removed'. Mirrors
 // ExpireAccountsByFingerprint's `AND status = 'active'` scoping above.
 func (r *accountRepository) MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string) error {
+	// removed_reason = 'user_disconnect': this is the institution-level user disconnect, so these
+	// rows are deliberately NOT eligible for the provider auto-restore (Issue #1569 Task 5 fix
+	// round 2). If the bank still reports these accounts on a later sync, they stay removed —
+	// which is precisely what the user asked for.
 	query := `
 		UPDATE accounts
-		SET status = 'removed', removed_at = NOW(), updated_at = NOW()
+		SET status = 'removed', removed_at = NOW(), removed_reason = 'user_disconnect', updated_at = NOW()
 		WHERE linked_item_id = $1 AND status = 'active'
 	`
 	_, err := r.db.Exec(ctx, query, linkedItemID)
