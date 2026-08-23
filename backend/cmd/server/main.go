@@ -1274,7 +1274,10 @@ func main() {
 		portfolioSnapshotWorker = jobs.NewPortfolioSnapshotWorker(jobs.PortfolioSnapshotWorkerDeps{
 			HoldingRepo:  holdingRepo,
 			SnapshotRepo: portfolioSnapshotRepo,
-			Logger:       appLogger,
+			// #1569 T6: the daily run also records the row-level history behind each aggregate,
+			// so a day with no Plaid sync is not a day task 11 has nothing to rebuild from.
+			HoldingSnapshotRepo: repository.NewHoldingSnapshotRepository(db),
+			Logger:              appLogger,
 		})
 		appLogger.Info("Portfolio snapshot worker created (River)")
 

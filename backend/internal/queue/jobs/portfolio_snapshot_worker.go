@@ -33,16 +33,20 @@ func (PortfolioSnapshotArgs) Kind() string { return "portfolio_snapshot" }
 type PortfolioSnapshotWorker struct {
 	river.WorkerDefaults[PortfolioSnapshotArgs]
 
-	holdingRepo  repository.HoldingRepository
-	snapshotRepo repository.PortfolioSnapshotRepository
-	logger       *slog.Logger
+	holdingRepo         repository.HoldingRepository
+	snapshotRepo        repository.PortfolioSnapshotRepository
+	holdingSnapshotRepo repository.HoldingSnapshotRepository
+	logger              *slog.Logger
 }
 
 // PortfolioSnapshotWorkerDeps contains the dependencies for PortfolioSnapshotWorker.
 type PortfolioSnapshotWorkerDeps struct {
 	HoldingRepo  repository.HoldingRepository
 	SnapshotRepo repository.PortfolioSnapshotRepository
-	Logger       *slog.Logger
+	// HoldingSnapshotRepo records the row-level history behind each aggregate (#1569 T6).
+	// Optional: nil skips the capture rather than failing the job.
+	HoldingSnapshotRepo repository.HoldingSnapshotRepository
+	Logger              *slog.Logger
 }
 
 // NewPortfolioSnapshotWorker creates a new PortfolioSnapshotWorker.
@@ -52,9 +56,10 @@ func NewPortfolioSnapshotWorker(deps PortfolioSnapshotWorkerDeps) *PortfolioSnap
 		logger = slog.Default()
 	}
 	return &PortfolioSnapshotWorker{
-		holdingRepo:  deps.HoldingRepo,
-		snapshotRepo: deps.SnapshotRepo,
-		logger:       logger,
+		holdingRepo:         deps.HoldingRepo,
+		snapshotRepo:        deps.SnapshotRepo,
+		holdingSnapshotRepo: deps.HoldingSnapshotRepo,
+		logger:              logger,
 	}
 }
 
@@ -113,6 +118,23 @@ func (w *PortfolioSnapshotWorker) Work(ctx context.Context, job *river.Job[Portf
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	var failCount int
 	for _, userID := range userIDs {
+		// #1569 T6: record the row-level history FIRST, so it exists for the aggregate written
+		// just below rather than only when the aggregate happens to succeed. This is the only
+		// writer of holding_snapshots on a day nothing synced, and task 11 rebuilds these
+		// aggregates from those rows — a day with an aggregate and no rows behind it is a day
+		// task 11 cannot repair. A failure here loses a day of history, which is exactly the loss
+		// this task exists to stop, so it counts as a job failure and River retries (the capture
+		// is idempotent within the UTC day). It does not abort the remaining users.
+		if w.holdingSnapshotRepo != nil {
+			if capErr := w.holdingSnapshotRepo.CaptureForUser(ctx, userID); capErr != nil {
+				w.logger.Error("holding snapshot capture failed for user",
+					"job_id", job.ID,
+					"user_id", userID,
+					"error", capErr,
+				)
+				failCount++
+			}
+		}
 		if _, upsertErr := w.snapshotRepo.Upsert(ctx, userID, today); upsertErr != nil {
 			w.logger.Error("portfolio snapshot upsert failed for user",
 				"job_id", job.ID,
@@ -131,7 +153,7 @@ func (w *PortfolioSnapshotWorker) Work(ctx context.Context, job *river.Job[Portf
 	)
 
 	if failCount > 0 {
-		return fmt.Errorf("portfolio snapshot: %d/%d upserts failed", failCount, len(userIDs))
+		return fmt.Errorf("portfolio snapshot: %d/%d per-user writes failed", failCount, len(userIDs))
 	}
 	return nil
 }

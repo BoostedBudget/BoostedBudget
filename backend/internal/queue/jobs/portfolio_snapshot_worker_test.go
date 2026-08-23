@@ -214,7 +214,9 @@ func TestPortfolioSnapshotWorker_Work_UpsertError(t *testing.T) {
 	err := worker.Work(ctx, job)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "2/2 upserts failed")
+	// "per-user writes" rather than "upserts" since #1569 T6: the same counter now also covers
+	// a failed holding_snapshots capture, so the wording no longer names only the upsert.
+	assert.Contains(t, err.Error(), "2/2 per-user writes failed")
 	holdingRepo.AssertExpectations(t)
 	snapshotRepo.AssertExpectations(t)
 }
@@ -265,4 +267,107 @@ func TestPortfolioSnapshotPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
 
 	unique := PortfolioSnapshotUniqueOpts()
 	require.NotZero(t, unique.ByPeriod)
+}
+
+// --- #1569 T6: the daily run must also record row-level history ---
+
+type mockHoldingSnapshotRepo struct {
+	mock.Mock
+}
+
+func (m *mockHoldingSnapshotRepo) CaptureForUser(ctx context.Context, userID string) error {
+	return m.Called(ctx, userID).Error(0)
+}
+
+func (m *mockHoldingSnapshotRepo) GetFinalCapturesForUserOnDate(ctx context.Context, userID string, asOf time.Time) ([]domain.HoldingSnapshot, error) {
+	panic("not implemented")
+}
+
+func (m *mockHoldingSnapshotRepo) GetByAccountDateRange(ctx context.Context, accountID string, start, end time.Time) ([]domain.HoldingSnapshot, error) {
+	panic("not implemented")
+}
+
+// This worker is the ONLY writer of portfolio_snapshots on a day with no Plaid sync — it upserts
+// an aggregate for every user with holdings whether or not anything synced. holding_snapshots is
+// otherwise written only by a sync, so without this call the two tables disagree about which days
+// exist, and task 11 (which rebuilds portfolio_snapshots FROM holding_snapshots) would find a day
+// with an aggregate and no rows to rebuild it from. Capturing here is what keeps holding_snapshots
+// a day-for-day row-level decomposition of portfolio_snapshots.
+func TestPortfolioSnapshotWorker_Work_CapturesHoldingHistoryForEveryUser(t *testing.T) {
+	ctx := context.Background()
+
+	holdingRepo := new(mockHoldingRepo)
+	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).Return([]string{"user-1", "user-2"}, nil)
+
+	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo.On("Upsert", ctx, mock.Anything, mock.AnythingOfType("time.Time")).
+		Return(&domain.PortfolioSnapshot{}, nil)
+
+	historyRepo := new(mockHoldingSnapshotRepo)
+	historyRepo.On("CaptureForUser", ctx, "user-1").Return(nil)
+	historyRepo.On("CaptureForUser", ctx, "user-2").Return(nil)
+
+	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
+		HoldingRepo:         holdingRepo,
+		SnapshotRepo:        snapshotRepo,
+		HoldingSnapshotRepo: historyRepo,
+		Logger:              slog.Default(),
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestPortfolioSnapshotJob(PortfolioSnapshotArgs{TriggerSource: "test"})))
+	historyRepo.AssertExpectations(t)
+	snapshotRepo.AssertExpectations(t)
+}
+
+// A capture failure loses a day of history, which is the exact loss this task exists to stop — so
+// it fails the job and lets River retry, the same way an upsert failure does. It must NOT abort
+// the remaining users: one user's failure has never stopped the rest here.
+func TestPortfolioSnapshotWorker_Work_CaptureError_FailsJobButStillProcessesEveryUser(t *testing.T) {
+	ctx := context.Background()
+
+	holdingRepo := new(mockHoldingRepo)
+	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).Return([]string{"user-1", "user-2"}, nil)
+
+	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo.On("Upsert", ctx, mock.Anything, mock.AnythingOfType("time.Time")).
+		Return(&domain.PortfolioSnapshot{}, nil)
+
+	historyRepo := new(mockHoldingSnapshotRepo)
+	historyRepo.On("CaptureForUser", ctx, "user-1").Return(errors.New("capture blew up"))
+	historyRepo.On("CaptureForUser", ctx, "user-2").Return(nil)
+
+	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
+		HoldingRepo:         holdingRepo,
+		SnapshotRepo:        snapshotRepo,
+		HoldingSnapshotRepo: historyRepo,
+		Logger:              slog.Default(),
+	})
+
+	err := worker.Work(ctx, newTestPortfolioSnapshotJob(PortfolioSnapshotArgs{TriggerSource: "test"}))
+	require.Error(t, err)
+	historyRepo.AssertExpectations(t)
+	// user-2 was still reached — both the capture and the upsert.
+	snapshotRepo.AssertCalled(t, "Upsert", ctx, "user-2", mock.AnythingOfType("time.Time"))
+}
+
+// The dependency is optional so the worker keeps running wherever it is not wired (and so the
+// pre-existing tests above, which do not set it, still describe real behaviour rather than a
+// configuration this build can no longer produce).
+func TestPortfolioSnapshotWorker_Work_NilHoldingSnapshotRepo_DoesNotPanic(t *testing.T) {
+	ctx := context.Background()
+
+	holdingRepo := new(mockHoldingRepo)
+	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).Return([]string{"user-1"}, nil)
+
+	snapshotRepo := new(mockSnapshotRepo)
+	snapshotRepo.On("Upsert", ctx, "user-1", mock.AnythingOfType("time.Time")).
+		Return(&domain.PortfolioSnapshot{}, nil)
+
+	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
+		HoldingRepo:  holdingRepo,
+		SnapshotRepo: snapshotRepo,
+		Logger:       slog.Default(),
+	})
+
+	require.NoError(t, worker.Work(ctx, newTestPortfolioSnapshotJob(PortfolioSnapshotArgs{TriggerSource: "test"})))
 }
