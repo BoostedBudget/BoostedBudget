@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -330,6 +331,43 @@ func TestDeleteSavingsGoal_NotFound(t *testing.T) {
 	_, err := handler.DeleteGoal(context.Background(), input)
 
 	require.Error(t, err)
+}
+
+// TestPurgeSavingsGoal_ReachesTheServiceAndMapsThePrecondition covers the second, explicit half of
+// the #1569 Task 8 two-step. DELETE is now non-destructive, so this is the only route that can
+// actually erase a user's hand-logged contributions.
+func TestPurgeSavingsGoal_ReachesTheServiceAndMapsThePrecondition(t *testing.T) {
+	t.Run("success forwards the authenticated user and the path id", func(t *testing.T) {
+		mockService := &mockSavingsGoalService{}
+		handler := NewSavingsGoalHandler(mockService)
+
+		_, err := handler.PurgeGoal(context.Background(), &PurgeSavingsGoalInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ID:                 "goal-123",
+		})
+
+		require.NoError(t, err)
+		require.Equal(t, [][2]string{{"user-123", "goal-123"}}, mockService.purgeCalls,
+			"a 204 that never reached the service would be indistinguishable from a purge that "+
+				"silently did nothing")
+	})
+
+	t.Run("a live goal is refused with 409, not 500", func(t *testing.T) {
+		mockService := &mockSavingsGoalService{purgeErr: domain.ErrSavingsGoalNotDeleted}
+		handler := NewSavingsGoalHandler(mockService)
+
+		_, err := handler.PurgeGoal(context.Background(), &PurgeSavingsGoalInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			ID:                 "goal-123",
+		})
+
+		require.Error(t, err)
+		var statusErr huma.StatusError
+		require.ErrorAs(t, err, &statusErr)
+		require.Equal(t, http.StatusConflict, statusErr.GetStatus(),
+			"the precondition is a client-correctable conflict — the same shape PurgeAccount's "+
+				"ErrAccountNotDisconnected already maps to")
+	})
 }
 
 // TestCreateSavingsGoalRequest_DeadlineDecoding tests JSON unmarshaling of deadline

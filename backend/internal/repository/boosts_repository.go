@@ -260,7 +260,7 @@ func (r *boostsRepository) Update(ctx context.Context, boost *domain.Boost) erro
 		SET name = $1, description = $2, enabled = $3, priority = $4,
 			trigger_config = $5, conditions = $6, condition_logic = $7,
 			actions = $8, updated_at = $9
-		WHERE id = $10
+		WHERE id = $10 AND deleted_at IS NULL
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -339,7 +339,7 @@ func (r *boostsRepository) IncrementExecutionCount(ctx context.Context, boostID 
 	query := `
 		UPDATE boosts
 		SET execution_count = execution_count + 1, last_executed_at = $1, updated_at = $1
-		WHERE id = $2
+		WHERE id = $2 AND deleted_at IS NULL
 	`
 
 	ct, err := r.db.Exec(ctx, query, time.Now(), boostID)
@@ -359,7 +359,7 @@ func (r *boostsRepository) UpdateLastSuccessful(ctx context.Context, boostID str
 	query := `
 		UPDATE boosts
 		SET last_successful_at = $1, updated_at = $1
-		WHERE id = $2
+		WHERE id = $2 AND deleted_at IS NULL
 	`
 
 	ct, err := r.db.Exec(ctx, query, time.Now(), boostID)
