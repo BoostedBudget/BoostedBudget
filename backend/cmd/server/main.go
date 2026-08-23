@@ -1402,6 +1402,13 @@ func main() {
 				// does for humamiddleware.HouseholdLookup.
 				transactionSyncService.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
 
+				// Issue #1569, Task 5: audit-log account.removed_by_provider. When a bank closes an
+				// account, Plaid stops returning it from /accounts/get and the sync soft-removes it
+				// so it drops out of CURRENT net worth; without this wiring that removal would
+				// happen with no trace a user could be shown. Same auditLogger instance as
+				// accountService's user-initiated account.removed entries above.
+				transactionSyncService.SetAuditLogger(auditLogger)
+
 				// Issue #972: Initialize TransferCorrelationService and wire into sync pipeline (B4)
 				transferCorrelationService := services.NewTransferCorrelationService(
 					transferSuggestionRepo,
