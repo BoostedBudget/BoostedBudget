@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -24,7 +25,40 @@ type SavingsGoalRepository interface {
 	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
 	GetByName(ctx context.Context, userID, name string) (*domain.SavingsGoal, error)
 	Update(ctx context.Context, goal *domain.SavingsGoal) error
-	Delete(ctx context.Context, id, userID string) error
+
+	// Delete TOMBSTONES a savings goal: it sets deleted_at/deleted_reason/deleted_by instead of
+	// issuing `DELETE FROM savings_goals`, so that savings_goal_contributions -- money the user
+	// logged BY HAND, refetchable from no provider -- survives instead of being cascaded away by
+	// fk_contributions_savings_goal. Issue #1569, Task 8.
+	//
+	// The goal disappears from every read in this codebase (all of them carry
+	// `deleted_at IS NULL`, enforced by TestNoConfigReadForgetsTheTombstoneFilter), and its
+	// auto-created savings budget_categories are tombstoned with it so they do not outlive the
+	// goal they budget for.
+	//
+	// Runs in one transaction with an "savings_goal.deleted" audit entry written via
+	// auditLog.LogInTx, so the entry and the state change commit or roll back together. auditLog
+	// may be nil, in which case no entry is written. Safe on this path because the transaction
+	// never locks a users row -- see AuditLogRepository.LogInTx's doc comment.
+	//
+	// Returns ErrSavingsGoalNotFound if the goal does not exist, belongs to another user, or is
+	// already tombstoned.
+	Delete(ctx context.Context, id, userID string, auditLog AuditLogRepository) error
+
+	// PurgeGoal permanently destroys a savings goal and, via ON DELETE CASCADE, every
+	// savings_goal_contribution, budget_category and savings_goal_category_detach row that
+	// references it. This is the genuinely destructive verb, and it CANNOT BE UNDONE.
+	//
+	// It refuses with ErrSavingsGoalNotDeleted, doing and changing nothing, unless the goal is
+	// ALREADY tombstoned. That two-step is the explicit confirmation the account purge established
+	// (repository.ErrAccountNotDisconnected, Issue #1569 Task 6): destroying hand-logged money is
+	// never something a single request can do by accident.
+	//
+	// Writes a "savings_goal.history_purged" audit entry inside the same transaction, mirroring
+	// PurgeAccount's "account.history_purged". Returns ErrSavingsGoalNotFound if the goal does not
+	// exist or belongs to another user.
+	PurgeGoal(ctx context.Context, id, userID string, auditLog AuditLogRepository) error
+
 	CountByUserID(ctx context.Context, userID string) (int, error)
 
 	// Balance sync operations (Issue #452, extended by #1300 for multi-basis progress)
@@ -116,7 +150,7 @@ func (r *savingsGoalRepository) Create(ctx context.Context, goal *domain.Savings
 
 // GetByID retrieves a savings goal by its ID.
 func (r *savingsGoalRepository) GetByID(ctx context.Context, id string) (*domain.SavingsGoal, error) {
-	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE id = $1`
+	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE id = $1 AND deleted_at IS NULL`
 	goal := &domain.SavingsGoal{}
 	err := r.db.QueryRow(ctx, query, id).Scan(
 		&goal.ID,
@@ -152,7 +186,7 @@ func (r *savingsGoalRepository) GetByID(ctx context.Context, id string) (*domain
 // GetByIDForUser retrieves a savings goal by ID with ownership validation.
 // Returns ErrSavingsGoalNotFound if the goal does not exist or belongs to a different user.
 func (r *savingsGoalRepository) GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error) {
-	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE id = $1 AND user_id = $2`
+	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`
 	goal := &domain.SavingsGoal{}
 	err := r.db.QueryRow(ctx, query, id, userID).Scan(
 		&goal.ID,
@@ -185,19 +219,19 @@ func (r *savingsGoalRepository) GetByIDForUser(ctx context.Context, id, userID s
 
 // GetByUserID retrieves all savings goals for a specific user.
 func (r *savingsGoalRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
-	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE user_id = $1 ORDER BY created_at DESC`
+	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE user_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`
 	return r.scanGoals(ctx, query, userID)
 }
 
 // GetActiveByUserID retrieves all active (not completed) savings goals for a user.
 func (r *savingsGoalRepository) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
-	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE user_id = $1 AND is_completed = false ORDER BY created_at DESC`
+	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE user_id = $1 AND is_completed = false AND deleted_at IS NULL ORDER BY created_at DESC`
 	return r.scanGoals(ctx, query, userID)
 }
 
 // GetByName retrieves a savings goal by user ID and name.
 func (r *savingsGoalRepository) GetByName(ctx context.Context, userID, name string) (*domain.SavingsGoal, error) {
-	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE user_id = $1 AND name = $2`
+	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE user_id = $1 AND name = $2 AND deleted_at IS NULL`
 	goal := &domain.SavingsGoal{}
 	err := r.db.QueryRow(ctx, query, userID, name).Scan(
 		&goal.ID,
@@ -245,7 +279,7 @@ func (r *savingsGoalRepository) Update(ctx context.Context, goal *domain.Savings
 			completed_at = $9, updated_at = $10, user_account_id = $11,
 			progress_basis = $12, account_percentage = $13, last_calculated_at = $14,
 			balance_as_of = $15
-		WHERE id = $16 AND user_id = $17
+		WHERE id = $16 AND user_id = $17 AND deleted_at IS NULL
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -283,25 +317,103 @@ func (r *savingsGoalRepository) Update(ctx context.Context, goal *domain.Savings
 	return nil
 }
 
-// Delete removes a savings goal from the database.
-func (r *savingsGoalRepository) Delete(ctx context.Context, id, userID string) error {
-	query := `DELETE FROM savings_goals WHERE id = $1 AND user_id = $2`
-
-	ct, err := r.db.Exec(ctx, query, id, userID)
+// Delete implements SavingsGoalRepository.Delete — see that method's doc comment for why this is
+// a tombstone rather than a DELETE.
+func (r *savingsGoalRepository) Delete(ctx context.Context, id, userID string, auditLog AuditLogRepository) error {
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
+	ct, err := tx.Exec(ctx, `
+		UPDATE savings_goals
+		SET deleted_at = NOW(), deleted_reason = $3, deleted_by = $4, updated_at = NOW()
+		WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+	`, id, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser)
+	if err != nil {
+		return fmt.Errorf("delete savings goal %s: %w", id, err)
+	}
+	if ct.RowsAffected() == 0 {
+		// Either it never existed, belongs to someone else, or is already tombstoned. All three
+		// are "not found" from the caller's side: a tombstoned goal is invisible to every read.
+		return domain.ErrSavingsGoalNotFound
+	}
+
+	// budget_categories.savings_goal_id -> savings_goals(id) is ON DELETE CASCADE (migration
+	// 000097), so before this change deleting a goal also removed the savings categories that
+	// CreateGoal auto-creates in every active budget. Tombstoning the goal alone would leave those
+	// categories behind, budgeting against a goal the user can no longer see. They are tombstoned
+	// with reason 'parent_deleted' so that behaviour is preserved -- while rollover_history rows
+	// that name one of them as their source, which the CASCADE used to destroy, survive.
+	if _, err := tx.Exec(ctx, `
+		UPDATE budget_categories
+		SET deleted_at = NOW(), deleted_reason = $2, deleted_by = $3, updated_at = NOW()
+		WHERE savings_goal_id = $1 AND deleted_at IS NULL
+	`, id, domain.SoftDeleteReasonParent, domain.SoftDeletedByUser); err != nil {
+		return fmt.Errorf("delete savings goal %s: tombstoning its budget categories: %w", id, err)
+	}
+
+	if auditLog != nil {
+		if err := auditLog.LogInTx(ctx, tx, "savings_goal.deleted", "savings_goal", id); err != nil {
+			return fmt.Errorf("delete savings goal %s: audit log: %w", id, err)
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+// PurgeGoal implements SavingsGoalRepository.PurgeGoal — see that method's doc comment.
+func (r *savingsGoalRepository) PurgeGoal(ctx context.Context, id, userID string, auditLog AuditLogRepository) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+
+	// Lock the row and check the precondition BEFORE destroying anything. FOR UPDATE here is a row
+	// lock on savings_goals, never on users, so it cannot participate in the users-row lock cycle
+	// AuditLogRepository.LogInTx's doc comment warns about.
+	//
+	var deletedAt *time.Time
+	err = tx.QueryRow(ctx, `
+		-- tombstone-exempt: this is the purge path. It exists precisely to act on an
+		-- already-tombstoned goal, so excluding tombstones here would leave it nothing to purge.
+		SELECT deleted_at FROM savings_goals WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+		id, userID,
+	).Scan(&deletedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrSavingsGoalNotFound
+		}
+		return fmt.Errorf("purge savings goal %s: %w", id, err)
+	}
+	if deletedAt == nil {
+		return domain.ErrSavingsGoalNotDeleted
+	}
+
+	// This is the destruction the tombstone was deferring: ON DELETE CASCADE takes
+	// savings_goal_contributions, budget_categories and savings_goal_category_detach with it.
+	ct, err := tx.Exec(ctx, `DELETE FROM savings_goals WHERE id = $1 AND user_id = $2`, id, userID)
+	if err != nil {
+		return fmt.Errorf("purge savings goal %s: %w", id, err)
+	}
 	if ct.RowsAffected() == 0 {
 		return domain.ErrSavingsGoalNotFound
 	}
 
-	return nil
+	if auditLog != nil {
+		if err := auditLog.LogInTx(ctx, tx, "savings_goal.history_purged", "savings_goal", id); err != nil {
+			return fmt.Errorf("purge savings goal %s: audit log: %w", id, err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // CountByUserID counts the total number of savings goals for a user.
 func (r *savingsGoalRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
-	query := `SELECT COUNT(*) FROM savings_goals WHERE user_id = $1`
+	query := `SELECT COUNT(*) FROM savings_goals WHERE user_id = $1 AND deleted_at IS NULL`
 
 	var count int
 	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
@@ -319,7 +431,7 @@ func (r *savingsGoalRepository) GetByAccountID(ctx context.Context, accountID st
 	WHERE (
 		user_account_id = (SELECT user_account_id FROM accounts WHERE id = $1 AND user_account_id IS NOT NULL)
 		OR (account_id = $1 AND user_account_id IS NULL)
-	) AND is_completed = false ORDER BY created_at DESC`
+	) AND is_completed = false AND deleted_at IS NULL ORDER BY created_at DESC`
 	return r.scanGoals(ctx, query, accountID)
 }
 
@@ -376,7 +488,7 @@ func (r *savingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID 
 	query := `
 		UPDATE savings_goals
 		SET current_amount = $1, last_calculated_at = $2, balance_as_of = $3, updated_at = NOW()
-		WHERE id = $4
+		WHERE id = $4 AND deleted_at IS NULL
 	`
 
 	ct, err := r.db.Exec(ctx, query, currentAmount, lastCalculatedAt, balanceAsOf, goalID)
@@ -403,7 +515,7 @@ func (r *savingsGoalRepository) MarkCompleted(ctx context.Context, goalID string
 		SET is_completed = true,
 		    completed_at = CASE WHEN completed_at IS NULL THEN $1 ELSE completed_at END,
 		    updated_at = $1
-		WHERE id = $2
+		WHERE id = $2 AND deleted_at IS NULL
 	`
 
 	ct, err := r.db.Exec(ctx, query, now, goalID)

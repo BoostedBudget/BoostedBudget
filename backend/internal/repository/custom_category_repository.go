@@ -412,8 +412,8 @@ func (r *customCategoryRepository) GetCategoryUsage(ctx context.Context, userID,
 
 	if err := r.db.QueryRow(ctx,
 		`SELECT COUNT(*) FROM budget_categories bc
-		 JOIN budgets b ON b.id = bc.budget_id
-		 WHERE b.user_id = $1 AND bc.custom_category_id = $2`,
+		 JOIN budgets b ON b.id = bc.budget_id AND b.deleted_at IS NULL
+		 WHERE b.user_id = $1 AND bc.custom_category_id = $2 AND bc.deleted_at IS NULL`,
 		userID, categoryID,
 	).Scan(&usage.BudgetCount); err != nil {
 		return nil, err

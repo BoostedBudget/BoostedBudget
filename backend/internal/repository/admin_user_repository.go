@@ -177,6 +177,7 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 		LEFT JOIN (
 			SELECT user_id, COUNT(*) as count
 			FROM boosts
+			WHERE deleted_at IS NULL
 			GROUP BY user_id
 		) r ON r.user_id = u.id
 		LEFT JOIN (
@@ -258,6 +259,7 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		LEFT JOIN (
 			SELECT user_id, COUNT(*) as count
 			FROM boosts
+			WHERE deleted_at IS NULL
 			GROUP BY user_id
 		) r ON r.user_id = u.id
 		LEFT JOIN (

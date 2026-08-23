@@ -494,7 +494,9 @@ func TestSavingsGoalRepository_Update_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestSavingsGoalRepository_Delete tests savings goal deletion
+// TestSavingsGoalRepository_Delete tests savings goal deletion. Issue #1569 Task 8: it is a
+// TOMBSTONE now, not a DELETE — the statement must be an UPDATE, and it must be followed by the
+// budget-category cascade inside the same transaction.
 func TestSavingsGoalRepository_Delete(t *testing.T) {
 	mock, repo := setupSavingsGoalMockDB(t)
 	defer mock.Close()
@@ -503,11 +505,16 @@ func TestSavingsGoalRepository_Delete(t *testing.T) {
 	goalID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM savings_goals`)).
-		WithArgs(goalID, userID).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
+		WithArgs(goalID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
+		WithArgs(goalID, domain.SoftDeleteReasonParent, domain.SoftDeletedByUser).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
-	err := repo.Delete(ctx, goalID, userID)
+	err := repo.Delete(ctx, goalID, userID, nil)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -522,11 +529,13 @@ func TestSavingsGoalRepository_Delete_NotFound(t *testing.T) {
 	goalID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM savings_goals`)).
-		WithArgs(goalID, userID).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
+		WithArgs(goalID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
 
-	err := repo.Delete(ctx, goalID, userID)
+	err := repo.Delete(ctx, goalID, userID, nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, domain.ErrSavingsGoalNotFound, err)

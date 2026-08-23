@@ -55,7 +55,21 @@ type SavingsGoalService interface {
 	GetGoals(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
 	GetActiveGoals(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
 	UpdateGoal(ctx context.Context, userID, goalID string, req *domain.UpdateSavingsGoalRequest) (*domain.SavingsGoal, error)
+	// DeleteGoal tombstones a savings goal. It is NOT destructive: every
+	// savings_goal_contribution the user logged by hand survives, and the goal simply becomes
+	// invisible. Issue #1569, Task 8.
 	DeleteGoal(ctx context.Context, userID, goalID string) error
+
+	// PurgeGoal permanently destroys an ALREADY-DELETED goal and every contribution under it.
+	// Refuses with domain.ErrSavingsGoalNotDeleted on a live goal — that two-step is the explicit
+	// confirmation, the same shape the account purge uses. Issue #1569, Task 8.
+	PurgeGoal(ctx context.Context, userID, goalID string) error
+
+	// SetAuditLogRepository wires the savings_goal.deleted / savings_goal.history_purged audit
+	// entries, which are written INSIDE the repository's own transaction via LogInTx so the entry
+	// and the state change commit or roll back together. Nil-safe optional dependency: when unset,
+	// the deletes still work and simply write no entry. Issue #1569, Task 8.
+	SetAuditLogRepository(ar repository.AuditLogRepository)
 
 	// SetBudgetRepo wires the optional budget repository for auto-creating savings categories
 	// in active budgets when a goal is created. If not set, auto-create is skipped. Issue #1300.
@@ -92,6 +106,11 @@ type savingsGoalService struct {
 	// analytics is optional; when set, basis-change events are fired via PostHog
 	// (Issue #1300 M14). Nil-safe: guard with "if s.analytics != nil".
 	analytics phclient.Analytics
+	// auditLogRepo records savings_goal.deleted / savings_goal.history_purged entries INSIDE the
+	// repository's own transaction (Issue #1569 Task 8), via LogInTx. Nil-safe optional
+	// dependency, wired by SetAuditLogRepository — same pattern as accountService.auditLogRepo,
+	// and safe for the same reason: neither transaction locks a users row.
+	auditLogRepo repository.AuditLogRepository
 }
 
 // NewSavingsGoalService creates a new SavingsGoalService instance.
@@ -210,6 +229,11 @@ func (s *savingsGoalService) SetProgressService(svc GoalProgressRecomputer) {
 // seed / archive operations (Issue #1300 M14).
 func (s *savingsGoalService) SetBasisSwitchContribRepo(repo GoalBasisSwitchContribRepo) {
 	s.basisSwitchRepo = repo
+}
+
+// SetAuditLogRepository wires the optional audit-log repository. See the interface method.
+func (s *savingsGoalService) SetAuditLogRepository(ar repository.AuditLogRepository) {
+	s.auditLogRepo = ar
 }
 
 // SetAnalytics wires the optional PostHog analytics client (Issue #1300 M14).
@@ -456,7 +480,7 @@ func (s *savingsGoalService) handleBasisSwitch(
 	}
 }
 
-// DeleteGoal removes a savings goal.
+// DeleteGoal tombstones a savings goal — see the interface method's doc comment.
 func (s *savingsGoalService) DeleteGoal(ctx context.Context, userID, goalID string) error {
 	s.logger.Info("deleting savings goal",
 		slog.String("user_id", userID),
@@ -474,8 +498,8 @@ func (s *savingsGoalService) DeleteGoal(ctx context.Context, userID, goalID stri
 		return domain.ErrSavingsGoalNotFound
 	}
 
-	// Delete the goal
-	if err := s.goalRepo.Delete(ctx, goalID, userID); err != nil {
+	// Tombstone the goal. Contributions are retained; see SavingsGoalRepository.Delete.
+	if err := s.goalRepo.Delete(ctx, goalID, userID, s.auditLogRepo); err != nil {
 		s.logger.Error("failed to delete savings goal",
 			slog.String("goal_id", goalID),
 			slog.String("error", err.Error()),
@@ -488,6 +512,32 @@ func (s *savingsGoalService) DeleteGoal(ctx context.Context, userID, goalID stri
 		slog.String("goal_id", goalID),
 	)
 
+	return nil
+}
+
+// PurgeGoal permanently destroys an already-deleted goal — see the interface method's doc comment.
+//
+// Ownership is enforced by the repository query itself (`WHERE id = $1 AND user_id = $2`), not by
+// a read-then-check in this method: DeleteGoal's GetByID-then-compare cannot be reused here
+// because every read excludes tombstoned goals, and a purge acts only on tombstoned goals.
+func (s *savingsGoalService) PurgeGoal(ctx context.Context, userID, goalID string) error {
+	s.logger.Info("purging savings goal",
+		slog.String("user_id", userID),
+		slog.String("goal_id", goalID),
+	)
+
+	if err := s.goalRepo.PurgeGoal(ctx, goalID, userID, s.auditLogRepo); err != nil {
+		s.logger.Error("failed to purge savings goal",
+			slog.String("goal_id", goalID),
+			slog.String("error", err.Error()),
+		)
+		return err
+	}
+
+	s.logger.Info("savings goal purged",
+		slog.String("user_id", userID),
+		slog.String("goal_id", goalID),
+	)
 	return nil
 }
 
