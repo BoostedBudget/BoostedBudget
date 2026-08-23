@@ -580,6 +580,7 @@ func (r *accountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Conte
 		       name, official_name, type, subtype, mask,
 		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
+		       removed_reason,
 		       created_at, updated_at
 		FROM accounts
 		WHERE linked_item_id = $1
@@ -612,6 +613,9 @@ func (r *accountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Conte
 			&account.UserAccountID,
 			&account.ReplacedByID,
 			&account.ReplacedAt,
+			// Issue #1569 Task 5: this is the ONLY read that populates RemovedReason — see that
+			// field's doc comment for why, and why nil is the safe default everywhere else.
+			&account.RemovedReason,
 			&account.CreatedAt,
 			&account.UpdatedAt,
 		)

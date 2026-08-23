@@ -39,6 +39,24 @@ type Account struct {
 	// RemovedAt is when the user deliberately disconnected this account (status = 'removed').
 	// NULL for every other status. Issue #1569, migration 000149.
 	RemovedAt *time.Time `json:"removed_at,omitempty" db:"removed_at"`
+	// RemovedReason records WHO removed this account — see the RemovalReason constants. It is the
+	// single input to one decision: whether restoreProviderRemovedAccounts may return the account
+	// to 'active'. Issue #1569 Task 5, migration 000154.
+	//
+	// ⚠ POPULATED BY EXACTLY ONE READ: GetByLinkedItemIDIncludingRetained, the sync's account read
+	// and the only caller that needs it. Every other query leaves it nil. That is deliberate rather
+	// than lazy, and it is SAFE in the only direction that matters: nil is read as "not
+	// provider-removed", so a stale or unpopulated value can only ever cause a restore to be
+	// SKIPPED, never performed. The authoritative check is the SQL predicate inside
+	// accountRepository.RestoreProviderRemovedAccount, which re-reads this column under FOR UPDATE
+	// and refuses anything that is not 'provider_absent'; this field exists so the service can skip
+	// the round trip for the overwhelmingly common case, not so it can decide.
+	//
+	// Not serialised (`json:"-"`): domain.Account IS an API response type (huma/operations/plaid.go),
+	// and exposing this would change api/openapi.yaml and the generated frontend client, which is
+	// out of scope for this task. Surfacing "your bank closed this account" to a user is worth
+	// doing; it is not this.
+	RemovedReason *string `json:"-" db:"removed_reason"`
 	// ⚠ DEAD COLUMN — never written non-NULL by any production path (#1537 round 14). Its only
 	// writer is accountRepository.UpdateStatus, and that method's sole production caller
 	// (services/account_service.go:510, the re-link soft-delete) passes a literal nil. The only other
