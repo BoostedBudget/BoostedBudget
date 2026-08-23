@@ -41,19 +41,23 @@ func addSiblingAccount(ctx context.Context, t *testing.T, db DB, f retainedFixtu
 	`, userAccountID, f.UserID, "sibling-inst-"+userAccountID.String())
 	require.NoError(t, err, "seed sibling user_account")
 
-	var removedAt, replacedAt any
+	var removedAt, replacedAt, expiredAt any
 	switch status {
 	case domain.AccountStatusRemoved:
 		removedAt = time.Now().UTC()
 	case domain.AccountStatusReplaced:
 		replacedAt = time.Now().UTC()
+	case domain.AccountStatusExpired:
+		// accounts_expired_at_consistency (migration 000155, Issue #1569 Task 6) requires
+		// expired_at whenever status = 'expired'.
+		expiredAt = time.Now().UTC()
 	}
 
 	_, err = db.Exec(ctx, `
 		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status,
-			user_account_id, removed_at, replaced_at)
-		VALUES ($1, $2, $3, $4, 'Sibling Account', 'depository', $5, $6, $7, $8)
-	`, accountID, f.LinkedItemID, f.UserID, plaidAccountID, string(status), userAccountID, removedAt, replacedAt)
+			user_account_id, removed_at, replaced_at, expired_at)
+		VALUES ($1, $2, $3, $4, 'Sibling Account', 'depository', $5, $6, $7, $8, $9)
+	`, accountID, f.LinkedItemID, f.UserID, plaidAccountID, string(status), userAccountID, removedAt, replacedAt, expiredAt)
 	require.NoError(t, err, "seed sibling account with status %s", status)
 
 	return accountID

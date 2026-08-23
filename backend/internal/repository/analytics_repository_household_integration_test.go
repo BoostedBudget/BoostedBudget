@@ -784,10 +784,16 @@ func TestAnalyticsRepository_GetSpendingByCategory_Household_IncludesReplacedAcc
 func markAccountNonActive(t *testing.T, pool *pgxpool.Pool, accountID, status string) {
 	t.Helper()
 	var err error
-	if status == "replaced" {
+	switch status {
+	case "replaced":
 		_, err = pool.Exec(context.Background(),
 			`UPDATE accounts SET status = 'replaced', replaced_at = now() WHERE id = $1`, accountID)
-	} else {
+	case "expired":
+		// accounts_expired_at_consistency (migration 000155, Issue #1569 Task 6) requires
+		// expired_at whenever status = 'expired'.
+		_, err = pool.Exec(context.Background(),
+			`UPDATE accounts SET status = 'expired', expired_at = now() WHERE id = $1`, accountID)
+	default:
 		_, err = pool.Exec(context.Background(),
 			`UPDATE accounts SET status = $2 WHERE id = $1`, accountID, status)
 	}

@@ -348,8 +348,34 @@ func (s *accountService) checkFingerprintOwnership(ctx context.Context, blindIdx
 			"other_item_id", ownership.LinkedItemID,
 			"status_changed_at", ownership.StatusChangedAt,
 		)
-		if err := s.accountRepo.ExpireAccountsByFingerprint(ctx, blindIdx); err != nil {
+		expiredAccountIDs, err := s.accountRepo.ExpireAccountsByFingerprint(ctx, blindIdx)
+		if err != nil {
 			return fmt.Errorf("failed to expire accounts by fingerprint: %w", err)
+		}
+
+		// Issue #1569 Task 6: audit-log each expired account. Nothing was logged on this path
+		// before — the gap plaid_account_reconciliation.go's own audit call explicitly calls out
+		// ("the expiry path does not, which is precisely the gap this repeats rather than copies").
+		//
+		// THE ACTOR PROBLEM: this account belongs to ownership.UserID (the dispossessed owner), but
+		// the write was triggered by userID (the caller linking a conflicting fingerprint). Logging
+		// this as something ownership.UserID did, or as something userID did TO their own account,
+		// would both be false — userID never touched this account, and ownership.UserID took no
+		// action at all; their dormant account was flipped by someone else's link. AuditLogger.Log
+		// has no actor parameter at all (see its doc comment on writeAuditLogEntry: user_id is
+		// always written NULL, "the honest reading" for exactly this kind of action nobody
+		// performed on the resource). That absence is deliberate here, not an oversight — do not
+		// widen this call to pass userID as if it were the actor.
+		//
+		// Non-fatal, same "already committed, don't abort" reasoning as every other audit call in
+		// this file: the expiry already happened, so a logging failure must not surface as a
+		// LinkAccounts error.
+		if s.auditLogger != nil {
+			for _, expiredID := range expiredAccountIDs {
+				if auditErr := s.auditLogger.Log(ctx, "account.expired_by_fingerprint_release", "account", expiredID); auditErr != nil {
+					logAuditFailure(ctx, auditErr, "account.expired_by_fingerprint_release", ownership.UserID)
+				}
+			}
 		}
 		// Issue #1531 Blocker 1: ExpireAccountsByFingerprint just flipped a DIFFERENT user's
 		// (ownership.UserID's) accounts from active to expired — the whole point of this method,

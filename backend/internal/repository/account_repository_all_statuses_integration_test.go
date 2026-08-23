@@ -37,12 +37,15 @@ import (
 // re-link handler (status='replaced') and ExpireAccountsByFingerprint (status='expired').
 func setAccountStatus(t *testing.T, pool *pgxpool.Pool, accountID string, status domain.AccountStatus) {
 	t.Helper()
-	// The accounts_replaced_at_consistency check constraint requires replaced_at to be set
-	// exactly when status='replaced' (and NULL otherwise), so the two columns move together.
+	// accounts_replaced_at_consistency requires replaced_at to be set exactly when
+	// status='replaced' (NULL otherwise), and accounts_expired_at_consistency (migration 000155,
+	// Issue #1569 Task 6) requires the same pairing for expired_at/'expired' — so both move with
+	// status together.
 	ct, err := pool.Exec(context.Background(), `
 		UPDATE accounts
 		SET status = $2::text,
-		    replaced_at = CASE WHEN $2::text = 'replaced' THEN NOW() ELSE NULL END
+		    replaced_at = CASE WHEN $2::text = 'replaced' THEN NOW() ELSE NULL END,
+		    expired_at = CASE WHEN $2::text = 'expired' THEN NOW() ELSE NULL END
 		WHERE id = $1`, accountID, status)
 	require.NoError(t, err, "set account status")
 	require.EqualValues(t, 1, ct.RowsAffected(), "status update must actually hit the row")

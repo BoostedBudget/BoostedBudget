@@ -447,8 +447,10 @@ func TestUnifiedFeed_ExpiredChain_TransactionsStayVisible(t *testing.T) {
 	seedBankingTxn(ctx, t, tx, f, now.AddDate(0, 0, -120), "Expired Chain Purchase")
 	seedInvestmentTxn(ctx, t, tx, f, now.AddDate(0, 0, -120), "Expired Chain Buy")
 
+	// accounts_expired_at_consistency (migration 000155, Issue #1569 Task 6) requires expired_at
+	// whenever status = 'expired'.
 	_, err = tx.Exec(ctx,
-		`UPDATE accounts SET status = 'expired', updated_at = NOW() WHERE id = $1`, f.AccountID)
+		`UPDATE accounts SET status = 'expired', expired_at = NOW(), updated_at = NOW() WHERE id = $1`, f.AccountID)
 	require.NoError(t, err)
 
 	repo := NewTransactionRepository(tx, nil)

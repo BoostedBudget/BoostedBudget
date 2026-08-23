@@ -500,7 +500,9 @@ func TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHist
 	// The only accounts row for this user_account_id is 'depository' and has been EXPIRED, as
 	// ExpireAccountsByFingerprint does to every active row sharing a fingerprint.
 	acctID := insertTestAccount(t, pool, li, owner, ua)
-	_, err := pool.Exec(ctx, `UPDATE accounts SET status = 'expired' WHERE id = $1`, acctID)
+	// accounts_expired_at_consistency (migration 000155, Issue #1569 Task 6) requires expired_at
+	// whenever status = 'expired'.
+	_, err := pool.Exec(ctx, `UPDATE accounts SET status = 'expired', expired_at = NOW() WHERE id = $1`, acctID)
 	require.NoError(t, err, "expire the only chain member")
 
 	now := time.Now().UTC()

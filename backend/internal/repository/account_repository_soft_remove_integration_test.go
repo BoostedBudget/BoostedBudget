@@ -272,7 +272,9 @@ func TestAccountRepository_UpdateStatus_Integration_ExpiredIsAlsoAHardRefusal(t 
 	// past instant: migration 000007's update_accounts_updated_at trigger re-stamps updated_at to
 	// NOW() on ANY UPDATE, including this seeding one, so the only meaningful assertion is that the
 	// REFUSED UpdateStatus call below does not move it again from whatever the trigger just set.
-	_, err := pool.Exec(ctx, `UPDATE accounts SET status = 'expired' WHERE id = $1`, accountID)
+	// accounts_expired_at_consistency (migration 000155, Issue #1569 Task 6) requires expired_at
+	// whenever status = 'expired'.
+	_, err := pool.Exec(ctx, `UPDATE accounts SET status = 'expired', expired_at = NOW() WHERE id = $1`, accountID)
 	require.NoError(t, err)
 
 	var updatedAtBefore time.Time

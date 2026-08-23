@@ -145,8 +145,9 @@ func TestGetItemsForCleanupPage_Integration_ZeroActiveAccountsLeg(t *testing.T) 
 	// Not a DELETE: the leg is `NOT EXISTS (... AND a.status = 'active')`, so moving the only account
 	// off 'active' must be enough on its own. 'expired' rather than something like 'closed' because
 	// accounts_valid_status admits exactly ('active', 'replaced', 'expired') — a 'closed' here fails
-	// the CHECK, which is how this assertion first surfaced.
-	_, err := tx.Exec(ctx, `UPDATE accounts SET status = 'expired' WHERE linked_item_id = $1`, itemID)
+	// the CHECK, which is how this assertion first surfaced. expired_at is set alongside it because
+	// accounts_expired_at_consistency (migration 000155, Issue #1569 Task 6) now requires it.
+	_, err := tx.Exec(ctx, `UPDATE accounts SET status = 'expired', expired_at = NOW() WHERE linked_item_id = $1`, itemID)
 	require.NoError(t, err)
 
 	assert.True(t, sweepSelects(t, ctx, repo, itemID),
