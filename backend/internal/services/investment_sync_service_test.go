@@ -415,9 +415,11 @@ func TestInvestmentSyncService_SyncHoldings_EmptyHoldings(t *testing.T) {
 	linkedItem := makeLinkedItem("item-001", userID)
 
 
-	// No securities, no holdings in response (account was fully liquidated)
+	// No securities, no holdings in response (account was fully liquidated) — but the account
+	// IS present in the response's `accounts` array, confirming Plaid enumerated it this call
+	// and genuinely reports zero holdings, not a partial/incomplete response for it.
 	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
-		[]plaid.AccountBase{},
+		[]plaid.AccountBase{{AccountId: plaidAccountID}},
 		[]plaid.Holding{},
 		[]plaid.Security{},
 		makeMinimalPlaidItem(),
@@ -440,6 +442,50 @@ func TestInvestmentSyncService_SyncHoldings_EmptyHoldings(t *testing.T) {
 	assert.Equal(t, 0, result.HoldingsReplaced)
 	assert.Equal(t, 1, result.AccountsProcessed) // account still processed (cleared)
 	deps.holdingRepo.AssertExpectations(t)
+}
+
+// TestInvestmentSyncService_SyncHoldings_PartialResponse_PreservesHoldings verifies the Issue
+// #1569 Task 4 fix: an account with no holdings in the response AND absent from the response's
+// `accounts` array (the only per-account completeness signal Plaid exposes, see
+// plaid_completeness.go) must NOT be treated as "fully liquidated." Existing holdings rows must
+// be preserved, and the sync must surface an error so the caller (ProcessWebhook) retries instead
+// of silently accepting a partial response as final.
+func TestInvestmentSyncService_SyncHoldings_PartialResponse_PreservesHoldings(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	internalAccountID := uuid.New().String()
+	plaidAccountID := "plaid-acct-partial-holdings"
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-001", userID)
+
+	// No holdings for this account AND the account itself is absent from `accounts` — Plaid's
+	// response says nothing about this account at all this call (a partial/degraded response),
+	// which is NOT the same as "confirmed fully liquidated."
+	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
+		[]plaid.AccountBase{},
+		[]plaid.Holding{},
+		[]plaid.Security{},
+		makeMinimalPlaidItem(),
+		"req-partial-holdings",
+	)
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, "tok").Return(holdingsResp, nil)
+
+	deps.securityRepo.On("UpsertBatch", ctx, []domain.Security{}).Return(map[string]string{}, nil)
+
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+
+	result, err := svc.SyncHoldings(ctx, linkedItem)
+
+	require.NoError(t, err)
+	// ReplaceForAccount must NEVER be called for this account — existing holdings are preserved.
+	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount", ctx, internalAccountID, userID, []domain.Holding{})
+	assert.Equal(t, 0, result.AccountsProcessed)
+	// A partial response must surface as an error so ProcessWebhook retries.
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0], plaidAccountID)
 }
 
 // TestInvestmentSyncService_SyncHoldings_UnmappedAccount verifies that holdings for
