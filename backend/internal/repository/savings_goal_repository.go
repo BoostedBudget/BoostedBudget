@@ -22,6 +22,17 @@ type SavingsGoalRepository interface {
 	// different user. Use instead of GetByID in security-sensitive paths (GAP AE).
 	GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error)
 	GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
+
+	// GetDeletedByUserID lists the user's TOMBSTONED goals, newest deletion first. It is the
+	// deliberate inverse of every other read here, and it exists because task 8 shipped a
+	// tombstone and a purge with no way to reach either: once deleted_at is set, no query in this
+	// repository can find the goal again, so the user can neither see that their hand-logged
+	// contributions were kept nor satisfy PurgeGoal's already-deleted precondition. Retention
+	// nobody can act on is deletion with a longer receipt.
+	//
+	// Scoped to the caller's own user_id, like every other listing here — the tombstone predicate
+	// is inverted, the tenancy predicate is not.
+	GetDeletedByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
 	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
 	GetByName(ctx context.Context, userID, name string) (*domain.SavingsGoal, error)
 	Update(ctx context.Context, goal *domain.SavingsGoal) error
@@ -88,6 +99,13 @@ const goalSelectCols = `
 	created_at, updated_at,
 	progress_basis, account_percentage, last_calculated_at, balance_as_of
 `
+
+// goalSelectColsWithDeletedAt is goalSelectCols plus the tombstone timestamp, for the ONE read
+// that returns tombstoned rows. Kept separate rather than folded into goalSelectCols so that the
+// eighteen existing scan sites are untouched: adding a column to the shared list would mean
+// editing every one of them, and a missed site is a runtime scan mismatch that no compiler
+// catches.
+const goalSelectColsWithDeletedAt = goalSelectCols + `, deleted_at`
 
 // Create creates a new savings goal in the database.
 func (r *savingsGoalRepository) Create(ctx context.Context, goal *domain.SavingsGoal) error {
@@ -221,6 +239,58 @@ func (r *savingsGoalRepository) GetByIDForUser(ctx context.Context, id, userID s
 func (r *savingsGoalRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
 	query := `SELECT ` + goalSelectCols + ` FROM savings_goals WHERE user_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`
 	return r.scanGoals(ctx, query, userID)
+}
+
+// GetDeletedByUserID retrieves the user's tombstoned savings goals, newest deletion first.
+func (r *savingsGoalRepository) GetDeletedByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
+	query := `SELECT ` + goalSelectColsWithDeletedAt + `
+		FROM savings_goals
+		-- tombstone-exempt: THIS READ IS THE TOMBSTONE LISTING ITSELF (#1569 Task 12). Inverting
+		-- the predicate is the entire purpose; see GetDeletedByUserID's interface doc for why the
+		-- listing has to exist at all. Tenancy is unchanged and is asserted by
+		-- TestSavingsGoals_DeletedListing_Integration, which deletes a second user's goal in the
+		-- same transaction precisely so a listing keyed on deleted_at alone would fail.
+		WHERE user_id = $1 AND deleted_at IS NOT NULL
+		ORDER BY deleted_at DESC`
+
+	rows, err := r.db.Query(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	goals := []*domain.SavingsGoal{}
+	for rows.Next() {
+		goal := &domain.SavingsGoal{}
+		if err := rows.Scan(
+			&goal.ID,
+			&goal.UserID,
+			&goal.Name,
+			&goal.Description,
+			&goal.TargetAmount,
+			&goal.CurrentAmount,
+			&goal.CurrencyCode,
+			&goal.AccountID,
+			&goal.UserAccountID,
+			&goal.Deadline,
+			&goal.IsCompleted,
+			&goal.CompletedAt,
+			&goal.CreatedAt,
+			&goal.UpdatedAt,
+			&goal.ProgressBasis,
+			&goal.AccountPercentage,
+			&goal.LastCalculatedAt,
+			&goal.BalanceAsOf,
+			&goal.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		goals = append(goals, goal)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return goals, nil
 }
 
 // GetActiveByUserID retrieves all active (not completed) savings goals for a user.

@@ -969,6 +969,10 @@ func (m *mockSavingsGoalRepository) GetByIDForUser(ctx context.Context, id, user
 	return nil, domain.ErrSavingsGoalNotFound
 }
 
+func (m *mockSavingsGoalRepository) GetDeletedByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
+	return nil, nil
+}
+
 func (m *mockSavingsGoalRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
 	var result []*domain.SavingsGoal
 	for _, g := range m.goals {

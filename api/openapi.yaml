@@ -5473,6 +5473,9 @@ components:
         deadline:
           format: date-time
           type: string
+        deleted_at:
+          format: date-time
+          type: string
         description:
           type: string
         id:
@@ -12909,6 +12912,32 @@ paths:
       security:
         - clerk: []
       summary: Get active savings goals
+      tags:
+        - Savings Goals
+  /api/v1/savings-goals/deleted:
+    get:
+      description: "Lists savings goals the user has deleted. Deleting a goal retains it and every contribution logged against it (Issue #1569); this endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at."
+      operationId: getDeletedSavingsGoals
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/SavingsGoal"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get deleted savings goals
       tags:
         - Savings Goals
   /api/v1/savings-goals/progress-summary:

@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -31,6 +32,10 @@ type mockSavingsGoalService struct {
 	// purgeCalls records (userID, goalID) for each PurgeGoal call, so the handler test can prove
 	// the route reaches the service rather than merely returning 204. Issue #1569, Task 8.
 	purgeCalls [][2]string
+	// #1569 Task 12: the deleted-goals listing that makes purge reachable.
+	deletedGoals      []*domain.SavingsGoal
+	deletedGoalsErr   error
+	deletedGoalsCalls []string
 }
 
 func (m *mockSavingsGoalService) CreateGoal(ctx context.Context, userID string, req *domain.CreateSavingsGoalRequest) (*domain.SavingsGoal, error) {
@@ -45,6 +50,15 @@ func (m *mockSavingsGoalService) GetGoal(ctx context.Context, userID, goalID str
 		return nil, m.getErr
 	}
 	return m.goal, nil
+}
+
+// deletedGoals is what GetDeletedGoals returns; deletedGoalsErr short-circuits it.
+func (m *mockSavingsGoalService) GetDeletedGoals(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
+	if m.deletedGoalsErr != nil {
+		return nil, m.deletedGoalsErr
+	}
+	m.deletedGoalsCalls = append(m.deletedGoalsCalls, userID)
+	return m.deletedGoals, nil
 }
 
 func (m *mockSavingsGoalService) GetGoals(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
@@ -600,4 +614,55 @@ func TestProgressSummaryRouteRegistration(t *testing.T) {
 
 	resp := api.Get("/api/v1/savings-goals/progress-summary")
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+}
+
+// ── #1569 Task 12 gap 2: the deleted-goals listing ────────────────────────────────────────────
+//
+// purgeSavingsGoal shipped in task 8 with a precondition (the goal must already be deleted) and
+// no way for any client to discover which goals satisfy it, because every other read filters
+// `deleted_at IS NULL`. These tests pin the endpoint that closes that loop.
+
+func TestGetDeletedSavingsGoals_ReturnsTheUsersTombstonedGoals(t *testing.T) {
+	deletedAt := time.Now().Add(-48 * time.Hour)
+	goal := createTestSavingsGoal()
+	goal.DeletedAt = &deletedAt
+
+	mockService := &mockSavingsGoalService{deletedGoals: []*domain.SavingsGoal{goal}}
+	handler := NewSavingsGoalHandler(mockService)
+
+	output, err := handler.GetDeletedGoals(context.Background(), &GetDeletedSavingsGoalsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, output.Body, 1)
+	assert.Equal(t, "goal-123", output.Body[0].ID)
+	require.NotNil(t, output.Body[0].DeletedAt,
+		"deleted_at must reach the client — it is the only thing distinguishing this listing")
+	// The handler must scope to the AUTHENTICATED user, not to anything in the request.
+	assert.Equal(t, []string{"user-123"}, mockService.deletedGoalsCalls)
+}
+
+func TestGetDeletedSavingsGoals_EmptyIsAnArrayNotNull(t *testing.T) {
+	mockService := &mockSavingsGoalService{deletedGoals: nil}
+	handler := NewSavingsGoalHandler(mockService)
+
+	output, err := handler.GetDeletedGoals(context.Background(), &GetDeletedSavingsGoalsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output.Body, "a client mapping over the response must not receive null")
+	assert.Empty(t, output.Body)
+}
+
+func TestGetDeletedSavingsGoals_Error(t *testing.T) {
+	mockService := &mockSavingsGoalService{deletedGoalsErr: errors.New("database error")}
+	handler := NewSavingsGoalHandler(mockService)
+
+	_, err := handler.GetDeletedGoals(context.Background(), &GetDeletedSavingsGoalsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	})
+
+	require.Error(t, err)
 }

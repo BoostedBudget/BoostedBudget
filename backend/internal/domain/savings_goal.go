@@ -48,6 +48,13 @@ type SavingsGoal struct {
 	// (for balance/account_percentage bases — freshness signal for API/MCP consumers).
 	BalanceAsOf *time.Time `json:"balance_as_of,omitempty" db:"balance_as_of"`
 
+	// DeletedAt is the tombstone marker (#1569 Task 8). NULL on every live goal, and every
+	// ordinary read carries `deleted_at IS NULL` — enforced mechanically by
+	// TestNoConfigReadForgetsTheTombstoneFilter. It is serialised (omitempty, so live goals are
+	// unchanged on the wire) for exactly one consumer: the deleted-goals listing added in Task 12,
+	// which has to tell the user WHEN they deleted a goal before offering to destroy it for good.
+	DeletedAt *time.Time `json:"deleted_at,omitempty" db:"deleted_at"`
+
 	// Associated data (populated on demand, not stored in DB)
 	Account *Account `json:"account,omitempty" db:"-"`
 }
