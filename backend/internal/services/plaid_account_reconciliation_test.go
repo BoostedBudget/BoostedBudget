@@ -8,11 +8,13 @@ import (
 	"testing"
 
 	"github.com/plaid/plaid-go/v23/plaid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -164,6 +166,9 @@ func TestReconcileRemovedAccounts_AlreadyDisconnected_NotReTransitioned(t *testi
 		reconcileTestAccount("acct-replaced", "plaid-replaced"),
 		reconcileTestAccount("acct-already", "plaid-already"),
 		reconcileTestAccount("acct-gone", "plaid-gone"),
+		// A survivor, so the all-or-nothing bound (which is exercised on its own below) is not
+		// what this test is measuring.
+		reconcileTestAccount("acct-live", "plaid-live"),
 	})
 
 	assert.Equal(t, 1, removed, "only the genuine transition counts")
@@ -223,6 +228,7 @@ func TestReconcileRemovedAccounts_AuditFailureIsNonFatal(t *testing.T) {
 	removed := svc.reconcileRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
 		reconcileTestAccount("acct-gone-1", "plaid-gone-1"),
 		reconcileTestAccount("acct-gone-2", "plaid-gone-2"),
+		reconcileTestAccount("acct-live", "plaid-live"), // survivor: not an all-item sweep
 	})
 
 	assert.Equal(t, 2, removed)
@@ -243,6 +249,7 @@ func TestReconcileRemovedAccounts_NilAuditLogger_NoPanic(t *testing.T) {
 	require.NotPanics(t, func() {
 		svc.reconcileRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
 			reconcileTestAccount("acct-gone", "plaid-gone"),
+			reconcileTestAccount("acct-live", "plaid-live"), // survivor: not an all-item sweep
 		})
 	})
 	accountRepo.AssertExpectations(t)
@@ -265,9 +272,150 @@ func TestReconcileRemovedAccounts_UpdateFailureDoesNotStopThePass(t *testing.T) 
 	removed := svc.reconcileRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
 		reconcileTestAccount("acct-fail", "plaid-fail"),
 		reconcileTestAccount("acct-ok", "plaid-ok"),
+		reconcileTestAccount("acct-live", "plaid-live"), // survivor: not an all-item sweep
 	})
 
 	assert.Equal(t, 1, removed)
 	accountRepo.AssertExpectations(t)
 	audit.AssertNumberOfCalls(t, "Log", 1)
+}
+
+// ---------------------------------------------------------------------------
+// Fix round 1: the all-or-nothing bound.
+//
+// A removal is PERMANENT — nothing in this codebase writes an account back to 'active', and there
+// is no un-remove path or UI — so the degenerate shape is refused outright: if every active
+// account under an item would go at once, none of them does.
+// ---------------------------------------------------------------------------
+
+// TestReconcileRemovedAccounts_RefusesToRemoveEveryAccountOfAnItem: a complete, non-empty Plaid
+// response that matches NONE of the item's accounts is an anomaly (rotated ids, or a response for
+// a different item), not a mass closure — and this sync cannot create replacement rows to
+// compensate. Nothing is written.
+func TestReconcileRemovedAccounts_RefusesToRemoveEveryAccountOfAnItem(t *testing.T) {
+	accountRepo := &MockAccountRepository{}
+	audit := &MockAuditLogger{}
+	svc := reconcileTestService(accountRepo, audit)
+
+	// Plaid returned real accounts — the roster IS complete — but none of them are ours.
+	roster := PlaidAccountRosterFrom([]plaid.AccountBase{
+		{AccountId: "plaid-rotated-1"},
+		{AccountId: "plaid-rotated-2"},
+	}, nil)
+	removed := svc.reconcileRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
+		reconcileTestAccount("acct-a", "plaid-a"),
+		reconcileTestAccount("acct-b", "plaid-b"),
+		reconcileTestAccount("acct-c", "plaid-c"),
+	})
+
+	assert.Equal(t, 0, removed, "an all-item sweep must be refused outright")
+	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	audit.AssertNotCalled(t, "Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestReconcileRemovedAccounts_SingleAccountItemIsNotExempt pins the edge case CONSCIOUSLY, so a
+// future reader does not "fix" it. For a one-account item, "complete roster, zero matches" is the
+// id-rotation shape rather than a closure (a genuine whole-institution closure arrives as an EMPTY
+// accounts array, which the completeness guard already refuses) — so the bound applies here too.
+// The cost is a real single-account closure staying stale until the user disconnects it, which is
+// recoverable; removing it wrongly is not.
+func TestReconcileRemovedAccounts_SingleAccountItemIsNotExempt(t *testing.T) {
+	accountRepo := &MockAccountRepository{}
+	svc := reconcileTestService(accountRepo, nil)
+
+	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-someone-elses"}}, nil)
+	removed := svc.reconcileRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
+		reconcileTestAccount("acct-only", "plaid-only"),
+	})
+
+	assert.Equal(t, 0, removed)
+	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestReconcileRemovedAccounts_BoundIsAllOrNothingNotAMajority proves the bound is exactly the
+// degenerate case and no wider: with one survivor out of three, the other two DO get removed.
+// Without this, "refuse everything" and "refuse when most would go" both pass the test above.
+func TestReconcileRemovedAccounts_BoundIsAllOrNothingNotAMajority(t *testing.T) {
+	accountRepo := &MockAccountRepository{}
+	audit := &MockAuditLogger{}
+	svc := reconcileTestService(accountRepo, audit)
+
+	accountRepo.On("UpdateStatus", mock.Anything, "acct-a", "user-1", domain.AccountStatusRemoved, (*string)(nil)).Return(nil).Once()
+	accountRepo.On("UpdateStatus", mock.Anything, "acct-b", "user-1", domain.AccountStatusRemoved, (*string)(nil)).Return(nil).Once()
+	audit.On("Log", mock.Anything, "account.removed_by_provider", "account", mock.Anything).Return(nil).Twice()
+
+	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-c"}}, nil)
+	removed := svc.reconcileRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
+		reconcileTestAccount("acct-a", "plaid-a"),
+		reconcileTestAccount("acct-b", "plaid-b"),
+		reconcileTestAccount("acct-c", "plaid-c"),
+	})
+
+	assert.Equal(t, 2, removed, "two of three is not an all-item sweep and must proceed")
+	accountRepo.AssertExpectations(t)
+}
+
+// TestReconcileRemovedAccounts_ForeignAccountDoesNotUnlockTheBound: the ownership filter runs
+// BEFORE the bound is measured, so an account this pass could never write to cannot be counted as
+// "the survivor" that makes a sweep look partial. Item has two rows; one belongs to another user;
+// the only writable one is absent from Plaid — that IS an all-item sweep of what we may touch.
+func TestReconcileRemovedAccounts_ForeignAccountDoesNotUnlockTheBound(t *testing.T) {
+	accountRepo := &MockAccountRepository{}
+	svc := reconcileTestService(accountRepo, nil)
+
+	foreign := reconcileTestAccount("acct-foreign", "plaid-foreign")
+	foreign.UserID = "user-2"
+
+	roster := PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-unrelated"}}, nil)
+	removed := svc.reconcileRemovedAccounts(context.Background(), reconcileTestItem(), roster, []domain.Account{
+		foreign,
+		reconcileTestAccount("acct-mine", "plaid-mine"),
+	})
+
+	assert.Equal(t, 0, removed)
+	accountRepo.AssertNotCalled(t, "UpdateStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestReconcileRemovedAccounts_MetricRecordsOutcomes: a mass sweep must be visible in metrics, not
+// only in logs. Reads deltas rather than absolute values — the collector is a package-level
+// registry shared with every other test in this package.
+func TestReconcileRemovedAccounts_MetricRecordsOutcomes(t *testing.T) {
+	read := func(outcome string) float64 {
+		return testutil.ToFloat64(observability.PlaidProviderAccountRemoval.WithLabelValues(outcome))
+	}
+	beforeRemoved := read("removed")
+	beforeRefused := read("refused_full_item_sweep")
+	beforeSkipped := read("skipped_incomplete_response")
+
+	// A genuine removal, with a survivor so the bound does not trip.
+	accountRepo := &MockAccountRepository{}
+	svc := reconcileTestService(accountRepo, nil)
+	accountRepo.On("UpdateStatus", mock.Anything, "acct-gone", "user-1", domain.AccountStatusRemoved, (*string)(nil)).Return(nil).Once()
+	svc.reconcileRemovedAccounts(context.Background(), reconcileTestItem(),
+		PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-live"}}, nil),
+		[]domain.Account{
+			reconcileTestAccount("acct-gone", "plaid-gone"),
+			reconcileTestAccount("acct-live", "plaid-live"),
+		})
+
+	// A refused all-item sweep of three accounts.
+	svc2 := reconcileTestService(&MockAccountRepository{}, nil)
+	svc2.reconcileRemovedAccounts(context.Background(), reconcileTestItem(),
+		PlaidAccountRosterFrom([]plaid.AccountBase{{AccountId: "plaid-rotated"}}, nil),
+		[]domain.Account{
+			reconcileTestAccount("acct-a", "plaid-a"),
+			reconcileTestAccount("acct-b", "plaid-b"),
+			reconcileTestAccount("acct-c", "plaid-c"),
+		})
+
+	// A pass declined for an untrustworthy response.
+	svc3 := reconcileTestService(&MockAccountRepository{}, nil)
+	svc3.reconcileRemovedAccounts(context.Background(), reconcileTestItem(),
+		PlaidAccountRosterFrom(nil, nil),
+		[]domain.Account{reconcileTestAccount("acct-a", "plaid-a")})
+
+	assert.Equal(t, float64(1), read("removed")-beforeRemoved)
+	assert.Equal(t, float64(3), read("refused_full_item_sweep")-beforeRefused,
+		"the refusal counter must record the SIZE of the sweep it prevented")
+	assert.Equal(t, float64(1), read("skipped_incomplete_response")-beforeSkipped)
 }

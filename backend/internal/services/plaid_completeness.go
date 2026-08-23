@@ -108,6 +108,39 @@ func (r PlaidAccountRoster) ConfirmedAbsent(plaidAccountID string) bool {
 	return !r.Present(plaidAccountID)
 }
 
+// ConfirmedAbsentIn answers the whole reverse-direction question in one call: given the
+// plaid_account_ids you already know about, which of them is this response able to PROVE are gone?
+//
+// This exists so that no caller ever has to write the "known accounts minus what Plaid returned"
+// loop by hand. Issue #1569 Task 5, fix round 1: an earlier version of this file claimed that loop
+// was unwritable. It is not — `for _, a := range known { if !roster.Present(a) { remove(a) } }`
+// compiles, reads as correct, and mirrors an idiom this package already uses legitimately
+// (investment_sync_service.go's holdings gate) — and on a zero-account or errored response it marks
+// EVERY account removed, which is permanent and unrecoverable (nothing writes an account back to
+// 'active'). What the type forecloses is laundering a failed call into a complete-looking roster,
+// and reconstructing the raw set to iterate. What it did NOT foreclose was that hand-written loop.
+// This method does: it is strictly easier to call than the loop is to write, and it cannot answer
+// affirmatively for anything when the roster is incomplete.
+//
+// Returns a nil slice for an incomplete roster, and never reports the same id twice.
+func (r PlaidAccountRoster) ConfirmedAbsentIn(known []string) []string {
+	if !r.complete {
+		return nil
+	}
+	var gone []string
+	seen := make(map[string]struct{}, len(known))
+	for _, id := range known {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		if r.ConfirmedAbsent(id) {
+			gone = append(gone, id)
+		}
+	}
+	return gone
+}
+
 // Complete reports whether this roster may certify absences at all. Exposed for logging and for
 // callers that want to say "skipped reconciliation, response not trustworthy" once rather than
 // per account; the removal decision itself must still go through ConfirmedAbsent.

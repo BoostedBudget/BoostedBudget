@@ -724,6 +724,28 @@ var (
 		Help: "Total delete-only Plaid sync operations skipped because the account was absent from the response's account list, by category (credit_liability, mortgage_liability, student_loan_liability, holdings).",
 	}, []string{"category"})
 
+	// PlaidProviderAccountRemoval counts the outcomes of reverse-direction account reconciliation:
+	// the sync noticing that Plaid has stopped returning an account, i.e. the bank closed it
+	// (Issue #1569 Task 5). Without this, a mass removal would be visible only in logs — and a
+	// wrong removal is PERMANENT: nothing in this codebase ever writes an account back to
+	// 'active', so a falsely-removed account leaves current net worth forever and stops receiving
+	// balance snapshots. This counter is how a sweep is noticed while it still matters.
+	//
+	// `removed` increments once per account actually transitioned. `refused_full_item_sweep`
+	// increments once per account SPARED by the all-or-nothing bound (so its magnitude is the size
+	// of the sweep that was refused, not the number of times the bound tripped) — any nonzero
+	// value there is an anomaly worth a human: it means a complete Plaid response named accounts
+	// but matched none of ours. `skipped_incomplete_response` increments once per reconciliation
+	// pass declined because the response could not certify anything.
+	//
+	// ⚠ LABEL HYGIENE: "outcome" is one of a small fixed set — removed | refused_full_item_sweep |
+	// skipped_incomplete_response | already_terminal | write_failed. Never a raw error string or
+	// any account/user identifier.
+	PlaidProviderAccountRemoval = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "plaid_provider_account_removal_total",
+		Help: "Total accounts affected by provider-initiated (bank-closed) account reconciliation, by outcome (removed, refused_full_item_sweep, skipped_incomplete_response, already_terminal, write_failed).",
+	}, []string{"outcome"})
+
 	// AccountsReplacedFiltered counts query executions that exclude replaced accounts or
 	// resolve a re-link chain (Issue #1109). The "family" label groups call sites by domain.
 	//
