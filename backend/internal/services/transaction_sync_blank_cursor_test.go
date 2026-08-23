@@ -66,7 +66,7 @@ func TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor(t *testin
 		Cursor:      &goodCursor,
 	}
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").
 		Return([]domain.Account{{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"}}, nil)
 
 	// A successful page that carries NO next_cursor. This is the shape under test.
@@ -143,7 +143,7 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping(t
 		Cursor:      &goodCursor,
 	}
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-loop").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-loop").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-loop"}}, nil).Maybe()
 
 	// Response 1: the contract violation under test — more pages promised, no cursor to fetch them with.
@@ -248,7 +248,7 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 		Cursor:      &startCursor,
 	}
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-multipage").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-multipage").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-multipage"}}, nil).Maybe()
 
 	page1 := &plaid.TransactionsSyncResponse{

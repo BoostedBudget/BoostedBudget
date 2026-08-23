@@ -110,8 +110,30 @@ type AccountRepository interface {
 	// ErrAccountBatchTenantMismatch and writes nothing (issue #1566).
 	CreateBatch(ctx context.Context, userID string, accounts []domain.Account) error
 
-	// GetByLinkedItemID retrieves all accounts for a specific linked item
+	// GetByLinkedItemID retrieves all ACTIVE accounts for a specific linked item.
+	// Shared by holdings, liability, investment-transaction and balance-snapshot syncs
+	// (investment_sync_service.go, liability_sync_service.go, and
+	// transaction_sync_service.go's createBalanceSnapshots), all of which wipe-and-reinsert
+	// on every run. Widening this to include non-active statuses would feed a retained
+	// (removed/expired/replaced) account into those paths and let a later sync clear or
+	// replace its holdings/liabilities/snapshots — the exact destruction Issue #1569 exists
+	// to stop. If a caller needs non-active rows, add a separate method (see
+	// GetByLinkedItemIDIncludingRetained) rather than widening this one.
 	GetByLinkedItemID(ctx context.Context, linkedItemID string) ([]domain.Account, error)
+
+	// GetByLinkedItemIDIncludingRetained retrieves accounts for a specific linked item
+	// REGARDLESS of status (active, replaced, expired, removed). It exists solely for
+	// transaction_sync_service.buildAccountMaps (Issue #1569 Task 1b): a Plaid item keeps
+	// delivering transactions for an account after the user disconnects it (status
+	// 'removed'), or after the 90-day fingerprint TTL releases a hold (status 'expired'),
+	// and those transactions are real — the money moved — so they belong in transaction and
+	// spending views like any other. Transactions are stored against the account regardless
+	// of status; retained-account visibility in the unified feed is handled separately by
+	// retainedAccountVisibilityLeg (transaction_repository.go).
+	//
+	// Do NOT use this for holdings/liability/investment-transaction/balance-snapshot syncs —
+	// see the warning on GetByLinkedItemID above.
+	GetByLinkedItemIDIncludingRetained(ctx context.Context, linkedItemID string) ([]domain.Account, error)
 
 	// GetByUserID retrieves all accounts for a specific user
 	GetByUserID(ctx context.Context, userID string) ([]domain.Account, error)
@@ -443,6 +465,69 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 		       created_at, updated_at
 		FROM accounts
 		WHERE linked_item_id = $1 AND status = 'active'
+		ORDER BY created_at ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, linkedItemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var accounts []domain.Account
+	for rows.Next() {
+		var account domain.Account
+		err := rows.Scan(
+			&account.ID,
+			&account.LinkedItemID,
+			&account.UserID,
+			&account.PlaidAccountID,
+			&account.Name,
+			&account.OfficialName,
+			&account.Type,
+			&account.Subtype,
+			&account.Mask,
+			&account.CurrentBalance,
+			&account.AvailableBalance,
+			&account.CurrencyCode,
+			&account.Status,
+			&account.UserAccountID,
+			&account.ReplacedByID,
+			&account.ReplacedAt,
+			&account.CreatedAt,
+			&account.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, account)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return accounts, nil
+}
+
+// GetByLinkedItemIDIncludingRetained is GetByLinkedItemID with the `status = 'active'`
+// predicate removed. See the interface doc comment (AccountRepository) for why this is a
+// SEPARATE method rather than a widening of GetByLinkedItemID: those three other syncs
+// wipe-and-reinsert on every run, and feeding them a retained account would let a later
+// sync destroy its holdings/liabilities/snapshots. This method's only caller is
+// transaction_sync_service.buildAccountMaps.
+func (r *accountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
+	query := `
+		SELECT id, linked_item_id, user_id, plaid_account_id,
+		       name, official_name, type, subtype, mask,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
+		       created_at, updated_at
+		FROM accounts
+		WHERE linked_item_id = $1
 		ORDER BY created_at ASC
 	`
 

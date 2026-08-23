@@ -1556,6 +1556,61 @@ func TestAccountRepository_GetByLinkedItemID_ExcludesReplaced(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuses verifies the
+// separate, sync-only read (Issue #1569 Task 1b) has NO status predicate — unlike
+// GetByLinkedItemID above, which callers must keep using for holdings/liability/
+// balance-snapshot syncs.
+func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuses(t *testing.T) {
+	mock, repo := setupAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	linkedItemID := uuid.New().String()
+	now := time.Now()
+	balance := 1500.50
+	available := 1450.25
+
+	rows := pgxmock.NewRows([]string{
+		"id", "linked_item_id", "user_id", "plaid_account_id",
+		"name", "official_name", "type", "subtype", "mask",
+		"current_balance", "available_balance", "currency_code",
+		"status", "user_account_id", "replaced_by_id", "replaced_at",
+		"created_at", "updated_at",
+	}).AddRow(
+		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-active",
+		"Active Checking", nil, "depository", strPtr("checking"), strPtr("1234"),
+		&balance, &available, "USD",
+		"active", nil, nil, nil,
+		now, now,
+	).AddRow(
+		uuid.New().String(), linkedItemID, uuid.New().String(), "acc-removed",
+		"Removed Card", nil, "credit", strPtr("credit card"), strPtr("5678"),
+		nil, nil, "USD",
+		"removed", nil, nil, nil,
+		now, now,
+	)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, linked_item_id, user_id, plaid_account_id,
+		       name, official_name, type, subtype, mask,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       status, user_account_id, replaced_by_id, replaced_at,
+		       created_at, updated_at
+		FROM accounts
+		WHERE linked_item_id = $1
+		ORDER BY created_at ASC
+	`)).WithArgs(linkedItemID).WillReturnRows(rows)
+
+	accounts, err := repo.GetByLinkedItemIDIncludingRetained(ctx, linkedItemID)
+
+	require.NoError(t, err)
+	require.Len(t, accounts, 2, "removed accounts must be included, unlike GetByLinkedItemID")
+	assert.Equal(t, "Active Checking", accounts[0].Name)
+	assert.Equal(t, "Removed Card", accounts[1].Name)
+	assert.Equal(t, domain.AccountStatusRemoved, accounts[1].Status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestAccountRepository_CountByUserID_ExcludesExpired verifies that expired accounts
 // are not counted towards a user's account quota (Issue #1010).
 func TestAccountRepository_CountByUserID_ExcludesExpired(t *testing.T) {

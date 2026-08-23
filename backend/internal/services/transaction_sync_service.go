@@ -620,15 +620,20 @@ func (s *transactionSyncService) SyncTransactions(
 	//     have log-and-continue paths that skip a row and still return nil, so the cursor advances
 	//     past rows that were never written. There are four:
 	//       1. processAddedTransactions — a row whose Plaid account_id is not in accountMap is
-	//          Warn'd and skipped (the `!found` skip; owned by task 1b, deliberately untouched);
-	//       2. processAddedTransactions — if that skipped ALL of them, it returns nil early;
+	//          Warn'd and skipped (the `!found` skip). Task 1b made buildAccountMaps load ALL
+	//          statuses (GetByLinkedItemIDIncludingRetained), not just 'active', so this branch
+	//          is now LARGELY UNREACHABLE for any account this sync has ever seen — it fires
+	//          only if Plaid names a plaid_account_id with no accounts row at all for this
+	//          linked_item_id, not merely a non-active one;
+	//       2. processAddedTransactions — if that skipped ALL of them, it returns nil early; same
+	//          "largely unreachable" narrowing as (1), for the same reason;
 	//       3. processModifiedTransactions — GetByExternalID miss: the modification is dropped;
 	//       4. processRemovedTransactions — a genuine DeleteByExternalID DB error is Warn'd and
 	//          counted as skipped, so the removal is never applied and the row stays visible.
 	//     Every one of these fails toward RETAINING a row (an un-imported row, a stale edit, an
 	//     un-deleted row) rather than destroying one, which is the safe side of #1569's governing
-	//     principle. They are residual scope, not part of this contract: 1b owns (1)/(2) and task 7
-	//     converts (4) to tombstones. Do not "fix" (4) here — that work is already assigned.
+	//     principle. (3) and (4) are residual scope, not part of this contract: task 7 converts
+	//     (4) to tombstones. Do not "fix" (3)/(4) here — that work is already assigned.
 	// The whole run's pages are held in memory until storage — unchanged by #1570, since the loop
 	// already accumulated every page into `result`; only the cursor write moved.
 	// ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -854,8 +859,19 @@ func (s *transactionSyncService) upsertMerchants(ctx context.Context, transactio
 //   - accountMap: Plaid account_id -> Internal account UUID
 //   - userAccountMap: Plaid account_id -> UserAccount UUID (stable reference)
 func (s *transactionSyncService) buildAccountMaps(ctx context.Context, linkedItemID string) (map[string]string, map[string]string, error) {
-	// Load all accounts for this linked item
-	accounts, err := s.accountRepo.GetByLinkedItemID(ctx, linkedItemID)
+	// Load ALL accounts for this linked item, regardless of status (Issue #1569 Task 1b).
+	// GetByLinkedItemID (active-only) would drop a 'removed'/'expired'/'replaced' account
+	// from this map, and every transaction Plaid delivers for it would then miss accountMap
+	// and be Warn'd-and-skipped forever by processAddedTransactions — the item never stops
+	// syncing it (CountActiveByLinkedItemID stays nonzero while siblings remain active), so
+	// this was a permanent, silent transaction loss for any account the user disconnects.
+	// These are real transactions — the money moved — so they are stored against the
+	// account like any other; retained-account visibility in the unified feed is handled by
+	// retainedAccountVisibilityLeg (transaction_repository.go), not by excluding rows here.
+	// Do NOT switch this to GetByLinkedItemID: that method is shared by the
+	// holdings/liability/balance-snapshot syncs, whose wipe-and-reinsert semantics must stay
+	// active-only (see the doc comment on AccountRepository.GetByLinkedItemID).
+	accounts, err := s.accountRepo.GetByLinkedItemIDIncludingRetained(ctx, linkedItemID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load accounts for linked item %s: %w", linkedItemID, err)
 	}
