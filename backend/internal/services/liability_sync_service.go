@@ -254,7 +254,10 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 	// per-category status). An account absent from this set was not returned by Plaid on this
 	// call at all; that is a partial/degraded response for that account, and the delete-only
 	// clear below MUST be skipped rather than treated as "confirmed no liability."
-	presentPlaidAccountIDs := PlaidResponseAccountIDs(resp.Accounts)
+	// (Task 5 reshaped the return value into PlaidAccountRoster so the inverse question — "is this
+	// account provably GONE?" — cannot be asked of an empty or errored response. Nothing about
+	// these gates changed: Present is the same plain membership test the bare set gave.)
+	roster := PlaidAccountRosterFrom(resp.Accounts, nil)
 
 	// Surface Plaid accounts with no matching internal account (Medium Codex finding #910).
 	for plaidID := range creditMap {
@@ -292,7 +295,7 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 			cacheBumpNeeded = true
 			result.CreditProcessed++
 			result.AccountsProcessed++
-		} else if _, complete := presentPlaidAccountIDs[plaidAccountID]; complete {
+		} else if roster.Present(plaidAccountID) {
 			if err := s.creditRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, nil); err != nil {
 				return result, fmt.Errorf("failed to clear credit liability for account %s: %w", internalAccountID, err)
 			}
@@ -314,7 +317,7 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 			cacheBumpNeeded = true
 			result.MortgageProcessed++
 			result.AccountsProcessed++
-		} else if _, complete := presentPlaidAccountIDs[plaidAccountID]; complete {
+		} else if roster.Present(plaidAccountID) {
 			if err := s.mortgageRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, nil); err != nil {
 				return result, fmt.Errorf("failed to clear mortgage liability for account %s: %w", internalAccountID, err)
 			}
@@ -336,7 +339,7 @@ func (s *liabilitySyncService) SyncLiabilities(ctx context.Context, linkedItem *
 			cacheBumpNeeded = true
 			result.StudentLoansProcessed++
 			result.AccountsProcessed++
-		} else if _, complete := presentPlaidAccountIDs[plaidAccountID]; complete {
+		} else if roster.Present(plaidAccountID) {
 			if err := s.studentLoanRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, nil); err != nil {
 				return result, fmt.Errorf("failed to clear student loan liability for account %s: %w", internalAccountID, err)
 			}

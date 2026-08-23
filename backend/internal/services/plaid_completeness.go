@@ -2,10 +2,10 @@ package services
 
 import "github.com/plaid/plaid-go/v23/plaid"
 
-// PlaidResponseAccountIDs returns the set of plaid_account_ids Plaid actually enumerated in a
-// response's `accounts` array.
+// PlaidAccountRoster is what a single Plaid response can tell us about which accounts an Item
+// still has — and, just as importantly, whether it can be trusted to tell us that at all.
 //
-// Issue #1569 Task 4 — why this exists and what it does NOT prove:
+// Issue #1569 Tasks 4 and 5 — why this exists and what it does NOT prove:
 //
 // Plaid's liabilities product is known to return partial responses: a single /liabilities/get
 // call can come back with a 200 and a `liabilities` object that simply omits an account's credit
@@ -14,7 +14,7 @@ import "github.com/plaid/plaid-go/v23/plaid"
 // /investments/holdings/get and its `holdings` array.
 //
 // We looked for a real per-account completeness signal in the generated Plaid client
-// (github.com/plaid/plaid-go/v23) before writing this function, specifically:
+// (github.com/plaid/plaid-go/v23) before writing this, specifically:
 //   - AccountBase (the element type of `accounts`) carries no error/status field — no
 //     verification_status equivalent for "did this account's data come back complete this call."
 //   - LiabilitiesGetResponse.Item and InvestmentsHoldingsGetResponse.Item are typed `Item`, whose
@@ -30,42 +30,88 @@ import "github.com/plaid/plaid-go/v23/plaid"
 //     /accounts/get. It is NOT scoped to "accounts this call has complete liability/holdings data
 //     for": Plaid's own sample /liabilities/get response includes a checking account and an auto
 //     loan in `accounts` that never appear in `liabilities` at all, because those account types
-//     structurally never carry liability data.
+//     structurally never carry liability data. None of this codebase's callers pass
+//     `options.account_ids`, so `accounts` is never client-truncated either.
 //
 // So Plaid genuinely does not expose an authoritative "this account's data for this category is
-// complete" bit. Presence in `accounts` is the best available proxy: it is the only per-account
-// signal in the response, and treating an account's absence from `accounts` as "unknown, do not
-// wipe" fails safe in the direction that matters — it can cause a stale row to survive a sync
-// where Plaid actually did clear the liability/holding, but it cannot cause a wipe of live data
-// Plaid never mentioned this call. Presence in `accounts`, by contrast, only certifies "Plaid
-// returned this account on this call" — a checking account being present says nothing about
-// whether its (nonexistent) credit liability was "confirmed empty" or merely never asked about;
-// callers combine this with their own category map before deciding to delete-only, so that
-// ambiguity is harmless there (a checking account is never in the category map either way).
+// complete" bit. Presence in `accounts` is the best available proxy, and this type exposes it
+// through two deliberately asymmetric questions:
 //
-// Task 5 (Issue #1569) reuses this same set to decide whether an accounts-list response can be
-// trusted to mark accounts `removed` — keep this function's contract (a plain presence set, no
-// category-specific filtering) generic enough for that caller too.
+//   - Present — "did Plaid name this account on this call?" A false answer means UNKNOWN, never
+//     "gone". Callers use it only to SKIP destructive work (Task 4's four delete-only wipes).
+//   - ConfirmedAbsent — "is this account provably gone?" This is the only door to a destructive
+//     transition, and it stays shut unless the response was BOTH successful and non-empty.
 //
-// ⚠ ZERO-ACCOUNTS CONTRACT — read this before reusing this function against an accounts-list
-// response (Task 5's use case). An EMPTY `accounts` input (nil or len 0) returns an EMPTY,
-// non-nil set — by construction, not by any special case. That is correct for THIS file's
-// callers, where an empty result only ever narrows a category map that a caller checks alongside
-// it (a wipe is skipped, never forced, when nothing is present). It is NOT safe to iterate this
-// function's result the other way — "for every account I already know about, if it's absent from
-// this set, mark it removed" — without FIRST checking that the input `accounts` slice itself was
-// non-empty and the call actually succeeded. A zero-length `accounts` slice is exactly what an
-// erroring, still-partial, or truly-item-has-no-accounts response all look like; this function
-// cannot and does not distinguish those cases, and naively trusting an empty result would mark
-// EVERY account removed on any of them. Callers that walk "known accounts minus this set" MUST
-// treat an empty (or suspiciously small) `accounts` input as its own guarded case upstream of
-// calling this function, not as a legitimate all-removed signal from it.
-func PlaidResponseAccountIDs(accounts []plaid.AccountBase) map[string]struct{} {
+// ⚠ WHY THE ASYMMETRY IS A TYPE AND NOT A COMMENT (Issue #1569 Task 5). The predecessor of this
+// type was a function returning a bare map[string]struct{}, with a long comment warning that
+// iterating it the other way — "for every account I already know about, if it is absent from this
+// set, mark it removed" — would mark EVERY account removed on an empty or errored response,
+// sweeping a user's whole portfolio to 'removed' in one run and zeroing their net worth. A
+// zero-length `accounts` array is exactly what an erroring, a still-partial, and a
+// genuinely-no-accounts response all look like. The comment was a warning sign, not a barrier: the
+// dangerous loop was one `for range` away and looked correct. Now it is unreachable. The set is
+// unexported and has no accessor, so the ONLY way to ask "is this one gone?" is ConfirmedAbsent,
+// which carries the emptiness/error check inside it. A caller that loops over every known account
+// asking ConfirmedAbsent on a zero-account response gets false every time and removes nothing —
+// the catastrophic case fails closed by construction rather than by discipline.
+type PlaidAccountRoster struct {
+	ids map[string]struct{}
+	// complete records that this roster came from a call that actually succeeded AND enumerated at
+	// least one identifiable account. Only a complete roster may certify an absence.
+	complete bool
+}
+
+// PlaidAccountRosterFrom builds a roster from a Plaid response's `accounts` array together with
+// the error that call returned. Both arguments are required precisely so that neither failure mode
+// can be omitted at a call site: a non-nil callErr, or an accounts array with no usable
+// account_ids, yields an INCOMPLETE roster — one that answers Present honestly but can never
+// answer ConfirmedAbsent affirmatively.
+//
+// Callers that have already returned on error pass nil, which reads as the assertion it is: "this
+// call succeeded."
+func PlaidAccountRosterFrom(accounts []plaid.AccountBase, callErr error) PlaidAccountRoster {
 	ids := make(map[string]struct{}, len(accounts))
 	for _, a := range accounts {
+		// A zero-value AccountBase (e.g. a defensive append bug) must not register as "account ''
+		// is present," which would make every absent-account check accidentally match on a blank
+		// plaidAccountID.
 		if a.AccountId != "" {
 			ids[a.AccountId] = struct{}{}
 		}
 	}
-	return ids
+	return PlaidAccountRoster{
+		ids:      ids,
+		complete: callErr == nil && len(ids) > 0,
+	}
 }
+
+// Present reports whether Plaid named this account in the response's `accounts` array.
+//
+// A false answer means "Plaid did not mention this account on this call" — which is UNKNOWN, not
+// "gone". Callers use Present only to skip destructive work; to act on an absence, use
+// ConfirmedAbsent.
+func (r PlaidAccountRoster) Present(plaidAccountID string) bool {
+	_, ok := r.ids[plaidAccountID]
+	return ok
+}
+
+// ConfirmedAbsent reports that this response is trustworthy enough to prove the account is gone:
+// the call succeeded, it enumerated a non-empty roster, and this account was not in it.
+//
+// Returns false for every account whenever the roster is incomplete (errored call, or zero
+// identifiable accounts) — see the type's doc comment for why that is the whole point. Also
+// returns false for a blank plaidAccountID, which no roster can ever speak to.
+func (r PlaidAccountRoster) ConfirmedAbsent(plaidAccountID string) bool {
+	if !r.complete || plaidAccountID == "" {
+		return false
+	}
+	return !r.Present(plaidAccountID)
+}
+
+// Complete reports whether this roster may certify absences at all. Exposed for logging and for
+// callers that want to say "skipped reconciliation, response not trustworthy" once rather than
+// per account; the removal decision itself must still go through ConfirmedAbsent.
+func (r PlaidAccountRoster) Complete() bool { return r.complete }
+
+// Len is the number of distinct, identifiable accounts Plaid enumerated. Diagnostics only.
+func (r PlaidAccountRoster) Len() int { return len(r.ids) }
