@@ -516,6 +516,11 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		    merchant_name = $5, merchant_id = $6, pfc_primary = $7, pfc_detailed = $8, pfc_confidence_level = $9,
 		    pfc_category_icon_url = $10, payment_channel = $11, pending = $12, external_metadata = $13,
 		    user_notes = $14, updated_at = $15,
+		    -- tombstone-exempt: HISTORICAL name resolution (#1569 Task 9). This recomputes the
+		    -- denormalised name for a row that ALREADY carries this override. Filtering
+		    -- tombstones here would set effective_category_name to NULL on every transaction
+		    -- filed under a deleted category the next time Plaid refreshed it — the silent
+		    -- history rewrite this task removes, arriving by a slower route.
 		    effective_category_name = CASE
 		        WHEN category_override_kind = 'custom' THEN
 		            (SELECT name FROM custom_categories WHERE id = transactions.custom_category_override_id AND user_id = transactions.user_id)
@@ -929,7 +934,12 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		idList := strings.Join(placeholders, ", ")
 		conditions = append(conditions, fmt.Sprintf(
 			"(t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-				"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s))))",
+				"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s))))"+
+				" /* tombstone-exempt: HISTORY FILTER (#1569 Task 9). This expands a requested"+
+				" category id to itself plus its children so the filter matches the transactions"+
+				" already filed under it. Excluding tombstones would make a user's own past"+
+				" transactions vanish from their own filtered view. The PICKER that supplies these"+
+				" ids is CustomCategoryRepository.GetByUserID, which IS tombstone-filtered. */",
 			idList, idList,
 		))
 	}
@@ -1296,6 +1306,11 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 		    category_override_date = $6,
 		    reviewed = true,
 		    reviewed_at = $6,
+		    -- tombstone-exempt: name resolution for the category being assigned (#1569 Task 9).
+		    -- Liveness is enforced at the service layer, which validates the id through
+		    -- CustomCategoryRepository.GetByID (tombstone-filtered) before calling this —
+		    -- see transaction_service.UpdateTransactionCategory. Filtering here as well would
+		    -- write a NULL name rather than refuse the write, which is the worse failure.
 		    effective_category_name = CASE
 		        WHEN $1 = 'custom' THEN
 		            (SELECT name FROM custom_categories WHERE id = $4::uuid AND user_id = transactions.user_id)
@@ -1362,6 +1377,9 @@ func (r *transactionRepository) BulkUpdateCategory(ctx context.Context, userID s
 		    category_override_date      = $6,
 		    reviewed                    = true,
 		    reviewed_at                 = $6,
+		    -- tombstone-exempt: same as UpdateCategory above (#1569 Task 9) — liveness is the
+		    -- service layer's gate (transaction_service.BulkUpdateTransactionCategory validates
+		    -- through the tombstone-filtered GetByID); this subquery only resolves the name.
 		    effective_category_name     = CASE
 		        WHEN $1 = 'custom' THEN
 		            (SELECT name FROM custom_categories WHERE id = $4::uuid AND user_id = transactions.user_id)
@@ -1615,7 +1633,7 @@ func buildCategoryClause(categoryKind string, pfcPrimary *string, pfcDetailed *s
 		}
 		// A PFC primary rolls up its detaileds (via effective_pfc_primary) AND any
 		// custom categories the user nested under it (parent_pfc_primary).
-		clause := fmt.Sprintf(`(effective_pfc_primary = $%d OR (category_override_kind = 'custom' AND custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1 AND parent_pfc_primary = $%d)))`, argStart, argStart)
+		clause := fmt.Sprintf(`(effective_pfc_primary = $%d OR (category_override_kind = 'custom' AND custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1 AND parent_pfc_primary = $%d))) /* tombstone-exempt: HISTORY FILTER (#1569 Task 9) — a PFC-primary budget rolls up the custom categories nested under it, and the transactions filed under a deleted one are still spend that happened in that primary. Excluding them would silently shrink a closed period's total. */`, argStart, argStart)
 		return clause, []interface{}{*pfcPrimary}
 	case "custom":
 		if customCategoryID == nil {
@@ -1623,7 +1641,7 @@ func buildCategoryClause(categoryKind string, pfcPrimary *string, pfcDetailed *s
 		}
 		// A custom category rolls up its custom children (parent_id). A leaf
 		// custom category's subquery resolves to just itself.
-		clause := fmt.Sprintf(`(category_override_kind = 'custom' AND custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text = $%d OR parent_id::text = $%d)))`, argStart, argStart)
+		clause := fmt.Sprintf(`(category_override_kind = 'custom' AND custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text = $%d OR parent_id::text = $%d))) /* tombstone-exempt: HISTORY FILTER (#1569 Task 9) — same reason as the PFC branch above; a budget line's spend must keep counting the transactions already filed under a since-deleted child category. */`, argStart, argStart)
 		return clause, []interface{}{*customCategoryID}
 	default:
 		return "1=0", nil
@@ -1939,6 +1957,9 @@ func (r *transactionRepository) UpdateEffectiveCategoryNameByCustomCategoryID(ct
 	query := `
 		UPDATE transactions
 		SET effective_category_name = (
+			-- tombstone-exempt: HISTORICAL name resolution (#1569 Task 9). A rename job that
+			-- lands after the category was deleted must still write the name, not NULL. The
+			-- rename itself is gated upstream by the tombstone-filtered GetByID.
 			SELECT name FROM custom_categories
 			WHERE id = $2::uuid AND user_id = $1
 		),
@@ -2588,7 +2609,10 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		idList := strings.Join(phs, ", ")
 		bankingExtraFilter += fmt.Sprintf(
 			" AND (t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-				"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s))))",
+				"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s))))"+
+				" /* tombstone-exempt: HISTORY FILTER (#1569 Task 9) — same rollup as the"+
+				" transaction-list filter above, and the same reason: the ids come from a"+
+				" tombstone-filtered picker, and the rows they select are history. */",
 			idList, idList,
 		)
 		investBankingOnlyFilter = " AND FALSE"

@@ -272,6 +272,9 @@ func (m *mockCustomCategoryRepoForBudget) CountByUserID(ctx context.Context, use
 func (m *mockCustomCategoryRepoForBudget) GetNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
 	return map[string]string{}, nil
 }
+func (m *mockCustomCategoryRepoForBudget) GetLiveNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
 func (m *mockCustomCategoryRepoForBudget) GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error) {
 	return nil, nil
 }
@@ -281,7 +284,7 @@ func (m *mockCustomCategoryRepoForBudget) HasChildren(ctx context.Context, id st
 func (m *mockCustomCategoryRepoForBudget) GetCategoryUsage(ctx context.Context, userID, categoryID string) (*domain.CategoryUsage, error) {
 	return &domain.CategoryUsage{}, nil
 }
-func (m *mockCustomCategoryRepoForBudget) DeleteWithReassignment(ctx context.Context, userID, categoryID string) error {
+func (m *mockCustomCategoryRepoForBudget) DeleteWithReassignment(ctx context.Context, userID, categoryID string, auditLog repository.AuditLogRepository) error {
 	return nil
 }
 

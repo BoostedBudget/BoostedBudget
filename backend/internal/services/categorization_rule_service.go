@@ -82,10 +82,13 @@ func (s *categorizationRuleService) enrichCustomCategoryDisplay(ctx context.Cont
 // CreateRule creates a new categorization rule (unlimited rules for all tiers).
 func (s *categorizationRuleService) CreateRule(ctx context.Context, userID string, req *domain.CreateCategorizationRuleRequest) (*domain.CategorizationRule, error) {
 	// IDOR check: reject a target_custom_category_id belonging to another user before
-	// persisting (Issue #1540). GetNamesByIDs is already user-scoped; an ID absent from
-	// the result isn't owned by the caller.
+	// persisting (Issue #1540), or one that has been tombstoned (Issue #1569 Task 9).
+	// GetLiveNamesByIDs is user-scoped and tombstone-filtered; an ID absent from the result is
+	// either not the caller's or deleted. A new rule must not be pointed at a deleted category:
+	// the delete path disables the rules that already pointed at one precisely so none can fire
+	// with a target the user can no longer see.
 	if req.TargetCustomCategoryID != nil {
-		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, []string{*req.TargetCustomCategoryID})
+		names, err := s.customCategoryRepo.GetLiveNamesByIDs(ctx, userID, []string{*req.TargetCustomCategoryID})
 		if err != nil {
 			return nil, err
 		}
@@ -213,8 +216,9 @@ func (s *categorizationRuleService) UpdateRule(ctx context.Context, userID, rule
 		rule.TargetPFCDetailed = req.TargetPFCDetailed
 	}
 	if req.TargetCustomCategoryID != nil {
-		// IDOR check: reject a target_custom_category_id belonging to another user (Issue #1540).
-		names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, []string{*req.TargetCustomCategoryID})
+		// IDOR check: reject a target_custom_category_id belonging to another user (Issue #1540)
+		// or a tombstoned one (Issue #1569 Task 9). See CreateRule for why this is the LIVE variant.
+		names, err := s.customCategoryRepo.GetLiveNamesByIDs(ctx, userID, []string{*req.TargetCustomCategoryID})
 		if err != nil {
 			return nil, err
 		}
