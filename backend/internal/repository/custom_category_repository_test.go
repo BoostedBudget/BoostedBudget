@@ -526,8 +526,8 @@ func TestCustomCategoryRepository_DeleteWithReassignment(t *testing.T) {
 		WithArgs(userID, categoryID).WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 	mock.ExpectExec(`UPDATE custom_categories SET parent_id = NULL`).
 		WithArgs(userID, categoryID).WillReturnResult(pgxmock.NewResult("UPDATE", 2))
-	mock.ExpectExec(`UPDATE budget_categories[\s\S]*SET deleted_at = NOW\(\)`).
-		WithArgs(categoryID, domain.SoftDeleteReasonParent, domain.SoftDeletedByUser).
+	mock.ExpectExec(`UPDATE budget_categories[\s\S]*SET deleted_at = NOW\(\)[\s\S]*SELECT b.id FROM budgets b WHERE b.user_id = \$1`).
+		WithArgs(userID, categoryID, domain.SoftDeleteReasonParent, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectCommit()
 

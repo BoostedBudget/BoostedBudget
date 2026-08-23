@@ -593,3 +593,229 @@ func TestCategoryTombstone_SecondDeleteIsNotFound_Integration(t *testing.T) {
 	assert.Equal(t, 1, f.count(t, ctx, `SELECT COUNT(*) FROM audit_logs WHERE resource_id = $1`, f.coffeeID),
 		"the second, refused delete still wrote an audit entry")
 }
+
+// ---------------------------------------------------------------------------------------------
+// 11. FIX ROUND 1 (review finding M1): every `tombstone-exempt` read, exercised against a
+//     tombstoned category.
+//
+// The guard proves a reason was WRITTEN next to each exempt reference. It cannot prove the reason
+// is true. Sixteen references to custom_categories are audited; ten of them were exempt with no
+// behavioural test involving a tombstoned category at all, which meant the exemption mechanism was
+// documentation rather than a pin. This is one fixture and ten assertions that convert it.
+//
+// Each sub-test names the file:line and the enclosing function it covers. If a future edit
+// "tidies up" one of those exemptions by adding `AND deleted_at IS NULL`, the corresponding
+// assertion fails with the reason the exemption exists.
+// ---------------------------------------------------------------------------------------------
+
+func TestCategoryTombstone_ExemptReadsStillSeeTheHistory_Integration(t *testing.T) {
+	f := seedCategoryTombstoneFixture(t)
+	ctx := context.Background()
+
+	txnRepo := NewTransactionRepository(f.tx, newTestFieldEncryptor(t))
+	analyticsRepo := NewAnalyticsRepository(f.tx)
+
+	require.NoError(t, f.catRepo.DeleteWithReassignment(ctx, f.userID, f.coffeeID, f.auditRepo))
+
+	custom := "custom"
+	start := time.Now().AddDate(0, 0, -60)
+	end := time.Now().AddDate(0, 0, 1)
+
+	effectiveName := func(txnID string) *string {
+		t.Helper()
+		var n *string
+		require.NoError(t, f.tx.QueryRow(ctx,
+			`SELECT effective_category_name FROM transactions WHERE id = $1`, txnID).Scan(&n))
+		return n
+	}
+
+	// transaction_repository.go:526 — Update()'s effective_category_name recompute.
+	t.Run("Update recomputes the name from a tombstoned category", func(t *testing.T) {
+		txn, err := txnRepo.GetByID(ctx, f.liveTxnID)
+		require.NoError(t, err)
+		txn.Name = "Blue Bottle (renamed)"
+		require.NoError(t, txnRepo.Update(ctx, txn))
+		got := effectiveName(f.liveTxnID)
+		require.NotNil(t, got, "the next Plaid refresh blanked the category name on a historical row")
+		assert.Equal(t, "Coffee", *got)
+	})
+
+	// transaction_repository.go:937 — buildWhereClause's CustomCategoryIDs expansion.
+	t.Run("the transaction list filter still matches history", func(t *testing.T) {
+		got, err := txnRepo.GetByUserIDWithFilters(ctx, f.userID,
+			domain.TransactionFilters{CustomCategoryIDs: []string{f.coffeeID}}, 50, 0)
+		require.NoError(t, err)
+		require.Len(t, got, 1, "the user's own past transaction vanished from their own filter")
+		assert.Equal(t, f.liveTxnID, got[0].ID)
+	})
+
+	// transaction_repository.go:2612 — the unified (banking+investment) keyset filter.
+	t.Run("the unified keyset filter still matches history", func(t *testing.T) {
+		items, _, err := txnRepo.GetByUserIDKeysetUnified(ctx, f.userID,
+			domain.TransactionFilters{CustomCategoryIDs: []string{f.coffeeID}}, nil, 50)
+		require.NoError(t, err)
+		require.Len(t, items, 1)
+		assert.Equal(t, f.liveTxnID, items[0].ID)
+	})
+
+	// transaction_repository.go:1316 — UpdateCategory's name resolution.
+	t.Run("UpdateCategory resolves the name rather than writing NULL", func(t *testing.T) {
+		require.NoError(t, txnRepo.UpdateCategory(ctx, f.liveTxnID, f.userID,
+			&custom, nil, nil, &f.coffeeID, domain.CategorySourceManual))
+		got := effectiveName(f.liveTxnID)
+		require.NotNil(t, got,
+			"filtering here would write a NULL name instead of refusing the write — the worse failure")
+		assert.Equal(t, "Coffee", *got)
+	})
+
+	// transaction_repository.go:1385 — BulkUpdateCategory's name resolution.
+	t.Run("BulkUpdateCategory resolves the name rather than writing NULL", func(t *testing.T) {
+		n, err := txnRepo.BulkUpdateCategory(ctx, f.userID, []string{f.liveTxnID},
+			&custom, nil, nil, &f.coffeeID, domain.CategorySourceManual)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, n)
+		got := effectiveName(f.liveTxnID)
+		require.NotNil(t, got)
+		assert.Equal(t, "Coffee", *got)
+	})
+
+	// transaction_repository.go:1963 — the rename-propagation job.
+	t.Run("the rename job still writes a name for a tombstoned category", func(t *testing.T) {
+		n, err := txnRepo.UpdateEffectiveCategoryNameByCustomCategoryID(ctx, f.userID, f.coffeeID)
+		require.NoError(t, err)
+		// 2, not 1: this statement carries no transactions-side tombstone filter either, so the
+		// provider-reversed row is rewritten alongside the live one. That is Task 7's ruling, not
+		// a slip here — a reversed transaction still renders, so its name must stay current.
+		require.EqualValues(t, 2, n)
+		got := effectiveName(f.liveTxnID)
+		require.NotNil(t, got, "a rename job landing after the delete blanked the historical name")
+		assert.Equal(t, "Coffee", *got)
+	})
+
+	// transaction_repository.go:1636 — buildCategoryClause's PFC-primary rollup branch.
+	t.Run("a PFC budget line still counts spend filed under a tombstoned child", func(t *testing.T) {
+		pfc := "FOOD_AND_DRINK"
+		sum, err := txnRepo.GetSpentSumForBudgetCategory(ctx, f.userID, &domain.BudgetCategory{
+			CategoryKind: "pfc", PFCPrimary: &pfc, MatchLogic: "category_only",
+		}, start, end)
+		require.NoError(t, err)
+		assert.InDelta(t, 4.50, sum, 0.001,
+			"deleting a child category silently shrank its parent's budgeted spend")
+	})
+
+	// transaction_repository.go:1644 — buildCategoryClause's custom branch.
+	t.Run("a custom budget line still counts its own history", func(t *testing.T) {
+		sum, err := txnRepo.GetSpentSumForBudgetCategory(ctx, f.userID, &domain.BudgetCategory{
+			CategoryKind: "custom", CustomCategoryID: &f.coffeeID, MatchLogic: "category_only",
+		}, start, end)
+		require.NoError(t, err)
+		assert.InDelta(t, 4.50, sum, 0.001)
+	})
+
+	// analytics_repository.go:637 — buildSpendingFilter, RollUpChildren = true.
+	t.Run("analytics with rollup still reports the tombstoned category's spend", func(t *testing.T) {
+		rows, err := analyticsRepo.GetSpendingByCategory(ctx, f.userID, domain.SpendingFilters{
+			StartDate:         start,
+			EndDate:           end,
+			CustomCategoryIDs: []string{f.coffeeID},
+			RollUpChildren:    true,
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, rows,
+			"a closed month quietly restated itself because a category was deleted")
+	})
+
+	// analytics_repository.go:652 — buildSpendingFilter, RollUpChildren = false.
+	t.Run("analytics without rollup still reports it", func(t *testing.T) {
+		rows, err := analyticsRepo.GetSpendingByCategory(ctx, f.userID, domain.SpendingFilters{
+			StartDate:         start,
+			EndDate:           end,
+			CustomCategoryIDs: []string{f.coffeeID},
+			RollUpChildren:    false,
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, rows)
+	})
+}
+
+// ---------------------------------------------------------------------------------------------
+// 12. FIX ROUND 1 (review finding I1): a disabled rule cannot be ARMED again onto a tombstoned
+//     target, and the engine's own read refuses one even if it somehow is.
+//
+// Step 2's whole justification is that a rule whose target the user can no longer see cannot keep
+// acting. Before this round that held for exactly as long as nobody sent
+// `PATCH /api/v1/rules/{id} {"enabled": true}`: the liveness gate lived inside
+// `if req.TargetCustomCategoryID != nil`, so a body with no target field skipped it entirely, and
+// ToggleRule never had a gate at all. This is the repository half — the service half is
+// TestCategorizationRuleService_{UpdateRule,ToggleRule}_RefusesToArmOntoATombstonedCategory.
+// ---------------------------------------------------------------------------------------------
+
+func TestCategoryTombstone_EngineRefusesARuleReArmedOntoATombstone_Integration(t *testing.T) {
+	f := seedCategoryTombstoneFixture(t)
+	ctx := context.Background()
+
+	require.NoError(t, f.catRepo.DeleteWithReassignment(ctx, f.userID, f.coffeeID, f.auditRepo))
+
+	// Re-arm BOTH rules the way a direct-SQL repair, an unguarded future writer, or the API bug
+	// this test was written for would: flip `enabled` and touch nothing else.
+	ct, err := f.tx.Exec(ctx,
+		`UPDATE categorization_rules SET enabled = true WHERE user_id = $1 AND target_custom_category_id = $2`,
+		f.userID, f.coffeeID)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, ct.RowsAffected(),
+		"both rules must be back to enabled = true in the DB, or this test proves nothing")
+
+	enabled, err := f.ruleRepo.GetEnabledByUserID(ctx, f.userID)
+	require.NoError(t, err)
+	assert.Empty(t, enabled,
+		"the rule engine reads GetEnabledByUserID; a rule naming a tombstoned category must not "+
+			"be in that set even when its `enabled` column says true")
+
+	// A rule with no custom target is unaffected by the new predicate.
+	pfcRuleID := uuid.New().String()
+	_, err = f.tx.Exec(ctx, `
+		INSERT INTO categorization_rules
+			(id, user_id, name, enabled, priority, conditions, target_kind, target_pfc_primary)
+		VALUES ($1, $2, 'Plain PFC rule', true, 1,
+			'[{"field":"name","operator":"contains","value":"x"}]'::jsonb, 'pfc', 'TRAVEL')
+	`, pfcRuleID, f.userID)
+	require.NoError(t, err)
+
+	enabled, err = f.ruleRepo.GetEnabledByUserID(ctx, f.userID)
+	require.NoError(t, err)
+	require.Len(t, enabled, 1,
+		"the tombstone predicate must not hide rules that have no custom-category target at all")
+	assert.Equal(t, pfcRuleID, enabled[0].ID)
+}
+
+// 13. FIX ROUND 1 (review finding M3): the owning-budget scoping subquery must NOT filter
+//     tombstoned budgets.
+//
+// The subquery answers "whose budget is this line on", and a tombstoned budget is still the same
+// user's. `AND b.deleted_at IS NULL` would satisfy the read guard and pass every other test in
+// this file while silently skipping a live budget line under a deleted budget — leaving it
+// pointing at a category that no longer exists. Task 8 tombstones a budget's categories with it,
+// so that state is not reachable through the API; it IS reachable through a direct-SQL repair or
+// a partial failure, which is the case the exemption reason names. Pinned here so the "tidy-up"
+// fails loudly.
+func TestCategoryTombstone_BudgetLineUnderATombstonedBudgetIsStillReached_Integration(t *testing.T) {
+	f := seedCategoryTombstoneFixture(t)
+	ctx := context.Background()
+
+	// Tombstone the BUDGET but deliberately leave its category line live.
+	_, err := f.tx.Exec(ctx, `
+		UPDATE budgets SET deleted_at = NOW(), deleted_reason = 'user_deleted', deleted_by = 'user'
+		WHERE id = $1
+	`, f.budgetID)
+	require.NoError(t, err)
+	require.Equal(t, 1, f.count(t, ctx,
+		`SELECT COUNT(*) FROM budget_categories WHERE id = $1 AND deleted_at IS NULL`, f.budgetCatID),
+		"the budget line must still be live going in, or this test proves nothing")
+
+	require.NoError(t, f.catRepo.DeleteWithReassignment(ctx, f.userID, f.coffeeID, f.auditRepo))
+
+	assert.Equal(t, 1, f.count(t, ctx,
+		`SELECT COUNT(*) FROM budget_categories WHERE id = $1 AND deleted_at IS NOT NULL`, f.budgetCatID),
+		"a live budget line under a TOMBSTONED budget was skipped — the ownership subquery must "+
+			"scope by owner, not by the budget's own liveness")
+}
