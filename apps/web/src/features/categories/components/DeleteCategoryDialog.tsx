@@ -90,13 +90,19 @@ export function DeleteCategoryDialog({
         {usage.child_count > 0 ? `, and ${plural(usage.child_count, 'sub-category')}` : ''}.
         <br />
         {HISTORY_IS_SAFE}
-        {effects.length > 0 && (
-          <ul className="mt-2 list-disc space-y-1 pl-5">
-            {effects.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-        )}
+        {/*
+          Spans, not a <ul>. Radix's DialogDescription renders a <p>, and only phrasing content is
+          legal inside one — a <ul> there is invalid HTML and logs a validateDOMNesting error every
+          time the dialog opens. `display: block` on a span is a CSS concern and does not affect
+          validity, so the lines still read as a list without claiming to be one. The bullet is a
+          literal character and is aria-hidden so it is not announced.
+        */}
+        {effects.map((line) => (
+          <span key={line} className="mt-1 block pl-4 -indent-4">
+            <span aria-hidden="true">• </span>
+            {line}
+          </span>
+        ))}
         <span className="mt-2 block">
           The category itself is removed from your lists and can&apos;t be restored.
         </span>

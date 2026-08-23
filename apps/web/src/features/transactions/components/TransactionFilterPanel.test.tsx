@@ -136,6 +136,22 @@ describe('TransactionFilterPanel — reversed transactions (#1569 T12)', () => {
     expect(screen.queryByText('1')).not.toBeInTheDocument()
   })
 
+  // Fix round 1 (I6). The hint had an id and nothing referenced it, so the explanation the
+  // docblock calls essential was invisible to assistive tech. "Reversed" is a word most people
+  // have not had to think about; a user who turns this on blind reads struck-through rows as an
+  // error in their data.
+  it('describes the switch with the hint text, not just labels it', () => {
+    render(<TransactionFilterPanel {...defaultProps} onIncludeReversedChange={() => {}} />)
+    expand()
+
+    const toggle = screen.getByRole('switch', { name: /reversed/i })
+    const describedBy = toggle.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    const hint = document.getElementById(describedBy!)
+    expect(hint).not.toBeNull()
+    expect(hint?.textContent).toMatch(/withdrew after they posted/i)
+  })
+
   it('notifies the page when the user opts in', () => {
     let received: boolean | undefined
     render(

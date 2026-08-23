@@ -285,9 +285,8 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
         </p>
         <p className="mt-1">
           Nobody is confirming what this account holds any more, so showing the last figures we
-          received would state a stale position as a live one. Your history is retained: this
-          account&apos;s transactions stay in your activity, and the positions we last confirmed
-          are kept on record.
+          received would state a stale position as a live one. This account&apos;s transactions
+          are retained and still appear in your activity.
         </p>
         <p className="mt-1">Reconnect the account to see current positions again.</p>
       </div>

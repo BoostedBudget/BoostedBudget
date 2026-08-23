@@ -13,6 +13,7 @@
  */
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { mockToastError } from '@/test/mocks/sonner'
 import {
   mockUseGetDeletedSavingsGoals,
   mockUsePurgeSavingsGoal,
@@ -47,6 +48,8 @@ function withDeleted(goals: unknown[]) {
 describe('DeletedGoalsPanel', () => {
   beforeEach(() => {
     mockPurgeSavingsGoalMutateAsync.mockClear()
+    mockToastError.mockClear()
+    mockDeletedSavingsGoalsRefetch.mockClear()
     mockUsePurgeSavingsGoal.mockReturnValue({
       mutateAsync: mockPurgeSavingsGoalMutateAsync,
       isPending: false,
@@ -141,5 +144,99 @@ describe('DeletedGoalsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /delete permanently/i }))
     expect(document.body.textContent).toMatch(/by hand/i)
     expect(document.body.textContent).toMatch(/can(no|'|’)t be undone/i)
+  })
+  // ── fix round 1, I1: the purge error path ───────────────────────────────────────────────
+  //
+  // Both rejections are reachable. ErrSavingsGoalNotFound: a stale listing, e.g. the goal was
+  // purged in another tab. ErrSavingsGoalNotDeleted (savings_goal_repository.go:456-462): the goal
+  // is no longer tombstoned. Before this fix, either produced an unhandled promise rejection, left
+  // the dialog open with the button re-armed and no message, and skipped the refetch so the stale
+  // row stayed on screen. AccountsPage.handlePurgeAccount is the precedent — and its comment was
+  // written for a 409 raised by task 6 of this same plan.
+  describe('purge failure', () => {
+    function failWith(err: unknown) {
+      mockPurgeSavingsGoalMutateAsync.mockImplementation(() => Promise.reject(err))
+    }
+
+    async function attemptPurge() {
+      render(<DeletedGoalsPanel />)
+      fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+      fireEvent.click(screen.getByRole('button', { name: /delete permanently: japan trip/i }))
+      fireEvent.click(screen.getByRole('button', { name: /^delete forever$/i }))
+      await waitFor(() => expect(mockPurgeSavingsGoalMutateAsync).toHaveBeenCalled())
+    }
+
+    it('tells the user when the purge is refused, instead of failing silently', async () => {
+      failWith({ response: { data: { detail: 'Goal must be deleted before it can be purged' } } })
+      await attemptPurge()
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1))
+      // The actionable text lives at response.data.detail (RFC 9457), not err.message.
+      expect(String(mockToastError.mock.calls[0][0])).toContain('must be deleted')
+    })
+
+    it('refreshes the listing on failure, so a stale row cannot linger', async () => {
+      failWith({ response: { data: { detail: 'Savings goal not found' } } })
+      await attemptPurge()
+      await waitFor(() => expect(mockDeletedSavingsGoalsRefetch).toHaveBeenCalled())
+    })
+
+    it('does not leave the confirmation dialog open after a failure', async () => {
+      failWith(new Error('boom'))
+      await attemptPurge()
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: /^delete forever$/i })).toBeNull(),
+      )
+    })
+
+    it('does not report success to analytics when the purge failed', async () => {
+      failWith(new Error('boom'))
+      await attemptPurge()
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled())
+      // The success toast/event path must not have run.
+      expect(mockToastError).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // ── fix round 1, Minor: accessibility of the disclosure and the row actions ─────────────
+  describe('accessibility', () => {
+    it('gives each row action an accessible name that says WHICH goal it destroys', () => {
+      withDeleted([deletedGoal, { ...deletedGoal, id: 'goal-10', name: 'New Roof' }])
+      render(<DeletedGoalsPanel />)
+      fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+
+      expect(screen.getByRole('button', { name: /delete permanently: japan trip/i })).toBeTruthy()
+      expect(screen.getByRole('button', { name: /delete permanently: new roof/i })).toBeTruthy()
+    })
+
+    it('exposes the disclosure with aria-controls pointing at the region it opens', () => {
+      render(<DeletedGoalsPanel />)
+      const toggle = screen.getByRole('button', { name: /deleted goals/i })
+      const controls = toggle.getAttribute('aria-controls')
+      expect(controls).toBeTruthy()
+
+      fireEvent.click(toggle)
+      expect(document.getElementById(controls!)).not.toBeNull()
+    })
+
+    // The first draft of the aria-labelledby fix emitted the shared verb span once PER ROW,
+    // giving N elements the same id — which silently breaks aria-labelledby resolution (only the
+    // first match is used) as well as being invalid HTML.
+    it('emits no duplicate element ids, however many goals are listed', () => {
+      withDeleted([
+        deletedGoal,
+        { ...deletedGoal, id: 'goal-10', name: 'New Roof' },
+        { ...deletedGoal, id: 'goal-11', name: 'Car Fund' },
+      ])
+      render(<DeletedGoalsPanel />)
+      fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+
+      const ids = Array.from(document.body.querySelectorAll('[id]')).map((el) => el.id)
+      expect(ids.length).toBe(new Set(ids).size)
+    })
+
+    it('labels the section with a real heading', () => {
+      render(<DeletedGoalsPanel />)
+      expect(screen.getByRole('heading', { name: /deleted goals/i })).toBeTruthy()
+    })
   })
 })

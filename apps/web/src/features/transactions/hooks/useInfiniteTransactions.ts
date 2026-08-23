@@ -13,6 +13,7 @@ import type { GetTransactionsSortDir } from '@boostedbudget/api-client/models/ge
 import type { Transaction as ApiTransaction } from '@boostedbudget/api-client/models/transaction';
 import type { ActivityItem } from '@boostedbudget/api-client/models/activityItem';
 import type { TransactionFilters, FeedRow } from '../types';
+import { isSettledPending } from '../types';
 
 export type TransactionFiltersState = TransactionFilters;
 export type SortBy = GetTransactionsSortBy;
@@ -116,8 +117,14 @@ export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
     refetchOnWindowFocus: false,
   });
 
+  // #1569 T12 (I2): a settled pending is dropped at the boundary, so it reaches NO consumer —
+  // not the table, not the card view, not a future one. See isSettledPending for why the client
+  // re-checks something the backend already gates twice.
   const transactions: FeedRow[] = useMemo(
-    () => (query.data?.pages.flatMap((p) => p.transactions ?? []) ?? []).map(toFeedRow),
+    () =>
+      (query.data?.pages.flatMap((p) => p.transactions ?? []) ?? [])
+        .map(toFeedRow)
+        .filter((row) => !isSettledPending(row)),
     [query.data],
   );
 

@@ -666,3 +666,78 @@ func TestGetDeletedSavingsGoals_Error(t *testing.T) {
 
 	require.Error(t, err)
 }
+
+// TestSavingsGoalDeletedRouteIsRegistered — #1569 Task 12 fix round 1 (I5).
+//
+// Deleting the whole huma.Register block for GET /savings-goals/deleted previously left this
+// package green: the handler was unit-tested by direct call, so nothing noticed that the route it
+// serves had stopped existing.
+//
+// ⚠ THE OBVIOUS VERSION OF THIS TEST DOES NOT WORK, and the first draft of it shipped broken.
+// Asserting `api.Get("/api/v1/savings-goals/deleted")` returns 401-not-404 SURVIVES deleting the
+// registration: with /deleted gone the request is matched by /savings-goals/{id} with
+// id="deleted", auth runs first, and the response is an identical 401. Measured — the mutant was
+// green. The status code cannot discriminate here, so the assertion is made against the registry
+// itself.
+func TestSavingsGoalDeletedRouteIsRegistered(t *testing.T) {
+	_, api := humatest.New(t)
+	RegisterSavingsGoalRoutes(api, NewSavingsGoalHandler(&mockSavingsGoalService{}))
+
+	item, ok := api.OpenAPI().Paths["/api/v1/savings-goals/deleted"]
+	require.True(t, ok, "GET /api/v1/savings-goals/deleted is not registered")
+	require.NotNil(t, item.Get, "the path exists but has no GET operation")
+	assert.Equal(t, "getDeletedSavingsGoals", item.Get.OperationID)
+}
+
+// TestSavingsGoalDeletedRoute_IsItsOwnOperation guards the failure the status-code test could not
+// see: the listing being served by getSavingsGoal with id="deleted".
+//
+// The registration used to carry a "(must be before :id route)" comment copied from its
+// neighbours. That claim is false for this router — a static segment wins over a parameter
+// regardless of registration order — so it has been corrected rather than propagated. What this
+// test holds is narrower and true: /deleted is a distinct path with a distinct operation from
+// /{id}, and the handler behind it is the listing handler, not the single-goal one.
+func TestSavingsGoalDeletedRoute_IsItsOwnOperation(t *testing.T) {
+	deletedAt := time.Now()
+	goal := createTestSavingsGoal()
+	goal.DeletedAt = &deletedAt
+
+	mockService := &mockSavingsGoalService{
+		goal:         createTestSavingsGoal(), // what the {id} route would return
+		deletedGoals: []*domain.SavingsGoal{goal},
+	}
+	handler := NewSavingsGoalHandler(mockService)
+
+	_, api := humatest.New(t)
+	RegisterSavingsGoalRoutes(api, handler)
+
+	paths := api.OpenAPI().Paths
+	deleted, ok := paths["/api/v1/savings-goals/deleted"]
+	require.True(t, ok)
+	byID, ok := paths["/api/v1/savings-goals/{id}"]
+	require.True(t, ok, "the {id} route must still exist — otherwise this proves nothing")
+	assert.NotEqual(t, byID.Get.OperationID, deleted.Get.OperationID,
+		"the deleted listing is being served by the single-goal operation")
+
+	// And the route must actually be WIRED to the listing handler. Distinct paths in the spec do
+	// not prove that: pointing `}, handler.GetDeletedGoals)` at handler.GetGoals instead left this
+	// package green until this half was added (measured). So drive the route end-to-end with an
+	// authenticated context and check WHICH handler answered — the two mocks return disjoint sets.
+	authed := func(ctx huma.Context, next func(huma.Context)) {
+		next(huma.WithValue(ctx, inputs.UserIDKey, "user-123"))
+	}
+	_, authedAPI := humatest.New(t)
+	authedAPI.UseMiddleware(authed)
+	RegisterSavingsGoalRoutes(authedAPI, handler)
+
+	resp := authedAPI.Get("/api/v1/savings-goals/deleted")
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var body []*domain.SavingsGoal
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	require.Len(t, body, 1)
+	require.NotNil(t, body[0].DeletedAt,
+		"the live listing answered — its goals carry no deleted_at")
+	assert.Equal(t, []string{"user-123"}, mockService.deletedGoalsCalls,
+		"GetDeletedGoals was never reached, so some other handler served /deleted")
+}

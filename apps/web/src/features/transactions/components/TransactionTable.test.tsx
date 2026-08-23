@@ -890,10 +890,69 @@ describe('TransactionTable', () => {
       }
     })
 
+    // ── C1: contrast ────────────────────────────────────────────────────────────────────
+    //
+    // The first version of this dimmed the row with `opacity-70` and the amount with
+    // `text-muted-foreground`. Rows have no background of their own (DataTable is bg-card), so
+    // the opacity composited straight onto the ground and took a 14px BOLD amount — not WCAG
+    // "large text", so the 4.5:1 floor applies — to 2.71:1 in light and 4.02:1 on dark card.
+    // Computed from src/index.css tokens; see the report for the full table.
+    //
+    // The fix is to remove the opacity entirely rather than tune it: a reversed row now
+    // composites on exactly the same ground as every other row, so no ratio anywhere can regress.
+    // The strike-through and the badge carry "undone"; the number stays fully legible, because
+    // the most important thing on a reversed row should not be the least readable thing on it.
+    it('does not dim the row, which would composite every cell below the AA floor', () => {
+      const { container } = renderRows([reversedRow])
+      expect(container.querySelector('tr.opacity-70')).toBeNull()
+      expect(container.querySelector('[class*="opacity-"]')).toBeNull()
+    })
+
+    it('renders the struck amount at full foreground contrast, not muted', () => {
+      const { container } = renderRows([reversedRow])
+      const struck = container.querySelector('.line-through')
+      expect(struck).not.toBeNull()
+      expect(struck?.className).toContain('text-foreground')
+      expect(struck?.className).not.toContain('text-muted-foreground')
+    })
+
+    // ── I2: a settled pending must render NOWHERE ───────────────────────────────────────
+    //
+    // The backend gates this twice (the query excludes TxnDeletedProviderRemovedPending, and
+    // Transaction.Reversed() returns false for it), and TestTombstone_SettledPendingIsNeverSurfaced
+    // pins it. This is the third gate, and it exists because of what was measured when one was
+    // fed in anyway: REVERSED BADGE true, PENDING BADGE false, AMOUNT RENDERED true — a settled
+    // pending rendered as an ordinary posted reversal, next to the posted twin it duplicates.
+    //
+    // Double-counting real money is the one failure mode worth a redundant client-side check,
+    // so `pending && reversed` is treated as unrenderable rather than as a reversal.
+    it('renders a pending+reversed row nowhere — it is a settled pending, not a reversal', () => {
+      const { container } = renderRows([{ ...reversedRow, pending: true }])
+      expect(screen.queryByText('Reversed')).not.toBeInTheDocument()
+      expect(screen.queryByText('Pending')).not.toBeInTheDocument()
+      expect(container.textContent).not.toContain('45.99')
+      expect(container.textContent).not.toContain('DUPLICATE CHARGE')
+    })
+
+    it('does not swallow the other rows when a settled pending is filtered out', () => {
+      renderRows([{ ...reversedRow, pending: true }, mockBankingRow])
+      expect(screen.getByText('Amazon')).toBeInTheDocument()
+    })
+
+    it('still renders an ordinary pending row, which is not a settled pending', () => {
+      renderRows([{ ...mockBankingRow, pending: true }])
+      expect(screen.getByText('Pending')).toBeInTheDocument()
+    })
+
+    // Tightened: td[data-ph-mask] alone matches ANY masked cell (merchant, account), so it
+    // passed even when the amount column was not in maskedColumnIds. Key on the cell that
+    // actually contains the amount.
     it('keeps the amount cell inside the masked column set', () => {
       const { container } = renderRows([reversedRow])
-      const amountCell = container.querySelector('td[data-ph-mask]')
-      expect(amountCell).not.toBeNull()
+      const maskedCells = Array.from(container.querySelectorAll('td[data-ph-mask]'))
+      const amountCell = maskedCells.find((td) => td.querySelector('[data-reversed="true"]'))
+      expect(amountCell).toBeDefined()
+      expect(amountCell?.textContent).toContain('45.99')
     })
   })
 })

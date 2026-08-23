@@ -125,4 +125,20 @@ describe('DeleteCategoryDialog', () => {
     const masked = Array.from(document.body.querySelectorAll('[data-ph-mask]'))
     expect(masked.some((el) => el.textContent === 'Coffee')).toBe(true)
   })
+  // Fix round 1 (Minor). Radix's DialogDescription renders a <p>, and the side-effect list was a
+  // <ul> inside it — invalid HTML and a permanent validateDOMNesting console error on every open.
+  it('nests no block-level list inside the dialog description paragraph', () => {
+    renderDialog()
+    const desc = document.body.querySelector('[data-slot="dialog-description"]')
+    expect(desc).not.toBeNull()
+    expect(desc?.tagName.toLowerCase()).toBe('p')
+    expect(desc?.querySelector('ul, ol, li, div, p')).toBeNull()
+  })
+
+  it('still presents the side effects as separate lines', () => {
+    renderDialog()
+    const desc = document.body.querySelector('[data-slot="dialog-description"]')!
+    // One block-displayed span per applicable side effect (rules, budget lines, sub-categories).
+    expect(desc.querySelectorAll('span.block').length).toBeGreaterThanOrEqual(3)
+  })
 })

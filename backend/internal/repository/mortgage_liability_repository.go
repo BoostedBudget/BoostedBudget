@@ -219,7 +219,7 @@ func (r *mortgageLiabilityRepository) GetByUserID(ctx context.Context, userID st
 		FROM mortgage_liabilities
 		JOIN accounts a ON a.id = mortgage_liabilities.account_id
 		WHERE mortgage_liabilities.user_id = $1
-		  -- -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		  -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		  AND ` + currentStateAccountLeg("a") + `
 		ORDER BY mortgage_liabilities.account_id
 	`

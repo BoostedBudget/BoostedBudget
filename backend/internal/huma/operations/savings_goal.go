@@ -360,7 +360,14 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetActiveGoals)
 
-	// GET /api/v1/savings-goals/deleted - List deleted goals (must be before :id route)
+	// GET /api/v1/savings-goals/deleted - List deleted goals (#1569 Task 12).
+	//
+	// The neighbouring registrations say "(must be before :id route)". That is FALSE for this
+	// router — a static segment beats a parameter whatever the registration order, verified by
+	// moving this block after {id} and still getting 200 — so the claim is not repeated here.
+	// The property is held by TestSavingsGoalDeletedRoute_IsNotSwallowedByTheIDRoute, not by
+	// where these lines happen to sit. It is nonetheless placed with the other collection routes
+	// for readability.
 	huma.Register(api, huma.Operation{
 		OperationID: "getDeletedSavingsGoals",
 		Method:      http.MethodGet,

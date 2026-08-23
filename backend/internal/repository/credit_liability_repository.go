@@ -154,7 +154,7 @@ func (r *creditLiabilityRepository) GetByUserID(ctx context.Context, userID stri
 		FROM credit_liabilities
 		JOIN accounts a ON a.id = credit_liabilities.account_id
 		WHERE credit_liabilities.user_id = $1
-		  -- -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		  -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		  AND ` + currentStateAccountLeg("a") + `
 		ORDER BY credit_liabilities.account_id
 	`

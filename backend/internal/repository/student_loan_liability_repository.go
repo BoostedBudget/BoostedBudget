@@ -282,7 +282,7 @@ func (r *studentLoanLiabilityRepository) GetByUserID(ctx context.Context, userID
 		FROM student_loan_liabilities
 		JOIN accounts a ON a.id = student_loan_liabilities.account_id
 		WHERE student_loan_liabilities.user_id = $1
-		  -- -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
+		  -- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		  AND ` + currentStateAccountLeg("a") + `
 		ORDER BY student_loan_liabilities.account_id
 	`
