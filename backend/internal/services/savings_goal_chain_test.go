@@ -112,7 +112,7 @@ func TestSavingsGoalService_ValidateOwnership_MatchesByUserAccountID(t *testing.
 
 	ctx := context.Background()
 	userID := "user-relink-001"
-	newAccountID := "new-account-uuid"   // post-relink account ID
+	newAccountID := "new-account-uuid" // post-relink account ID
 	stableUserAccountID := "user-acct-stable"
 
 	// The user's active accounts after re-link: only the new account is active.
@@ -204,7 +204,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
 		UserID:         "user-savings-001",
 		Name:           "Savings Chain Rule",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeSavingsGoal,
+		BoostType:      domain.BoostTypeSavingsGoal,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -273,7 +273,7 @@ func TestSavingsGoalExecutor_ChainResolver_NilFallback(t *testing.T) {
 		UserID:         "user-savings-002",
 		Name:           "Nil Resolver Savings",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeSavingsGoal,
+		BoostType:      domain.BoostTypeSavingsGoal,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -352,7 +352,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID_Depth2(t *testing.
 		UserID:         "user-savings-depth2",
 		Name:           "Depth-2 Savings Rule",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeSavingsGoal,
+		BoostType:      domain.BoostTypeSavingsGoal,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,

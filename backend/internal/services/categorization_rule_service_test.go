@@ -375,9 +375,9 @@ func TestCategorizationRuleService_GetRuleByID_PopulatesTargetCustomCategoryDisp
 	catID := "cat-uuid-rule"
 
 	rule := &domain.CategorizationRule{
-		ID:     ruleID,
-		UserID: userID,
-		Name:   "Custom Rule",
+		ID:                     ruleID,
+		UserID:                 userID,
+		Name:                   "Custom Rule",
 		TargetKind:             ptrStr("custom"),
 		TargetCustomCategoryID: &catID,
 		Conditions:             []domain.RuleCondition{{Type: domain.ConditionMerchantContains, Value: "test"}},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -21,7 +22,20 @@ type BudgetRepository interface {
 	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.Budget, error)
 	GetByName(ctx context.Context, userID, name string) (*domain.Budget, error)
 	Update(ctx context.Context, budget *domain.Budget) error
-	Delete(ctx context.Context, id, userID string) error
+	// Delete TOMBSTONES a budget and, with it, its categories. It sets
+	// deleted_at/deleted_reason/deleted_by instead of issuing `DELETE FROM budgets`, so that
+	// rollover_history and budget_period_events -- both ON DELETE CASCADE off budgets, and
+	// rollover_history additionally CASCADE off budget_categories -- survive instead of being
+	// destroyed alongside it. Issue #1569, Task 8.
+	//
+	// The categories are tombstoned in the SAME transaction with reason 'parent_deleted', because
+	// fk_budget_categories_budget_id used to remove them and reads like
+	// GetCategoriesMatchingTransaction find categories without going through their budget.
+	//
+	// Writes a "budget.deleted" audit entry via auditLog.LogInTx inside that transaction; auditLog
+	// may be nil. Returns ErrBudgetNotFound if the budget does not exist, belongs to another user,
+	// or is already tombstoned.
+	Delete(ctx context.Context, id, userID string, auditLog AuditLogRepository) error
 	CountByUserID(ctx context.Context, userID string) (int, error)
 
 	// BudgetCategory operations
@@ -36,7 +50,14 @@ type BudgetRepository interface {
 	GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error)
 	UpdateCategory(ctx context.Context, category *domain.BudgetCategory) error
 	UpdateCategorySpentAmount(ctx context.Context, categoryID string, spentAmount float64) error
-	DeleteCategory(ctx context.Context, id, budgetID string) error
+	// DeleteCategory TOMBSTONES a budget category, so that rollover_history rows naming it as
+	// their source_budget_category_id survive rather than being CASCADEd away by
+	// fk_rollover_history_source_budget_category_id. Issue #1569, Task 8.
+	//
+	// Writes a "budget_category.deleted" audit entry via auditLog.LogInTx inside the same
+	// transaction; auditLog may be nil. Returns ErrBudgetCategoryNotFound if the category does not
+	// exist, is not in budgetID, or is already tombstoned.
+	DeleteCategory(ctx context.Context, id, budgetID string, auditLog AuditLogRepository) error
 
 	// Query for spent amount sync (Issue #451)
 	GetCategoriesMatchingTransaction(ctx context.Context, userID string, effective *domain.EffectiveCategory) ([]domain.BudgetCategory, error)
@@ -178,7 +199,7 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 			amount, currency_code, is_active, created_at, updated_at,
 			income_amount, income_sources, expected_income, series_id
 		FROM budgets
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 	`
 
 	budget := &domain.Budget{}
@@ -233,7 +254,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 			amount, currency_code, is_active, created_at, updated_at,
 			income_amount, income_sources, expected_income, series_id
 		FROM budgets
-		WHERE user_id = $1
+		WHERE user_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at DESC
 	`
 
@@ -293,7 +314,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 			amount, currency_code, is_active, created_at, updated_at,
 			income_amount, income_sources, expected_income, series_id
 		FROM budgets
-		WHERE user_id = $1 AND is_active = true
+		WHERE user_id = $1 AND is_active = true AND deleted_at IS NULL
 		ORDER BY created_at DESC
 	`
 
@@ -353,7 +374,7 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 			amount, currency_code, is_active, created_at, updated_at,
 			income_amount, income_sources, expected_income, series_id
 		FROM budgets
-		WHERE user_id = $1 AND name = $2
+		WHERE user_id = $1 AND name = $2 AND deleted_at IS NULL
 	`
 
 	budget := &domain.Budget{}
@@ -419,7 +440,7 @@ func (r *budgetRepository) Update(ctx context.Context, budget *domain.Budget) er
 			end_date = $5, amount = $6, currency_code = $7, is_active = $8,
 			updated_at = $9, income_amount = $10, income_sources = $11,
 			expected_income = $12
-		WHERE id = $13 AND user_id = $14
+		WHERE id = $13 AND user_id = $14 AND deleted_at IS NULL
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -454,25 +475,47 @@ func (r *budgetRepository) Update(ctx context.Context, budget *domain.Budget) er
 	return nil
 }
 
-// Delete removes a budget and its categories from the database.
-func (r *budgetRepository) Delete(ctx context.Context, id, userID string) error {
-	query := `DELETE FROM budgets WHERE id = $1 AND user_id = $2`
-
-	ct, err := r.db.Exec(ctx, query, id, userID)
+// Delete implements BudgetRepository.Delete — see that method's doc comment for why this is a
+// tombstone rather than a DELETE.
+func (r *budgetRepository) Delete(ctx context.Context, id, userID string, auditLog AuditLogRepository) error {
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
+	ct, err := tx.Exec(ctx, `
+		UPDATE budgets
+		SET deleted_at = NOW(), deleted_reason = $3, deleted_by = $4, updated_at = NOW()
+		WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+	`, id, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser)
+	if err != nil {
+		return fmt.Errorf("delete budget %s: %w", id, err)
+	}
 	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetNotFound
 	}
 
-	return nil
+	if _, err := tx.Exec(ctx, `
+		UPDATE budget_categories
+		SET deleted_at = NOW(), deleted_reason = $2, deleted_by = $3, updated_at = NOW()
+		WHERE budget_id = $1 AND deleted_at IS NULL
+	`, id, domain.SoftDeleteReasonParent, domain.SoftDeletedByUser); err != nil {
+		return fmt.Errorf("delete budget %s: tombstoning its categories: %w", id, err)
+	}
+
+	if auditLog != nil {
+		if err := auditLog.LogInTx(ctx, tx, "budget.deleted", "budget", id); err != nil {
+			return fmt.Errorf("delete budget %s: audit log: %w", id, err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // CountByUserID counts the total number of budgets for a user.
 func (r *budgetRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
-	query := `SELECT COUNT(*) FROM budgets WHERE user_id = $1`
+	query := `SELECT COUNT(*) FROM budgets WHERE user_id = $1 AND deleted_at IS NULL`
 
 	var count int
 	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
@@ -553,8 +596,8 @@ func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID
 			sg.name AS savings_goal_name
 		FROM budget_categories bc
 		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
-		LEFT JOIN savings_goals sg ON sg.id = bc.savings_goal_id
-		WHERE bc.budget_id = $1
+		LEFT JOIN savings_goals sg ON sg.id = bc.savings_goal_id AND sg.deleted_at IS NULL
+		WHERE bc.budget_id = $1 AND bc.deleted_at IS NULL
 		ORDER BY bc.created_at ASC
 	`
 
@@ -626,8 +669,8 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 			sg.name AS savings_goal_name
 		FROM budget_categories bc
 		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
-		LEFT JOIN savings_goals sg ON sg.id = bc.savings_goal_id
-		WHERE bc.budget_id = ANY($1)
+		LEFT JOIN savings_goals sg ON sg.id = bc.savings_goal_id AND sg.deleted_at IS NULL
+		WHERE bc.budget_id = ANY($1) AND bc.deleted_at IS NULL
 		ORDER BY bc.budget_id ASC, bc.created_at ASC
 	`
 
@@ -705,7 +748,7 @@ func (r *budgetRepository) UpdateCategory(ctx context.Context, category *domain.
 		SET category_kind = $1, pfc_primary = $2, pfc_detailed = $3, custom_category_id = $4,
 			allocated_amount = $5, spent_amount = $6, updated_at = $7,
 			tags = $8, match_logic = $9
-		WHERE id = $10 AND budget_id = $11
+		WHERE id = $10 AND budget_id = $11 AND deleted_at IS NULL
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -739,7 +782,7 @@ func (r *budgetRepository) UpdateCategorySpentAmount(ctx context.Context, catego
 	query := `
 		UPDATE budget_categories
 		SET spent_amount = $1, updated_at = NOW()
-		WHERE id = $2
+		WHERE id = $2 AND deleted_at IS NULL
 	`
 
 	ct, err := r.db.Exec(ctx, query, spentAmount, categoryID)
@@ -754,20 +797,34 @@ func (r *budgetRepository) UpdateCategorySpentAmount(ctx context.Context, catego
 	return nil
 }
 
-// DeleteCategory removes a budget category.
-func (r *budgetRepository) DeleteCategory(ctx context.Context, id, budgetID string) error {
-	query := `DELETE FROM budget_categories WHERE id = $1 AND budget_id = $2`
-
-	ct, err := r.db.Exec(ctx, query, id, budgetID)
+// DeleteCategory implements BudgetRepository.DeleteCategory — see that method's doc comment for
+// why this is a tombstone rather than a DELETE.
+func (r *budgetRepository) DeleteCategory(ctx context.Context, id, budgetID string, auditLog AuditLogRepository) error {
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
+	ct, err := tx.Exec(ctx, `
+		UPDATE budget_categories
+		SET deleted_at = NOW(), deleted_reason = $3, deleted_by = $4, updated_at = NOW()
+		WHERE id = $1 AND budget_id = $2 AND deleted_at IS NULL
+	`, id, budgetID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser)
+	if err != nil {
+		return fmt.Errorf("delete budget category %s: %w", id, err)
+	}
 	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetCategoryNotFound
 	}
 
-	return nil
+	if auditLog != nil {
+		if err := auditLog.LogInTx(ctx, tx, "budget_category.deleted", "budget_category", id); err != nil {
+			return fmt.Errorf("delete budget category %s: audit log: %w", id, err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // GetCategoriesMatchingTransaction finds budget categories that match a transaction's category.
@@ -792,8 +849,8 @@ func (r *budgetRepository) GetCategoriesMatchingTransaction(ctx context.Context,
 					bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 					bc.tags, bc.match_logic
 				FROM budget_categories bc
-				JOIN budgets b ON bc.budget_id = b.id
-				WHERE b.user_id = $1 AND b.is_active = true
+				JOIN budgets b ON bc.budget_id = b.id AND b.deleted_at IS NULL
+				WHERE b.user_id = $1 AND b.is_active = true AND bc.deleted_at IS NULL
 				  AND bc.category_kind = 'pfc' AND bc.pfc_primary = $2
 				  AND bc.pfc_detailed IS NULL
 			`
@@ -806,8 +863,8 @@ func (r *budgetRepository) GetCategoriesMatchingTransaction(ctx context.Context,
 					bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 					bc.tags, bc.match_logic
 				FROM budget_categories bc
-				JOIN budgets b ON bc.budget_id = b.id
-				WHERE b.user_id = $1 AND b.is_active = true
+				JOIN budgets b ON bc.budget_id = b.id AND b.deleted_at IS NULL
+				WHERE b.user_id = $1 AND b.is_active = true AND bc.deleted_at IS NULL
 				  AND bc.category_kind = 'pfc' AND bc.pfc_primary = $2
 				  AND (bc.pfc_detailed IS NULL OR bc.pfc_detailed = $3)
 			`
@@ -825,8 +882,8 @@ func (r *budgetRepository) GetCategoriesMatchingTransaction(ctx context.Context,
 				bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 				bc.tags, bc.match_logic
 			FROM budget_categories bc
-			JOIN budgets b ON bc.budget_id = b.id
-			WHERE b.user_id = $1 AND b.is_active = true
+			JOIN budgets b ON bc.budget_id = b.id AND b.deleted_at IS NULL
+			WHERE b.user_id = $1 AND b.is_active = true AND bc.deleted_at IS NULL
 			  AND (
 			    (bc.category_kind = 'custom'
 			      AND (bc.custom_category_id::text = $2
@@ -890,7 +947,7 @@ func (r *budgetRepository) UpdateBudgetIncome(ctx context.Context, budgetID stri
 	query := `
 		UPDATE budgets
 		SET income_amount = $1, updated_at = NOW()
-		WHERE id = $2
+		WHERE id = $2 AND deleted_at IS NULL
 	`
 
 	ct, err := r.db.Exec(ctx, query, incomeAmount, budgetID)
@@ -913,7 +970,7 @@ func (r *budgetRepository) GetAllActivePaginated(ctx context.Context, limit int,
 			amount, currency_code, is_active, created_at, updated_at,
 			income_amount, income_sources, expected_income, series_id
 		FROM budgets
-		WHERE is_active = true
+		WHERE is_active = true AND deleted_at IS NULL
 		ORDER BY id ASC
 		LIMIT $1 OFFSET $2
 	`
@@ -1011,8 +1068,8 @@ func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryI
 			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 			bc.tags, bc.match_logic
 		FROM budget_categories bc
-		JOIN budgets b ON b.id = bc.budget_id AND b.user_id = $2
-		WHERE bc.id = $1
+		JOIN budgets b ON b.id = bc.budget_id AND b.user_id = $2 AND b.deleted_at IS NULL
+		WHERE bc.id = $1 AND bc.deleted_at IS NULL
 	`
 	var bc domain.BudgetCategory
 	var tagsJSON []byte

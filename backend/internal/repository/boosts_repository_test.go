@@ -811,18 +811,23 @@ func TestBoostsRepository_Update_Success(t *testing.T) {
 
 // --- Delete ---
 
+// Issue #1569 Task 8: the delete is a TOMBSTONE now, and it carries a user_id predicate the old
+// `DELETE FROM boosts WHERE id = $1` never had.
 func TestBoostsRepository_Delete_Success(t *testing.T) {
 	mock, repo := setupBoostsRepoDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
 	boostID := uuid.New().String()
+	userID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM boosts WHERE id = $1`)).
-		WithArgs(boostID).
-		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE boosts`)).
+		WithArgs(boostID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
-	err := repo.Delete(ctx, boostID)
+	err := repo.Delete(ctx, boostID, userID, nil)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -834,12 +839,15 @@ func TestBoostsRepository_Delete_NotFound(t *testing.T) {
 
 	ctx := context.Background()
 	boostID := uuid.New().String()
+	userID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM boosts WHERE id = $1`)).
-		WithArgs(boostID).
-		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE boosts`)).
+		WithArgs(boostID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
 
-	err := repo.Delete(ctx, boostID)
+	err := repo.Delete(ctx, boostID, userID, nil)
 
 	assert.ErrorIs(t, err, domain.ErrBoostNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())

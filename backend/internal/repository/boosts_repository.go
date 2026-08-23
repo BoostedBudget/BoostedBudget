@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -38,8 +39,22 @@ type BoostsRepository interface {
 	// Update updates an existing boost.
 	Update(ctx context.Context, boost *domain.Boost) error
 
-	// Delete removes a boost from the database.
-	Delete(ctx context.Context, id string) error
+	// Delete TOMBSTONES a boost: it sets deleted_at/deleted_reason/deleted_by instead of issuing
+	// `DELETE FROM boosts`, so that boost_executions -- the automation audit trail, which
+	// fk_boost_executions_boost_id would otherwise CASCADE away -- survives. Issue #1569, Task 8.
+	//
+	// userID is a NEW parameter. The old statement was `DELETE FROM boosts WHERE id = $1` with no
+	// ownership predicate at all. That was not exploitable (boostService.DeleteBoost is the only
+	// caller and does a GetByID-then-compare first, verified by grep), but it made the repository
+	// method depend on a check it could not see, and every sibling repository -- savings goals,
+	// budgets -- already scopes its own delete by user_id. Now this one does too.
+	//
+	// Runs in one transaction with a "boost.deleted" audit entry written via auditLog.LogInTx, so
+	// the entry and the state change commit or roll back together. auditLog may be nil.
+	//
+	// Returns ErrBoostNotFound if the boost does not exist, belongs to another user, or is already
+	// tombstoned.
+	Delete(ctx context.Context, id, userID string, auditLog AuditLogRepository) error
 
 	// CountByUserID counts the total number of automation boosts for a user.
 	CountByUserID(ctx context.Context, userID string) (int, error)
@@ -148,7 +163,7 @@ func (r *boostsRepository) GetByID(ctx context.Context, id string) (*domain.Boos
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
 		FROM boosts
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 	`
 
 	return r.scanBoost(r.db.QueryRow(ctx, query, id))
@@ -162,7 +177,7 @@ func (r *boostsRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
 		FROM boosts
-		WHERE user_id = $1
+		WHERE user_id = $1 AND deleted_at IS NULL
 		ORDER BY priority DESC, created_at ASC
 	`
 
@@ -189,7 +204,7 @@ func (r *boostsRepository) GetByUserIDFiltered(ctx context.Context, userID strin
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
 		FROM boosts
-		WHERE user_id = $1 AND boost_type = ANY($2::text[])
+		WHERE user_id = $1 AND boost_type = ANY($2::text[]) AND deleted_at IS NULL
 		ORDER BY priority DESC, created_at ASC
 	`
 
@@ -204,7 +219,7 @@ func (r *boostsRepository) GetEnabledByUserID(ctx context.Context, userID string
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
 		FROM boosts
-		WHERE user_id = $1 AND enabled = true
+		WHERE user_id = $1 AND enabled = true AND deleted_at IS NULL
 		ORDER BY priority DESC, created_at ASC
 	`
 
@@ -219,7 +234,7 @@ func (r *boostsRepository) GetByName(ctx context.Context, userID, name string) (
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
 		FROM boosts
-		WHERE user_id = $1 AND name = $2
+		WHERE user_id = $1 AND name = $2 AND deleted_at IS NULL
 	`
 
 	return r.scanBoost(r.db.QueryRow(ctx, query, userID, name))
@@ -276,25 +291,39 @@ func (r *boostsRepository) Update(ctx context.Context, boost *domain.Boost) erro
 	return nil
 }
 
-// Delete removes a boost from the database.
-func (r *boostsRepository) Delete(ctx context.Context, id string) error {
-	query := `DELETE FROM boosts WHERE id = $1`
-
-	ct, err := r.db.Exec(ctx, query, id)
+// Delete implements BoostsRepository.Delete — see that method's doc comment for why this is a
+// tombstone rather than a DELETE, and why it now takes userID.
+func (r *boostsRepository) Delete(ctx context.Context, id, userID string, auditLog AuditLogRepository) error {
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
+	ct, err := tx.Exec(ctx, `
+		UPDATE boosts
+		SET deleted_at = NOW(), deleted_reason = $3, deleted_by = $4, updated_at = NOW()
+		WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+	`, id, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser)
+	if err != nil {
+		return fmt.Errorf("delete boost %s: %w", id, err)
+	}
 	if ct.RowsAffected() == 0 {
 		return domain.ErrBoostNotFound
 	}
 
-	return nil
+	if auditLog != nil {
+		if err := auditLog.LogInTx(ctx, tx, "boost.deleted", "boost", id); err != nil {
+			return fmt.Errorf("delete boost %s: audit log: %w", id, err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // CountByUserID counts the total number of automation boosts for a user.
 func (r *boostsRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
-	query := `SELECT COUNT(*) FROM boosts WHERE user_id = $1`
+	query := `SELECT COUNT(*) FROM boosts WHERE user_id = $1 AND deleted_at IS NULL`
 
 	var count int
 	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
@@ -358,6 +387,7 @@ func (r *boostsRepository) GetBoostsByEventTrigger(ctx context.Context, userID, 
 			AND enabled = true
 			AND trigger_config->>'type' = 'event'
 			AND trigger_config->>'event' = $2
+			AND deleted_at IS NULL
 		ORDER BY priority DESC, created_at ASC
 	`
 
@@ -372,7 +402,7 @@ func (r *boostsRepository) GetBoostsByType(ctx context.Context, userID string, b
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
 		FROM boosts
-		WHERE user_id = $1 AND enabled = true AND boost_type = $2
+		WHERE user_id = $1 AND enabled = true AND boost_type = $2 AND deleted_at IS NULL
 		ORDER BY priority DESC, created_at ASC
 	`
 
@@ -391,6 +421,7 @@ func (r *boostsRepository) GetBoostsByScheduleTrigger(ctx context.Context) ([]*d
 		WHERE enabled = true
 			AND trigger_config->>'type' = 'schedule'
 			AND trigger_config->>'cron' IS NOT NULL
+			AND deleted_at IS NULL
 		ORDER BY priority DESC, created_at ASC
 	`
 

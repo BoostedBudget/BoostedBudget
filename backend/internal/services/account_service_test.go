@@ -751,7 +751,6 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	// This test documents the expected behavior; implementation in GREEN phase
 }
 
-
 // TestAccountService_LinkAccounts_EncryptionVerified tests that access token is encrypted
 func TestAccountService_LinkAccounts_EncryptionVerified(t *testing.T) {
 	// Given: Mock encryption service
@@ -4458,13 +4457,13 @@ func TestLinkAccounts_FingerprintCheck_BlocksAnotherUserActiveItem(t *testing.T)
 
 	plaidAccounts := []map[string]interface{}{
 		{
-			"account_id":           "plaid-acct-block-1",
+			"account_id":            "plaid-acct-block-1",
 			"persistent_account_id": persistentAccountID,
-			"balances":             map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
-			"mask":                 "1234",
-			"name":                 "Checking",
-			"subtype":              "checking",
-			"type":                 "depository",
+			"balances":              map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
+			"mask":                  "1234",
+			"name":                  "Checking",
+			"subtype":               "checking",
+			"type":                  "depository",
 		},
 	}
 	_, plaidClient := newTestPlaidServerWithPersistentID(t, accessToken, plaidItemID, plaidAccounts)
@@ -4538,13 +4537,13 @@ func TestLinkAccounts_FingerprintCheck_BlocksTTLNotExpired(t *testing.T) {
 
 	plaidAccounts := []map[string]interface{}{
 		{
-			"account_id":           "plaid-acct-ttl-1",
+			"account_id":            "plaid-acct-ttl-1",
 			"persistent_account_id": persistentAccountID,
-			"balances":             map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
-			"mask":                 "5678",
-			"name":                 "Savings",
-			"subtype":              "savings",
-			"type":                 "depository",
+			"balances":              map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
+			"mask":                  "5678",
+			"name":                  "Savings",
+			"subtype":               "savings",
+			"type":                  "depository",
 		},
 	}
 	_, plaidClient := newTestPlaidServerWithPersistentID(t, accessToken, plaidItemID, plaidAccounts)
@@ -4620,13 +4619,13 @@ func TestLinkAccounts_FingerprintCheck_AllowsAfterTTLExpiry(t *testing.T) {
 
 	plaidAccounts := []map[string]interface{}{
 		{
-			"account_id":           "plaid-acct-expired-1",
+			"account_id":            "plaid-acct-expired-1",
 			"persistent_account_id": persistentAccountID,
-			"balances":             map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
-			"mask":                 mask,
-			"name":                 "Checking",
-			"subtype":              "checking",
-			"type":                 "depository",
+			"balances":              map[string]interface{}{"available": 100.0, "current": 110.0, "iso_currency_code": "USD"},
+			"mask":                  mask,
+			"name":                  "Checking",
+			"subtype":               "checking",
+			"type":                  "depository",
 		},
 	}
 	_, plaidClient := newTestPlaidServerWithPersistentID(t, accessToken, plaidItemID, plaidAccounts)

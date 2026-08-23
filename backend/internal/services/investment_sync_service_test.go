@@ -369,7 +369,6 @@ func TestInvestmentSyncService_SyncHoldings_SecurityMappingCorrect(t *testing.T)
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
 	sec := makePlaidSecurity(plaidSecurityID, "Apple Inc.", "AAPL")
 	holding := makePlaidHolding(plaidAccountID, plaidSecurityID, 5.0, 165.0, 825.0, 750.0)
 
@@ -415,7 +414,6 @@ func TestInvestmentSyncService_SyncHoldings_EmptyHoldings(t *testing.T) {
 	plaidAccountID := "plaid-acct-001"
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
 
 	// No securities, no holdings in response (account was fully liquidated) — but the account
 	// IS present in the response's `accounts` array, confirming Plaid enumerated it this call
@@ -507,7 +505,6 @@ func TestInvestmentSyncService_SyncHoldings_UnmappedAccount(t *testing.T) {
 
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
 
 	// Plaid returns a holding for an account we don't have internally
 	plaidSecurityID := "plaid-sec-001"
@@ -775,7 +772,6 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_Pagination_SinglePage(
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
@@ -816,7 +812,6 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_Pagination_MultiplePag
 	plaidAccountID := "plaid-acct-001"
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
 
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
@@ -892,7 +887,6 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_Pagination_ExactBounda
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
@@ -936,7 +930,6 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_DuplicatesSkipped(t *t
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
@@ -972,7 +965,6 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_UpdatesLastSyncedDate(
 	plaidAccountID := "plaid-acct-001"
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
 
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
@@ -1012,7 +1004,6 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_PartialPageError_NoDat
 	plaidAccountID := "plaid-acct-001"
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
 
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
@@ -1063,7 +1054,6 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_NullSecurityID(t *test
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
 	}, nil)
@@ -1106,7 +1096,6 @@ func TestInvestmentSyncService_SyncInvestmentTransactions_SecurityResolution(t *
 	plaidSecurityID := "plaid-sec-AAPL"
 	internalSecurityID := "internal-" + uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
 
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
 		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
@@ -1274,7 +1263,6 @@ func TestInvestmentSyncService_SyncHoldings_UnmappedSecurity_SkipsAccountReplace
 	internalSecurityID := uuid.New().String()
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
 
 	// Two holdings: one with a known security, one with an unknown security
 	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(

@@ -419,11 +419,16 @@ func TestBudgetRepository_Delete(t *testing.T) {
 	budgetID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM budgets`)).
-		WithArgs(budgetID, userID).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budgets`)).
+		WithArgs(budgetID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
+		WithArgs(budgetID, domain.SoftDeleteReasonParent, domain.SoftDeletedByUser).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+	mock.ExpectCommit()
 
-	err := repo.Delete(ctx, budgetID, userID)
+	err := repo.Delete(ctx, budgetID, userID, nil)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -438,11 +443,13 @@ func TestBudgetRepository_Delete_NotFound(t *testing.T) {
 	budgetID := uuid.New().String()
 	userID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM budgets`)).
-		WithArgs(budgetID, userID).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budgets`)).
+		WithArgs(budgetID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
 
-	err := repo.Delete(ctx, budgetID, userID)
+	err := repo.Delete(ctx, budgetID, userID, nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, domain.ErrBudgetNotFound, err)
@@ -683,11 +690,13 @@ func TestBudgetRepository_DeleteCategory(t *testing.T) {
 	categoryID := uuid.New().String()
 	budgetID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM budget_categories`)).
-		WithArgs(categoryID, budgetID).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
+		WithArgs(categoryID, budgetID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
-	err := repo.DeleteCategory(ctx, categoryID, budgetID)
+	err := repo.DeleteCategory(ctx, categoryID, budgetID, nil)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -702,11 +711,13 @@ func TestBudgetRepository_DeleteCategory_NotFound(t *testing.T) {
 	categoryID := uuid.New().String()
 	budgetID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM budget_categories`)).
-		WithArgs(categoryID, budgetID).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
+		WithArgs(categoryID, budgetID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
 
-	err := repo.DeleteCategory(ctx, categoryID, budgetID)
+	err := repo.DeleteCategory(ctx, categoryID, budgetID, nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, domain.ErrBudgetCategoryNotFound, err)

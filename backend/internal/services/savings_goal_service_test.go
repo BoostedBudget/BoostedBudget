@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -68,7 +69,12 @@ func (m *MockSavingsGoalRepository) Update(ctx context.Context, goal *domain.Sav
 	return args.Error(0)
 }
 
-func (m *MockSavingsGoalRepository) Delete(ctx context.Context, id, userID string) error {
+func (m *MockSavingsGoalRepository) Delete(ctx context.Context, id, userID string, auditLog repository.AuditLogRepository) error {
+	args := m.Called(ctx, id, userID)
+	return args.Error(0)
+}
+
+func (m *MockSavingsGoalRepository) PurgeGoal(ctx context.Context, id, userID string, auditLog repository.AuditLogRepository) error {
 	args := m.Called(ctx, id, userID)
 	return args.Error(0)
 }
@@ -563,7 +569,6 @@ func TestSavingsGoalService_CreateGoal_ReplacedAccountRejected(t *testing.T) {
 	mockAccountRepo.AssertExpectations(t)
 }
 
-
 // TestSavingsGoalService_UpdateGoal_RefreshesUserAccountID verifies that when a user
 // changes a savings goal's linked account, UpdateGoal writes the new account's
 // user_account_id to the goal. Issue #1109: B.5 fix.
@@ -783,7 +788,7 @@ func TestSavingsGoalService_UpdateGoal_SetsProgressBasis(t *testing.T) {
 		{
 			name: "switch to account_percentage sets pct",
 			req: domain.UpdateSavingsGoalRequest{
-				ProgressBasis:    &pctBasis,
+				ProgressBasis:     &pctBasis,
 				AccountPercentage: &pct,
 			},
 			wantBasis: "account_percentage",

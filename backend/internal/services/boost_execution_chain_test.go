@@ -5,9 +5,9 @@ package services
 // and ToUserAccountID when the boost action has those stable IDs.
 
 import (
-	"errors"
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -44,7 +44,7 @@ func TestBoostExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 		UserID:         "user-123",
 		Name:           "Transfer to Savings",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -55,7 +55,6 @@ func TestBoostExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-
 
 	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
@@ -96,7 +95,7 @@ func TestBoostExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T
 		UserID:         "user-123",
 		Name:           "Legacy Transfer Rule",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -107,7 +106,6 @@ func TestBoostExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-
 
 	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
@@ -162,7 +160,7 @@ func TestBoostExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing
 		UserID:         "user-123",
 		Name:           "Chain Resolver Transfer",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -219,7 +217,7 @@ func TestBoostExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
 		UserID:         "user-123",
 		Name:           "Nil Resolver Fallback",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -276,7 +274,7 @@ func TestBoostExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testi
 		UserID:         "user-123",
 		Name:           "Legacy No UAID",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -324,7 +322,7 @@ func TestBoostExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
 		UserID:         "user-sim",
 		Name:           "Simulate With UAID",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
@@ -409,7 +407,7 @@ func TestBoostExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *
 		UserID:         "user-depth2",
 		Name:           "Depth-2 Chain Transfer",
 		Enabled:        true,
-		BoostType:       domain.BoostTypeTransferSuggestion,
+		BoostType:      domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,

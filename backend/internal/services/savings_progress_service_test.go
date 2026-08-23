@@ -729,7 +729,7 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		summary, err := svc.GetProgressSummary(context.Background(), "u1")
 
 		require.NoError(t, err)
-		assert.Equal(t, 700.0, summary.TotalSaved)  // 500 + 200
+		assert.Equal(t, 700.0, summary.TotalSaved)   // 500 + 200
 		assert.Equal(t, 1500.0, summary.TotalTarget) // 1000 + 500
 		// 700/1500*100 = 46.67
 		assert.Equal(t, 46.67, summary.OverallPercentComplete)

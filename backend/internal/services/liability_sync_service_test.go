@@ -179,9 +179,9 @@ func makePlaidCreditLiability(plaidAccountID string) plaid.CreditCardLiability {
 	lastStatementIssueDate := plaidNullStr("2024-01-01")
 	lastStatementBalance := plaidNullFloat(500.0)
 	apr := plaid.APR{
-		AprPercentage:       19.99,
-		AprType:             "purchase",
-		BalanceSubjectToApr: plaidNullFloat(480.0),
+		AprPercentage:        19.99,
+		AprType:              "purchase",
+		BalanceSubjectToApr:  plaidNullFloat(480.0),
 		InterestChargeAmount: plaidNullFloat(7.99),
 	}
 	return plaid.CreditCardLiability{
@@ -420,8 +420,6 @@ func TestLiabilitySyncService_SyncLiabilities_CreditHappyPath(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-
 	credit := makePlaidCreditLiability(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{credit},
@@ -465,8 +463,6 @@ func TestLiabilitySyncService_SyncLiabilities_MortgageHappyPath(t *testing.T) {
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
 
-
-
 	mortgage := makePlaidMortgageLiability(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{},
@@ -505,8 +501,6 @@ func TestLiabilitySyncService_SyncLiabilities_StudentLoanHappyPath(t *testing.T)
 	internalAccountID := uuid.New().String()
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
-
 
 	student := makePlaidStudentLoan(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(
@@ -548,7 +542,6 @@ func TestLiabilitySyncService_SyncLiabilities_UnmappedAccountSkipped(t *testing.
 
 	internalAccountID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", "user-001")
-
 
 	credit := makePlaidCreditLiability("unknown-plaid-account")
 	// "some-other-account" (the internal account's actual plaid_account_id) is present in the
@@ -597,8 +590,6 @@ func TestLiabilitySyncService_SyncLiabilities_MixedTypes(t *testing.T) {
 	slAcctID := uuid.New().String()
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-multi", userID)
-
-
 
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{makePlaidCreditLiability(plaidCCID)},
@@ -650,8 +641,6 @@ func TestLiabilitySyncService_SyncLiabilities_EmptyArrayClearsData(t *testing.T)
 	internalAccountID := uuid.New().String()
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
-
 
 	// All arrays empty AND the account is present in the response's accounts array — Plaid
 	// confirms it enumerated this account this call and reported no liabilities, a genuine
@@ -856,7 +845,6 @@ func TestLiabilitySyncService_SyncLiabilities_UpdatesLastSyncedAt(t *testing.T) 
 
 	linkedItem := makeLinkedItem("item-001", "user-001")
 
-
 	resp := makePlaidLiabilitiesResponse(
 		[]plaid.CreditCardLiability{},
 		[]plaid.MortgageLiability{},
@@ -888,8 +876,6 @@ func TestLiabilitySyncService_SyncLiabilities_CreditRepoError(t *testing.T) {
 	internalAccountID := uuid.New().String()
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-001", userID)
-
-
 
 	credit := makePlaidCreditLiability(plaidAccountID)
 	resp := makePlaidLiabilitiesResponse(

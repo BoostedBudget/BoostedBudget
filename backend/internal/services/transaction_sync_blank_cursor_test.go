@@ -198,10 +198,10 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping(t
 // `UpdateCursor` ran INSIDE the pagination loop (per page), while storage happens AFTER it.
 // So on a two-page sync where page 1 succeeds and page 2 returns has_more=true with an empty cursor:
 //
-//	1. page 1's transactions are appended to `result` and page 1's cursor is PERSISTED;
-//	2. round 10's guard returned an error before any storage;
-//	3. the worker reads `result` only on the success path (queue/jobs/plaid_sync.go) — on error it is
-//	   discarded entirely.
+//  1. page 1's transactions are appended to `result` and page 1's cursor is PERSISTED;
+//  2. round 10's guard returned an error before any storage;
+//  3. the worker reads `result` only on the success path (queue/jobs/plaid_sync.go) — on error it is
+//     discarded entirely.
 //
 // The retry then resumes from page 1's cursor, and /transactions/sync does not re-deliver page 1. Those
 // transactions are gone. The condition is server-side and deterministic on retry, so all five attempts

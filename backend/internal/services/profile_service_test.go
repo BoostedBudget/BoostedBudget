@@ -192,6 +192,7 @@ func (m *MockProfileRepository) ClearPastDueStartedAt(ctx context.Context, userI
 func (m *MockProfileRepository) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{}, nil
 }
+
 // GetUsersNeedingRetentionClockRepair, RepairRetentionClock (Issue #1413 H5 residual) are not
 // exercised by these profile-service tests; stubbed to satisfy the widened ProfileRepository
 // interface.
@@ -817,14 +818,14 @@ func (m *mockTx) Commit(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
 }
-func (m *mockTx) Rollback(ctx context.Context) error                     { return nil }
+func (m *mockTx) Rollback(ctx context.Context) error { return nil }
 func (m *mockTx) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
 	panic("not implemented")
 }
 func (m *mockTx) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
 	panic("not implemented")
 }
-func (m *mockTx) LargeObjects() pgx.LargeObjects     { panic("not implemented") }
+func (m *mockTx) LargeObjects() pgx.LargeObjects { panic("not implemented") }
 func (m *mockTx) Prepare(ctx context.Context, name, sql string) (*pgconn.StatementDescription, error) {
 	panic("not implemented")
 }

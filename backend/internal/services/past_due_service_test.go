@@ -113,7 +113,7 @@ func (m *mockPastDueNotificationRepo) Create(ctx context.Context, n *domain.Noti
 // ---- Helpers ----
 
 const (
-	testGraceDays          = 21
+	testGraceDays           = 21
 	testPlaidDisconnectDays = 14
 )
 
