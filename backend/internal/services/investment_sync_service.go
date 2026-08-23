@@ -10,6 +10,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 )
@@ -291,9 +292,29 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 		SecuritiesUpserted: len(domainSecurities),
 	}
 
+	// Issue #1569 Task 4: the only per-account completeness signal Plaid's
+	// /investments/holdings/get response exposes is presence in `accounts` (see
+	// plaid_completeness.go — the same reasoning as the liability sync applies here: no
+	// account-level error/status field, and item.error is documented as populated only by
+	// /item/get). An account absent from this set was not returned by Plaid on this call at all;
+	// zero holdings for it below is then a partial/degraded response, not a confirmed liquidation.
+	presentPlaidAccountIDs := PlaidResponseAccountIDs(resp.Accounts)
+
 	// For each internal account, replace holdings atomically
 	for plaidAccountID, internalAccountID := range accountMap {
-		plaidHoldings := holdingsByAccount[plaidAccountID] // empty if account was liquidated
+		plaidHoldings := holdingsByAccount[plaidAccountID] // empty if liquidated OR response is partial for this account
+
+		if len(plaidHoldings) == 0 {
+			if _, complete := presentPlaidAccountIDs[plaidAccountID]; !complete {
+				observability.PlaidWipeSkippedIncompleteResponse.WithLabelValues("holdings").Inc()
+				s.logger.Warn("skipping holdings clear: account absent from Plaid's holdings response, preserving existing rows",
+					"account_id", internalAccountID,
+					"item_id", linkedItem.ID,
+				)
+				result.Errors = append(result.Errors, fmt.Sprintf("account %s: skipped holdings clear, account absent from Plaid's response (partial/incomplete)", plaidAccountID))
+				continue
+			}
+		}
 
 		domainHoldings := make([]domain.Holding, 0, len(plaidHoldings))
 		skippedAny := false

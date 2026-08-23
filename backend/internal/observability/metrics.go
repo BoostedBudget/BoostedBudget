@@ -707,6 +707,23 @@ var (
 		Help: "Total bank links refused because no stable user_accounts identity could be established, by reason (service_unwired, match_or_create_failed).",
 	}, []string{"reason"})
 
+	// PlaidWipeSkippedIncompleteResponse counts delete-only Plaid sync operations skipped
+	// because the target account was absent from the response's `accounts` array — the only
+	// per-account signal Plaid's /liabilities/get and /investments/holdings/get responses
+	// expose (Issue #1569 Task 4). An account missing from `accounts` means this response says
+	// nothing about that account at all, which this codebase treats as "unknown, do not wipe"
+	// rather than "confirmed no data of this type." Every increment here is a wipe that the old
+	// code would have performed and this one refused — that's the point of the counter: it turns
+	// a previously silent, undetectable data-loss path into something observable.
+	//
+	// ⚠ LABEL HYGIENE: "category" is one of a small fixed set — credit_liability |
+	// mortgage_liability | student_loan_liability | holdings. Never a raw error string or any
+	// account/user identifier.
+	PlaidWipeSkippedIncompleteResponse = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "plaid_wipe_skipped_incomplete_response_total",
+		Help: "Total delete-only Plaid sync operations skipped because the account was absent from the response's account list, by category (credit_liability, mortgage_liability, student_loan_liability, holdings).",
+	}, []string{"category"})
+
 	// AccountsReplacedFiltered counts query executions that exclude replaced accounts or
 	// resolve a re-link chain (Issue #1109). The "family" label groups call sites by domain.
 	//
