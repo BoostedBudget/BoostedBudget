@@ -84,3 +84,12 @@ func (s *PortfolioRepairSummary) Add(outcome string, n int) {
 		s.RefusedPartialCoverage += n
 	}
 }
+
+// Merge folds another run's counts in, for a caller repairing many users in one pass.
+func (s *PortfolioRepairSummary) Merge(o PortfolioRepairSummary) {
+	s.Examined += o.Examined
+	s.Repaired += o.Repaired
+	s.Verified += o.Verified
+	s.RefusedNoCoverage += o.RefusedNoCoverage
+	s.RefusedPartialCoverage += o.RefusedPartialCoverage
+}

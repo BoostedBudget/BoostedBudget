@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -93,6 +94,13 @@ func (w *PortfolioSnapshotWorker) Work(ctx context.Context, job *river.Job[Portf
 		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
 	}()
+
+	// Step 0 (#1569 Task 11, S6/E4): repair the PAST days that were recorded before the account
+	// liveness predicate was corrected. Bounded, ledger-gated and idempotent — see
+	// repository.RepairUserFromHistory. It runs here because this job already runs daily and
+	// already holds the snapshot repository, and because a day it does not reach today is still
+	// unexamined tomorrow, so the pass needs no retry logic of its own.
+	w.repairRecordedHistory(ctx, job.ID)
 
 	// Step 1: Get all users with holdings.
 	userIDs, err := w.holdingRepo.GetDistinctUserIDsWithHoldings(ctx)
@@ -199,4 +207,57 @@ func PortfolioSnapshotInsertOpts() *river.InsertOpts {
 // time (Issue #1448).
 func PortfolioSnapshotPeriodicOpts() *river.PeriodicJobOpts {
 	return &river.PeriodicJobOpts{RunOnStart: true, ID: PortfolioSnapshotArgs{}.Kind()}
+}
+
+// portfolioRepairUsersPerRun bounds one run's repair pass. The pass is resumable by construction —
+// a user it does not reach keeps their unexamined days and is picked up on the next daily run — so
+// the cap costs nothing but keeps a first run over a large backlog from stretching the daily job.
+const portfolioRepairUsersPerRun = 200
+
+// repairRecordedHistory runs the #1569 Task 11 repair over the users the ledger still owes a
+// verdict.
+//
+// It NEVER fails the job, deliberately. The aggregate write is this job's contract; the repair is
+// catch-up work over rows that are already wrong and will still be there tomorrow. Returning an
+// error here would make River retry the capture and the aggregate as well, and would eventually
+// dead-letter a job whose actual work succeeded — trading a stale historical row for a missing
+// current one.
+//
+// The user list comes from UserIDsWithUnexaminedSnapshots, NOT from the holdings enumeration this
+// job uses for its own work: that one joins a.status = 'active' and so skips a user who has
+// disconnected every institution, whose recorded curve is the one most likely to be wrong.
+func (w *PortfolioSnapshotWorker) repairRecordedHistory(ctx context.Context, jobID int64) {
+	userIDs, err := w.snapshotRepo.UserIDsWithUnexaminedSnapshots(ctx, portfolioRepairUsersPerRun)
+	if err != nil {
+		w.logger.Error("#1569 portfolio history repair: could not enumerate users; skipping this run",
+			"job_id", jobID, "error", err)
+		return
+	}
+	if len(userIDs) == 0 {
+		return
+	}
+
+	var total domain.PortfolioRepairSummary
+	var failed int
+	for _, userID := range userIDs {
+		summary, repairErr := w.snapshotRepo.RepairUserFromHistory(ctx, userID)
+		if repairErr != nil {
+			w.logger.Error("#1569 portfolio history repair failed for user; their days stay unexamined",
+				"job_id", jobID, "user_id", userID, "error", repairErr)
+			failed++
+			continue
+		}
+		total.Merge(summary)
+	}
+
+	w.logger.Info("#1569 portfolio history repair pass complete",
+		"job_id", jobID,
+		"users", len(userIDs),
+		"failed_users", failed,
+		"days_examined", total.Examined,
+		"days_repaired", total.Repaired,
+		"days_verified", total.Verified,
+		"days_refused_no_coverage", total.RefusedNoCoverage,
+		"days_refused_partial_coverage", total.RefusedPartialCoverage,
+	)
 }
