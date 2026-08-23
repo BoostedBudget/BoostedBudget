@@ -28,21 +28,28 @@
 -- the table grows with elapsed days, not with sync frequency. No row is ever DELETEd by a sync:
 -- "append-only" here means a past day is immutable, which is the property the thesis needs.
 --
--- captured_at is what makes a same-day overwrite reconstructible. Every row written by one
--- capture of one account shares that capture's transaction timestamp, so a later reader can ask
--- for the day's FINAL position set with:
+-- ⚠ SUPERSEDED BY MIGRATIONS 000161 AND 000162 — the two paragraphs this replaces taught two rules that are
+-- now wrong, and both were wrong in the dangerous direction (they made a reconstruction
+-- OVER-report, which looks like a complete answer). Corrected here rather than left standing,
+-- because a stale instruction in the file a task-11 reader opens first is worse than no
+-- instruction. 000162 re-issues the corrected COMMENT ON COLUMN into the database itself, since
+-- editing this file does nothing for a database already migrated past it.
 --
---     SELECT hs.* FROM holding_snapshots hs
---     WHERE hs.account_id = $1 AND hs.as_of_date = $2
---       AND hs.captured_at = (SELECT MAX(hs2.captured_at) FROM holding_snapshots hs2
---                             WHERE hs2.account_id = hs.account_id AND hs2.as_of_date = hs.as_of_date)
+-- WRONG #1 — "filter on MAX(captured_at) to get the day's final position set." An INSERT ... SELECT
+-- writes nothing when it observes nothing, so a confirmed-complete liquidation left the MORNING's
+-- capture holding the day's maximum captured_at and being returned as that day's positions
+-- (measured: live holdings 0, day's history 5000.00). captured_at is provenance, not a selection
+-- key. 000161 adds `present`: a capture marks everything it did not re-observe absent, so the
+-- present rows for an (account, day) ARE its last capture, by construction, and reconstruction
+-- filters on present with no dedup rule at all.
 --
--- A security sold between two same-day captures keeps its earlier row with the EARLIER
--- captured_at, so that predicate excludes it — matching what portfolio_snapshots itself records
--- for that day (last write of the day wins).
---
--- LIVENESS: rows only exist for days an account was actually synced, i.e. days it was live, so a
--- reconstruction from these tables needs no account_status_history overlap test of its own.
+-- WRONG #2 (the liveness paragraph) — "rows only exist for days an account was actually synced, so a reconstruction needs no
+-- account_status_history overlap test of its own." Accounts are SOFT-removed and the only
+-- DELETE FROM holdings is in ReplaceForAccount, so a disconnected account's holdings live on and
+-- the daily sweep re-captured them every day (measured: history 1500.00 over 2 rows against
+-- Upsert's 1000.00 over 1). The capture now applies the SAME account_status_history overlap test
+-- Upsert applies. Reconstruction still needs no overlap test of its OWN — but only because the
+-- capture already applied one, which is the opposite of what this used to say.
 --
 -- GDPR: both tables carry user_id with an ON DELETE CASCADE FK to users, which is the path
 -- DeleteUserCascade relies on (it issues one DELETE FROM users and lets the FK graph do the work).
@@ -82,10 +89,12 @@ COMMENT ON COLUMN holding_snapshots.as_of_date IS
     'UTC calendar date of the capture, computed as (now() AT TIME ZONE ''UTC'')::date inside the '
     'capturing statement so it does not depend on the session TimeZone setting.';
 
+-- ⚠ Re-issued corrected by 000162, for databases already migrated past this file. Kept in sync
+-- here so a FRESH database gets the right text immediately rather than only after 000162 runs.
 COMMENT ON COLUMN holding_snapshots.captured_at IS
-    'Transaction timestamp of the capture that last wrote this row. All rows written by one '
-    'capture of one account share it, so MAX(captured_at) per (account_id, as_of_date) identifies '
-    'that day''s final position set and excludes securities sold earlier the same day.';
+    'Provenance of this row: the transaction timestamp of the capture that last wrote it. NOT a '
+    'selection key. Reconstruction of a day''s positions filters on `present`, not on '
+    'MAX(captured_at) — see the column comment on present.';
 
 COMMENT ON COLUMN holding_snapshots.user_account_id IS
     'Copied from holdings.user_account_id — the stable chain-expansion key (#1109) that survives '

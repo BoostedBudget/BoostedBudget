@@ -773,3 +773,204 @@ func TestHistorySnapshot_AbsenceMarking_LeavesEarlierDaysAlone(t *testing.T) {
 	require.NotNil(t, snaps[0].InstitutionValue)
 	assert.Equal(t, 5000.0, *snaps[0].InstitutionValue)
 }
+
+// ── Fix round 2, item 2: the history side's liveness BOUNDARY ─────────────────────────────────
+//
+// accountLiveOnDateClause is a re-derivation of the predicate Upsert carries as its own inline
+// literal (portfolio_snapshot_repository.go ~:96-108). They are two copies of one rule and CAN
+// drift. Re-review measured exactly how far the existing tests guarded that, and the two answers
+// were not the same. Deleting the valid_to bound from UPSERT made
+// CaptureForUser_ExcludesAccountsNotLiveOnTheDay fail, so coarse drift was caught. But changing
+// `valid_to >` to `>=` on the HISTORY side only left the entire ./internal/repository integration
+// package green — nothing guarded the history side's boundary at all.
+//
+// The mixed-liveness fixture uses an account terminated ten days ago, nowhere near a boundary, so
+// it structurally cannot see an off-by-one. This test is the boundary pin, the counterpart of
+// Upsert's own OverlapBoundaryIsUTC.
+//
+// The rule is a half-open interval [valid_from, valid_to) overlapping the half-open calendar day
+// [D, D+1): live iff valid_from < D+1 AND (valid_to IS NULL OR valid_to > D). Each probe below
+// sits exactly ON one of those two bounds, one on each side.
+//
+// These fixtures manipulate account_status_history ONLY and never touch accounts.status: the
+// predicate reads recorded liveness, not current status (that is #1569's Fix A design), and
+// leaving status alone keeps the accounts trigger from firing again and adding intervals that
+// would muddy what is being measured.
+func TestHistorySnapshot_CaptureForUser_LivenessBoundaryIsTheHalfOpenUTCDay(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, linkedItemID, accountOpen, secID := seedInvestmentFixture(ctx, t, tx, "hist-boundary")
+
+	mkAccount := func(label string) uuid.UUID {
+		id := uuid.New()
+		_, err := tx.Exec(ctx, `
+			INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+			VALUES ($1, $2, $3, $4, $5, 'investment', 'active')`,
+			id, linkedItemID, userID, "hist-boundary-"+label+"-"+id.String(), label)
+		require.NoError(t, err)
+		return id
+	}
+	endsAtMidnight := mkAccount("ends-at-midnight")
+	endsJustAfterMidnight := mkAccount("ends-just-after-midnight")
+	startsTomorrowMidnight := mkAccount("starts-tomorrow-midnight")
+
+	for _, seed := range []struct {
+		account uuid.UUID
+		value   float64
+	}{
+		{accountOpen, 1000},
+		{endsAtMidnight, 500},
+		{endsJustAfterMidnight, 250},
+		{startsTomorrowMidnight, 125},
+	} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO holdings (user_id, account_id, security_id, quantity, institution_value)
+			VALUES ($1, $2, $3, 1, $4)`, userID, seed.account, secID, seed.value)
+		require.NoError(t, err)
+	}
+
+	// setInterval rewrites the account's single trigger-created 'active' interval. Bounds are
+	// computed SERVER-side off the same (now() AT TIME ZONE 'UTC')::date the capture uses, so the
+	// probes land exactly on the boundary rather than near it.
+	setInterval := func(account uuid.UUID, fromExpr, toExpr string) {
+		t.Helper()
+		ct, err := tx.Exec(ctx, `
+			WITH d AS (SELECT ((now() AT TIME ZONE 'UTC')::date)::timestamp AT TIME ZONE 'UTC' AS midnight)
+			UPDATE account_status_history ash
+			SET valid_from = `+fromExpr+`, valid_to = `+toExpr+`
+			FROM d
+			WHERE ash.account_id = $1 AND ash.status = 'active' AND ash.valid_to IS NULL`, account)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, ct.RowsAffected(), "the trigger-created 'active' interval must exist to rewrite")
+	}
+
+	// Ends EXACTLY at this UTC day's midnight → the interval is [.., D) and does NOT overlap
+	// [D, D+1). Not live today. This is the probe the `>` → `>=` mutation flips.
+	setInterval(endsAtMidnight, "d.midnight - INTERVAL '30 days'", "d.midnight")
+	// Ends one microsecond into the day → overlaps by that microsecond. Live today.
+	setInterval(endsJustAfterMidnight, "d.midnight - INTERVAL '30 days'", "d.midnight + INTERVAL '1 microsecond'")
+	// Starts EXACTLY at tomorrow's midnight → [D+1, ..) does not overlap [D, D+1). Not live today.
+	// This is the probe a `<` → `<=` mutation on the valid_from bound flips.
+	setInterval(startsTomorrowMidnight, "d.midnight + INTERVAL '1 day'", "NULL")
+
+	snapRepo := NewHoldingSnapshotRepository(tx)
+	day, err := snapRepo.CaptureForUser(ctx, userID.String())
+	require.NoError(t, err)
+
+	snaps, err := snapRepo.GetForUserOnDate(ctx, userID.String(), day)
+	require.NoError(t, err)
+
+	captured := map[string]float64{}
+	total := 0.0
+	for _, s := range snaps {
+		require.NotNil(t, s.InstitutionValue)
+		captured[s.AccountID] = *s.InstitutionValue
+		total += *s.InstitutionValue
+	}
+
+	assert.Contains(t, captured, accountOpen.String(), "an open interval is live")
+	assert.Contains(t, captured, endsJustAfterMidnight.String(),
+		"an interval ending one microsecond INTO the day overlaps it — valid_to > D must be strict-greater, and this is the true side of it")
+	assert.NotContains(t, captured, endsAtMidnight.String(),
+		"an interval ending EXACTLY at the day's midnight is [.., D) and does not overlap [D, D+1) — this is what `valid_to >= D` would wrongly include")
+	assert.NotContains(t, captured, startsTomorrowMidnight.String(),
+		"an interval starting EXACTLY at tomorrow's midnight does not overlap today — this is what `valid_from <= D+1` would wrongly include")
+	assert.Equal(t, 1250.0, total)
+
+	// And the boundary answer must be the SAME one Upsert reaches. This is the only thing standing
+	// between the two copies of the predicate and a silent divergence.
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), day)
+	require.NoError(t, err)
+	assert.Equal(t, snap.TotalValue, total,
+		"accountLiveOnDateClause and Upsert's inline copy are two derivations of one rule; if they disagree at the boundary a task-11 rebuild rewrites the curve")
+}
+
+// ── Fix round 2, item 3: all FOUR portfolio_snapshots columns, not just total_value ───────────
+//
+// Task 11 rebuilds total_value, total_cost_basis, total_gain_loss AND total_gain_loss_pct. Only
+// the first was contracted. The gain/loss pair is computed under
+// FILTER (WHERE cost_basis IS NOT NULL AND institution_value IS NOT NULL) — NULL cost_basis is
+// excluded to prevent phantom gains, NULL institution_value to prevent phantom losses — while
+// total_value and total_cost_basis are plain SUMs over ALL holdings. That asymmetry is exactly the
+// sort of rule a rebuild gets silently wrong, so it is pinned here against real Postgres rather
+// than described in a report.
+//
+// Fixture deliberately contains all three shapes: both values known, cost_basis NULL, and
+// institution_value NULL.
+func TestHistorySnapshot_ReconstructsAllFourPortfolioSnapshotColumns(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secBoth := seedInvestmentFixture(ctx, t, tx, "hist-fourcol")
+
+	mkSecurity := func(label string) uuid.UUID {
+		id := uuid.New()
+		_, err := tx.Exec(ctx,
+			`INSERT INTO securities (id, plaid_security_id, name) VALUES ($1, $2, $3)`,
+			id, "hist-fourcol-"+label+"-"+id.String(), label)
+		require.NoError(t, err)
+		return id
+	}
+	secNoCostBasis := mkSecurity("no-cost-basis")
+	secNoValue := mkSecurity("no-value")
+
+	require.NoError(t, NewHoldingRepository(tx).ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
+		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secBoth.String(),
+			Quantity: 10, CostBasis: f64(4000), InstitutionValue: f64(5000)},
+		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secNoCostBasis.String(),
+			Quantity: 3, CostBasis: nil, InstitutionValue: f64(1000)},
+		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secNoValue.String(),
+			Quantity: 7, CostBasis: f64(2000), InstitutionValue: nil},
+	}))
+
+	day := todayUTC(ctx, t, tx)
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), day)
+	require.NoError(t, err)
+
+	// Sanity-pin Upsert's own arithmetic, so the equalities below cannot both be wrong in the
+	// same direction and still agree.
+	require.Equal(t, 6000.0, snap.TotalValue, "total_value is a plain SUM over ALL holdings; the NULL-value row contributes nothing")
+	require.Equal(t, 6000.0, snap.TotalCostBasis, "total_cost_basis is a plain SUM over ALL holdings; the NULL-cost-basis row contributes nothing")
+	require.Equal(t, 1000.0, snap.TotalGainLoss, "gain/loss counts ONLY the row where both values are known: 5000 - 4000")
+	require.NotNil(t, snap.TotalGainLossPct)
+	require.InDelta(t, 25.0, *snap.TotalGainLossPct, 1e-9, "1000 / 4000 * 100")
+
+	snaps, err := NewHoldingSnapshotRepository(tx).GetForUserOnDate(ctx, userID.String(), day)
+	require.NoError(t, err)
+	require.Len(t, snaps, 3, "history must carry the NULL-bearing rows too, or the FILTER cannot be reproduced")
+
+	var value, costBasis, filteredValue, filteredBasis float64
+	for _, s := range snaps {
+		if s.InstitutionValue != nil {
+			value += *s.InstitutionValue
+		}
+		if s.CostBasis != nil {
+			costBasis += *s.CostBasis
+		}
+		if s.CostBasis != nil && s.InstitutionValue != nil {
+			filteredValue += *s.InstitutionValue
+			filteredBasis += *s.CostBasis
+		}
+	}
+	gainLoss := filteredValue - filteredBasis
+
+	assert.Equal(t, snap.TotalValue, value)
+	assert.Equal(t, snap.TotalCostBasis, costBasis,
+		"total_cost_basis must be reconstructible — task 11 rebuilds it and nothing asserted it before")
+	assert.Equal(t, snap.TotalGainLoss, gainLoss,
+		"the both-non-NULL FILTER must be reproducible from history; a rebuild that COALESCEd instead would invent gains")
+	require.Greater(t, filteredBasis, 0.0)
+	assert.InDelta(t, *snap.TotalGainLossPct, gainLoss/filteredBasis*100, 1e-9,
+		"the pct denominator is the FILTERED basis, not total_cost_basis — 4000 here, not 6000")
+	assert.NotEqual(t, costBasis, filteredBasis,
+		"guard against a fixture that makes the two denominators coincide, which would let a wrong rebuild pass")
+}

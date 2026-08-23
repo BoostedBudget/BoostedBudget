@@ -22,10 +22,14 @@ type HoldingSnapshot struct {
 
 	// AsOfDate is the UTC calendar day this position is recorded for.
 	AsOfDate time.Time `json:"as_of_date" db:"as_of_date"`
-	// CapturedAt is the transaction timestamp of the capture that last wrote this row. Every row
-	// written by one capture of one account shares it, so MAX(captured_at) per
-	// (account_id, as_of_date) identifies that day's FINAL position set — which is what excludes
-	// a security that was sold between two captures on the same day.
+	// CapturedAt is the transaction timestamp of the capture that last wrote this row.
+	//
+	// ⚠ It is provenance, NOT a selection key. An earlier draft of this task asked readers to
+	// filter on MAX(captured_at) per (account_id, as_of_date) to find a day's final position set;
+	// that rule is GONE and must not be reintroduced. Present is what identifies the final set —
+	// a capture marks everything it did not re-observe absent, so the present rows for a day ARE
+	// its last capture, by construction. Filtering on captured_at instead would silently
+	// resurrect a position that a confirmed-complete Plaid response had cleared.
 	CapturedAt time.Time `json:"captured_at" db:"captured_at"`
 	// Present is FALSE once a capture for this (account, as_of_date) stopped observing this
 	// security — sold between two same-day captures, or cleared by a confirmed-complete Plaid
