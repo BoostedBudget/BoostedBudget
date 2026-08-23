@@ -1516,6 +1516,7 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		{Table: "categorization_rules", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "credit_liabilities", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "custom_categories", Column: "user_id", DeleteRule: "CASCADE"},
+		{Table: "holding_snapshots", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "holdings", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "household_invites", Column: "accepted_user_id", DeleteRule: "SET NULL"},
 		{Table: "household_invites", Column: "inviter_user_id", DeleteRule: "CASCADE"},
@@ -1523,6 +1524,7 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		{Table: "household_share_consents", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "households", Column: "owner_user_id", DeleteRule: "CASCADE"},
 		{Table: "investment_transactions", Column: "user_id", DeleteRule: "CASCADE"},
+		{Table: "liability_statements", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "linked_items", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "mcp_recipes", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "merchant_name_overrides", Column: "user_id", DeleteRule: "CASCADE"},
@@ -1684,6 +1686,18 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 	execNoErr(t, ctx, pool, `
 		INSERT INTO holdings (user_id, account_id, security_id, quantity)
 		VALUES ($1, $2, $3, 1)`, target.ID, accountID, securityID)
+
+	// #1569 T6: the two append-only history tables. They exist precisely so a sync cannot destroy
+	// a user's past — which makes it all the more important that a GDPR erasure still can. Both
+	// carry a user_id CASCADE FK to users, and DeleteUserCascade issues one DELETE FROM users and
+	// lets the FK graph do the rest, so the count==0 assertion in the loop below is the proof.
+	execNoErr(t, ctx, pool, `
+		INSERT INTO holding_snapshots (user_id, account_id, security_id, as_of_date, quantity)
+		VALUES ($1, $2, $3, CURRENT_DATE, 1)`, target.ID, accountID, securityID)
+
+	execNoErr(t, ctx, pool, `
+		INSERT INTO liability_statements (user_id, account_id, liability_type, as_of_date, details)
+		VALUES ($1, $2, 'credit', CURRENT_DATE, '{}'::jsonb)`, target.ID, accountID)
 
 	execNoErr(t, ctx, pool, `
 		INSERT INTO investment_transactions (user_id, account_id, plaid_investment_transaction_id, type, name, amount, date)

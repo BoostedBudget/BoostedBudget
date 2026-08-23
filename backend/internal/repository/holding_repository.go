@@ -188,6 +188,20 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 		}
 	}
 
+	// #1569 T6: record what this account now holds into the append-only history table, in this
+	// SAME transaction and IN ADDITION to the replace above — the replace's semantics are
+	// deliberately unchanged (see holding_snapshot_repository.go for why soft-deleting holdings
+	// was rejected). Derived from the rows just written, so the history can never disagree with
+	// the state it describes, and a rollback discards both together.
+	//
+	// A confirmed-complete liquidation (holdings empty) captures nothing new and, crucially,
+	// deletes nothing: earlier days keep their rows. Guarding an EMPTY response from wiping
+	// current state is a separate concern and lives upstream, in SyncHoldings' PlaidAccountRoster
+	// gate — this repository is reached only once that gate has been passed.
+	if err := captureHoldingSnapshots(ctx, tx, accountID, userID); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 

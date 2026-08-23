@@ -123,6 +123,14 @@ func (r *creditLiabilityRepository) ReplaceForAccount(ctx context.Context, accou
 		}
 	}
 
+	// #1569 T6: capture the committed state — parent row AND the APR schedule just written — into
+	// liability_statements, in this same transaction and IN ADDITION to the replace above. The
+	// delete-only path returns earlier and deliberately captures nothing: there is nothing to
+	// record, and the days already recorded must not be disturbed by a clear.
+	if err := captureCreditLiabilityStatement(ctx, tx, accountID, userID); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 
