@@ -277,6 +277,14 @@ func (m *MockAccountRepository) GetByLinkedItemID(ctx context.Context, linkedIte
 	return args.Get(0).([]domain.Account), args.Error(1)
 }
 
+func (m *MockAccountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
+	args := m.Called(ctx, linkedItemID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.Account), args.Error(1)
+}
+
 func (m *MockAccountRepository) GetByUserID(ctx context.Context, userID string) ([]domain.Account, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {

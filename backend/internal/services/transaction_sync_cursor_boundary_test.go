@@ -79,9 +79,9 @@ func TestSyncTransactions_StorageFailureAfterMultiPageFetch_LeavesCursorUnadvanc
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", "cursor-1", 0).Return(page2, nil).Twice()
 
 	// Storage fails on the first run only.
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-loss").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-loss").
 		Return([]domain.Account(nil), errors.New("accounts table unavailable")).Once()
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-loss").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-loss").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-loss"}}, nil)
 
 	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -145,7 +145,7 @@ func TestSyncTransactions_MultiPageSuccess_AdvancesCursorOnceAfterStorage(t *tes
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", "cursor-2", 0).
 		Return(newCursorBoundaryPage("txn-p3", "cursor-3", false), nil).Once()
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-order").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-order").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-order"}}, nil)
 
 	stored := false
@@ -203,7 +203,7 @@ func TestSyncTransactions_BlankFinalPageCursor_PersistsLastGoodCursorAfterStorag
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", "cursor-1", 0).
 		Return(newCursorBoundaryPage("txn-p2", "", false), nil).Once()
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-blankfinal").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-blankfinal").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-blankfinal"}}, nil)
 	mockTransactionRepo.On("CreateBatch", mock.Anything, mock.Anything).
 		Return(map[string]bool{"txn-p1": true, "txn-p2": true}, nil)
@@ -249,7 +249,7 @@ func TestSyncTransactions_SinglePageBlankCursor_PersistsNothing(t *testing.T) {
 
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", startCursor, 0).
 		Return(newCursorBoundaryPage("txn-only", "", false), nil).Once()
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-single-blank").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-single-blank").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-single-blank"}}, nil)
 	mockTransactionRepo.On("CreateBatch", mock.Anything, mock.Anything).
 		Return(map[string]bool{"txn-only": true}, nil)
@@ -294,7 +294,7 @@ func TestSyncTransactions_PageFetchFailure_LeavesCursorUnadvanced(t *testing.T) 
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", "cursor-1", 0).
 		Return((*plaid.TransactionsSyncResponse)(nil), errors.New("plaid 500")).Once()
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-fetchfail").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-fetchfail").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-fetchfail"}}, nil).Maybe()
 	mockTransactionRepo.On("CreateBatch", mock.Anything, mock.Anything).
 		Return(map[string]bool{}, nil).Maybe()
@@ -346,7 +346,7 @@ func TestSyncTransactions_ModifiedStorageFailure_LeavesCursorUnadvanced(t *testi
 	page.SetHasMore(false)
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", startCursor, 0).Return(page, nil).Once()
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-modfail").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-modfail").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-modfail"}}, nil)
 	mockTransactionRepo.On("GetByExternalID", mock.Anything, domain.SourcePlaid, mock.Anything, "user-modfail").
 		Return(&domain.Transaction{ID: "existing"}, nil)
@@ -406,7 +406,7 @@ func TestSyncTransactions_RemovedDeleteError_StillAdvancesCursor(t *testing.T) {
 	page.SetHasMore(false)
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", startCursor, 0).Return(page, nil).Once()
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-remfail").
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-remfail").
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: "user-remfail"}}, nil)
 	mockTransactionRepo.On("DeleteByExternalID", mock.Anything, domain.SourcePlaid, "txn-rem-1", "user-remfail").
 		Return(errors.New("deadlock detected")).Once()

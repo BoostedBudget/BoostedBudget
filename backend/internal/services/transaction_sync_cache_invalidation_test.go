@@ -72,7 +72,7 @@ func newSyncCacheInvalidationHarness(t *testing.T) (
 	ctx := context.Background()
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-before", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-after").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// transactionRepo: no .On() setup — Added is skipped (no matching account), Modified/Removed
 	// are empty, so no method on it should ever be invoked. Matches TestSyncTransactions_SuccessSinglePage.
 
@@ -208,7 +208,7 @@ func TestSyncTransactions_BumpsOnPartialCommitEvenWhenSyncLaterFails(t *testing.
 	accounts := []domain.Account{
 		{ID: "account-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: linkedItem.UserID},
 	}
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return(accounts, nil)
 
 	plaidResp := &plaid.TransactionsSyncResponse{
 		Added: []plaid.Transaction{
@@ -299,7 +299,7 @@ func newSingleStepSyncHarness(t *testing.T, itemSuffix string, resp *plaid.Trans
 	}
 
 	ctx := context.Background()
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).
 		Return([]domain.Account{{ID: "account-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: linkedItem.UserID}}, nil)
 	mockPlaidService.On("TransactionsSync", ctx, "decrypted-token", "cursor-before", 0).Return(resp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-after").Return(nil)

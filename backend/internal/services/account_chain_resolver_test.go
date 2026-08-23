@@ -48,6 +48,9 @@ func (m *mockAccountRepositoryForChainResolver) CreateBatch(ctx context.Context,
 func (m *mockAccountRepositoryForChainResolver) GetByLinkedItemID(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
 	return nil, nil
 }
+func (m *mockAccountRepositoryForChainResolver) GetByLinkedItemIDIncludingRetained(ctx context.Context, linkedItemID string) ([]domain.Account, error) {
+	return nil, nil
+}
 func (m *mockAccountRepositoryForChainResolver) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
 	return nil, nil
 }

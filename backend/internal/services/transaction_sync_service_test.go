@@ -173,7 +173,7 @@ func TestProcessWebhook_Success(t *testing.T) {
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "new-cursor-from-plaid").Return(nil)
 
 	// Issue #261: Mock account repository for transaction storage
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// Mock transaction batch creation (empty because transaction has unmapped account, so will be skipped)
 	// No accounts exist, so all transactions will be skipped in processAddedTransactions
 
@@ -382,7 +382,7 @@ func TestSyncTransactions_SuccessSinglePage(t *testing.T) {
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-after").Return(nil)
 
 	// Issue #261: Mock account repository for transaction storage
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// All transactions will be skipped since no accounts exist
 
 	// Execute
@@ -452,7 +452,7 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-page2").Return(nil).Once()
 
 	// Issue #261: Mock account repository for transaction storage
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// Mock deletion of removed transaction
 	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID).Return(nil)
 
@@ -620,7 +620,7 @@ func TestSyncTransactions_CursorUpdateError(t *testing.T) {
 	// Storage runs first and genuinely COMMITS the row — that is the situation this test is about:
 	// durable rows plus a cursor that could not be advanced. An empty account list would skip the
 	// row and make the test vacuous.
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).
 		Return([]domain.Account{{ID: "acc-1", PlaidAccountID: "plaid-acc-1", UserID: linkedItem.UserID}}, nil)
 	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(map[string]bool{"txn-1": true}, nil)
 
@@ -683,7 +683,7 @@ func TestSyncTransactions_EmptyCursor(t *testing.T) {
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "cursor-initial").Return(nil)
 
 	// Issue #261: Mock account repository for transaction storage
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
@@ -744,7 +744,7 @@ func TestBuildAccountMap_Success(t *testing.T) {
 			Name:           "Credit Card",
 		},
 	}
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).Return(accounts, nil)
 
 	// Execute
 	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
@@ -785,7 +785,7 @@ func TestBuildAccountMap_EmptyAccounts(t *testing.T) {
 	linkedItemID := "linked-item-123"
 
 	// Mock: GetByLinkedItemID returns empty slice
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).Return([]domain.Account{}, nil)
 
 	// Execute
 	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
@@ -823,7 +823,7 @@ func TestBuildAccountMap_RepositoryError(t *testing.T) {
 	linkedItemID := "linked-item-123"
 
 	// Mock: GetByLinkedItemID returns error
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItemID).Return(nil, errors.New("database error"))
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItemID).Return(nil, errors.New("database error"))
 
 	// Execute
 	accountMap, _, err := service.buildAccountMaps(ctx, linkedItemID)
@@ -2046,7 +2046,7 @@ func TestSyncTransactions_CursorHeldBackWhenTxnStorageFails(t *testing.T) {
 	accounts := []domain.Account{
 		{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"},
 	}
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").Return(accounts, nil)
 
 	// Mock: Plaid TransactionsSync returns transactions
 	newCursor := "cursor-page-2"
@@ -2125,7 +2125,7 @@ func TestSyncTransactions_CursorResumeFromLastSuccessfulPage(t *testing.T) {
 	accounts := []domain.Account{
 		{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"},
 	}
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").Return(accounts, nil)
 
 	// Mock: Plaid API is called with the RESUME cursor (not empty cursor)
 	finalCursor := "cursor-final"
@@ -2211,7 +2211,7 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			accounts := []domain.Account{
 				{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"},
 			}
-			mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-first-sync").Return(accounts, nil)
+			mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-first-sync").Return(accounts, nil)
 
 			// Mock: Plaid API - expect empty string cursor for first sync; premium tier = 730 days
 			firstCursor := "cursor-first"
@@ -2283,7 +2283,7 @@ func TestSyncTransactions_FinalPageCursorUpdate(t *testing.T) {
 	accounts := []domain.Account{
 		{ID: "acc-uuid-1", PlaidAccountID: "plaid-acc-1", UserID: "user-123"},
 	}
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").Return(accounts, nil)
 
 	// Mock: Plaid API returns final page (has_more=false)
 	finalCursor := "cursor-final-page"
@@ -2515,7 +2515,7 @@ func TestTransactionSyncService_SyncTransactions_SetsUserAccountID(t *testing.T)
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", "existing-cursor", 0).Return(plaidResp, nil)
 
 	// Mock GetByLinkedItemID returns accounts with UserAccountID set
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").Return(accounts, nil)
 
 	// Mock CreateBatch - verify transactions have UserAccountID set
 	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
@@ -2612,7 +2612,7 @@ func TestTransactionSyncService_SyncTransactions_LooksUpUserAccountFromAccount(t
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", "existing-cursor", 0).Return(plaidResp, nil)
 
-	mockAccountRepo.On("GetByLinkedItemID", ctx, "linked-item-123").Return(accounts, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").Return(accounts, nil)
 
 	// Verify each transaction gets correct UserAccountID from its account
 	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
@@ -3474,7 +3474,7 @@ func TestSyncTransactions_CallsCorrelateForUser(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "token", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// CorrelateForUser must be called with the correct userID
 	mockCorrelation.On("CorrelateForUser", ctx, "user-corr-1").Return(nil)
 
@@ -3528,7 +3528,7 @@ func TestSyncTransactions_CorrelationErrorDoesNotFailSync(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "token2", "c3", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c4").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// CorrelateForUser returns an error — sync must NOT fail
 	mockCorrelation.On("CorrelateForUser", ctx, "user-corr-2").Return(errors.New("correlation db error"))
 
@@ -3655,7 +3655,7 @@ func TestSyncTransactions_SavingsRecomputeUserCalledAfterSync(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	mockProgressUpdater.On("RecomputeUser", ctx, "user-recompute-1").Return(nil)
 
 	result, err := svc.SyncTransactions(ctx, linkedItem)
@@ -3699,7 +3699,7 @@ func TestSyncTransactions_SavingsBackfillCalledAfterRecompute(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	mockBackfill.On("BackfillManagedCategories", ctx, "user-backfill-1").Return(nil)
 
 	result, err := svc.SyncTransactions(ctx, linkedItem)
@@ -3739,7 +3739,7 @@ func TestSyncTransactions_SavingsRecomputeErrorDoesNotFailSync(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// RecomputeUser errors — sync must still succeed
 	mockProgressUpdater.On("RecomputeUser", ctx, "user-nonfatal").Return(errors.New("db connection lost"))
 
@@ -3779,7 +3779,7 @@ func TestSyncTransactions_SavingsNilSafeWhenNotWired(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	result, err := svc.SyncTransactions(ctx, linkedItem)
 
@@ -3824,7 +3824,7 @@ func TestSyncTransactions_DeleteManagedContribsBeforeTransactionRemoval(t *testi
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	// GetByExternalID returns the internal transaction (for contribution cleanup)
 	internalTxn := &domain.Transaction{ID: internalTxnID}
@@ -3880,7 +3880,7 @@ func TestSyncTransactions_DeleteManagedContribNonFatalOnError(t *testing.T) {
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	internalTxn := &domain.Transaction{ID: internalTxnID}
 	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-nf").
@@ -3976,7 +3976,7 @@ func TestSyncTransactions_ProposedContributionsCreatedForTransferIn(t *testing.T
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	// Goal reader returns one contributions-basis goal linked to accountID
 	contributionsGoal := &domain.SavingsGoal{
@@ -4048,7 +4048,7 @@ func TestSyncTransactions_ProposedContributionsSkipsNonContributionsBasisGoals(t
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	// Return a manual-basis and a balance-basis goal — neither should trigger inflow detection
 	goals := []*domain.SavingsGoal{
@@ -4107,7 +4107,7 @@ func TestSyncTransactions_ProposedContributionsSkipsGoalWithNoAccountID(t *testi
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	// Contributions-basis goal but no AccountID — detection must be skipped
 	goals := []*domain.SavingsGoal{
@@ -4165,7 +4165,7 @@ func TestSyncTransactions_ProposedContributionUpsertErrorIsNonFatal(t *testing.T
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	goals := []*domain.SavingsGoal{
 		{ID: goalID, UserID: userID, AccountID: accountID, ProgressBasis: domain.ProgressBasisContributions},
@@ -4230,7 +4230,7 @@ func TestSyncTransactions_ProposedContributionsNilSafeWhenNotWired(t *testing.T)
 	}
 	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
 	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
-	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 
 	result, err := svc.SyncTransactions(ctx, linkedItem)
 
