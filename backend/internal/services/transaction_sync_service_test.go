@@ -455,6 +455,11 @@ func TestSyncTransactions_SuccessMultiplePages(t *testing.T) {
 	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
 	// Mock deletion of removed transaction
 	mockTransactionRepo.On("TombstoneByExternalID", ctx, domain.SourcePlaid, "txn-rem-1", linkedItem.UserID, domain.TxnDeletedByPlaidSync).Return(domain.TxnDeletedProviderRemovedPosted, nil)
+	// #1569 round 1: processModifiedTransactions now looks the row up BEFORE mapping, so this
+	// lookup happens even for a transaction whose account cannot be mapped. Not found + not
+	// mappable is the one remaining skip, which is the same outcome this test always asserted.
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "txn-mod-1", linkedItem.UserID).
+		Return(nil, repository.ErrTransactionNotFound)
 
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
@@ -1347,6 +1352,106 @@ func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 	assert.NotEmpty(t, upserted[0].ID,
 		"CreateBatch keys BatchRuleApplication records off pre-assigned IDs, so the upsert must carry one")
 	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessModifiedTransactions_UnmappableAccountButStored_StillApplies pins the round-1 fix to
+// the OTHER log-and-continue path in this function.
+//
+// Before it, mapPlaidTransaction ran first, and an account_id missing from accountMap discarded the
+// modification before anything checked whether the transaction was already stored — Warn, skip,
+// return nil, cursor advances, edit gone. That is residual (3)'s exact failure mode reached one
+// branch earlier, and it was missed because the contract comment's enumeration named only
+// processAddedTransactions.
+//
+// The stored row already records account_id / linked_item_id / user_account_id, so the payload is
+// remapped and that identity re-attached. The user's notes still survive, as on every other path.
+func TestProcessModifiedTransactions_UnmappableAccountButStored_StillApplies(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, mockTransactionRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-123", UserID: "user-456"}
+
+	// accountMap deliberately does NOT contain the transaction's plaid account.
+	accountMap := map[string]string{"plaid-acc-other": "account-uuid-other"}
+
+	modified := []plaid.Transaction{{
+		TransactionId: "plaid-txn-unmappable",
+		AccountId:     "plaid-acc-vanished",
+		Amount:        321.00,
+		Date:          "2024-02-01",
+		Name:          "Corrected Name",
+	}}
+
+	notes := "do not lose this"
+	storedUserAccountID := "user-account-uuid-1"
+	stored := &domain.Transaction{
+		ID:            "stored-uuid",
+		UserID:        "user-456",
+		AccountID:     "account-uuid-stored",
+		LinkedItemID:  "linked-item-stored",
+		UserAccountID: &storedUserAccountID,
+		UserNotes:     &notes,
+	}
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-unmappable", "user-456").
+		Return(stored, nil)
+
+	var updated *domain.Transaction
+	mockTransactionRepo.On("Update", ctx, mock.Anything).
+		Run(func(args mock.Arguments) { updated = args.Get(1).(*domain.Transaction) }).
+		Return(nil).Once()
+
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
+
+	require.NoError(t, err)
+	mockTransactionRepo.AssertNotCalled(t, "CreateBatch")
+	require.NotNil(t, updated, "the edit must be applied, not dropped, when we already hold the row")
+	assert.Equal(t, "stored-uuid", updated.ID)
+	assert.Equal(t, "Corrected Name", updated.Name, "the provider's new data must actually land")
+	assert.Equal(t, "account-uuid-stored", updated.AccountID,
+		"identity comes from the stored row when accountMap cannot supply it")
+	assert.Equal(t, "linked-item-stored", updated.LinkedItemID)
+	require.NotNil(t, updated.UserAccountID)
+	assert.Equal(t, storedUserAccountID, *updated.UserAccountID)
+	require.NotNil(t, updated.UserNotes)
+	assert.Equal(t, notes, *updated.UserNotes, "user work survives this path like every other")
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestProcessModifiedTransactions_UnmappableAndNotStored_IsTheOnlySkip is the boundary of the fix
+// above. With nothing stored there is no account_id to insert under and no row to update, so this
+// stays a log-and-continue — narrowed exactly as processAddedTransactions' equivalent is by task
+// 1b's GetByLinkedItemIDIncludingRetained, and recorded as residual (3) in the
+// #1570 STORAGE-BEFORE-CURSOR CONTRACT comment.
+func TestProcessModifiedTransactions_UnmappableAndNotStored_IsTheOnlySkip(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, mockTransactionRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-123", UserID: "user-456"}
+
+	modified := []plaid.Transaction{{
+		TransactionId: "plaid-txn-ghost",
+		AccountId:     "plaid-acc-vanished",
+		Amount:        1.00,
+		Date:          "2024-02-01",
+		Name:          "Ghost",
+	}}
+
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-ghost", "user-456").
+		Return(nil, repository.ErrTransactionNotFound)
+
+	err := service.processModifiedTransactions(ctx, modified, linkedItem, map[string]string{}, nil)
+
+	require.NoError(t, err, "this must not wedge the sync: re-delivery cannot conjure an account row")
+	mockTransactionRepo.AssertNotCalled(t, "Update")
+	mockTransactionRepo.AssertNotCalled(t, "CreateBatch")
 }
 
 // TestProcessModifiedTransactions_LookupFailureIsNotSwallowed separates residual (3)'s idempotent

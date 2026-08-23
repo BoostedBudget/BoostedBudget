@@ -99,7 +99,27 @@ type SavingsContributionRepository interface {
 // contributionSelectCols is the canonical column list for contribution rows.
 const contributionSelectCols = `
 	id, savings_goal_id, transaction_id, amount, source, status,
-	managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
+	managed_by_reconciliation, confirmed_by_user, occurred_on::text, created_at, updated_at
+`
+
+// contributionSelectColsJoined is contributionSelectCols for queries that JOIN savings_goals.
+//
+// Both tables have an `id`, so the unqualified list is ambiguous the moment a JOIN is present and
+// Postgres rejects the whole statement with `column reference "id" is ambiguous`. Use this one in a
+// JOIN context and contributionSelectCols in a single-table SELECT or a RETURNING clause (where no
+// alias exists to qualify with).
+//
+// Both cast occurred_on to text: the column is DATE and SavingsGoalContribution.OccurredOn is a
+// `string` holding YYYY-MM-DD, and pgx cannot scan a binary-format date straight into *string.
+//
+// Neither problem is #1569's — the tombstone work only added `deleted_at IS NULL` to five
+// ownership probes in this file. They were found because #1569 round 1 added the first integration
+// coverage these three methods have ever had (finding M-1), and both defects made the affected
+// methods fail 100% of the time against a real database. See
+// TestSavingsContributionRepository_Integration_*_RejectsTombstoned.
+const contributionSelectColsJoined = `
+	c.id, c.savings_goal_id, c.transaction_id, c.amount, c.source, c.status,
+	c.managed_by_reconciliation, c.confirmed_by_user, c.occurred_on::text, c.created_at, c.updated_at
 `
 
 // savingsContributionRepository implements SavingsContributionRepository using PostgreSQL.
@@ -506,7 +526,7 @@ type scannable interface {
 // ListByGoal returns all contributions for a goal ordered newest-first.
 // userID is joined through savings_goals to enforce ownership scoping (Codex C1 / M20).
 func (r *savingsContributionRepository) ListByGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error) {
-	query := `SELECT ` + contributionSelectCols + `
+	query := `SELECT ` + contributionSelectColsJoined + `
 		FROM savings_goal_contributions c
 		JOIN savings_goals g ON g.id = c.savings_goal_id
 		WHERE c.savings_goal_id = $1
@@ -552,7 +572,7 @@ func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context,
 
 	// Step 0: Load + lock the contribution row; verify it belongs to userID via goal ownership.
 	fetchQuery := `
-		SELECT ` + contributionSelectCols + `
+		SELECT ` + contributionSelectColsJoined + `
 		FROM savings_goal_contributions c
 		JOIN savings_goals g ON g.id = c.savings_goal_id
 		WHERE c.id = $1 AND g.user_id = $2

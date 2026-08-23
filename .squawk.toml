@@ -50,15 +50,6 @@ excluded_rules = [
   "require-concurrent-index-deletion",  # Acceptable for small tables
   "renaming-column",                    # Intentional schema evolutions
   "changing-column-type",               # Intentional schema evolutions
-  # Issue #1569 (000157): flipping rule_execution_history.transaction_id from ON DELETE CASCADE to
-  # ON DELETE SET NULL REQUIRES dropping its NOT NULL -- SET NULL cannot fire against a NOT NULL
-  # column, so the rule fires on the one statement that makes the audit trail survivable. Squawk has
-  # no per-statement ignore comment that this version honours (tried `-- squawk-ignore
-  # ban-drop-not-null`; still reported), so the suppression has to live here. The rule's stated risk
-  # is "may break existing clients": rule_execution_history has NO Go client at all
-  # (`grep -rn "rule_execution_history\\|RuleExecution" backend --include="*.go"` matches only
-  # migrations), so there is nothing to break.
-  "ban-drop-not-null",
 ]
 
 # Note: The following critical safety rules remain ENABLED:

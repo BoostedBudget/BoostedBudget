@@ -352,6 +352,7 @@ export * from './topMoverItem';
 export * from './topMovers';
 export * from './topUnreviewedCategory';
 export * from './transaction';
+export * from './transactionDeletedReason';
 export * from './transferSuggestion';
 export * from './transferSuggestionListResponse';
 export * from './transferSuggestionMatchState';

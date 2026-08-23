@@ -6353,9 +6353,10 @@ components:
         deleted_at:
           format: date-time
           type: string
-        deleted_by:
-          type: string
         deleted_reason:
+          enum:
+            - provider_removed_pending
+            - provider_removed_posted
           type: string
         effective_category_name:
           type: string

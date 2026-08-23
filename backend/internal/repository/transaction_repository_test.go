@@ -41,6 +41,22 @@ func TestTransactionSelectColumns(t *testing.T) {
 			"transactionSelectColumns order must match the positional Scan() in scanTransactions")
 	})
 
+	// #1569 round 1. transactionSelectColumns and scanTransactionDestSliceWithState are coupled
+	// POSITIONALLY, and the test above only compares the column list to a hardcoded copy of itself —
+	// it never touches the destination slice. Four hand-maintained copies of that slice existed
+	// before #1569; consolidating them removed the drift-between-copies risk and left the survivor
+	// with no guard at all. This is the cheap half of the fix (a length check catches an
+	// added-to-one-not-the-other mistake); the half that catches a same-typed SWAP is
+	// TestScanDestinations_MapColumnsToTheRightFields_Integration, because only a real row can
+	// reveal that pfc_primary landed in PFCDetailed.
+	t.Run("scan destination count matches the column list", func(t *testing.T) {
+		repo := &transactionRepository{}
+		dest, _ := repo.scanTransactionDestSliceWithState(&domain.Transaction{})
+		assert.Len(t, dest, len(transactionSelectColumns),
+			"scanTransactionDestSliceWithState must have exactly one destination per column in "+
+				"transactionSelectColumns; a mismatch is a runtime Scan error on every read")
+	})
+
 	t.Run("no duplicate column names", func(t *testing.T) {
 		seen := make(map[string]bool, len(transactionSelectColumns))
 		for _, col := range transactionSelectColumns {
