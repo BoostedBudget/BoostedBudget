@@ -481,3 +481,83 @@ func TestHistorySnapshot_LiabilityClear_DestroysCurrentRowButNotHistory(t *testi
 	require.NoError(t, json.Unmarshal(stmts[0].Details, &details))
 	assert.Len(t, details.APRs, 1, "the APR schedule the clear wiped from current state survives in history")
 }
+
+// ── The daily job's capture: a day with no Plaid sync still gets rows ─────────────────────────
+//
+// portfolio_snapshot_worker.go upserts a portfolio_snapshots aggregate for every user with
+// holdings once a day whether or not anything synced. If holding_snapshots were written only on a
+// sync, those days would carry an aggregate with no rows behind it — and task 11 rebuilds the
+// aggregates FROM the rows. CaptureForUser is what closes that, so the two tables agree day for
+// day.
+
+func TestHistorySnapshot_CaptureForUser_RecordsADayWithNoSyncAndMatchesTheAggregate(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-daily")
+
+	// Holdings inserted directly: this models a day on which no sync ran, so
+	// ReplaceForAccount — and therefore the per-account capture — never fired.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (user_id, account_id, security_id, quantity, cost_basis, institution_value)
+		VALUES ($1, $2, $3, 3, 900.00, 1200.00)`, userID, accountID, secID)
+	require.NoError(t, err)
+
+	snapRepo := NewHoldingSnapshotRepository(tx)
+	day := todayUTC(ctx, t, tx)
+
+	before, err := snapRepo.GetFinalCapturesForUserOnDate(ctx, userID.String(), day)
+	require.NoError(t, err)
+	require.Empty(t, before, "precondition: nothing has captured this day yet, so the assertion below is not vacuous")
+
+	require.NoError(t, snapRepo.CaptureForUser(ctx, userID.String()))
+
+	after, err := snapRepo.GetFinalCapturesForUserOnDate(ctx, userID.String(), day)
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	assert.Equal(t, float64(3), after[0].Quantity)
+
+	// Day-for-day parity with what the same job's Upsert writes for that user.
+	snap, err := NewPortfolioSnapshotRepository(tx).Upsert(ctx, userID.String(), day)
+	require.NoError(t, err)
+	require.NotNil(t, after[0].InstitutionValue)
+	assert.Equal(t, snap.TotalValue, *after[0].InstitutionValue,
+		"the captured rows must sum to the aggregate the daily job writes for the same day")
+
+	// Idempotent within the day: a second run refreshes the same row rather than appending.
+	require.NoError(t, snapRepo.CaptureForUser(ctx, userID.String()))
+	var rowsForDay int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM holding_snapshots WHERE user_id = $1 AND as_of_date = $2`,
+		userID, day).Scan(&rowsForDay))
+	assert.Equal(t, 1, rowsForDay, "re-running the daily capture must not append a second row for the same day")
+}
+
+// A sync-day capture and the daily capture must land on the SAME row, not two: they share the
+// (account, security, day) grain. If they diverged, the day would double-count.
+func TestHistorySnapshot_CaptureForUser_AfterASyncCapture_RefreshesTheSameDayRow(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "hist-both")
+	require.NoError(t, NewHoldingRepository(tx).ReplaceForAccount(ctx, accountID.String(), userID.String(), []domain.Holding{
+		{UserID: userID.String(), AccountID: accountID.String(), SecurityID: secID.String(), Quantity: 5, InstitutionValue: f64(500)},
+	}))
+
+	require.NoError(t, NewHoldingSnapshotRepository(tx).CaptureForUser(ctx, userID.String()))
+
+	day := todayUTC(ctx, t, tx)
+	var rowsForDay int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM holding_snapshots WHERE user_id = $1 AND as_of_date = $2`,
+		userID, day).Scan(&rowsForDay))
+	assert.Equal(t, 1, rowsForDay, "the sync capture and the daily capture share one grain — they must collide, not accumulate")
+}

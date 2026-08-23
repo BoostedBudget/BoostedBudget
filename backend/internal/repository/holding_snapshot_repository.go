@@ -66,12 +66,48 @@ func captureHoldingSnapshots(ctx context.Context, db DB, accountID, userID strin
 	return err
 }
 
+// captureHoldingSnapshotsForUserSQL is the whole-user form of the statement above, and exists for
+// one reason: portfolio_snapshot_worker.go upserts a portfolio_snapshots aggregate for EVERY user
+// with holdings once a day, whether or not anything synced that day. A per-account capture that
+// only fires on a sync would therefore leave days that have an aggregate and no rows behind it —
+// and task 11 rebuilds those aggregates FROM these rows. Capturing here keeps holding_snapshots a
+// day-for-day row-level decomposition of portfolio_snapshots instead of a sparse subset of it.
+//
+// Same grain, same conflict handling, same in-statement UTC date as the per-account form. $1 =
+// user_id.
+const captureHoldingSnapshotsForUserSQL = `
+	INSERT INTO holding_snapshots (
+		user_id, account_id, user_account_id, security_id,
+		as_of_date, captured_at,
+		quantity, cost_basis, institution_value, institution_price
+	)
+	SELECT
+		h.user_id, h.account_id, h.user_account_id, h.security_id,
+		(now() AT TIME ZONE 'UTC')::date, now(),
+		h.quantity, h.cost_basis, h.institution_value, h.institution_price
+	FROM holdings h
+	WHERE h.user_id = $1::uuid
+	ON CONFLICT (account_id, security_id, as_of_date) DO UPDATE SET
+		user_id           = EXCLUDED.user_id,
+		user_account_id   = EXCLUDED.user_account_id,
+		captured_at       = EXCLUDED.captured_at,
+		quantity          = EXCLUDED.quantity,
+		cost_basis        = EXCLUDED.cost_basis,
+		institution_value = EXCLUDED.institution_value,
+		institution_price = EXCLUDED.institution_price
+`
+
 // HoldingSnapshotRepository reads the history captureHoldingSnapshots writes.
 //
 // Read-only on purpose: the only writer is the capture above, inside the replace's transaction.
 // Nothing here changes any existing read path — task 12 owns holdings/liability read consistency
 // and task 11 owns rebuilding portfolio_snapshots from these rows.
 type HoldingSnapshotRepository interface {
+	// CaptureForUser records every holding this user currently has into today's UTC row set.
+	// Called by the daily portfolio snapshot job so a day with no Plaid sync still gets rows.
+	// Idempotent: re-running it the same day refreshes that day's rows rather than appending.
+	CaptureForUser(ctx context.Context, userID string) error
+
 	// GetFinalCapturesForUserOnDate returns the user's positions as of the LAST capture of each
 	// account on the given UTC calendar day. This is the reconstruction primitive task 11 needs:
 	// SUMming institution_value / cost_basis over the result reproduces the same aggregate
@@ -91,6 +127,11 @@ type holdingSnapshotRepository struct {
 
 func NewHoldingSnapshotRepository(db DB) HoldingSnapshotRepository {
 	return &holdingSnapshotRepository{db: db}
+}
+
+func (r *holdingSnapshotRepository) CaptureForUser(ctx context.Context, userID string) error {
+	_, err := r.db.Exec(ctx, captureHoldingSnapshotsForUserSQL, userID)
+	return err
 }
 
 const holdingSnapshotColumns = `
