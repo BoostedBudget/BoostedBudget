@@ -492,3 +492,23 @@ func TestPortfolioSnapshotWorker_Work_RepairEnumerationFailure_StillWritesTheAgg
 	snapshotRepo.AssertNotCalled(t, "RepairUserFromHistory", mock.Anything, mock.Anything)
 	snapshotRepo.AssertCalled(t, "Upsert", ctx, "user-1", mock.Anything)
 }
+
+// F5: Work must survive a zero-valued worker, exactly as it does for a nil HoldingSnapshotRepo.
+// The repair pass is now the first statement in Work, so without this guard it holds the earliest
+// nil dereference in the job — ahead of holdingRepo's, which every other test relies on reaching.
+func TestPortfolioSnapshotWorker_Work_NilSnapshotRepo_DoesNotPanicInTheRepairPass(t *testing.T) {
+	ctx := context.Background()
+
+	holdingRepo := new(mockHoldingRepo)
+	holdingRepo.On("GetDistinctUserIDsWithHoldings", ctx).Return([]string{}, nil)
+
+	worker := NewPortfolioSnapshotWorker(PortfolioSnapshotWorkerDeps{
+		HoldingRepo:  holdingRepo,
+		SnapshotRepo: nil,
+		Logger:       slog.Default(),
+	})
+
+	assert.NotPanics(t, func() {
+		require.NoError(t, worker.Work(ctx, newTestPortfolioSnapshotJob(PortfolioSnapshotArgs{})))
+	})
+}

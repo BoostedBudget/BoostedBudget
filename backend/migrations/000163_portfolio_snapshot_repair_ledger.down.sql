@@ -3,4 +3,5 @@
 -- reverted, because the pre-repair values were wrong and this table is the only copy of them.
 -- Take a copy before rolling back if that history matters.
 
+DROP INDEX IF EXISTS idx_portfolio_snapshot_repairs_outcome;
 DROP TABLE IF EXISTS portfolio_snapshot_repairs;

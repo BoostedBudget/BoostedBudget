@@ -69,6 +69,15 @@ ALTER TABLE portfolio_snapshot_repairs
 CREATE UNIQUE INDEX IF NOT EXISTS uq_portfolio_snapshot_repairs_user_date
     ON portfolio_snapshot_repairs (user_id, snapshot_date);
 
+-- "Which days did the repair actually rewrite?" is the first question anyone asks this table, and
+-- without an index it is a seq scan over a row per user per day. snapshot_date is the second column
+-- so the same index serves "what did it repair, and when".
+-- squawk-ignore require-concurrent-index-creation
+-- Not CONCURRENTLY: the table is CREATEd in this same migration and is therefore guaranteed empty
+-- and unreferenced here, so there is no lock to avoid and CONCURRENTLY cannot run in a transaction.
+CREATE INDEX IF NOT EXISTS idx_portfolio_snapshot_repairs_outcome
+    ON portfolio_snapshot_repairs (outcome, snapshot_date);
+
 COMMENT ON TABLE portfolio_snapshot_repairs IS
     'One row per portfolio_snapshots day the #1569 repair EXAMINED — repaired, verified, or '
     'refused. Refusals are recorded deliberately: a day with no holding_snapshots coverage must be '
