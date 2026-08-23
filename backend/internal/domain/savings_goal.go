@@ -267,7 +267,7 @@ type SavingsGoalProgressItem struct {
 	// Balance-only fields (non-nil when basis = balance or account_percentage)
 	LinkedBalance     *float64   `json:"linked_balance,omitempty"`
 	BalanceAsOf       *time.Time `json:"balance_as_of,omitempty"`
-	Freshness         string     `json:"freshness"` // fresh|stale|unknown|not_applicable
+	Freshness         string     `json:"freshness"` // fresh|stale|unknown|not_applicable|basis_account_disconnected
 	AccountPercentage *float64   `json:"account_percentage,omitempty"` // non-nil when basis=account_percentage
 	// Completion
 	CompletedAt *time.Time `json:"completed_at,omitempty"` // sticky; nil until first completion

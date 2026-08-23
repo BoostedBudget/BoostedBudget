@@ -100,8 +100,18 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 		      SELECT 1 FROM account_status_history ash
 		      WHERE ash.account_id = a.id
 		        AND ash.status = 'active'
-		        AND ash.valid_from < $2::date + INTERVAL '1 day'
-		        AND (ash.valid_to IS NULL OR ash.valid_to > $2::date)
+		        -- Explicitly UTC (#1569 F4): "$2::date + INTERVAL '1 day'" yields a timestamp
+		        -- WITHOUT time zone, which Postgres resolves against the SESSION TimeZone when
+		        -- compared to a timestamptz. Production is correct only because NewPool pins
+		        -- TimeZone=UTC (the #1461 lesson) — an implicit dependency this query must not
+		        -- carry. AT TIME ZONE 'UTC' makes it self-contained, which also matters because
+		        -- a migration or a psql session does NOT inherit that pin. The lower bound needs
+		        -- the explicit ::timestamp step: a bare "date AT TIME ZONE 'UTC'" casts the date
+		        -- to timestamptz FIRST (in the session zone) and then reads it out as UTC wall
+		        -- time — the opposite of what is wanted — whereas "date + INTERVAL" is already
+		        -- a timestamp without time zone and needs no such nudge.
+		        AND ash.valid_from < ($2::date + INTERVAL '1 day') AT TIME ZONE 'UTC'
+		        AND (ash.valid_to IS NULL OR ash.valid_to > ($2::date)::timestamp AT TIME ZONE 'UTC')
 		  )
 		ON CONFLICT (user_id, snapshot_date) DO UPDATE SET
 			total_value       = EXCLUDED.total_value,
