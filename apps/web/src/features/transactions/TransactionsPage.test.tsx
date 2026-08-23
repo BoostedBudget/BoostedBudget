@@ -6,7 +6,7 @@
  * Issue #575: Migrated to bun:test with centralized mocks
  */
 
-import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
@@ -670,6 +670,109 @@ describe('TransactionsPage', () => {
 
       expect(screen.getByRole('checkbox', { name: /replaced checking \(closed\)/i })).toBeInTheDocument()
       expect(screen.getByRole('checkbox', { name: /expired checking \(closed\)/i })).toBeInTheDocument()
+    })
+  })
+
+  describe('Retained account name resolution in the table (Issue #1569, Task 3)', () => {
+    // The Account column body cells only render past jsdom's zero-size layout when the
+    // virtualizer believes the scroll container has real dimensions — TransactionTable
+    // wires onScrollEnd (see TransactionsPage.tsx) which turns virtualization on. This
+    // stub mirrors the identical technique already used in
+    // DataTable.test.tsx's "DataTable virtualization" describe block: it is jsdom layout
+    // stubbing (Element.prototype.getBoundingClientRect / offsetHeight / offsetWidth),
+    // not a mock.module() of an app hook, so it does not run afoul of the
+    // never-inline-mock-app-hooks rule.
+    const originalGetBCR = Element.prototype.getBoundingClientRect
+    let offsetHeightDesc: PropertyDescriptor | undefined
+    let offsetWidthDesc: PropertyDescriptor | undefined
+
+    beforeEach(() => {
+      Element.prototype.getBoundingClientRect = mock(() => ({
+        height: 56,
+        width: 800,
+        top: 0,
+        bottom: 56,
+        left: 0,
+        right: 800,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      })) as unknown as typeof Element.prototype.getBoundingClientRect
+      offsetHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+      offsetWidthDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+      Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 400 })
+      Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 800 })
+    })
+
+    afterEach(() => {
+      Element.prototype.getBoundingClientRect = originalGetBCR
+      if (offsetHeightDesc) {
+        Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeightDesc)
+      } else {
+        delete (HTMLElement.prototype as unknown as Record<string, unknown>)['offsetHeight']
+      }
+      if (offsetWidthDesc) {
+        Object.defineProperty(HTMLElement.prototype, 'offsetWidth', offsetWidthDesc)
+      } else {
+        delete (HTMLElement.prototype as unknown as Record<string, unknown>)['offsetWidth']
+      }
+    })
+
+    const renderWithAccountStatus = async (status: 'removed' | 'replaced' | 'expired', accountName: string) => {
+      configureQueries({
+        transactions: [
+          {
+            id: 'txn-retained-1',
+            user_id: 'user-123',
+            account_id: 'acc-retained',
+            linked_item_id: 'item-789',
+            source: 'plaid',
+            external_transaction_id: 'plaid-txn-retained',
+            amount: 12.34,
+            date: '2025-10-25',
+            name: 'Retained Account Transaction',
+            merchant_name: 'Retained Account Transaction',
+            pfc_primary: 'FOOD_AND_DRINK',
+            pending: false,
+            created_at: '2025-10-25T10:00:00Z',
+            updated_at: '2025-10-25T10:00:00Z',
+          },
+        ],
+        totalCount: 1,
+      })
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [{ id: 'acc-retained', name: accountName, status }] },
+        isLoading: false,
+        error: null,
+      })
+
+      const Wrapper = createWrapper()
+      render(<TransactionsPage />, { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(screen.getByText(/transactions loaded/i)).toBeInTheDocument()
+      })
+    }
+
+    it('renders a removed account\'s NAME in the Account column, not "Unknown"', async () => {
+      await renderWithAccountStatus('removed', 'Removed Checking')
+
+      expect(await screen.findByText('Removed Checking')).toBeInTheDocument()
+      expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
+    })
+
+    it('renders a replaced account\'s NAME in the Account column, not "Unknown"', async () => {
+      await renderWithAccountStatus('replaced', 'Replaced Checking')
+
+      expect(await screen.findByText('Replaced Checking')).toBeInTheDocument()
+      expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
+    })
+
+    it('renders an expired account\'s NAME in the Account column, not "Unknown"', async () => {
+      await renderWithAccountStatus('expired', 'Expired Checking')
+
+      expect(await screen.findByText('Expired Checking')).toBeInTheDocument()
+      expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
     })
   })
 
