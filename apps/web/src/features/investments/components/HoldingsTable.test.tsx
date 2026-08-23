@@ -469,4 +469,58 @@ describe('HoldingsTable', () => {
       localStorage.removeItem(`bb:table-prefs:${userId}:portfolio-holdings`)
     })
   })
+  // ── #1569 T12 gap 4: the disconnected-account empty state ──────────────────────────────
+  //
+  // Half A ruled that positions are a CURRENT-STATE question and stay hidden once an account
+  // goes terminal (see backend account_liveness_sql.go). That ruling is only honest if the UI
+  // says so. AccountsPage lists closed accounts, so a user CAN reach this tab for one, and the
+  // generic empty state told them "nothing synced yet" — which is false: positions were synced,
+  // retained, and are being withheld on purpose.
+  describe('disconnected account (#1569 T12)', () => {
+    const accountClosed = makeAccount({ id: 'acct-closed', name: 'Old Brokerage', status: 'removed' })
+
+    beforeEach(() => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [accountAlpha, accountBeta, accountClosed] },
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve({}),
+      })
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [], count: 0 },
+        isLoading: false,
+        isError: false,
+      })
+    })
+
+    it('explains WHY a disconnected account shows no positions, instead of "nothing synced yet"', () => {
+      render(<HoldingsTable accountId="acct-closed" />)
+      expect(screen.getByText(/disconnected/i)).toBeDefined()
+      expect(screen.queryByText(/no holdings synced yet/i)).toBeNull()
+    })
+
+    it('says the history was kept, so the user is not told their data is gone', () => {
+      render(<HoldingsTable accountId="acct-closed" />)
+      expect(screen.getByText(/retained/i)).toBeDefined()
+    })
+
+    it('leaves a live account on the ordinary empty state', () => {
+      render(<HoldingsTable accountId="acct-alpha" />)
+      expect(screen.getByText(/no holdings synced yet/i)).toBeDefined()
+      expect(screen.queryByText(/disconnected/i)).toBeNull()
+    })
+
+    // The notice must not appear over real rows: if the backend ever did return a position for a
+    // terminal account, the honest thing is to show the position, not to claim there is none.
+    it('does not replace holdings that are actually present', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [makeHolding({ id: 'h9', ticker_symbol: 'ZZZ', account_id: 'acct-closed' })], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable accountId="acct-closed" />)
+      expect(screen.getByText('ZZZ')).toBeDefined()
+      expect(screen.queryByText(/disconnected/i)).toBeNull()
+    })
+  })
 })
