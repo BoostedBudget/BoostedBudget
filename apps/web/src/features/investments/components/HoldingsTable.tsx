@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useGetHoldings } from '@boostedbudget/api-client/endpoints/investments/investments'
-import { useActiveAccounts } from '@/features/accounts/hooks'
+import { useAllAccounts, isInactive } from '@/features/accounts/hooks'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState, FilterState } from '@/shared/components/DataTable'
 import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
@@ -72,7 +72,14 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
   const { data: holdingsData, isLoading, isError } = useGetHoldings(
     isScoped ? { account_id: accountId } : undefined,
   )
-  const { accounts } = useActiveAccounts()
+  // useAllAccounts, not useActiveAccounts — and NOT for the reason TransactionsPage switched
+  // (#1569 T3). No holding row can reference a terminal account: the backend's current-state
+  // universe hides them at the query (see account_liveness_sql.go, currentStateAccountLeg), so
+  // widening this map adds no name to resolve. It is widened because the component needs the
+  // STATUS of the account it is scoped to. AccountsPage lists closed accounts and links to them,
+  // so this tab is reachable for one, and without the status it can only say "nothing synced
+  // yet" — which is the opposite of true.
+  const { accounts } = useAllAccounts()
 
   // Build id→name map for resolving account UUIDs to human-readable names.
   const accountNameById = useMemo(() => {
@@ -81,6 +88,15 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
     )
     return map
   }, [accounts])
+
+  // Scoped to an account that is no longer connected. Deliberately derived from the account,
+  // never from "zero rows": a live account with nothing in it is a different fact and keeps the
+  // ordinary empty state.
+  const scopedAccountIsDisconnected = useMemo(() => {
+    if (!isScoped || !accounts) return false
+    const scoped = accounts.find((a) => a.id === accountId)
+    return scoped != null && isInactive(scoped)
+  }, [isScoped, accounts, accountId])
 
   const activeColumnIds = isScoped ? ACCOUNT_HOLDINGS_COLUMN_IDS : PORTFOLIO_HOLDINGS_COLUMN_IDS
   const tablePrefsKey = isScoped ? 'account-holdings' : 'portfolio-holdings'
@@ -252,6 +268,28 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
     return (
       <div className="text-sm text-destructive p-4">
         Unable to load holdings. Please refresh the page.
+      </div>
+    )
+  }
+
+  // The disconnected notice REPLACES the empty state, never the rows. If a position is somehow
+  // present for a terminal account, showing it beats claiming there is nothing.
+  if (scopedAccountIsDisconnected && sortedHoldings.length === 0) {
+    return (
+      <div
+        role="note"
+        className="rounded-lg border border-border bg-muted/40 p-4 text-sm text-muted-foreground"
+      >
+        <p className="font-medium text-foreground">
+          Positions aren&apos;t shown for a disconnected account.
+        </p>
+        <p className="mt-1">
+          Nobody is confirming what this account holds any more, so showing the last figures we
+          received would state a stale position as a live one. Your history is retained: this
+          account&apos;s transactions stay in your activity, and the positions we last confirmed
+          are kept on record.
+        </p>
+        <p className="mt-1">Reconnect the account to see current positions again.</p>
       </div>
     )
   }
