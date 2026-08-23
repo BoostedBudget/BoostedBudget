@@ -23,29 +23,39 @@ import (
 // admin/savings/transfer repositories. Reviewing them by eye is exactly the kind of enumeration
 // that goes stale the first time someone adds a query, so it is enforced mechanically here instead.
 //
-// THE RULE. Any STATEMENT in non-test Go source under internal/ whose string literals, taken
-// together, contain `FROM transactions` or `JOIN transactions` (a DELETE's own FROM excepted — that
-// is a write) must also contain either:
+// THE RULE. Every read REFERENCE to `transactions` in non-test Go source under internal/ — each
+// `FROM`/`JOIN`/`USING transactions [alias]`, a DELETE's own FROM excepted, that being a write —
+// must carry a tombstone predicate OF ITS OWN: `<its alias>.deleted_at IS NULL`, or an unqualified
+// `deleted_at IS NULL` where the reference has no alias. The statement-level escape hatch is the
+// token `tombstone-exempt:` followed by a written reason, for the cases where the predicate is
+// genuinely supplied elsewhere (a shared WHERE-clause builder) or the query genuinely wants to see
+// tombstones.
 //
-//   - the predicate `deleted_at IS NULL`, or
-//   - the token `tombstone-exempt:` followed by a written reason, for the cases where the predicate
-//     is genuinely supplied elsewhere (a shared WHERE-clause builder) or the query genuinely wants
-//     to see tombstones.
+// ⚠ THE "OF ITS OWN" IS A TASK 8 FIX, AND IT MATTERED. Until then this guard asked only whether the
+// string "deleted_at IS NULL" appeared ANYWHERE in the statement — which any OTHER table's
+// predicate satisfies. Task 8 gave savings_goals/boosts/budgets/budget_categories the same
+// treatment, wrote the same loose check, and review found a live site
+// (transfer_suggestion_repository.go GetByUserIDStatuses) where an unfiltered `LEFT JOIN boosts r`
+// was waved through by the `txn.deleted_at IS NULL` on the transactions join right below it. The
+// per-reference form is now shared by both guards via tombstoneReadOffenders
+// (config_tombstone_guard_test.go). Re-audited under the strict form, THIS guard reported no new
+// offenders — the weakness was latent here, not exploited — but it was the same weakness.
 //
 // This is a syntactic check, not a semantic one — it cannot tell a correct predicate from a
 // misplaced one, and it is deliberately cheap enough to never be the reason someone skips it. Its
 // job is to make FORGETTING impossible; getting it RIGHT is what the behavioural tests are for.
 //
 // Mutation-checked: deleting `AND t.deleted_at IS NULL` from any one of the audited queries turns
-// this test RED with that file and line named.
-
-// tombstoneTableRef matches a read reference to the transactions table. `\b` after the name keeps
-// `transactions_backup`-style names from matching; the (?i) is defensive, this codebase writes SQL
-// keywords in upper case throughout.
-var tombstoneTableRef = regexp.MustCompile(`(?is)\b(FROM|JOIN)\s+transactions\b`)
+// this test RED with that file and line named, and so does replacing it with another table's
+// qualified predicate.
 
 // tombstoneDeleteRef matches the FROM of a DELETE statement, which is a write and out of scope.
 var tombstoneDeleteRef = regexp.MustCompile(`(?is)\bDELETE\s+FROM\s+transactions\b`)
+
+// transactionTombstoneTables is the single-element table list this guard audits. It exists so the
+// check can share tombstoneReadOffenders with the four-table config guard
+// (config_tombstone_guard_test.go) rather than keeping a second, subtly different copy.
+var transactionTombstoneTables = []string{"transactions"}
 
 func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 	root := repoInternalRoot(t)
@@ -75,13 +85,12 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 		// the same function stay separate units, which is the point: a countQuery and its
 		// paginated sibling each have to carry the predicate themselves.
 		ast.Inspect(file, func(n ast.Node) bool {
-			var unit ast.Node
 			switch n.(type) {
 			case *ast.AssignStmt, *ast.ValueSpec, *ast.ReturnStmt, *ast.ExprStmt:
-				unit = n
 			default:
 				return true
 			}
+			unit := n
 
 			var sqlParts []string
 			line := fset.Position(unit.Pos()).Line
@@ -97,16 +106,17 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 			})
 			sql := strings.Join(sqlParts, "\n")
 
-			// A DELETE's own FROM is a write, not a read.
-			read := tombstoneDeleteRef.ReplaceAllString(sql, "")
-			if !tombstoneTableRef.MatchString(read) {
-				return true // keep descending: a nested unit may still contain a read
+			bad := tombstoneReadOffenders(sql, transactionTombstoneTables, tombstoneDeleteRef)
+			if len(bad) == 0 {
+				// Keep descending only if this unit did not itself match a read; otherwise the
+				// enclosing unit already accounts for every literal inside it and descending
+				// would report the same query again from a nested statement.
+				return !tombstoneReadRefRegexp(transactionTombstoneTables).MatchString(
+					tombstoneDeleteRef.ReplaceAllString(sql, ""))
 			}
-			if !strings.Contains(sql, "deleted_at IS NULL") && !strings.Contains(sql, "tombstone-exempt:") {
-				offenders = append(offenders, rel+":"+strconv.Itoa(line))
+			for _, ref := range bad {
+				offenders = append(offenders, rel+":"+strconv.Itoa(line)+" ("+ref+")")
 			}
-			// Do not descend: the enclosing unit already accounts for every literal inside it,
-			// so descending would report the same query again from a nested statement.
 			return false
 		})
 		return nil
@@ -117,9 +127,10 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 
 	if len(offenders) > 0 {
 		t.Fatalf(
-			"%d SQL statement(s) read `transactions` without excluding tombstoned rows (#1569).\n"+
-				"Add `AND <alias>.deleted_at IS NULL` to the query, or, if the predicate is genuinely\n"+
-				"supplied elsewhere, an SQL comment `-- tombstone-exempt: <why>` inside the literal:\n  %s",
+			"%d read reference(s) to `transactions` carry no tombstone predicate OF THEIR OWN (#1569).\n"+
+				"Add `AND <that reference's alias>.deleted_at IS NULL` — another table's predicate in\n"+
+				"the same statement does NOT count — or, if the predicate is genuinely supplied\n"+
+				"elsewhere, an SQL comment `-- tombstone-exempt: <why>` inside the literal:\n  %s",
 			len(offenders), strings.Join(offenders, "\n  "))
 	}
 }
