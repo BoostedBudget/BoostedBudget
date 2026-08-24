@@ -603,11 +603,16 @@ func householdAccountsCTEForBalancesPerDay() string {
 // grant can only exist for someone who WAS accepted into this household (InsertShare runs in
 // the accept fan-out and nowhere else), and the interval predicate above already bounds WHEN it
 // applies — so admitting it cannot show a stranger's data, nor any instant outside the window
-// the household was legitimately shown. Meanwhile at asOf = now the two clauses collapse back
-// to the old predicate exactly: no committed row has revoked_at > now(), so every closed grant
-// is filtered by the interval before the guard is reached, and every open grant still needs
-// active membership. The present-day result set is therefore unchanged, by construction rather
-// than by hope — pinned by TestHouseholdShareAsOf_OpenGrantStillRequiresActiveMembership.
+// the household was legitimately shown. Meanwhile an OPEN grant still requires active
+// membership, exactly as before — pinned by
+// TestHouseholdShareAsOf_OpenGrantStillRequiresActiveMembership.
+//
+// Precisely, for a "current" call (asOf = the read's own instant) the only rows the relaxed
+// clause can add are grants revoked AFTER that instant, i.e. revoked concurrently with the
+// request. Those were open at the instant the caller asked about, so including them is the
+// point-in-time answer, not a widening of who may be seen: the departed member's membership
+// was live at asOf too. Anything revoked before asOf is filtered by the interval predicate
+// before the membership clause is ever reached.
 //
 // ── Why the dedup is now two-stage ───────────────────────────────────────────────────────────
 //
