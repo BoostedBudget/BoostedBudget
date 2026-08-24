@@ -103,9 +103,13 @@ type LinkedItemRepository interface {
 	// account_status_history for each. transactions survive (SET NULL on both account_id and
 	// linked_item_id, migration 000035). Issue #1569, Task 6.
 	//
-	// Refuses with ErrLinkedItemNotDisconnected unless plaid_removed_at is already stamped — a
-	// purge must never be the FIRST thing that happens to an item, or it destroys the only local
-	// record of a Plaid Item that might still be billing. Call the disconnect endpoint first.
+	// Refuses with ErrLinkedItemNotDisconnected unless BOTH plaid_removed_at is already stamped
+	// AND no account under the item is still status='active'. A purge must never be the FIRST
+	// thing that happens to an item, or it destroys the only local record of a Plaid Item that
+	// might still be billing; and the stamp alone is not proof the user disconnected anything,
+	// because the billing cleanup sweep stamps errored/stale items without touching their
+	// accounts (#1569 residual E9 — see the implementation for the full argument). Call the
+	// disconnect endpoint first.
 	//
 	// Refuses with ErrPurgeBlockedBySavingsGoal, doing and changing nothing, while a savings goal
 	// still references any account under this item (migration 000150's RESTRICT constraint).
@@ -803,6 +807,36 @@ func (r *linkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID
 		return fmt.Errorf("purge linked item %s: %w", linkedItemID, err)
 	}
 	if plaidRemovedAt == nil {
+		return ErrLinkedItemNotDisconnected
+	}
+
+	// ⚠ plaid_removed_at is not by itself proof the USER disconnected this institution — #1569
+	// residual E9. The billing cleanup sweep stamps it too, for items that are merely in an error
+	// state or stale (cleanupCandidateReasonPredicate above), and
+	// PlaidItemCleanupService.RemoveItem leaves every account under such an item at
+	// status='active': accountRepository.MarkRemovedByLinkedItemID has exactly one production
+	// caller, accountService.DisconnectInstitution, and the sweep is not it. Without this second
+	// leg, a background job could silently satisfy the precondition for the most destructive verb
+	// in this file, and the retained history #1569 exists to keep would go with it.
+	//
+	// This is the institution-level equal of PurgeAccount's `status == active -> refuse` guard
+	// (account_repository.go), and it shares its sentinel with the stamp check above because the
+	// user-facing answer is identical: disconnect first. That is not a dead end —
+	// DisconnectInstitution is idempotent against an already-removed Plaid item (ITEM_NOT_FOUND
+	// maps to success) and marks the accounts removed on its way through.
+	//
+	// Read inside the same transaction, after the FOR UPDATE on linked_items. That lock does not
+	// cover the accounts rows, so a disconnect committing concurrently could still flip one to
+	// 'removed' between this SELECT and the deletes — which only ever turns a permitted purge into
+	// a refused one, never the reverse.
+	var liveAccounts int
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM accounts WHERE linked_item_id = $1 AND status = 'active'`,
+		linkedItemID,
+	).Scan(&liveAccounts); err != nil {
+		return fmt.Errorf("purge linked item %s: counting live accounts: %w", linkedItemID, err)
+	}
+	if liveAccounts > 0 {
 		return ErrLinkedItemNotDisconnected
 	}
 
