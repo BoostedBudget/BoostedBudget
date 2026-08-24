@@ -5585,6 +5585,12 @@ components:
           format: date-time
           type: string
         freshness:
+          enum:
+            - fresh
+            - stale
+            - unknown
+            - not_applicable
+            - basis_account_disconnected
           type: string
         goal_id:
           type: string

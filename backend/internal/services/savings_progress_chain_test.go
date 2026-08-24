@@ -441,3 +441,244 @@ func TestSavingsProgress_Summary_ChainHasNoLiveMember_ReportsDisconnected(t *tes
 // strPtr1569 is a local string-pointer helper (the package already has a ptrStr in
 // transaction_service_test.go).
 func strPtr1569(s string) *string { return &s }
+
+// ─── I1: the account_percentage basis needs BOTH halves, same as balance ─────
+//
+// Round 1 shipped only half (a) for account_percentage — the re-link test. Disabling the
+// freeze guard in the account_percentage branch of RecomputeGoal left the entire unit AND
+// integration suite green, so the guard that stops an account_percentage goal recomputing
+// from a frozen balance was pinned by nothing.
+
+// TestSavingsProgress_AccountPercentage_ChainHasNoLiveMember_StillFreezes mirrors the
+// balance-basis freeze test: a percent-of-balance goal whose chain has no live member must not
+// recompute from the retained row's frozen balance, and must not drop to zero.
+func TestSavingsProgress_AccountPercentage_ChainHasNoLiveMember_StillFreezes(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	resolver := &progressChainResolverStub{
+		resolve: func(context.Context, string) (string, error) { return "", ErrNoActiveAccount },
+	}
+	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, resolver)
+
+	pct := 0.25
+	// current_amount (1000) differs from what the frozen row would produce (3500 * 0.25 = 875),
+	// so "did not move" and "recomputed from the frozen row" are distinguishable.
+	goal := makeGoal("g1", "u1", "acc-old", domain.ProgressBasisAccountPercentage, 10000, 1000)
+	goal.AccountPercentage = &pct
+	goal.UserAccountID = strPtr1569("uaid-1")
+
+	frozen := 3500.00
+	terminal := &domain.Account{
+		ID: "acc-old", UserID: "u1", CurrentBalance: &frozen,
+		Status: domain.AccountStatusRemoved, UpdatedAt: time.Now().Add(-90 * 24 * time.Hour),
+	}
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil).Maybe()
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+
+	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
+	assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
+	assert.Equal(t, 1000.0, goal.CurrentAmount, "frozen goal keeps its last computed amount, not 3500 * 0.25")
+}
+
+// TestSavingsProgress_AccountPercentage_NilUserAccountID_DegradesToPhysicalRow_AndFreezes is
+// the account_percentage twin of the balance-basis legacy-row test.
+func TestSavingsProgress_AccountPercentage_NilUserAccountID_DegradesToPhysicalRow_AndFreezes(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	resolver := &progressChainResolverStub{}
+	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, resolver)
+
+	pct := 0.25
+	goal := makeGoal("g1", "u1", "acc-old", domain.ProgressBasisAccountPercentage, 10000, 1000)
+	goal.AccountPercentage = &pct
+	goal.UserAccountID = nil
+
+	frozen := 3500.00
+	terminal := &domain.Account{
+		ID: "acc-old", UserID: "u1", CurrentBalance: &frozen,
+		Status: domain.AccountStatusReplaced, UpdatedAt: time.Now(),
+	}
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	require.NoError(t, svc.RecomputeGoal(context.Background(), goal))
+
+	assert.Empty(t, resolver.calls(), "no chain reference to resolve — resolver must not be called")
+	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
+	assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
+}
+
+// TestSavingsProgress_Summary_AccountPercentage_ChainHasNoLiveMember_ReportsDisconnected pins
+// the freshness half for account_percentage — without it, the new badge could silently stop
+// appearing for percent-of-balance goals.
+func TestSavingsProgress_Summary_AccountPercentage_ChainHasNoLiveMember_ReportsDisconnected(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	resolver := &progressChainResolverStub{
+		resolve: func(context.Context, string) (string, error) { return "", ErrNoActiveAccount },
+	}
+	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, resolver)
+
+	pct := 0.25
+	recent := time.Now().Add(-1 * time.Hour)
+	goal := &domain.SavingsGoal{
+		ID: "g1", UserID: "u1", Name: "Shared Pot",
+		CurrentAmount: 1000, TargetAmount: 10000,
+		ProgressBasis: domain.ProgressBasisAccountPercentage, AccountPercentage: &pct,
+		AccountID: "acc-old", UserAccountID: strPtr1569("uaid-1"), BalanceAsOf: &recent,
+	}
+	frozen := 3500.00
+	terminal := &domain.Account{
+		ID: "acc-old", UserID: "u1", CurrentBalance: &frozen, Status: domain.AccountStatusRemoved,
+	}
+
+	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, nil)
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil)
+
+	summary, err := svc.GetProgressSummary(context.Background(), "u1")
+
+	require.NoError(t, err)
+	require.Len(t, summary.Goals, 1)
+	assert.Equal(t, domain.FreshnessBasisAccountDisconnected, summary.Goals[0].Freshness)
+}
+
+// ─── M1: a resolver blip must not be reported as freshness ───────────────────
+
+// TestSavingsProgress_Summary_ResolverTransportError_ReportsUnknownNotFresh covers the
+// summary side of the transport-error distinction. Round 1 discarded the error with
+// `if err == nil`, so during a database blip a permanently-frozen goal reported `fresh` from
+// its stale balance_as_of and the disconnected badge silently vanished.
+func TestSavingsProgress_Summary_ResolverTransportError_ReportsUnknownNotFresh(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	resolver := &progressChainResolverStub{
+		resolve: func(context.Context, string) (string, error) {
+			return "", errors.New("connection refused")
+		},
+	}
+	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, resolver)
+
+	recent := time.Now().Add(-1 * time.Hour) // would otherwise compute as `fresh`
+	goal := &domain.SavingsGoal{
+		ID: "g1", UserID: "u1", Name: "Emergency Fund",
+		CurrentAmount: 1000, TargetAmount: 10000,
+		ProgressBasis: domain.ProgressBasisBalance,
+		AccountID:     "acc-old", UserAccountID: strPtr1569("uaid-1"), BalanceAsOf: &recent,
+	}
+	bal := 3500.00
+	accountRepo.On("GetByIDAndUser", mock.Anything, mock.Anything, mock.Anything).Return(
+		&domain.Account{ID: "acc-old", UserID: "u1", CurrentBalance: &bal, Status: domain.AccountStatusActive}, nil).Maybe()
+	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, nil)
+
+	summary, err := svc.GetProgressSummary(context.Background(), "u1")
+
+	require.NoError(t, err, "one unresolvable goal must not fail the whole summary")
+	require.Len(t, summary.Goals, 1)
+	assert.Equal(t, domain.FreshnessUnknown, summary.Goals[0].Freshness,
+		"a resolution failure is not evidence of freshness")
+	assert.Nil(t, summary.Goals[0].LinkedBalance,
+		"no balance may be reported from an account we failed to resolve")
+}
+
+// ─── I3: the account read stays scoped to the REQUESTER ──────────────────────
+
+// TestSavingsProgress_Summary_AccountReadIsScopedToRequesterNotGoalOwner pins the ownership
+// gate on the read that populates LinkedBalance (a financial amount). Scoping it to
+// goal.UserID would compare the goal against its own owner, so the check could never fail
+// closed; the pre-#1569 code passed the requester's id and that must survive.
+func TestSavingsProgress_Summary_AccountReadIsScopedToRequesterNotGoalOwner(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	resolver := &progressChainResolverStub{
+		resolve: func(context.Context, string) (string, error) { return "acc-live", nil },
+	}
+	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, resolver)
+
+	// A goal owned by someone else reaching the summary of requester "u1" (the shape a future
+	// household view would produce). The account read must be scoped to "u1".
+	goal := &domain.SavingsGoal{
+		ID: "g1", UserID: "other-owner", Name: "Not Mine",
+		CurrentAmount: 1000, TargetAmount: 10000,
+		ProgressBasis: domain.ProgressBasisBalance,
+		AccountID:     "acc-old", UserAccountID: strPtr1569("uaid-1"),
+	}
+	othersBalance := 9999.00
+	// Registered ONLY for the goal owner: if the code scopes to goal.UserID the read succeeds
+	// and leaks the balance; scoped to the requester it must miss.
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-live", "other-owner").
+		Return(&domain.Account{ID: "acc-live", UserID: "other-owner", CurrentBalance: &othersBalance, Status: domain.AccountStatusActive}, nil).Maybe()
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-live", "u1").
+		Return(nil, ErrAccountNotFoundForProgress).Maybe()
+
+	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, nil)
+
+	summary, err := svc.GetProgressSummary(context.Background(), "u1")
+
+	require.NoError(t, err)
+	require.Len(t, summary.Goals, 1)
+	assert.Nil(t, summary.Goals[0].LinkedBalance,
+		"an account the requester does not own must not have its balance reported")
+
+	for _, c := range accountRepo.Calls {
+		if c.Method == "GetByIDAndUser" {
+			assert.Equal(t, "u1", c.Arguments.Get(2),
+				"the account read must be scoped to the requester, not the goal's owner")
+		}
+	}
+}
+
+// ErrAccountNotFoundForProgress stands in for repository.ErrAccountNotFound without importing
+// the repository package into this service-level test.
+var ErrAccountNotFoundForProgress = errors.New("account not found")
+
+// ─── M4: the summary's goal universe is active-only, deliberately ────────────
+
+// TestSavingsProgress_Summary_UniverseIsActiveOnly pins the boundary behind the review's M4
+// ("completed goals never get the disconnect badge"). It is deliberate, not an oversight:
+//
+//   - RecomputeUser — the only periodic recompute path — also reads GetActiveByUserID, so a
+//     COMPLETED goal's current_amount is frozen whether or not its account is connected. The
+//     card's existing "Completed" badge already explains why that number is static; adding
+//     "Account disconnected" would attribute a general property to a specific cause.
+//   - Widening the universe here is an API-semantics change to a live MCP/AI contract
+//     (goal_count, total_saved, total_target, overall_percent_complete all shift), which is
+//     out of scope for a re-link defect.
+//
+// This test exists so that widening it later is a deliberate act with a failing test attached,
+// rather than an accident.
+func TestSavingsProgress_Summary_UniverseIsActiveOnly(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, &progressChainResolverStub{})
+
+	active := makeGoal("g-active", "u1", "acc-1", domain.ProgressBasisContributions, 1000, 250)
+	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{active}, nil)
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g-active").Return(250.0, nil)
+
+	summary, err := svc.GetProgressSummary(context.Background(), "u1")
+
+	require.NoError(t, err)
+	assertNoCallTo(t, &goalRepo.Mock, "GetByIDForUser")
+	require.Len(t, summary.Goals, 1)
+	assert.Equal(t, "g-active", summary.Goals[0].GoalID)
+
+	// Consequence worth stating out loud: because the universe excludes completed goals,
+	// CompletedGoalCount — which counts goal.IsCompleted within that universe — is structurally
+	// always 0. That is a pre-existing defect in a field the JSON contract advertises, not
+	// something this task introduced; pinned here so the follow-up has a starting point.
+	assert.Equal(t, 0, summary.CompletedGoalCount,
+		"structurally zero: the universe filters is_completed = false before this is counted")
+}

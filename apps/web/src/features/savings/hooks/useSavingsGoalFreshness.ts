@@ -12,16 +12,17 @@
 
 import { useMemo } from 'react'
 import { useGetSavingsProgressSummary } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals'
+import type { SavingsGoalProgressItemFreshness } from '@boostedbudget/api-client/models'
 
-export function useSavingsGoalFreshness(): Record<string, string> {
-  const { data } = useGetSavingsProgressSummary({
-    query: {
-      staleTime: 30 * 1000,
-    },
-  })
+export function useSavingsGoalFreshness(): Record<string, SavingsGoalProgressItemFreshness> {
+  // No staleTime override: whether an account is disconnected changes at most a few times in a
+  // user's lifetime, so it has no business being refetched more eagerly than anything else on
+  // the page. An earlier 30 s override made this rarely-changing flag the most aggressively
+  // refetched query here; the app-wide default is the right cadence.
+  const { data } = useGetSavingsProgressSummary()
 
   return useMemo(() => {
-    const byGoalId: Record<string, string> = {}
+    const byGoalId: Record<string, SavingsGoalProgressItemFreshness> = {}
     for (const item of data?.goals ?? []) {
       if (item?.goal_id && item.freshness) {
         byGoalId[item.goal_id] = item.freshness

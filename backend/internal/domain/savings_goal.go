@@ -28,14 +28,14 @@ type SavingsGoal struct {
 	TargetAmount  float64    `json:"target_amount" db:"target_amount"`
 	CurrentAmount float64    `json:"current_amount" db:"current_amount"` // Computed per ProgressBasis; stored for fast reads
 	CurrencyCode  string     `json:"currency_code" db:"currency_code"`
-	AccountID     string     `json:"account_id" db:"account_id"` // Required linked account
+	AccountID     string     `json:"account_id" db:"account_id"`                     // Required linked account
 	UserAccountID *string    `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference surviving re-links (Issue #1109)
 	Deadline      *time.Time `json:"deadline,omitempty" db:"deadline"`
 	IsCompleted   bool       `json:"is_completed" db:"is_completed"`
 	// CompletedAt is sticky once set — never cleared by a later computed drop (Issue #1300 Codex C5).
-	CompletedAt     *time.Time `json:"completed_at,omitempty" db:"completed_at"`
-	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at" db:"updated_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty" db:"completed_at"`
+	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`
 
 	// Progress tracking configuration (Issue #1300).
 	// ProgressBasis determines how current_amount is derived.
@@ -130,12 +130,12 @@ func (sg *SavingsGoal) Validate() error {
 // Contributions are split-capable: one transaction may be allocated across multiple goals
 // via the partial unique constraint (transaction_id, savings_goal_id).
 type SavingsGoalContribution struct {
-	ID            string  `json:"id" db:"id"`
-	SavingsGoalID string  `json:"savings_goal_id" db:"savings_goal_id"`
+	ID            string `json:"id" db:"id"`
+	SavingsGoalID string `json:"savings_goal_id" db:"savings_goal_id"`
 	// TransactionID is nil for manually entered contributions.
 	TransactionID *string `json:"transaction_id,omitempty" db:"transaction_id"`
 	// Amount is always positive (stored as ABS of the original transaction magnitude).
-	Amount     float64 `json:"amount" db:"amount"`
+	Amount float64 `json:"amount" db:"amount"`
 	// Source records the contribution origin: manual (user-entered), confirmed_transfer
 	// (user confirmed a detected TRANSFER_IN), or boost_match (auto-confirmed via
 	// TransferSuggestion.MatchedTransactionID).
@@ -249,33 +249,38 @@ const (
 
 // ComputedFrom constants label the progress source for MCP consumers.
 const (
-	ComputedFromManual               = "manual"
-	ComputedFromConfirmedContribs    = "confirmed_contributions"
-	ComputedFromAccountBalance       = "account_balance"
-	ComputedFromAccountPercentage    = "account_percentage"
+	ComputedFromManual            = "manual"
+	ComputedFromConfirmedContribs = "confirmed_contributions"
+	ComputedFromAccountBalance    = "account_balance"
+	ComputedFromAccountPercentage = "account_percentage"
 )
 
 // SavingsGoalProgressItem contains basis-aware progress details for a single goal.
 // Designed for LLM/MCP consumption — all semantics are explicit (Codex C11).
 type SavingsGoalProgressItem struct {
-	GoalID      string `json:"goal_id"`
-	GoalName    string `json:"goal_name"`
-	AccountID   string `json:"account_id,omitempty"`
+	GoalID    string `json:"goal_id"`
+	GoalName  string `json:"goal_name"`
+	AccountID string `json:"account_id,omitempty"`
 	// Amounts
 	CurrentAmount float64 `json:"current_amount"`
 	TargetAmount  float64 `json:"target_amount"`
 	// Percent 0–100 (clamped)
 	PercentComplete float64 `json:"percent_complete"`
 	// Basis semantics — consumers MUST use these to interpret current_amount correctly
-	ProgressBasis string `json:"progress_basis"`  // manual|contributions|balance|account_percentage
-	ComputedFrom  string `json:"computed_from"`   // human-readable, see ComputedFrom* constants
+	ProgressBasis string `json:"progress_basis"` // manual|contributions|balance|account_percentage
+	ComputedFrom  string `json:"computed_from"`  // human-readable, see ComputedFrom* constants
 	// Always returned — even for non-contributions bases — so consumers can compare approaches
 	ConfirmedContributionsTotal float64 `json:"confirmed_contributions_total"`
 	// Balance-only fields (non-nil when basis = balance or account_percentage)
-	LinkedBalance     *float64   `json:"linked_balance,omitempty"`
-	BalanceAsOf       *time.Time `json:"balance_as_of,omitempty"`
-	Freshness         string     `json:"freshness"` // fresh|stale|unknown|not_applicable|basis_account_disconnected
-	AccountPercentage *float64   `json:"account_percentage,omitempty"` // non-nil when basis=account_percentage
+	LinkedBalance *float64   `json:"linked_balance,omitempty"`
+	BalanceAsOf   *time.Time `json:"balance_as_of,omitempty"`
+	// Freshness is enumerated so orval emits a TypeScript union rather than a bare `string`
+	// (Issue #1569 Task 13). Without the enum the frontend has to hand-duplicate the literal
+	// "basis_account_disconnected", and a rename here would leave tsc and both test suites
+	// green while the UI silently stopped rendering the explanation — exactly the silent-drift
+	// class this flag was surfaced to prevent. Keep in sync with the Freshness* constants above.
+	Freshness         string   `json:"freshness" enum:"fresh,stale,unknown,not_applicable,basis_account_disconnected"`
+	AccountPercentage *float64 `json:"account_percentage,omitempty"` // non-nil when basis=account_percentage
 	// Completion
 	CompletedAt *time.Time `json:"completed_at,omitempty"` // sticky; nil until first completion
 	Deadline    *time.Time `json:"deadline,omitempty"`

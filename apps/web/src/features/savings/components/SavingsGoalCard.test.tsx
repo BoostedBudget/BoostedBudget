@@ -174,32 +174,74 @@ describe('SavingsGoalCard', () => {
       render(<SavingsGoalCard goal={mockGoal} freshness="basis_account_disconnected" />)
 
       // Information must not be carried by colour alone: the badge states the condition in
-      // words, and the notice below gives the reason and the remedy.
-      expect(screen.getByText('Account disconnected')).toBeInTheDocument()
-      const notice = screen.getByRole('status')
+      // words, and the notice gives the reason and the remedy.
+      const badge = screen.getByTestId('savings-goal-disconnected-badge')
+      expect(badge).toHaveTextContent('Account disconnected')
+
+      const noticeId = badge.getAttribute('aria-describedby')
+      expect(noticeId).toBeTruthy()
+      const notice = document.getElementById(noticeId as string)
+      expect(notice).not.toBeNull()
       expect(notice).toHaveTextContent(/no longer connected/i)
       expect(notice).toHaveTextContent(/frozen/i)
       expect(notice).toHaveTextContent(/reconnect/i)
     })
 
+    // The 4.5:1 AA contrast measured for this notice is a property of the warning token pair
+    // (bg-warning / text-warning-foreground), not of the badge in general. Swapping the
+    // variant would silently change the measured colours, so pin the pair itself.
+    it('uses the warning token pair whose contrast was measured for AA', () => {
+      render(<SavingsGoalCard goal={mockGoal} freshness="basis_account_disconnected" />)
+      const badge = screen.getByTestId('savings-goal-disconnected-badge')
+      expect(badge.className).toContain('bg-warning')
+      expect(badge.className).toContain('text-warning-foreground')
+    })
+
+    // ⚠ Scope of this test, stated precisely because the obvious reading is wrong: deleting
+    // the explicit aria-hidden from SavingsGoalCard leaves this GREEN. lucide-react's Icon
+    // applies `aria-hidden="true"` itself whenever no a11y prop is passed
+    // (lucide-react/dist/esm/Icon.mjs:36), so the attribute is guaranteed by the library, not
+    // by us. What this DOES catch is someone actively un-hiding the icon (aria-hidden={false}
+    // or an added aria-label), which would announce a meaningless second node next to a badge
+    // whose own text already says "Account disconnected". Verified by mutation both ways.
+    it('leaves the decorative icon hidden from assistive technology', () => {
+      render(<SavingsGoalCard goal={mockGoal} freshness="basis_account_disconnected" />)
+      const badge = screen.getByTestId('savings-goal-disconnected-badge')
+      const icon = badge.querySelector('svg')
+      expect(icon).not.toBeNull()
+      expect(icon).toHaveAttribute('aria-hidden', 'true')
+    })
+
     it.each([['fresh'], ['stale'], ['unknown'], ['not_applicable']])(
       'stays silent for freshness=%s — those balances are still being updated',
       (value) => {
-        render(<SavingsGoalCard goal={mockGoal} freshness={value} />)
-        expect(screen.queryByRole('status')).not.toBeInTheDocument()
+        render(<SavingsGoalCard goal={mockGoal} freshness={value as never} />)
+        expect(screen.queryByTestId('savings-goal-disconnected-badge')).not.toBeInTheDocument()
         expect(screen.queryByText('Account disconnected')).not.toBeInTheDocument()
       },
     )
 
     it('stays silent when no freshness is supplied at all', () => {
       render(<SavingsGoalCard goal={mockGoal} />)
-      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('savings-goal-disconnected-badge')).not.toBeInTheDocument()
       expect(screen.queryByText('Account disconnected')).not.toBeInTheDocument()
     })
 
-    it('does not dim the card — an opacity wash would drag the whole card below AA', () => {
-      const { container } = render(<SavingsGoalCard goal={mockGoal} freshness="basis_account_disconnected" />)
-      expect(container.querySelector('[class*="opacity-"]')).toBeNull()
+    // Task 12 lost a Critical to an opacity wash compositing onto the card. The earlier guard
+    // here only checked for an `opacity-*` class on this component's own nodes, which misses
+    // inline styles and fractional colour alpha (`bg-card/90`). It still cannot see an
+    // ancestor wash applied by a parent — SavingsGoalsGrid is not rendered here — so that half
+    // is covered by not introducing one rather than by this assertion.
+    it('does not dim the card, by class, by colour alpha, or by inline style', () => {
+      const { container } = render(
+        <SavingsGoalCard goal={mockGoal} freshness="basis_account_disconnected" />,
+      )
+      for (const el of container.querySelectorAll<HTMLElement>('*')) {
+        expect(el.className.toString()).not.toMatch(/(^|\s|:)opacity-/)
+        // Tailwind colour-alpha shorthand: bg-card/90, text-foreground/50, …
+        expect(el.className.toString()).not.toMatch(/(bg|text|border)-[a-z-]+\/\d/)
+        expect(el.style.opacity).toBe('')
+      }
     })
   })
 });

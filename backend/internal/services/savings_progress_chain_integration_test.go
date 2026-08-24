@@ -50,6 +50,13 @@ type savingsChainFixture struct {
 
 func setupSavingsChainFixture(t *testing.T, relinked bool) *savingsChainFixture {
 	t.Helper()
+	return setupSavingsChainFixtureWithBasis(t, relinked, domain.ProgressBasisBalance, nil)
+}
+
+// setupSavingsChainFixtureWithBasis builds the same chain for either balance-derived basis.
+// accountPercentage must be non-nil exactly when basis is account_percentage.
+func setupSavingsChainFixtureWithBasis(t *testing.T, relinked bool, basis string, accountPercentage *float64) *savingsChainFixture {
+	t.Helper()
 	pool := setupHouseholdServiceIntegrationDB(t)
 	enc := newTestFieldEncryptor(t)
 	ctx := context.Background()
@@ -57,6 +64,43 @@ func setupSavingsChainFixture(t *testing.T, relinked bool) *savingsChainFixture 
 
 	profileRepo := repository.NewProfileRepository(pool, enc)
 	user := insertIntegrationTestUser(t, profileRepo, "savings-chain-"+suffix+"@example.com", "premium", "active")
+
+	// ⚠ Registered HERE, immediately after the user exists and BEFORE any child row is
+	// inserted. Registering it at the end of the fixture (where it used to live) means a
+	// require.* failure part-way through — a new NOT NULL column, a check constraint — calls
+	// t.FailNow() before Cleanup is ever registered, and every row created so far survives.
+	// That is not hypothetical: three user_accounts rows leaked that way during this task and
+	// broke migration 000100's #1334 preflight over in internal/database, a package this test
+	// does not touch. Deleting rows that do not exist yet is free; not deleting rows that do is
+	// a cross-package failure.
+	t.Cleanup(func() {
+		// context.Background(), not t.Context(): a cancelled context here leaves fixture rows
+		// behind that break other packages sharing this database.
+		cleanupCtx := context.Background()
+
+		// ⚠ Every statement is checked rather than swallowed with `_, _ =`. This is a safety
+		// net, not the fix for the leak described above (that was the registration point) —
+		// but it is the reason a future leak surfaces here, in the test that caused it, rather
+		// than as an unrelated package's failure two runs later. A silent cleanup in a shared
+		// database is not a tidy-up, it is a delayed failure somewhere else.
+		type step struct {
+			what string
+			sql  string
+			arg  any
+		}
+		for _, st := range []step{
+			{"savings_goals", `DELETE FROM savings_goals WHERE user_id = $1`, user.ID},
+			{"accounts.replaced_by_id", `UPDATE accounts SET replaced_by_id = NULL WHERE user_id = $1`, user.ID},
+			{"accounts", `DELETE FROM accounts WHERE user_id = $1`, user.ID},
+			{"linked_items", `DELETE FROM linked_items WHERE user_id = $1`, user.ID},
+			{"user_accounts", `DELETE FROM user_accounts WHERE user_id = $1`, user.ID},
+			{"users", `DELETE FROM users WHERE id = $1`, user.ID},
+		} {
+			if _, err := pool.Exec(cleanupCtx, st.sql, st.arg); err != nil {
+				t.Errorf("fixture cleanup failed at %s (leaks rows into the shared database): %v", st.what, err)
+			}
+		}
+	})
 
 	var userAccountID string
 	require.NoError(t, pool.QueryRow(ctx, `
@@ -107,21 +151,9 @@ func setupSavingsChainFixture(t *testing.T, relinked bool) *savingsChainFixture 
 	var goalID string
 	require.NoError(t, pool.QueryRow(ctx, `
 		INSERT INTO savings_goals (user_id, name, target_amount, current_amount, currency_code,
-		                           account_id, user_account_id, progress_basis)
-		VALUES ($1, 'Emergency Fund', 10000, 1000, 'USD', $2, $3, 'balance')
-		RETURNING id`, user.ID, oldAccountID, userAccountID).Scan(&goalID))
-
-	t.Cleanup(func() {
-		// context.Background(), not t.Context(): a cancelled context here leaves fixture rows
-		// behind that break other packages sharing this database.
-		cleanupCtx := context.Background()
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM savings_goals WHERE user_id = $1`, user.ID)
-		_, _ = pool.Exec(cleanupCtx, `UPDATE accounts SET replaced_by_id = NULL WHERE user_id = $1`, user.ID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM accounts WHERE user_id = $1`, user.ID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM linked_items WHERE user_id = $1`, user.ID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM user_accounts WHERE user_id = $1`, user.ID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM users WHERE id = $1`, user.ID)
-	})
+		                           account_id, user_account_id, progress_basis, account_percentage)
+		VALUES ($1, 'Emergency Fund', 10000, 1000, 'USD', $2, $3, $4, $5)
+		RETURNING id`, user.ID, oldAccountID, userAccountID, basis, accountPercentage).Scan(&goalID))
 
 	accountRepo := repository.NewAccountRepository(pool, enc)
 	goalRepo := repository.NewSavingsGoalRepository(pool)
@@ -219,4 +251,38 @@ func TestSavingsProgressChain_Integration_NullUserAccountID_DegradesHonestly(t *
 	assert.Equal(t, 1000.00, f.storedAmount(t),
 		"with no chain reference the goal reads its own replaced row and freezes there — "+
 			"it must not adopt that row's frozen 3500, nor the live sibling's 4200")
+}
+
+// TestSavingsProgressChain_Integration_AccountPercentage_NoLiveMemberStillFreezes is the
+// account_percentage twin of the balance freeze test. Round 1 covered only `balance`, and a
+// mutation run proved the account_percentage freeze guard could be deleted with the entire
+// unit AND integration suite still green.
+func TestSavingsProgressChain_Integration_AccountPercentage_NoLiveMemberStillFreezes(t *testing.T) {
+	pct := 0.25
+	f := setupSavingsChainFixtureWithBasis(t, false, domain.ProgressBasisAccountPercentage, &pct)
+	ctx := context.Background()
+
+	require.NoError(t, f.svc.RecomputeGoalByID(ctx, f.userID, f.goalID))
+
+	// The retained row holds 3500; recomputing from it would store 3500 * 0.25 = 875.
+	assert.Equal(t, 1000.00, f.storedAmount(t),
+		"a percent-of-balance goal with no live member stays frozen at 1000, not 875")
+
+	summary, err := f.svc.GetProgressSummary(ctx, f.userID)
+	require.NoError(t, err)
+	require.Len(t, summary.Goals, 1)
+	assert.Equal(t, domain.FreshnessBasisAccountDisconnected, summary.Goals[0].Freshness)
+}
+
+// TestSavingsProgressChain_Integration_AccountPercentage_RelinkResumesRecompute is the other
+// half for account_percentage: the live row holds 4200, so 4200 * 0.25 = 1050.
+func TestSavingsProgressChain_Integration_AccountPercentage_RelinkResumesRecompute(t *testing.T) {
+	pct := 0.25
+	f := setupSavingsChainFixtureWithBasis(t, true, domain.ProgressBasisAccountPercentage, &pct)
+	ctx := context.Background()
+
+	require.NoError(t, f.svc.RecomputeGoalByID(ctx, f.userID, f.goalID))
+
+	assert.Equal(t, 1050.00, f.storedAmount(t),
+		"a re-linked percent-of-balance goal recomputes from the live 4200, not the frozen 3500")
 }

@@ -126,7 +126,7 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 		newAmount = sum
 
 	case domain.ProgressBasisBalance:
-		account, err := s.resolveBasisAccount(ctx, goal)
+		account, err := s.resolveBasisAccount(ctx, goal.UserID, goal)
 		if err != nil {
 			return err
 		}
@@ -165,7 +165,7 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 		if goal.AccountPercentage == nil {
 			return fmt.Errorf("savings_progress: goal %s has account_percentage basis but nil percentage", goal.ID)
 		}
-		account, err := s.resolveBasisAccount(ctx, goal)
+		account, err := s.resolveBasisAccount(ctx, goal.UserID, goal)
 		if err != nil {
 			return err
 		}
@@ -251,6 +251,49 @@ func (s *savingsProgressService) RecomputeUser(ctx context.Context, userID strin
 	return nil
 }
 
+// applyBasisAccountFreshness overwrites item.Freshness / item.LinkedBalance from the goal's
+// live basis account (Issue #1569).
+//
+// It distinguishes the two ways resolution can fail to produce an account, because they mean
+// opposite things to the reader:
+//
+//   - no live member in the chain, or a retained physical row -> FreshnessBasisAccountDisconnected.
+//     The number is frozen forever and the UI says so.
+//   - an infrastructure failure (database blip, resolver error) -> FreshnessUnknown. We do NOT
+//     know whether the account is live, so reporting the time-based `fresh` computed from
+//     balance_as_of would assert something we did not check. The earlier version of this code
+//     swallowed the error with `if err == nil`, which made a frozen goal claim freshness and
+//     the disconnected badge disappear for the duration of the blip.
+func (s *savingsProgressService) applyBasisAccountFreshness(
+	ctx context.Context,
+	requesterID string,
+	goal *domain.SavingsGoal,
+	item *domain.SavingsGoalProgressItem,
+) {
+	acct, err := s.resolveBasisAccount(ctx, requesterID, goal)
+	if err != nil {
+		s.logger.Warn("progress_summary: could not resolve basis account — reporting unknown freshness",
+			slog.String("goal_id", goal.ID),
+			slog.String("error", err.Error()),
+		)
+		item.Freshness = domain.FreshnessUnknown
+		return
+	}
+	if acct == nil {
+		return
+	}
+
+	// A disconnected basis account's balance will never update again — report that distinctly
+	// from "still updating, just not recently" (FreshnessStale).
+	if isAccountDisconnected(acct) {
+		item.Freshness = domain.FreshnessBasisAccountDisconnected
+	}
+	if acct.CurrentBalance != nil {
+		bal := clampNonNegative(*acct.CurrentBalance)
+		item.LinkedBalance = &bal
+	}
+}
+
 // resolveBasisAccount returns the account whose current_balance a balance-basis (or
 // account_percentage-basis) goal must be computed from (Issue #1569).
 //
@@ -270,7 +313,7 @@ func (s *savingsProgressService) RecomputeUser(ctx context.Context, userID strin
 // empty — real production rows are still like this, see #1569's main.go wiring defect) or no
 // resolver, it reads the physical row, which is the pre-#1569 behaviour and still freezes when
 // that row is terminal. It never substitutes a different chain's account.
-func (s *savingsProgressService) resolveBasisAccount(ctx context.Context, goal *domain.SavingsGoal) (*domain.Account, error) {
+func (s *savingsProgressService) resolveBasisAccount(ctx context.Context, requesterID string, goal *domain.SavingsGoal) (*domain.Account, error) {
 	accountID := goal.AccountID
 
 	if s.chainResolver != nil && goal.UserAccountID != nil && *goal.UserAccountID != "" {
@@ -294,7 +337,12 @@ func (s *savingsProgressService) resolveBasisAccount(ctx context.Context, goal *
 		}
 	}
 
-	account, err := s.accountRepo.GetByIDAndUser(ctx, accountID, goal.UserID)
+	// Scope the read to the REQUESTER, never to goal.UserID. Passing the goal's own owner id
+	// would make this ownership check compare the goal against itself, so it could never fail
+	// closed — and this path sets item.LinkedBalance, a financial amount. The pre-#1569 code
+	// passed the requester's id here; keeping that is not a refinement, it is preserving the
+	// only ownership gate on the read.
+	account, err := s.accountRepo.GetByIDAndUser(ctx, accountID, requesterID)
 	if err != nil {
 		return nil, fmt.Errorf("savings_progress: get account %s for goal %s: %w", accountID, goal.ID, err)
 	}
@@ -388,31 +436,12 @@ func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID 
 			// Issue #1569: resolve through the re-link chain so the flag agrees with what
 			// RecomputeGoal actually computed from — otherwise a re-linked goal would be
 			// reported as disconnected while its amount is being updated normally.
-			if acct, err := s.resolveBasisAccount(ctx, goal); err == nil && acct != nil {
-				// Issue #1569: a disconnected basis account's balance will never update again —
-				// report that distinctly from "still updating, just not recently" (FreshnessStale).
-				if isAccountDisconnected(acct) {
-					item.Freshness = domain.FreshnessBasisAccountDisconnected
-				}
-				if acct.CurrentBalance != nil {
-					bal := clampNonNegative(*acct.CurrentBalance)
-					item.LinkedBalance = &bal
-				}
-			}
+			s.applyBasisAccountFreshness(ctx, userID, goal, &item)
 		case domain.ProgressBasisAccountPercentage:
 			item.ComputedFrom = domain.ComputedFromAccountPercentage
 			item.Freshness = s.computeFreshness(goal.BalanceAsOf, now, freshnessWindow)
 			// Issue #1569: see the identical chain resolution in the balance-basis branch above.
-			if acct, err := s.resolveBasisAccount(ctx, goal); err == nil && acct != nil {
-				// Issue #1569: see the identical check in the balance-basis branch above.
-				if isAccountDisconnected(acct) {
-					item.Freshness = domain.FreshnessBasisAccountDisconnected
-				}
-				if acct.CurrentBalance != nil {
-					bal := clampNonNegative(*acct.CurrentBalance)
-					item.LinkedBalance = &bal
-				}
-			}
+			s.applyBasisAccountFreshness(ctx, userID, goal, &item)
 		default: // manual or empty
 			item.ProgressBasis = domain.ProgressBasisManual // normalise empty string
 			item.ComputedFrom = domain.ComputedFromManual
