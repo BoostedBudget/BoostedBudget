@@ -222,7 +222,7 @@ func TestAccountRepository_CountByUserID(t *testing.T) {
 		SELECT COUNT(*)
 		FROM accounts
 		WHERE user_id = $1
-		AND status NOT IN ('expired', 'removed')
+		AND status = 'active'
 	`)).WithArgs(userID).WillReturnRows(rows)
 
 	// Execute
@@ -234,10 +234,13 @@ func TestAccountRepository_CountByUserID(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestAccountRepository_CountByUserID_ExcludesRemoved verifies that a retained 'removed' account
-// (Issue #1569: accounts are retained rather than deleted) does not count towards a user's account
-// quota, same as 'expired' already does not. Before this fix the query only excluded 'expired', so
-// a removed-but-retained account still counted.
+// TestAccountRepository_CountByUserID_ExcludesRemoved pins the SQL TEXT that keeps a retained
+// 'removed' account (Issue #1569: accounts are retained rather than deleted) out of the count.
+//
+// ⚠ It cannot pin the BEHAVIOUR: pgxmock never executes the query, and the row count below is one
+// this test made up. The behavioural proof — including the 'replaced' case this text used to let
+// through, residual E10 — is
+// TestAccountRepository_CountByUserID_Integration_CountsOneRowPerRealAccount, against Postgres.
 func TestAccountRepository_CountByUserID_ExcludesRemoved(t *testing.T) {
 	mock, repo := setupAccountMockDB(t)
 	defer mock.Close()
@@ -252,7 +255,7 @@ func TestAccountRepository_CountByUserID_ExcludesRemoved(t *testing.T) {
 		SELECT COUNT(*)
 		FROM accounts
 		WHERE user_id = $1
-		AND status NOT IN ('expired', 'removed')
+		AND status = 'active'
 	`)).WithArgs(userID).WillReturnRows(rows)
 
 	count, err := repo.CountByUserID(ctx, userID)
@@ -1742,7 +1745,7 @@ func TestAccountRepository_CountByUserID_ExcludesExpired(t *testing.T) {
 		SELECT COUNT(*)
 		FROM accounts
 		WHERE user_id = $1
-		AND status NOT IN ('expired', 'removed')
+		AND status = 'active'
 	`)).WithArgs(userID).WillReturnRows(rows)
 
 	count, err := repo.CountByUserID(ctx, userID)

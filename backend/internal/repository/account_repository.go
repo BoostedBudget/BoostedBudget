@@ -913,21 +913,33 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 	return accounts, nil
 }
 
-// CountByUserID counts the total number of accounts for a user.
-// Excludes accounts with status='expired' (Issue #1010: TTL-released fingerprints) and
-// status='removed' (Issue #1569: accounts are retained rather than deleted, so a removed account
-// still has a row here and must be excluded from the count the same way an expired one already is).
+// CountByUserID counts a user's accounts: one row per account the user actually has.
+//
+// `status = 'active'` rather than a NOT IN list, and the difference is 'replaced' (#1569 residual
+// E10). The three non-active statuses are all the same kind of thing here — a row the schema
+// keeps that is not an account the user has:
+//
+//	expired  — the 90-day fingerprint TTL released the hold (#1010).
+//	removed  — the user disconnected it; retained, not deleted (#1569).
+//	replaced — the PRE-RE-LINK COPY of an account whose successor is the active row beside it,
+//	           sharing one user_account_id. Counting both reports two accounts where the user has
+//	           one, and a re-link is a routine event, not an edge case.
+//
+// The earlier NOT IN ('expired', 'removed') form excluded the two that had been noticed and kept
+// the one that had not. CountActiveByLinkedItemID (below) has counted 'active' only since #668.
 //
 // NOTE (#1569, Task 6): this method has NO production caller today — the only real subscription
 // limit in this codebase is transaction_history_days (config/subscription_tiers.yaml); there is no
-// account-count entitlement. This fix is hygiene against a future caller that would otherwise
-// silently over-count retained accounts, not a fix to a live bug.
+// account-count entitlement. It is hygiene against a future caller, and
+// TestAccountRepository_CountByUserID_Integration_CountsOneRowPerRealAccount (a LIVE-Postgres
+// test, because this method's two pgxmock tests supply their own answer and cannot see a wrong
+// WHERE clause) is what keeps it honest.
 func (r *accountRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
 	query := `
 		SELECT COUNT(*)
 		FROM accounts
 		WHERE user_id = $1
-		AND status NOT IN ('expired', 'removed')
+		AND status = 'active'
 	`
 
 	var count int
