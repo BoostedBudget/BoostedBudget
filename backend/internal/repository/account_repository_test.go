@@ -531,7 +531,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		"current_balance", "available_balance", "currency_code",
 		"nickname", "custom_color", "custom_icon", "custom_emoji",
 		"display_order", "is_hidden",
-		"user_account_id", "status", "removed_at",
+		"user_account_id", "status", "removed_at", "replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 	}).AddRow(
 		accountID, uuid.New().String(), userID, "plaid-acc-1",
@@ -539,7 +539,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		&balance, &available, "USD",
 		strPtr("My Checking"), strPtr("#3B82F6"), strPtr("wallet"), strPtr("💰"),
 		&displayOrder, false,
-		&userAccountID, domain.AccountStatusActive, nil,
+		&userAccountID, domain.AccountStatusActive, nil, nil, nil,
 		now, now,
 	)
 
@@ -549,7 +549,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id, status, removed_at,
+		       user_account_id, status, removed_at, replaced_at, replaced_by_id,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -596,7 +596,7 @@ func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
 		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id, status, removed_at,
+		       user_account_id, status, removed_at, replaced_at, replaced_by_id,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
