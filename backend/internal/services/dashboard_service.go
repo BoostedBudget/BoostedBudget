@@ -212,6 +212,53 @@ func hasSnapshotOutsideAccountMap(snapshots []domain.BalanceSnapshot, accountMap
 	return false
 }
 
+// asOfIsHistorical reports whether asOfDate names a day strictly BEFORE today (UTC).
+//
+// This is the seam of the whole #1569 task-21 C2 fix, and it cuts in both directions. For a past
+// date the account universe must be resolved from recorded liveness at that date, or a
+// since-disconnected account's snapshot is dropped from the figure the response is labelled with.
+// For today it must NOT be: `GetForHouseholdScopeLiveAsOf`'s doc comment states the reason
+// directly — passing asOf=now readmits an account removed moments ago — and the product rule
+// (task 20) is that CURRENT totals include only linked/active accounts.
+//
+// asOfDate has already been Truncate(24*time.Hour)'d by every caller, so this is a day comparison,
+// not an instant one. A FUTURE date is deliberately not historical: it is a current-figure question
+// wearing a different label.
+func asOfIsHistorical(asOfDate time.Time) bool {
+	return asOfDate.Before(time.Now().UTC().Truncate(24 * time.Hour))
+}
+
+// mergeMissingAccounts copies entries from src into dst for keys dst does not already hold.
+//
+// ADD-ONLY. The as-of universe AUGMENTS the active-now one; it never replaces it. The only rows
+// this can add are accounts that are NOT active today, WERE live at the requested date, and have a
+// snapshot at or before it — exactly the set that was being dropped, and the only set the fix is
+// about.
+//
+// ⚠ WHAT ADD-ONLY IS AND IS NOT PINNED BY, stated rather than implied. The two maps can only
+// disagree for a chain key whose members differ — a re-link, where the current map holds the
+// ACTIVE successor and the as-of map holds the predecessor that was live then. What they disagree
+// about is TYPE attribution (assets vs liabilities, which ByType bucket); the BALANCE always comes
+// from the snapshot row either way, so the totals this fix exists to correct are identical under
+// both merge directions. Making the merge overwrite therefore does NOT turn any test in this
+// package red, and that is honestly a gap rather than a proof.
+//
+// Add-only is chosen because it is the precedence the baseline path already applies (active map
+// first, historical as fallback — baselineBalanceForComparison, and
+// TestDashboard_AccountOpenedAfterTheCutoff_IsAbsentFromTheBaseline_Integration, which asserts that
+// ordering explicitly). Having the current leg resolve a chain differently from the baseline leg
+// of the same response is a class of bug this file has already been bitten by twice (#1369 G1,
+// #1537 round 10). Whether a HISTORICAL read should instead prefer the member that was live then
+// is a real question, and deliberately not answered here: it would change the baseline path too,
+// and it changes no total.
+func mergeMissingAccounts(dst, src map[string]domain.Account) {
+	for key, account := range src {
+		if _, exists := dst[key]; !exists {
+			dst[key] = account
+		}
+	}
+}
+
 func buildChainAwareAccountMap(accounts []domain.Account) map[string]domain.Account {
 	m := make(map[string]domain.Account, len(accounts)*2)
 	for _, account := range accounts {
@@ -290,6 +337,13 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 	}
 
 	accountMap := buildChainAwareAccountMap(accounts)
+	// #1569 task 21 (C2): the snapshots above were read AS OF asOfDate; the map that INTERPRETS
+	// them must be resolved at the same instant, or a since-disconnected account's snapshot is
+	// silently dropped from the figure this response is labelled with. The baseline half of this
+	// very response already does this (historicalAccountMap, below); the current half did not.
+	if err := s.augmentWithAsOfUniverse(ctx, userID, asOfDate, snapshots, accountMap); err != nil {
+		return nil, err
+	}
 
 	// Group snapshots by account type
 	byType := make(map[string]*domain.AccountTypeBalance)
@@ -443,6 +497,64 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 // IncludeHidden is true to match GetByUserID, which applies no is_hidden predicate at all —
 // a baseline source that defaults to hiding hidden accounts would silently change which accounts
 // count toward it.
+// augmentWithAsOfUniverse adds, to the CURRENT-leg account map of a personal-scope read, the
+// accounts that were live at asOfDate but are not active today. It mutates accountMap in place and
+// is a no-op unless asOfDate is genuinely in the past.
+//
+// It reuses historicalAccountMap rather than issuing its own query, which buys three things: the
+// same IncludeHidden treatment (GetByUserID applies no is_hidden predicate, so a source that hides
+// them would change which accounts count), the same recorded-liveness universe, and the same
+// hasSnapshotOutsideAccountMap short-circuit — so the common case, where every snapshot already
+// resolves, costs no extra round trip at all.
+//
+// An error here is FATAL rather than degrading to the un-augmented map. The un-augmented map is
+// precisely the defect: it produces a confidently-labelled figure that is too small, and this
+// endpoint is reachable by an agent. Both callers already fail the request when the account read
+// fails; this is the same failure for the same reason.
+func (s *dashboardService) augmentWithAsOfUniverse(
+	ctx context.Context,
+	userID string,
+	asOfDate time.Time,
+	snapshots []domain.BalanceSnapshot,
+	accountMap map[string]domain.Account,
+) error {
+	if !asOfIsHistorical(asOfDate) {
+		return nil
+	}
+	asOfMap, err := s.historicalAccountMap(ctx, userID, endOfDay(asOfDate), snapshots, accountMap)
+	if err != nil {
+		return fmt.Errorf("failed to resolve the as-of account universe for %s: %w",
+			asOfDate.Format("2006-01-02"), err)
+	}
+	mergeMissingAccounts(accountMap, asOfMap)
+	return nil
+}
+
+// augmentHouseholdWithAsOfUniverse is augmentWithAsOfUniverse for household scope. The household
+// pair is split across two repository methods rather than one option struct
+// (GetForHouseholdScopeActiveNow / GetForHouseholdScopeLiveAsOf), so the shape differs; the rule,
+// the seam and the add-only merge are identical.
+func (s *dashboardService) augmentHouseholdWithAsOfUniverse(
+	ctx context.Context,
+	userID string,
+	scope *domain.HouseholdScope,
+	asOfDate time.Time,
+	cutoff time.Time,
+	snapshots []domain.BalanceSnapshot,
+	accountMap map[string]domain.Account,
+) error {
+	if !asOfIsHistorical(asOfDate) || !hasSnapshotOutsideAccountMap(snapshots, accountMap) {
+		return nil
+	}
+	asOfAccounts, err := s.accountRepo.GetForHouseholdScopeLiveAsOf(ctx, userID, scope, cutoff)
+	if err != nil {
+		return fmt.Errorf("failed to resolve the as-of household account universe for %s: %w",
+			asOfDate.Format("2006-01-02"), err)
+	}
+	mergeMissingAccounts(accountMap, buildChainAwareAccountMap(asOfAccounts))
+	return nil
+}
+
 func (s *dashboardService) historicalAccountMap(
 	ctx context.Context,
 	userID string,
@@ -513,6 +625,13 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 		return nil, fmt.Errorf("failed to get household accounts: %w", err)
 	}
 	accountMap := buildChainAwareAccountMap(accounts)
+	// #1569 task 21 (C2): same defect as the personal path, same fix — for a PAST as_of_date the
+	// interpreting map must come from recorded liveness at that date, because
+	// GetForHouseholdScopeActiveNow filters `a.status = 'active'` regardless of its cutoff. The
+	// baseline below already reaches for GetForHouseholdScopeLiveAsOf for exactly this reason.
+	if err := s.augmentHouseholdWithAsOfUniverse(ctx, userID, scope, asOfDate, currentCutoff, snapshots, accountMap); err != nil {
+		return nil, err
+	}
 
 	byType := make(map[string]*domain.AccountTypeBalance)
 	var totalBalance float64
@@ -781,6 +900,12 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 	}
 
 	accountMap := buildChainAwareAccountMap(accounts)
+	// #1569 task 21 (C2) — see GetBalanceSummary's identical augmentation. This endpoint is an MCP
+	// `read` capability, so "what was my net worth on <past date>" reaching an agent as 0.00 was
+	// the sharpest form of the defect.
+	if err := s.augmentWithAsOfUniverse(ctx, userID, asOfDate, snapshots, accountMap); err != nil {
+		return nil, err
+	}
 
 	// Initialize category structure
 	byCategory := make(map[string]*domain.NetWorthCategoryBalance)
@@ -1022,6 +1147,10 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 		return nil, fmt.Errorf("failed to get household accounts: %w", err)
 	}
 	accountMap := buildChainAwareAccountMap(currentAccounts)
+	// #1569 task 21 (C2) — see getBalanceSummaryHousehold's identical augmentation.
+	if err := s.augmentHouseholdWithAsOfUniverse(ctx, userID, scope, asOfDate, currentCutoff, snapshots, accountMap); err != nil {
+		return nil, err
+	}
 
 	byCategory := make(map[string]*domain.NetWorthCategoryBalance)
 	var totalAssets, totalLiabilities float64
