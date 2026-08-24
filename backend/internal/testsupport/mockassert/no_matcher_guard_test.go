@@ -22,9 +22,14 @@ import (
 // the assertion can never fail — it passes while the call is happening. See NoCallTo's doc comment
 // for the full history.
 //
-// THIS IS A RATCHET, NOT A BAN. 352 of these remain in the tree. They are not being mass-rewritten:
+// THIS IS A RATCHET, NOT A BAN. 351 pre-existing calls remain in the tree, plus exactly one
+// deliberate call in this file (TestAssertNotCalledWithNoMatchersCannotFail, which demonstrates the
+// defect against a spy) — so the baseline total is 352, of which 351 are the problem. #1569's
+// original count of 352 pre-existing calls came from a line-oriented grep; one of those hits was
+// PROSE in savings_progress_chain_test.go's doc comment, which the AST scan correctly ignores.
+// They are not being mass-rewritten:
 // a reviewer rewrote all 363 originals mechanically and no test newly failed, so there is no
-// currently-masked defect, and a 352-call sweep is a separate decision with its own risk of
+// currently-masked defect, and a 351-call sweep is a separate decision with its own risk of
 // converting a silent pass into a noisy one in a test nobody is looking at. What must not happen is
 // the number going UP: every new one is a test that is counted and cannot fail.
 //
@@ -33,6 +38,12 @@ import (
 //   - a file over its baseline, or a file not in the baseline at all, is a NEW no-op assertion;
 //   - a file under its baseline means someone fixed some — lower the number, so the improvement is
 //     locked in and cannot silently be spent on a new one elsewhere in the same file.
+//
+// SCOPE, and its one hole: the scan is over `git ls-files`, so a brand-new test file that has not
+// been `git add`ed yet is INVISIBLE to this guard locally. It becomes visible the moment it is
+// staged, and CI only ever sees tracked files, so nothing reaches main unchecked — but a local
+// `go test ./...` on unstaged new work will not warn you. The same applies to
+// TestEveryCitedTestNameResolves.
 //
 // Mutation-checked: adding one `AssertNotCalled(t, "Method")` to any file in the tree turns this
 // test red naming that file and line; see task-19-report.md.
@@ -290,7 +301,7 @@ func (f *fakeTestingT) FailNow()                      { f.failed = true }
 
 // TestAssertNotCalledWithNoMatchersCannotFail is the reason this whole file exists, demonstrated
 // rather than asserted in a comment. A mock records a real call to Save("x"), and testify's
-// AssertNotCalled(t, "Save") — the form 352 call sites in this tree still use — reports PASS.
+// AssertNotCalled(t, "Save") — the form 351 call sites in this tree still use — reports PASS.
 //
 // If testify ever changes this behaviour, this test goes red and the guard above can be deleted.
 func TestAssertNotCalledWithNoMatchersCannotFail(t *testing.T) {
