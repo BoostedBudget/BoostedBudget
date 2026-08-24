@@ -1080,8 +1080,11 @@ func (s *householdService) PurgeRemovedMembership(ctx context.Context, household
 	//      but a departed member's CURRENT account name and mask are now reachable at past
 	//      instants where the row previously did not appear at all. That is a widening of what
 	//      is legible, not of which periods are visible, and it is the same identifying detail
-	//      the household saw while the account was shared. Closing it properly needs an as-of
-	//      read of account metadata, which account_status_history does not carry.
+	//      the household saw while the account was shared. It is also bounded by that read's
+	//      own `a.status = 'active'` filter: a departed member's account has to still be LIVE
+	//      today to be legible at all, so a disconnected or replaced one is already invisible.
+	//      Closing the rest properly needs an as-of read of account metadata, which
+	//      account_status_history does not carry.
 	if cerr = shareRepo.RevokeSharesForUser(ctx, householdID, userID); cerr != nil {
 		return cerr
 	}
