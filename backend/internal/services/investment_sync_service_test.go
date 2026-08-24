@@ -545,7 +545,7 @@ func TestInvestmentSyncService_SyncHoldings_UnmappedAccount(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.AccountsProcessed)
-	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount")
+	assertNoCallTo(t, &deps.holdingRepo.Mock, "ReplaceForAccount")
 }
 
 // TestInvestmentSyncService_SyncHoldings_PlaidAPIError verifies that Plaid API
@@ -1310,7 +1310,7 @@ func TestInvestmentSyncService_SyncHoldings_UnmappedSecurity_SkipsAccountReplace
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	// ReplaceForAccount must NOT be called — existing holdings are preserved
-	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount")
+	assertNoCallTo(t, &deps.holdingRepo.Mock, "ReplaceForAccount")
 	// Error is recorded in result
 	assert.Len(t, result.Errors, 1)
 }
@@ -1371,7 +1371,7 @@ func TestInvestmentSyncService_ProcessWebhook_HoldingsPartialFailure(t *testing.
 	assert.Contains(t, err.Error(), "partial failure")
 	// Webhook must NOT be marked as processed
 	assert.False(t, webhook.Processed)
-	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount")
+	assertNoCallTo(t, &deps.holdingRepo.Mock, "ReplaceForAccount")
 }
 
 // TestInvestmentSyncService_ProcessWebhook_HoldingsSkippedIncomplete verifies that when
@@ -1421,7 +1421,7 @@ func TestInvestmentSyncService_ProcessWebhook_HoldingsSkippedIncomplete(t *testi
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "incomplete")
 	assert.False(t, webhook.Processed)
-	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount")
+	assertNoCallTo(t, &deps.holdingRepo.Mock, "ReplaceForAccount")
 }
 
 // TestInvestmentSyncService_ProcessWebhook_NilWebhook verifies that nil input returns an error.

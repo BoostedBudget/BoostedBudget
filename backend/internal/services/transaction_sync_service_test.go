@@ -1346,7 +1346,7 @@ func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
 
 	assert.NoError(t, err)
-	mockTransactionRepo.AssertNotCalled(t, "Update")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "Update")
 	require.Len(t, upserted, 1, "the modification must reach the database as an upsert, not be dropped")
 	assert.Equal(t, "plaid-txn-new", *upserted[0].ExternalTransactionID)
 	assert.NotEmpty(t, upserted[0].ID,
@@ -1407,7 +1407,7 @@ func TestProcessModifiedTransactions_UnmappableAccountButStored_StillApplies(t *
 	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
 
 	require.NoError(t, err)
-	mockTransactionRepo.AssertNotCalled(t, "CreateBatch")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "CreateBatch")
 	require.NotNil(t, updated, "the edit must be applied, not dropped, when we already hold the row")
 	assert.Equal(t, "stored-uuid", updated.ID)
 	assert.Equal(t, "Corrected Name", updated.Name, "the provider's new data must actually land")
@@ -1450,8 +1450,8 @@ func TestProcessModifiedTransactions_UnmappableAndNotStored_IsTheOnlySkip(t *tes
 	err := service.processModifiedTransactions(ctx, modified, linkedItem, map[string]string{}, nil)
 
 	require.NoError(t, err, "this must not wedge the sync: re-delivery cannot conjure an account row")
-	mockTransactionRepo.AssertNotCalled(t, "Update")
-	mockTransactionRepo.AssertNotCalled(t, "CreateBatch")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "Update")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "CreateBatch")
 }
 
 // TestProcessModifiedTransactions_LookupFailureIsNotSwallowed separates residual (3)'s idempotent
@@ -1483,8 +1483,8 @@ func TestProcessModifiedTransactions_LookupFailureIsNotSwallowed(t *testing.T) {
 
 	require.Error(t, err, "a lookup failure is not the missing-row case and must abort the sync")
 	assert.Contains(t, err.Error(), "connection reset by peer")
-	mockTransactionRepo.AssertNotCalled(t, "CreateBatch")
-	mockTransactionRepo.AssertNotCalled(t, "Update")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "CreateBatch")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "Update")
 }
 
 // TestProcessModifiedTransactions_EmptySlice tests handling of empty input
@@ -1665,7 +1665,7 @@ func TestProcessRemovedTransactions_EmptySlice(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	// DeleteByExternalID should NOT be called
-	mockTransactionRepo.AssertNotCalled(t, "TombstoneByExternalID")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "TombstoneByExternalID")
 }
 
 // TestProcessRemovedTransactions_NilTransactionID tests handling of nil transaction_id (should skip)
@@ -1704,7 +1704,7 @@ func TestProcessRemovedTransactions_NilTransactionID(t *testing.T) {
 	// Assert - should succeed but skip nil transaction
 	assert.NoError(t, err)
 	// DeleteByExternalID should NOT be called for nil ID
-	mockTransactionRepo.AssertNotCalled(t, "TombstoneByExternalID")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "TombstoneByExternalID")
 }
 
 // ============================================================================
