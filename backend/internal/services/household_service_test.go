@@ -2511,10 +2511,10 @@ func TestHouseholdService_AcceptInvite_NonPayingInvitee_NotBlocked(t *testing.T)
 
 // TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleBillingRelationship_JoinsFreely
 // documents (but does NOT pin the raw-vs-effective distinction of) the nil-PaddleSubscriptionID
-// short-circuit in callerHasLivePaddleSubscription (household_service.go:1440-1442): a comped
+// short-circuit in callerHasLivePaddleSubscription (household_service.go:1674-1676): a comped
 // user with no Paddle billing relationship at all has no refund/double-charge risk and must join
 // freely. Because PaddleSubscriptionID is nil here, the function returns at that check BEFORE
-// ever reaching the status switch at :1443 — so this case can never fail on a raw-vs-effective
+// ever reaching the status switch at :1677 — so this case can never fail on a raw-vs-effective
 // switch there, regardless of ManualTierOverride/effective status. The actual #1413 pin for that
 // switch is TestCallerHasLivePaddleSubscription_CompedUser_WithPaddleSub_RawCancelled_PinnedRaw
 // below, which sets a real PaddleSubscriptionID so the switch is actually exercised.
@@ -2532,7 +2532,7 @@ func TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleBillingRelationship_
 }
 
 // TestCallerHasLivePaddleSubscription_CompedUser_WithPaddleSub_RawCancelled_PinnedRaw is the
-// #1413 PinnedRaw pin test for the status switch at household_service.go:1443. Unlike the test
+// #1413 PinnedRaw pin test for the status switch at household_service.go:1677. Unlike the test
 // above, PaddleSubscriptionID is set here so execution actually reaches that switch instead of
 // returning early at the nil check. Raw SubscriptionStatus is "cancelled" (the real Paddle
 // subscription is genuinely terminated — no refund/double-charge risk), while a LIVE manual

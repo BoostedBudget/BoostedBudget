@@ -19,10 +19,22 @@ type HouseholdAccountShareService interface {
 	// share visibility. Active-member-only (returns domain.ErrHouseholdNotFound if
 	// the caller has no active membership) and owner-of-account-only (returns
 	// domain.ErrAccountNotOwned if userAccountID does not belong to the caller).
-	// Never writes revoked_at — that is reserved for member removal
-	// (RevokeSharesForUser). Runs in one transaction that locks the caller's own
-	// active household_members row, so it cannot race a concurrent RemoveMember/
-	// self-leave on the same row.
+	// The caller always ends up with exactly one OPEN grant (revoked_at NULL) carrying
+	// the requested visibility — including 'hidden', so a later member removal still
+	// finds and revokes it.
+	//
+	// #1569 T7 corrected this contract, which used to read "Never writes revoked_at —
+	// that is reserved for member removal (RevokeSharesForUser)". It does now: a
+	// visibility CHANGE closes the outgoing state's interval (stamping its revoked_at)
+	// and opens a new one, because overwriting the single row in place rewrote the
+	// account's whole history to whatever the member last chose. Removal is still the
+	// only thing that leaves the account with NO open grant.
+	//
+	// Runs in one transaction that locks the household row and then the caller's own
+	// active household_members row — in that order, per this codebase's lock-ordering
+	// convention, which the interval INSERT above made load-bearing (see the
+	// implementation's comment for the deadlock it fixes). It therefore cannot race a
+	// concurrent RemoveMember/self-leave on either row.
 	SetAccountShareVisibility(ctx context.Context, callerUserID, userAccountID string, visibility domain.ShareVisibility) (*domain.HouseholdAccountShare, error)
 
 	// ListMyAccountShares returns the caller's own accounts with their current
@@ -57,7 +69,7 @@ func (s *householdService) SetAccountShareVisibility(ctx context.Context, caller
 	// real insert does. Now that a visibility change closes one interval and INSERTS the next,
 	// that lock IS taken — and a concurrent RemoveMember (households FOR UPDATE, then this
 	// member's household_members row) deadlocked against it reproducibly, 2 runs in 8 under
-	// TestHouseholdServiceIntegration_SetAccountShareVisibility_RaceRemoveMember.
+	// TestHouseholdServiceIntegration_SetAccountShareVisibility_RaceRemoveMember_NoActiveShareSurvives.
 	//
 	// resolveHousehold is a non-locking lookup used only to learn WHICH household to lock; the
 	// authoritative membership check is still LockActiveMembershipForUser below, so a caller
