@@ -92,6 +92,15 @@ func TestHouseholdShareRepository_SetShareVisibility_Share(t *testing.T) {
 
 	physIdx := "combined-fp"
 	now := time.Now()
+	mock.ExpectBegin()
+	// #1569 T7: the outgoing interval is CLOSED first, and only when it is a different state.
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE household_account_shares SET revoked_at = now(), updated_at = now()
+		WHERE household_id = $1 AND user_account_id = $2
+		  AND revoked_at IS NULL AND visibility <> $3
+	`)).
+		WithArgs("hh-1", "acct-1", domain.ShareVisibilityShared).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility)
 		VALUES ($1, $2, $3, $4)
@@ -107,13 +116,14 @@ func TestHouseholdShareRepository_SetShareVisibility_Share(t *testing.T) {
 			"id", "household_id", "user_account_id", "visibility", "shared_at", "revoked_at",
 			"physical_account_blind_idx", "created_at", "updated_at",
 		}).AddRow("share-1", "hh-1", "acct-1", domain.ShareVisibilityShared, now, nil, &physIdx, now, now))
+	mock.ExpectCommit()
 
 	share, err := repo.SetShareVisibility(context.Background(), "hh-1", "acct-1", &physIdx, domain.ShareVisibilityShared)
 	require.NoError(t, err)
 	require.NotNil(t, share)
 	assert.Equal(t, "share-1", share.ID)
 	assert.Equal(t, domain.ShareVisibilityShared, share.Visibility)
-	assert.Nil(t, share.RevokedAt, "PATCH share/hide must never write revoked_at")
+	assert.Nil(t, share.RevokedAt, "the row SetShareVisibility returns is always the newly-OPEN interval")
 }
 
 func TestHouseholdShareRepository_SetShareVisibility_Hide_NeverTouchesRevokedAt(t *testing.T) {
@@ -122,6 +132,15 @@ func TestHouseholdShareRepository_SetShareVisibility_Hide_NeverTouchesRevokedAt(
 	defer mock.Close()
 
 	now := time.Now()
+	mock.ExpectBegin()
+	// #1569 T7: the outgoing interval is CLOSED first, and only when it is a different state.
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE household_account_shares SET revoked_at = now(), updated_at = now()
+		WHERE household_id = $1 AND user_account_id = $2
+		  AND revoked_at IS NULL AND visibility <> $3
+	`)).
+		WithArgs("hh-1", "acct-1", domain.ShareVisibilityHidden).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility)
 		VALUES ($1, $2, $3, $4)
@@ -137,11 +156,13 @@ func TestHouseholdShareRepository_SetShareVisibility_Hide_NeverTouchesRevokedAt(
 			"id", "household_id", "user_account_id", "visibility", "shared_at", "revoked_at",
 			"physical_account_blind_idx", "created_at", "updated_at",
 		}).AddRow("share-1", "hh-1", "acct-1", domain.ShareVisibilityHidden, now, nil, nil, now, now))
+	mock.ExpectCommit()
 
 	share, err := repo.SetShareVisibility(context.Background(), "hh-1", "acct-1", nil, domain.ShareVisibilityHidden)
 	require.NoError(t, err)
-	// Hiding an account keeps it "active" (revoked_at NULL) so member-removal's
-	// RevokeSharesForUser still catches and revokes it later. #1368 Phase 4.
+	// Hiding an account keeps an OPEN row (revoked_at NULL) so member-removal's
+	// RevokeSharesForUser still catches and revokes it later. #1368 Phase 4. What #1569 T7
+	// changed is the row the previous state left behind, not this one.
 	assert.Nil(t, share.RevokedAt)
 	assert.Equal(t, domain.ShareVisibilityHidden, share.Visibility)
 }

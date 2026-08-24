@@ -204,3 +204,99 @@ func TestHouseholdShareAsOf_OpenGrantStillRequiresActiveMembership(t *testing.T)
 	require.NoError(t, err)
 	assert.Empty(t, pastRead, "and in the past too — only a CLOSED (historical) grant is admitted without active membership")
 }
+
+// TestHouseholdShareAsOf_VisibilityChangeDoesNotRewriteThePast is scope item 2 of #1569 T7.
+// SetShareVisibility overwrote `visibility` in place on the single open grant row, so the
+// row's ONE interval carried whatever the member last chose. Hiding an account therefore
+// rewrote the whole history of that account: an as-of read for a date when it demonstrably
+// WAS in the household aggregate reported that it never had been. A visibility change is a
+// new state starting now, not a correction of the past.
+func TestHouseholdShareAsOf_VisibilityChangeDoesNotRewriteThePast(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdShareRepository(pool)
+	acctRepo := repository.NewAccountRepository(pool, nil)
+
+	now := time.Now().UTC()
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM household_account_shares WHERE household_id = $1`, hh) //nolint:errcheck
+	})
+
+	shared, err := repo.SetShareVisibility(ctx, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityShared)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE household_account_shares SET shared_at = $1 WHERE id = $2`, now.AddDate(0, 0, -60), shared.ID)
+	require.NoError(t, err)
+
+	// The member hides the account TODAY.
+	hidden, err := repo.SetShareVisibility(ctx, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityHidden)
+	require.NoError(t, err)
+	require.Equal(t, domain.ShareVisibilityHidden, hidden.Visibility)
+	require.Nil(t, hidden.RevokedAt, "the CURRENT state must stay an open row so a later RevokeSharesForUser finds it")
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+
+	past, err := acctRepo.GetForHouseholdScope(ctx, owner, scope, now.AddDate(0, 0, -30))
+	require.NoError(t, err)
+	require.Len(t, past, 1, "30 days ago this account WAS in the household aggregate; hiding it today must not rewrite that")
+	require.Equal(t, memberAcct.AccountID, past[0].ID)
+
+	present, err := acctRepo.GetForHouseholdScope(ctx, owner, scope, now.Add(time.Minute))
+	require.NoError(t, err)
+	require.Empty(t, present, "and it must be hidden from TODAY's read — retaining the past must not resurrect it")
+
+	// The shape that makes the above possible: the shared period survives as its own CLOSED
+	// interval, and the hidden period is the open one.
+	rows, err := pool.Query(ctx, `
+		SELECT visibility, revoked_at IS NULL FROM household_account_shares
+		WHERE household_id = $1 AND user_account_id = $2 ORDER BY shared_at
+	`, hh, memberAcct.UserAccountID)
+	require.NoError(t, err)
+	defer rows.Close()
+	type state struct {
+		visibility string
+		open       bool
+	}
+	var states []state
+	for rows.Next() {
+		var st state
+		require.NoError(t, rows.Scan(&st.visibility, &st.open))
+		states = append(states, st)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []state{{"shared", false}, {"hidden", true}}, states,
+		"a visibility change must CLOSE the outgoing state's interval and OPEN a new one, not overwrite in place")
+}
+
+// TestHouseholdShareAsOf_RepeatingTheCurrentVisibilityDoesNotChurnIntervals guards the other
+// direction: an idempotent PATCH (setting the visibility it already has) must not manufacture
+// a zero-length interval and a new row on every call. Only a genuine state CHANGE closes.
+func TestHouseholdShareAsOf_RepeatingTheCurrentVisibilityDoesNotChurnIntervals(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdShareRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ua := insertTestUserAccount(t, pool, owner)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM household_account_shares WHERE household_id = $1`, hh) //nolint:errcheck
+	})
+
+	first, err := repo.SetShareVisibility(ctx, hh, ua, nil, domain.ShareVisibilityShared)
+	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		again, err := repo.SetShareVisibility(ctx, hh, ua, nil, domain.ShareVisibilityShared)
+		require.NoError(t, err)
+		require.Equal(t, first.ID, again.ID, "re-asserting the same visibility must return the SAME open row")
+	}
+
+	var total int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+		hh, ua).Scan(&total))
+	assert.Equal(t, 1, total, "no-op PATCHes must not accumulate zero-length intervals")
+}
