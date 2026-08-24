@@ -26,6 +26,17 @@ import (
 // them; a hard delete of financial history is a decision, there are five of them, and every one
 // should be visible in a single list that a reviewer can read in ten seconds.
 //
+// THE GAP IN THE FUNCTION KEY, precisely. The key is (function, TABLE), so a second delete of a
+// DIFFERENT history table inside an allowlisted function IS caught — that is a new key. What slips
+// through is a second delete of the SAME table in the same function, i.e. widening what an existing
+// purge destroys. For PurgeAccount that case is covered behaviourally instead, by
+// TestHistoryRetentionRoundTrip_PurgeDestroysOnlyWhatItNames, which seeds a sibling institution and
+// asserts the purge does not touch it.
+//
+// SCOPE: backend/internal only. A delete written in cmd/ would not be seen; today the only match
+// there is in a test file, so there is no live gap, but the boundary is a walk of repoInternalRoot
+// and not a decision that cmd/ is safe.
+//
 // KEYED BY FUNCTION, NOT BY LINE. Line numbers rot — this plan re-pinned one twice — and a
 // file-level key would let a second, unrelated delete slip into an already-listed file. The
 // function name is also the only part of the key that a reader can evaluate: `PurgeAccount` and
