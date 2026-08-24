@@ -22,8 +22,11 @@ user could never get back:
 - **Deleting a budget, a boost, a savings goal or a category** cascaded into
   `budget_period_events`, `rollover_history`, `boost_executions` and `savings_goal_contributions`.
   Deleting a goal deleted the record of money the user had typed in by hand.
-- **Nothing recorded liveness at all.** Every historical read resolved an account's universe from
-  its *current* status, so an account that went away retroactively vanished from every past day.
+- **Nothing recorded liveness at all.** Historical reads resolved an account's universe from its
+  *current* status, so an account that went away retroactively vanished from past days. Task 21
+  found four such sites (personal and household × balance-summary and net-worth) plus a fifth of a
+  related shape; that enumeration is what was fixed, and it was never established that it was the
+  complete set of such reads in the tree.
 
 None of these was a bug in the sense of a wrong line. Each was a default: the schema said CASCADE,
 the sync said DELETE, and no one had written down that history was supposed to survive. This ADR
@@ -59,14 +62,36 @@ The user, in the UI, in words, asked for *this data* to be destroyed, and the co
 they confirmed. The verb is `Purge`, `Delete`, or `Erase` — never `Disconnect`, `Remove`,
 `Unlink`, `Close`, `Cancel` or `Sync`.
 
-Requirements: a distinct endpoint and repository method from the retaining path; an audit row
-written **in the same transaction** as the delete; a precondition that refuses to run on live data;
-and an entry in `allowedHistoryDeletes` (guard G2) giving the reason.
+Requirements for anything NEW in this bucket: a distinct endpoint and repository method from the
+retaining path; an audit row written **in the same transaction** as the delete; a precondition that
+refuses to run on live data; and an entry in `allowedHistoryDeletes` (guard G2) giving the reason.
 
-Today this bucket has exactly five members: `PurgeAccount`, `PurgeLinkedItem`, `PurgeGoal`,
-`DeleteContribution`, and `DeleteManagedForTransaction`. The last is the edge case: it deletes only
-rows with `managed_by_reconciliation = true` — derived, regenerable rows the reconciler owns, which
-are not a record of anything the user did. A user-entered contribution does not match the predicate.
+Today this bucket has exactly five members — the five distinct functions keyed in
+`allowedHistoryDeletes` (`history_delete_guard_test.go:57-91`, eight `(function, table)` entries
+across them). ⚠ **They do not all meet the four requirements, and this document previously implied
+they did.** The strong form holds for the three purges only:
+
+| | `PurgeAccount` | `PurgeLinkedItem` | `PurgeGoal` | `DeleteContribution` | `DeleteManagedForTransaction` |
+|---|---|---|---|---|---|
+| Own endpoint/method, distinct from the retaining path | yes | yes | yes | yes | no endpoint — reconciler-internal |
+| Audit row in the SAME transaction | yes | yes | yes | **no** | **no** |
+| Precondition refusing to run on live data | yes | yes | yes | **no — inverted**: its predicate requires a LIVE goal (`g.deleted_at IS NULL`) | **no** |
+| Entry in `allowedHistoryDeletes` with a reason | yes | yes | yes | yes | yes |
+
+*Method:* the audit column is `/usr/bin/grep -n "LogInTx" backend/internal/repository/{account,linked_item,savings_goal,savings_contribution}_repository.go`
+— three `*.history_purged` calls, none in `savings_contribution_repository.go`. The precondition
+column is reading each method body; `DeleteContribution`
+(`savings_contribution_repository.go:654-671`) and `DeleteManagedForTransaction` (`:721-728`) are
+each a single bare `db.Exec` with no surrounding transaction.
+
+The two contribution deletes are recorded here as a **known deviation**, not as satisfying the
+list. `DeleteContribution` destroys exactly the one row the user is looking at and just asked to
+remove. `DeleteManagedForTransaction` deletes only rows with `managed_by_reconciliation = true` —
+derived, regenerable rows the reconciler owns, which are not a record of anything the user did; a
+user-entered contribution does not match the predicate. Note also that its predicate is
+`WHERE transaction_id = $1 AND managed_by_reconciliation = true`, with **no user scoping** — safe
+only because `transaction_id` is already user-scoped by its caller. **Copy the purges, not these
+two**, when adding a sixth member.
 
 ### 2. Side-effect destruction — forbidden; tombstone instead
 
@@ -79,12 +104,40 @@ wrote the dialog did not know it would.
 
 ### 3. Automatic destruction — forbidden without a written retention policy
 
-Nothing deletes financial history on a timer, a threshold, a tier downgrade, or a background
+Nothing may delete financial history on a timer, a threshold, a tier downgrade, or a background
 sweep, unless the deletion is itself a published retention policy the user was told about. The
-30/7-day deletion-grace sweep qualifies, and only because the warning emails now enumerate what
-they will destroy. Garbage-collecting tombstoned rows does **not** qualify and is permanently out
-of scope for #1569: a tombstone whose row is later collected is a delayed version of the defect
-this issue exists to fix.
+30/7-day deletion-grace sweep is the one member of this bucket. Garbage-collecting tombstoned rows
+does **not** qualify and is permanently out of scope for #1569: a tombstone whose row is later
+collected is a delayed version of the defect this issue exists to fix.
+
+⚠ **OPEN COMPLIANCE ITEM: the sweep's warning emails do not enumerate everything the sweep
+destroys, and this branch is part of why.** Both notices
+(`backend/internal/queue/jobs/retention_cleanup_check.go:742` and `:769`) name exactly *"your
+automation rules, transaction history, and balance history"*. The sweep runs `DeleteUserCascade` —
+a real `DELETE FROM users` cascading ~37 tables (that file's own count, `:129`). Tables it destroys
+that those three categories do not cover:
+
+| Table | Status |
+|---|---|
+| `holding_snapshots` | **new this branch** (migration `000160`) — before it, no per-day holdings record existed to lose |
+| `liability_statements`, `credit_liability_aprs` | **new this branch** (`000161`) — same |
+| `savings_goal_contributions` | **newly reachable this branch**: now outlives a deleted goal (Decision 4), so the sweep is the first thing that destroys hand-logged money |
+| `boost_executions`, `rollover_history`, `budget_categories` | **newly reachable this branch** — same, they now outlive their tombstoned parent |
+| `account_status_history`, and `balance_snapshots` under a disconnected account | **newly reachable this branch**: retained past a disconnect (Decision 1) rather than cascaded away at disconnect time |
+| `portfolio_snapshots`, `portfolio_snapshot_repairs`, `rule_execution_history`, `holdings`, the three liability tables | pre-existing gap, unchanged by this branch |
+
+*Method:* the two email bodies read at the cited lines; the table list is `historyBearingTables`
+(`history_cascade_guard_test.go:75-95`) cross-checked against `allowedHistoryCascades`' `parent:
+"users"` block, which is this repo's own enumeration of what `DELETE FROM users` reaches directly.
+
+**This branch narrowed the gap in the code and widened it in the copy.** It is recorded here rather
+than fixed here: rewriting a user-facing deletion warning is a compliance-adjacent change that
+needs its own review against the privacy policy's Section 8.4, and it should be a ticket. A correct
+enumeration would be **category-level rather than table-level**, so it does not go stale the next
+time a table is added — e.g. *"everything in your account: your accounts and their balance and
+holdings history, your transactions, your budgets, your savings goals and the contributions you
+logged by hand, and your automation rules and their execution history."* Until that lands, the
+sweep's claim to be a *published* retention policy is weaker than this document previously stated.
 
 ---
 
@@ -103,11 +156,20 @@ historical reads resolve their account universe **as of the day being rendered**
 `accounts.status` today. Without this, retaining the row would still have made the past change
 every time the present did.
 
-### 3. Plaid cannot delete anything
+### 3. A Plaid sync cannot delete a transaction, and cannot act on an unproven absence
 
-A `removed` transaction is tombstoned (`000156`, `TombstoneByExternalID`), keeping the user's
-category overrides and notes. A partial holdings or liabilities response cannot overwrite a
-complete one, and an unprovable response cannot certify an absence.
+A `removed` transaction is tombstoned (`000156`, `TombstoneByExternalID`,
+`transaction_repository.go:580`), keeping the user's category overrides and notes. A partial
+holdings or liabilities response cannot overwrite a complete one, and an unprovable response cannot
+certify an absence.
+
+⚠ **This is narrower than "Plaid cannot delete anything", which is what the heading said and which
+is false.** A sync still hard-deletes `holdings` (`holding_repository.go:151`),
+`credit_liabilities` and `credit_liability_aprs` (`credit_liability_repository.go:67,75`),
+`mortgage_liabilities` (`:141`) and `student_loan_liabilities` (`:198`) on every run, by design —
+see Decision 10 for why those are live state rather than history, and what carries their past
+instead. *Method:* `/usr/bin/grep -rn "DELETE FROM" backend/internal/repository/*liability*.go
+backend/internal/repository/holding_repository.go` over non-test Go.
 
 ### 4. The four config parents tombstone
 
@@ -135,18 +197,69 @@ strand it forever. Two other tables are in the same position for the same reason
 only through their tombstoned parent. This is why guard G1 is an *allowlist with reasons* rather
 than a ban.
 
-### 7. Retention never overrides another person's privacy bound
+### 7. Retention never overrides another person's privacy bound — on the BALANCE reads. The spending reads still over-erase, and that is a deferral, not an oversight
 
-In a household, one member's history is visible to the household only for the interval it was
-actually shared. The household series is clipped at the revocation **instant**, not the revocation
-**day**. The first version of this rule dropped the departure day whole, on a false binary — "drop
-the member's last partial day, or admit a post-departure instant". Clipping `bs.snapshot_at`
-directly against `share_started_at` / `share_ended_at` does neither: the household keeps every
-instant it was genuinely entitled to and gets nothing outside them. Pinned by
+In a household, one member's history should be visible to the household exactly for the interval it
+was actually shared. That rule shipped on the **balance / net-worth** reads and **not** on the
+**spending, income and savings-rate** reads. The two therefore disagree about the same days. This
+was ruled a deliberate deferral and it stands; the reason is a money double-count, below.
+
+**What shipped.** `householdAccountsCTEForBalancesPerDay`
+(`backend/internal/repository/analytics_repository.go:578-593`) and its point-in-time sibling
+`householdAccountsCTEForBalancesAsOf` (`:654-`) admit closed grants —
+`(ua.user_id = ANY($3) OR has.revoked_at IS NOT NULL)` — and carry `share_ended_at` (or bound on
+`$4`) so the series is clipped at the revocation **instant**, not the revocation **day**. A
+departed member's shared period survives in the household net-worth chart. The first version of
+this rule dropped the departure day whole, on a false binary — "drop the member's last partial day,
+or admit a post-departure instant". Clipping `bs.snapshot_at` directly against `share_started_at` /
+`share_ended_at` does neither: the household keeps every instant it was genuinely entitled to and
+gets nothing outside them. Pinned by
 `TestHouseholdShareRange_RevocationDayKeepsOnlyPreRevocationInstants` and its mirror
 `TestHouseholdShareRange_ShareStartDayExcludesPreGrantInstants`. **More retention is not
-automatically better** — this is a case where the answer was exactness in both directions, and the
-opening bound was leaking.
+automatically better** — the answer here was exactness in both directions, and the opening bound
+was leaking.
+
+**What did not.** `householdAccountsCTE` (`:514-534`) still carries **both**
+`has.revoked_at IS NULL` **and** `ua.user_id = ANY($3)`. A departed member's **entire** past —
+not merely the post-revocation part — disappears from household spending, income and savings-rate.
+Nine date-ranged household reads consume it, every one joining
+`household_accounts ha ON ha.user_account_id = a.user_account_id`:
+
+| Line | Method |
+|---|---|
+| `:171` | `getCashFlowAggregationHousehold` |
+| `:321` | `getCashFlowGroupedHousehold` |
+| `:846` | `getSpendingByCategoryHousehold` |
+| `:948` | `getSpendingByMerchantHousehold` |
+| `:1077` | `getSpendingTrendsHousehold` |
+| `:1222` | `getAverageMonthlySpendHousehold` |
+| `:1354` | `getSavingsRateForPeriodHousehold` |
+| `:1463` | `getMonthOverMonthSpendingHousehold` |
+| `:1651` | `getIncomeSourceBreakdownHousehold` |
+
+*Method:* `/usr/bin/grep -n "householdAccountsCTE()" internal/repository/analytics_repository.go`
+returns **10** rows — the nine above plus the definition at `:514` (the two balance siblings have
+different names and are excluded by the exact-match `()`). Then
+`/usr/bin/grep -c "household_accounts ha" internal/repository/analytics_repository.go` returns
+**9**, all the identical `ON ha.user_account_id = a.user_account_id`, confirming the join column at
+every site.
+
+**Why widening that CTE naively is WORSE than the divergence.** It is
+`DISTINCT ON (COALESCE(has.physical_account_blind_idx, ua.id::text))` — one row per **fingerprint**,
+not per `user_account`. Drop `revoked_at IS NULL` and a re-fingerprinted account with two closed
+grants yields **two** rows carrying the same `user_account_id`; because all nine sites join on
+`ha.user_account_id`, every matching transaction lands twice in `SUM()` and `COUNT()`. That is a
+money double-count, and showing a household a doubled spend total is worse than showing it too
+little. A date clip does not rescue it either: the `DISTINCT ON` collapses to one row keeping the
+earliest `shared_at`, so the surviving row has no `revoked_at` to clip against.
+
+**What a correct fix costs.** The same interval-emission-then-collapse restructuring the balance
+side got, re-derived for a **per-transaction** aggregation shape rather than a per-day one, and
+carried across all nine sites with coverage at each. That was judged out of scope for #1569.
+
+**Until it lands, read the two charts as different universes.** A household spending chart means
+"the accounts *currently* shared by *current* members"; a household net-worth chart means "what the
+household was entitled to see on each day". **No test asserts they agree, because they do not.**
 
 ### 8. GDPR erasure is the one thing that overrides all of this
 
@@ -160,18 +273,29 @@ guard G1's allowlist more than any other.
 Two claims, and the difference between them was got wrong once in this document already, so both
 are stated with what was checked.
 
-**No user can un-delete anything.** `grep -icE "restore|undelete|recover" api/openapi.yaml` returns
-**0**, and no `Path:` in `internal/huma/operations/` exposes one. There is no endpoint to restore a
-transaction, a goal, a budget, a category, a boost, or an account. Enumerating every un-tombstone
-write in `backend/internal` — `grep -n "deleted_at = NULL\|removed_at = NULL"` — returns exactly
-**two** rows in the whole tree, and neither is user-callable:
+**No user can un-delete anything.** `/usr/bin/grep -icE "restore|undelete|recover" api/openapi.yaml`
+returns **0**, and no `Path:` in `internal/huma/operations/` exposes one. There is no endpoint to
+restore a transaction, a goal, a budget, a category, a boost, or an account.
+
+⚠ *The method, stated honestly, because an earlier version of this section overstated it.*
+`/usr/bin/grep -rn "deleted_at = NULL\|removed_at = NULL" backend/internal` returns **7** rows, of
+which **2** are non-test — `household_repository.go:623` and `account_repository.go:1746`. That
+pattern is a **spot check, not an enumeration**: it sees only that literal spelling, and
+`updateStatusWithRemovalReason` (`account_repository.go:1679-1691`) clears `removed_at` and
+`removed_reason` through bind parameters `$4` and `$5`, which the pattern cannot see at all. What
+actually supports the conclusion is enumerating every statement that WRITES the column —
+`/usr/bin/grep -rn "SET deleted_at" backend/internal`, 9 non-test rows, **all** `SET deleted_at =
+NOW()` — plus reading the two restores named below. The conclusion holds; the grep alone never
+proved it. The two un-tombstone writes, neither user-callable:
 
 | Write | What it undoes |
 |---|---|
 | `household_repository.go` `RestoreMember` | a household MEMBERSHIP, not financial history |
 | `account_repository.go` `RestoreProviderRemovedAccount` | an account tombstone, and only a provider-caused one |
 
-**Nothing sets `deleted_at = NULL`.** The six `deleted_at` tombstones — `transactions`,
+**No write in `backend/internal` sets `deleted_at` back to NULL** (method: the two greps above —
+every `SET deleted_at` is `= NOW()`, and no statement clears it by literal or by bind parameter).
+The six `deleted_at` tombstones — `transactions`,
 `savings_goals`, `boosts`, `budgets`, `budget_categories`, `custom_categories` — have no restore
 path of any kind, automatic or manual. For those, a tombstone means **retained and permanently
 invisible**: the row survives so its history children survive and past days keep rendering, not so
@@ -180,24 +304,53 @@ the user can change their mind.
 **The one exception, and it is a real decision.** `accounts` is soft-removed with a recorded CAUSE,
 and the cause decides reversibility:
 
-- `MarkRemovedByProvider` stamps `removed_reason = 'provider_absent'` — the bank stopped reporting
-  the account.
-- `UpdateStatus` and `MarkRemovedByLinkedItemID` stamp `removed_reason = 'user_disconnect'` — the
-  user pressed the button.
+- `MarkRemovedByProvider` (`account_repository.go:1626-1628`) stamps
+  `removed_reason = 'provider_absent'` — the bank stopped reporting the account.
+- `UpdateStatus` (`:1616-1621`) stamps `removed_reason = 'user_disconnect'` — the user pressed the
+  button. Both delegate to `updateStatusWithRemovalReason`, which stamps a reason **only** on a
+  transition to `removed` and writes NULL otherwise, so migration `000154`'s
+  `accounts_removed_reason_valid` CHECK is satisfied by construction.
+- ⚠ `MarkRemovedByLinkedItemID` (`:1769`, interface at `:334`) stamps **no fixed reason** — an
+  earlier version of this document said it stamped `'user_disconnect'`, which told the reader that
+  a background sweep was a user button press. It takes `reason domain.RemovalReason` as a
+  **parameter**, and its two live callers pass two different values:
+  `services/account_service.go:1170` (`DisconnectInstitution`) passes `RemovalReasonUserDisconnect`;
+  `services/plaid_item_cleanup_service.go:573` (the orphaned-Plaid-item cleanup sweep) passes a
+  **third** constant this document did not previously mention, `RemovalReasonLinkRemoved`
+  (`domain/account.go:153`). The sweep selects an item merely for sitting in `login_required` past
+  `errorDays`; the constant exists precisely so that is not recorded as the user's intent. The
+  method refuses `provider_absent` outright (`:1780`) — which is what keeps such accounts out of
+  automatic resurrection — and refuses an empty reason (`:1786`). *Method:*
+  `/usr/bin/grep -rn "MarkRemovedByLinkedItemID" --include="*.go" .` filtered to non-test files,
+  then reading each caller.
 
 `RestoreProviderRemovedAccount` flips a row back to `status = 'active'` with `removed_at` and
-`removed_reason` cleared, and its predicate is the whole safety argument:
+`removed_reason` cleared. ⚠ **The gate is a Go `if`, not a SQL predicate** — this document and the
+method's own doc comment both claimed the UPDATE's WHERE clause carried it, and both were wrong.
+The actual cause check is `account_repository.go:1734-1738`:
 
-```
-status = 'removed' AND removed_reason IS NOT NULL AND removed_reason = 'provider_absent'
+```go
+if currentStatus != string(domain.AccountStatusRemoved) ||
+    removedReason == nil ||
+    *removedReason != string(domain.RemovalReasonProviderAbsent) {
+    return ErrAccountNotRestorable
+}
 ```
 
-Anything else returns `ErrAccountNotRestorable`. **A user disconnect is never undone by a sync**,
-and a legacy row whose cause was never recorded (NULL, written before migration 000154) is refused
-too — because it cannot be *proven* to be anything else. The live caller is
-`restoreReappearedAccount` in `plaid_account_reconciliation.go`, which treats the refusal as the
-routine answer rather than an error. The check and the write are one `SELECT … FOR UPDATE`
-transaction, so a disconnect racing a sync cannot be resurrected.
+and the UPDATE at `:1744-1748` carries only `WHERE id = $2 AND user_id = $3`. Note the explicit nil
+check: the legacy NULL-cause row (written before migration `000154`) is refused by that line, not
+by SQL's NULL-comparison semantics, because no SQL comparison is involved.
+
+**The behaviour is nonetheless correct and race-safe.** The `SELECT status, removed_reason … FOR
+UPDATE` (`:1719-1722`), the `if`, and the UPDATE are one transaction, so a disconnect racing a sync
+cannot resurrect the account. **A user disconnect is never undone by a sync**, and a legacy row
+whose cause was never recorded is refused too, because it cannot be *proven* to be anything else.
+What is NOT true is that a future caller reaching that UPDATE by a different route would be stopped
+by the schema — the check would have to be carried with it. The one live caller today is
+`restoreReappearedAccount` in `services/plaid_account_reconciliation.go:290,301-306`, which treats
+the refusal as the routine answer rather than an error (*method:*
+`/usr/bin/grep -rn "RestoreProviderRemovedAccount" internal --include="*.go"` over non-test files —
+one implementation, one interface entry, one call).
 
 This is the corollary "the provider is not the user" applied in both directions: the provider
 removing an account is not a deletion request, so it is reversible when the provider changes its
@@ -245,6 +398,45 @@ is pinned by `TestHistorySnapshot_*`.
 
 ---
 
+### 11. A closed account carries no current balance; its history remains fully queryable
+
+This is the seam the whole decision turns on: **the CURRENT universe goes empty, the HISTORICAL
+universe stays intact.** They are different questions and retention only ever promised the second.
+
+A terminal-status account presents **no** `current_balance` and **no** `available_balance` from any
+read. That column is a figure frozen at the moment the account stopped syncing; it carries no as-of
+instant, so it is not history — it is a stale claim about *now*. As-of balances come from
+`balance_snapshots` / `holding_snapshots` and are untouched: a closed account's history is exactly
+as queryable as it was before. Shipped in commit `d44f1445`.
+
+**NULL, not zero.** Both fields are `*float64` with `omitempty`, and neither is in the `Account`
+schema's `required` list in `api/openapi.yaml` (*method:* parsed the spec and read
+`components.schemas.Account.required` — 11 entries, `current_balance` and `available_balance` in
+neither), so omission is contract-legal and a client has nothing to render. Zero is a *number*: it
+renders as "$0.00", a positive claim that the account is empty, which is a different and false
+statement from "we no longer know". NULL is also this field's established unknown value — Plaid
+omits `available_balance` for several account types — so every existing nil check already does the
+right thing.
+
+**Why it cannot over-apply.** One choke point, `accountBalanceProjection`
+(`repository/account_liveness_sql.go:160`), is used by all **ten** account-shaped SELECTs
+(`account_repository.go:559, 622, 690, 810, 887, 1132, 1184, 1443, 1506, 1555`; *method:*
+`/usr/bin/grep -rn "accountBalanceProjection(" internal --include="*.go"` over non-test files). Its
+`CASE` keys on `status = 'active'`, and `accounts_valid_status` is exactly
+`CHECK (status IN ('active', 'replaced', 'expired', 'removed'))` (migration
+`000149_add_accounts_removed_status.up.sql:64-65`), so `status = 'active'` is precisely the
+complement of the three terminal states. There is no fifth value for the rule to mis-classify.
+
+Mechanically pinned by `TestNoAccountProjectionCarriesATerminalBalance`; the historical half is
+asserted over the same account in the same test — the snapshots are untouched.
+
+**Known consequence, deliberately not fixed here.** `AccountsPage.tsx`'s balance-range filter and
+sort coalesce an absent balance to `0` (~`:336`, ~`:367`), so a closed account with no balance
+matches a `min/max` range and sorts as zero. What a range predicate should mean for an unknown
+value is a product decision, not a mechanical one; it wants a ticket.
+
+---
+
 ## How This Is Enforced
 
 Writing a principle down does not keep it. Four mechanisms do:
@@ -261,6 +453,14 @@ Writing a principle down does not keep it. Four mechanisms do:
 Both G1 and G2 fail in **two** directions: an unallowlisted violation, and an allowlist entry whose
 target no longer exists. Stale entries are how the next violation gets justified — they make a
 decision read as current when the schema has already moved on.
+
+⚠ **No guard checks that an allowlist REASON is true.** The reason strings are prose for the next
+reader, and G1's key is `(child, parent, constraint)` while G2's is `(function, table)` — neither
+carries a predicate, so an entry keeps its blessing when the SQL under it is widened. Two G1
+reasons shipped false in this issue, both saying a `savings_goals`-parented cascade "fires only
+under GDPR erasure" eleven lines from `savings_goal_repository.go`'s own comment that a purge is
+"the destruction the tombstone was deferring". Re-derive a reason before relying on it; do not
+treat a green guard suite as evidence that the reasons are accurate.
 
 Each guard's own meta-tests construct the violation it exists to catch and prove the guard reports
 it. This is not ceremony. Three guards in this issue shipped in a form that could not fail — an

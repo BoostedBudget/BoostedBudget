@@ -125,8 +125,11 @@ Full reasoning, the classification test and the surprising cases:
 
 Before writing anything that removes a row, classify it:
 - **Explicit destruction** — the user asked for *this data*, in words, in the confirm dialog. Allowed.
-  Needs its own endpoint/method distinct from the retaining one, an audit row in the SAME
-  transaction, a precondition refusing live data, and an entry in `allowedHistoryDeletes`.
+  Anything NEW here needs its own endpoint/method distinct from the retaining one, an audit row in
+  the SAME transaction, a precondition refusing live data, and an entry in `allowedHistoryDeletes`.
+  ⚠ Only the three purges (`PurgeAccount`, `PurgeLinkedItem`, `PurgeGoal`) meet all four today;
+  `DeleteContribution` / `DeleteManagedForTransaction` have no audit row and no live-data
+  precondition (known deviation, see ADR § Classification Test). **Copy the purges.**
 - **Side-effect destruction** — the delete is a consequence of something else they asked for
   (disconnect, cancel, downgrade, sync). **Forbidden.** Tombstone instead (`deleted_at`, or
   `removed_at` for accounts) and teach every read to filter it.
@@ -146,8 +149,25 @@ Never write confirm copy promising the user they can restore it.
 `RestoreProviderRemovedAccount` un-removes a row only when
 `status='removed' AND removed_reason='provider_absent'` (the bank stopped reporting it), called from
 `restoreReappearedAccount` on sync. A `user_disconnect` tombstone — and a legacy NULL cause — is
-refused with `ErrAccountNotRestorable` and is **never** undone by a sync. If you add a removal path,
+refused with `ErrAccountNotRestorable` and is **never** undone by a sync. ⚠ That check is a **Go
+`if` under `SELECT … FOR UPDATE`**, not the UPDATE's WHERE clause (which is only
+`id = $2 AND user_id = $3`) — race-safe as written, but a new write path to `status='active'` must
+carry the check with it. There are **three** removal causes, not two: `MarkRemovedByLinkedItemID`
+takes the reason as a parameter, and the orphaned-Plaid-item sweep passes
+`RemovalReasonLinkRemoved` — a background sweep is not a user disconnect. If you add a removal path,
 stamp the cause; if you add a restore, scope it to a cause you can prove.
+
+⚠ **A closed account carries no current balance; its history stays fully queryable.** A terminal
+account (`removed`/`replaced`/`expired`) presents NULL — not zero — for `current_balance` /
+`available_balance` from all ten account reads (one renderer, `accountBalanceProjection`); as-of
+balances from `balance_snapshots`/`holding_snapshots` are untouched. Current universe empty,
+historical universe intact.
+
+⚠ **Household spending and household net-worth do NOT agree about a departed member.** Balance /
+net-worth reads honour the shared interval; spending, income and savings-rate reads
+(`householdAccountsCTE`, nine call sites) still erase a departed member's entire past. Known,
+costed deferral — widening the CTE naively double-counts money. See ADR Decision 7 before touching
+it.
 
 ⚠ Enforced mechanically, and each guard's meta-tests construct the violation and prove it fails:
 - `TestNoUnallowlistedCascadeIntoHistoryTable` (G1) — new `ON DELETE CASCADE` into a history-bearing
@@ -155,6 +175,9 @@ stamp the cause; if you add a restore, scope it to a cause you can prove.
   ⚠ Some cascades are the ONLY GDPR-erasure route for their table (`budget_categories`,
   `budget_period_events`, `savings_goal_contributions` have no `user_id` FK) — read the reason
   before "fixing" one to RESTRICT, or you strand the rows forever.
+  ⚠ **No guard checks that an allowlist reason is TRUE.** Neither key carries a predicate, so an
+  entry keeps its blessing when the SQL under it widens. Two reasons shipped false in #1569.
+  Re-derive before relying on one.
 - `TestNoUnallowlistedHistoryDelete` (G2) — a hard `DELETE FROM` a history table in Go.
 - `TestNoConfigReadForgetsTheTombstoneFilter` / `TestNoTransactionReadForgetsTheTombstoneFilter` —
   a read that forgets `deleted_at IS NULL` (per reference, alias-qualified).
