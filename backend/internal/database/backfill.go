@@ -648,6 +648,18 @@ func backfillDownstreamUserAccountIDs(ctx context.Context, db *pgxpool.Pool) err
 				WHERE bs.account_id = a.id AND bs.user_account_id IS NULL AND a.user_account_id IS NOT NULL`,
 		},
 		{
+			// Issue #1569 residual E7. The history rows written BEFORE an account's identity was
+			// minted carry NULL, and nothing else can ever fill them: the record_account_status_change
+			// trigger fires on status changes only, so assigning accounts.user_account_id later does
+			// not rewrite the intervals already recorded. Without this step the column is not merely
+			// unread, it is unrepairable — on exactly the pre-mint accounts whose retained history is
+			// the point of #1569.
+			table: "account_status_history",
+			query: `UPDATE account_status_history ash SET user_account_id = a.user_account_id
+				FROM accounts a
+				WHERE ash.account_id = a.id AND ash.user_account_id IS NULL AND a.user_account_id IS NOT NULL`,
+		},
+		{
 			table: "savings_goals",
 			query: `UPDATE savings_goals sg SET user_account_id = a.user_account_id
 				FROM accounts a
