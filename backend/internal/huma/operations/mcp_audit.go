@@ -56,7 +56,7 @@ type RecordMCPAuditBody struct {
 	ActorUserID           string   `json:"actor_user_id" doc:"Clerk user ID of the actor; resolved to the internal user UUID server-side"`
 	GrantID               string   `json:"grant_id" doc:"OAuth grant ID from the Clerk token"`
 	Scopes                []string `json:"scopes,omitempty" doc:"OAuth scopes granted"`
-	OperationClass        string   `json:"operation_class" enum:"read,write" doc:"Operation class: read or write"`
+	OperationClass        string   `json:"operation_class" enum:"read,write,destructive" doc:"Operation class: read, write, or destructive (permanently destroys data — #1569)"`
 	OperationID           string   `json:"operation_id" doc:"OpenAPI operationId"`
 	ConfirmationPresented bool     `json:"confirmation_presented" doc:"Whether confirmation was required"`
 	ConfirmationConfirmed bool     `json:"confirmation_confirmed" doc:"Whether confirmation was provided and valid"`

@@ -11,7 +11,7 @@ type MCPAuditEntry struct {
 	ActorUserID           string    `json:"actor_user_id"`
 	GrantID               string    `json:"grant_id"`
 	Scopes                []string  `json:"scopes"`
-	OperationClass        string    `json:"operation_class"` // "read" | "write"
+	OperationClass        string    `json:"operation_class"` // "read" | "write" | "destructive"
 	OperationID           string    `json:"operation_id"`
 	ConfirmationPresented bool      `json:"confirmation_presented"`
 	ConfirmationConfirmed bool      `json:"confirmation_confirmed"`

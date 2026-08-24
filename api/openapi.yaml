@@ -5024,10 +5024,11 @@ components:
           description: Idempotency key if provided
           type: string
         operation_class:
-          description: "Operation class: read or write"
+          description: "Operation class: read, write, or destructive (permanently destroys data — #1569)"
           enum:
             - read
             - write
+            - destructive
           type: string
         operation_id:
           description: OpenAPI operationId

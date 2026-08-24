@@ -86,11 +86,46 @@ const write = (operationId: string, opts: { destructive?: boolean; idempotent?: 
   excluded: false
 })
 
+/**
+ * An excluded operation that does NOT change state (or whose only method is a GET).
+ *
+ * ⚠ Use excludedWrite() for a mutating operation and destructive({ excluded: true }) for one
+ * that destroys data. Until Issue #1569 Task 16 this helper was used for ALL 45 excluded
+ * mutating operations too, hard-coding `class: 'read', destructive: false` onto verbs like
+ * purgeAccount — so the manifest positively asserted that purging a bank account destroys
+ * nothing. `excluded` is the invocability flag; `class` states what the operation IS, and the
+ * two are now independent. Two spec-index-driven guards in capability-summary.drift.test.ts
+ * (every GET is 'read'; every mutating method is 'write' or 'destructive') keep it that way
+ * automatically, so the wart cannot be reintroduced by a new entry.
+ */
 const excluded = (operationId: string, reason: string, publicBoundary?: PublicBoundaryId): CapabilityEntry => ({
   operationId,
   class: 'read',
   destructive: false,
   confirmationRequired: false,
+  idempotent: true,
+  excluded: true,
+  excludedReason: reason,
+  publicBoundary
+})
+
+/**
+ * An excluded operation that CHANGES STATE but does not destroy data.
+ *
+ * confirmationRequired stays `false`, as it has always been for every excluded entry: the
+ * host-proxy throws on `excluded` before it ever reads the confirmation gate, so the manifest
+ * has no opinion to record here (mcp/tools/execute.ts documents why asking it produces a
+ * confident wrong answer). destructive() is the deliberate exception — see its doc.
+ */
+const excludedWrite = (operationId: string, reason: string, publicBoundary?: PublicBoundaryId): CapabilityEntry => ({
+  operationId,
+  class: 'write',
+  destructive: false,
+  confirmationRequired: false,
+  // Left at excluded()'s long-standing `true`, unchanged. Task 16 corrected `class` because the
+  // HTTP method makes its truth derivable and two guards now enforce it; `idempotent` has no such
+  // derivable truth (PUT saveDashboardPreferences is idempotent, POST createHousehold is not) and
+  // no consumer reads it, so re-guessing it here would be churn dressed as a fix.
   idempotent: true,
   excluded: true,
   excludedReason: reason,
@@ -122,7 +157,10 @@ const destructive = (
   class: 'destructive',
   destructive: true,
   confirmationRequired: true,
-  idempotent: opts.idempotent ?? false,
+  // For an EXCLUDED entry, default to excluded()'s long-standing `true` so this reclassification
+  // changes exactly one thing — the class — and the before/after diff stays reviewable. See
+  // excludedWrite's note on why `idempotent` is out of scope for Task 16.
+  idempotent: opts.idempotent ?? (opts.excluded ? true : false),
   excluded: opts.excluded ?? false,
   ...(opts.excluded && { excludedReason: opts.reason }),
   rationale: opts.reason,
@@ -148,7 +186,7 @@ const REASON_QA = 'QA/testing endpoint, not for production MCP use'
 const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // ── MCP Audit (service-auth via X-Origin-Secret, not end-user Clerk JWT) ──
   // The audit endpoint is excluded from MCP tool calls; only the Worker service calls it directly.
-  excluded('recordMCPAuditEntry', 'Internal service endpoint; called by Worker service auth, not end-user MCP tools'),
+  excludedWrite('recordMCPAuditEntry', 'Internal service endpoint; called by Worker service auth, not end-user MCP tools'),
 
   // ── MCP Recipes (read/write allowed; recipes exposed as MCP tools) ────────
   read('listMCPRecipes'),
@@ -206,10 +244,23 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // into disconnect (non-destructive, stops syncing) and purge (permanently destroys history).
   // ALL FOUR stay excluded — an AI assistant must never touch Plaid linking/removal OR a user's
   // financial history, and purge is the one place a hard delete is now even possible.
-  excluded('disconnectAccount', REASON_PLAID_LINKING, 'bank-connections'),
-  excluded('purgeAccount', REASON_PLAID_LINKING, 'bank-connections'),
-  excluded('disconnectInstitution', REASON_PLAID_LINKING, 'bank-connections'),
-  excluded('purgeInstitution', REASON_PLAID_LINKING, 'bank-connections'),
+  excludedWrite('disconnectAccount', REASON_PLAID_LINKING, 'bank-connections'),
+  // Hard destruction, verified: `DELETE FROM balance_snapshots` then `DELETE FROM accounts`
+  // (account_repository.go:999,1008). Task 16 gave it its true class — excluded() used to
+  // assert destructive:false on it, i.e. the manifest claimed purging an account destroys nothing.
+  destructive('purgeAccount', {
+    excluded: true,
+    reason: REASON_PLAID_LINKING,
+    publicBoundary: 'bank-connections'
+  }),
+  excludedWrite('disconnectInstitution', REASON_PLAID_LINKING, 'bank-connections'),
+  // Hard destruction: `DELETE FROM balance_snapshots` then `DELETE FROM linked_items`
+  // (linked_item_repository.go:827,833).
+  destructive('purgeInstitution', {
+    excluded: true,
+    reason: REASON_PLAID_LINKING,
+    publicBoundary: 'bank-connections'
+  }),
 
   // ── Admin (all excluded) ─────────────────────────────────────────────────
   excluded('checkRole', REASON_ADMIN),
@@ -219,26 +270,31 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('getAdminDeadLetterJobArgs', REASON_ADMIN),
   excluded('getAdminPaymentFailures', REASON_ADMIN),
   excluded('listAdminPlaidOrphanedItems', REASON_ADMIN),
-  excluded('recordAdminPlaidOrphanedItemOperatorResolution', REASON_ADMIN),
+  excludedWrite('recordAdminPlaidOrphanedItemOperatorResolution', REASON_ADMIN),
   excluded('getSystemHealth', REASON_ADMIN),
   excluded('listAdminUsers', REASON_ADMIN),
   excluded('getAdminUserDetail', REASON_ADMIN),
   excluded('listAdminPaddleWebhooks', REASON_ADMIN),
   excluded('getAdminPaddleWebhookStats', REASON_ADMIN),
   excluded('getAdminPaddleWebhookDetail', REASON_ADMIN),
-  excluded('bulkDeleteAdminDeadLetterJobs', REASON_ADMIN),
-  excluded('addAdminDeadLetterJobNotes', REASON_ADMIN),
-  excluded('retryAdminDeadLetterJob', REASON_ADMIN),
-  excluded('fireWebhook', REASON_ADMIN),
-  excluded('grantTrial', REASON_ADMIN),
-  excluded('replayAdminPaddleWebhook', REASON_ADMIN),
-  excluded('deleteAdminDeadLetterJob', REASON_ADMIN),
+  // Hard destruction, in bulk: `DELETE FROM dead_letter_jobs <where>`
+  // (dead_letter_job_repository.go:248).
+  destructive('bulkDeleteAdminDeadLetterJobs', { excluded: true, reason: REASON_ADMIN }),
+  excludedWrite('addAdminDeadLetterJobNotes', REASON_ADMIN),
+  excludedWrite('retryAdminDeadLetterJob', REASON_ADMIN),
+  excludedWrite('fireWebhook', REASON_ADMIN),
+  excludedWrite('grantTrial', REASON_ADMIN),
+  excludedWrite('replayAdminPaddleWebhook', REASON_ADMIN),
+  // Hard destruction: `DELETE FROM dead_letter_jobs` (dead_letter_job_repository.go:187).
+  destructive('deleteAdminDeadLetterJob', { excluded: true, reason: REASON_ADMIN }),
   excluded('get-admin-user-subscription', REASON_ADMIN),
-  excluded('create-admin-subscription-override', REASON_ADMIN),
-  excluded('update-admin-user-tier', REASON_ADMIN),
+  excludedWrite('create-admin-subscription-override', REASON_ADMIN),
+  excludedWrite('update-admin-user-tier', REASON_ADMIN),
   // #1414: revoking a subscription comp is an irreversible, billing-adjacent admin action.
   // Excluded under the blanket admin policy — deliberately, not merely by default.
-  excluded('remove-admin-user-tier-override', REASON_ADMIN),
+  // Hard destruction: `DELETE FROM user_subscription_overrides`
+  // (postgres_subscription_override_repository.go:74).
+  destructive('remove-admin-user-tier-override', { excluded: true, reason: REASON_ADMIN }),
 
   // ── Auto-Categorization ─────────────────────────────────────────────────
   // Rule mutations un-excluded per Issue #957 (Q1 decision). Mitigations:
@@ -250,15 +306,21 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   write('createRule'),
   write('updateRule', { idempotent: true }),
   // Hard `DELETE FROM categorization_rules` (repository/categorization_rule_repository.go:348).
-  // INVOCABLE: rules are user-authored automation config, not financial history, and Issue #957
-  // un-excluded rule mutations with owner sign-off. It is nonetheless irreversible — note that
-  // deleting a CATEGORY only *disables* the rules that targeted it (custom_category_repository.go
-  // step 2), so the codebase already treats a rule row as worth keeping. Agents that only want to
-  // stop a rule firing should prefer toggleRule, which is reversible.
+  // INVOCABLE, and materially less risky than the bare DELETE looks: migration 000164 flipped
+  // fk_rule_execution_history_rule_id from CASCADE to ON DELETE SET NULL and added rule_name +
+  // definition_snapshot, so a deleted rule's EXECUTION HISTORY survives, carrying the rule's
+  // definition captured at execution time. What is destroyed is the live rule row, not the record
+  // of what it did. User-authored automation config, not financial history; Issue #957 un-excluded
+  // rule mutations with owner sign-off.
+  //
+  // Still irreversible for the rule itself, and deleting a CATEGORY only *disables* the rules that
+  // targeted it (custom_category_repository.go step 2) — so an agent that merely wants a rule to
+  // stop firing should prefer toggleRule, which is reversible.
   destructive('deleteRule', {
     reason:
-      'Hard-deletes a categorization rule (no tombstone); user-authored automation config, not ' +
-      'financial history. Reversible alternative available: toggleRule. Agent access per #957.'
+      'Hard-deletes a categorization rule (no tombstone), but migration 000164 makes its ' +
+      'rule_execution_history survive with a definition_snapshot, so the automation record is ' +
+      'not lost. Config, not financial history. Reversible alternative: toggleRule. Per #957.'
   }),
   write('toggleRule', { idempotent: true }),
 
@@ -267,14 +329,14 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getBoostByID'),
   read('getBoostExecutions'), // per-boost automation history
   read('getUserBoostExecutions'), // #1569 Task 14: GET /api/v1/boost-executions, per-user history
-  excluded('createBoost', REASON_RULES_UNATTENDED),
-  excluded('updateBoost', REASON_RULES_UNATTENDED),
-  excluded('deleteBoost', REASON_RULES_UNATTENDED),
-  excluded('disableBoost', REASON_RULES_UNATTENDED),
-  excluded('enableBoost', REASON_RULES_UNATTENDED),
-  excluded('toggleBoost', REASON_RULES_UNATTENDED),
-  excluded('triggerBoost', REASON_RULES_UNATTENDED),
-  excluded('testBoost', REASON_RULES_UNATTENDED),
+  excludedWrite('createBoost', REASON_RULES_UNATTENDED),
+  excludedWrite('updateBoost', REASON_RULES_UNATTENDED),
+  excludedWrite('deleteBoost', REASON_RULES_UNATTENDED),
+  excludedWrite('disableBoost', REASON_RULES_UNATTENDED),
+  excludedWrite('enableBoost', REASON_RULES_UNATTENDED),
+  excludedWrite('toggleBoost', REASON_RULES_UNATTENDED),
+  excludedWrite('triggerBoost', REASON_RULES_UNATTENDED),
+  excludedWrite('testBoost', REASON_RULES_UNATTENDED),
 
   // ── Budgets ─────────────────────────────────────────────────────────────
   read('getBudgets'),
@@ -318,8 +380,8 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getDashboardPreferences'),
   read('getDefaultLayout'),
   read('getWidgetTypes'),
-  excluded('saveDashboardPreferences', REASON_DASHBOARD_DEFERRED),
-  excluded('resetDashboardPreferences', REASON_DASHBOARD_DEFERRED),
+  excludedWrite('saveDashboardPreferences', REASON_DASHBOARD_DEFERRED),
+  excludedWrite('resetDashboardPreferences', REASON_DASHBOARD_DEFERRED),
 
   // ── Health / Monitoring ─────────────────────────────────────────────────
   // getMetrics was removed here (#1514): /metrics moved to an internal-only
@@ -340,21 +402,28 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('listHouseholdMembers'),
   read('listHouseholdInvites'),
   read('getHouseholdInvitePreview'),
-  excluded('createHousehold', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
-  excluded('updateHouseholdName', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
-  excluded('deleteHousehold', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
-  excluded('createHouseholdInvite', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
-  excluded('revokeHouseholdInvite', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
-  excluded('removeHouseholdMember', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
-  excluded('acceptHouseholdInvite', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
-  excluded('declineHouseholdInvite', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excludedWrite('createHousehold', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excludedWrite('updateHouseholdName', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  // Hard destruction: `DELETE FROM households` (household_repository.go:330). Contrast
+  // removeHouseholdMember and revokeHouseholdInvite just below, which are status updates
+  // ('removed' / 'revoked') and therefore plain excluded writes.
+  destructive('deleteHousehold', {
+    excluded: true,
+    reason: REASON_HOUSEHOLD_INAPP,
+    publicBoundary: 'household-sharing'
+  }),
+  excludedWrite('createHouseholdInvite', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excludedWrite('revokeHouseholdInvite', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excludedWrite('removeHouseholdMember', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excludedWrite('acceptHouseholdInvite', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excludedWrite('declineHouseholdInvite', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
 
   // ── Household (Issue #1368: account sharing grants, Phase 4) ──────────────
   // Reading the caller's own sharing state is safe; toggling what a household member's
   // financial account exposes to other members is a privacy/consent decision — same
   // deliberate-in-app-action policy as the rest of the household membership/consent surface.
   read('listMyAccountShares'),
-  excluded('setHouseholdShareVisibility', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excludedWrite('setHouseholdShareVisibility', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
 
   // ── Notifications ────────────────────────────────────────────────────────
   read('getNotifications'),
@@ -363,14 +432,14 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   write('markAllNotificationsAsRead', { idempotent: true }),
 
   // ── Plaid (account-linking permanently non-MCP) ──────────────────────────
-  excluded('exchangePublicToken', REASON_PLAID_LINKING, 'bank-connections'),
-  excluded('createLinkToken', REASON_PLAID_LINKING, 'bank-connections'),
+  excludedWrite('exchangePublicToken', REASON_PLAID_LINKING, 'bank-connections'),
+  excludedWrite('createLinkToken', REASON_PLAID_LINKING, 'bank-connections'),
 
   // ── Privacy / Profile ────────────────────────────────────────────────────
   read('getPrivacySettings'),
   read('getUserProfile'),
-  excluded('updatePrivacySettings', REASON_PRIVACY_INAPP, 'household-sharing'),
-  excluded('updateUserProfile', 'Profile mutations deferred to follow-up'),
+  excludedWrite('updatePrivacySettings', REASON_PRIVACY_INAPP, 'household-sharing'),
+  excludedWrite('updateUserProfile', 'Profile mutations deferred to follow-up'),
 
   // ── Regions ─────────────────────────────────────────────────────────────
   read('getRegions'),
@@ -419,10 +488,10 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('get-current-subscription'),
   read('getSubscriptionTiers'),
   read('get-billing-portal-url'),
-  excluded('cancel-paddle-subscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
-  excluded('create-paddle-checkout', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
-  excluded('preview-paddle-subscription-update', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
-  excluded('update-paddle-subscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  excludedWrite('cancel-paddle-subscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  excludedWrite('create-paddle-checkout', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  excludedWrite('preview-paddle-subscription-update', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  excludedWrite('update-paddle-subscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
 
   // ── Merchants (Issue #957: merchant name handling + MCP exposure) ────────
   // Reads: always available for browsing and duplicate detection.
@@ -432,17 +501,21 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getMerchantOverrides'),
   read('getMerchantDuplicateSuggestions'),
   write('setMerchantOverride', { idempotent: true }),
-  // Hard `DELETE FROM merchant_name_overrides` (merchant_override_repository.go:132).
-  // INVOCABLE: the row is a user-authored display-name preference, not financial history, it is
-  // the documented inverse of setMerchantOverride, and getMerchantOverrides lets the agent read
-  // the current value before clearing it.
+  // Hard `DELETE FROM merchant_name_overrides` (merchant_override_repository.go:132) — the WHOLE
+  // row, which carries two distinct user decisions: display_name AND merged_into_merchant_id, the
+  // per-user merge collapsing this merchant into another (migration 000101:104-106). So "clear
+  // the override" also un-merges; the verb's name under-describes what it destroys.
+  // INVOCABLE: both are presentation decisions over merchants the user does not own, not
+  // financial history, and getMerchantOverrides returns both fields — so the agent can read the
+  // current state before clearing and restore it via setMerchantOverride / mergeMerchants.
   // idempotent stays false, exactly as it was before Task 16 — this task reclassifies, it does
   // not re-evaluate other flags. (The repository does note the DELETE is idempotent; correcting
   // the flag is a separate, deliberate change and nothing reads it today.)
   destructive('clearMerchantOverride', {
     reason:
-      'Hard-deletes a merchant display-name override; a display preference, not financial ' +
-      'history, and restorable via setMerchantOverride from getMerchantOverrides.'
+      'Hard-deletes the whole merchant_name_overrides row — the display-name override AND the ' +
+      'per-user merge pointer (merged_into_merchant_id). Presentation decisions, not financial ' +
+      'history; readable via getMerchantOverrides, restorable via setMerchantOverride/mergeMerchants.'
   }),
   write('bulkSetMerchantOverrides', { idempotent: true }),
   write('mergeMerchants', { idempotent: true }),
@@ -485,7 +558,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getSavingsImpactMe'), // #972: authed per-user, read-only
 
   // ── User ────────────────────────────────────────────────────────────────
-  excluded('requestDeletion', REASON_DELETION_INAPP, 'account-deletion'),
+  excludedWrite('requestDeletion', REASON_DELETION_INAPP, 'account-deletion'),
   excluded('cancelDeletion', REASON_DELETION_INAPP, 'account-deletion'),
 
   // ── User Accounts ────────────────────────────────────────────────────────
@@ -494,9 +567,9 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   write('updateUserAccount', { idempotent: true }),
 
   // ── Webhooks + QA ────────────────────────────────────────────────────────
-  excluded('paddle-webhook', REASON_WEBHOOK),
-  excluded('handlePlaidWebhook', REASON_WEBHOOK),
-  excluded('qaAuthBypass', REASON_QA)
+  excludedWrite('paddle-webhook', REASON_WEBHOOK),
+  excludedWrite('handlePlaidWebhook', REASON_WEBHOOK),
+  excludedWrite('qaAuthBypass', REASON_QA)
 ]
 
 // ── Lookup map ─────────────────────────────────────────────────────────────
@@ -560,6 +633,16 @@ export function isWrite(operationId: string): boolean {
 export function isDestructive(operationId: string): boolean {
   const entry = getCapability(operationId)
   return entry !== undefined && !entry.excluded && entry.class === 'destructive'
+}
+
+/**
+ * Returns true if the operation permanently destroys data, REGARDLESS of whether MCP will
+ * dispatch it. This is the predicate for "would this destroy my data?"; isDestructive() answers
+ * the narrower "is this available AND destructive?". Both exist because the honest answer for
+ * purgeAccount differs between the two questions.
+ */
+export function destroysData(operationId: string): boolean {
+  return getCapability(operationId)?.class === 'destructive'
 }
 
 /**
