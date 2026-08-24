@@ -548,7 +548,7 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -611,7 +611,7 @@ func (r *accountRepository) GetByLinkedItemIDIncludingRetained(ctx context.Conte
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       removed_reason,
 		       created_at, updated_at
@@ -679,7 +679,7 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -799,7 +799,7 @@ func householdScopeQuery(statuses householdStatusFilter) string {
 	return "WITH " + householdAccountsCTEForBalancesAsOf() + `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
 		       a.created_at, a.updated_at
 		FROM accounts a
@@ -876,7 +876,7 @@ func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, user
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
@@ -1121,7 +1121,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
 		       user_account_id, status, removed_at, replaced_at, replaced_by_id,
@@ -1173,7 +1173,7 @@ func (r *accountRepository) GetByUserAccountIDAndUser(ctx context.Context, userA
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
 		       user_account_id, status, removed_at,
@@ -1432,7 +1432,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
@@ -1495,7 +1495,7 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       user_account_id, status, replaced_at, replaced_by_id,
 		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
 		       created_at, updated_at
@@ -1544,7 +1544,7 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       user_account_id, status, replaced_at, replaced_by_id,
 		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
 		       created_at, updated_at

@@ -134,19 +134,17 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 			return err
 		}
 
-		// Codex C9: NULL/stale balance — leave prior value, do NOT zero.
-		if account.CurrentBalance == nil {
-			s.logger.Warn("savings_progress: account balance is nil — skipping recompute (stale)",
-				slog.String("goal_id", goal.ID),
-				slog.String("account_id", account.ID),
-			)
-			return nil
-		}
-
 		// Issue #1569: a retained (non-active) account's current_balance is frozen at
 		// disconnect and will never update again. Freeze current_amount rather than
 		// recomputing from that frozen figure on every run — same treatment as the nil-balance
-		// case above, and for the same reason (nothing new to report).
+		// case below, and for the same reason (nothing new to report).
+		//
+		// ORDER MATTERS, and it is the opposite of what it was. Task 21 (item D) made a terminal
+		// account carry NO balance at all, so such an account now ALSO satisfies the nil check —
+		// and with the nil check first, every disconnected account was reported as merely "stale".
+		// The outcome is identical either way (freeze, never zero); what was lost was the operator
+		// signal that says WHY, and "stale" invites waiting for a sync that is never coming.
+		// Checking the specific condition before the general one keeps the log honest.
 		//
 		// After resolveBasisAccount this fires only when the chain genuinely has no live
 		// member (or the goal carries no chain reference at all). An ordinary re-link
@@ -156,6 +154,15 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 				slog.String("goal_id", goal.ID),
 				slog.String("account_id", account.ID),
 				slog.String("account_status", string(account.Status)),
+			)
+			return nil
+		}
+
+		// Codex C9: NULL/stale balance — leave prior value, do NOT zero.
+		if account.CurrentBalance == nil {
+			s.logger.Warn("savings_progress: account balance is nil — skipping recompute (stale)",
+				slog.String("goal_id", goal.ID),
+				slog.String("account_id", account.ID),
 			)
 			return nil
 		}
@@ -173,21 +180,21 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 			return err
 		}
 
-		// Codex C9: same null/stale handling.
-		if account.CurrentBalance == nil {
-			s.logger.Warn("savings_progress: account balance is nil — skipping recompute (stale)",
-				slog.String("goal_id", goal.ID),
-				slog.String("account_id", account.ID),
-			)
-			return nil
-		}
-
 		// Issue #1569: see the identical check in the balance-basis branch above.
 		if isAccountDisconnected(account) {
 			s.logger.Warn("savings_progress: basis account is no longer active — skipping recompute",
 				slog.String("goal_id", goal.ID),
 				slog.String("account_id", account.ID),
 				slog.String("account_status", string(account.Status)),
+			)
+			return nil
+		}
+
+		// Codex C9: same null/stale handling.
+		if account.CurrentBalance == nil {
+			s.logger.Warn("savings_progress: account balance is nil — skipping recompute (stale)",
+				slog.String("goal_id", goal.ID),
+				slog.String("account_id", account.ID),
 			)
 			return nil
 		}
