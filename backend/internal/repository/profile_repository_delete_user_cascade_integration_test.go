@@ -1511,6 +1511,7 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		{Table: "accounts", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "audit_logs", Column: "user_id", DeleteRule: "SET NULL"},
 		{Table: "balance_snapshots", Column: "user_id", DeleteRule: "CASCADE"},
+		{Table: "boost_executions", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "boosts", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "budgets", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "categorization_rules", Column: "user_id", DeleteRule: "CASCADE"},
@@ -1539,6 +1540,11 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		{Table: "referrals", Column: "referred_id", DeleteRule: "CASCADE"},
 		{Table: "referrals", Column: "referrer_id", DeleteRule: "CASCADE"},
 		{Table: "rollover_history", Column: "user_id", DeleteRule: "CASCADE"},
+		// #1569 Task 14: boost_executions and rule_execution_history gained their OWN user_id
+		// CASCADE because their parent FKs became ON DELETE SET NULL. Before that flip each was
+		// reachable only through its parent (boost_id -> boosts, rule_id -> categorization_rules),
+		// so without these two entries an erased user's automation history would survive forever.
+		{Table: "rule_execution_history", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "savings_goals", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "student_loan_liabilities", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "subscription_entitlements", Column: "payer_user_id", DeleteRule: "CASCADE"},
@@ -1761,9 +1767,29 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		VALUES ($1, $2, $3, 10, 'full', NOW(), NOW() + INTERVAL '1 day')`,
 		target.ID, budgetID, budgetCategoryID)
 
+	// boosts -> boost_executions and categorization_rules -> rule_execution_history. Since #1569
+	// Task 14 both history tables carry their OWN user_id CASCADE (their parent FKs are now
+	// ON DELETE SET NULL, so the old two-hop path no longer erases them). Seeded and asserted
+	// below rather than only listed in the tripwire.
+	var cascadeBoostID, cascadeRuleID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO boosts (user_id, name, boost_type) VALUES ($1, 'Test Boost', 'budget_alert') RETURNING id`,
+		target.ID).Scan(&cascadeBoostID))
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO categorization_rules (user_id, name) VALUES ($1, 'Test Rule') RETURNING id`,
+		target.ID).Scan(&cascadeRuleID))
+
+	var boostExecutionID, ruleExecutionID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO boost_executions (boost_id, user_id, status, boost_name)
+		VALUES ($1, $2, 'completed', 'Test Boost') RETURNING id`,
+		cascadeBoostID, target.ID).Scan(&boostExecutionID))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO rule_execution_history (rule_id, user_id, action_type, result, rule_name)
+		VALUES ($1, $2, 'category', 'applied', 'Test Rule') RETURNING id`,
+		cascadeRuleID, target.ID).Scan(&ruleExecutionID))
+
 	// Standalone tables (no dependencies beyond user_id).
-	execNoErr(t, ctx, pool, `INSERT INTO boosts (user_id, name, boost_type) VALUES ($1, 'Test Boost', 'budget_alert')`, target.ID)
-	execNoErr(t, ctx, pool, `INSERT INTO categorization_rules (user_id, name) VALUES ($1, 'Test Rule')`, target.ID)
 	execNoErr(t, ctx, pool, `INSERT INTO custom_categories (user_id, name) VALUES ($1, 'Test Category')`, target.ID)
 	execNoErr(t, ctx, pool, `INSERT INTO mcp_recipes (user_id, name) VALUES ($1, 'Test Recipe')`, target.ID)
 	execNoErr(t, ctx, pool, `
@@ -1864,6 +1890,14 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 	var budgetCategoryCount int
 	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM budget_categories WHERE id = $1", budgetCategoryID).Scan(&budgetCategoryCount))
 	assert.Equal(t, 0, budgetCategoryCount, "budget_categories must cascade away transitively via budgets")
+
+	// #1569 Task 14: these two are now erased by their OWN user_id CASCADE, not by their parent's.
+	// If either FK were dropped the row would survive erasure with a NULL parent, silently.
+	var boostExecutionCount, ruleExecutionCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM boost_executions WHERE id = $1", boostExecutionID).Scan(&boostExecutionCount))
+	assert.Equal(t, 0, boostExecutionCount, "boost_executions must be erased via its own user_id CASCADE")
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM rule_execution_history WHERE id = $1", ruleExecutionID).Scan(&ruleExecutionCount))
+	assert.Equal(t, 0, ruleExecutionCount, "rule_execution_history must be erased via its own user_id CASCADE")
 }
 
 // ─── Round 15, finding D2: the same predicate, asked BEFORE the irreversible external work ───────

@@ -144,9 +144,9 @@ func seedConfigTombstoneFixture(t *testing.T) *configTombstoneFixture {
 	`, f.boostID, f.userID)
 
 	mustExec("boost_execution", `
-		INSERT INTO boost_executions (id, boost_id, status, completed_at)
-		VALUES ($1, $2, 'completed', NOW())
-	`, f.boostExecID, f.boostID)
+		INSERT INTO boost_executions (id, boost_id, status, completed_at, user_id)
+		VALUES ($1, $2, 'completed', NOW(), $3)
+	`, f.boostExecID, f.boostID, f.userID)
 
 	mustExec("budget", `
 		INSERT INTO budgets (id, user_id, name, period, start_date, amount, series_id)

@@ -29,8 +29,8 @@ func createTestRolloverHistory(userID, budgetID, sourceCategoryID string) *domai
 	return &domain.RolloverHistory{
 		ID:                     uuid.New().String(),
 		UserID:                 userID,
-		BudgetID:               budgetID,
-		SourceBudgetCategoryID: sourceCategoryID,
+		BudgetID:               &budgetID,
+		SourceBudgetCategoryID: &sourceCategoryID,
 		Amount:                 100.00,
 		RolloverType:           domain.RolloverTypeFull,
 		BudgetPeriodStart:      time.Now().AddDate(0, -1, 0),
@@ -179,10 +179,10 @@ func TestRolloverHistoryRepository_GetByID(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows(columns).AddRow(
 			rolloverID,
 			userID,
-			budgetID,
+			&budgetID,
 			nil, // boost_id
 			nil, // boost_execution_id
-			sourceCategoryID,
+			&sourceCategoryID,
 			nil, // target_budget_category_id
 			100.00,
 			domain.RolloverTypeFull,
@@ -199,8 +199,10 @@ func TestRolloverHistoryRepository_GetByID(t *testing.T) {
 	assert.NotNil(t, rollover)
 	assert.Equal(t, rolloverID, rollover.ID)
 	assert.Equal(t, userID, rollover.UserID)
-	assert.Equal(t, budgetID, rollover.BudgetID)
-	assert.Equal(t, sourceCategoryID, rollover.SourceBudgetCategoryID)
+	require.NotNil(t, rollover.BudgetID)
+	assert.Equal(t, budgetID, *rollover.BudgetID)
+	require.NotNil(t, rollover.SourceBudgetCategoryID)
+	assert.Equal(t, sourceCategoryID, *rollover.SourceBudgetCategoryID)
 	assert.Equal(t, 100.00, rollover.Amount)
 	assert.Equal(t, domain.RolloverTypeFull, rollover.RolloverType)
 	assert.Equal(t, domain.RolloverStatusPending, rollover.Status)
@@ -252,10 +254,10 @@ func TestRolloverHistoryRepository_GetByUserID(t *testing.T) {
 			AddRow(
 				uuid.New().String(),
 				userID,
-				uuid.New().String(),
+				strPtr(uuid.New().String()),
 				nil,
 				nil,
-				uuid.New().String(),
+				strPtr(uuid.New().String()),
 				nil,
 				100.00,
 				domain.RolloverTypeFull,
@@ -268,10 +270,10 @@ func TestRolloverHistoryRepository_GetByUserID(t *testing.T) {
 			AddRow(
 				uuid.New().String(),
 				userID,
-				uuid.New().String(),
+				strPtr(uuid.New().String()),
 				nil,
 				nil,
-				uuid.New().String(),
+				strPtr(uuid.New().String()),
 				nil,
 				50.00,
 				domain.RolloverTypeCapped,
@@ -341,10 +343,10 @@ func TestRolloverHistoryRepository_GetByBudgetID(t *testing.T) {
 			AddRow(
 				uuid.New().String(),
 				userID,
-				budgetID,
+				&budgetID,
 				nil,
 				nil,
-				uuid.New().String(),
+				strPtr(uuid.New().String()),
 				nil,
 				100.00,
 				domain.RolloverTypeFull,
@@ -359,7 +361,8 @@ func TestRolloverHistoryRepository_GetByBudgetID(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Len(t, rollovers, 1)
-	assert.Equal(t, budgetID, rollovers[0].BudgetID)
+	require.NotNil(t, rollovers[0].BudgetID)
+	assert.Equal(t, budgetID, *rollovers[0].BudgetID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -388,10 +391,10 @@ func TestRolloverHistoryRepository_GetPendingByUserID(t *testing.T) {
 			AddRow(
 				uuid.New().String(),
 				userID,
-				uuid.New().String(),
+				strPtr(uuid.New().String()),
 				nil,
 				nil,
-				uuid.New().String(),
+				strPtr(uuid.New().String()),
 				nil,
 				75.00,
 				domain.RolloverTypePercentage,
@@ -497,10 +500,10 @@ func TestRolloverHistoryRepository_GetByBudgetAndPeriod(t *testing.T) {
 			AddRow(
 				uuid.New().String(),
 				userID,
-				budgetID,
+				&budgetID,
 				nil,
 				nil,
-				uuid.New().String(),
+				strPtr(uuid.New().String()),
 				nil,
 				100.00,
 				domain.RolloverTypeFull,
@@ -515,7 +518,8 @@ func TestRolloverHistoryRepository_GetByBudgetAndPeriod(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Len(t, rollovers, 1)
-	assert.Equal(t, budgetID, rollovers[0].BudgetID)
+	require.NotNil(t, rollovers[0].BudgetID)
+	assert.Equal(t, budgetID, *rollovers[0].BudgetID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -547,10 +551,10 @@ func TestRolloverHistoryRepository_GetBySourceCategory(t *testing.T) {
 			AddRow(
 				uuid.New().String(),
 				userID,
-				budgetID,
+				&budgetID,
 				nil,
 				nil,
-				sourceCategoryID,
+				&sourceCategoryID,
 				nil,
 				100.00,
 				domain.RolloverTypeFull,
@@ -565,7 +569,8 @@ func TestRolloverHistoryRepository_GetBySourceCategory(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Len(t, rollovers, 1)
-	assert.Equal(t, sourceCategoryID, rollovers[0].SourceBudgetCategoryID)
+	require.NotNil(t, rollovers[0].SourceBudgetCategoryID)
+	assert.Equal(t, sourceCategoryID, *rollovers[0].SourceBudgetCategoryID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

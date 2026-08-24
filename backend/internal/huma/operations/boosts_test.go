@@ -284,7 +284,7 @@ func TestBoostHandler_TriggerBoost_Success(t *testing.T) {
 	mockProvider := &mockManualProvider{
 		execution: &domain.BoostExecution{
 			ID:     "exec-1",
-			BoostID: "rule-1",
+			BoostID: strPtr("rule-1"),
 			Status: domain.ExecutionStatusCompleted,
 		},
 	}
@@ -316,7 +316,7 @@ func TestBoostHandler_TriggerBoost_WithTriggerData(t *testing.T) {
 	mockProvider := &mockManualProvider{
 		execution: &domain.BoostExecution{
 			ID:     "exec-1",
-			BoostID: "rule-1",
+			BoostID: strPtr("rule-1"),
 			Status: domain.ExecutionStatusCompleted,
 		},
 	}
@@ -644,8 +644,8 @@ func TestBoostHandler_GetBoostExecutions_Success(t *testing.T) {
 	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	executions := []*domain.BoostExecution{
-		{ID: "exec-1", BoostID: "rule-1", Status: domain.ExecutionStatusCompleted},
-		{ID: "exec-2", BoostID: "rule-1", Status: domain.ExecutionStatusCompleted},
+		{ID: "exec-1", BoostID: strPtr("rule-1"), Status: domain.ExecutionStatusCompleted},
+		{ID: "exec-2", BoostID: strPtr("rule-1"), Status: domain.ExecutionStatusCompleted},
 	}
 	mockExecService.On("GetExecutionHistoryWithFilter", mock.Anything, "rule-1", (*domain.ExecutionStatus)(nil), 20, 0).Return(executions, 2, nil)
 
@@ -679,7 +679,7 @@ func TestBoostHandler_GetBoostExecutions_WithStatusFilter(t *testing.T) {
 
 	completedStatus := domain.ExecutionStatusCompleted
 	executions := []*domain.BoostExecution{
-		{ID: "exec-1", BoostID: "rule-1", Status: domain.ExecutionStatusCompleted},
+		{ID: "exec-1", BoostID: strPtr("rule-1"), Status: domain.ExecutionStatusCompleted},
 	}
 	mockExecService.On("GetExecutionHistoryWithFilter", mock.Anything, "rule-1", &completedStatus, 20, 0).Return(executions, 1, nil)
 
