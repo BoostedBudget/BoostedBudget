@@ -144,32 +144,36 @@ func (r *balanceSnapshotRepository) GetAggregatedHistory(ctx context.Context, us
 
 	// Base query with parameterized account-type filter in CTE.
 	// If accountTypes is provided, add AND a.type = ANY($4) to the WHERE clause.
+	// #1569 task 19: this used to resolve the winning row per (day, chain) with
+	// MAX(snapshot_at) AND MAX(id::text) computed INDEPENDENTLY, then join back on both. When a day
+	// held two snapshots for one re-link chain — exactly what an institution-change overlap day
+	// looks like — and the EARLIER row happened to have the higher uuid, no row satisfied both
+	// conditions and the whole day DISAPPEARED from the user's balance history. With random uuids
+	// that is a coin flip per overlap day. DISTINCT ON picks one real row, which is what was meant,
+	// and is the same shape GetAggregatedHistoryForHousehold already used. Pinned by
+	// TestHistoryRetentionRoundTrip_InstitutionChangeKeepsLastMonthWithoutDoubleCounting, whose
+	// fixture chooses the uuids so the failing direction is deterministic.
 	const queryBase = `
-		WITH latest_per_account_per_day AS (
+		WITH per_account_per_day AS (
 		    SELECT
-		        (snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
+		        (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
 		        COALESCE(bs.user_account_id::text, bs.account_id::text) AS chain_key,
-		        MAX(snapshot_at) AS latest_at,
-		        MAX(bs.id::text) AS latest_id
+		        bs.snapshot_at,
+		        bs.id AS snapshot_id,
+		        bs.current_balance,
+		        a.type AS account_type
 		    FROM balance_snapshots bs
 		    LEFT JOIN accounts a ON a.id = bs.account_id
 		    WHERE bs.user_id = $1
 		      AND bs.snapshot_at >= $2
 		      AND bs.snapshot_at <= $3
 		      %s
-		    GROUP BY snapshot_date, chain_key
 		),
 		deduped AS (
-		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		           bs.current_balance, a.type AS account_type
-		    FROM balance_snapshots bs
-		    JOIN latest_per_account_per_day l
-		      ON COALESCE(bs.user_account_id::text, bs.account_id::text) = l.chain_key
-		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
-		      AND bs.snapshot_at = l.latest_at
-		      AND bs.id::text = l.latest_id
-		    LEFT JOIN accounts a ON a.id = bs.account_id
-		    WHERE bs.user_id = $1
+		    SELECT DISTINCT ON (snapshot_date, chain_key)
+		           snapshot_date, current_balance, account_type
+		    FROM per_account_per_day
+		    ORDER BY snapshot_date, chain_key, snapshot_at DESC, snapshot_id DESC
 		)
 		SELECT snapshot_date,
 		       COALESCE(account_type, '') AS account_type,
