@@ -121,5 +121,8 @@ by the record_account_status_change() trigger on accounts (provenance='recorded'
 COMMENT ON COLUMN account_status_history.valid_to IS
 'Exclusive upper bound of this interval. NULL means still current. Half-open: live at valid_from, not live at valid_to.';
 
+COMMENT ON COLUMN account_status_history.user_account_id IS
+$COMMENT$The account's stable cross-re-link identity AS IT STOOD when this interval opened, copied by the record_account_status_change() trigger. NOT READ by anything today (every as-of liveness predicate keys on account_id); it exists so a future chain-level "was this user_account live at T" query does not have to join back to a mutable accounts row. NULLABLE and legitimately NULL for intervals opened before an account's identity was minted (Issue #1569) — backfillDownstreamUserAccountIDs (internal/database/backfill.go) repairs those, because the trigger fires on status changes only and would never rewrite them.$COMMENT$;
+
 COMMENT ON COLUMN account_status_history.provenance IS
 '''backfilled'' for rows synthesized once from pre-existing accounts.updated_at/replaced_at/removed_at columns (000152); ''recorded'' for rows written live by the accounts status trigger.';
