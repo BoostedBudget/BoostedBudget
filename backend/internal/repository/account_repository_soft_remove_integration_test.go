@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -401,4 +402,96 @@ func TestAccountRepository_Reads_Integration_ReturnRemovedAt(t *testing.T) {
 		"GetAccountsWithInstitutionFiltered backs the accounts page — the surface that renders the "+
 			"'as of <date>' label — so it must carry removed_at")
 	assert.WithinDuration(t, stamped, *found.RemovedAt, time.Second)
+}
+
+// TestAccountRepository_SoftRemove_Integration_RetainsEveryDerivedTable is #1569 residual E12.
+//
+// The two retention tests above assert balance_snapshots and nothing else, which is the ONE table
+// that a hard delete would NOT have taken (accounts.id is ON DELETE SET NULL there since
+// migration 000150) — so they were the weakest possible witness for the claim they were making.
+// The tables a delete really destroys are the CASCADE ones: holdings, investment_transactions,
+// the three liability tables, holding_snapshots, and account_status_history itself. And
+// savings_goals is RESTRICT, so a delete would not merely lose it, it would fail outright.
+//
+// Both user-facing removal paths are covered, because they are different statements:
+// UpdateStatus (single account) and MarkRemovedByLinkedItemID (whole institution).
+//
+// Mutation-checked twice, because the first mutant does not isolate the gap:
+//
+//   - Replacing updateStatusWithRemovalReason's UPDATE with a DELETE takes holdings,
+//     credit_liabilities, investment_transactions, holding_snapshots and account_status_history
+//     from 1 to 0 here. The pre-existing tests also go red under it, but on their "SELECT status
+//     FROM accounts" re-read — the account row is gone — never on a derived table.
+//   - So the sharper mutant: keep the UPDATE and add
+//     `DELETE FROM holdings/holding_snapshots WHERE account_id = $1` to the same transaction.
+//     TestAccountRepository_UpdateStatus_Integration_RemovedPreservesBalanceSnapshots PASSES —
+//     the account survives and balance_snapshots is untouched — while this test fails on
+//     "holdings must survive" and "holding_snapshots must survive". That difference is exactly
+//     residual E12: the old witness was the one table (SET NULL, migration 000150) that a
+//     destructive change would leave standing.
+func TestAccountRepository_SoftRemove_Integration_RetainsEveryDerivedTable(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	repo := NewAccountRepository(pool, newTestFieldEncryptor(t))
+
+	for _, tc := range []struct {
+		name   string
+		remove func(t *testing.T, f retainedFixture)
+	}{
+		{
+			name: "single account disconnect",
+			remove: func(t *testing.T, f retainedFixture) {
+				require.NoError(t, repo.UpdateStatus(ctx, f.AccountID.String(), f.UserID.String(),
+					domain.AccountStatusRemoved, nil))
+			},
+		},
+		{
+			name: "institution disconnect",
+			remove: func(t *testing.T, f retainedFixture) {
+				require.NoError(t, repo.MarkRemovedByLinkedItemID(ctx, f.LinkedItemID.String()))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := seedRetainedFixture(ctx, t, pool, "soft-remove-derived-"+uuid.New().String())
+			t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+
+			snap := seedBalanceSnapshot(ctx, t, pool, f)
+			hold := seedHolding(ctx, t, pool, f)
+			liab := seedCreditLiability(ctx, t, pool, f)
+			inv := seedInvestmentTransaction(ctx, t, pool, f)
+			goal := seedSavingsGoal(ctx, t, pool, f)
+
+			var secID uuid.UUID
+			require.NoError(t, pool.QueryRow(ctx,
+				`SELECT security_id FROM holdings WHERE id = $1`, hold).Scan(&secID))
+			basis, value := 100.0, 120.0
+			seedHoldingSnapshot(ctx, t, pool, f.UserID, f.AccountID, secID,
+				time.Now().UTC().AddDate(0, 0, -1), true, &basis, &value)
+
+			historyBefore := countRows(ctx, t, pool, "account_status_history", "account_id", f.AccountID)
+			require.GreaterOrEqual(t, historyBefore, 1)
+
+			tc.remove(t, f)
+
+			var status string
+			require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM accounts WHERE id = $1`, f.AccountID).Scan(&status))
+			require.Equal(t, "removed", status, "precondition: the removal must actually have happened")
+
+			assert.Equal(t, 1, countRows(ctx, t, pool, "balance_snapshots", "id", snap), "balance_snapshots must survive")
+			assert.Equal(t, 1, countRows(ctx, t, pool, "holdings", "id", hold), "holdings must survive (CASCADE table)")
+			assert.Equal(t, 1, countRows(ctx, t, pool, "credit_liabilities", "id", liab), "credit_liabilities must survive (CASCADE table)")
+			assert.Equal(t, 1, countRows(ctx, t, pool, "investment_transactions", "id", inv), "investment_transactions must survive (CASCADE table)")
+			assert.Equal(t, 1, countRows(ctx, t, pool, "savings_goals", "id", goal), "savings_goals must survive (RESTRICT table)")
+
+			var holdingSnaps int
+			require.NoError(t, pool.QueryRow(ctx,
+				`SELECT COUNT(*) FROM holding_snapshots WHERE account_id = $1`, f.AccountID).Scan(&holdingSnaps))
+			assert.Equal(t, 1, holdingSnaps, "holding_snapshots must survive (CASCADE table)")
+
+			// The history table records the removal rather than being destroyed by it.
+			assert.Greater(t, countRows(ctx, t, pool, "account_status_history", "account_id", f.AccountID), historyBefore,
+				"the removal must ADD an interval, not take the account's history with it")
+		})
+	}
 }
