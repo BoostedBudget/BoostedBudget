@@ -188,7 +188,6 @@ func (r *userTagRepository) GetByName(ctx context.Context, userID, name string) 
 	return tag, nil
 }
 
-// Update updates an existing tag
 // Update renames or recolours a registry tag.
 //
 // ⚠ IT DOES NOT TOUCH transactions.tags, AND THAT IS NOT AN OVERSIGHT TO FIX IN ISOLATION.
@@ -203,8 +202,11 @@ func (r *userTagRepository) GetByName(ctx context.Context, userID, name string) 
 //   * usage_count has NO production writer. IncrementUsageCount and DecrementUsageCount exist on
 //     this repository and are called by nothing outside tests — verified over the tracked tree
 //     with `git ls-files | xargs /usr/bin/grep -ln "IncrementUsageCount\|DecrementUsageCount"`,
-//     which returns this file and three test files, and by
-//     `git ls-files '*.go' | xargs /usr/bin/grep -ln user_tags`, which returns only this file.
+//     which returns this file and three test files. `git ls-files '*.go' | xargs /usr/bin/grep -ln
+//     user_tags` returns FIVE files: this one and four test files. (An earlier version of this
+//     comment said "only this file", which was the non-test subset and not what the command
+//     prints. Corrected: the substance — no production writer outside this repository — is what
+//     the non-test subset shows, and it holds.)
 //
 // So user_tags is a standalone picker list, not an index over the tags actually in use. Making
 // RENAME the one operation that reaches across into transactions would create a coupling in a

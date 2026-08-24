@@ -127,10 +127,24 @@ func TestDownMigration000151_RefusesWhileStatusHistoryExists_Integration(t *test
 		require.NoError(t, err)
 		defer tx.Rollback(ctx) //nolint:errcheck // always rolled back
 
-		// 000152's trigger writes to this table on every account status change, so it must go
-		// first — exactly as golang-migrate orders the real rollback.
-		_, err = tx.Exec(ctx, `DROP TRIGGER IF EXISTS trg_account_status_history ON accounts`)
+		// Bounded rather than unbounded: this subtest empties a shared table and then DROPs it,
+		// which needs ACCESS EXCLUSIVE. On a shared integration database a concurrent writer turns
+		// that into a wait, and an unbounded wait surfaces as an opaque `deadlock detected`
+		// (SQLSTATE 40P01) that reads like a defect in the migration rather than contention.
+		// Observed exactly once, when two `go test -tags integration` invocations were accidentally
+		// run against the same database at the same time — `-p 1` serialises packages WITHIN one
+		// invocation, not BETWEEN two.
+		_, err = tx.Exec(ctx, `SET LOCAL lock_timeout = '10s'`)
 		require.NoError(t, err)
+
+		// ⚠ NO `DROP TRIGGER` HERE, deliberately. An earlier version dropped 000152's trigger from
+		// `accounts` first, on the theory that it must go before the table it writes to. It does
+		// not: nothing in this subtest inserts an account or changes a status, so the trigger never
+		// fires, and `DROP TABLE account_status_history` removes it along with the table. What the
+		// DROP TRIGGER did do was take ACCESS EXCLUSIVE on ACCOUNTS — the busiest table in the
+		// schema — BEFORE this transaction touched account_status_history, i.e. in the opposite
+		// order from every ordinary writer (accounts row lock, then the trigger's insert). That is
+		// the lock inversion that deadlocked.
 		_, err = tx.Exec(ctx, `DELETE FROM account_status_history`)
 		require.NoError(t, err)
 

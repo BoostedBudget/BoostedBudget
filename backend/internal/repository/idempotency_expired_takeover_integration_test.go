@@ -135,3 +135,64 @@ func TestIdempotency_LiveRowStillWinsTheConflict_Integration(t *testing.T) {
 
 	_ = time.Now
 }
+
+// The takeover's hardcoded lifetime must match migration 000086's column DEFAULT. #1569 task 20,
+// review round 1.
+//
+// idempotencyStoreQuery spells `NOW() + INTERVAL '24 hours'` because SQL offers no portable way to
+// say "whatever the column default would have been" inside a DO UPDATE. That duplicates
+// 000086:12's `DEFAULT NOW() + INTERVAL '24 hours'`, and nothing else keeps the two in step:
+// change either and a TAKEN-OVER row silently gets a different lifetime from a FRESHLY INSERTED
+// one — the kind of divergence that shows up as a key expiring early or late, months later, with
+// no error.
+//
+// This compares the two rows against each other rather than against a hardcoded 24, so the test
+// does not become a third copy of the same constant.
+func TestIdempotency_TakeoverLifetimeMatchesTheColumnDefault_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck // always rolled back
+
+	userID, _, _ := seedDownProbeFixture(t, ctx, tx, "s9-life")
+
+	// A freshly INSERTED row takes the column DEFAULT.
+	freshKey := fmt.Sprintf("idem-life-fresh-%s", uuid.New().String())
+	_, err = tx.Exec(ctx, `
+		INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
+		VALUES ($1, $2, 'op', '{}'::jsonb)`, freshKey, userID)
+	require.NoError(t, err)
+
+	// A TAKEN-OVER row goes through idempotencyStoreQuery's DO UPDATE branch.
+	takenKey := fmt.Sprintf("idem-life-taken-%s", uuid.New().String())
+	_, err = tx.Exec(ctx, `
+		INSERT INTO idempotency_keys (key, user_id, operation_id, response_body, expires_at)
+		VALUES ($1, $2, 'op', '{"v":"stale"}'::jsonb, NOW() - INTERVAL '1 hour')`, takenKey, userID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, idempotencyStoreQuery, takenKey, userID, "op", []byte(`{"v":"fresh"}`))
+	require.NoError(t, err)
+
+	// Both were written inside one transaction, so NOW() is identical for both — the difference is
+	// entirely the lifetime each path applied. Compared to the second to absorb nothing but that.
+	var deltaSeconds float64
+	require.NoError(t, tx.QueryRow(ctx, `
+		SELECT EXTRACT(EPOCH FROM (
+			(SELECT expires_at FROM idempotency_keys WHERE key = $1 AND user_id = $3)
+			- (SELECT expires_at FROM idempotency_keys WHERE key = $2 AND user_id = $3)
+		))`, takenKey, freshKey, userID).Scan(&deltaSeconds))
+
+	assert.InDelta(t, 0.0, deltaSeconds, 1.0,
+		"the takeover lifetime in idempotencyStoreQuery has diverged from migration 000086's column "+
+			"DEFAULT by %.0f seconds — a taken-over key now expires at a different time from a fresh "+
+			"one", deltaSeconds)
+
+	// Fail closed: if the fixture somehow produced NULL/equal-by-accident values this would still
+	// pass, so assert both rows genuinely exist and sit in the future.
+	var n int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM idempotency_keys WHERE user_id = $1 AND key IN ($2, $3) AND expires_at > NOW()`,
+		userID, takenKey, freshKey).Scan(&n))
+	require.Equal(t, 2, n, "both probe rows must exist with a live expiry")
+}

@@ -59,9 +59,16 @@ import (
 // So: this closes the Markdown half of a name-and-path guard. It does not close "the ADR was
 // wrong", and no guard in this repository does.
 //
-// SCOPE: tracked *.md at the repository root or under docs/. Vendored skill trees (.agent*/,
-// .claude/) and the sdd working notes (.superpowers/) are excluded — they are third-party or
-// scratch, and neither is a claim this repository makes.
+// SCOPE, AND WHAT IT LEAVES OUT. Tracked *.md at the repository ROOT or under docs/ — 50 of the
+// 430 tracked Markdown files. Vendored skill trees (.agent*/, .claude/) and the sdd working notes
+// (.superpowers/) are excluded deliberately: third-party or scratch, and neither is a claim this
+// repository makes.
+//
+// ⚠ But roughly two dozen PROJECT-OWNED Markdown files are outside that scope and are therefore
+// unguarded: backend/docs/, apps/web/, .github/, apps/mcp-server/, conductor/. Do not read this
+// guard as "Markdown is now covered" — it covers the root and docs/. Widening it is a matter of
+// changing mdInScope and absorbing whatever baseline that produces; it was not done here because
+// the baselines were measured against this scope.
 //
 // A RATCHET, like task 19's, for rules 1 and 3. Rule 2 is a flat ban: it is clean today.
 

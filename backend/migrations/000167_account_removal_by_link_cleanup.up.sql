@@ -42,8 +42,18 @@ ALTER TABLE accounts DROP CONSTRAINT IF EXISTS accounts_removed_reason_valid;
 -- Adding this CHECK NOT VALID and then VALIDATE-ing would be the general rule, and it is what
 -- 000154 did. It is unnecessary here and the two-step is skipped deliberately: the predicate is
 -- strictly WIDER than the constraint dropped one statement above (same expression, one extra
--- admitted value), so every existing row already satisfies it — there is nothing for a validation
--- pass to find, and the ACCESS EXCLUSIVE lock is held for the same duration either way.
+-- admitted value), so every existing row already satisfies it and there is nothing for a
+-- validation pass to find.
+--
+-- ⚠ CORRECTION (#1569 task 20, review round 1). This paragraph used to end "and the ACCESS
+-- EXCLUSIVE lock is held for the same duration either way", which is FALSE. A validating
+-- `ADD CONSTRAINT ... CHECK` holds ACCESS EXCLUSIVE for the whole table scan; `NOT VALID` takes it
+-- only momentarily, and the later `VALIDATE CONSTRAINT` runs under SHARE UPDATE EXCLUSIVE, which
+-- does not block reads or writes. The two-step is therefore strictly cheaper in lock terms on a
+-- large table, and the sentence was inventing a justification the decision does not need.
+--
+-- The decision stands on the argument above it, unchanged: the widening is a superset, accounts is
+-- small, and this migration already holds ACCESS EXCLUSIVE for the DROP one statement earlier.
 ALTER TABLE accounts ADD CONSTRAINT accounts_removed_reason_valid
     CHECK (
         removed_reason IS NULL
