@@ -2,9 +2,13 @@ package repository
 
 import (
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"strconv"
 	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Shared SQL-literal folding for the source-scanning guards in this package.
@@ -127,4 +131,83 @@ func sqlStringExprs(file *ast.File) []struct {
 // containsAccountProjectionMarker reports whether folded SQL looks like an account-shaped read.
 func containsAccountProjectionMarker(sql string) bool {
 	return strings.Contains(strings.ToLower(sql), "plaid_account_id")
+}
+
+// TestFoldSQLExpr is the folder's own self-test.
+//
+// Two source-scanning guards now depend entirely on this function, and it was shipped with no test
+// of its own — so a folding bug would have silently blinded both while every guard stayed green.
+// That is the same shape as the defect it was written to repair, one level down.
+func TestFoldSQLExpr(t *testing.T) {
+	// mustParseExpr is deliberately not shared: each case is a standalone Go expression.
+	fold := func(t *testing.T, src string) (string, bool) {
+		t.Helper()
+		expr, err := parser.ParseExpr(src)
+		if err != nil {
+			t.Fatalf("parsing %q: %v", src, err)
+		}
+		return foldSQLExpr(expr)
+	}
+
+	t.Run("a plain literal is itself", func(t *testing.T) {
+		got, ok := fold(t, "`SELECT id FROM accounts`")
+		require.True(t, ok)
+		require.Equal(t, "SELECT id FROM accounts", got)
+	})
+
+	t.Run("a concatenation is joined — the whole point", func(t *testing.T) {
+		got, ok := fold(t, "`SELECT id, ` + `status FROM accounts`")
+		require.True(t, ok)
+		require.Equal(t, "SELECT id, status FROM accounts", got)
+		require.Regexp(t, `(?is)\bSELECT\b.*\bFROM\b`, got,
+			"a per-literal scan sees no SELECT...FROM span here at all; that is the blindness this fixes")
+	})
+
+	t.Run("this package's renderers are CALLED, not approximated", func(t *testing.T) {
+		got, ok := fold(t, "`SELECT ` + accountBalanceProjection(\"a\") + ` FROM accounts a`")
+		require.True(t, ok)
+		require.Contains(t, got, accountBalanceProjection("a"),
+			"the folded text must be byte-identical to what the production query gets")
+		require.Contains(t, got, "CASE WHEN a.status = 'active'")
+
+		got, ok = fold(t, "`WHERE ` + currentStateAccountLeg(\"a\")")
+		require.True(t, ok)
+		require.Equal(t, "WHERE "+currentStateAccountLeg("a"), got)
+	})
+
+	t.Run("an unknown call becomes the placeholder, which has no word characters", func(t *testing.T) {
+		got, ok := fold(t, "`SELECT ` + someUnknownRenderer(x) + ` FROM accounts`")
+		require.True(t, ok)
+		require.Contains(t, got, unfoldableSQLFragment)
+		require.NotRegexp(t, `\bcurrent_balance\b`, got)
+		// The span still resolves, so the guards judge the KNOWN part rather than skipping the query.
+		require.Regexp(t, `(?is)\bSELECT\b.*\bFROM\b`, got)
+	})
+
+	t.Run("a bare identifier is not string-shaped", func(t *testing.T) {
+		_, ok := fold(t, "someQueryConst")
+		require.False(t, ok, "an opaque identifier must not be reported as folded empty text — "+
+			"that would let a guard treat an unknown query as an empty select list")
+	})
+
+	t.Run("non-ADD operators are not folded", func(t *testing.T) {
+		_, ok := fold(t, "`a` == `b`")
+		require.False(t, ok)
+	})
+
+	t.Run("sqlStringExprs folds a concatenation ONCE, not per fragment", func(t *testing.T) {
+		file, err := parser.ParseFile(token.NewFileSet(), "x.go",
+			"package p\nfunc f() string { return `SELECT plaid_account_id, ` + `status FROM accounts` }", 0)
+		require.NoError(t, err)
+
+		var accountShaped []string
+		for _, e := range sqlStringExprs(file) {
+			if containsAccountProjectionMarker(e.SQL) {
+				accountShaped = append(accountShaped, e.SQL)
+			}
+		}
+		require.Len(t, accountShaped, 1,
+			"descending into the fragments would hand the guards the same halves that fooled them")
+		require.Equal(t, "SELECT plaid_account_id, status FROM accounts", accountShaped[0])
+	})
 }

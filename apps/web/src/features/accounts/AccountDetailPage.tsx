@@ -16,7 +16,7 @@ import { useParams, Link } from 'react-router'
 import { ArrowLeft, AlertCircle } from 'lucide-react'
 import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import { AccountSummaryHeader } from './components/AccountSummaryHeader'
-import { getAccountTypeLabel } from './utils'
+import { getAccountTypeLabel, getAccountBalanceAsOfDate } from './utils'
 import { HoldingsTable } from '../investments/components/HoldingsTable'
 import { NetWorthSection } from '../net-worth/components/NetWorthSection'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -42,7 +42,18 @@ export function AccountDetailPage() {
   const { accountId } = useParams<{ accountId: string }>()
   const trackEvent = useTrackEvent()
 
-  const { data, isLoading, isError, refetch } = useGetAccounts({ include_hidden: 'true' })
+  // status: 'all_statuses' — NOT the server's `active` default. Issue #1569 task 21 (F4): the
+  // Closed accounts view renders an AccountCard per terminal-status account, and AccountCard links
+  // unconditionally to this page. Without this parameter the account is simply absent from the
+  // response and every one of those cards led to "Account not found." Retention the user cannot
+  // open is retention nobody can act on, which is the failure this whole issue is about.
+  //
+  // It must match AccountsPage's own query key ({ include_hidden: 'true', status: 'all_statuses' })
+  // so the two share one cache entry rather than issuing two requests for overlapping universes.
+  const { data, isLoading, isError, refetch } = useGetAccounts({
+    include_hidden: 'true',
+    status: 'all_statuses',
+  })
   const account = data?.accounts?.find((a) => a.id === accountId)
 
   useEffect(() => {
@@ -111,6 +122,7 @@ export function AccountDetailPage() {
           customEmoji={account.custom_emoji}
           customIcon={account.custom_icon}
           customColor={account.custom_color}
+          asOfDate={getAccountBalanceAsOfDate(account)}
         />
 
         {/* Investment-only sections */}

@@ -245,6 +245,14 @@ func TestDashboard_PastAsOfDate_ResolvesTheAccountUniverseAtThatInstant_Integrat
 	// Live for 90 days, holding $1,000 twenty days ago, disconnected ten days ago. So on the
 	// requested date the account was live and the money was tracked; today it is neither.
 	backdateActiveInterval(ctx, t, tx, f.AccountID, now.AddDate(0, 0, -90))
+	// TWO snapshots, and the older one is not decoration. The baseline for an as_of of -20d is
+	// -50d, so with only the -20d snapshot GetSnapshotsAsOfForUser(endOfDay(-50d)) returns nothing,
+	// PeriodComparison comes back NIL, and any assertion about ChangePercent guarded by a nil check
+	// never runs. That is precisely how the first draft of this test hid the headline claim behind
+	// an `if` that was always false — the seventh vacuity class this plan has turned up, in the
+	// test for the defect it was written to pin. The -60d snapshot gives the baseline something to
+	// resolve so the comparison is non-nil and can be asserted unconditionally.
+	seedAsOfSnapshot(ctx, t, tx, f, 500.00, now.AddDate(0, 0, -60))
 	seedAsOfSnapshot(ctx, t, tx, f, 1000.00, now.AddDate(0, 0, -20))
 	_, err = tx.Exec(ctx, `
 		UPDATE accounts SET status = 'removed', removed_at = $2, updated_at = $2 WHERE id = $1`,
@@ -280,7 +288,10 @@ func TestDashboard_PastAsOfDate_ResolvesTheAccountUniverseAtThatInstant_Integrat
 	require.NoError(t, err)
 	assert.InDelta(t, 1000.00, summary.TotalBalance, 0.001,
 		"the money WAS there on the requested date; answering 0 for a past date is the bug")
-	require.NotEmpty(t, summary.ByType,
+	// assert, not require: a fatal here would abort before the PeriodComparison assertions below,
+	// which are the ones carrying the MCP claim. Under the pre-fix mutant every one of these fails,
+	// and all of them must be SEEN to fail — a require would hide the interesting half.
+	assert.NotEmpty(t, summary.ByType,
 		"the breakdown must carry the account too — an empty ByType beside a non-zero total would "+
 			"mean the account was counted without being interpreted")
 
@@ -288,10 +299,21 @@ func TestDashboard_PastAsOfDate_ResolvesTheAccountUniverseAtThatInstant_Integrat
 	require.NoError(t, err)
 	assert.InDelta(t, 1000.00, netWorth.NetWorth, 0.001,
 		"net worth on a past date is a question about that date's universe")
-	if netWorth.PeriodComparison != nil {
-		assert.Greater(t, netWorth.PeriodComparison.NetWorthChangePercent, -100.0,
-			"a -100%% change is the artefact of the current side reading 0, not a real decline")
-	}
+	// The MCP symptom, asserted rather than guarded away. $500 at the -50d baseline and $1,000 on
+	// the requested date is a REAL +100% rise. Before the fix the current side read 0 against the
+	// same $500 baseline, so an agent asked "what was my net worth on <date>" was told -100% —
+	// everything gone — about an account that was simply disconnected afterwards.
+	require.NotNil(t, netWorth.PeriodComparison,
+		"a comparison must be produced at all; a nil one is how this assertion silently stopped "+
+			"running in the first draft of this test")
+	require.NotNil(t, summary.PeriodComparison)
+	assert.InDelta(t, 500.00, netWorth.PeriodComparison.PreviousNetWorth, 0.001,
+		"the baseline is the -60d snapshot, unaffected by this fix")
+	assert.InDelta(t, 100.0, netWorth.PeriodComparison.NetWorthChangePercent, 0.001,
+		"a REAL +100%% rise. -100%% is the artefact of the current side reading 0")
+
+	assert.InDelta(t, 100.0, summary.PeriodComparison.ChangePercent, 0.001,
+		"the balance-summary comparison carries the same symptom and the same fix")
 
 	// ── (A): TODAY is unchanged. The as-of universe must NOT readmit the removed account. ──
 	today, err := svc.GetBalanceSummary(ctx, f.UserID.String(), nil)
@@ -399,4 +421,118 @@ func TestDashboardHousehold_PastAsOfDate_ResolvesTheAccountUniverseAtThatInstant
 	require.NoError(t, err)
 	assert.InDelta(t, 0.00, today.TotalBalance, 0.001,
 		"a disconnected account stays out of the household's CURRENT total")
+}
+
+// TestDashboard_PastAsOfDate_MergeDirection_DecidesInclusionUnderATypeFilter pins the ADD-ONLY
+// merge direction of augmentWithAsOfUniverse, at the one place where the direction changes a
+// TOTAL rather than a label.
+//
+// I originally graded this as "type attribution only, changes no total, therefore not pinned". That
+// was wrong, and the review caught it. The account map does not merely decorate a snapshot: it
+// gates INCLUSION, because `filters.AccountTypes` is applied to `account.Type` after the lookup
+// (GetBalanceSummary / GetNetWorth). For a chain that re-linked AFTER the requested date, the
+// current map holds the SUCCESSOR and the as-of map holds the PREDECESSOR — and if their types
+// differ, the merge direction decides whether that chain's money is counted at all.
+//
+// WHY THE CASE IS REACHABLE AT ALL, since it is narrow enough to look impossible. The augmentation
+// short-circuits when every snapshot already resolves in the current map, so a lone re-linked chain
+// never triggers a fetch. It takes a SECOND chain — one fully disconnected, resolving nowhere — to
+// force the as-of read that then also returns the re-linked chain's predecessor. Both chains are in
+// this fixture for that reason; deleting the disconnected one would make this test pass under
+// either direction and prove nothing.
+//
+// THE DIRECTION KEPT, and its cost stated plainly. Add-only: an account that is active today keeps
+// its current-map entry, so the chain is interpreted by its SUCCESSOR. That is the same precedence
+// baselineBalanceForComparison already applies to the baseline leg of this same response, and
+// having the two legs resolve one chain differently is a class of bug this file has been bitten by
+// twice (#1369 G1, #1537 round 10). The cost is real: a historical figure is attributed to the
+// successor's type, ID and name. Preferring the member that was live THEN is arguably more honest
+// for a historical read, but it is a change that must move BOTH legs together, and it is not this
+// task's to make. It is stated here rather than left for the next reader to discover.
+func TestDashboard_PastAsOfDate_MergeDirection_DecidesInclusionUnderATypeFilter(t *testing.T) {
+	pool := setupDashboardAsOfDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	now := time.Now().UTC()
+	asOf := now.AddDate(0, 0, -20)
+
+	// ── Chain X: fully disconnected. Resolves in NO current map, so it forces the as-of fetch. ──
+	x := seedAsOfAccount(ctx, t, tx, "merge-dir-x")
+	backdateActiveInterval(ctx, t, tx, x.AccountID, now.AddDate(0, 0, -90))
+	seedAsOfSnapshot(ctx, t, tx, x, 1000.00, asOf)
+	_, err = tx.Exec(ctx, `
+		UPDATE accounts SET status = 'removed', removed_at = $2, updated_at = $2 WHERE id = $1`,
+		x.AccountID, now.AddDate(0, 0, -10))
+	require.NoError(t, err)
+	ct, err := tx.Exec(ctx, `
+		UPDATE account_status_history SET valid_from = $2, valid_to = $3
+		WHERE account_id = $1 AND status = 'active'`,
+		x.AccountID, now.AddDate(0, 0, -90), now.AddDate(0, 0, -10))
+	require.NoError(t, err)
+	require.EqualValues(t, 1, ct.RowsAffected())
+
+	// ── Chain Y, same user: re-linked FIVE days ago, i.e. AFTER the requested date. ──────────
+	// Y1 ('investment') was live at asOf; Y2 ('depository') is active today. They share a chain key,
+	// so the snapshot below resolves to Y2 through the current map and to Y1 through the as-of map.
+	yUserAccountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
+		VALUES ($1, $2, $3, 'depository')`, yUserAccountID, x.UserID, "merge-dir-y-inst-"+yUserAccountID.String())
+	require.NoError(t, err)
+
+	y1, y2 := uuid.New(), uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Old Brokerage', 'investment', 'active', $5)`,
+		y1, x.LinkedItemID, x.UserID, "merge-dir-y1-"+y1.String(), yUserAccountID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'New Checking', 'depository', 'active', $5)`,
+		y2, x.LinkedItemID, x.UserID, "merge-dir-y2-"+y2.String(), yUserAccountID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO balance_snapshots (id, account_id, user_account_id, user_id, current_balance, currency_code, snapshot_at, source)
+		VALUES ($1, $2, $3, $4, 300.00, 'USD', $5, 'sync')`,
+		uuid.New(), y1, yUserAccountID, x.UserID, asOf)
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `
+		UPDATE accounts SET status = 'replaced', replaced_at = $2, replaced_by_id = $3, updated_at = $2
+		WHERE id = $1`, y1, now.AddDate(0, 0, -5), y2)
+	require.NoError(t, err)
+	ct, err = tx.Exec(ctx, `
+		UPDATE account_status_history SET valid_from = $2, valid_to = $3
+		WHERE account_id = $1 AND status = 'active'`,
+		y1, now.AddDate(0, 0, -90), now.AddDate(0, 0, -5))
+	require.NoError(t, err)
+	require.EqualValues(t, 1, ct.RowsAffected(), "Y1 must have exactly one recorded active interval")
+
+	svc := NewDashboardService(
+		repository.NewBalanceSnapshotRepository(tx),
+		repository.NewAccountRepository(tx, dashboardAsOfEncryptor(t)),
+	)
+
+	// Precondition: unfiltered, both chains count either way. If this is not 1300 the fixture is
+	// wrong and every assertion below would be measuring something else.
+	unfiltered, err := svc.GetBalanceSummary(ctx, x.UserID.String(), &domain.DashboardFilters{AsOfDate: &asOf})
+	require.NoError(t, err)
+	require.InDelta(t, 1300.00, unfiltered.TotalBalance, 0.001,
+		"fixture precondition: both chains resolve at the requested date")
+
+	// The assertion the direction decides. Add-only -> Y is interpreted by the SUCCESSOR Y2
+	// ('depository'), so it passes the filter: 1000 + 300. Overwrite -> Y is interpreted by the
+	// PREDECESSOR Y1 ('investment'), the type filter drops it, and the total is 1000.
+	filtered, err := svc.GetBalanceSummary(ctx, x.UserID.String(), &domain.DashboardFilters{
+		AsOfDate:     &asOf,
+		AccountTypes: []string{"depository"},
+	})
+	require.NoError(t, err)
+	assert.InDelta(t, 1300.00, filtered.TotalBalance, 0.001,
+		"add-only: a chain that is active today keeps its current-map entry, so the type filter "+
+			"sees the successor's type. An overwriting merge would resolve it to the predecessor "+
+			"and drop $300 from the total — the merge direction is not a labelling choice")
 }

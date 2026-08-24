@@ -235,22 +235,28 @@ func asOfIsHistorical(asOfDate time.Time) bool {
 // snapshot at or before it — exactly the set that was being dropped, and the only set the fix is
 // about.
 //
-// ⚠ WHAT ADD-ONLY IS AND IS NOT PINNED BY, stated rather than implied. The two maps can only
-// disagree for a chain key whose members differ — a re-link, where the current map holds the
-// ACTIVE successor and the as-of map holds the predecessor that was live then. What they disagree
-// about is TYPE attribution (assets vs liabilities, which ByType bucket); the BALANCE always comes
-// from the snapshot row either way, so the totals this fix exists to correct are identical under
-// both merge directions. Making the merge overwrite therefore does NOT turn any test in this
-// package red, and that is honestly a gap rather than a proof.
+// ⚠ THE DIRECTION CHANGES A TOTAL, not just a label. An earlier revision of this comment claimed
+// the two directions differ only in TYPE attribution and therefore could not move a number. That
+// was wrong. The map gates INCLUSION as well as decoration: `filters.AccountTypes` is applied to
+// `account.Type` AFTER this lookup, so for a chain that re-linked after the requested date — the
+// only case where the two maps disagree, the current map holding the successor and the as-of map
+// the predecessor — a differing type decides whether that chain's money is counted at all. Pinned,
+// with the disconnected second chain needed to reach the case, by
+// TestDashboard_PastAsOfDate_MergeDirection_DecidesInclusionUnderATypeFilter: 1300.00 add-only
+// versus 1000.00 overwriting.
 //
 // Add-only is chosen because it is the precedence the baseline path already applies (active map
 // first, historical as fallback — baselineBalanceForComparison, and
 // TestDashboard_AccountOpenedAfterTheCutoff_IsAbsentFromTheBaseline_Integration, which asserts that
 // ordering explicitly). Having the current leg resolve a chain differently from the baseline leg
 // of the same response is a class of bug this file has already been bitten by twice (#1369 G1,
-// #1537 round 10). Whether a HISTORICAL read should instead prefer the member that was live then
-// is a real question, and deliberately not answered here: it would change the baseline path too,
-// and it changes no total.
+// #1537 round 10).
+//
+// The cost, stated rather than left to be found: a historical figure is attributed to the
+// SUCCESSOR's type, id and name. Preferring the member that was live THEN is arguably more honest
+// for a point-in-time read — but it would have to move the baseline leg with it, or the two halves
+// of one response would disagree about one chain, which is the exact failure both prior bugs were.
+// That is a separate change and deliberately not made here.
 func mergeMissingAccounts(dst, src map[string]domain.Account) {
 	for key, account := range src {
 		if _, exists := dst[key]; !exists {
