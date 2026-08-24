@@ -293,8 +293,16 @@ type SavingsProgressSummary struct {
 	TotalSaved             float64 `json:"total_saved"`
 	TotalTarget            float64 `json:"total_target"`
 	OverallPercentComplete float64 `json:"overall_percent_complete"` // 0–100
-	GoalCount              int     `json:"goal_count"`
-	CompletedGoalCount     int     `json:"completed_goal_count"`
+	// GoalCount is the number of ACTIVE goals — the same universe as Goals, TotalSaved and
+	// TotalTarget. It is NOT the user's total number of goals. GoalCount + CompletedGoalCount is,
+	// for a user with no tombstoned goals.
+	GoalCount int `json:"goal_count"`
+	// CompletedGoalCount is the number of COMPLETED goals, counted OUTSIDE the active universe
+	// above (Issue #1569 Task 20). It was previously derived by counting IsCompleted within that
+	// universe, whose query filters `is_completed = false`, so it was structurally always 0 — a
+	// required field of the JSON contract answering "how many goals have I completed?" with a
+	// confident wrong zero.
+	CompletedGoalCount int `json:"completed_goal_count"`
 }
 
 // IsOnTrack returns true if the goal is on track to be completed by deadline.

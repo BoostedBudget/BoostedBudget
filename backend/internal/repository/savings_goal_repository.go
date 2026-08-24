@@ -72,6 +72,19 @@ type SavingsGoalRepository interface {
 
 	CountByUserID(ctx context.Context, userID string) (int, error)
 
+	// CountCompletedByUserID counts the user's COMPLETED, non-tombstoned savings goals.
+	//
+	// Issue #1569 Task 20 (A4). SavingsProgressSummary.CompletedGoalCount used to be derived by
+	// counting IsCompleted over GetActiveByUserID's result — a universe whose WHERE clause is
+	// `is_completed = false`. The count was therefore structurally zero for every user who has
+	// ever completed a goal, and the field is REQUIRED in the JSON contract, so an MCP or LLM
+	// consumer asking "how many goals have I completed?" got a confident, well-typed, wrong 0.
+	// A separate count is the fix rather than widening the summary's universe: the universe is
+	// deliberately active-only (see savings_progress_chain_test.go's
+	// TestSavingsProgress_Summary_UniverseIsActiveOnly), and widening it would silently change
+	// Goals, TotalSaved, TotalTarget and OverallPercentComplete too.
+	CountCompletedByUserID(ctx context.Context, userID string) (int, error)
+
 	// Balance sync operations (Issue #452, extended by #1300 for multi-basis progress)
 	GetByAccountID(ctx context.Context, accountID string) ([]*domain.SavingsGoal, error)
 	// UpdateCurrentAmount stores the recomputed current_amount and records the recompute timestamp.
@@ -491,6 +504,22 @@ func (r *savingsGoalRepository) CountByUserID(ctx context.Context, userID string
 		return 0, err
 	}
 
+	return count, nil
+}
+
+// CountCompletedByUserID counts the user's completed savings goals — see the interface method's
+// doc comment (Issue #1569 Task 20) for why this cannot be derived from GetActiveByUserID.
+//
+// `deleted_at IS NULL` matches CountByUserID and GetActiveByUserID: a tombstoned goal is excluded
+// from every other count the summary reports, and including it only here would make
+// CompletedGoalCount incomparable with GoalCount.
+func (r *savingsGoalRepository) CountCompletedByUserID(ctx context.Context, userID string) (int, error) {
+	query := `SELECT COUNT(*) FROM savings_goals WHERE user_id = $1 AND is_completed = true AND deleted_at IS NULL`
+
+	var count int
+	if err := r.db.QueryRow(ctx, query, userID).Scan(&count); err != nil {
+		return 0, err
+	}
 	return count, nil
 }
 

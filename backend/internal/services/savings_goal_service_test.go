@@ -92,6 +92,11 @@ func (m *MockSavingsGoalRepository) CountByUserID(ctx context.Context, userID st
 	return args.Int(0), args.Error(1)
 }
 
+func (m *MockSavingsGoalRepository) CountCompletedByUserID(ctx context.Context, userID string) (int, error) {
+	args := m.Called(ctx, userID)
+	return args.Int(0), args.Error(1)
+}
+
 func (m *MockSavingsGoalRepository) GetByAccountID(ctx context.Context, accountID string) ([]*domain.SavingsGoal, error) {
 	args := m.Called(ctx, accountID)
 	if args.Get(0) == nil {
