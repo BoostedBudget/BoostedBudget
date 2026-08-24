@@ -117,9 +117,10 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
       {isOpen && (
         <div id={panelId} className="mt-2 space-y-2">
           <p className="px-1 text-xs text-muted-foreground">
-            Deleting a goal doesn&apos;t throw anything away. Every contribution you logged is
-            still saved, so you can look back at what you put aside. Erase one for good below if
-            you want it gone.
+            Deleting a goal doesn&apos;t throw anything away on its own &mdash; every contribution
+            you logged is still saved here, so you can look back at what you put aside. Two things
+            do erase it for good: the button below, and permanently deleting the account the goal
+            was tracking.
           </p>
           {/*
             N identical "Delete permanently" buttons are indistinguishable in a screen reader's

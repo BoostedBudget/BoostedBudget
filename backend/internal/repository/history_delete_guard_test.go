@@ -65,6 +65,16 @@ var allowedHistoryDeletes = map[string]string{
 	// migration 000150's RESTRICT. Without this the purge was permanently unreachable for any
 	// account that had ever had a goal: the tombstone leaves account_id set, so "delete the goal
 	// first, then try again" could never be satisfied (#1569 task 21, defect C1).
+	//
+	// ⚠ WHAT THIS ENTRY DOES NOT ENFORCE. The key is (function, TABLE) and carries no predicate, so
+	// the guard authorises `DELETE FROM savings_goals` inside PurgeAccount — full stop. Dropping
+	// the `deleted_at IS NOT NULL` scope would silently keep this entry's blessing while turning a
+	// narrow cleanup into a hard delete of LIVE goals and their hand-logged contributions. The
+	// scope is held by behaviour instead, in both directions:
+	// TestAccountRepository_PurgeAccount_Integration_TombstonedSavingsGoalDoesNotBlock (a deleted
+	// goal must not block) and ..._RefusesWhileSavingsGoalReferencesAccount (a live one must), and
+	// inverting the predicate turns both red. Reason strings in this map describe intent; they are
+	// not checked against the SQL, and no entry here should be read as if they were.
 	"repository/account_repository.go#PurgeAccount|savings_goals": "explicit account purge, tombstoned goals only: the user already deleted the goal, which is PurgeGoal's precondition; a live goal still blocks via RESTRICT",
 
 	// The linked-item purge. Same shape, one level up: the user disconnects AND purges an

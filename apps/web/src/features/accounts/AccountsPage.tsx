@@ -227,13 +227,20 @@ export function AccountsPage() {
   // any single account row — a surviving chain member keeps that key, so the purged account's
   // transactions continue to appear under it automatically. The dialog states this rather than
   // leaving it implied.
+  //
+  // The savings-goal sentences are BOTH load-bearing after #1569 task 21 (C1), and they say
+  // different things. A LIVE goal still blocks the purge, so that sentence is advice. A goal the
+  // user has ALREADY deleted no longer blocks it — the purge destroys the tombstone and its
+  // hand-logged contributions and says nothing, because a tombstoned goal is invisible in every
+  // view. That is the only destruction here the user gets no second prompt for, which is exactly
+  // why it belongs in the enumeration and not only in the advice.
   function buildPurgeDescription(account: Account): React.ReactNode {
     const displayName = account.nickname || account.official_name || account.name
     const maskPart = account.mask ? ` (...${account.mask})` : ''
     const isInvestment = account.type === 'investment'
     return (
       <span>
-        You are about to permanently delete <strong data-ph-mask>{displayName}{maskPart}</strong> and all of its balance history, holdings, and liabilities.
+        You are about to permanently delete <strong data-ph-mask>{displayName}{maskPart}</strong> and all of its balance history, holdings, liabilities, and any savings goal you have already deleted that was tracking it (including the contributions you logged by hand against it).
         <br /><strong>This cannot be undone.</strong>
         {isInvestment && (
           <>
@@ -241,7 +248,7 @@ export function AccountsPage() {
           </>
         )}
         <br />Your bank transactions will NOT be deleted — if another connection to this same account exists, they will continue to appear there; otherwise they remain visible with no linked account.
-        <br />If a savings goal still tracks this account, the purge will be refused until you delete or re-link that goal.
+        <br />If a savings goal still tracks this account, the purge will be refused until you delete or re-link that goal. <strong>Deleting the goal first means it is destroyed here too</strong> — along with every contribution you logged by hand against it.
       </span>
     )
   }

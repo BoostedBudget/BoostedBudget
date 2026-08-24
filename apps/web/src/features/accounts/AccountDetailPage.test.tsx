@@ -373,3 +373,76 @@ describe('AccountDetailPage', () => {
     expect(screen.getByText('WF Checking')).toBeInTheDocument()
   })
 })
+
+// Issue #1569 task 21, F4 — the Closed view's cards were dead links.
+//
+// AccountCard renders an unconditional <Link to={`/accounts/${id}`}> on every card, and the Closed
+// accounts view (status=all_statuses) renders those cards for terminal-status accounts. This page
+// queried WITHOUT a status parameter, so the server applied its `active` default and the account
+// was simply absent — every closed account's card navigated to "Account not found."
+//
+// That was already true before this branch for a `replaced` account, but item D made it reachable
+// and obvious: the Closed view is where a user goes to look at exactly these accounts, and #1569's
+// whole premise is that their history is retained. A retained account you cannot open is retention
+// nobody can act on.
+describe('AccountDetailPage — closed accounts (Issue #1569)', () => {
+  const closedAccount = {
+    ...mockDepositoryAccount,
+    id: 'acc-closed',
+    name: 'Old Savings',
+    // Cleared explicitly: displayName is nickname || official_name || name, so leaving the base
+    // fixture's values in place would assert on a name this fixture never sets.
+    nickname: undefined,
+    official_name: undefined,
+    status: 'removed',
+    removed_at: '2026-03-01T00:00:00Z',
+    current_balance: undefined,
+    available_balance: undefined,
+  }
+
+  it('requests the full account universe, not just active accounts', () => {
+    renderDetailPage('acc-investment')
+
+    // Every call must carry it — a single un-scoped call is enough to lose the account.
+    expect(mockUseGetAccounts).toHaveBeenCalled()
+    for (const call of mockUseGetAccounts.mock.calls) {
+      expect(call[0]).toMatchObject({ status: 'all_statuses' })
+    }
+  })
+
+  it('renders a closed account instead of "Account not found"', () => {
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [closedAccount] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+
+    renderDetailPage('acc-closed')
+
+    expect(screen.queryByText(/account not found/i)).toBeNull()
+    expect(screen.getByText('Old Savings')).toBeInTheDocument()
+  })
+
+  it('labels the absent balance as last known, with an as-of date', () => {
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [closedAccount] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+
+    renderDetailPage('acc-closed')
+
+    // Residual #3 from the first pass: the page passed no asOfDate, so a closed account's
+    // (now absent) balance was labelled "Current Balance" — a live label on a figure that does
+    // not exist. AccountCard has said "Last known balance" since task 2; the two surfaces
+    // disagreed about the same account.
+    expect(screen.getByText('Last known balance')).toBeInTheDocument()
+    expect(screen.queryByText('Current Balance')).toBeNull()
+    expect(screen.getByText(/as of/i)).toBeInTheDocument()
+    expect(screen.queryByText('$0.00')).toBeNull()
+  })
+})

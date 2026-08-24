@@ -36,8 +36,15 @@ import (
 // WHAT IT CANNOT SEE, stated rather than discovered later:
 //
 //  1. It inherits every blind spot of the `plaid_account_id` marker — a `SELECT *`, or a narrow
-//     read that pulls `current_balance` without the marker, is invisible. There is no such read in
-//     the tree today; a narrow balance probe would be a new shape and would need its own answer.
+//     read that pulls `current_balance` without the marker, is invisible. FOUR such reads exist
+//     today, all in investment_analytics_repository.go (lines 98, 115, 205, 221 at the time of
+//     writing): they select `a.current_balance` in an aggregate over `accounts a` without ever
+//     naming `plaid_account_id`. They are correct — but by a DIFFERENT mechanism, the
+//     `currentStateAccountLeg("a")` in their WHERE, which restricts them to active accounts and
+//     which this guard cannot see. If that leg were removed those reads would surface a terminal
+//     account's frozen balance and nothing here would fire. That is a real hole, named rather than
+//     glossed; closing it wants a marker for "reads a balance from accounts", not a wider version
+//     of this one.
 //  2. It governs the `accounts` table only. A balance selected from balance_snapshots is HISTORY
 //     and is deliberately untouched — that is the seam the whole ruling turns on.
 //  3. It cannot tell whether the CASE's predicate is RIGHT, only that the fragment is verbatim.
