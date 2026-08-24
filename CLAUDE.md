@@ -150,6 +150,11 @@ Corollaries: the provider is not the user (Plaid removing an item is not a delet
   a NO-OP for any method taking arguments. Use `mockassert.NoCallTo` instead.
 - `TestEveryCitedTestNameResolves` — a comment citing a test name that does not exist. Names only;
   it deliberately says nothing about line numbers.
+- `TestNoAccountProjectionOmitsStatus` — an account-shaped `SELECT` (one naming `plaid_account_id`)
+  that omits `status`. Without it `Account.Status` is `""`, which `isAccountDisconnected` reads as
+  ACTIVE.
+- `TestEveryHistoryShapedTableIsClassified` — a live table named like history that is in neither
+  `historyBearingTables` nor `deliberatelyNotHistoryBearing`. Both G1 and G2 are blind to those.
 
 The exception, and the only one: GDPR erasure is a real hard delete
 (`docs/decisions/2026-08-01-gdpr-erasure-hard-delete.md`). No retention decision may leave a row
