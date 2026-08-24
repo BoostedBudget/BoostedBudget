@@ -157,13 +157,15 @@ func (r *householdShareRepository) SetShareVisibility(ctx context.Context, house
 		return nil, err
 	}
 
-	// Open the new interval. ON CONFLICT still carries the whole race: a contender that was
-	// blocked on the UPDATE above wakes with a snapshot predating our INSERT, closes nothing,
-	// and lands here — where DO UPDATE absorbs it exactly as before. That path overwrites an
-	// interval instead of closing it, and is the one case where a visibility state leaves no
-	// trace; its lifetime is bounded by how long the contender was blocked, i.e. one
-	// round-trip, and the alternative (surfacing a 23505 to a user toggling a switch twice)
-	// is worse.
+	// Open the new interval. ON CONFLICT is kept for a race that is NOT reachable today: a
+	// contender blocked on the UPDATE above would wake with a snapshot predating our INSERT,
+	// close nothing, and land here, where DO UPDATE would overwrite an interval instead of
+	// closing it — the one path on which a visibility state could leave no trace. The only
+	// non-test caller is SetAccountShareVisibility, which holds LockHouseholdByID for the whole
+	// transaction, so concurrent toggles within a household are fully serialized and different
+	// households cannot collide on this index at all. The residual is a FUTURE caller reaching
+	// this method without that lock; ON CONFLICT keeps that case from surfacing a 23505 to
+	// someone toggling a switch twice, at the cost of one microsecond-lived interval.
 	var s domain.HouseholdAccountShare
 	err = tx.QueryRow(ctx, `
 		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility)

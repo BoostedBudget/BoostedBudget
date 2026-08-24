@@ -557,13 +557,17 @@ func householdScopeArgs(requestingUserID string, scope *domain.HouseholdScope) [
 // departed member vanished from the household net-worth chart. Not clipped at the departure:
 // erased from every day BEFORE it too, so the series a household saw for a shared period went to
 // zero the moment someone left. That is the most visible instance of the defect #1569 exists to
-// fix, so this read now works the same way the point-in-time one does.
+// fix, so this read now answers from the same interval, on the same half-open rule, at the same
+// instant resolution as the point-in-time one.
 //
 // The row therefore carries share_ended_at (the exclusive end, NULL when current) and
 // share_row_id, and the membership guard is relaxed for CLOSED intervals only — identical
 // reasoning to householdAccountsCTEForBalancesAsOf's, see there. What is NOT here is the
-// interval predicate itself: a range read evaluates it per calendar day, not once, so the clip
-// lives in the caller's per-day stage where the day is in scope.
+// interval predicate itself: a range read applies it per row of the aggregation rather than once
+// for the query, so the clip lives in the caller's per-day stage. It is the SAME half-open
+// interval evaluated at the SAME instant resolution the point-in-time CTE uses — a date-resolution
+// clip would not mirror it, and got both bounds wrong in opposite directions before it was
+// corrected; see GetAggregatedHistoryForHousehold's per_account_per_day WHERE clause.
 //
 // ⚠ The consequence a caller MUST handle: one user_account can now match SEVERAL rows of this
 // CTE. Closed intervals are unconstrained by uq_household_account_shares_active and may overlap,

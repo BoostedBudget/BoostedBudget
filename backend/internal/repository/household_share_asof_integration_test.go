@@ -457,10 +457,14 @@ func TestHouseholdShareRange_StopsAtTheDeparture(t *testing.T) {
 		"a snapshot from AFTER the departure must never enter the household series")
 }
 
-// TestHouseholdShareRange_RevocationDayIsExcluded pins the day-granularity boundary. The daily
-// point is "the latest snapshot that day", which on the revocation day can be an instant AFTER
-// visibility ended — so the whole day is excluded, the half-open rule at date resolution.
-func TestHouseholdShareRange_RevocationDayIsExcluded(t *testing.T) {
+// TestHouseholdShareRange_RevocationDayKeepsOnlyPreRevocationInstants pins the CLOSING bound at
+// INSTANT resolution, not date resolution.
+//
+// The first version of this rule excluded the revocation day whole, on a false binary: either drop
+// the member's last partial day or admit a post-departure instant. Clipping on bs.snapshot_at
+// against share_ended_at directly does neither — the household keeps every instant it was
+// genuinely entitled to, including ones earlier on the departure day, and nothing after.
+func TestHouseholdShareRange_RevocationDayKeepsOnlyPreRevocationInstants(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
 	repo := repository.NewBalanceSnapshotRepository(pool)
@@ -471,11 +475,12 @@ func TestHouseholdShareRange_RevocationDayIsExcluded(t *testing.T) {
 	hh := insertTestHousehold(t, pool, owner)
 	memberAcct := setupHouseholdMemberAccount(t, pool, member)
 
-	// Revoke at midday on day -10; the day before is fully inside.
+	// Revoke at midday on day -10, with a snapshot on either side of that instant ON THAT DAY.
 	revokedAt := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC).AddDate(0, 0, -10)
 	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, 0, -60))
 	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 50, revokedAt.AddDate(0, 0, -1))
 	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 60, revokedAt.Add(-time.Hour))
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 70, revokedAt.Add(time.Hour))
 	revokeShareAt(t, pool, hh, memberAcct.UserAccountID, revokedAt)
 
 	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
@@ -483,10 +488,47 @@ func TestHouseholdShareRange_RevocationDayIsExcluded(t *testing.T) {
 	require.NoError(t, err)
 
 	totals := rangeHistoryTotals(points)
-	assert.Contains(t, totals, revokedAt.AddDate(0, 0, -1).Format("2006-01-02"), "the last fully-shared day stays")
-	assert.NotContains(t, totals, revokedAt.Format("2006-01-02"),
-		"the revocation day is excluded whole: its daily point is the latest snapshot that day, which "+
-			"can be an instant the household was no longer entitled to")
+	assert.Contains(t, totals, revokedAt.AddDate(0, 0, -1).Format("2006-01-02"), "the last full day stays")
+
+	departureDay := revokedAt.Format("2006-01-02")
+	require.Contains(t, totals, departureDay,
+		"the departure day must NOT be dropped whole — the household legitimately saw this account "+
+			"until midday, and an instant-resolution clip keeps that without admitting anything later")
+	assert.InDelta(t, 60, totals[departureDay], 0.01,
+		"70 is the snapshot taken an hour AFTER the revocation and must never enter the series; a "+
+			"missing day means the clip is back at date resolution and threw away legitimate history")
+}
+
+// TestHouseholdShareRange_ShareStartDayExcludesPreGrantInstants is the mirror of the above, and
+// the direction that was leaking: the lower bound was GREATEST($4::date, share_started_at::date),
+// which admits the WHOLE share-start day — including instants BEFORE the grant existed. The
+// "cannot leak" principle the closing bound was argued from has to apply here too.
+func TestHouseholdShareRange_ShareStartDayExcludesPreGrantInstants(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	now := time.Now().UTC()
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	// The grant opens at midday on day -10; the ONLY snapshot that day is three hours earlier.
+	sharedAt := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC).AddDate(0, 0, -10)
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityShared, sharedAt)
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 777, sharedAt.Add(-3*time.Hour))
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 888, sharedAt.AddDate(0, 0, 1))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, now.AddDate(0, 0, -60), now, nil)
+	require.NoError(t, err)
+
+	totals := rangeHistoryTotals(points)
+	assert.NotContains(t, totals, sharedAt.Format("2006-01-02"),
+		"an instant three hours BEFORE the grant existed must not appear in the household series — "+
+			"a date-resolution lower bound admits the whole share-start day and leaks exactly that")
+	assert.Contains(t, totals, sharedAt.AddDate(0, 0, 1).Format("2006-01-02"), "the day after is genuinely shared")
 }
 
 // TestHouseholdShareRange_OverlappingRefingerprintedIntervalsDoNotDoubleCount is the gap the

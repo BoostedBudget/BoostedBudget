@@ -364,16 +364,26 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 		    -- TestGetAggregatedHistoryForHousehold_RelinkChain_UsesActiveAccountType (active wins) and
 		    -- TestGetAggregatedHistoryForHousehold_ExpiredOnlyChain_KeepsTypeFilteredHistory (fallback).
 		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id
-		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		    -- The caller's requested window, at date resolution because that is what it is: a
+		    -- range of calendar days the chart covers.
+		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date >= $4::date
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $5::date
-		      -- The exclusive end, at DATE resolution. The whole revocation day goes, not merely the
-		      -- instants after the revocation: a daily point is "the latest snapshot that day", which
-		      -- on that day can be an instant the household was no longer entitled to. Excluding the
-		      -- day is the conservative reading of [shared_at, revoked_at) at this granularity, and it
-		      -- is the direction that cannot leak. Pinned by
-		      -- TestHouseholdShareRange_RevocationDayIsExcluded.
-		      AND (ha.share_ended_at IS NULL
-		           OR (bs.snapshot_at AT TIME ZONE 'UTC')::date < (ha.share_ended_at AT TIME ZONE 'UTC')::date)
+		      -- The GRANT's own bounds, at INSTANT resolution — [share_started_at, share_ended_at),
+		      -- the same half-open interval householdAccountsCTEForBalancesAsOf evaluates, evaluated
+		      -- the same way. Comparing bs.snapshot_at directly is what lets both bounds be exact:
+		      -- the household keeps every instant it was genuinely entitled to, including ones
+		      -- earlier on the day it gained or lost access, and gets nothing outside them.
+		      --
+		      -- Both bounds used to be date-resolution, and each was wrong in its own direction. The
+		      -- opening bound was GREATEST($4::date, share_started_at::date), which admitted the
+		      -- WHOLE share-start day: a snapshot taken hours BEFORE the grant existed entered the
+		      -- series. The closing bound excluded the revocation day whole, which leaked nothing but
+		      -- threw away real history on a false binary — "drop the last partial day OR admit a
+		      -- post-departure instant" was never the choice. Pinned in both directions by
+		      -- TestHouseholdShareRange_ShareStartDayExcludesPreGrantInstants and
+		      -- TestHouseholdShareRange_RevocationDayKeepsOnlyPreRevocationInstants.
+		      AND bs.snapshot_at >= ha.share_started_at
+		      AND (ha.share_ended_at IS NULL OR bs.snapshot_at < ha.share_ended_at)
 		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.user_account_id,
 		             ha.share_started_at DESC, ha.share_row_id,
 		             bs.snapshot_at DESC, bs.id DESC,
