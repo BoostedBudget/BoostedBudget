@@ -1300,6 +1300,52 @@ func (s *transactionSyncService) detectAndUpsertProposedContributions(ctx contex
 
 // processRemovedTransactions TOMBSTONES the transactions Plaid reports as removed. Issue #1569.
 //
+// ⚠ WHAT THIS STILL DOES NOT DO: MOVE THE USER'S WORK OFF A SETTLED PENDING. #1569 task 20 (T10a),
+// investigated and NOT implemented; the finding is recorded here so the next attempt starts from it
+// rather than from the census entry, which proposes a worse design.
+//
+// THE DEFECT, which is live and routine. When a pending transaction posts, Plaid removes the
+// pending one and adds a NEW transaction with a different transaction_id. This function tombstones
+// the pending row, and task 7 established that a settled pending must render NOWHERE
+// (deleted_reason = provider_removed_pending; see isSettledPending in
+// apps/web/src/features/transactions/types.ts, and
+// TestTombstone_SettledPendingIsNeverSurfaced_Integration). So the user's category override, notes,
+// tags and `reviewed` state are RETAINED on a row nothing will ever show them on, and the posted
+// twin arrives blank. Every time anybody categorises a pending charge.
+//
+// ⚠ THE CENSUS PROPOSED FUZZY MATCHING ON (account_id, amount, date±window, merchant). DO NOT.
+// Plaid supplies the link exactly: Transaction.PendingTransactionId (confirmed present in the
+// pinned SDK, plaid-go v23.0.0, plaid/model_transaction.go:47) is set on the POSTED transaction and
+// holds the transaction_id of the pending one it replaced. This repository reads it nowhere today
+// — `/usr/bin/grep -rn PendingTransactionId backend/` matches only a stale test binary. A heuristic
+// would risk attaching one transaction's category to a different transaction, which is worse than
+// the bug it fixes; the provider's own pointer cannot.
+//
+// WHAT AN IMPLEMENTATION NEEDS:
+//   1. a migration adding transactions.pending_transaction_id_blind_idx (blind index only — the
+//      value is never read back, only matched, so the plaintext need not be stored at all);
+//   2. the Plaid -> domain mapper and CreateBatch/Update to populate it (CreateBatch is a 32-field
+//      multi-row INSERT; this makes it 33, and the field must NOT appear in the ON CONFLICT SET
+//      clause's preserve list by accident);
+//   3. the annotation move inside TombstoneByExternalID's own transaction, so it happens AS PART OF
+//      the tombstoning rather than before or after it — task 7's rule is that the settled row must
+//      not be resurrected, and a two-statement version can crash between them and leave the
+//      annotations on both rows, i.e. double-categorised;
+//   4. a refusal to overwrite: if the posted twin already carries the user's own annotations, they
+//      win. The move fills a blank row, it does not merge.
+//
+// ORDERING IS ALREADY IN THIS FUNCTION'S FAVOUR and does not need a second hook for the common
+// case: processTransactions aggregates EVERY page into result.Added/Modified/Removed before storing
+// anything, then runs step 6/7 (added, modified) before step 8 (this function), and only advances
+// the cursor after all of it. So for any removal+addition Plaid delivers together — which is how a
+// settlement is delivered — the posted twin is already in the database when this runs.
+//
+// RESIDUAL if it is built that way: a removal delivered in one sync whose posted twin arrives in a
+// LATER one would leave the annotations on the tombstone. Closing that needs the mirror hook in the
+// storage path (on inserting a posted transaction with a pending_transaction_id, look for an
+// already-tombstoned pending row and pull its annotations forward). Whether that case can occur is
+// NOT established here; it is a question about Plaid's delivery semantics, not about this code.
+//
 // It used to hard-delete them. That was the last unrecoverable destroyer of user-authored work in
 // this codebase: a `removed` entry arrives with no user action behind it, and the DELETE took the
 // user's category overrides, tags, notes and `reviewed` state with it, plus the
