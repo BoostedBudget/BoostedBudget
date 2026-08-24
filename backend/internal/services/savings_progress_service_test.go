@@ -67,7 +67,7 @@ func newTestProgressService(
 	accountRepo *mockSavingsProgressAccountRepo,
 ) SavingsProgressService {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	return NewSavingsProgressService(goalRepo, contribRepo, accountRepo, logger)
+	return NewSavingsProgressService(goalRepo, contribRepo, accountRepo, nil, logger)
 }
 
 func makeGoal(id, userID, accountID, basis string, target, current float64) *domain.SavingsGoal {
@@ -315,14 +315,18 @@ func TestSavingsProgress_Balance_DisconnectedAccount_SkipsRecompute(t *testing.T
 	}
 
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
+	// Registered as .Maybe() so a regression records the write instead of panicking on an
+	// unexpected mock call, letting assertNoCallTo below fail as a real assertion.
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	err := svc.RecomputeGoal(context.Background(), goal)
 
 	require.NoError(t, err)
 	// Neither UpdateCurrentAmount nor MarkCompleted should be called — same freeze semantics
 	// as the nil-balance case above.
-	goalRepo.AssertNotCalled(t, "UpdateCurrentAmount")
-	goalRepo.AssertNotCalled(t, "MarkCompleted")
+	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
+	assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
 }
 
 // ─── account_percentage basis ─────────────────────────────────────────────────
