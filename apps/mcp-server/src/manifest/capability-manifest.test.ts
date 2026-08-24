@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'bun:test'
-import { getCapability, isAllowed, isExcluded, isWrite, requiresConfirmation } from './capability-manifest'
+import {
+  ALL_OPERATION_IDS,
+  getCapability,
+  isAllowed,
+  isDestructive,
+  isExcluded,
+  isWrite,
+  requiresConfirmation
+} from './capability-manifest'
 
 // ── Deny-by-default ────────────────────────────────────────────────────────
 
@@ -86,10 +94,14 @@ describe('write operations', () => {
     expect(getCapability('createSavingsGoal')?.class).toBe('write')
   })
 
-  it('marks delete operations as destructive', () => {
+  // ⚠ Rewritten by Issue #1569 Task 16. This used to read "marks delete operations as
+  // destructive" and assert deleteBudget.destructive === true. deleteBudget no longer destroys
+  // anything: budget_repository.go Delete tombstones the budget and its categories. The
+  // genuinely destructive verbs are pinned in the 'destructive class' suite at the bottom.
+  it('marks the soft-deleting deleteBudget as a confirmation-gated, non-destructive write', () => {
     const del = getCapability('deleteBudget')
     expect(del?.class).toBe('write')
-    expect(del?.destructive).toBe(true)
+    expect(del?.destructive).toBe(false)
     expect(del?.confirmationRequired).toBe(true)
   })
 })
@@ -198,11 +210,16 @@ describe('excluded operations', () => {
   it('allows auto-categorization writes with confirmation-gating (Issue #957 Q1)', () => {
     // Rule mutations were un-excluded per Issue #957 Q1 decision.
     // They are confirmation-gated writes, not excluded.
-    for (const opId of ['createRule', 'updateRule', 'deleteRule', 'toggleRule']) {
+    for (const opId of ['createRule', 'updateRule', 'toggleRule']) {
       expect(isExcluded(opId)).toBe(false)
       expect(getCapability(opId)?.class).toBe('write')
       expect(getCapability(opId)?.confirmationRequired).toBe(true)
     }
+    // deleteRule stays invocable under the same #957 decision, but Task 16 moved it up a tier:
+    // it is a hard DELETE, unlike createRule/updateRule/toggleRule.
+    expect(isExcluded('deleteRule')).toBe(false)
+    expect(getCapability('deleteRule')?.class).toBe('destructive')
+    expect(getCapability('deleteRule')?.confirmationRequired).toBe(true)
   })
 
   it('classifies getMerchantOverrides as read (Issue #957 gap fill)', () => {
@@ -235,10 +252,10 @@ describe('excluded operations', () => {
     }
   })
 
-  it('classifies clearMerchantOverride as a destructive confirmation-gated write (Issue #957 G40)', () => {
+  it('classifies clearMerchantOverride as a confirmation-gated destructive op (#957 G40, #1569 T16)', () => {
     const entry = getCapability('clearMerchantOverride')
     expect(entry).toBeDefined()
-    expect(entry?.class).toBe('write')
+    expect(entry?.class).toBe('destructive')
     expect(entry?.confirmationRequired).toBe(true)
     expect(entry?.excluded).toBe(false)
     expect(entry?.destructive).toBe(true)
@@ -331,8 +348,11 @@ describe('completeness', () => {
     //   allowed/read/write/destructive counts are unchanged.
     // +2 net from Issue #1569 Task 6: deleteAccount removed; disconnectAccount, purgeAccount, and
     //   purgeInstitution added (disconnectInstitution kept, moved to POST).
+    // +3 from Issue #1569 Task 16: purgeSavingsGoal (destructive, excluded), getDeletedSavingsGoals
+    //   and getUserBoostExecutions (read). All three were already in api/openapi.yaml but in NO
+    //   manifest entry — check:manifest and the spec-index build were both failing at that HEAD.
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(196)
+    expect(ALL_OPERATION_IDS.length).toBe(199)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified
@@ -484,5 +504,138 @@ describe('issue #1503: listAdminPlaidOrphanedItems', () => {
     expect(entry).toBeDefined()
     expect(entry?.excluded).toBe(true)
     expect(entry?.excludedReason).toBe('Admin endpoints are excluded from MCP')
+  })
+})
+
+// ── Issue #1569 Task 16: the destructive capability tier ────────────────────
+//
+// Before this task the manifest had exactly two classes, so an agent granted
+// `write` could invoke deleteSavingsGoal indistinguishably from createTag. After
+// fifteen tasks on this branch most "delete" verbs tombstone (history retained,
+// dependent financial records preserved) while a smaller set genuinely destroys
+// rows with no tombstone and no restore path. `destructive` is that smaller set.
+//
+// Every literal below was verified against backend SQL, not inferred from the verb
+// name — see the manifest's own per-operation comments.
+
+describe('issue #1569 task 16: destructive class', () => {
+  /**
+   * THE SET. Asserted as a set (not per-op existence checks) so a newly added
+   * destructive verb that nobody classified fails HERE rather than defaulting to
+   * `write` and silently becoming agent-invocable.
+   */
+  const DESTRUCTIVE_OPERATIONS = [
+    'clearMerchantOverride',
+    'deleteMCPRecipe',
+    'deleteRule',
+    'deleteSavingsGoalContribution',
+    'deleteTag',
+    'purgeSavingsGoal'
+  ]
+
+  /** Whether an agent may invoke each destructive operation at all. Pinned per operation. */
+  const DESTRUCTIVE_INVOCABILITY: Record<string, boolean> = {
+    // Allowed: destroys user-authored CONFIGURATION the agent can read back before
+    // deleting and recreate afterwards. None of these touch financial history.
+    clearMerchantOverride: true,
+    deleteMCPRecipe: true,
+    deleteRule: true,
+    deleteTag: true,
+    // Excluded: destroys FINANCIAL HISTORY irreversibly. Same policy as the four
+    // Plaid disconnect/purge verbs — an agent must never be able to call these.
+    deleteSavingsGoalContribution: false,
+    purgeSavingsGoal: false
+  }
+
+  /**
+   * Soft-deleting verbs. These tombstone (deleted_at/deleted_reason/deleted_by) and
+   * preserve the dependent financial history the old ON DELETE CASCADE destroyed, so
+   * they are NOT destructive — that is the whole point of the branch. Pinned so a
+   * later change that reverts one to a hard DELETE has to come back through here.
+   */
+  const SOFT_DELETE_OPERATIONS = ['deleteBudget', 'deleteBudgetCategory', 'deleteCategory', 'deleteSavingsGoal']
+
+  it('pins the exact set of destructive-class operations', () => {
+    const actual = ALL_OPERATION_IDS.filter((id) => getCapability(id)?.class === 'destructive').sort()
+    expect(actual).toEqual(DESTRUCTIVE_OPERATIONS)
+  })
+
+  it('pins invocability per destructive operation', () => {
+    for (const [operationId, invocable] of Object.entries(DESTRUCTIVE_INVOCABILITY)) {
+      const entry = getCapability(operationId)
+      expect(entry, `${operationId} is not in the manifest`).toBeDefined()
+      expect(entry?.excluded, `${operationId} excluded flag`).toBe(!invocable)
+      expect(isAllowed(operationId), `${operationId} isAllowed`).toBe(invocable)
+    }
+  })
+
+  it('records an exclusion reason on every excluded destructive operation', () => {
+    for (const [operationId, invocable] of Object.entries(DESTRUCTIVE_INVOCABILITY)) {
+      if (invocable) continue
+      expect(getCapability(operationId)?.excludedReason ?? '', operationId).not.toBe('')
+    }
+  })
+
+  it('keeps the destructive flag and the destructive class in lockstep for every entry', () => {
+    // Two independent fields would drift. The flag IS the class, everywhere.
+    const mismatched = ALL_OPERATION_IDS.filter((id) => {
+      const e = getCapability(id)!
+      return e.destructive !== (e.class === 'destructive')
+    })
+    expect(mismatched).toEqual([])
+  })
+
+  it('records a rationale in the manifest for every destructive-class operation', () => {
+    // The brief for this task: say WHY, in the manifest, not only in the report.
+    for (const operationId of DESTRUCTIVE_OPERATIONS) {
+      const rationale = getCapability(operationId)?.rationale ?? ''
+      expect(rationale.length, `${operationId} has no rationale`).toBeGreaterThan(20)
+    }
+  })
+
+  it('requires confirmation on every destructive-class operation', () => {
+    for (const operationId of DESTRUCTIVE_OPERATIONS) {
+      expect(requiresConfirmation(operationId), operationId).toBe(true)
+    }
+  })
+
+  it('classifies soft-deleting verbs as write, not destructive', () => {
+    for (const operationId of SOFT_DELETE_OPERATIONS) {
+      const entry = getCapability(operationId)
+      expect(entry?.class, operationId).toBe('write')
+      expect(entry?.destructive, operationId).toBe(false)
+      expect(entry?.confirmationRequired, operationId).toBe(true)
+      expect(isAllowed(operationId), operationId).toBe(true)
+    }
+  })
+
+  it('isDestructive is true only for the destructive class and never for excluded ops', () => {
+    expect(isDestructive('deleteTag')).toBe(true)
+    expect(isDestructive('deleteRule')).toBe(true)
+    // Excluded destructive ops are NOT "available and destructive" — they are unavailable.
+    expect(isDestructive('purgeSavingsGoal')).toBe(false)
+    expect(isDestructive('deleteSavingsGoalContribution')).toBe(false)
+    // Soft deletes and plain writes/reads.
+    expect(isDestructive('deleteBudget')).toBe(false)
+    expect(isDestructive('createTag')).toBe(false)
+    expect(isDestructive('getTransactions')).toBe(false)
+    expect(isDestructive('nonExistentOperation')).toBe(false)
+  })
+
+  it('isWrite excludes the destructive class (destructive is a class above write)', () => {
+    // No production caller reads isWrite (verified by grep across the repo at the time
+    // of this change); it is asserted here so the narrowing is a decision, not a slip.
+    expect(isWrite('deleteTag')).toBe(false)
+    expect(isWrite('deleteBudget')).toBe(true)
+  })
+
+  it('classifies the three previously-unclassified operations this branch added', () => {
+    // These three were in api/openapi.yaml but in NO manifest entry at all, so
+    // `bun run check:manifest` and the spec-index build were both failing at HEAD.
+    expect(getCapability('purgeSavingsGoal')?.class).toBe('destructive')
+    expect(getCapability('getDeletedSavingsGoals')?.class).toBe('read')
+    expect(getCapability('getDeletedSavingsGoals')?.excluded).toBe(false)
+    expect(getCapability('getUserBoostExecutions')?.class).toBe('read')
+    expect(getCapability('getUserBoostExecutions')?.excluded).toBe(false)
   })
 })

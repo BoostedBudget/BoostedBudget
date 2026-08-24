@@ -143,6 +143,10 @@ export function createApiClient(mutator: FetchMutator) {
       },
     } as const,
     boosts: {
+      /** GET /api/v1/boost-executions */
+      getUserBoostExecutions(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/boost-executions', method: 'GET', params, signal })
+      },
       /** GET /api/v1/boosts */
       getBoosts(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/boosts', method: 'GET', params, signal })
@@ -433,6 +437,10 @@ export function createApiClient(mutator: FetchMutator) {
       getActiveSavingsGoals(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/savings-goals/active', method: 'GET', signal })
       },
+      /** GET /api/v1/savings-goals/deleted */
+      getDeletedSavingsGoals(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/savings-goals/deleted', method: 'GET', signal })
+      },
       /** GET /api/v1/savings-goals/progress-summary */
       getSavingsProgressSummary(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/savings-goals/progress-summary', method: 'GET', signal })
@@ -444,10 +452,6 @@ export function createApiClient(mutator: FetchMutator) {
       /** POST /api/v1/savings-goals/{goalID}/contributions */
       logSavingsGoalContribution(goalID: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions`, method: 'POST', data, signal })
-      },
-      /** DELETE /api/v1/savings-goals/{goalID}/contributions/{id} */
-      deleteSavingsGoalContribution(goalID: string, id: string, signal?: AbortSignal): Promise<unknown> {
-        return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions/${id}`, method: 'DELETE', signal })
       },
       /** POST /api/v1/savings-goals/{goalID}/contributions/{id}/confirm */
       confirmSavingsGoalContribution(goalID: string, id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {

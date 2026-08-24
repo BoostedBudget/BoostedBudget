@@ -28,6 +28,17 @@
  * disconnectAccount/purgeAccount/purgeInstitution added; disconnectInstitution kept, moved to
  * POST) and net +2 exclusions, since all four new/renamed operations stay excluded under
  * REASON_PLAID_LINKING. allowed/read/write/destructive are unchanged.
+ * ⚠ NOW 199 total / 134 allowed / 89 read / 45 write / 65 excluded / 4 destructive: Issue #1569
+ * Task 16 (a) classified three operations that were in api/openapi.yaml but in NO manifest entry
+ * at all — purgeSavingsGoal (destructive, excluded), getDeletedSavingsGoals and
+ * getUserBoostExecutions (read), which is +3 total, +2 read, +1 excluded; (b) excluded
+ * deleteSavingsGoalContribution, which was an allowed write that hard-deletes a savings ledger
+ * row (−1 allowed write, +1 excluded); and (c) introduced the `destructive` class. Note what
+ * (c) did NOT do to these numbers: writeOperations still counts every allowed MUTATING
+ * operation (class 'write' OR 'destructive'), so allowed === read + write still holds and the
+ * public page's sentence stays arithmetically true. destructiveWriteOperations fell 9 → 4
+ * because deleteBudget/deleteBudgetCategory/deleteCategory/deleteSavingsGoal now tombstone
+ * rather than destroy, and deleteSavingsGoalContribution left the allowed set entirely.
  */
 
 import { describe, expect, it } from 'bun:test'
@@ -35,7 +46,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { computeCapabilitySummary, readSpecIndex } from '../../scripts/generate-mcp-capability-summary'
-import { ALL_OPERATION_IDS } from './capability-manifest'
+import { ALL_OPERATION_IDS, getCapability } from './capability-manifest'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const COMMITTED_JSON_PATH = resolve(__dirname, '../../../web/src/features/mcp/data/capabilitySummary.json')
@@ -87,16 +98,51 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
   it('documents the known baseline values (informational — the drift check above is authoritative)', () => {
     const fresh = computeCapabilitySummary(readSpecIndex())
 
-    expect(fresh.totalOperations).toBe(196)
-    expect(fresh.allowedOperations).toBe(133)
-    expect(fresh.readOperations).toBe(87)
-    expect(fresh.writeOperations).toBe(46)
-    expect(fresh.excludedOperations).toBe(63)
-    expect(fresh.destructiveWriteOperations).toBe(9)
+    expect(fresh.totalOperations).toBe(199)
+    expect(fresh.allowedOperations).toBe(134)
+    expect(fresh.readOperations).toBe(89)
+    expect(fresh.writeOperations).toBe(45)
+    expect(fresh.excludedOperations).toBe(65)
+    expect(fresh.destructiveWriteOperations).toBe(4)
     expect(fresh.allowedOperations).toBe(fresh.readOperations + fresh.writeOperations)
     expect(fresh.totalOperations).toBe(fresh.allowedOperations + fresh.excludedOperations)
 
     expect(fresh.publicBoundaries).toHaveLength(4)
+  })
+
+  /**
+   * #1569 Task 16. The drift test above compares AGGREGATES, so two classification changes
+   * that cancel out (one op write→destructive, another destructive→write) would leave every
+   * count identical and this file green. This pins the per-operation class carried in the
+   * committed spec index against the manifest, so any single reclassification is caught even
+   * when the totals do not move.
+   */
+  it('the committed spec index agrees with the manifest on every operation class', () => {
+    const disagreements = readSpecIndex()
+      .entries.filter((e) => {
+        const capability = getCapability(e.operationId)
+        return !capability || capability.class !== e.manifestClass || capability.excluded !== e.excluded
+      })
+      .map((e) => e.operationId)
+
+    expect(
+      disagreements,
+      'spec-index.json is stale relative to the manifest — rebuild with: bun run build:spec-index'
+    ).toEqual([])
+  })
+
+  /**
+   * The destructive tier is a public-facing claim ("N of these permanently destroy data"), so
+   * pin its membership from the summary's own inputs rather than trusting the aggregate count.
+   */
+  it('counts exactly the allowed destructive-class operations in destructiveWriteOperations', () => {
+    const allowedDestructive = readSpecIndex()
+      .entries.filter((e) => !e.excluded && e.manifestClass === 'destructive')
+      .map((e) => e.operationId)
+      .sort()
+
+    expect(allowedDestructive).toEqual(['clearMerchantOverride', 'deleteMCPRecipe', 'deleteRule', 'deleteTag'])
+    expect(computeCapabilitySummary(readSpecIndex()).destructiveWriteOperations).toBe(allowedDestructive.length)
   })
 
   it('committed JSON ends with a trailing newline (matches the generator script)', () => {

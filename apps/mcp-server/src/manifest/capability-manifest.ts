@@ -9,7 +9,26 @@
  * if any OpenAPI operationId is missing from this manifest.
  */
 
-export type OperationClass = 'read' | 'write'
+/**
+ * The MCP capability tiers, in increasing order of what an agent can do with them.
+ *
+ * - `read`   — non-mutating.
+ * - `write`  — changes state, but nothing it changes is destroyed. Every soft-delete
+ *              ("tombstone") verb lives here: after Issue #1569 a deleted budget, budget
+ *              category, custom category or savings goal is stamped
+ *              deleted_at/deleted_reason/deleted_by and its dependent financial history
+ *              (rollover_history, contributions, transactions) is preserved.
+ * - `destructive` — permanently destroys stored rows. No tombstone, no restore path.
+ *              Issue #1569 Task 16: a `write` grant must not carry the power to do this.
+ *
+ * ⚠ Classify by VERIFIED BACKEND BEHAVIOUR, never by the verb's name. On this branch
+ * `deleteSavingsGoal` is a tombstone and `purgeSavingsGoal` is the hard DELETE; the names
+ * are not a reliable guide. Each destructive entry below cites the SQL it was read from.
+ *
+ * `destructive` is a CLASS, not a permission: an operation can be in it and still be
+ * `excluded`. See the destructive() helper.
+ */
+export type OperationClass = 'read' | 'write' | 'destructive'
 
 export const PUBLIC_BOUNDARY_IDS = [
   'bank-connections',
@@ -22,9 +41,13 @@ export type PublicBoundaryId = (typeof PUBLIC_BOUNDARY_IDS)[number]
 
 export interface CapabilityEntry {
   operationId: string
-  /** 'read' for safe, non-mutating ops; 'write' for state-changing ops */
+  /** See OperationClass — 'read' | 'write' | 'destructive'. */
   class: OperationClass
-  /** Whether this write destroys or permanently removes data */
+  /**
+   * Whether this operation permanently destroys data.
+   * Kept in lockstep with `class === 'destructive'` (pinned by capability-manifest.test.ts)
+   * so the two cannot drift apart into two separate half-truths.
+   */
   destructive: boolean
   /** True if confirmation token required before execution */
   confirmationRequired: boolean
@@ -34,6 +57,12 @@ export interface CapabilityEntry {
   excluded: boolean
   /** Human-readable reason for exclusion */
   excludedReason?: string
+  /**
+   * Why this operation carries the class it does — required on every `destructive`
+   * entry (see the destructive() helper), so the judgement is auditable in the manifest
+   * itself rather than only in a PR description.
+   */
+  rationale?: string
   /** Curated user-facing boundary category, when one should be shown publicly. */
   publicBoundary?: PublicBoundaryId
 }
@@ -68,6 +97,38 @@ const excluded = (operationId: string, reason: string, publicBoundary?: PublicBo
   publicBoundary
 })
 
+/**
+ * An operation that permanently destroys stored rows.
+ *
+ * `reason` is REQUIRED and is the exclusion reason when `excluded` is true; for an
+ * invocable destructive operation it documents why an agent is nevertheless trusted with
+ * it. Either way the justification lives in the manifest, not only in a PR description.
+ *
+ * Unlike excluded(), this helper keeps `class: 'destructive'` and `destructive: true` even
+ * when the operation is excluded — the class states what the operation IS, the excluded
+ * flag states whether MCP will dispatch it. (excluded() hard-codes class:'read' for its 45
+ * mutating entries; that long-standing wart is documented in mcp/tools/execute.ts and is
+ * deliberately not widened here.)
+ *
+ * confirmationRequired is true unconditionally: on the invocable entries the host-proxy
+ * enforces it, and on the excluded entries it is the fail-safe default should the exclusion
+ * ever be lifted.
+ */
+const destructive = (
+  operationId: string,
+  opts: { excluded?: boolean; reason: string; idempotent?: boolean; publicBoundary?: PublicBoundaryId }
+): CapabilityEntry => ({
+  operationId,
+  class: 'destructive',
+  destructive: true,
+  confirmationRequired: true,
+  idempotent: opts.idempotent ?? false,
+  excluded: opts.excluded ?? false,
+  ...(opts.excluded && { excludedReason: opts.reason }),
+  rationale: opts.reason,
+  ...(opts.publicBoundary && { publicBoundary: opts.publicBoundary })
+})
+
 // ── Exclusion reason constants ──────────────────────────────────────────────
 
 const REASON_ADMIN = 'Admin endpoints are excluded from MCP'
@@ -99,7 +160,12 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('runMCPRecipe'),
   write('createMCPRecipe', { idempotent: false }),
   write('updateMCPRecipe', { idempotent: true }),
-  write('deleteMCPRecipe', { destructive: true }),
+  // Hard `DELETE FROM mcp_recipes` (repository/recipe_repository.go:125) — no tombstone.
+  // INVOCABLE: a recipe is agent-authored automation, not financial history, and getMCPRecipe
+  // lets the agent read the full definition back before deleting and re-create it afterwards.
+  destructive('deleteMCPRecipe', {
+    reason: 'Hard-deletes an agent-authored recipe; recoverable by re-creating it from getMCPRecipe'
+  }),
 
   // ── Investments (Issue #138: portfolio snapshots + API endpoints) ────────
   read('getHoldings'), // holdings list with security metadata
@@ -183,13 +249,24 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getRuleByID'),
   write('createRule'),
   write('updateRule', { idempotent: true }),
-  write('deleteRule', { destructive: true }),
+  // Hard `DELETE FROM categorization_rules` (repository/categorization_rule_repository.go:348).
+  // INVOCABLE: rules are user-authored automation config, not financial history, and Issue #957
+  // un-excluded rule mutations with owner sign-off. It is nonetheless irreversible — note that
+  // deleting a CATEGORY only *disables* the rules that targeted it (custom_category_repository.go
+  // step 2), so the codebase already treats a rule row as worth keeping. Agents that only want to
+  // stop a rule firing should prefer toggleRule, which is reversible.
+  destructive('deleteRule', {
+    reason:
+      'Hard-deletes a categorization rule (no tombstone); user-authored automation config, not ' +
+      'financial history. Reversible alternative available: toggleRule. Agent access per #957.'
+  }),
   write('toggleRule', { idempotent: true }),
 
   // ── Boosts ──────────────────────────────────────────────────────────────
   read('getBoosts'),
   read('getBoostByID'),
-  read('getBoostExecutions'),
+  read('getBoostExecutions'), // per-boost automation history
+  read('getUserBoostExecutions'), // #1569 Task 14: GET /api/v1/boost-executions, per-user history
   excluded('createBoost', REASON_RULES_UNATTENDED),
   excluded('updateBoost', REASON_RULES_UNATTENDED),
   excluded('deleteBoost', REASON_RULES_UNATTENDED),
@@ -207,10 +284,14 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getCategoryTransactions'),
   write('createBudget'),
   write('updateBudget', { idempotent: true }),
-  write('deleteBudget', { destructive: true }),
+  // #1569 Task 16: NOT destructive any more. Tombstones the budget and its categories
+  // (deleted_at/deleted_reason/deleted_by, budget_repository.go Delete) instead of the old
+  // `DELETE FROM budgets`, so rollover_history and every dependent row survive.
+  write('deleteBudget'),
   write('addBudgetCategory'),
   write('updateBudgetCategory', { idempotent: true }),
-  write('deleteBudgetCategory', { destructive: true }),
+  // #1569 Task 16: tombstone, not a DELETE (budget_repository.go DeleteCategory).
+  write('deleteBudgetCategory'),
   write('syncBudget'),
   read('previewCategoryMatches'), // POST but non-mutating
 
@@ -223,7 +304,10 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getCategoryUsage'),
   write('createCategory'),
   write('updateCategory', { idempotent: true }),
-  write('deleteCategory', { destructive: true }),
+  // #1569 Task 16: tombstone (custom_category_repository.go DeleteWithReassignment) — the
+  // category is stamped deleted_*, rules targeting it are DISABLED rather than deleted, children
+  // are reparented, and its budget lines are tombstoned so rollover_history survives.
+  write('deleteCategory'),
 
   // ── Dashboard (reads + layout writes excluded) ──────────────────────────
   read('getAccountTypes'),
@@ -298,13 +382,38 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getSavingsProgressSummary'), // #1300: basis-aware analytics (Codex C11)
   write('createSavingsGoal'),
   write('updateSavingsGoal', { idempotent: true }),
-  write('deleteSavingsGoal', { destructive: true }),
+  // #1569 Task 16: tombstone (savings_goal_repository.go Delete) — the goal and its budget
+  // categories are stamped deleted_*, and the contribution ledger the old ON DELETE CASCADE
+  // would have taken with it survives. getDeletedSavingsGoals lists what is tombstoned.
+  write('deleteSavingsGoal'),
+  read('getDeletedSavingsGoals'), // #1569: listing of the caller's own tombstoned goals
+  // THE hard delete on this branch: `DELETE FROM savings_goals` (savings_goal_repository.go
+  // PurgeGoal:467), cascading into savings_goal_contributions, budget_categories and
+  // savings_goal_category_detach. EXCLUDED: this destroys financial history irreversibly, which
+  // is exactly the line the four Plaid disconnect/purge verbs are excluded on. #1569's thesis is
+  // that destroying financial history must be an explicit, deliberate human act.
+  destructive('purgeSavingsGoal', {
+    excluded: true,
+    reason:
+      'Irreversibly destroys a savings goal and its contribution ledger (ON DELETE CASCADE). ' +
+      'Destroying financial history must be a deliberate in-app action, never an agent call (#1569).'
+  }),
   // #1300 M20: contribution ledger
   read('listSavingsGoalContributions'),
   write('logSavingsGoalContribution'),
   write('confirmSavingsGoalContribution', { idempotent: true }),
   write('rejectSavingsGoalContribution', { idempotent: true }), // R3-7: sticky tombstone
-  write('deleteSavingsGoalContribution', { destructive: true }),
+  // Hard `DELETE FROM savings_goal_contributions` (savings_contribution_repository.go:656) —
+  // no tombstone, no restore path. EXCLUDED (was an allowed `write` before Task 16): a
+  // contribution is a money record in the user's savings ledger, so this is the same category of
+  // loss as purgeSavingsGoal. rejectSavingsGoalContribution stays available as the reversible,
+  // history-preserving way for an agent to dismiss a proposed contribution.
+  destructive('deleteSavingsGoalContribution', {
+    excluded: true,
+    reason:
+      'Hard-deletes a savings contribution ledger row — financial history, unrecoverable. Agents ' +
+      'must use rejectSavingsGoalContribution (sticky tombstone) instead (#1569).'
+  }),
 
   // ── Subscription ─────────────────────────────────────────────────────────
   read('get-current-subscription'),
@@ -323,7 +432,18 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getMerchantOverrides'),
   read('getMerchantDuplicateSuggestions'),
   write('setMerchantOverride', { idempotent: true }),
-  write('clearMerchantOverride', { destructive: true }),
+  // Hard `DELETE FROM merchant_name_overrides` (merchant_override_repository.go:132).
+  // INVOCABLE: the row is a user-authored display-name preference, not financial history, it is
+  // the documented inverse of setMerchantOverride, and getMerchantOverrides lets the agent read
+  // the current value before clearing it.
+  // idempotent stays false, exactly as it was before Task 16 — this task reclassifies, it does
+  // not re-evaluate other flags. (The repository does note the DELETE is idempotent; correcting
+  // the flag is a separate, deliberate change and nothing reads it today.)
+  destructive('clearMerchantOverride', {
+    reason:
+      'Hard-deletes a merchant display-name override; a display preference, not financial ' +
+      'history, and restorable via setMerchantOverride from getMerchantOverrides.'
+  }),
   write('bulkSetMerchantOverrides', { idempotent: true }),
   write('mergeMerchants', { idempotent: true }),
 
@@ -332,7 +452,15 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getTagByID'),
   write('createTag'),
   write('updateTag', { idempotent: true }),
-  write('deleteTag', { destructive: true }),
+  // Hard `DELETE FROM user_tags` (user_tag_repository.go:226). INVOCABLE: it removes only the
+  // tag definition row (name + usage_count). Transactions carry their tags as a JSONB array of
+  // names (migration 000018), with no FK to user_tags, so no transaction loses a tag and
+  // createTag re-creates the definition. Not financial history.
+  destructive('deleteTag', {
+    reason:
+      'Hard-deletes the tag definition row only; transaction tags are a JSONB name array with no ' +
+      'FK to user_tags, so no transaction data is lost and createTag restores the definition.'
+  }),
 
   // ── Transactions ────────────────────────────────────────────────────────
   read('getTransactions'),
@@ -410,10 +538,36 @@ export function isExcluded(operationId: string): boolean {
 
 /**
  * Returns true if the operation is a write class and not excluded.
+ *
+ * ⚠ NARROWED by Issue #1569 Task 16: `destructive` is a class ABOVE write, so this now
+ * returns false for deleteTag/deleteRule/clearMerchantOverride/deleteMCPRecipe. Use
+ * isMutating() where "does this change state" is the question. This function had no
+ * production callers when the class was added (only this package's own tests), so the
+ * narrowing changed no runtime behaviour; capability-manifest.test.ts pins it.
  */
 export function isWrite(operationId: string): boolean {
   const entry = getCapability(operationId)
   return entry !== undefined && !entry.excluded && entry.class === 'write'
+}
+
+/**
+ * Returns true if the operation is available through MCP AND permanently destroys data.
+ *
+ * False for an EXCLUDED destructive operation: such an operation is not "available and
+ * destructive", it is unavailable, and callers gating UI or audit copy on this must not be
+ * told about a power the host-proxy will refuse anyway.
+ */
+export function isDestructive(operationId: string): boolean {
+  const entry = getCapability(operationId)
+  return entry !== undefined && !entry.excluded && entry.class === 'destructive'
+}
+
+/**
+ * Returns true if the operation is available through MCP and changes state — write OR
+ * destructive. This is the predicate that means what isWrite() meant before Task 16.
+ */
+export function isMutating(operationId: string): boolean {
+  return isWrite(operationId) || isDestructive(operationId)
 }
 
 /**
