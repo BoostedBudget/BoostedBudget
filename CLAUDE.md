@@ -117,6 +117,42 @@ config/
 - **PR titles**: `#N: title`
 - **PR body**: **MUST include `Closes #N`** (auto-closes issue on merge)
 
+### Financial History Is Retained by Default (#1569)
+**Financial history is retained unless the user explicitly asks for it to be destroyed.** Retention
+is the default on every path; destruction is a named verb the user invokes, or it is a defect.
+Full reasoning, the classification test and the surprising cases:
+`docs/decisions/2026-08-24-financial-history-retained-by-default.md`.
+
+Before writing anything that removes a row, classify it:
+- **Explicit destruction** — the user asked for *this data*, in words, in the confirm dialog. Allowed.
+  Needs its own endpoint/method distinct from the retaining one, an audit row in the SAME
+  transaction, a precondition refusing live data, and an entry in `allowedHistoryDeletes`.
+- **Side-effect destruction** — the delete is a consequence of something else they asked for
+  (disconnect, cancel, downgrade, sync). **Forbidden.** Tombstone instead (`deleted_at`, or
+  `removed_at` for accounts) and teach every read to filter it.
+- **Automatic destruction** — a timer, threshold or sweep. **Forbidden** unless it is a published
+  retention policy the user was told about. GC of tombstoned rows is permanently out of scope.
+
+Corollaries: the provider is not the user (Plaid removing an item is not a deletion request), and
+"I want to stop" is not "I want it gone".
+
+⚠ Enforced mechanically, and each guard's meta-tests construct the violation and prove it fails:
+- `TestNoUnallowlistedCascadeIntoHistoryTable` (G1) — new `ON DELETE CASCADE` into a history-bearing
+  table. Allowlist + reason in `backend/internal/repository/history_cascade_guard_test.go`.
+  ⚠ Some cascades are the ONLY GDPR-erasure route for their table (`budget_categories`,
+  `budget_period_events`, `savings_goal_contributions` have no `user_id` FK) — read the reason
+  before "fixing" one to RESTRICT, or you strand the rows forever.
+- `TestNoUnallowlistedHistoryDelete` (G2) — a hard `DELETE FROM` a history table in Go.
+- `TestNoConfigReadForgetsTheTombstoneFilter` / `TestNoTransactionReadForgetsTheTombstoneFilter` —
+  a read that forgets `deleted_at IS NULL` (per reference, alias-qualified).
+- `TestHistoryRetentionRoundTrip_*` (G3) — disconnect / re-link / purge, against real Postgres.
+- `TestNoNewNoMatcherAssertNotCalled` — `AssertNotCalled(t, "Method")` with no argument matchers is
+  a NO-OP for any method taking arguments. Use `mockassert.NoCallTo` instead.
+
+The exception, and the only one: GDPR erasure is a real hard delete
+(`docs/decisions/2026-08-01-gdpr-erasure-hard-delete.md`). No retention decision may leave a row
+unreachable from `users`.
+
 ### Analytics Instrumentation (PostHog)
 When implementing new features or modifying user-facing flows:
 - **Frontend**: Fire analytics events for meaningful user actions using `useTrackEvent()` hook and constants from `ANALYTICS_EVENTS` (`apps/web/src/shared/analytics/events.ts`). Add new event constants when adding new trackable actions.

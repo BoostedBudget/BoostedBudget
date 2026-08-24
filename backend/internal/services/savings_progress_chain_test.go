@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/mockassert"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -63,13 +64,15 @@ func (s *progressChainResolverStub) calls() []string {
 // method was never called with an EMPTY argument list — for a method that always takes
 // arguments it can never fail, so it silently passes even when the call happened. This
 // helper matches on the method name, which is what these freeze tests actually mean.
+//
+// #1569 task 19: the implementation has been PROMOTED to internal/testsupport/mockassert so that
+// packages other than this one can use it — it was the only correct spelling of this assertion in
+// the tree, and it was reachable only from `package services`. This wrapper stays so the ~20 call
+// sites here read the same; new code outside this package should call mockassert.NoCallTo directly.
+// TestNoNewNoMatcherAssertNotCalled stops new no-matcher AssertNotCalled calls being added anywhere.
 func assertNoCallTo(t *testing.T, m *mock.Mock, method string) {
 	t.Helper()
-	for _, c := range m.Calls {
-		if c.Method == method {
-			t.Fatalf("expected no call to %s, but it was called with %v", method, c.Arguments)
-		}
-	}
+	mockassert.NoCallTo(t, m, method)
 }
 
 // callArgsTo returns the arguments of the first recorded call to the named method, and
