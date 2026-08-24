@@ -1164,7 +1164,7 @@ func (s *accountService) DisconnectInstitution(ctx context.Context, linkedItemID
 	// Transition the item's accounts to 'removed' with removed_at set — the change that actually
 	// retains history: no CASCADE, no DELETE, balance_snapshots/holdings/investment
 	// transactions/liability rows for these accounts are untouched.
-	if err := s.accountRepo.MarkRemovedByLinkedItemID(ctx, linkedItemID); err != nil {
+	if err := s.accountRepo.MarkRemovedByLinkedItemID(ctx, linkedItemID, domain.RemovalReasonUserDisconnect); err != nil {
 		if s.logger != nil {
 			s.logger.Error("failed to mark accounts removed after disconnecting linked item",
 				"item_id", linkedItemID,

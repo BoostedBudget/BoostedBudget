@@ -112,9 +112,10 @@ const (
 	// AccountStatusExpired indicates the fingerprint hold was released after the 90-day TTL
 	// (Issue #1010: applies when a disconnected item's grace period expires and another user links)
 	AccountStatusExpired AccountStatus = "expired"
-	// AccountStatusRemoved indicates the account is no longer connected. It has TWO causes as of
-	// Issue #1569 Task 5 — the user deliberately disconnected it, or Plaid stopped returning it
-	// (the bank closed it) — distinguished by RemovalReason, NOT by this status. Distinct from
+	// AccountStatusRemoved indicates the account is no longer connected. It has THREE causes as of
+	// Issue #1569 Task 20 — the user deliberately disconnected it, Plaid stopped returning it (the
+	// bank closed it), or one of this product's own flows removed the Plaid Item — distinguished by
+	// RemovalReason, NOT by this status. Distinct from
 	// AccountStatusReplaced (superseded by a re-link) and AccountStatusExpired (TTL release).
 	// Requires RemovedAt to be set — see migration 000149's accounts_removed_at_consistency CHECK.
 	AccountStatusRemoved AccountStatus = "removed"
@@ -136,6 +137,20 @@ const (
 	// RemovalReasonProviderAbsent: a confirmed-complete Plaid /accounts/get stopped returning this
 	// account, i.e. the bank closed it. The only reason eligible for automatic restore.
 	RemovalReasonProviderAbsent RemovalReason = "provider_absent"
+	// RemovalReasonLinkRemoved: one of this product's own flows removed the account's Plaid Item, so
+	// the account can never sync again even though the bank still reports it. Issue #1569 Task 20.
+	//
+	// Neither of the other two values is true of these rows, and reaching for either is a real
+	// hazard rather than a naming preference. 'user_disconnect' would falsify the user's intent —
+	// the orphaned-item cleanup sweep selects an item merely for sitting in 'login_required' past
+	// errorDays. 'provider_absent' would be worse: it is the ONE value RestoreAccount accepts, so
+	// these accounts would become eligible for automatic resurrection under a Plaid Item that no
+	// longer exists.
+	//
+	// Deliberately NOT specialised per flow (swept / subscription cancelled / erasure). WHY the link
+	// was removed is already recorded per item on linked_items and in audit_logs; duplicating it here
+	// would be the false-cause mistake migration 000153 removed from account_status_history.reason.
+	RemovalReasonLinkRemoved RemovalReason = "link_removed"
 )
 
 // Validate checks that the Account has all required fields and valid types

@@ -224,7 +224,7 @@ func TestAccountStatusHistory_BulkMultiRowUpdate_OneIntervalPerAccount(t *testin
 	checkingID := insertAshFixtureAccount(t, ctx, pool, item.ID, userID, "plaid-checking-"+suffix)
 	savingsID := insertAshFixtureAccount(t, ctx, pool, item.ID, userID, "plaid-savings-"+suffix)
 
-	require.NoError(t, accountRepo.MarkRemovedByLinkedItemID(ctx, item.ID))
+	require.NoError(t, accountRepo.MarkRemovedByLinkedItemID(ctx, item.ID, domain.RemovalReasonUserDisconnect))
 
 	for _, accountID := range []string{checkingID, savingsID} {
 		intervals := ashIntervalsFor(t, ctx, pool, accountID)

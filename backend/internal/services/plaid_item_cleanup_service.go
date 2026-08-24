@@ -442,6 +442,17 @@ type PlaidItemCleanupService interface {
 	// wiring it here closes the H1 race for all of them at once rather than requiring each
 	// caller to duplicate the claim/release ceremony around its own disconnect call.
 	SetWorkClaimsRepo(repo repository.WorkClaimsRepository)
+
+	// SetAccountRepo wires the account repository this service needs in order to transition an
+	// item's accounts to 'removed' once its Plaid Item is gone. REQUIRED, not optional, and every
+	// entry point refuses before touching Plaid when it is unset — see SetWorkClaimsRepo above for
+	// the same argument.
+	//
+	// Issue #1569 Task 20 (A2). This service had no account repository at all, so removing a Plaid
+	// Item stopped the syncing and left every account under it at status='active' forever: a frozen
+	// balance rendered as a current one, with no "as of" date, reached by a routine background sweep
+	// over items merely stuck in 'login_required'.
+	SetAccountRepo(repo AccountRepoForCleanup)
 }
 
 // linkedItemRepoForCleanup is a minimal interface for the repository operations
@@ -473,11 +484,22 @@ type plaidServiceForCleanup interface {
 	RemoveItem(ctx context.Context, accessToken string) error
 }
 
+// AccountRepoForCleanup is the one account-repository method this service needs: the bulk
+// active -> removed transition for every account under a linked item. Issue #1569 Task 20.
+//
+// Deliberately narrow rather than repository.AccountRepository — that interface has upwards of
+// forty methods, and a service whose only legitimate interest in accounts is "mark them removed"
+// should not be handed the ability to purge one.
+type AccountRepoForCleanup interface {
+	MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string, reason domain.RemovalReason) error
+}
+
 // plaidItemCleanupService implements PlaidItemCleanupService
 type plaidItemCleanupService struct {
 	linkedItemRepo linkedItemRepoForCleanup
 	plaidService   plaidServiceForCleanup
 	claimsRepo     repository.WorkClaimsRepository // Issue #1413 H1: required, see SetWorkClaimsRepo
+	accountRepo    AccountRepoForCleanup           // Issue #1569 Task 20: required, see SetAccountRepo
 	logger         *slog.Logger
 }
 
@@ -504,6 +526,36 @@ func (s *plaidItemCleanupService) SetWorkClaimsRepo(repo repository.WorkClaimsRe
 	s.claimsRepo = repo
 }
 
+// SetAccountRepo wires the account repository this service requires. See the interface method's
+// doc comment (Issue #1569 Task 20) for why an unset one is a refusal rather than a degradation.
+func (s *plaidItemCleanupService) SetAccountRepo(repo AccountRepoForCleanup) {
+	s.accountRepo = repo
+}
+
+// markAccountsRemoved transitions every still-active account under one linked item to 'removed'.
+//
+// Issue #1569 Task 20 (A2). Called from BOTH cleanup paths, at the same point in each: AFTER the
+// plaid_removed_at stamp and BEFORE the 'disconnected' status write. That position is load-bearing
+// for exactly the reason the stamp's own ordering comment gives — cleanupItems SKIPS 'disconnected'
+// rows without re-attempting them, so any work still outstanding when that status lands is never
+// done. Failing here therefore leaves the item live and retryable, and the retry re-enters with
+// Plaid answering ITEM_NOT_FOUND (mapped to success) and MarkPlaidRemoved COALESCE-ing to a no-op,
+// so the pass converges on one wasted API call.
+//
+// The reason is always RemovalReasonLinkRemoved and never varies per flow: see that constant, and
+// migration 000167, for why the distinction between "swept", "subscription cancelled" and "erasure"
+// deliberately does not reach this column.
+func (s *plaidItemCleanupService) markAccountsRemoved(ctx context.Context, linkedItemIDs ...string) error {
+	for _, id := range linkedItemIDs {
+		if err := s.accountRepo.MarkRemovedByLinkedItemID(ctx, id, domain.RemovalReasonLinkRemoved); err != nil {
+			s.logger.Error("Plaid item removed but marking its accounts removed failed; the accounts would otherwise keep showing a frozen balance as a live one",
+				"item_id", id, "error", err)
+			return fmt.Errorf("failed to mark accounts removed for item %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
 // RemoveAllUserItems implements PlaidItemCleanupService.RemoveAllUserItems
 //
 // Issue #1413 round-4 Critical finding C2: the item list is read INSIDE cleanupItems's claimed
@@ -527,6 +579,12 @@ func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 		// configuration, and refusing before the repository is touched keeps a caller from getting the
 		// old unchecked behaviour back by passing nil to a required parameter.
 		return fmt.Errorf("RemoveItem: an eligibility recheck is required before removing item %s from Plaid", linkedItemID)
+	}
+	if s.accountRepo == nil {
+		// Fail closed BEFORE the irreversible Plaid call, for the same reason cleanupItems refuses an
+		// unset claims repository: proceeding would remove the Item and leave its accounts asserting a
+		// live balance they can no longer update, and nothing downstream would ever revisit them.
+		return fmt.Errorf("plaidItemCleanupService: account repository not configured")
 	}
 
 	// Get the linked item
@@ -704,6 +762,12 @@ func (s *plaidItemCleanupService) RemoveItem(ctx context.Context, linkedItemID s
 			"error", stampErr,
 		)
 		return fmt.Errorf("failed to record plaid_removed_at for item %s after Plaid removal: %w", linkedItemID, stampErr)
+	}
+
+	// Issue #1569 Task 20 (A2). BEFORE MarkItemsDisconnected — see markAccountsRemoved's doc comment
+	// for why that position, and not after, is what keeps a failure here retryable.
+	if acctErr := s.markAccountsRemoved(ctx, linkedItemID); acctErr != nil {
+		return acctErr
 	}
 
 	if markErr := s.linkedItemRepo.MarkItemsDisconnected(ctx, []string{linkedItemID}); markErr != nil {
@@ -892,6 +956,11 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 	if s.claimsRepo == nil {
 		return fmt.Errorf("plaidItemCleanupService: work claims repository not configured")
 	}
+	// Issue #1569 Task 20 (A2): same fail-closed rule as RemoveItem's, and stated before the claim is
+	// taken so a misconfiguration cannot burn a lease.
+	if s.accountRepo == nil {
+		return fmt.Errorf("plaidItemCleanupService: account repository not configured")
+	}
 	// Issue #1500: see the doc comment's "recheck is REQUIRED" bullet for why this third copy of the
 	// refusal exists even though both entry points already made it.
 	if recheck == nil {
@@ -1034,6 +1103,17 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 					itemErrs = append(itemErrs, fmt.Errorf("failed to record plaid_removed_at for %d item(s): %w", len(successIDs), stampErr))
 				}
 			}
+			// Issue #1569 Task 20 (A2). Same position and same argument as RemoveItem's call: after the
+			// stamp, before the 'disconnected' status this loop's own skip branch reads. Gated on
+			// `stamped` for the reason markItemsDisconnectedWhenStamped is — when the stamp genuinely
+			// failed the pass is already going to be retried, and the retry will reach here again.
+			if stamped {
+				if acctErr := s.markAccountsRemoved(ctx, successIDs...); acctErr != nil {
+					itemErrs = append(itemErrs, acctErr)
+					stamped = false
+				}
+			}
+
 			if markErr := s.markItemsDisconnectedWhenStamped(ctx, successIDs, stamped); markErr != nil {
 				if errors.Is(markErr, repository.ErrNoLinkedItemsUpdated) {
 					// Issue #1413 Medium finding (PR #1443 Codex review round 4): a legitimate

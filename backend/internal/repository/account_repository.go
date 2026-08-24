@@ -308,7 +308,14 @@ type AccountRepository interface {
 	// status='removed' with removed_at stamped, without deleting the row or destroying anything
 	// that references it (balance_snapshots, holdings, investment transactions, liability rows,
 	// savings_goals). Issue #1569: disconnecting an institution must retain history.
-	MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string) error
+	//
+	// `reason` is written to removed_reason and is a REQUIRED parameter rather than a hardcoded
+	// 'user_disconnect' (Issue #1569 Task 20). Two callers now exist and they disagree about it:
+	// accountService.DisconnectInstitution passes RemovalReasonUserDisconnect, and
+	// plaidItemCleanupService passes RemovalReasonLinkRemoved because the user asked for nothing.
+	// The parameter is deliberately not defaulted — the wrong value here is not cosmetic, it decides
+	// whether RestoreAccount may later resurrect the row.
+	MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string, reason domain.RemovalReason) error
 
 	// PurgeAccount permanently and transactionally destroys accountID and every row derived from
 	// it: the account row itself, its balance_snapshots (explicit — migration 000150 made that FK
@@ -1715,17 +1722,32 @@ func (r *accountRepository) RestoreProviderRemovedAccount(ctx context.Context, a
 // carries a more specific terminal reason for why it stopped being active, and a blanket
 // disconnect must not overwrite that with the less specific 'removed'. Mirrors
 // ExpireAccountsByFingerprint's `AND status = 'active'` scoping above.
-func (r *accountRepository) MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string) error {
-	// removed_reason = 'user_disconnect': this is the institution-level user disconnect, so these
-	// rows are deliberately NOT eligible for the provider auto-restore (Issue #1569 Task 5 fix
-	// round 2). If the bank still reports these accounts on a later sync, they stay removed —
-	// which is precisely what the user asked for.
+func (r *accountRepository) MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string, reason domain.RemovalReason) error {
+	// The reason is the CALLER's to state — see the interface method's doc comment. It used to be
+	// hardcoded 'user_disconnect' here, which was true of the only caller that existed then
+	// (DisconnectInstitution) and became a lie the moment plaidItemCleanupService started calling it
+	// (Issue #1569 Task 20).
+	//
+	// Whichever value arrives, these rows are NOT eligible for the provider auto-restore:
+	// RestoreAccount accepts 'provider_absent' and nothing else, and no caller of this method passes
+	// that. Refused here as well, rather than left to the caller's discretion, because a
+	// 'provider_absent' written on this path would mean "the bank closed it" about accounts the bank
+	// is still reporting — and would make them silently resurrectable.
+	if reason == domain.RemovalReasonProviderAbsent {
+		return fmt.Errorf("MarkRemovedByLinkedItemID: refusing to mark accounts under item %s as %q — "+
+			"this path is never the provider dropping an account, and that reason is the only one "+
+			"RestoreAccount will act on", linkedItemID, reason)
+	}
+	if reason == "" {
+		return fmt.Errorf("MarkRemovedByLinkedItemID: a removal reason is required for item %s", linkedItemID)
+	}
+
 	query := `
 		UPDATE accounts
-		SET status = 'removed', removed_at = NOW(), removed_reason = 'user_disconnect', updated_at = NOW()
+		SET status = 'removed', removed_at = NOW(), removed_reason = $2, updated_at = NOW()
 		WHERE linked_item_id = $1 AND status = 'active'
 	`
-	_, err := r.db.Exec(ctx, query, linkedItemID)
+	_, err := r.db.Exec(ctx, query, linkedItemID, string(reason))
 	return err
 }
 

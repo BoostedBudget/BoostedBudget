@@ -81,7 +81,7 @@ func (m *mockAccountRepositoryForChainResolver) CheckFingerprintOwnership(ctx co
 func (m *mockAccountRepositoryForChainResolver) ExpireAccountsByFingerprint(ctx context.Context, fingerprintBlindIdx string) ([]string, error) {
 	return nil, nil
 }
-func (m *mockAccountRepositoryForChainResolver) MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string) error {
+func (m *mockAccountRepositoryForChainResolver) MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string, reason domain.RemovalReason) error {
 	return nil
 }
 func (m *mockAccountRepositoryForChainResolver) MarkRemovedByProvider(ctx context.Context, accountID, userID string) error {

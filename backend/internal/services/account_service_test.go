@@ -386,8 +386,8 @@ func (m *MockAccountRepository) ExpireAccountsByFingerprint(ctx context.Context,
 
 // Issue #1569: transition every active account under a linked item to 'removed' with removed_at
 // set, without deleting the row.
-func (m *MockAccountRepository) MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string) error {
-	args := m.Called(ctx, linkedItemID)
+func (m *MockAccountRepository) MarkRemovedByLinkedItemID(ctx context.Context, linkedItemID string, reason domain.RemovalReason) error {
+	args := m.Called(ctx, linkedItemID, reason)
 	return args.Error(0)
 }
 
@@ -2116,7 +2116,7 @@ func TestDisconnectInstitution_Success(t *testing.T) {
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
 	mockLinkedItemRepo.On("MarkPlaidRemoved", ctx, []string{linkedItemID}).Return(nil)
 	mockLinkedItemRepo.On("MarkItemsDisconnected", ctx, []string{linkedItemID}).Return(nil)
-	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID).Return(nil)
+	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID, domain.RemovalReasonUserDisconnect).Return(nil)
 
 	// Execute
 	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
@@ -2162,7 +2162,7 @@ func TestDisconnectInstitution_LogsAuditEntry(t *testing.T) {
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
 	mockLinkedItemRepo.On("MarkPlaidRemoved", ctx, []string{linkedItemID}).Return(nil)
 	mockLinkedItemRepo.On("MarkItemsDisconnected", ctx, []string{linkedItemID}).Return(nil)
-	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID).Return(nil)
+	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID, domain.RemovalReasonUserDisconnect).Return(nil)
 	mockAuditLogger.On("Log", ctx, "institution.disconnected", "linked_item", linkedItemID).Return(nil)
 
 	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
@@ -2197,7 +2197,7 @@ func TestDisconnectInstitution_StampsPlaidRemoved_GDPRProperty(t *testing.T) {
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
 	mockLinkedItemRepo.On("MarkPlaidRemoved", ctx, []string{linkedItemID}).Return(nil)
 	mockLinkedItemRepo.On("MarkItemsDisconnected", ctx, []string{linkedItemID}).Return(nil)
-	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID).Return(nil)
+	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID, domain.RemovalReasonUserDisconnect).Return(nil)
 
 	require.NoError(t, service.DisconnectInstitution(ctx, linkedItemID, userID))
 
@@ -2286,7 +2286,7 @@ func TestDisconnectInstitution_GenuinePlaidFailure_DoesNotProceedToStep4(t *test
 	mockLinkedItemRepo.AssertNotCalled(t, "DeleteByUser", mock.Anything, mock.Anything, mock.Anything)
 	mockLinkedItemRepo.AssertNotCalled(t, "MarkPlaidRemoved", mock.Anything, mock.Anything)
 	mockLinkedItemRepo.AssertNotCalled(t, "MarkItemsDisconnected", mock.Anything, mock.Anything)
-	mockAccountRepo.AssertNotCalled(t, "MarkRemovedByLinkedItemID", mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "MarkRemovedByLinkedItemID", mock.Anything, mock.Anything, mock.Anything)
 	mockPlaidService.AssertExpectations(t)
 }
 
@@ -2319,7 +2319,7 @@ func TestDisconnectInstitution_PlaidItemAlreadyGone_StillProceedsToStep4(t *test
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(plaidItemNotFoundErr())
 	mockLinkedItemRepo.On("MarkPlaidRemoved", ctx, []string{linkedItemID}).Return(nil)
 	mockLinkedItemRepo.On("MarkItemsDisconnected", ctx, []string{linkedItemID}).Return(nil)
-	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID).Return(nil)
+	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID, domain.RemovalReasonUserDisconnect).Return(nil)
 
 	require.NoError(t, service.DisconnectInstitution(ctx, linkedItemID, userID),
 		"ITEM_NOT_FOUND means the Item is already gone from Plaid — billing has stopped, so the disconnect succeeded")
@@ -2359,7 +2359,7 @@ func TestDisconnectInstitution_MarkPlaidRemovedError_Propagates(t *testing.T) {
 
 	require.Error(t, err, "a stamp failure after a successful Plaid removal must surface, not be swallowed")
 	mockLinkedItemRepo.AssertNotCalled(t, "MarkItemsDisconnected", mock.Anything, mock.Anything)
-	mockAccountRepo.AssertNotCalled(t, "MarkRemovedByLinkedItemID", mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "MarkRemovedByLinkedItemID", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestDisconnectInstitution_MarkItemsDisconnectedError_Propagates verifies a genuine (non-no-op)
@@ -2389,7 +2389,7 @@ func TestDisconnectInstitution_MarkItemsDisconnectedError_Propagates(t *testing.
 	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
 
 	require.Error(t, err)
-	mockAccountRepo.AssertNotCalled(t, "MarkRemovedByLinkedItemID", mock.Anything, mock.Anything)
+	mockAccountRepo.AssertNotCalled(t, "MarkRemovedByLinkedItemID", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestDisconnectInstitution_MarkAccountsRemovedError_Propagates verifies that a failure marking the
@@ -2417,7 +2417,7 @@ func TestDisconnectInstitution_MarkAccountsRemovedError_Propagates(t *testing.T)
 	mockPlaidService.On("RemoveItem", ctx, accessToken).Return(nil)
 	mockLinkedItemRepo.On("MarkPlaidRemoved", ctx, []string{linkedItemID}).Return(nil)
 	mockLinkedItemRepo.On("MarkItemsDisconnected", ctx, []string{linkedItemID}).Return(nil)
-	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID).Return(assert.AnError)
+	mockAccountRepo.On("MarkRemovedByLinkedItemID", ctx, linkedItemID, domain.RemovalReasonUserDisconnect).Return(assert.AnError)
 
 	err := service.DisconnectInstitution(ctx, linkedItemID, userID)
 
