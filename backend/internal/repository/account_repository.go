@@ -1064,6 +1064,16 @@ func (r *accountRepository) PurgeAccount(ctx context.Context, accountID, userID 
 // status predicate itself (deliberately: a caller may need to look up a since-disconnected
 // account, e.g. to explain why its balance is frozen), so returning the status is what lets
 // them make that call themselves instead of silently treating every result as active.
+//
+// Selects `replaced_at`/`replaced_by_id` too, and the reason is NOT a Go caller — there is none
+// (#1569 residual E2, review finding F1). This read's result is returned over the wire verbatim:
+// accountService.UpdateAccount fetches through it and PlaidHandler.UpdateAccount assigns the
+// account straight into the PATCH /api/v1/accounts/{id} response body. domain.Account's fields are
+// `json:",omitempty"`, and apps/web/src/features/accounts/utils.ts's getAccountBalanceAsOfDate
+// reads `removed_at ?? replaced_at ?? updated_at` — so omitting replaced_at did not merely hide a
+// column, it made the client fall through to updated_at and label a REPLACED account's frozen
+// balance with the timestamp of the edit that had just been made. Any read whose rows reach that
+// helper must carry all three; "no Go consumer" is not the test.
 func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userID string) (*domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
@@ -1071,7 +1081,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id, status, removed_at,
+		       user_account_id, status, removed_at, replaced_at, replaced_by_id,
 		       created_at, updated_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
@@ -1085,6 +1095,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 		&account.DisplayOrder, &account.IsHidden,
 		&account.UserAccountID, &account.Status, &account.RemovedAt,
+		&account.ReplacedAt, &account.ReplacedByID,
 		&account.CreatedAt, &account.UpdatedAt,
 	)
 

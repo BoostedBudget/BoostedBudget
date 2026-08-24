@@ -495,3 +495,59 @@ func TestAccountRepository_SoftRemove_Integration_RetainsEveryDerivedTable(t *te
 		})
 	}
 }
+
+// TestAccountRepository_GetByIDAndUser_Integration_ReturnsReplacedAt closes the half of #1569
+// residual E2 that the Go-side grep could not see, because the consumer is not in Go.
+//
+// domain.Account.ReplacedAt/ReplacedByID are `json:",omitempty"` fields on the API surface, and
+// apps/web/src/features/accounts/utils.ts:27 reads them:
+//
+//	account.removed_at ?? account.replaced_at ?? account.updated_at
+//
+// GetByIDAndUser omitted both, and its result is returned over the wire —
+// accountService.UpdateAccount (account_service.go:1281) fetches through it and
+// PlaidHandler.UpdateAccount (huma/operations/plaid.go:283) assigns the returned account straight
+// into the response body. So a PATCH /api/v1/accounts/{id} response for a REPLACED account could
+// never carry replaced_at, the frontend fell through to updated_at, and the "last known balance,
+// as of <date>" label showed the date of the edit that had just been made rather than the date the
+// balance froze. That is precisely the label drift #1569 exists to end, arriving through the one
+// read whose omission looked harmless because no Go caller consulted the field.
+func TestAccountRepository_GetByIDAndUser_Integration_ReturnsReplacedAt(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	repo := NewAccountRepository(pool, newTestFieldEncryptor(t))
+
+	f := seedRetainedFixture(ctx, t, pool, "getbyid-replaced-"+uuid.New().String())
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+
+	// The re-link's successor, then the transition that makes the original a chain member.
+	successorID := uuid.New()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'New Bank Checking', 'depository', 'active', $5)`,
+		successorID, f.LinkedItemID, f.UserID, "getbyid-succ-"+successorID.String(), f.UserAccountID)
+	require.NoError(t, err)
+
+	successor := successorID.String()
+	require.NoError(t, repo.UpdateStatus(ctx, f.AccountID.String(), f.UserID.String(),
+		domain.AccountStatusReplaced, &successor))
+
+	byID, err := repo.GetByIDAndUser(ctx, f.AccountID.String(), f.UserID.String())
+	require.NoError(t, err)
+	require.Equal(t, domain.AccountStatusReplaced, byID.Status)
+	require.Nil(t, byID.RemovedAt, "a re-link is not a removal — the frontend's first fallback must stay empty")
+	require.NotNil(t, byID.ReplacedAt,
+		"without replaced_at the PATCH response falls through to updated_at and labels the frozen "+
+			"balance with the date of the edit that just happened")
+	require.NotNil(t, byID.ReplacedByID, "the chain successor must be reachable from the response too")
+	assert.Equal(t, successor, *byID.ReplacedByID)
+	// ⚠ Deliberately NO assertion that replaced_at precedes updated_at. replaced_at is Go's
+	// time.Now() (host clock) and updated_at is the update_accounts_updated_at trigger's NOW()
+	// (Postgres clock), and against this project's Docker Postgres the DB clock runs BEHIND the
+	// host — measured here at delta = -955µs on the very row this test writes. Any assertion
+	// ordering a Go timestamp against a DB-generated one is therefore sitting on a sub-millisecond
+	// margin on the wrong side of zero. That class already produces one intermittent failure in
+	// this file (see TestAccountRepository_Reads_Integration_ReturnRemovedAt) and this test does
+	// not join it: what it exists to prove is that the columns are SELECTED, not what they hold
+	// relative to each other.
+}
