@@ -23,9 +23,24 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// disconnectItemAccountsForPurge puts an item's accounts into the state a real user disconnect
+// leaves behind (accountRepository.MarkRemovedByLinkedItemID's statement, inlined so this test
+// file does not need the account repository). PurgeLinkedItem refuses while any account under the
+// item is still 'active' — #1569 residual E9 — so every test that purges must reach that state
+// the way production does, rather than stamping plaid_removed_at and jumping the queue.
+func disconnectItemAccountsForPurge(ctx context.Context, t *testing.T, pool *pgxpool.Pool, linkedItemID any) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `
+		UPDATE accounts
+		SET status = 'removed', removed_at = NOW(), removed_reason = 'user_disconnect', updated_at = NOW()
+		WHERE linked_item_id = $1 AND status = 'active'`, linkedItemID)
+	require.NoError(t, err, "seed the post-disconnect account state PurgeLinkedItem requires")
+}
 
 // TestLinkedItemRepository_PurgeLinkedItem_Integration_RefusesUntilDisconnected proves the
 // plaid_removed_at guard: a purge must never be the first thing that happens to a linked item.
@@ -84,8 +99,9 @@ func TestLinkedItemRepository_PurgeLinkedItem_Integration_ClearsDanglingReplaced
 	_, err := pool.Exec(ctx, `UPDATE linked_items SET replaced_by_id = $1, status = 'replaced', replaced_at = NOW() WHERE id = $2`, newItem.ID, oldItem.ID)
 	require.NoError(t, err)
 
-	// Disconnect newItem so the plaid_removed_at guard doesn't block the purge under test.
+	// Disconnect newItem so neither purge precondition blocks the purge under test.
 	require.NoError(t, repo.MarkPlaidRemoved(ctx, []string{newItem.ID}))
+	disconnectItemAccountsForPurge(ctx, t, pool, newItem.ID)
 
 	err = repo.PurgeLinkedItem(ctx, newItem.ID, userID, nil)
 	require.NoError(t, err, "purging a re-linked-FROM item must not fail with a dangling foreign-key violation")
@@ -135,6 +151,7 @@ func TestLinkedItemRepository_PurgeLinkedItem_Integration_RemovesAllAccountsAndD
 	inv2 := seedInvestmentTransaction(ctx, t, pool, second)
 
 	require.NoError(t, repo.MarkPlaidRemoved(ctx, []string{f.LinkedItemID.String()}))
+	disconnectItemAccountsForPurge(ctx, t, pool, f.LinkedItemID)
 
 	err := repo.PurgeLinkedItem(ctx, f.LinkedItemID.String(), f.UserID.String(), nil)
 	require.NoError(t, err)
@@ -182,6 +199,7 @@ func TestLinkedItemRepository_PurgeLinkedItem_Integration_SavingsGoalOnAnyAccoun
 	seedSavingsGoal(ctx, t, pool, second)
 
 	require.NoError(t, repo.MarkPlaidRemoved(ctx, []string{f.LinkedItemID.String()}))
+	disconnectItemAccountsForPurge(ctx, t, pool, f.LinkedItemID)
 
 	err := repo.PurgeLinkedItem(ctx, f.LinkedItemID.String(), f.UserID.String(), nil)
 	require.ErrorIs(t, err, ErrPurgeBlockedBySavingsGoal)
@@ -225,6 +243,7 @@ func TestLinkedItemRepository_PurgeLinkedItem_Integration_BankTransactionsSurviv
 	txn2 := seedBankingTxn(ctx, t, pool, second, time.Now(), "Second Account Coffee")
 
 	require.NoError(t, repo.MarkPlaidRemoved(ctx, []string{f.LinkedItemID.String()}))
+	disconnectItemAccountsForPurge(ctx, t, pool, f.LinkedItemID)
 	require.NoError(t, repo.PurgeLinkedItem(ctx, f.LinkedItemID.String(), f.UserID.String(), nil))
 
 	for _, txnID := range []uuid.UUID{txn1, txn2} {
@@ -251,6 +270,7 @@ func TestLinkedItemRepository_PurgeLinkedItem_Integration_WritesAuditRowInSameTr
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
 
 	require.NoError(t, repo.MarkPlaidRemoved(ctx, []string{f.LinkedItemID.String()}))
+	disconnectItemAccountsForPurge(ctx, t, pool, f.LinkedItemID)
 	require.NoError(t, repo.PurgeLinkedItem(ctx, f.LinkedItemID.String(), f.UserID.String(), auditLog))
 
 	var count int
@@ -259,4 +279,52 @@ func TestLinkedItemRepository_PurgeLinkedItem_Integration_WritesAuditRowInSameTr
 		f.LinkedItemID.String(),
 	).Scan(&count))
 	assert.Equal(t, 1, count, "a linked_item.history_purged audit entry must be written")
+}
+
+// TestLinkedItemRepository_PurgeLinkedItem_Integration_RefusesWhileAnAccountIsStillActive is
+// #1569 residual E9.
+//
+// plaid_removed_at alone is NOT proof that the USER disconnected this institution. The billing
+// cleanup sweep stamps it too: cleanupCandidateReasonPredicate selects items merely because they
+// are in an error state, or stale, and PlaidItemCleanupService.RemoveItem then stamps
+// plaid_removed_at and marks the item 'disconnected' — while leaving every account under it at
+// status='active' (accountRepo.MarkRemovedByLinkedItemID has exactly one production caller,
+// accountService.DisconnectInstitution, and the sweep is not it). So a background job could
+// silently satisfy the precondition for the most destructive verb this repository exposes.
+//
+// The single-account path already refuses that: PurgeAccount returns ErrAccountNotDisconnected
+// for a status='active' row. This is the institution-level equal, and it is what makes "disconnect
+// first, then purge" a rule the schema enforces rather than a rule the UI happens to follow.
+// There is no dead end: DisconnectInstitution is idempotent against an already-removed Plaid item
+// (ITEM_NOT_FOUND maps to success) and marks the accounts removed on the way through.
+func TestLinkedItemRepository_PurgeLinkedItem_Integration_RefusesWhileAnAccountIsStillActive(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	repo := NewLinkedItemRepository(pool, newTestFieldEncryptor(t))
+
+	f := seedRetainedFixture(ctx, t, pool, "purge-item-still-active-"+uuid.New().String())
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+
+	snap := seedBalanceSnapshot(ctx, t, pool, f)
+
+	// Exactly the state the cleanup sweep leaves behind: Plaid side recorded done, accounts
+	// untouched.
+	require.NoError(t, repo.MarkPlaidRemoved(ctx, []string{f.LinkedItemID.String()}))
+
+	err := repo.PurgeLinkedItem(ctx, f.LinkedItemID.String(), f.UserID.String(), nil)
+	require.ErrorIs(t, err, ErrLinkedItemNotDisconnected,
+		"a purge must not be reachable while the institution still has a live account under it")
+
+	assert.Equal(t, 1, countRows(ctx, t, pool, "linked_items", "id", f.LinkedItemID), "item must survive")
+	assert.Equal(t, 1, countRows(ctx, t, pool, "accounts", "id", f.AccountID), "account must survive")
+	assert.Equal(t, 1, countRows(ctx, t, pool, "balance_snapshots", "id", snap), "history must survive")
+
+	// And once the accounts really are removed, the same call goes through — the guard is a
+	// precondition, not a wall.
+	_, err = pool.Exec(ctx, `
+		UPDATE accounts SET status = 'removed', removed_at = NOW(), removed_reason = 'user_disconnect'
+		WHERE linked_item_id = $1 AND status = 'active'`, f.LinkedItemID)
+	require.NoError(t, err)
+	require.NoError(t, repo.PurgeLinkedItem(ctx, f.LinkedItemID.String(), f.UserID.String(), nil))
+	assert.Equal(t, 0, countRows(ctx, t, pool, "linked_items", "id", f.LinkedItemID))
 }
