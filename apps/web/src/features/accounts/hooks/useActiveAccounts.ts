@@ -43,9 +43,26 @@ export function isReplaced(account: Account): boolean {
 /**
  * Returns true when the account is NOT live: `replaced` (superseded by a
  * re-link), `expired` (90-day fingerprint TTL released the hold), or
- * `removed` (the user deliberately disconnected it). Only `active` accounts
- * are live — see backend/internal/domain/account.go's AccountStatus enum
- * (Issue #1569).
+ * `removed`. Only `active` accounts are live — see
+ * backend/internal/domain/account.go's AccountStatus enum (Issue #1569).
+ *
+ * ⚠ `removed` has THREE causes, not one, and this comment used to name only the first
+ * ("the user deliberately disconnected it"). Issue #1569 task 20 added the third and the backend
+ * enum was updated; this mirror was not, which is how a doc comment becomes a false statement
+ * about behaviour. The causes are distinguished by the backend's `accounts.removed_reason`, never
+ * by this status:
+ *   - `user_disconnect`  the user asked (DisconnectAccount / DisconnectInstitution);
+ *   - `provider_absent`  a confirmed-complete Plaid roster stopped returning it (the bank closed it);
+ *   - `link_removed`     one of the product's own flows removed the Plaid Item — the orphaned-item
+ *                        cleanup sweep, a subscription-cancellation disconnect, or erasure.
+ *
+ * ⚠ THE THIRD CAUSE MEANS THIS PREDICATE CAN FLIP WITH NO USER ACTION. A background sweep can move
+ * an account to `removed`, and everything keyed on isInactive() moves with it: the account leaves
+ * the default Accounts list for the Closed toggle, and it drops out of every "now" total built
+ * from active accounts (current net worth, dashboard balances). Historical series are unaffected —
+ * they are built from balance_snapshots, which are retained. This is the intended behaviour, and
+ * the alternative is worse: an account that has stopped syncing would otherwise keep showing a
+ * frozen balance as a current one, undated, which is the defect task 20 (A2) exists to fix.
  *
  * Accounts without a `status` field (legacy, created before the field was
  * added) are treated as active for backward compatibility, same as

@@ -1316,10 +1316,21 @@ func (s *transactionSyncService) detectAndUpsertProposedContributions(ctx contex
 // ⚠ THE CENSUS PROPOSED FUZZY MATCHING ON (account_id, amount, date±window, merchant). DO NOT.
 // Plaid supplies the link exactly: Transaction.PendingTransactionId (confirmed present in the
 // pinned SDK, plaid-go v23.0.0, plaid/model_transaction.go:47) is set on the POSTED transaction and
-// holds the transaction_id of the pending one it replaced. This repository reads it nowhere today
-// — `/usr/bin/grep -rn PendingTransactionId backend/` matches only a stale test binary. A heuristic
-// would risk attaching one transaction's category to a different transaction, which is worse than
-// the bug it fixes; the provider's own pointer cannot.
+// holds the transaction_id of the pending one it replaced.
+//
+// No Go code in this repository reads it. ⚠ Stating that checkably is harder than it looks, and the
+// first version of this comment got it wrong by claiming a grep "matches only a stale test binary":
+// the loose `/usr/bin/grep -rn PendingTransactionId backend/` also matches THIS COMMENT, and the
+// snake_case spelling additionally matches domain/transaction.go:54 and migration 000156 — neither
+// of which is a reader. Any grep for the name necessarily hits the prose describing it.
+//
+// So the check names its own expected output:
+//     git ls-files '*.go' | xargs /usr/bin/grep -ln 'GetPendingTransactionId\|\.PendingTransactionId'
+// returns EXACTLY ONE file — this one, on the line above. A second file in that list means someone
+// has started using it and this paragraph is out of date.
+//
+// A heuristic would risk attaching one transaction's category to a different transaction, which is
+// worse than the bug it fixes; the provider's own pointer cannot.
 //
 // WHAT AN IMPLEMENTATION NEEDS:
 //   1. a migration adding transactions.pending_transaction_id_blind_idx (blind index only — the

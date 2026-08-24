@@ -545,6 +545,29 @@ func (s *plaidItemCleanupService) SetAccountRepo(repo AccountRepoForCleanup) {
 // The reason is always RemovalReasonLinkRemoved and never varies per flow: see that constant, and
 // migration 000167, for why the distinction between "swept", "subscription cancelled" and "erasure"
 // deliberately does not reach this column.
+//
+// ⚠⚠ WHAT THIS TRANSITION DOES TO WHAT THE USER SEES, disclosed in full because a background job
+// causing it is a large thing to do quietly (#1569 task 20, review round 1 — the first version of
+// this disclosure mentioned only the button, which is the smallest of the three).
+//
+// apps/web/src/features/accounts/hooks/useActiveAccounts.ts's isInactive() returns true for
+// 'removed', so a swept item's accounts, with no user action and no notification:
+//
+//   1. GAIN the "as of <date>" caption on their balance — the point of the change, and the defect
+//      this fixes: the figure had stopped updating and was being rendered as current;
+//   2. LEAVE the default Accounts list for the Closed toggle;
+//   3. DROP OUT of every "now" total built from active accounts — current net worth and the
+//      dashboard balance cards FALL by those accounts' last known balances.
+//
+// Historical series are NOT affected: they are built from balance_snapshots, which are retained,
+// so past points keep the same values.
+//
+// (3) is the one worth arguing about, and it is accepted deliberately. The alternative is to keep
+// counting a frozen figure in a total labelled "now", which is precisely the Critical this task
+// exists to close — a number that is wrong and says it is current. A total that excludes an account
+// nobody can sync is right; a total that includes a stale one is not. But "a background sweep
+// silently changed my net worth" is a real support conversation, and if the product wants a
+// notification on this transition, THIS is the line it hangs off. Nothing here sends one today.
 func (s *plaidItemCleanupService) markAccountsRemoved(ctx context.Context, linkedItemIDs ...string) error {
 	for _, id := range linkedItemIDs {
 		if err := s.accountRepo.MarkRemovedByLinkedItemID(ctx, id, domain.RemovalReasonLinkRemoved); err != nil {

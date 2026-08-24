@@ -104,6 +104,17 @@ func NewIdempotencyRepository(db DB) IdempotencyRepository {
 // re-evaluate defaults, so the taken-over row would otherwise keep the timestamp it had already
 // passed and be re-taken on the very next call — a fix that fixes nothing. created_at is
 // deliberately NOT reset; it records when the key was first seen.
+//
+// ⚠ THE 24 HOURS BELOW DUPLICATES migration 000086's column DEFAULT
+// (`expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '24 hours'`, 000086:12). They agree
+// today and nothing enforces that they keep agreeing: change one and a taken-over row silently
+// gets a different lifetime from a freshly inserted one. It is spelled out rather than derived
+// because SQL gives no portable way to say "whatever the column default would have been" inside
+// DO UPDATE, and pinned by TestIdempotency_TakeoverLifetimeMatchesTheColumnDefault_Integration,
+// which reads the default out of the catalog and compares the two rows.
+//
+// #1569 task 20, review round 1: the duplication was flagged there and is now checked rather than
+// merely noted.
 const idempotencyStoreQuery = `
 	INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
 	VALUES ($1, $2, $3, $4::jsonb)
