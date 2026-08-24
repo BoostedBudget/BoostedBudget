@@ -18,9 +18,14 @@ export interface SavingsGoalsGridProps {
   /** Called when any contribution action (confirm/reject/delete/log) changes data.
    *  Forwarded to each SavingsGoalCard so the parent goal list refreshes (R3-5). */
   onContributionChanged?: () => void
+  /**
+   * goal id -> `freshness` from the progress summary (Issue #1569 Task 13 / E14). A goal
+   * missing from this map is simply not annotated.
+   */
+  freshnessByGoalId?: Record<string, string>
 }
 
-export function SavingsGoalsGrid({ goals, onEdit, onDelete, emptyMessage, onContributionChanged }: SavingsGoalsGridProps) {
+export function SavingsGoalsGrid({ goals, onEdit, onDelete, emptyMessage, onContributionChanged, freshnessByGoalId }: SavingsGoalsGridProps) {
   if (goals.length === 0 && emptyMessage) {
     return <EmptyState size="compact" icon={<SearchX />} title={emptyMessage} />
   }
@@ -34,6 +39,7 @@ export function SavingsGoalsGrid({ goals, onEdit, onDelete, emptyMessage, onCont
           onEdit={onEdit}
           onDelete={onDelete}
           onContributionChanged={onContributionChanged}
+          freshness={freshnessByGoalId?.[goal.id]}
         />
       ))}
     </div>

@@ -164,4 +164,42 @@ describe('SavingsGoalCard', () => {
       expect(onAddFunds).toHaveBeenCalledWith(mockGoal);
     });
   });
+
+  // Issue #1569 (Task 13, E14): the API's `freshness` flag had zero frontend consumers, so a
+  // goal whose linked account is gone showed a permanently frozen number with no explanation.
+  // Only the actionable value is surfaced — `fresh`/`stale`/`unknown` are ordinary states and
+  // must stay silent.
+  describe('disconnected-account notice (freshness)', () => {
+    it('explains the frozen amount when the basis account is disconnected', () => {
+      render(<SavingsGoalCard goal={mockGoal} freshness="basis_account_disconnected" />)
+
+      // Information must not be carried by colour alone: the badge states the condition in
+      // words, and the notice below gives the reason and the remedy.
+      expect(screen.getByText('Account disconnected')).toBeInTheDocument()
+      const notice = screen.getByRole('status')
+      expect(notice).toHaveTextContent(/no longer connected/i)
+      expect(notice).toHaveTextContent(/frozen/i)
+      expect(notice).toHaveTextContent(/reconnect/i)
+    })
+
+    it.each([['fresh'], ['stale'], ['unknown'], ['not_applicable']])(
+      'stays silent for freshness=%s — those balances are still being updated',
+      (value) => {
+        render(<SavingsGoalCard goal={mockGoal} freshness={value} />)
+        expect(screen.queryByRole('status')).not.toBeInTheDocument()
+        expect(screen.queryByText('Account disconnected')).not.toBeInTheDocument()
+      },
+    )
+
+    it('stays silent when no freshness is supplied at all', () => {
+      render(<SavingsGoalCard goal={mockGoal} />)
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+      expect(screen.queryByText('Account disconnected')).not.toBeInTheDocument()
+    })
+
+    it('does not dim the card — an opacity wash would drag the whole card below AA', () => {
+      const { container } = render(<SavingsGoalCard goal={mockGoal} freshness="basis_account_disconnected" />)
+      expect(container.querySelector('[class*="opacity-"]')).toBeNull()
+    })
+  })
 });

@@ -56,6 +56,14 @@ export const mockUsePurgeSavingsGoal = mock(() => ({
 }))
 export const mockGetGetDeletedSavingsGoalsQueryKey = mock(() => ['getDeletedSavingsGoals'])
 
+// #1569 Task 13 (E14): basis-aware progress summary — the only source of the `freshness`
+// flag that explains a frozen balance-basis amount.
+export const mockUseGetSavingsProgressSummary = mock(() => ({
+  data: undefined as any,
+  isLoading: false,
+  error: null,
+}))
+
 export const mockUseGetSavingsGoal = mock(() => ({
   data: undefined,
   isLoading: false,
@@ -133,6 +141,7 @@ mock.module('@boostedbudget/api-client/endpoints/savings-goals/savings-goals', (
   useGetSavingsGoals: mockUseGetSavingsGoals,
   useGetActiveSavingsGoals: mockUseGetActiveSavingsGoals,
   useGetSavingsGoal: mockUseGetSavingsGoal,
+  useGetSavingsProgressSummary: mockUseGetSavingsProgressSummary,
   useGetDeletedSavingsGoals: mockUseGetDeletedSavingsGoals,
   usePurgeSavingsGoal: mockUsePurgeSavingsGoal,
   getGetDeletedSavingsGoalsQueryKey: mockGetGetDeletedSavingsGoalsQueryKey,
