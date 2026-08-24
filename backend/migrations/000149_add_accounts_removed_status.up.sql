@@ -13,6 +13,15 @@
 -- three different facts about an account's lifecycle, and later tasks in #1569 (account status
 -- history) depend on being able to tell them apart.
 --
+-- ⚠ Every existence guard below is scoped to THIS table (`conrelid = 'accounts'::regclass`,
+-- `table_schema = current_schema()`), and that is load-bearing rather than tidy. pg_constraint is
+-- database-wide while constraint names are unique only per table: with a bare
+-- `conname = 'accounts_valid_status'` test, a same-named constraint on any other table answers
+-- the guard, so step 2's table-scoped DROP succeeds and its re-add is then skipped as
+-- "already present" — leaving accounts with NO status CHECK and the migration reporting success.
+-- Pinned by TestMigration000149_StatusCheckGuardsAreTableScoped, which plants exactly that decoy
+-- and runs this file's own bytes. Issue #1569 residual E11.
+--
 -- Follows the CHECK-widening idiom from 000062 (drop-if-exists, re-add, inside an idempotent
 -- DO $$ ... END $$ block) and the status+timestamp pairing precedent from 000107's
 -- chk_household_members_status_removed_at, mirroring the existing sibling constraint
@@ -26,7 +35,8 @@ DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'accounts' AND column_name = 'removed_at'
+        WHERE table_schema = current_schema()
+          AND table_name = 'accounts' AND column_name = 'removed_at'
     ) THEN
         ALTER TABLE accounts ADD COLUMN removed_at TIMESTAMPTZ;
     END IF;
@@ -40,14 +50,16 @@ DO $$
 BEGIN
     -- Drop the old constraint (covers 'active', 'replaced', 'expired' only)
     IF EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'accounts_valid_status'
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'accounts'::regclass AND conname = 'accounts_valid_status'
     ) THEN
         ALTER TABLE accounts DROP CONSTRAINT accounts_valid_status;
     END IF;
 
     -- Add expanded constraint
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'accounts_valid_status'
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'accounts'::regclass AND conname = 'accounts_valid_status'
     ) THEN
         ALTER TABLE accounts ADD CONSTRAINT accounts_valid_status
             CHECK (status IN ('active', 'replaced', 'expired', 'removed'));
@@ -61,7 +73,8 @@ END $$;
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'accounts_removed_at_consistency'
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'accounts'::regclass AND conname = 'accounts_removed_at_consistency'
     ) THEN
         ALTER TABLE accounts ADD CONSTRAINT accounts_removed_at_consistency
             CHECK (

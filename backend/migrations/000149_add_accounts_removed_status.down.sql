@@ -19,13 +19,15 @@ ALTER TABLE accounts DROP CONSTRAINT IF EXISTS accounts_removed_at_consistency;
 DO $$
 BEGIN
     IF EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'accounts_valid_status'
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'accounts'::regclass AND conname = 'accounts_valid_status'
     ) THEN
         ALTER TABLE accounts DROP CONSTRAINT accounts_valid_status;
     END IF;
 
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'accounts_valid_status'
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'accounts'::regclass AND conname = 'accounts_valid_status'
     ) THEN
         ALTER TABLE accounts ADD CONSTRAINT accounts_valid_status
             CHECK (status IN ('active', 'replaced', 'expired'));
