@@ -360,3 +360,190 @@ func TestHouseholdShareAsOf_EqualSharedAtTieBreaksOnLowestID(t *testing.T) {
 		"with shared_at tied, the LOWEST-id interval must win: its fingerprint collides with the "+
 			"sibling account's, so the two collapse. A length of 2 means the tiebreak runs the other way")
 }
+
+// ─── The RANGE read (#1569 T7, F1) ───────────────────────────────────────────
+//
+// GetAggregatedHistoryForHousehold is the household net-worth CHART. It is the most visible
+// instance of the defect this task exists to fix: its CTE filtered `revoked_at IS NULL AND
+// ua.user_id = ANY($3)`, two independent reasons a departed member's contribution disappeared
+// from the WHOLE series — not clipped at the departure, erased from every day before it too.
+
+// rangeHistoryTotals collapses a BalanceHistoryPoint slice to (date -> total) for assertions
+// that care about which DAYS survive rather than the per-type breakdown.
+func rangeHistoryTotals(points []domain.BalanceHistoryPoint) map[string]float64 {
+	totals := make(map[string]float64, len(points))
+	for _, p := range points {
+		totals[p.Date.Format("2006-01-02")] += p.TotalBalance
+	}
+	return totals
+}
+
+// departedMemberRangeFixture: the member shares 60 days ago, has snapshots at -50/-40/-30/-20,
+// and departs at -10. Every snapshot therefore falls strictly inside the shared window.
+func departedMemberRangeFixture(t *testing.T, pool *pgxpool.Pool) (owner, hh string, days []time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	owner = insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh = insertTestHousehold(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, 0, -60))
+	for i, d := range []int{-50, -40, -30, -20} {
+		at := now.AddDate(0, 0, d)
+		insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, float64(100*(i+1)), at)
+		days = append(days, at)
+	}
+	revokeShareAt(t, pool, hh, memberAcct.UserAccountID, now.AddDate(0, 0, -10))
+	_ = ctx
+	return owner, hh, days
+}
+
+// TestHouseholdShareRange_DepartedMemberKeepsTheSharedPeriod is F1's headline: the four days
+// the member was genuinely shared must survive their departure. Before this fix the series
+// went to ZERO points.
+func TestHouseholdShareRange_DepartedMemberKeepsTheSharedPeriod(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	now := time.Now().UTC()
+	owner, hh, days := departedMemberRangeFixture(t, pool)
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, now.AddDate(0, 0, -60), now, nil)
+	require.NoError(t, err)
+
+	totals := rangeHistoryTotals(points)
+	require.Len(t, totals, 4,
+		"all four days inside [shared_at, revoked_at) must survive the departure — zero means the "+
+			"whole series was erased, which is the defect")
+	for i, d := range days {
+		key := d.Format("2006-01-02")
+		require.Contains(t, totals, key)
+		assert.InDelta(t, float64(100*(i+1)), totals[key], 0.01, "day %s", key)
+	}
+}
+
+// TestHouseholdShareRange_StopsAtTheDeparture is the other direction: retaining the shared
+// period must not hand the household anything from after the member left.
+func TestHouseholdShareRange_StopsAtTheDeparture(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	now := time.Now().UTC()
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, 0, -60))
+	inside := now.AddDate(0, 0, -30)
+	after := now.AddDate(0, 0, -3)
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 111, inside)
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 999, after)
+	revokeShareAt(t, pool, hh, memberAcct.UserAccountID, now.AddDate(0, 0, -10))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, now.AddDate(0, 0, -60), now, nil)
+	require.NoError(t, err)
+
+	totals := rangeHistoryTotals(points)
+	assert.Contains(t, totals, inside.Format("2006-01-02"), "the shared day stays")
+	assert.NotContains(t, totals, after.Format("2006-01-02"),
+		"a snapshot from AFTER the departure must never enter the household series")
+}
+
+// TestHouseholdShareRange_RevocationDayIsExcluded pins the day-granularity boundary. The daily
+// point is "the latest snapshot that day", which on the revocation day can be an instant AFTER
+// visibility ended — so the whole day is excluded, the half-open rule at date resolution.
+func TestHouseholdShareRange_RevocationDayIsExcluded(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	now := time.Now().UTC()
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	// Revoke at midday on day -10; the day before is fully inside.
+	revokedAt := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC).AddDate(0, 0, -10)
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, 0, -60))
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 50, revokedAt.AddDate(0, 0, -1))
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 60, revokedAt.Add(-time.Hour))
+	revokeShareAt(t, pool, hh, memberAcct.UserAccountID, revokedAt)
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, now.AddDate(0, 0, -60), now, nil)
+	require.NoError(t, err)
+
+	totals := rangeHistoryTotals(points)
+	assert.Contains(t, totals, revokedAt.AddDate(0, 0, -1).Format("2006-01-02"), "the last fully-shared day stays")
+	assert.NotContains(t, totals, revokedAt.Format("2006-01-02"),
+		"the revocation day is excluded whole: its daily point is the latest snapshot that day, which "+
+			"can be an instant the household was no longer entitled to")
+}
+
+// TestHouseholdShareRange_OverlappingRefingerprintedIntervalsDoNotDoubleCount is the gap the
+// interval relaxation opens and the reviewer's prototype did not cover. Once closed rows are
+// admitted, one user_account can match SEVERAL grant rows on the same day; the joint-account
+// dedup keys on the fingerprint, so two rows with different fingerprints put ONE account in two
+// buckets and its balance is summed TWICE into that day's total.
+func TestHouseholdShareRange_OverlappingRefingerprintedIntervalsDoNotDoubleCount(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	now := time.Now().UTC()
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	oldFP := "fp-old-" + hh
+	newFP := "fp-new-" + hh
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &oldFP, domain.ShareVisibilityShared, now.AddDate(0, 0, -90))
+	revokeShareAt(t, pool, hh, memberAcct.UserAccountID, now.AddDate(0, 0, -10))
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &newFP, domain.ShareVisibilityShared, now.AddDate(0, 0, -60))
+	revokeShareAt(t, pool, hh, memberAcct.UserAccountID, now.AddDate(0, 0, -5))
+
+	day := now.AddDate(0, 0, -30) // covered by BOTH intervals
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 400, day)
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, now.AddDate(0, 0, -60), now, nil)
+	require.NoError(t, err)
+
+	totals := rangeHistoryTotals(points)
+	require.Contains(t, totals, day.Format("2006-01-02"))
+	assert.InDelta(t, 400, totals[day.Format("2006-01-02")], 0.01,
+		"800 means the account was counted once per matching grant interval — the per-(day, user_account) "+
+			"collapse must run BEFORE the joint-account fingerprint dedup")
+}
+
+// TestHouseholdShareRange_OpenGrantStillRequiresActiveMembership mirrors the as-of read's
+// guard: the relaxation is for CLOSED intervals only.
+func TestHouseholdShareRange_OpenGrantStillRequiresActiveMembership(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	now := time.Now().UTC()
+	owner := insertTestUser(t, pool)
+	stranger := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	strangerAcct := setupHouseholdMemberAccount(t, pool, stranger)
+
+	insertHouseholdShare(t, pool, hh, strangerAcct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, 0, -60))
+	insertBalanceSnapshot(t, pool, stranger, strangerAcct.AccountID, strangerAcct.UserAccountID, 1234, now.AddDate(0, 0, -30))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, now.AddDate(0, 0, -60), now, nil)
+	require.NoError(t, err)
+	assert.Empty(t, rangeHistoryTotals(points), "an OPEN grant for a non-active member stays excluded")
+}

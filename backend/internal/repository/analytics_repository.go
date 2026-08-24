@@ -547,23 +547,44 @@ func householdScopeArgs(requestingUserID string, scope *domain.HouseholdScope) [
 // erase the other member's genuinely-earlier data from the whole series (Codex adversarial
 // review P1-2, deferred fast-follow #1378). So this CTE does NOT collapse fingerprint
 // collisions to one row; it exposes every shared user_account_id along with its physical
-// fingerprint and its own share_started_at, leaving per-day dedup to the caller's
-// DISTINCT ON ((day), fingerprint). Same three leading args as householdAccountsCTE: $1 =
-// requesting userID (pins its type; unused otherwise here), $2 = household ID, $3 = active
-// member user IDs.
+// fingerprint and its own interval bounds, leaving all per-day resolution to the caller. Same
+// three leading args as householdAccountsCTE: $1 = requesting userID (pins its type; unused
+// otherwise here), $2 = household ID, $3 = active member user IDs.
+//
+// ── #1569 T7: this CTE emits INTERVALS, and the caller clips per day ─────────────────────────
+//
+// It used to filter `revoked_at IS NULL AND ua.user_id = ANY($3)` — two independent reasons a
+// departed member vanished from the household net-worth chart. Not clipped at the departure:
+// erased from every day BEFORE it too, so the series a household saw for a shared period went to
+// zero the moment someone left. That is the most visible instance of the defect #1569 exists to
+// fix, so this read now works the same way the point-in-time one does.
+//
+// The row therefore carries share_ended_at (the exclusive end, NULL when current) and
+// share_row_id, and the membership guard is relaxed for CLOSED intervals only — identical
+// reasoning to householdAccountsCTEForBalancesAsOf's, see there. What is NOT here is the
+// interval predicate itself: a range read evaluates it per calendar day, not once, so the clip
+// lives in the caller's per-day stage where the day is in scope.
+//
+// ⚠ The consequence a caller MUST handle: one user_account can now match SEVERAL rows of this
+// CTE. Closed intervals are unconstrained by uq_household_account_shares_active and may overlap,
+// and a re-fingerprinted account produces rows whose `fingerprint` differs — so a caller that
+// keys its dedup on fingerprint alone drops ONE account into two buckets and sums its balance
+// twice. GetAggregatedHistoryForHousehold collapses per (day, user_account_id) first for exactly
+// this reason; any new consumer must do the same.
 func householdAccountsCTEForBalancesPerDay() string {
 	return `household_accounts AS (
 		SELECT
 			ua.id                                                 AS user_account_id,
 			COALESCE(has.physical_account_blind_idx, ua.id::text) AS fingerprint,
 			has.shared_at                                         AS share_started_at,
+			has.revoked_at                                        AS share_ended_at,
+			has.id                                                AS share_row_id,
 			$1::uuid                                              AS _requesting_user_id
 		FROM household_account_shares has
 		JOIN user_accounts ua ON ua.id = has.user_account_id
 		WHERE has.household_id = $2
 		  AND has.visibility  = 'shared'
-		  AND has.revoked_at IS NULL
-		  AND ua.user_id = ANY($3)
+		  AND (ua.user_id = ANY($3) OR has.revoked_at IS NOT NULL)
 	)`
 }
 
