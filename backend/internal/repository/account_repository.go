@@ -247,6 +247,10 @@ type AccountRepository interface {
 	// Returns ErrAccountNotFound if no account with that user_account_id belongs to userID.
 	// Used for IDOR protection when a TransferAction carries from_user_account_id/to_user_account_id
 	// (the stable account reference that survives Plaid re-links). Issue #972: GAP AE.
+	//
+	// Prefers the chain's active member but does not require one — a fully terminal chain still
+	// answers, so the returned Account carries Status and RemovedAt and a caller that needs a LIVE
+	// account must check them (#1569 residual E2).
 	GetByUserAccountIDAndUser(ctx context.Context, userAccountID, userID string) (*domain.Account, error)
 
 	// GetByUserAccountID retrieves all accounts for a user_account (any status).
@@ -1104,8 +1108,13 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 // (the stable account reference that survives Plaid re-links). Issue #972: GAP AE.
 //
 // Note: user_account_id is not unique — re-linked accounts share the same value (one active
-// + N replaced). LIMIT 1 with status='active' first ensures a deterministic result and
-// returns the current live account when the caller needs the account data.
+// + N replaced/removed). LIMIT 1 with status='active' first ensures a deterministic result and
+// PREFERS the current live account — but it does not guarantee one: a chain whose every member
+// is terminal still returns a row, which is correct (the identity is still the user's) and is
+// exactly why status and removed_at are selected (#1569 residual E2). The query already sorts on
+// status; withholding it from the result left the caller unable to tell which case it got, and
+// left Account.Status at its zero value "" — a value no accounts row can ever hold, so a caller
+// comparing against AccountStatusActive would silently read every account as not-live.
 func (r *accountRepository) GetByUserAccountIDAndUser(ctx context.Context, userAccountID, userID string) (*domain.Account, error) {
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
@@ -1113,7 +1122,7 @@ func (r *accountRepository) GetByUserAccountIDAndUser(ctx context.Context, userA
 		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
-		       user_account_id,
+		       user_account_id, status, removed_at,
 		       created_at, updated_at
 		FROM accounts
 		WHERE user_account_id = $1 AND user_id = $2
@@ -1128,7 +1137,7 @@ func (r *accountRepository) GetByUserAccountIDAndUser(ctx context.Context, userA
 		&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
 		&account.Nickname, &account.CustomColor, &account.CustomIcon, &account.CustomEmoji,
 		&account.DisplayOrder, &account.IsHidden,
-		&account.UserAccountID,
+		&account.UserAccountID, &account.Status, &account.RemovedAt,
 		&account.CreatedAt, &account.UpdatedAt,
 	)
 

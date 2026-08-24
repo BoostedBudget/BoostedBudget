@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
 // TestAccountRepository_CountByUserID_Integration_CountsOneRowPerRealAccount is #1569 residual
@@ -65,4 +67,36 @@ func TestAccountRepository_CountByUserID_Integration_CountsOneRowPerRealAccount(
 	assert.Equal(t, 1, count,
 		"four rows, one real account: the 'replaced' pre-re-link copy is the same account as its "+
 			"active successor and must not be counted twice")
+}
+
+// TestAccountRepository_GetByUserAccountIDAndUser_Integration_ReportsStatus is #1569 residual E2's
+// one remaining reachable case.
+//
+// The read sorts on `CASE WHEN status = 'active' THEN 0 ELSE 1 END` — it PREFERS a live chain
+// member — and then did not return status at all. So for a chain whose members are all terminal
+// (a disconnected account whose identity survives, which is the state #1569 creates on purpose)
+// the caller got a row back with Status = "", a value no accounts row can hold, and no way to
+// tell a live account from a disconnected one. The method's own doc comment claimed it "returns
+// the current live account".
+func TestAccountRepository_GetByUserAccountIDAndUser_Integration_ReportsStatus(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	repo := NewAccountRepository(pool, newTestFieldEncryptor(t))
+
+	f := seedRetainedFixture(ctx, t, pool, "by-ua-status-"+uuid.New().String())
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+
+	live, err := repo.GetByUserAccountIDAndUser(ctx, f.UserAccountID.String(), f.UserID.String())
+	require.NoError(t, err)
+	assert.Equal(t, domain.AccountStatusActive, live.Status, "the live chain member must say so")
+	assert.Nil(t, live.RemovedAt)
+
+	require.NoError(t, repo.UpdateStatus(ctx, f.AccountID.String(), f.UserID.String(),
+		domain.AccountStatusRemoved, nil))
+
+	terminal, err := repo.GetByUserAccountIDAndUser(ctx, f.UserAccountID.String(), f.UserID.String())
+	require.NoError(t, err, "the identity survives the disconnect — this must still resolve")
+	assert.Equal(t, domain.AccountStatusRemoved, terminal.Status,
+		"a chain with no live member must report the terminal status, not an empty one")
+	assert.NotNil(t, terminal.RemovedAt, "and the date the history was frozen at")
 }
