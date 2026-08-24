@@ -317,9 +317,28 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 
 	const queryBase = `
 		WITH ` + `%s,` + `
-		latest_per_account_per_day AS (
-		    SELECT DISTINCT ON ((bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.fingerprint)
+		per_account_per_day AS (
+		    -- #1569 T7, stage 1 of 2: collapse to ONE row per (day, user_account_id), applying the
+		    -- grant INTERVAL clip that makes a departed member's shared period survive their
+		    -- departure without leaking a single day past it.
+		    --
+		    -- This stage is not optional bookkeeping. household_accounts now emits one row per grant
+		    -- INTERVAL, and a user_account can match several on the same day (closed intervals are
+		    -- unconstrained by uq_household_account_shares_active and may overlap). The stage-2 dedup
+		    -- below keys on the fingerprint, which a re-fingerprinted account changes between
+		    -- intervals — so without this collapse ONE account lands in two buckets and its balance is
+		    -- summed TWICE into that day's total. Pinned by
+		    -- TestHouseholdShareRange_OverlappingRefingerprintedIntervalsDoNotDoubleCount.
+		    --
+		    -- The interval in force wins (share_started_at DESC, share_row_id), matching
+		    -- householdAccountsCTEForBalancesAsOf's rule, so the fingerprint carried into stage 2 is
+		    -- the one that was actually recorded on that day.
+		    SELECT DISTINCT ON ((bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.user_account_id)
 		        (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
+		        ha.user_account_id,
+		        ha.fingerprint,
+		        bs.snapshot_at,
+		        bs.id AS snapshot_id,
 		        bs.current_balance,
 		        a.type AS account_type
 		    FROM balance_snapshots bs
@@ -347,9 +366,30 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id
 		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $5::date
-		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.fingerprint,
+		      -- The exclusive end, at DATE resolution. The whole revocation day goes, not merely the
+		      -- instants after the revocation: a daily point is "the latest snapshot that day", which
+		      -- on that day can be an instant the household was no longer entitled to. Excluding the
+		      -- day is the conservative reading of [shared_at, revoked_at) at this granularity, and it
+		      -- is the direction that cannot leak. Pinned by
+		      -- TestHouseholdShareRange_RevocationDayIsExcluded.
+		      AND (ha.share_ended_at IS NULL
+		           OR (bs.snapshot_at AT TIME ZONE 'UTC')::date < (ha.share_ended_at AT TIME ZONE 'UTC')::date)
+		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.user_account_id,
+		             ha.share_started_at DESC, ha.share_row_id,
 		             bs.snapshot_at DESC, bs.id DESC,
 		             (a.status = 'active') DESC NULLS LAST, a.id
+		),
+		latest_per_account_per_day AS (
+		    -- Stage 2, unchanged in intent: resolve joint-account fingerprint collisions PER DAY, the
+		    -- freshest-synced copy winning. Its input is already one row per (day, user_account), so
+		    -- the snapshot-recency ordering picks the same winner it always did; the trailing
+		    -- user_account_id keeps a full tie deterministic rather than arbitrary.
+		    SELECT DISTINCT ON (snapshot_date, fingerprint)
+		        snapshot_date,
+		        current_balance,
+		        account_type
+		    FROM per_account_per_day
+		    ORDER BY snapshot_date, fingerprint, snapshot_at DESC, snapshot_id DESC, user_account_id
 		)
 		SELECT snapshot_date,
 		       COALESCE(account_type, '') AS account_type,
