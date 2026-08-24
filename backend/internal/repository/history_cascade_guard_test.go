@@ -153,11 +153,24 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	// ---- The three tables whose ONLY erasure route is this edge. -------------------------------
 	// None of these three has a foreign key to `users`, so `DELETE FROM users` reaches them only
 	// through the parent named here. Task 14 found all three; removing any of them would leave rows
-	// behind after a completed GDPR erasure. All three parents are themselves TOMBSTONED, so in
-	// ordinary use the cascade never fires — a user deleting a budget or a goal sets deleted_at and
-	// the children survive. The cascade is reachable only from the hard delete of the users row.
-	{child: "budget_categories", parent: "budgets", constraint: "fk_budget_categories_budget_id"}:               "ONLY erasure path: budget_categories has no user_id FK; budgets is tombstoned so this fires only under GDPR erasure",
-	{child: "savings_goal_contributions", parent: "savings_goals", constraint: "fk_contributions_savings_goal"}: "ONLY erasure path: savings_goal_contributions has no user_id column; savings_goals is tombstoned so this fires only under GDPR erasure",
+	// behind after a completed GDPR erasure.
+	//
+	// ⚠ "ORDINARY DELETE" AND "GDPR ERASURE ONLY" ARE NOT THE SAME CLAIM, and two reasons in this
+	// map used to conflate them. All three parents are tombstoned by their ORDINARY delete, so no
+	// ordinary delete fires any of these cascades — a user deleting a budget or a goal sets
+	// deleted_at and the children survive. That is the property worth relying on. It does NOT
+	// follow that only `DELETE FROM users` fires them: `savings_goals` is additionally hard-deleted
+	// by three explicit bucket-1 purge paths, each of which requires an EXISTING tombstone
+	// (PurgeGoal, savings_goal_repository.go; PurgeAccount, account_repository.go; PurgeLinkedItem,
+	// linked_item_repository.go — all three allowlisted in allowedHistoryDeletes). `budgets` and
+	// `custom_categories` have no such purge today; verified with
+	// `/usr/bin/grep -rn "DELETE FROM budgets\|DELETE FROM custom_categories" internal --include="*.go"`
+	// over non-test Go, which returns only prose in comments explaining why they no longer do it.
+	//
+	// Nothing in this file checks that a reason string is TRUE — they are prose for the next
+	// reader. Re-derive before relying on one.
+	{child: "budget_categories", parent: "budgets", constraint: "fk_budget_categories_budget_id"}:               "ONLY erasure path: budget_categories has no user_id FK; budgets is tombstoned by its ordinary delete and has no purge path, so this fires only under GDPR erasure",
+	{child: "savings_goal_contributions", parent: "savings_goals", constraint: "fk_contributions_savings_goal"}: "ONLY erasure path: savings_goal_contributions has no user_id column. savings_goals is tombstoned by its ordinary delete, so no ordinary delete fires this — but GDPR erasure AND the three explicit purges that hard-delete a tombstoned goal (PurgeGoal, PurgeAccount, PurgeLinkedItem) all do",
 
 	// ---- Explicit destruction: the account purge. ----------------------------------------------
 	// `PurgeAccount` (account_repository.go) is the user asking, in words, for one account's data to
@@ -170,7 +183,7 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	// ---- Tombstoned-parent cascades that no ordinary delete can reach. -------------------------
 	{child: "accounts", parent: "linked_items", constraint: "fk_accounts_linked_item_id"}:                         "linked_items rows are themselves purged only by an explicit disconnect-and-purge; a disconnect soft-removes and keeps the row",
 	{child: "budget_categories", parent: "custom_categories", constraint: "fk_budget_categories_custom_category"}: "custom_categories is tombstoned, so this cascade fires only under GDPR erasure",
-	{child: "budget_categories", parent: "savings_goals", constraint: "fk_budget_categories_savings_goal"}:        "savings_goals is tombstoned, so this cascade fires only under GDPR erasure",
+	{child: "budget_categories", parent: "savings_goals", constraint: "fk_budget_categories_savings_goal"}:        "savings_goals is tombstoned by its ordinary delete, so no ordinary goal delete fires this; GDPR erasure and the three explicit purges that hard-delete a tombstoned goal (PurgeGoal, PurgeAccount, PurgeLinkedItem) all do",
 }
 
 // historyShapedTableName matches the table names that READ as a record of something that happened.

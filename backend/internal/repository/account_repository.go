@@ -289,13 +289,21 @@ type AccountRepository interface {
 	// reappears in a later confirmed-complete roster was not closed after all, and nothing else in
 	// this codebase ever writes an account back to 'active'.
 	//
-	// ⚠ THE PREDICATE IS THE SAFETY PROPERTY, AND IT LIVES IN SQL. The UPDATE matches only
-	// `status = 'removed' AND removed_reason = 'provider_absent'`. A user-disconnected row
-	// ('user_disconnect') and a legacy row (NULL — SQL equality is false for NULL, so no extra
-	// clause is needed) are both refused with ErrAccountNotRestorable. Callers may pre-filter for
-	// efficiency, but they are not trusted to: auto-resurrecting an account the user deliberately
-	// disconnected would invert the whole principle of Issue #1569, so the check is enforced here,
-	// under the same FOR UPDATE lock as the write.
+	// ⚠ THE CAUSE CHECK IS THE SAFETY PROPERTY, AND IT LIVES IN GO — not, as this comment claimed
+	// until #1569's ADR review, in the UPDATE's WHERE clause. The implementation reads
+	// `status, removed_reason` under `SELECT … FOR UPDATE`, refuses in a Go `if` unless the row is
+	// `status = 'removed'` with a NON-NULL `removed_reason` equal to 'provider_absent', and only
+	// then issues an UPDATE whose predicate is just `id = $2 AND user_id = $3`. A user-disconnected
+	// row ('user_disconnect') and a legacy row (NULL cause, written before migration 000154) are
+	// both refused with ErrAccountNotRestorable — the NULL case needs an explicit nil check
+	// precisely BECAUSE it is not SQL equality doing the work.
+	//
+	// The distinction is not pedantry: the check and the write share one transaction and one
+	// FOR UPDATE lock, so the behaviour IS race-safe today, but nothing in the schema or the
+	// statement would stop a future caller that reached the UPDATE by another route. Callers may
+	// pre-filter for efficiency, but they are not trusted to: auto-resurrecting an account the user
+	// deliberately disconnected would invert the whole principle of Issue #1569. If you add a
+	// second write path to `status = 'active'`, carry the cause check with it.
 	RestoreProviderRemovedAccount(ctx context.Context, accountID, userID string) error
 
 	// CheckFingerprintOwnership checks if a fingerprint blind index is already held by a different user.
