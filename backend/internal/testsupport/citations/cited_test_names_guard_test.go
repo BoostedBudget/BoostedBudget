@@ -36,10 +36,11 @@ import (
 // names are stable and a wrong one is unambiguously wrong. The existing method-attribution guard
 // covers a different axis again.
 //
-// SCOPE: tracked Go source only. Markdown is NOT scanned, which matters — the retention ADR
-// (docs/decisions/2026-08-24-...) cites test names and its own decision numbers, and one of those
-// cross-references shipped wrong and was caught by a human reviewer rather than by this. Extending
-// the scan to docs/ is a reasonable follow-up; it is not done here.
+// SCOPE: tracked Go source only. Markdown is scanned by its own sibling guard,
+// markdown_citations_guard_test.go (#1569 task 20, A6), which shares this file's citationVerdict
+// and adds two rules Go does not need: intra-document `Decision N` cross-references, and backticked
+// repository paths. Read that file's header before assuming Markdown is now covered — two of the
+// three documentation defects that motivated it were false factual claims, which no guard catches.
 //
 // A RATCHET, not a ban. 33 broken citations exist at HEAD; they are listed below rather than fixed,
 // because fixing one means finding out what the author MEANT, which is 33 separate investigations
