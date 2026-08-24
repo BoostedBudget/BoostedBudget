@@ -295,9 +295,9 @@ func TestUnifiedFeed_EmittedQuery_EXPLAIN(t *testing.T) {
 	require.Contains(t, rec.sql, "account_status_history h",
 		"the emitted feed query no longer carries retainedAccountVisibilityLeg — either the leg "+
 			"moved or this test is now planning something else entirely")
-	require.Contains(t, rec.sql, retainedAccountVisibilityLeg("t", "t.date"),
+	require.Contains(t, rec.sql, retainedAccountVisibilityLegs("t", "t.date"),
 		"the banking branch must carry the leg VERBATIM as the helper renders it")
-	require.Contains(t, rec.sql, retainedAccountVisibilityLeg("it", "it.date"),
+	require.Contains(t, rec.sql, retainedAccountVisibilityLegs("it", "it.date"),
 		"so must the investment branch")
 
 	conn, err := db.Acquire(ctx)

@@ -2336,7 +2336,51 @@ func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, us
 // layer can detect flag-toggle mid-scroll and return 400 (cursor mismatch).
 // Note: external_transaction_id from banking rows is encrypted; we decrypt it
 // inline after scanning.
-// retainedAccountVisibilityLeg renders the HISTORICAL half of the unified feed's account
+// retainedAccountVisibilityLegs renders BOTH historical account-visibility legs for a dated row
+// table aliased `alias` with a date column `dateCol`, as ONE string that a caller cannot take half
+// of.
+//
+// WHY THEY ARE ONE FUNCTION (#1569, task 21 / C4). The two legs below are COMPLEMENTS, and that is
+// not a stylistic observation — it is the whole reason this exists:
+//
+//	activeChainSiblingLeg              fires only when an ACTIVE account shares the row's chain key
+//	retainedAccountNoLiveSuccessorLeg  fires only when NO active account shares it (its NOT EXISTS)
+//
+// So a read that carries exactly one of them covers exactly half of the retained universe and
+// silently drops the other half. IncomeSummary and investmentTransactionRepository.GetByUserID both
+// carried only the second: a brokerage that was RE-LINKED (old account 'replaced', new one 'active'
+// on the same user_account_id) had every pre-relink dividend excluded by both legs at once — the
+// chain leg was absent and the retained leg's NOT EXISTS was closed by the live successor. Measured
+// on a real chain: IncomeSummary 0.00 and the investments feed empty, while
+// GetByUserIDKeysetUnified over the same rows listed the dividend.
+//
+// Rendering them together makes that state unrepresentable. The individual legs are documented
+// below; neither should be called on its own, and TestRetainedVisibilityLegsTravelTogether holds
+// that to account.
+func retainedAccountVisibilityLegs(alias, dateCol string) string {
+	return activeChainSiblingLeg(alias) + retainedAccountNoLiveSuccessorLeg(alias, dateCol)
+}
+
+// activeChainSiblingLeg renders the RE-LINK half: a row whose own account is no longer active is
+// still visible while an ACTIVE account shares its user_account_id — the stable chain key set at
+// insert time (Issue #1109). EXISTS rather than a JOIN so that several accounts sharing one chain
+// key cannot duplicate the row (Issue #1304).
+//
+// chain_a.user_id is intentionally omitted: user-ownership is transitive via the user_accounts FK
+// (migration 000033), and every caller's outer query is already gated on user_id.
+func activeChainSiblingLeg(alias string) string {
+	return fmt.Sprintf(`
+		      OR (
+		          %s.user_account_id IS NOT NULL
+		          AND EXISTS (
+		              SELECT 1 FROM accounts chain_a
+		              WHERE chain_a.user_account_id = %s.user_account_id
+		                AND chain_a.status = 'active'
+		          )
+		      )`, alias, alias)
+}
+
+// retainedAccountNoLiveSuccessorLeg renders the HISTORICAL half of the unified feed's account
 // visibility predicate for a transaction table aliased `t` with a date column `dateCol`.
 //
 // WHY IT EXISTS (#1569). Task 2 stopped hard-deleting disconnected accounts; they are soft-removed
@@ -2410,7 +2454,7 @@ func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, us
 // TENANCY: this leg adds NO user predicate of its own — it keys on t.account_id, and ownership is
 // carried entirely by the outer query's `user_id = $1::uuid`, exactly as the chain leg above does.
 // TestUnifiedFeed_DisconnectedChain_DoesNotLeakAcrossUsers is what holds that claim to account.
-func retainedAccountVisibilityLeg(alias, dateCol string) string {
+func retainedAccountNoLiveSuccessorLeg(alias, dateCol string) string {
 	return fmt.Sprintf(`
 		      OR EXISTS (
 		          SELECT 1
@@ -2779,25 +2823,12 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		  -- — so without this gate the one query that most needs to hide tombstones is the one most
 		  -- likely to surface them.
 		  AND %s
-		  -- Chain-expansion active-account filter: include pre-relink rows whose
-		  -- account_id is replaced, as long as an active account shares the same
-		  -- user_account_id (the stable chain key set at insert time — Issue #1109).
-		  -- Using EXISTS subqueries (no JOIN) avoids row duplication when multiple
-		  -- accounts share a user_account_id (Issue #1304).
-		  -- Note: chain_a.user_id is intentionally omitted — user-ownership is
-		  -- transitive via the user_accounts FK (migration 000033), and the outer
-		  -- query is already gated on t.user_id = $1::uuid.  Parity with the investment
-		  -- branch is intentional; diverging here would reintroduce asymmetry.
+		  -- The chain-expansion and retained legs are rendered together by
+		  -- retainedAccountVisibilityLegs — they are complements and a read that carries only one
+		  -- covers only half the retained universe (#1569 task 21 / C4).
 		  AND (
 		      EXISTS (SELECT 1 FROM accounts WHERE id = t.account_id AND status = 'active') -- NULL account_id always false here; falls through to chain leg below
-		      OR (
-		          t.user_account_id IS NOT NULL
-		          AND EXISTS (
-		              SELECT 1 FROM accounts chain_a
-		              WHERE chain_a.user_account_id = t.user_account_id
-		                AND chain_a.status = 'active'
-		          )
-		      )%s
+%s
 		      -- Truly orphaned rows: migration 000035's ON DELETE SET NULL left transactions with
 		      -- no account_id behind every pre-Task-2 hard delete. They match neither leg above
 		      -- (NULL never satisfies "id = t.account_id", and there is no accounts row left to
@@ -2857,25 +2888,12 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		FROM investment_transactions it
 		LEFT JOIN securities sec ON sec.id = it.security_id
 		WHERE it.user_id = $1::uuid
-		  -- Chain-expansion active-account filter: include pre-relink rows whose
-		  -- account_id is replaced, as long as an active account shares the same
-		  -- user_account_id (the stable chain key set at insert time — Issue #1109).
-		  -- Using EXISTS subqueries (no JOIN) avoids row duplication when multiple
-		  -- accounts share a user_account_id (Issue #1304).
-		  -- Note: chain_a.user_id is intentionally omitted — user-ownership is
-		  -- transitive via the user_accounts FK (migration 000033), and the outer
-		  -- query is already gated on it.user_id = $1::uuid. Parity with the banking
-		  -- branch is intentional; diverging here would reintroduce asymmetry.
+		  -- Both legs together, exactly as the banking branch above — see
+		  -- retainedAccountVisibilityLegs. Parity is intentional; diverging here would
+		  -- reintroduce asymmetry.
 		  AND (
 		      EXISTS (SELECT 1 FROM accounts WHERE id = it.account_id AND status = 'active')
-		      OR (
-		          it.user_account_id IS NOT NULL
-		          AND EXISTS (
-		              SELECT 1 FROM accounts chain_a
-		              WHERE chain_a.user_account_id = it.user_account_id
-		                AND chain_a.status = 'active'
-		          )
-		      )%s
+%s
 		  )
 		%s%s%s%s%s%s
 
@@ -2884,9 +2902,9 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	`,
 		bankingMerchantJoins,
 		transactionTombstoneCondition("t", filters.IncludeReversed),
-		retainedAccountVisibilityLeg("t", "t.date"),
+		retainedAccountVisibilityLegs("t", "t.date"),
 		bankingAcctFilter, bankingDateFilter, bankingSearchFilter, bankingExtraFilter, bankingCursorFilter, bankingActivityFilter,
-		retainedAccountVisibilityLeg("it", "it.date"),
+		retainedAccountVisibilityLegs("it", "it.date"),
 		investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investCursorFilter, investBankingOnlyFilter,
 		limitPH,
 	)
