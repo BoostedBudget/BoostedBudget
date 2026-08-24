@@ -42,6 +42,25 @@ import (
 // status — a caller that genuinely needs three columns should select three columns and not
 // `plaid_account_id`. An exemption comment would be the first thing reached for.
 //
+// WHAT IT CANNOT SEE, measured against constructed cases rather than guessed. Two holes remain, and
+// both were found by building the case and running it:
+//
+//  1. `SELECT *` and `SELECT a.*` are INVISIBLE — the select list never names `plaid_account_id`, so
+//     the marker never fires. There is no such account read in the tree today. A star projection
+//     would in fact bring `status` along, so this is a blind spot rather than a false negative, but
+//     it is a blind spot.
+//  2. A function call containing FROM truncates the span, because `accountProjectionSelect` is
+//     non-greedy. It cuts BOTH ways and neither is silent about it:
+//     `SELECT EXTRACT(YEAR FROM created_at), plaid_account_id FROM accounts` is a MISS (the marker
+//     falls outside the truncated span), and `SELECT plaid_account_id, EXTRACT(YEAR FROM created_at)
+//     FROM accounts` is a FALSE POSITIVE (status falls outside it). Neither shape exists in the tree.
+//
+// Two holes that a first draft of this guard DID have are now closed, and both are pinned below:
+// a join whose OTHER table supplies `status` (`a.plaid_account_id, li.status`) and a correlated
+// subquery selecting `status` from somewhere else. Both used to satisfy a bare "contains status"
+// check while the account still arrived with Status == "". They are the same defect class as the
+// tombstone guards' alias-unqualified predicate, and the fix is the same one.
+//
 // Mutation-checked: deleting `status` from any account projection in the tree turns this test red
 // with the file, line and offending column list; see task-19-report.md.
 
@@ -49,16 +68,40 @@ import (
 // found separately rather than swallowed.
 var accountProjectionSelect = regexp.MustCompile(`(?is)\bSELECT\b(.*?)\bFROM\b`)
 
+var (
+	// The marker, with its qualifier captured: `a.plaid_account_id` -> "a", bare -> "".
+	accountProjectionMarker = regexp.MustCompile(`(?i)(?:\b([A-Za-z_][A-Za-z0-9_]*)\.)?\bplaid_account_id\b`)
+	// Every `status` in the list, with its qualifier. `status_changed_at` does not match: `_` is a
+	// word character, so \b does not fire after "status".
+	accountProjectionStatus = regexp.MustCompile(`(?i)(?:\b([A-Za-z_][A-Za-z0-9_]*)\.)?\bstatus\b`)
+)
+
 // accountSelectsMissingStatus returns, for one SQL string, the select lists that name
-// `plaid_account_id` but not `status`.
+// `plaid_account_id` but do not name a `status` BELONGING TO THE SAME TABLE REFERENCE.
+//
+// The qualifier check is the same lesson the tombstone read guards learned: `SELECT
+// a.plaid_account_id, li.status FROM accounts a JOIN linked_items li ...` satisfies a bare
+// "contains status" test with a DIFFERENT table's column, which is precisely the defect — the
+// account still arrives with Status == "". Matching the qualifier that carries `plaid_account_id`
+// costs nothing and closes it. An unqualified marker accepts an unqualified `status` (a
+// single-table read) and nothing else.
 func accountSelectsMissingStatus(sql string) []string {
 	var offenders []string
 	for _, m := range accountProjectionSelect.FindAllStringSubmatch(sql, -1) {
 		list := m[1]
-		if !regexp.MustCompile(`(?i)\bplaid_account_id\b`).MatchString(list) {
+		marker := accountProjectionMarker.FindStringSubmatch(list)
+		if marker == nil {
 			continue
 		}
-		if regexp.MustCompile(`(?i)\bstatus\b`).MatchString(list) {
+		qualifier := marker[1]
+		ok := false
+		for _, st := range accountProjectionStatus.FindAllStringSubmatch(list, -1) {
+			if strings.EqualFold(st[1], qualifier) {
+				ok = true
+				break
+			}
+		}
+		if ok {
 			continue
 		}
 		offenders = append(offenders, strings.Join(strings.Fields(list), " "))
@@ -160,6 +203,34 @@ func TestAccountStatusProjectionGuard_FlagsASelectThatOmitsStatus(t *testing.T) 
 			2,
 		},
 		{"lowercase and wrapped", "select\n  plaid_account_id,\n  name\nfrom accounts", 1},
+		{
+			"a JOINED table's status does NOT satisfy the account's",
+			"SELECT a.id, a.plaid_account_id, li.status FROM accounts a JOIN linked_items li ON li.id = a.linked_item_id",
+			1,
+		},
+		{
+			"the account's OWN status does",
+			"SELECT a.id, a.plaid_account_id, a.status FROM accounts a JOIN linked_items li ON li.id = a.linked_item_id",
+			0,
+		},
+		{
+			"a correlated subquery's status does NOT",
+			"SELECT a.plaid_account_id, (SELECT status FROM linked_items WHERE id = a.linked_item_id) AS s FROM accounts a",
+			1,
+		},
+		{
+			"a qualified status does not satisfy an UNQUALIFIED marker",
+			"SELECT plaid_account_id, li.status FROM accounts JOIN linked_items li ON true",
+			1,
+		},
+		// The two known holes, pinned AS holes so that closing one is a visible change rather than a
+		// silent improvement nobody notices, and so the header cannot drift away from the behaviour.
+		{"KNOWN HOLE: star projection is invisible", "SELECT a.* FROM accounts a", 0},
+		{
+			"KNOWN HOLE: a FROM inside a function truncates the span",
+			"SELECT EXTRACT(YEAR FROM created_at) AS y, plaid_account_id FROM accounts",
+			0,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

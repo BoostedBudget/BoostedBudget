@@ -185,8 +185,25 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 // _events, _executions, _statements, _contributions, _repairs, _log or _audit is a claim the author
 // made about what the table is; this test only asks them to finish the sentence.
 //
-// It is a net, not a definition: a history table named `daily_totals` still slips past. Adding one
-// to historyBearingTables by hand remains correct and is not made redundant by this.
+// ⚠ HOW MUCH IT ACTUALLY COVERS, measured rather than assumed: **7 of the 17 tables already in
+// historyBearingTables do not match this regexp** — accounts, boosts, budget_categories, budgets,
+// custom_categories, savings_goals, transactions. That is 41%, and it is the LARGEST class the
+// guards protect: the tombstoned parents. The net is structurally incapable of finding another one
+// of those, because their names describe a thing rather than a record of a thing.
+//
+// It caught `portfolio_snapshots` because that table happened to be shaped like history. Read this
+// as "it will catch the next _snapshots table", not as "the universe is now complete". Adding a
+// table to historyBearingTables by hand remains the primary mechanism and is not made redundant by
+// this. TestHistoryShapedTableClassification_TheNetMissesMostOfWhatItProtects pins the 7 so this
+// paragraph cannot quietly become false.
+//
+// ⚠ AND IT IS ONE LINE TO UNDO, demonstrated, not hypothesised. Moving `portfolio_snapshots` out of
+// historyBearingTables into deliberatelyNotHistoryBearing with a plausible-sounding false reason
+// ("derived aggregate, recomputable from holdings at any time") and deleting its allowlist edge
+// leaves the ENTIRE guard suite green — G1, G2, all three classification meta-tests, everything.
+// Nothing checks that a reason is TRUE, only that it is non-empty. These guards make forgetting
+// impossible; they do not make a wrong decision impossible, and a reviewer reading a migration is
+// still the only thing standing between a reclassification and a silent reversal of #1569.
 var historyShapedTableName = regexp.MustCompile(
 	`(_history|_histories|_snapshot|_snapshots|_event|_events|_executions|_statements|` +
 		`_contributions|_repairs|_log|_logs|_audit)$`)
@@ -375,6 +392,38 @@ func TestHistoryShapedTableClassification_MapsAgreeOnNothing(t *testing.T) {
 		}
 		if strings.TrimSpace(deliberatelyNotHistoryBearing[tbl]) == "" {
 			t.Errorf("%s is excluded with no reason; the reason is the point", tbl)
+		}
+	}
+}
+
+// TestHistoryShapedTableClassification_TheNetMissesMostOfWhatItProtects pins the measured coverage of
+// historyShapedTableName against the list it is meant to backstop.
+//
+// It is not an aspiration to fix — the tombstoned parents SHOULD NOT be renamed to satisfy a regexp.
+// It exists so that the honest disclosure above stays honest: if someone widens the pattern, or adds
+// a shaped table, the number here changes and the comment gets updated with it.
+func TestHistoryShapedTableClassification_TheNetMissesMostOfWhatItProtects(t *testing.T) {
+	want := map[string]bool{
+		"accounts": true, "boosts": true, "budget_categories": true, "budgets": true,
+		"custom_categories": true, "savings_goals": true, "transactions": true,
+	}
+	got := map[string]bool{}
+	for tbl := range historyBearingTables {
+		if !historyShapedTableName.MatchString(tbl) {
+			got[tbl] = true
+		}
+	}
+	for tbl := range want {
+		if !got[tbl] {
+			t.Errorf("%s now MATCHES historyShapedTableName; the net got wider, which is good — update "+
+				"the count in the doc comment above", tbl)
+		}
+	}
+	for tbl := range got {
+		if !want[tbl] {
+			t.Errorf("%s is history-bearing and does NOT match historyShapedTableName, and it is not in "+
+				"the recorded list. The completeness net cannot find tables like it; add it here and "+
+				"update the count in the doc comment above", tbl)
 		}
 	}
 }
