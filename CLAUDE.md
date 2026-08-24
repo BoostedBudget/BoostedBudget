@@ -148,6 +148,8 @@ Corollaries: the provider is not the user (Plaid removing an item is not a delet
 - `TestHistoryRetentionRoundTrip_*` (G3) — disconnect / re-link / purge, against real Postgres.
 - `TestNoNewNoMatcherAssertNotCalled` — `AssertNotCalled(t, "Method")` with no argument matchers is
   a NO-OP for any method taking arguments. Use `mockassert.NoCallTo` instead.
+- `TestEveryCitedTestNameResolves` — a comment citing a test name that does not exist. Names only;
+  it deliberately says nothing about line numbers.
 
 The exception, and the only one: GDPR erasure is a real hard delete
 (`docs/decisions/2026-08-01-gdpr-erasure-hard-delete.md`). No retention decision may leave a row
