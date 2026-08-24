@@ -58,7 +58,7 @@ func (m *mockBoostExecutionRepository) GetByID(ctx context.Context, id string) (
 func (m *mockBoostExecutionRepository) GetByBoostID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.BoostExecution, error) {
 	var result []*domain.BoostExecution
 	for _, e := range m.executions {
-		if e.BoostID == ruleID {
+		if e.BoostID != nil && *e.BoostID == ruleID {
 			result = append(result, e)
 		}
 	}
@@ -68,7 +68,7 @@ func (m *mockBoostExecutionRepository) GetByBoostID(ctx context.Context, ruleID 
 func (m *mockBoostExecutionRepository) GetLastExecutionForBoost(ctx context.Context, ruleID string) (*domain.BoostExecution, error) {
 	var latest *domain.BoostExecution
 	for _, e := range m.executions {
-		if e.BoostID == ruleID {
+		if e.BoostID != nil && *e.BoostID == ruleID {
 			if latest == nil || e.StartedAt.After(latest.StartedAt) {
 				latest = e
 			}
@@ -90,10 +90,26 @@ func (m *mockBoostExecutionRepository) GetPendingExecutions(ctx context.Context,
 	return result, nil
 }
 
+// GetByUserID is the Issue #1569 Task 14 reader that can see an execution whose boost has been
+// purged (boost_id NULL). Matching on the execution's own UserID mirrors the real query.
+func (m *mockBoostExecutionRepository) GetByUserID(ctx context.Context, userID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
+	var result []*domain.BoostExecution
+	for _, e := range m.executions {
+		if e.UserID != userID {
+			continue
+		}
+		if status != nil && e.Status != *status {
+			continue
+		}
+		result = append(result, e)
+	}
+	return result, len(result), nil
+}
+
 func (m *mockBoostExecutionRepository) GetFailedExecutions(ctx context.Context, ruleID string, limit int) ([]*domain.BoostExecution, error) {
 	var result []*domain.BoostExecution
 	for _, e := range m.executions {
-		if e.BoostID == ruleID && e.Status == domain.ExecutionStatusFailed {
+		if e.BoostID != nil && *e.BoostID == ruleID && e.Status == domain.ExecutionStatusFailed {
 			result = append(result, e)
 		}
 	}
@@ -105,7 +121,7 @@ func (m *mockBoostExecutionRepository) GetFailedExecutions(ctx context.Context, 
 func (m *mockBoostExecutionRepository) GetByBoostIDWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
 	var result []*domain.BoostExecution
 	for _, e := range m.executions {
-		if e.BoostID == ruleID {
+		if e.BoostID != nil && *e.BoostID == ruleID {
 			if status == nil || e.Status == *status {
 				result = append(result, e)
 			}
@@ -573,7 +589,8 @@ func TestBoostExecutionService(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.NotEmpty(t, execution.ID)
-		assert.Equal(t, boost.ID, execution.BoostID)
+		require.NotNil(t, execution.BoostID)
+		assert.Equal(t, boost.ID, *execution.BoostID)
 		assert.Equal(t, domain.ExecutionStatusCompleted, execution.Status)
 		assert.NotNil(t, execution.CompletedAt)
 
@@ -757,13 +774,13 @@ func TestGetExecutionHistory(t *testing.T) {
 			executions: []*domain.BoostExecution{
 				{
 					ID:        "exec-1",
-					BoostID:   "rule-1",
+					BoostID:   strPtr("rule-1"),
 					Status:    domain.ExecutionStatusCompleted,
 					StartedAt: now.Add(-1 * time.Hour),
 				},
 				{
 					ID:        "exec-2",
-					BoostID:   "rule-1",
+					BoostID:   strPtr("rule-1"),
 					Status:    domain.ExecutionStatusCompleted,
 					StartedAt: now,
 				},
@@ -3639,8 +3656,8 @@ func TestBoostExecutionService_GetExecutionHistoryWithFilter_NoFilter(t *testing
 
 	execRepo := &mockBoostExecutionRepository{
 		executions: []*domain.BoostExecution{
-			{ID: "e1", BoostID: boostID, Status: domain.ExecutionStatusCompleted},
-			{ID: "e2", BoostID: boostID, Status: domain.ExecutionStatusFailed},
+			{ID: "e1", BoostID: &boostID, Status: domain.ExecutionStatusCompleted},
+			{ID: "e2", BoostID: &boostID, Status: domain.ExecutionStatusFailed},
 		},
 	}
 	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
@@ -3660,9 +3677,9 @@ func TestBoostExecutionService_GetExecutionHistoryWithFilter_WithStatusFilter(t 
 
 	execRepo := &mockBoostExecutionRepository{
 		executions: []*domain.BoostExecution{
-			{ID: "e1", BoostID: boostID, Status: domain.ExecutionStatusCompleted},
-			{ID: "e2", BoostID: boostID, Status: domain.ExecutionStatusFailed},
-			{ID: "e3", BoostID: boostID, Status: domain.ExecutionStatusCompleted},
+			{ID: "e1", BoostID: &boostID, Status: domain.ExecutionStatusCompleted},
+			{ID: "e2", BoostID: &boostID, Status: domain.ExecutionStatusFailed},
+			{ID: "e3", BoostID: &boostID, Status: domain.ExecutionStatusCompleted},
 		},
 	}
 	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
@@ -3675,4 +3692,133 @@ func TestBoostExecutionService_GetExecutionHistoryWithFilter_WithStatusFilter(t 
 	for _, r := range results {
 		assert.Equal(t, domain.ExecutionStatusCompleted, r.Status)
 	}
+}
+
+// ---------------------------------------------------------------------------------------------
+// Issue #1569 Task 14 — the definition snapshot is captured at execution time and frozen there.
+// ---------------------------------------------------------------------------------------------
+
+// newSnapshotTestBoost builds a fully-populated budget-alert boost for the snapshot tests.
+func newSnapshotTestBoost() *domain.Boost {
+	actionsJSON, _ := json.Marshal(map[string]interface{}{
+		"notification_channels": []string{"email"},
+		"threshold_type":        "percentage",
+		"threshold_value":       80,
+	})
+	desc := "explains itself to the user, not to the audit trail"
+	return &domain.Boost{
+		ID:          "boost-snapshot-1569",
+		UserID:      "user-snapshot-1569",
+		Name:        "Warn me at 80%",
+		Description: &desc,
+		Enabled:     true,
+		Priority:    7,
+		BoostType:   domain.BoostTypeBudgetAlert,
+		TriggerConfig: domain.TriggerConfig{
+			Type:  domain.TriggerTypeEvent,
+			Event: "budget_updated",
+		},
+		Conditions: []domain.BoostCondition{{
+			Field:    "budget_category.percent_used",
+			Operator: domain.ConditionOperatorGte,
+			Value:    "80",
+		}},
+		ConditionLogic: "AND",
+		Actions:        actionsJSON,
+	}
+}
+
+// TestExecuteBoost_WritesDefinitionSnapshotAtExecutionTime is the "what did this automation do, and
+// why" half. fk_boost_executions_boost_id is ON DELETE SET NULL, so the execution row has to carry
+// its own explanation; a row that only says `status=completed` explains nothing once the boost that
+// produced it is gone.
+func TestExecuteBoost_WritesDefinitionSnapshotAtExecutionTime(t *testing.T) {
+	ctx := context.Background()
+	execRepo := &mockBoostExecutionRepository{}
+	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
+
+	boost := newSnapshotTestBoost()
+	execution, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
+	require.NoError(t, err)
+	require.NotNil(t, execution)
+
+	assert.Equal(t, boost.UserID, execution.UserID,
+		"user_id is the execution row's own ON DELETE CASCADE path to users once boost_id can be NULL")
+	require.NotNil(t, execution.BoostID)
+	assert.Equal(t, boost.ID, *execution.BoostID)
+	require.NotNil(t, execution.BoostName)
+	assert.Equal(t, "Warn me at 80%", *execution.BoostName)
+
+	require.NotEmpty(t, execution.DefinitionSnapshot, "an orphan with no snapshot explains nothing")
+	var snap map[string]interface{}
+	require.NoError(t, json.Unmarshal(execution.DefinitionSnapshot, &snap))
+
+	assert.Equal(t, boost.ID, snap["boost_id"], "which automation this was, after boost_id is NULLed")
+	assert.Equal(t, "Warn me at 80%", snap["name"])
+	assert.Equal(t, string(domain.BoostTypeBudgetAlert), snap["boost_type"], "WHAT it did")
+	assert.NotNil(t, snap["actions"], "WHAT it did, in detail")
+	assert.NotNil(t, snap["trigger_config"], "WHY it ran at all")
+	assert.NotEmpty(t, snap["conditions"], "WHY it fired")
+	assert.Equal(t, "AND", snap["condition_logic"])
+	assert.Equal(t, true, snap["enabled"], "why a skip was recorded, when one is")
+	assert.Equal(t, float64(7), snap["priority"])
+	assert.Equal(t, "boost_execution_service", snap["captured_by"],
+		"provenance distinguishes a live capture from migration 000164's backfill")
+	assert.NotEmpty(t, snap["captured_at"])
+
+	// Deliberate exclusions, asserted so a later "just add everything" does not slip in.
+	assert.NotContains(t, snap, "description",
+		"free text with no bearing on behaviour and a PII surface with no reader")
+	assert.NotContains(t, snap, "execution_count",
+		"a lifetime counter, not a fact about this execution")
+	assert.NotContains(t, snap, "last_executed_at")
+}
+
+// TestExecuteBoost_SnapshotDoesNotFollowLaterDefinitionEdits is the "as it was THEN" half, and the
+// only thing that makes the snapshot worth having: if editing the boost rewrote its history, the
+// snapshot would be a slower way of reading the parent row.
+func TestExecuteBoost_SnapshotDoesNotFollowLaterDefinitionEdits(t *testing.T) {
+	ctx := context.Background()
+	execRepo := &mockBoostExecutionRepository{}
+	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
+
+	boost := newSnapshotTestBoost()
+	execution, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
+	require.NoError(t, err)
+
+	// The user renames the boost, disables it, raises the threshold and drops the condition.
+	boost.Name = "Warn me at 95%"
+	boost.Enabled = false
+	boost.Priority = 99
+	boost.Conditions = nil
+	boost.Actions, _ = json.Marshal(map[string]interface{}{
+		"notification_channels": []string{"email"},
+		"threshold_type":        "percentage",
+		"threshold_value":       95,
+	})
+
+	// A second execution must see the NEW definition...
+	second, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
+	require.NoError(t, err)
+	require.NotNil(t, second.BoostName)
+	assert.Equal(t, "Warn me at 95%", *second.BoostName)
+
+	// ...while the first execution's record of what happened is untouched.
+	require.Len(t, execRepo.executions, 2)
+	stored := execRepo.executions[0]
+	require.Equal(t, execution.ID, stored.ID)
+	require.NotNil(t, stored.BoostName)
+	assert.Equal(t, "Warn me at 80%", *stored.BoostName,
+		"renaming a boost must not rewrite what the audit trail says it was called when it ran")
+
+	var snap map[string]interface{}
+	require.NoError(t, json.Unmarshal(stored.DefinitionSnapshot, &snap))
+	assert.Equal(t, "Warn me at 80%", snap["name"])
+	assert.Equal(t, true, snap["enabled"], "the boost was enabled WHEN IT RAN; it is disabled now")
+	assert.Equal(t, float64(7), snap["priority"])
+	assert.NotEmpty(t, snap["conditions"], "the conditions it actually evaluated, not today's empty set")
+	actions, ok := snap["actions"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, float64(80), actions["threshold_value"],
+		"the threshold it actually applied, not the one the user set afterwards")
 }

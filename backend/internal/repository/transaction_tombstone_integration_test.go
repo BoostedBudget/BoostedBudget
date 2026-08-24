@@ -152,9 +152,9 @@ func seedTombstoneFixture(t *testing.T) *tombstoneFixture {
 	require.NoError(t, err, "seed categorization_rule")
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO rule_execution_history (id, rule_id, transaction_id, action_type, result)
-		VALUES ($1, $2, $3, 'category', 'applied')
-	`, f.ruleExecID, f.ruleID, f.postedTxnID)
+		INSERT INTO rule_execution_history (id, rule_id, transaction_id, action_type, result, user_id)
+		VALUES ($1, $2, $3, 'category', 'applied', $4)
+	`, f.ruleExecID, f.ruleID, f.postedTxnID, f.userID)
 	require.NoError(t, err, "seed rule_execution_history")
 
 	return f

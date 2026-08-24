@@ -118,14 +118,25 @@ func (s *boostExecutionService) ExecuteBoost(ctx context.Context, boost *domain.
 
 	startTime := time.Now()
 
-	// Create execution record
+	// Create execution record.
+	//
+	// UserID, BoostName and DefinitionSnapshot are captured HERE, from the boost as it stands at
+	// this moment, and are never rewritten (BoostExecutionRepository.Update does not touch them).
+	// Issue #1569 Task 14: fk_boost_executions_boost_id is ON DELETE SET NULL, so this row must be
+	// able to answer "what did this automation do, and why" with no parent left to join to -- and
+	// it must answer with the definition AS IT WAS THEN, not as it is now.
 	triggerContextJSON, _ := json.Marshal(triggerData)
+	boostID := boost.ID
+	boostName := boost.Name
 	execution := &domain.BoostExecution{
-		ID:             uuid.New().String(),
-		BoostID: boost.ID,
-		Status:         domain.ExecutionStatusRunning,
-		StartedAt:      startTime,
-		TriggerContext: triggerContextJSON,
+		ID:                 uuid.New().String(),
+		BoostID:            &boostID,
+		UserID:             boost.UserID,
+		BoostName:          &boostName,
+		DefinitionSnapshot: buildBoostDefinitionSnapshot(boost),
+		Status:             domain.ExecutionStatusRunning,
+		StartedAt:          startTime,
+		TriggerContext:     triggerContextJSON,
 	}
 
 	// Save initial execution record
@@ -1030,4 +1041,58 @@ func ptrTime(t time.Time) *time.Time {
 
 func ptrString(s string) *string {
 	return &s
+}
+
+// buildBoostDefinitionSnapshot captures the parts of a boost definition needed to answer "what did
+// this automation do, and why" from the execution row alone, once the boost itself is gone.
+//
+// Issue #1569 Task 14. What is INCLUDED and why:
+//
+//	boost_id, name          which automation this was, after boost_id has been SET NULL
+//	boost_type, actions     WHAT it did
+//	trigger_config          WHY it ran at all
+//	conditions,
+//	condition_logic,
+//	enabled                 WHY it fired -- or why it recorded a skip with no effect
+//	priority                why it ran before or after a competing boost
+//	captured_at, captured_by
+//	                        provenance, so a reader can tell a live capture from migration
+//	                        000164's backfill of pre-existing rows
+//
+// Deliberately EXCLUDED:
+//
+//	description             free text, no bearing on behaviour, and a PII surface with no reader
+//	execution_count,
+//	last_executed_at,
+//	last_successful_at      counters describing the boost's whole lifetime rather than this
+//	                        execution -- and this very row is one of the things they count, so
+//	                        freezing them here would record a number that was already stale
+//	created_at, updated_at  properties of the definition, not of what it did
+//	user_id                 already a first-class column on the row
+//
+// Marshalling cannot fail for these types in practice; if it somehow did, a nil snapshot is
+// written (SQL NULL) rather than failing the execution. Losing the explanation is bad; refusing to
+// run the user's automation because the explanation would not serialise is worse.
+func buildBoostDefinitionSnapshot(boost *domain.Boost) json.RawMessage {
+	snapshot := map[string]interface{}{
+		"boost_id":        boost.ID,
+		"name":            boost.Name,
+		"boost_type":      boost.BoostType,
+		"enabled":         boost.Enabled,
+		"priority":        boost.Priority,
+		"condition_logic": boost.ConditionLogic,
+		"conditions":      boost.Conditions,
+		"trigger_config":  boost.TriggerConfig,
+		"captured_at":     time.Now().UTC().Format(time.RFC3339),
+		"captured_by":     "boost_execution_service",
+	}
+	if len(boost.Actions) > 0 {
+		snapshot["actions"] = boost.Actions
+	}
+
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil
+	}
+	return encoded
 }

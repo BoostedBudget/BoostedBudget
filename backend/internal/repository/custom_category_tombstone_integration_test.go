@@ -190,9 +190,9 @@ func seedCategoryTombstoneFixture(t *testing.T) *categoryTombstoneFixture {
 	// -> categorization_rules(id) is ON DELETE CASCADE (migration 000020:159), which is why
 	// "delete the rule" is not an available ruling for steps 2/3.
 	mustExec("rule_execution_history", `
-		INSERT INTO rule_execution_history (id, rule_id, transaction_id, action_type, result)
-		VALUES ($1, $2, $3, 'category', 'applied')
-	`, f.ruleExecID, f.categoryOnlyRuleID, f.liveTxnID)
+		INSERT INTO rule_execution_history (id, rule_id, transaction_id, action_type, result, user_id)
+		VALUES ($1, $2, $3, 'category', 'applied', $4)
+	`, f.ruleExecID, f.categoryOnlyRuleID, f.liveTxnID, f.userID)
 
 	mustExec("budget", `
 		INSERT INTO budgets (id, user_id, name, period, start_date, amount, series_id)
