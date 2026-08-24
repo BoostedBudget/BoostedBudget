@@ -1779,6 +1779,18 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-isolated-test-lists.test.sh
 
+      # #1569 task 20 (A1). The E2E seeder swallowed a totally failed seed four separate ways and
+      # printed "✅ Test data seeded successfully!", so the E2E job ran the whole suite against a
+      # database holding one user row and nothing else. This guard really CALLS seed_e2e_data
+      # against a recording docker stub and asserts it returns non-zero when psql fails.
+      #
+      # Wired into this job rather than the E2E job on purpose: it needs no database, no browser
+      # and no Clerk credentials, so it must not wait behind the E2E job to report that the E2E
+      # job's own reporting is broken.
+      - name: Guard — the E2E seeder must fail loudly (#1569)
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bash scripts/__tests__/check-e2e-seed-fails-loudly.test.sh
+
       - name: Lint frontend
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bun run lint
