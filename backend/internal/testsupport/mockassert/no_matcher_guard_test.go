@@ -44,6 +44,10 @@ import (
 // The correct way to REMOVE an entry is to rewrite the calls as
 // `mockassert.NoCallTo(t, &mockThing.Mock, "Method")` and then lower or delete the number here.
 var noMatcherBaseline = map[string]int{
+	// The one deliberate no-matcher call in the tree: TestAssertNotCalledWithNoMatchersCannotFail
+	// below calls it on purpose, against a spy, to demonstrate that it reports PASS on a recorded
+	// call. Removing it would remove the evidence for this whole file.
+	"backend/internal/testsupport/mockassert/no_matcher_guard_test.go":                     1,
 	"backend/internal/huma/middleware/admin_test.go":                                       8,
 	"backend/internal/huma/operations/admin_subscriptions_test.go":                         1,
 	"backend/internal/huma/operations/savings_goal_contribution_test.go":                   8,
