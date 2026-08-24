@@ -1019,9 +1019,12 @@ components:
           type: string
         boost_id:
           type: string
+        boost_name:
+          type: string
         completed_at:
           format: date-time
           type: string
+        definition_snapshot: {}
         error_code:
           type: string
         error_message:
@@ -1045,9 +1048,11 @@ components:
         status:
           type: string
         trigger_context: {}
+        user_id:
+          type: string
       required:
         - id
-        - boost_id
+        - user_id
         - status
         - started_at
         - trigger_context
