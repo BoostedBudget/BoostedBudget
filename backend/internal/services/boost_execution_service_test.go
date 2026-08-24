@@ -3822,3 +3822,75 @@ func TestExecuteBoost_SnapshotDoesNotFollowLaterDefinitionEdits(t *testing.T) {
 	assert.Equal(t, float64(80), actions["threshold_value"],
 		"the threshold it actually applied, not the one the user set afterwards")
 }
+
+// ---------------------------------------------------------------------------------------------
+// Issue #1569 Task 14 (review round 2) — the per-user automation history reader.
+// ---------------------------------------------------------------------------------------------
+
+// TestGetUserExecutionHistory_ReturnsOrphansAndScopesToTheUser is the service half of the only read
+// path that can surface an execution whose boost has been purged. Every other read is keyed on
+// boost_id, so without this a retained orphan is invisible to every client.
+func TestGetUserExecutionHistory_ReturnsOrphansAndScopesToTheUser(t *testing.T) {
+	ctx := context.Background()
+
+	orphanName := "Purged Boost"
+	liveBoostID := "boost-live"
+	execRepo := &mockBoostExecutionRepository{
+		executions: []*domain.BoostExecution{
+			// The orphan: its boost is gone, so boost_id is NULL.
+			{ID: "e-orphan", BoostID: nil, UserID: "user-1", BoostName: &orphanName,
+				Status: domain.ExecutionStatusCompleted},
+			{ID: "e-live", BoostID: &liveBoostID, UserID: "user-1",
+				Status: domain.ExecutionStatusCompleted},
+			// Another tenant's row. Must never appear.
+			{ID: "e-other", BoostID: &liveBoostID, UserID: "user-2",
+				Status: domain.ExecutionStatusCompleted},
+		},
+	}
+	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
+
+	executions, total, err := svc.GetUserExecutionHistory(ctx, "user-1", nil, 20, 0)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, total)
+	require.Len(t, executions, 2)
+
+	ids := make([]string, 0, len(executions))
+	for _, e := range executions {
+		ids = append(ids, e.ID)
+	}
+	assert.Contains(t, ids, "e-orphan",
+		"the orphan is the whole reason this reader exists; filtering it out is the bug")
+	assert.NotContains(t, ids, "e-other", "another tenant's automation history must never be returned")
+
+	var orphan *domain.BoostExecution
+	for _, e := range executions {
+		if e.ID == "e-orphan" {
+			orphan = e
+		}
+	}
+	require.NotNil(t, orphan)
+	assert.Nil(t, orphan.BoostID, "the parent link is gone")
+	require.NotNil(t, orphan.BoostName)
+	assert.Equal(t, "Purged Boost", *orphan.BoostName,
+		"and the caller can still say which automation this was")
+}
+
+func TestGetUserExecutionHistory_PassesTheStatusFilterThrough(t *testing.T) {
+	ctx := context.Background()
+	liveBoostID := "boost-live"
+	execRepo := &mockBoostExecutionRepository{
+		executions: []*domain.BoostExecution{
+			{ID: "e-done", BoostID: &liveBoostID, UserID: "user-1", Status: domain.ExecutionStatusCompleted},
+			{ID: "e-failed", BoostID: nil, UserID: "user-1", Status: domain.ExecutionStatusFailed},
+		},
+	}
+	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
+
+	failed := domain.ExecutionStatusFailed
+	executions, total, err := svc.GetUserExecutionHistory(ctx, "user-1", &failed, 20, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	require.Len(t, executions, 1)
+	assert.Equal(t, "e-failed", executions[0].ID)
+}

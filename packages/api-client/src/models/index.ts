@@ -219,6 +219,7 @@ export * from './getTransferSuggestionsParams';
 export * from './getUnreadCountOutputBody';
 export * from './getUnusualSpendParams';
 export * from './getUserAccountsParams';
+export * from './getUserBoostExecutionsParams';
 export * from './grantTrialResponseBody';
 export * from './holdingView';
 export * from './household';

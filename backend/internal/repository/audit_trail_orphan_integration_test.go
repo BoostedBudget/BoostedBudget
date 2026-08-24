@@ -455,3 +455,55 @@ func TestAuditTrail_GetByUserIDFiltersByStatus_Integration(t *testing.T) {
 	require.Len(t, execs, 1)
 	assert.Equal(t, f.boostExecID, execs[0].ID)
 }
+
+// TestAuditTrail_GetByUserIDNeverCrossesTenants_Integration is the SQL-level tenancy guard for the
+// account-wide reader added in review round 2. The service and handler tests can only prove that a
+// user id is passed down; only a real database with two users in it can prove the query actually
+// filters on it.
+func TestAuditTrail_GetByUserIDNeverCrossesTenants_Integration(t *testing.T) {
+	f := seedAuditTrailFixture(t)
+	ctx := context.Background()
+
+	// A second user with their own boost and their own execution, in the same table.
+	otherUserID := uuid.New().String()
+	otherBoostID := uuid.New().String()
+	otherExecID := uuid.New().String()
+	mustExec := func(what, sql string, args ...any) {
+		t.Helper()
+		_, err := f.tx.Exec(ctx, sql, args...)
+		require.NoError(t, err, "seed %s", what)
+	}
+	mustExec("other user", `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, otherUserID, "test|"+otherUserID, "audit-trail-other-"+otherUserID+"@example.com")
+	mustExec("other boost", `
+		INSERT INTO boosts (id, user_id, name, boost_type, enabled)
+		VALUES ($1, $2, 'Someone Else Boost', 'budget_alert', true)
+	`, otherBoostID, otherUserID)
+	mustExec("other boost_execution", `
+		INSERT INTO boost_executions (id, boost_id, status, user_id, boost_name)
+		VALUES ($1, $2, 'completed', $3, 'Someone Else Boost')
+	`, otherExecID, otherBoostID, otherUserID)
+
+	// Purge the first user's boost so their only visible row is an orphan — the case where there is
+	// no parent left to authorise against and the denormalised user_id is the entire boundary.
+	_, err := f.tx.Exec(ctx, `DELETE FROM boosts WHERE id = $1`, f.boostID)
+	require.NoError(t, err)
+
+	repo := NewBoostExecutionRepository(f.tx)
+
+	execs, total, err := repo.GetByUserID(ctx, f.userID, nil, 50, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, total, "the count must be scoped too, not just the page")
+	require.Len(t, execs, 1)
+	assert.Equal(t, f.boostExecID, execs[0].ID)
+	assert.Nil(t, execs[0].BoostID, "and the row returned is the orphan, not a live row")
+
+	otherExecs, otherTotal, err := repo.GetByUserID(ctx, otherUserID, nil, 50, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, otherTotal)
+	require.Len(t, otherExecs, 1)
+	assert.Equal(t, otherExecID, otherExecs[0].ID,
+		"each user sees exactly their own automation history and nobody else's")
+}

@@ -699,16 +699,16 @@ func (b *Boost) ParseSavingsGoalAction() (*SavingsGoalAction, error) {
 
 // BoostExecution tracks a single execution of a boost.
 type BoostExecution struct {
-	ID                  string          `json:"id" db:"id"`
+	ID string `json:"id" db:"id"`
 	// BoostID is a POINTER because fk_boost_executions_boost_id is ON DELETE SET NULL since Issue
 	// #1569 Task 14 (migration 000164). NULL means "the boost that ran has since been purged",
 	// never "no boost" -- every row was written for a real one. BoostName and DefinitionSnapshot
 	// are what a reader shows in its place.
-	BoostID              *string          `json:"boost_id,omitempty" db:"boost_id"`
+	BoostID *string `json:"boost_id,omitempty" db:"boost_id"`
 	// UserID is denormalised onto the execution row. It is the row's own ON DELETE CASCADE path to
 	// users (so GDPR erasure still reaches it once boost_id can be NULL) AND the key GetByUserID
 	// reads it by (so an orphan is not invisible to every list in the app).
-	UserID              string          `json:"user_id" db:"user_id"`
+	UserID string `json:"user_id" db:"user_id"`
 	// BoostName and DefinitionSnapshot are written once, at execution time, and never updated.
 	// They record the definition AS IT WAS THEN -- editing or deleting the boost afterwards does
 	// not rewrite history.

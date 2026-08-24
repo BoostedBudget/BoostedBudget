@@ -10009,6 +10009,57 @@ paths:
       summary: Toggle a rule
       tags:
         - Auto-Categorization
+  /api/v1/boost-executions:
+    get:
+      description: "Retrieves every boost execution for the authenticated user with an optional status filter. Unlike /boosts/{id}/executions this also returns executions whose boost has since been deleted: those carry boost_id = null plus boost_name and definition_snapshot, captured at execution time."
+      operationId: getUserBoostExecutions
+      parameters:
+        - description: "Filter by status: pending, running, completed, failed"
+          explode: false
+          in: query
+          name: status
+          schema:
+            description: "Filter by status: pending, running, completed, failed"
+            type: string
+        - description: Maximum number of results
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 20
+            description: Maximum number of results
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+        - description: Number of results to skip
+          explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            description: Number of results to skip
+            format: int64
+            minimum: 0
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BoostExecutionsResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get account-wide boost execution history
+      tags:
+        - Boosts
   /api/v1/boosts:
     get:
       description: "Retrieves boosts for the authenticated user, ordered by priority. Use the repeatable `boost_type` query parameter to filter by type. Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal. Transfer-generating types are transfer_suggestion and savings_goal. When omitted, all boost types are returned."
