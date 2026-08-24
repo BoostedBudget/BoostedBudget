@@ -162,7 +162,7 @@ func TestHouseholdShareAsOf_OverlappingHistoricalRowsAreDeterministic(t *testing
 
 	acctRepo := repository.NewAccountRepository(pool, nil)
 	for i := 0; i < 5; i++ {
-		got, err := acctRepo.GetForHouseholdScope(ctx, owner, scope, asOf)
+		got, err := acctRepo.GetForHouseholdScopeActiveNow(ctx, owner, scope, asOf)
 		require.NoError(t, err)
 		require.Len(t, got, 1, "one logical grant matching asOf twice must still yield exactly ONE account row")
 		require.Equal(t, memberAcct.AccountID, got[0].ID)
@@ -175,7 +175,7 @@ func TestHouseholdShareAsOf_OverlappingHistoricalRowsAreDeterministic(t *testing
 	insertHouseholdShare(t, pool, hh, other.UserAccountID, &oldFP, domain.ShareVisibilityShared, now.AddDate(0, 0, -60))
 	revokeShareAt(t, pool, hh, other.UserAccountID, now.AddDate(0, 0, -5))
 
-	got, err := acctRepo.GetForHouseholdScope(ctx, owner, scope, asOf)
+	got, err := acctRepo.GetForHouseholdScopeActiveNow(ctx, owner, scope, asOf)
 	require.NoError(t, err)
 	assert.Len(t, got, 2,
 		"the grant in force at asOf carries the NEW fingerprint, so it must not collide with the "+
@@ -247,12 +247,12 @@ func TestHouseholdShareAsOf_VisibilityChangeDoesNotRewriteThePast(t *testing.T) 
 
 	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
 
-	past, err := acctRepo.GetForHouseholdScope(ctx, owner, scope, now.AddDate(0, 0, -30))
+	past, err := acctRepo.GetForHouseholdScopeActiveNow(ctx, owner, scope, now.AddDate(0, 0, -30))
 	require.NoError(t, err)
 	require.Len(t, past, 1, "30 days ago this account WAS in the household aggregate; hiding it today must not rewrite that")
 	require.Equal(t, memberAcct.AccountID, past[0].ID)
 
-	present, err := acctRepo.GetForHouseholdScope(ctx, owner, scope, now.Add(time.Minute))
+	present, err := acctRepo.GetForHouseholdScopeActiveNow(ctx, owner, scope, now.Add(time.Minute))
 	require.NoError(t, err)
 	require.Empty(t, present, "and it must be hidden from TODAY's read — retaining the past must not resurrect it")
 
@@ -354,7 +354,7 @@ func TestHouseholdShareAsOf_EqualSharedAtTieBreaksOnLowestID(t *testing.T) {
 	revokeShareAt(t, pool, hh, sibling.UserAccountID, now.AddDate(0, 0, -5))
 
 	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
-	got, err := acctRepo.GetForHouseholdScope(ctx, owner, scope, now.AddDate(0, 0, -30))
+	got, err := acctRepo.GetForHouseholdScopeActiveNow(ctx, owner, scope, now.AddDate(0, 0, -30))
 	require.NoError(t, err)
 	assert.Len(t, got, 1,
 		"with shared_at tied, the LOWEST-id interval must win: its fingerprint collides with the "+

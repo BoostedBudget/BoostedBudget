@@ -594,7 +594,7 @@ func householdAccountsCTEForBalancesPerDay() string {
 
 // householdAccountsCTEForBalancesAsOf is the asOf-bounded, single-instant sibling of
 // householdAccountsCTEForBalancesPerDay, used by point-in-time balance lookups
-// (GetSnapshotsAsOfForHousehold, GetForHouseholdScope, GetForHouseholdScopeLiveAsOf) that are
+// (GetSnapshotsAsOfForHousehold, GetForHouseholdScopeActiveNow, GetForHouseholdScopeLiveAsOf) that are
 // evaluated at a specific instant — both the "current" call (asOf=now) and a "previous period"
 // call (asOf=now-30d) reuse this same query, so the joint-account fingerprint winner must be
 // picked using "latest snapshot AT OR BEFORE asOf ($4)", not "latest snapshot ever". Without

@@ -92,7 +92,7 @@ func accountChainKey(a domain.Account) string {
 //
 // Issue #1537 round 10 fixed the universe half, which round 9 broke. Round 9 applied the CURRENT
 // account map to the baseline as well, and that map comes from an active-only read
-// (GetByUserID: `status = 'active'`; GetForHouseholdScope: `a.status = 'active'`, regardless of its
+// (GetByUserID: `status = 'active'`; GetForHouseholdScopeActiveNow: `a.status = 'active'`, regardless of its
 // asOf) while the snapshot reads filter on user_id/household membership alone. A snapshot whose
 // account has since gone 'replaced' or 'expired' with no active chain successor therefore had no map
 // entry and was dropped: a $1,000 account disconnected 30 days ago produced baseline $0 (or, with
@@ -455,7 +455,7 @@ func (s *dashboardService) historicalAccountMap(
 // getBalanceSummaryHousehold is the household-scope variant of GetBalanceSummary. It MUST
 // NOT call GetLatestByUserID/GetByUserID — those are single-user and would silently drop
 // every non-requester member's accounts from the aggregate (Codex adversarial review,
-// P0-2). GetSnapshotsAsOfForHousehold/GetForHouseholdScope already dedup joint accounts
+// P0-2). GetSnapshotsAsOfForHousehold/GetForHouseholdScopeActiveNow already dedup joint accounts
 // (freshest-synced copy) and resolve re-link chains via the stable user_account_id, so —
 // unlike the personal path — no further chain-key dedup loop is needed here.
 //
@@ -492,12 +492,12 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 	// without any accountMap lookup" — true, and a bug: the baseline then included accounts the
 	// filtered current total excluded, making ChangePercent arbitrary under a type filter (#1537
 	// round 9). Round 9's replacement then said this one map "serves both the current total and the
-	// previous-period baseline" — also a bug, because GetForHouseholdScope filters
+	// previous-period baseline" — also a bug, because GetForHouseholdScopeActiveNow filters
 	// `a.status = 'active'` regardless of its asOf, so a household account disconnected since the
 	// cutoff vanished from the baseline and a real decrease was reported as "no change" (#1537
 	// round 10). The baseline needs its OWN map, resolved at the previous cutoff and over all
 	// statuses — like getNetWorthHousehold, this path needs a map per point in time after all.
-	accounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, currentCutoff)
+	accounts, err := s.accountRepo.GetForHouseholdScopeActiveNow(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household accounts: %w", err)
 	}
@@ -986,7 +986,7 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 }
 
 // getNetWorthHousehold is the household-scope variant of GetNetWorth. As with
-// getBalanceSummaryHousehold, it uses GetSnapshotsAsOfForHousehold/GetForHouseholdScope
+// getBalanceSummaryHousehold, it uses GetSnapshotsAsOfForHousehold/GetForHouseholdScopeActiveNow
 // (never the single-user GetLatestByUserID/GetByUserID — Codex adversarial review, P0-2)
 // and needs no chain-key dedup loop since those methods already collapse joint accounts
 // and re-link chains to one row each. The "current" fetch is anchored on asOfDate, matching the
@@ -1006,7 +1006,7 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
 	}
-	currentAccounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, currentCutoff)
+	currentAccounts, err := s.accountRepo.GetForHouseholdScopeActiveNow(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household accounts: %w", err)
 	}
@@ -1089,13 +1089,13 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 	if err == nil && len(previousSnapshots) > 0 {
 		// #1369 gap-closure G1: the previous-period account map MUST be built with the SAME
 		// asOf cutoff as previousSnapshots above, not reuse the "now"-asOf accountMap from
-		// the current-period loop. GetForHouseholdScope's joint-account fingerprint winner
+		// the current-period loop. GetForHouseholdScopeActiveNow's joint-account fingerprint winner
 		// depends on asOf — if a joint account's globally-freshest copy has no snapshot
 		// before previousCutoff, the "now" accountMap only knows about that (wrong-for-this-
 		// period) copy's user_account_id, and the lookup below would silently drop the
 		// account instead of resolving to the other member's genuinely earlier copy.
 		//
-		// The right point in time is still not enough: GetForHouseholdScope filters
+		// The right point in time is still not enough: GetForHouseholdScopeActiveNow filters
 		// `a.status = 'active'` REGARDLESS of its asOf, so a member's account disconnected since
 		// the cutoff is absent from previousAccountMap and was dropped from the baseline — the
 		// #1537 round 10 defect, in the path that round did not reach. GetForHouseholdScopeLiveAsOf
@@ -1107,7 +1107,7 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 		// Why it is user-visible: GetAggregatedHistory LEFT JOINs accounts with NO status predicate,
 		// so the net-worth history CHART already counts the since-expired account. Unfixed, the chart
 		// draws the drop while the KPI tile above it reads 0.00%.
-		previousAccounts, acctErr := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, previousCutoff)
+		previousAccounts, acctErr := s.accountRepo.GetForHouseholdScopeActiveNow(ctx, userID, scope, previousCutoff)
 		if acctErr == nil {
 			previousAccountMap := buildChainAwareAccountMap(previousAccounts)
 			// Gated on the PREVIOUS-cutoff map, not the "now" map: a chain that merely re-linked

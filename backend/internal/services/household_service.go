@@ -1074,7 +1074,7 @@ func (s *householdService) PurgeRemovedMembership(ctx context.Context, household
 	//      membership, which is what licenses the as-of reads admitting it without a current
 	//      membership check. It is not licensed by "InsertShare is the only writer" — it no
 	//      longer is.
-	//   2. GetForHouseholdScope joins the as-of grant to LIVE `accounts` columns (name, mask,
+	//   2. GetForHouseholdScopeActiveNow joins the as-of grant to LIVE `accounts` columns (name, mask,
 	//      official_name, current_balance). Balances are safe — every consumer takes the number
 	//      from an asOf-bounded balance_snapshots row, never from accounts.current_balance —
 	//      but a departed member's CURRENT account name and mask are now reachable at past

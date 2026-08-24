@@ -159,12 +159,12 @@ func TestHouseholdServiceIntegration_PurgeRemovedMembership_AsOfReadSurvivesTheP
 
 	inside := f.revokedAt.AddDate(0, 0, -10)
 
-	accounts, err := acctRepo.GetForHouseholdScope(ctx, f.ownerID, scope, inside)
+	accounts, err := acctRepo.GetForHouseholdScopeActiveNow(ctx, f.ownerID, scope, inside)
 	require.NoError(t, err)
 	require.Len(t, accounts, 1, "an as-of read INSIDE the shared window must still resolve the departed member's account 30+ days after the purge ran")
 	require.Equal(t, f.accountID, accounts[0].ID)
 
-	after, err := acctRepo.GetForHouseholdScope(ctx, f.ownerID, scope, time.Now().UTC())
+	after, err := acctRepo.GetForHouseholdScopeActiveNow(ctx, f.ownerID, scope, time.Now().UTC())
 	require.NoError(t, err)
 	require.Empty(t, after, "and nothing after the departure — retention must not widen what the household can see today")
 }

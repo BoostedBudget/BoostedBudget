@@ -97,7 +97,7 @@ func (m *mockAccountRepositoryForChainResolver) GetByUserAccountIDAndUser(ctx co
 	return nil, nil
 }
 
-func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScopeActiveNow(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
 	return nil, nil
 }
 
