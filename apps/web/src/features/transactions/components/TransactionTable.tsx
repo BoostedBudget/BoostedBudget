@@ -407,7 +407,20 @@ export function TransactionTable({
           // row treatment at all, a reversed row composites on exactly the same ground as every
           // other row, so nothing here can regress a ratio. "Undone" is carried by the
           // strike-through and the Reversed badge, which is where it belongs.
-          row.pending && 'bg-warning/10 hover:bg-warning/20'
+          // #1569 task 20 (A3). This was `bg-warning/10 hover:bg-warning/20`, and it failed WCAG
+          // AA in three of its four states. A row has no background of its own — DataTable paints
+          // bg-card — so the tint composited onto the card and EVERY cell was read against the
+          // result: text-muted-foreground (the date column, the category label) fell to 4.38:1
+          // light, 4.05:1 on light hover and 4.44:1 on dark hover, against a 4.5:1 floor. 14px
+          // regular is not WCAG "large text".
+          //
+          // Tuning the alpha was rejected, for the reason the reversed-row note above gives and
+          // task 12 gave before it: `/5` buys 4.55:1, and 0.05 against a rounding boundary is not
+          // a margin. The marker is a left rule on the first cell instead — it paints INSIDE one
+          // cell's own box rather than under the row's text, so no ratio anywhere on the row moves
+          // and the hover state is DataTable's ordinary one. "Pending" is still carried by the
+          // badge and its clock icon in the amount column, which is where the information belongs.
+          row.pending && '[&>td:first-child]:border-l-4 [&>td:first-child]:border-l-warning'
         )
       }
       className={cn(loading && 'transaction-table--loading', className)}
