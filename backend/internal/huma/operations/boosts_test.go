@@ -147,10 +147,10 @@ func (m *MockBoostExecutionService) TestBoost(ctx context.Context, boost *domain
 
 func createMockBoost(id, userID string) *domain.Boost {
 	return &domain.Boost{
-		ID:       id,
-		UserID:   userID,
-		Name:     "Test Rule " + id,
-		Enabled:  true,
+		ID:        id,
+		UserID:    userID,
+		Name:      "Test Rule " + id,
+		Enabled:   true,
 		BoostType: domain.BoostTypeBudgetAlert,
 		TriggerConfig: domain.TriggerConfig{
 			Type: domain.TriggerTypeSchedule,
@@ -294,9 +294,9 @@ func TestBoostHandler_TriggerBoost_Success(t *testing.T) {
 	manager := workers.NewBoostSchedulerManager(nil)
 	mockProvider := &mockManualProvider{
 		execution: &domain.BoostExecution{
-			ID:     "exec-1",
+			ID:      "exec-1",
 			BoostID: strPtr("rule-1"),
-			Status: domain.ExecutionStatusCompleted,
+			Status:  domain.ExecutionStatusCompleted,
 		},
 	}
 	manager.RegisterProvider(mockProvider)
@@ -326,9 +326,9 @@ func TestBoostHandler_TriggerBoost_WithTriggerData(t *testing.T) {
 	manager := workers.NewBoostSchedulerManager(nil)
 	mockProvider := &mockManualProvider{
 		execution: &domain.BoostExecution{
-			ID:     "exec-1",
+			ID:      "exec-1",
 			BoostID: strPtr("rule-1"),
-			Status: domain.ExecutionStatusCompleted,
+			Status:  domain.ExecutionStatusCompleted,
 		},
 	}
 	manager.RegisterProvider(mockProvider)
@@ -486,9 +486,9 @@ func TestBoostHandler_TestBoostExecution_Success(t *testing.T) {
 	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	testResult := &domain.BoostTestResult{
-		BoostID:        "rule-1",
-		BoostName:      boost.Name,
-		BoostType:      boost.BoostType,
+		BoostID:       "rule-1",
+		BoostName:     boost.Name,
+		BoostType:     boost.BoostType,
 		ConditionsMet: true,
 		ConditionResults: []domain.ConditionEvalResult{
 			{Field: "amount", Operator: "gt", Value: "50", Actual: float64(100), Met: true},
@@ -563,9 +563,9 @@ func TestBoostHandler_TestBoostExecution_PFCDisplayFieldsPassThrough(t *testing.
 	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	testResult := &domain.BoostTestResult{
-		BoostID:        "rule-1",
-		BoostName:      boost.Name,
-		BoostType:      boost.BoostType,
+		BoostID:       "rule-1",
+		BoostName:     boost.Name,
+		BoostType:     boost.BoostType,
 		ConditionsMet: true,
 		ConditionResults: []domain.ConditionEvalResult{
 			{
@@ -835,7 +835,7 @@ func TestBoostHandler_GetUserBoostExecutions_ReturnsOrphans(t *testing.T) {
 	liveBoostID := "boost-live"
 	executions := []*domain.BoostExecution{
 		{ID: "e-orphan", BoostID: nil, UserID: "user-1", BoostName: &orphanName,
-			Status: domain.ExecutionStatusCompleted,
+			Status:             domain.ExecutionStatusCompleted,
 			DefinitionSnapshot: []byte(`{"name":"Purged Boost","boost_type":"savings_goal"}`)},
 		{ID: "e-live", BoostID: &liveBoostID, UserID: "user-1", Status: domain.ExecutionStatusCompleted},
 	}
@@ -942,11 +942,17 @@ func TestBoostHandler_GetUserBoostExecutions_NoExecutionService(t *testing.T) {
 // TestBoostRoutes_ExecutionsPathIsNotSwallowedByTheIDWildcard proves at the ROUTER level, not by
 // reasoning about matching rules, that the account-wide history endpoint is actually reachable.
 //
-// It earned its place immediately: the route was first registered at /api/v1/boosts/executions on
-// the assumption that a literal segment beats a wildcard. It does not — huma v2's humaflow router
-// matched /api/v1/boosts/{id} with id="executions" and dispatched to GetBoostByID. Every
-// handler-level test above still passed, because those call the handler function directly and never
-// touch the router, so the endpoint would have shipped dead. The path is now a hyphenated sibling.
+// It earned its place immediately: the route was first registered at /api/v1/boosts/executions, and
+// this test caught /api/v1/boosts/{id} matching it with id="executions" and dispatching to
+// GetBoostByID. Every handler-level test above still passed, because those call the handler function
+// directly and never touch the router.
+//
+// ⚠ ATTRIBUTION CORRECTED (#1569 task 19). What this test measures is humatest.New's router, which is
+// REGISTRATION-ORDER SENSITIVE. Production uses humaecho.NewV4 — Echo v4's radix tree — where a
+// static segment beats a {param} sibling in either order, so the endpoint would NOT have shipped
+// dead. Both routers are measured in cmd/server/router_precedence_test.go. This test is still worth
+// keeping: it pins that the account-wide path is reachable, and it is honest about which router it
+// is asking. Do not read a humatest verdict as production routing.
 func TestBoostRoutes_ExecutionsPathIsNotSwallowedByTheIDWildcard(t *testing.T) {
 	mockBoostService := new(MockBoostService)
 	mockExecService := new(MockBoostExecutionService)

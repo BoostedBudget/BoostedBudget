@@ -566,14 +566,24 @@ func RegisterBoostRoutes(api huma.API, handler *BoostHandler) {
 
 	// GET /api/v1/boost-executions - Account-wide automation history, orphans included.
 	//
-	// Issue #1569 Task 14. ⚠ The path is a SIBLING of /api/v1/boosts, not a child, and that is
-	// deliberate. This was first registered as /api/v1/boosts/executions on the assumption that a
-	// literal segment beats a wildcard; huma v2's humaflow router does NOT do that — the request
-	// was matched by /api/v1/boosts/{id} with id="executions" and reached GetBoostByID, which would
-	// have made this endpoint dead on arrival while every handler-level unit test still passed.
-	// Caught by TestBoostRoutes_ExecutionsPathIsNotSwallowedByTheIDWildcard, which is a router-level
-	// test for exactly that reason. Hyphenated siblings are the existing convention here
-	// (/api/v1/savings-goals, /api/v1/transfer-suggestions, /api/v1/user-accounts).
+	// Issue #1569 Task 14, ATTRIBUTION CORRECTED in task 19. The path is a SIBLING of /api/v1/boosts
+	// rather than a child. This was first registered as /api/v1/boosts/executions, and
+	// TestBoostRoutes_ExecutionsPathIsNotSwallowedByTheIDWildcard showed the request being matched by
+	// /api/v1/boosts/{id} with id="executions" and reaching GetBoostByID.
+	//
+	// ⚠ That observation was real but it was NOT production behaviour, and the original comment here
+	// blamed the wrong router. That test builds its API with humatest.New, which is registration-order
+	// sensitive: a literal registered AFTER a {param} sibling loses. Production builds the API with
+	// humaecho.NewV4 (cmd/server/main.go) — Echo v4's radix tree, where static beats param in EITHER
+	// registration order. Measured both ways in
+	// TestRouterPrecedence_ProductionEchoAlwaysPrefersTheLiteralSegment and
+	// TestRouterPrecedence_HumatestIsRegistrationOrderSensitive (cmd/server).
+	//
+	// So /api/v1/boosts/executions would have worked in production; the hyphenated sibling is a
+	// convention choice, not a defect fix. It stays because it matches the existing convention
+	// (/api/v1/savings-goals, /api/v1/transfer-suggestions, /api/v1/user-accounts) and because
+	// changing a shipped path to prove a point is not worth a migration. Do NOT generalise the
+	// original claim: a literal route sharing a prefix with a {param} sibling is not dead here.
 	huma.Register(api, huma.Operation{
 		OperationID: "getUserBoostExecutions",
 		Method:      http.MethodGet,
