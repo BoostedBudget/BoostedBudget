@@ -1385,7 +1385,7 @@ func TestGetNetWorth_PreviousPeriodChainDedup(t *testing.T) {
 
 // ─── #1369 — Phase 5: household balance/net-worth aggregation ───────────────
 //
-// Household mode must use GetSnapshotsAsOfForHousehold / GetForHouseholdScope — NOT
+// Household mode must use GetSnapshotsAsOfForHousehold / GetForHouseholdScopeActiveNow — NOT
 // GetLatestByUserID / GetByUserID (and GetByUserIDAndDateRange, deleted in #1537) — single-user, and
 // would silently drop every non-requester member's data (Codex adversarial review,
 // P0-2/P0-3). These are pure-Go aggregation tests (repo correctness is covered by
@@ -1412,7 +1412,7 @@ func TestGetBalanceSummary_Household_AggregatesAcrossMembers(t *testing.T) {
 	mockAccountRepo := new(MockAccountRepository)
 
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(snapshots, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(accounts, nil)
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(accounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 	filters := &domain.DashboardFilters{HouseholdScope: scope}
@@ -1450,7 +1450,7 @@ func TestGetNetWorth_Household_AggregatesAcrossMembers(t *testing.T) {
 	mockAccountRepo := new(MockAccountRepository)
 
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(snapshots, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(accounts, nil)
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(accounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 	filters := &domain.DashboardFilters{HouseholdScope: scope}
@@ -1499,7 +1499,7 @@ func TestGetNetWorth_Household_PreviousPeriod_JointAccountResolvesViaMatchingAsO
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
 		return time.Since(tm) < time.Minute // "now"-ish call
 	})).Return(currentSnapshots, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
 		return time.Since(tm) < time.Minute
 	})).Return(currentAccounts, nil)
 
@@ -1507,7 +1507,7 @@ func TestGetNetWorth_Household_PreviousPeriod_JointAccountResolvesViaMatchingAsO
 		d := time.Since(tm)
 		return d > 29*24*time.Hour && d < 31*24*time.Hour // ~30-days-ago call
 	})).Return(previousSnapshots, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
 		d := time.Since(tm)
 		return d > 29*24*time.Hour && d < 31*24*time.Hour
 	})).Return(previousAccounts, nil)

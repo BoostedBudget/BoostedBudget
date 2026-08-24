@@ -206,7 +206,7 @@ func TestGetBalanceSummaryHousehold_Baseline_RequestsLivenessAtBaselineCutoff(t 
 	mockAccountRepo := new(MockAccountRepository)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.MatchedBy(isCurrent)).Return(current, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.MatchedBy(isPrevious)).Return(previous, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.MatchedBy(isCurrent)).Return(activeAccounts, nil)
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, mock.MatchedBy(isCurrent)).Return(activeAccounts, nil)
 	mockAccountRepo.On("GetForHouseholdScopeLiveAsOf", ctx, requestingUserID, scope, mock.MatchedBy(isPrevious)).Return(liveAtCutoff, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -251,8 +251,8 @@ func TestGetNetWorthHousehold_Baseline_RequestsLivenessAtBaselineCutoff(t *testi
 	mockAccountRepo := new(MockAccountRepository)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.MatchedBy(isCurrent)).Return(current, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.MatchedBy(isPrevious)).Return(previous, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.MatchedBy(isCurrent)).Return(activeAccounts, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.MatchedBy(isPrevious)).Return(activeAccounts, nil)
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, mock.MatchedBy(isCurrent)).Return(activeAccounts, nil)
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, mock.MatchedBy(isPrevious)).Return(activeAccounts, nil)
 	mockAccountRepo.On("GetForHouseholdScopeLiveAsOf", ctx, requestingUserID, scope, mock.MatchedBy(isPrevious)).Return(liveAtCutoff, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)

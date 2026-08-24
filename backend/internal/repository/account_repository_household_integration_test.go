@@ -1,12 +1,12 @@
 // account_repository_household_integration_test.go — DB-backed behavior for
-// AccountRepository.GetForHouseholdScope, added by #1369 (Phase 5) so household balance
+// AccountRepository.GetForHouseholdScopeActiveNow, added by #1369 (Phase 5) so household balance
 // aggregation never has to fall back to the single-user AccountRepository.GetByUserID
 // (Codex adversarial review, P0-2: that would silently drop every non-requester member's
 // accounts from the household aggregate).
 //
 // Run:
 //
-//	DATABASE_URL="postgres://..." go test ./internal/repository/ -run TestAccountRepository_GetForHouseholdScope -v
+//	DATABASE_URL="postgres://..." go test ./internal/repository/ -run TestAccountRepository_GetForHouseholdScopeActiveNow -v
 package repository_test
 
 import (
@@ -37,14 +37,14 @@ func newTestFieldEncryptor(t *testing.T) *appcrypto.FieldEncryptor {
 	return enc
 }
 
-func TestAccountRepository_GetForHouseholdScope_IncludesSharedMemberAccount(t *testing.T) {
+func TestAccountRepository_GetForHouseholdScopeActiveNow_IncludesSharedMemberAccount(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
 	repo := repository.NewAccountRepository(pool, newTestFieldEncryptor(t))
 
 	owner, member, hh, ownerAcct, memberAcct := setupTwoMemberSharedHousehold(t, pool)
 
-	accounts, err := repo.GetForHouseholdScope(ctx, owner, &domain.HouseholdScope{
+	accounts, err := repo.GetForHouseholdScopeActiveNow(ctx, owner, &domain.HouseholdScope{
 		HouseholdID:   hh,
 		MemberUserIDs: []string{owner, member},
 	}, time.Now().UTC())
@@ -59,7 +59,7 @@ func TestAccountRepository_GetForHouseholdScope_IncludesSharedMemberAccount(t *t
 	assert.True(t, ids[memberAcct.AccountID], "member's shared account must be included — not just the requester's own")
 }
 
-func TestAccountRepository_GetForHouseholdScope_ExcludesHiddenVisibilityShare(t *testing.T) {
+func TestAccountRepository_GetForHouseholdScopeActiveNow_ExcludesHiddenVisibilityShare(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
 	repo := repository.NewAccountRepository(pool, newTestFieldEncryptor(t))
@@ -71,7 +71,7 @@ func TestAccountRepository_GetForHouseholdScope_ExcludesHiddenVisibilityShare(t 
 	shareRepo := repository.NewHouseholdShareRepository(pool)
 	require.NoError(t, shareRepo.InsertShare(ctx, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityHidden))
 
-	accounts, err := repo.GetForHouseholdScope(ctx, owner, &domain.HouseholdScope{
+	accounts, err := repo.GetForHouseholdScopeActiveNow(ctx, owner, &domain.HouseholdScope{
 		HouseholdID:   hh,
 		MemberUserIDs: []string{owner, member},
 	}, time.Now().UTC())
@@ -81,13 +81,13 @@ func TestAccountRepository_GetForHouseholdScope_ExcludesHiddenVisibilityShare(t 
 	}
 }
 
-// TestAccountRepository_GetForHouseholdScope_JointAccountWinnerRespectsAsOfCutoff closes a
+// TestAccountRepository_GetForHouseholdScopeActiveNow_JointAccountWinnerRespectsAsOfCutoff closes a
 // gap found by Codex adversarial review during #1369 gap-closure G1: adding the asOf param
-// to GetForHouseholdScope was verified only via unit-test mocks and a same-instant
+// to GetForHouseholdScopeActiveNow was verified only via unit-test mocks and a same-instant
 // integration test — nothing proved the underlying SQL actually switches which member's
 // copy of a joint account wins the fingerprint dedup as asOf varies. Mirrors
 // TestBalanceSnapshotRepository_GetSnapshotsAsOfForHousehold_JointAccountWinnerRespectsAsOfCutoff.
-func TestAccountRepository_GetForHouseholdScope_JointAccountWinnerRespectsAsOfCutoff(t *testing.T) {
+func TestAccountRepository_GetForHouseholdScopeActiveNow_JointAccountWinnerRespectsAsOfCutoff(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
 	repo := repository.NewAccountRepository(pool, newTestFieldEncryptor(t))
@@ -118,14 +118,14 @@ func TestAccountRepository_GetForHouseholdScope_JointAccountWinnerRespectsAsOfCu
 
 	// asOf = 35 days ago: member's copy has no snapshot before this cutoff, so the winner
 	// must resolve to owner's pre-cutoff copy, not silently drop the joint account.
-	accounts, err := repo.GetForHouseholdScope(ctx, owner, scope, now.AddDate(0, 0, -35))
+	accounts, err := repo.GetForHouseholdScopeActiveNow(ctx, owner, scope, now.AddDate(0, 0, -35))
 	require.NoError(t, err)
 	require.Len(t, accounts, 1, "joint account must still resolve to a single account row")
 	assert.Equal(t, ownerAcct.AccountID, accounts[0].ID,
 		"must resolve to owner's pre-cutoff copy, not member's globally-freshest-but-ineligible-as-of-cutoff copy")
 
 	// asOf = today: member's copy is eligible now and is the freshest overall.
-	current, err := repo.GetForHouseholdScope(ctx, owner, scope, now)
+	current, err := repo.GetForHouseholdScopeActiveNow(ctx, owner, scope, now)
 	require.NoError(t, err)
 	require.Len(t, current, 1)
 	assert.Equal(t, memberAcct.AccountID, current[0].ID, "as of today, member's freshest copy must win")

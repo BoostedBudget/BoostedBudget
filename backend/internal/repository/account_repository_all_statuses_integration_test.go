@@ -8,7 +8,7 @@
 //   - IncludeReplaced produces `status IN ('active','replaced')` — it EXCLUDES 'expired',
 //     which is exactly what ExpireAccountsByFingerprint writes for a fully-disconnected
 //     chain (the case the dashboard comparison baseline is about).
-//   - GetForHouseholdScope filters `a.status = 'active'` REGARDLESS of its asOf argument,
+//   - GetForHouseholdScopeActiveNow filters `a.status = 'active'` REGARDLESS of its asOf argument,
 //     so passing a past cutoff to it does not widen the universe at all.
 //
 // Per project rule, pgxmock cannot see any of that — only real Postgres can (see memory

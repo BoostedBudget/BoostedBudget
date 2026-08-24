@@ -112,7 +112,7 @@ func TestGetBalanceSummaryHousehold_PeriodComparison_AppliesAccountTypeFilterToB
 		mock.MatchedBy(func(asOf time.Time) bool { return asOf.After(cutoff) })).Return(current, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope,
 		mock.MatchedBy(func(asOf time.Time) bool { return !asOf.After(cutoff) })).Return(previous, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope,
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope,
 		mock.AnythingOfType("time.Time")).Return(accounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -227,7 +227,7 @@ func TestGetBalanceSummary_PeriodComparison_BaselineIncludesSinceInactiveAccount
 }
 
 // TestGetBalanceSummaryHousehold_PeriodComparison_BaselineIncludesSinceInactiveAccounts is the
-// household twin. GetForHouseholdScope filters `WHERE a.status = 'active'` REGARDLESS of its asOf
+// household twin. GetForHouseholdScopeActiveNow filters `WHERE a.status = 'active'` REGARDLESS of its asOf
 // argument, so passing the previous cutoff to it does not help by itself — the household path needs
 // its own all-statuses account source. Issue #1537 round 10.
 func TestGetBalanceSummaryHousehold_PeriodComparison_BaselineIncludesSinceInactiveAccounts(t *testing.T) {
@@ -272,7 +272,7 @@ func TestGetBalanceSummaryHousehold_PeriodComparison_BaselineIncludesSinceInacti
 		mock.MatchedBy(isCurrent)).Return(current, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope,
 		mock.MatchedBy(isPrevious)).Return(previous, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope,
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope,
 		mock.MatchedBy(isCurrent)).Return(activeAccounts, nil)
 	// The historical household map is resolved AT THE PREVIOUS CUTOFF, matching the
 	// baseline snapshot fetch's asOf — the joint-account fingerprint winner must be picked
@@ -383,7 +383,7 @@ func TestGetNetWorth_PeriodComparison_BaselineIncludesSinceInactiveAccounts(t *t
 
 // TestGetNetWorthHousehold_PeriodComparison_BaselineIncludesSinceInactiveAccounts is the household
 // twin. getNetWorthHousehold already resolves its baseline map at the CORRECT asOf
-// (GetForHouseholdScope(..., previousCutoff), per #1369 gap-closure G1) — but that method filters
+// (GetForHouseholdScopeActiveNow(..., previousCutoff), per #1369 gap-closure G1) — but that method filters
 // `a.status = 'active'` REGARDLESS of its asOf, so the right point in time over the wrong status
 // universe still drops a member's since-expired account. Issue #1537.
 func TestGetNetWorthHousehold_PeriodComparison_BaselineIncludesSinceInactiveAccounts(t *testing.T) {
@@ -434,10 +434,10 @@ func TestGetNetWorthHousehold_PeriodComparison_BaselineIncludesSinceInactiveAcco
 		mock.MatchedBy(isCurrent)).Return(current, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope,
 		mock.MatchedBy(isPrevious)).Return(previous, nil)
-	// Active-only at BOTH cutoffs — that is what GetForHouseholdScope really returns.
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope,
+	// Active-only at BOTH cutoffs — that is what GetForHouseholdScopeActiveNow really returns.
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope,
 		mock.MatchedBy(isCurrent)).Return(activeAccounts, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope,
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope,
 		mock.MatchedBy(isPrevious)).Return(activeAccounts, nil)
 	mockAccountRepo.On("GetForHouseholdScopeLiveAsOf", ctx, requestingUserID, scope,
 		mock.MatchedBy(isPrevious)).Return(allStatusAccounts, nil)
@@ -569,9 +569,9 @@ func TestGetNetWorthHousehold_PeriodComparison_AppliesAccountTypeFilterToBaselin
 		mock.MatchedBy(isCurrent)).Return(current, nil)
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope,
 		mock.MatchedBy(isPrevious)).Return(previous, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope,
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope,
 		mock.MatchedBy(isCurrent)).Return(accounts, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope,
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope,
 		mock.MatchedBy(isPrevious)).Return(accounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
@@ -903,7 +903,7 @@ func TestGetBalanceSummaryHousehold_ExplicitAsOfDate_AnchorsBothSides(t *testing
 		[]domain.BalanceSnapshot{{ID: "at-baseline", AccountID: "acct-1", UserID: "owner-1",
 			CurrentBalance: &atBaseline, SnapshotAt: baselineDate.Add(23*time.Hour + 30*time.Minute)}}, nil)
 	// The account map must be resolved at the SAME cutoff as the current snapshot read.
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, endOfDay(asOf)).Return(accounts, nil)
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, endOfDay(asOf)).Return(accounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 
@@ -945,8 +945,8 @@ func TestGetNetWorthHousehold_ExplicitAsOfDate_AnchorsBothSides(t *testing.T) {
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, endOfDay(baselineDate)).Return(
 		[]domain.BalanceSnapshot{{ID: "at-baseline", AccountID: "acct-1", UserID: "owner-1",
 			CurrentBalance: &atBaseline, SnapshotAt: baselineDate.Add(23*time.Hour + 30*time.Minute)}}, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, endOfDay(asOf)).Return(accounts, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, endOfDay(baselineDate)).Return(accounts, nil)
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, endOfDay(asOf)).Return(accounts, nil)
+	mockAccountRepo.On("GetForHouseholdScopeActiveNow", ctx, requestingUserID, scope, endOfDay(baselineDate)).Return(accounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 

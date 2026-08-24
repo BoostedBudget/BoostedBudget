@@ -168,26 +168,38 @@ type AccountRepository interface {
 	// GetByUserID retrieves all accounts for a specific user
 	GetByUserID(ctx context.Context, userID string) ([]domain.Account, error)
 
-	// GetForHouseholdScope retrieves every active account currently shared into the
+	// GetForHouseholdScopeActiveNow retrieves every CURRENTLY-active account shared into the
 	// household (visibility='shared', not revoked, owner is an active member), across
 	// ALL members — not just requestingUserID. Household balance aggregation must use
 	// this instead of GetByUserID, which is single-user and would silently drop every
 	// non-requester member's accounts (Codex adversarial review, P0-2). Joint accounts
-	// dedup to one row per physical fingerprint (freshest-synced copy AT OR BEFORE asOf
-	// wins). requestingUserID is passed through only to satisfy the shared household CTE's
-	// parameter typing. asOf is the point-in-time cutoff used to resolve joint-account
-	// fingerprint winners; it must match the asOf passed to whichever
-	// GetSnapshotsAsOfForHousehold call this account map will be paired with, or the two
-	// can disagree on which member's copy wins for a joint account (Issue #1369
-	// gap-closure G1). Issue #1369 — Phase 5.
-	GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error)
+	// dedup to one row per physical fingerprint (freshest-synced copy AT OR BEFORE
+	// grantsAsOf wins). requestingUserID is passed through only to satisfy the shared
+	// household CTE's parameter typing.
+	//
+	// ⚠ WHAT grantsAsOf DOES AND DOES NOT SCOPE (Issue #1569 AC2). It resolves the household
+	// SHARE GRANTS and the joint-account fingerprint winner at that instant, and nothing else;
+	// account STATUS is read from the live `accounts` row, so an account disconnected since
+	// grantsAsOf is absent however live it was then. That is deliberate — see task 12's
+	// universes ruling in account_liveness_sql.go — but under the method's previous name
+	// (GetForHouseholdScope, with the argument called asOf) it read as a defect, and three
+	// call-site comments in dashboard_service.go existed only to warn readers about it. The
+	// name now carries that fact, and TestAccountRepository_HouseholdScopeReadNamesDoNotLieAboutAsOf
+	// stops the old one coming back. For "which accounts were LIVE at a past instant", use
+	// GetForHouseholdScopeLiveAsOf below.
+	//
+	// grantsAsOf must match the asOf passed to whichever GetSnapshotsAsOfForHousehold call this
+	// account map will be paired with, or the two can disagree on which member's copy wins for a
+	// joint account (Issue #1369 gap-closure G1). Issue #1369 — Phase 5.
+	GetForHouseholdScopeActiveNow(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, grantsAsOf time.Time) ([]domain.Account, error)
 
-	// GetForHouseholdScopeLiveAsOf is GetForHouseholdScope with the `a.status = 'active'`
+	// GetForHouseholdScopeLiveAsOf is GetForHouseholdScopeActiveNow with the `a.status = 'active'`
 	// predicate REPLACED by recorded liveness at asOf (account_status_history), rather than
 	// removed. It is the correct source for a household baseline "as of" a past date and
 	// It answers "was live then", rather than the "ever existed" universe #1537's
 	// since-removed all-statuses variant produced, which wrongly admitted accounts opened
-	// AFTER asOf. Same asOf contract as GetForHouseholdScope — it must match the asOf of the
+	// AFTER asOf. This is the ONLY one of the pair whose date argument scopes status; the
+	// grant/dedup half of the contract is identical, and the date must match the asOf of the
 	// GetSnapshotsAsOfForHousehold call it is paired with. Callers must NOT use this for a
 	// "current" figure: the product rule is that current totals include only linked/active
 	// accounts, and passing asOf=now here would readmit an account removed moments ago.
@@ -701,24 +713,27 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 	return accounts, nil
 }
 
-// GetForHouseholdScope retrieves every active account shared into the household across
-// all its members. Uses the asOf-bounded balance-oriented household CTE (freshest-synced
-// copy AT OR BEFORE asOf wins for joint-account fingerprint collisions — see
-// householdAccountsCTEForBalancesAsOf) since account metadata backs balance/net-worth
-// aggregation, not transaction history. asOf must match whichever
-// GetSnapshotsAsOfForHousehold call this account map is paired with (Issue #1369
-// gap-closure G1) — see the interface doc for why. Issue #1369 — Phase 5.
-func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
-	return r.getForHouseholdScope(ctx, requestingUserID, scope, asOf, householdActiveOnly)
+// GetForHouseholdScopeActiveNow retrieves every CURRENTLY-active account shared into the
+// household across all its members. Uses the date-bounded balance-oriented household CTE
+// (freshest-synced copy AT OR BEFORE grantsAsOf wins for joint-account fingerprint collisions —
+// see householdAccountsCTEForBalancesAsOf) since account metadata backs balance/net-worth
+// aggregation, not transaction history. grantsAsOf bounds the share grants and that dedup and
+// NOT account status — see the interface doc for the full contract and for why the method is
+// no longer called GetForHouseholdScope. Issue #1369 — Phase 5; renamed by Issue #1569 AC2.
+func (r *accountRepository) GetForHouseholdScopeActiveNow(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, grantsAsOf time.Time) ([]domain.Account, error) {
+	return r.getForHouseholdScope(ctx, requestingUserID, scope, grantsAsOf, householdActiveOnly)
 }
 
-// GetForHouseholdScopeLiveAsOf is GetForHouseholdScope with the unconditional `a.status = 'active'`
-// predicate REPLACED by recorded liveness at asOf, read from account_status_history.
+// GetForHouseholdScopeLiveAsOf is GetForHouseholdScopeActiveNow with the unconditional
+// `a.status = 'active'` predicate REPLACED by recorded liveness at asOf, read from
+// account_status_history.
 //
-// This is the method GetForHouseholdScope's asOf argument always implied but never delivered: that
-// read threads asOf into the joint-account dedup CTE and then filters on CURRENT status anyway, so
-// a member's account disconnected since the cutoff is absent from a universe that claims to be
-// "as of" a date before the disconnection. #1537's workaround was an all-statuses variant (take
+// This is what the other read's date argument USED to imply, back when that method was called
+// GetForHouseholdScope and its argument was called asOf: it threads the date into the
+// joint-account dedup CTE and then filters on CURRENT status anyway, so a member's account
+// disconnected since the cutoff is absent. Issue #1569 AC2 renamed that method rather than
+// widening it — the two universes stay separate (account_liveness_sql.go) and the name now says
+// which one you are asking. #1537's workaround was an all-statuses variant (take
 // every status and let the snapshot decide); this is the recorded answer, and it additionally
 // EXCLUDES accounts that did not exist yet at asOf, which all-statuses could not — which is why
 // that variant was removed rather than kept beside this one.
@@ -735,7 +750,8 @@ func (r *accountRepository) GetForHouseholdScopeLiveAsOf(ctx context.Context, re
 type householdStatusFilter int
 
 const (
-	// householdActiveOnly restricts to `a.status = 'active'` (GetForHouseholdScope).
+	// householdActiveOnly restricts to `a.status = 'active'` — CURRENT status, regardless of the
+	// query's date argument (GetForHouseholdScopeActiveNow, and its name says so).
 	householdActiveOnly householdStatusFilter = iota
 	// householdLiveAsOf restricts to accounts that account_status_history records as having been
 	// 'active' at the query's asOf instant (GetForHouseholdScopeLiveAsOf). Issue #1569.

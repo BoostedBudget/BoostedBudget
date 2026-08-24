@@ -220,11 +220,19 @@ func TestAccountRepository_GetForHouseholdScopeLiveAsOf_ResolvesTheUniverseThatR
 
 	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
 
-	activeOnly, err := repo.GetForHouseholdScope(ctx, owner, scope, cutoff)
+	// #1569 AC2. This assertion used to DOCUMENT A GAP: the read was called GetForHouseholdScope,
+	// its argument was called asOf, and it filtered on current status anyway. The closure was to
+	// rename it, not to widen it (task 12's universes ruling forbids the widening — see
+	// account_liveness_sql.go), so the same assertion now PINS A CONTRACT the name states out
+	// loud: ActiveNow means current status, whatever date you hand it. If this ever starts
+	// returning the member's since-removed account, the two household reads have collapsed into
+	// one and the LiveAsOf variant below has lost its reason to exist.
+	activeOnly, err := repo.GetForHouseholdScopeActiveNow(ctx, owner, scope, cutoff)
 	require.NoError(t, err)
 	assert.False(t, accountIDSet(activeOnly)[memberAcct.AccountID],
-		"GetForHouseholdScope filters on CURRENT status regardless of its asOf — that gap is the "+
-			"whole reason this variant exists")
+		"GetForHouseholdScopeActiveNow must filter on CURRENT status regardless of its date "+
+			"argument — that is what its name promises, and what makes the LiveAsOf variant a "+
+			"distinct question rather than a duplicate")
 
 	live, err := repo.GetForHouseholdScopeLiveAsOf(ctx, owner, scope, cutoff)
 	require.NoError(t, err)
