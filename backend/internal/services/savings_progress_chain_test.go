@@ -205,7 +205,9 @@ func TestSavingsProgress_Balance_ChainHasNoLiveMember_StillFreezes(t *testing.T)
 	}
 	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, resolver)
 
-	goal := makeGoal("g1", "u1", "acc-old", domain.ProgressBasisBalance, 10000, 3500)
+	// current_amount (1000) is deliberately different from the frozen balance (3500) so that
+	// "did not move" and "recomputed from the frozen row" are distinguishable outcomes.
+	goal := makeGoal("g1", "u1", "acc-old", domain.ProgressBasisBalance, 10000, 1000)
 	goal.UserAccountID = strPtr1569("uaid-1")
 
 	frozen := 3500.00
@@ -223,7 +225,7 @@ func TestSavingsProgress_Balance_ChainHasNoLiveMember_StillFreezes(t *testing.T)
 
 	assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
 	assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
-	assert.Equal(t, 3500.0, goal.CurrentAmount, "frozen goal keeps its last computed amount")
+	assert.Equal(t, 1000.0, goal.CurrentAmount, "frozen goal keeps its last computed amount, not the retained row's 3500")
 }
 
 // ─── honest degradation when the chain reference is absent ───────────────────
@@ -239,7 +241,7 @@ func TestSavingsProgress_Balance_NilUserAccountID_DegradesToPhysicalRow_AndFreez
 	resolver := &progressChainResolverStub{}
 	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, resolver)
 
-	goal := makeGoal("g1", "u1", "acc-old", domain.ProgressBasisBalance, 10000, 3500)
+	goal := makeGoal("g1", "u1", "acc-old", domain.ProgressBasisBalance, 10000, 1000)
 	goal.UserAccountID = nil // legacy row
 
 	frozen := 3500.00
