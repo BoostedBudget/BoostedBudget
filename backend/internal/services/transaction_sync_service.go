@@ -1485,19 +1485,6 @@ func (s *transactionSyncService) createBalanceSnapshots(
 			continue
 		}
 
-		// Check for recent snapshot (5-minute deduplication window)
-		latestSnapshot, err := s.balanceSnapshotRepo.GetLatestByAccountID(ctx, internalAccount.ID)
-		if err != nil {
-			s.logger.Warn("failed to check latest snapshot for account", "plaid_account_id", plaidAccountID, "error", err)
-		} else if latestSnapshot != nil && now.Sub(latestSnapshot.SnapshotAt) < deduplicationWindow {
-			s.logger.Debug("skipping snapshot, recent snapshot exists",
-				"plaid_account_id", plaidAccountID,
-				"age", now.Sub(latestSnapshot.SnapshotAt).Round(time.Second),
-			)
-			dedupedCount++
-			continue
-		}
-
 		// Extract balance from Plaid response
 		balances, hasBalances := plaidAccount.GetBalancesOk()
 		if !hasBalances || balances == nil {
@@ -1507,9 +1494,37 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		}
 
 		// Create and validate balance snapshot
+		//
+		// #1569 task 20 (S8): built BEFORE the deduplication check, not after. The check now needs
+		// to know what the new balance IS — see isRedundantSnapshot.
 		snapshot := s.createBalanceSnapshot(internalAccount, linkedItem, balances, now, plaidAccountID)
 		if snapshot == nil {
 			skippedCount++
+			continue
+		}
+
+		// Deduplication (5-minute window AND unchanged figures).
+		//
+		// #1569 task 20 (S8). This used to be purely time-based: if a snapshot existed inside the
+		// window, the incoming one was dropped whatever it said. So two genuinely different
+		// balances arriving less than five minutes apart — a paycheck landing between a webhook
+		// and a manual refresh, or two webhooks for one settlement burst — silently lost the LATER,
+		// truer one, and the balance history recorded a figure that had already stopped being true.
+		// (Note the direction: the row kept is the OLDER one, because it is the incoming write that
+		// is skipped.)
+		//
+		// The window's purpose was never to suppress information; the comment above says it exists
+		// to "REDUCE excessive snapshots", i.e. to stop high-frequency syncs writing the SAME number
+		// over and over. Adding the value test keeps that entirely and stops it discarding history.
+		latestSnapshot, err := s.balanceSnapshotRepo.GetLatestByAccountID(ctx, internalAccount.ID)
+		if err != nil {
+			s.logger.Warn("failed to check latest snapshot for account", "plaid_account_id", plaidAccountID, "error", err)
+		} else if isRedundantSnapshot(latestSnapshot, snapshot, now, deduplicationWindow) {
+			s.logger.Debug("skipping snapshot, an identical recent snapshot exists",
+				"plaid_account_id", plaidAccountID,
+				"age", now.Sub(latestSnapshot.SnapshotAt).Round(time.Second),
+			)
+			dedupedCount++
 			continue
 		}
 
@@ -1530,6 +1545,41 @@ func (s *transactionSyncService) createBalanceSnapshots(
 		"deduped", dedupedCount,
 	)
 	return nil
+}
+
+// isRedundantSnapshot reports whether `next` says nothing `latest` does not already say.
+//
+// #1569 task 20 (S8). Both conditions must hold: the existing snapshot is INSIDE the window AND it
+// carries the same figures. The value test is what stops the window discarding history — a real
+// balance change arriving inside five minutes is new information, and the only place it is ever
+// recorded is this table.
+//
+// Both balances are compared, and each is compared including its NULL-ness: Plaid reports
+// available_balance for some account types and not others, and a transition between "known" and
+// "unknown" is itself a change worth a row. Comparing only current_balance would silently drop it.
+//
+// No epsilon. These are *float64 carrying a provider-supplied decimal that this code neither
+// computes with nor rounds — it is copied from the response into the row — so two syncs reporting
+// the same figure produce bit-identical values, and an epsilon would only widen the set of real
+// changes that get dropped.
+func isRedundantSnapshot(latest, next *domain.BalanceSnapshot, now time.Time, window time.Duration) bool {
+	if latest == nil || next == nil {
+		return false
+	}
+	if now.Sub(latest.SnapshotAt) >= window {
+		return false
+	}
+	return sameBalance(latest.CurrentBalance, next.CurrentBalance) &&
+		sameBalance(latest.AvailableBalance, next.AvailableBalance)
+}
+
+// sameBalance compares two optional balances, treating NULL as a distinct value rather than as a
+// wildcard.
+func sameBalance(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 // createBalanceSnapshot builds a BalanceSnapshot from Plaid balance data.
