@@ -126,7 +126,7 @@ func TestHouseholdShareRepository_SetShareVisibility_Share(t *testing.T) {
 	assert.Nil(t, share.RevokedAt, "the row SetShareVisibility returns is always the newly-OPEN interval")
 }
 
-func TestHouseholdShareRepository_SetShareVisibility_Hide_NeverTouchesRevokedAt(t *testing.T) {
+func TestHouseholdShareRepository_SetShareVisibility_Hide_LeavesAnOpenRow(t *testing.T) {
 	t.Parallel()
 	mock, repo := setupHouseholdShareMockDB(t)
 	defer mock.Close()
@@ -140,7 +140,7 @@ func TestHouseholdShareRepository_SetShareVisibility_Hide_NeverTouchesRevokedAt(
 		  AND revoked_at IS NULL AND visibility <> $3
 	`)).
 		WithArgs("hh-1", "acct-1", domain.ShareVisibilityHidden).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility)
 		VALUES ($1, $2, $3, $4)

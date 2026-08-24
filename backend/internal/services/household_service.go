@@ -1000,6 +1000,15 @@ func (s *householdService) PurgeRemovedMembership(ctx context.Context, household
 		return cerr
 	}
 
+	// #1569 T7 left this hard delete, and the AcceptInvite restore path that clears
+	// removed_at (householdRepository.RestoreMember), deliberately in place — see the ruling
+	// below for what DID change. Both destroy the fact and timing of a past removal, and they
+	// have to move together: retaining a removal interval that this statement deletes 30 days
+	// later buys nothing. Nothing reads household_members.removed_at outside this
+	// removal/restore/purge machinery today, so there is no consumer to break or serve either
+	// way; whoever changes it should decide whether an as-of membership read is actually
+	// wanted first, and watch uq_household_members_active_user (global on user_id,
+	// active-only) when making a re-invite insert a new row instead of resurrecting this one.
 	_, userID, cerr := hhRepo.DeleteRemovedMember(ctx, membershipID)
 	if cerr != nil {
 		return cerr
@@ -1055,6 +1064,24 @@ func (s *householdService) PurgeRemovedMembership(ctx context.Context, household
 	// destroys it: household_account_shares.user_account_id is ON DELETE CASCADE from
 	// user_accounts, which DeleteUserCascade removes. Pinned by
 	// TestHouseholdServiceIntegration_PurgeRemovedMembership_GDPRErasureStillDestroysGrants.
+	//
+	// TWO LIMITS OF THIS RULING, both real and both accepted:
+	//
+	//   1. A retained grant is created by exactly two paths — the accept fan-out's InsertShare
+	//      and SetShareVisibility's interval INSERT — and BOTH require an active membership in
+	//      this household (the fan-out runs inside AcceptInvite; SetAccountShareVisibility
+	//      holds LockActiveMembershipForUser). So a closed grant always attests to a real past
+	//      membership, which is what licenses the as-of reads admitting it without a current
+	//      membership check. It is not licensed by "InsertShare is the only writer" — it no
+	//      longer is.
+	//   2. GetForHouseholdScope joins the as-of grant to LIVE `accounts` columns (name, mask,
+	//      official_name, current_balance). Balances are safe — every consumer takes the number
+	//      from an asOf-bounded balance_snapshots row, never from accounts.current_balance —
+	//      but a departed member's CURRENT account name and mask are now reachable at past
+	//      instants where the row previously did not appear at all. That is a widening of what
+	//      is legible, not of which periods are visible, and it is the same identifying detail
+	//      the household saw while the account was shared. Closing it properly needs an as-of
+	//      read of account metadata, which account_status_history does not carry.
 	if cerr = shareRepo.RevokeSharesForUser(ctx, householdID, userID); cerr != nil {
 		return cerr
 	}
