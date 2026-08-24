@@ -164,9 +164,12 @@ type AccountService interface {
 	// repository.AccountRepository.PurgeAccount's doc comment for the exact contract. Only the
 	// account owner may purge their account. Issue #1569, Task 6.
 	//
-	// Transactions are NOT destroyed (orphaned via ON DELETE SET NULL) and a savings goal still
-	// referencing this account BLOCKS the purge (repository.ErrPurgeBlockedBySavingsGoal) —
-	// callers must delete the goal first.
+	// Transactions are NOT destroyed (orphaned via ON DELETE SET NULL) and a LIVE savings goal
+	// still referencing this account BLOCKS the purge (repository.ErrPurgeBlockedBySavingsGoal) —
+	// callers must delete the goal first, and doing so is now sufficient. A goal the user has
+	// already deleted is a tombstone that still carries account_id; the purge destroys it (and its
+	// contributions, exactly as POST /savings-goals/{id}/purge would) rather than being blocked by
+	// it forever. Issue #1569, task 21 (defect C1).
 	//
 	// Returns repository.ErrAccountNotFound if account doesn't exist or user doesn't own it.
 	PurgeAccount(ctx context.Context, accountID, userID string) error

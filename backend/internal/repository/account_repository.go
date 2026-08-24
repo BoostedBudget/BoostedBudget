@@ -38,6 +38,14 @@ var (
 	// Postgres foreign-key-violation error (23503 on fk_savings_goals_account_id) into something
 	// the API layer can map to an actionable 409, instead of leaking a raw pgconn.PgError. Issue
 	// #1569, Task 6.
+	//
+	// ⚠ "a savings goal" here means a LIVE one. A TOMBSTONED goal does not reach this error: both
+	// purge paths remove it themselves before the delete that would trip the FK (#1569 task 21,
+	// defect C1). That carve-out is what makes the 409's advice — "delete the goal first, then try
+	// again" — a step the user can actually complete. Between task 8 (goal deletion became a
+	// tombstone, which leaves account_id set) and that fix it was not: the goal became invisible to
+	// every read, could not be deleted a second time, and the FK fired forever, so explicit
+	// destruction was permanently unreachable for any account that had ever had a goal.
 	ErrPurgeBlockedBySavingsGoal = errors.New("a savings goal still references this account; delete the goal first")
 
 	// ErrAccountNotDisconnected is returned by PurgeAccount when the account is still 'active'.
@@ -1037,6 +1045,34 @@ func (r *accountRepository) PurgeAccount(ctx context.Context, accountID, userID 
 	// row disappears out from under this query.
 	if _, err := tx.Exec(ctx, `DELETE FROM balance_snapshots WHERE account_id = $1`, accountID); err != nil {
 		return fmt.Errorf("purge account %s: deleting balance snapshots: %w", accountID, err)
+	}
+
+	// TOMBSTONED savings goals go with the account; LIVE ones still block it. Issue #1569, task 21
+	// (defect C1).
+	//
+	// Migration 000150 made savings_goals.account_id RESTRICT precisely so the accounts DELETE
+	// below would refuse while a goal pointed at it, and the 409 that refusal maps to tells the
+	// user to delete the goal first. Task 8 then made goal deletion a TOMBSTONE, which leaves
+	// account_id set — so doing what the error asked changed nothing, the FK fired again, and the
+	// goal was by then invisible to every read and could not be deleted a second time. The one
+	// sanctioned way to destroy data was permanently unreachable for any account that had ever had
+	// a savings goal.
+	//
+	// The tombstone is exactly PurgeGoal's own precondition (ErrSavingsGoalNotDeleted), so a user
+	// who reaches here has already performed the two explicit acts that endpoint demands, plus the
+	// purge confirmation itself. Nothing becomes destructible that POST /savings-goals/{id}/purge
+	// could not already destroy on the same row; the CASCADE that carries the goal's
+	// savings_goal_contributions, budget_categories and savings_goal_category_detach rows is the
+	// same one PurgeGoal relies on.
+	//
+	// A goal with deleted_at IS NULL is deliberately NOT matched here. It still trips the FK below
+	// and still returns ErrPurgeBlockedBySavingsGoal — which is what keeps that error's text true:
+	// deleting the goal now really does unblock the retry.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM savings_goals
+		WHERE account_id = $1 AND user_id = $2 AND deleted_at IS NOT NULL
+	`, accountID, userID); err != nil {
+		return fmt.Errorf("purge account %s: deleting tombstoned savings goals: %w", accountID, err)
 	}
 
 	// Deleting the account row itself CASCADEs to holdings, investment_transactions, the three

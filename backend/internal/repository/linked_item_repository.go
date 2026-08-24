@@ -881,6 +881,19 @@ func (r *linkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID
 		return fmt.Errorf("purge linked item %s: deleting balance snapshots: %w", linkedItemID, err)
 	}
 
+	// Tombstoned savings goals go with the accounts under this item; live ones still block it —
+	// see PurgeAccount's identical block (account_repository.go) for the full reasoning. Issue
+	// #1569, task 21 (defect C1). Without this, the institution-level purge is dead for exactly the
+	// same population as the account-level one, and for exactly the same reason.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM savings_goals
+		WHERE user_id = $2
+		  AND deleted_at IS NOT NULL
+		  AND account_id IN (SELECT id FROM accounts WHERE linked_item_id = $1)
+	`, linkedItemID, userID); err != nil {
+		return fmt.Errorf("purge linked item %s: deleting tombstoned savings goals: %w", linkedItemID, err)
+	}
+
 	ct, err := tx.Exec(ctx, `DELETE FROM linked_items WHERE id = $1 AND user_id = $2`, linkedItemID, userID)
 	if err != nil {
 		if isForeignKeyViolation(err, "fk_savings_goals_account_id") {
