@@ -373,7 +373,15 @@ _get_clerk_user_id() {
 # Seed E2E test data into the database
 # Arguments:
 #   $1 - DATABASE_URL (required)
-# Returns 0 on success, 1 on failure (non-fatal)
+# Returns:
+#   0 - seeded
+#   1 - the seed FAILED (SQL error). Fatal: the suite would run against an empty database.
+#   2 - seeding was SKIPPED because a precondition is absent (no seed file, no Clerk user id).
+#       Not fatal — a developer without CLERK_SECRET_KEY can still run unauthenticated specs.
+#
+# #1569 task 20 (A1): the 1-vs-2 split is load-bearing. This function used to return 1 for both,
+# and the caller downgraded 1 to a warning so that the legitimate skip stayed quiet -- which meant
+# a real SQL failure was quiet too. Pinned by scripts/__tests__/check-e2e-seed-fails-loudly.test.sh.
 seed_e2e_data() {
   local database_url="${1:?Error: DATABASE_URL required for seed_e2e_data}"
   local seed_file="${E2E_SCRIPT_DIR}/seed-e2e-data.sql"
@@ -381,7 +389,7 @@ seed_e2e_data() {
   # Check if seed file exists
   if [ ! -f "$seed_file" ]; then
     echo "   ⚠️  Seed file not found: $seed_file"
-    return 1
+    return 2
   fi
 
   echo "🌱 Seeding E2E test data..."
@@ -393,7 +401,7 @@ seed_e2e_data() {
   if [ -z "$clerk_user_id" ]; then
     echo "   ⚠️  Could not determine Clerk user ID"
     echo "   Set E2E_CLERK_USER_ID or ensure TEST_CLERK_EMAIL and CLERK_SECRET_KEY are set"
-    return 1
+    return 2
   fi
 
   echo "   Using Clerk user ID: $clerk_user_id"
@@ -405,23 +413,51 @@ seed_e2e_data() {
 
   # Run SQL via psql inside the Docker container
   # Copy the temp file to the container and execute it
-  docker cp "$temp_file" "${E2E_POSTGRES_CONTAINER}:/tmp/seed.sql"
+  if ! docker cp "$temp_file" "${E2E_POSTGRES_CONTAINER}:/tmp/seed.sql"; then
+    rm -f "$temp_file"
+    echo "   ❌ Could not copy the seed script into ${E2E_POSTGRES_CONTAINER}"
+    return 1
+  fi
 
-  # Show seed output for debugging (Issue #698)
+  # #1569 task 20 (A1). Three deliberate details, each of which was individually enough to hide a
+  # totally failed seed:
+  #
+  #   -v ON_ERROR_STOP=1  -- WITHOUT it, psql -f reports ERROR and then exits 0. Every check below
+  #                          would be reading a zero from a run that seeded nothing.
+  #   PIPESTATUS[0]       -- the output is still piped through `tee` for the Issue #698 debugging
+  #                          view, and a pipeline's $? is the LAST command's. The old code read $?
+  #                          after a pipeline ending in `|| true`, so it could only ever be 0.
+  #   no `|| true`        -- `tee` to a log instead of `grep ... || true`. Filtering the output was
+  #                          never worth converting the exit status to a constant, and the full
+  #                          output is what a failing seed needs anyway.
+  local seed_log="${temp_file}.log"
   docker exec "$E2E_POSTGRES_CONTAINER" \
-    psql -U "$E2E_POSTGRES_USER" -d "$E2E_POSTGRES_DB" -f /tmp/seed.sql \
-    2>&1 | grep -E "NOTICE|ERROR|count|table_name" || true
-
-  local exit_code=$?
+    psql -v ON_ERROR_STOP=1 -U "$E2E_POSTGRES_USER" -d "$E2E_POSTGRES_DB" -f /tmp/seed.sql \
+    2>&1 | tee "$seed_log"
+  local exit_code=${PIPESTATUS[0]}
 
   # Clean up temp file
   rm -f "$temp_file"
 
-  if [ $exit_code -ne 0 ]; then
-    echo "   ⚠️  Seed script failed (exit code: $exit_code)"
+  if [ "$exit_code" -ne 0 ]; then
+    echo "   ❌ Seed script FAILED (psql exit code: $exit_code)"
+    echo "   ---- seed output ----"
+    cat "$seed_log" 2>/dev/null
+    echo "   ---------------------"
+    rm -f "$seed_log"
     return 1
   fi
 
+  # Belt and braces: ON_ERROR_STOP makes psql exit non-zero on an ERROR, but a seed that starts
+  # RAISE-ing warnings without failing is still worth refusing to call a success.
+  if grep -q "^ERROR:\|: ERROR:" "$seed_log" 2>/dev/null; then
+    echo "   ❌ Seed script printed an ERROR despite exiting 0:"
+    grep "^ERROR:\|: ERROR:" "$seed_log"
+    rm -f "$seed_log"
+    return 1
+  fi
+
+  rm -f "$seed_log"
   echo "   ✅ Test data seeded successfully!"
   return 0
 }

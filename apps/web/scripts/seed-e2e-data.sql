@@ -480,7 +480,14 @@ BEGIN
         (v_user_id, 'Work Expenses', 'GENERAL_SERVICES', 'briefcase', '#607D8B', 0),
         (v_user_id, 'Side Hustle', 'INCOME', 'trending-up', '#00BCD4', 0),
         (v_user_id, 'Pet Supplies', 'GENERAL_MERCHANDISE', 'heart', '#E91E63', 0)
-    ON CONFLICT (user_id, name) DO NOTHING;
+    -- #1569 Task 20 (A1): the arbiter MUST carry `WHERE deleted_at IS NULL`.
+    -- Migration 000159 (this issue's task 9) dropped the UNIQUE CONSTRAINT
+    -- `unique_user_category_name` and recreated it as a PARTIAL unique index of the same name.
+    -- Postgres will not infer a partial index from a bare `ON CONFLICT (user_id, name)`; it
+    -- raises `there is no unique or exclusion constraint matching the ON CONFLICT specification`,
+    -- which aborts this whole DO block and rolls back all thirteen seeded inserts. The index
+    -- predicate must be restated here verbatim for inference to succeed.
+    ON CONFLICT (user_id, name) WHERE deleted_at IS NULL DO NOTHING;
 
     -- =============================================================================
     -- Step 7: Create E2E fixture budget + categories (description='e2e-fixture-v1' marker)
@@ -503,7 +510,9 @@ BEGIN
         true,
         v_series_id
     )
-    ON CONFLICT (user_id, name) DO UPDATE SET
+    -- #1569 Task 20 (A1): partial-index arbiter, same reason as custom_categories above --
+    -- migration 000158 turned `unique_budget_name_per_user` into a partial unique index.
+    ON CONFLICT (user_id, name) WHERE deleted_at IS NULL DO UPDATE SET
         description = EXCLUDED.description,
         amount = EXCLUDED.amount,
         expected_income = EXCLUDED.expected_income,

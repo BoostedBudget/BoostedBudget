@@ -220,36 +220,39 @@ test-scripts:
 	@echo "Running shell script regression suites"
 	@echo "========================================"
 	@echo ""
-	@echo "1/9: check-frontend-coverage.test.sh (exercises the real lcov merger)"
+	@echo "1/10: check-frontend-coverage.test.sh (exercises the real lcov merger)"
 	@if command -v lcov &> /dev/null; then \
 		bash scripts/check-frontend-coverage.test.sh; \
 	else \
 		echo "⚠️  lcov not installed — skipping (install: brew install lcov). CI always has lcov."; \
 	fi
 	@echo ""
-	@echo "2/9: check-orphan-chunks.test.sh"
+	@echo "2/10: check-orphan-chunks.test.sh"
 	@bash scripts/__tests__/check-orphan-chunks.test.sh
 	@echo ""
-	@echo "3/9: rollback-residue.test.sh"
+	@echo "3/10: rollback-residue.test.sh"
 	@bash scripts/__tests__/rollback-residue.test.sh
 	@echo ""
-	@echo "4/9: pg_dump-via-docker.test.sh"
+	@echo "4/10: pg_dump-via-docker.test.sh"
 	@bash scripts/__tests__/pg_dump-via-docker.test.sh
 	@echo ""
-	@echo "5/9: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
+	@echo "5/10: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
 	@bash scripts/__tests__/check-e2e-storage-state.test.sh
 	@echo ""
-	@echo "6/9: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
+	@echo "6/10: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
 	@bash scripts/__tests__/check-mcp-job-triggers.test.sh
 	@echo ""
-	@echo "7/9: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
+	@echo "7/10: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
 	@bash scripts/__tests__/check-typographic-quotes.test.sh
 	@echo ""
-	@echo "8/9: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
+	@echo "8/10: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
 	@bash scripts/__tests__/check-frontend-test-timeout.test.sh
 	@echo ""
-	@echo "9/9: check-isolated-test-lists.test.sh (#1537 — the 22 process-isolated test paths must exist and stay in sync)"
+	@echo "9/10: check-isolated-test-lists.test.sh (#1537 — the 22 process-isolated test paths must exist and stay in sync)"
 	@bash scripts/__tests__/check-isolated-test-lists.test.sh
+	@echo ""
+	@echo "10/10: check-e2e-seed-fails-loudly.test.sh (#1569 A1 — the E2E seeder must not swallow a failed seed)"
+	@bash scripts/__tests__/check-e2e-seed-fails-loudly.test.sh
 	@echo ""
 	@echo "✅ Shell script regression suites passed!"
 

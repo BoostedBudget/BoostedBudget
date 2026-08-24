@@ -78,7 +78,7 @@ echo "Testing $REGULAR_COUNT/$TOTAL_COUNT tests (excluding $((TOTAL_COUNT - REGU
 # bunfig was written has never actually applied to this script.
 #
 # Pass exactly ONE --timeout here. bun honours the LAST one given, so a second flag silently
-# overrides this value; scripts/__tests__/check-frontend-test-timeout.test.sh fails the build on
+# overrides this value; <repo-root>/scripts/__tests__/check-frontend-test-timeout.test.sh fails the build on
 # a duplicate rather than letting a small trailing value hide behind a large leading one.
 #
 # Its sibling test-conflict-files.sh already passed `--timeout 30000` on both of its
