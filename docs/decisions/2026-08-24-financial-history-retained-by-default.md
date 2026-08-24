@@ -155,25 +155,57 @@ A completed erasure is a real `DELETE FROM users`, and the FK graph does the res
 no retention decision may leave a row unreachable from `users`. This is the constraint that shapes
 guard G1's allowlist more than any other.
 
-### 9. There is no restore, and that is a decision, not an omission
+### 9. There is no USER-INITIATED restore — and exactly one automatic one, scoped to provider cause
 
-**Nothing in this application can un-delete anything.** `grep -iE "restore|undelete|recover"` over
-`api/openapi.yaml` returns zero matches: there is no restore endpoint for a transaction, a goal, a
-budget, a category, a boost, or an account.
+Two claims, and the difference between them was got wrong once in this document already, so both
+are stated with what was checked.
 
-This is the sentence the rest of the document is most likely to be misread without. "Tombstone
-instead of delete" reads, to someone who has not checked, as *recoverable*. It is not. A tombstoned
-row is **retained and permanently invisible**: it survives so that its history children survive and
-so that past days keep rendering correctly, not so that the user can change their mind.
+**No user can un-delete anything.** `grep -icE "restore|undelete|recover" api/openapi.yaml` returns
+**0**, and no `Path:` in `internal/huma/operations/` exposes one. There is no endpoint to restore a
+transaction, a goal, a budget, a category, a boost, or an account. Enumerating every un-tombstone
+write in `backend/internal` — `grep -n "deleted_at = NULL\|removed_at = NULL"` — returns exactly
+**two** rows in the whole tree, and neither is user-callable:
 
-Two consequences follow, and they point in opposite directions:
+| Write | What it undoes |
+|---|---|
+| `household_repository.go` `RestoreMember` | a household MEMBERSHIP, not financial history |
+| `account_repository.go` `RestoreProviderRemovedAccount` | an account tombstone, and only a provider-caused one |
 
-- **The delete confirmation must not promise reversibility.** Copy saying "you can restore this
-  later" would be false. Copy saying "this cannot be undone" is accurate today, and is what the
-  dialogs say.
-- **The retention is nevertheless real.** The row is not gone; a future restore feature is a
-  possible product decision, and this schema is what makes it possible at all. It is simply not
-  something anything ships today, and no code may assume otherwise.
+**Nothing sets `deleted_at = NULL`.** The six `deleted_at` tombstones — `transactions`,
+`savings_goals`, `boosts`, `budgets`, `budget_categories`, `custom_categories` — have no restore
+path of any kind, automatic or manual. For those, a tombstone means **retained and permanently
+invisible**: the row survives so its history children survive and past days keep rendering, not so
+the user can change their mind.
+
+**The one exception, and it is a real decision.** `accounts` is soft-removed with a recorded CAUSE,
+and the cause decides reversibility:
+
+- `MarkRemovedByProvider` stamps `removed_reason = 'provider_absent'` — the bank stopped reporting
+  the account.
+- `UpdateStatus` and `MarkRemovedByLinkedItemID` stamp `removed_reason = 'user_disconnect'` — the
+  user pressed the button.
+
+`RestoreProviderRemovedAccount` flips a row back to `status = 'active'` with `removed_at` and
+`removed_reason` cleared, and its predicate is the whole safety argument:
+
+```
+status = 'removed' AND removed_reason IS NOT NULL AND removed_reason = 'provider_absent'
+```
+
+Anything else returns `ErrAccountNotRestorable`. **A user disconnect is never undone by a sync**,
+and a legacy row whose cause was never recorded (NULL, written before migration 000154) is refused
+too — because it cannot be *proven* to be anything else. The live caller is
+`restoreReappearedAccount` in `plaid_account_reconciliation.go`, which treats the refusal as the
+routine answer rather than an error. The check and the write are one `SELECT … FOR UPDATE`
+transaction, so a disconnect racing a sync cannot be resurrected.
+
+This is the corollary "the provider is not the user" applied in both directions: the provider
+removing an account is not a deletion request, so it is reversible when the provider changes its
+mind; the user removing one is, so it never is.
+
+**What this means for copy.** A delete or disconnect dialog must not promise the user they can
+restore it, because they cannot. It may accurately say that an account the bank stops reporting
+will come back on its own if the bank reports it again.
 
 ### 10. Live state is still destructively replaced; the snapshot is the history
 
@@ -186,14 +218,30 @@ That is the intended design, and Decision 5 stated only half of it. The split is
 
 - `holdings` is **live state** — what the account holds right now. It is a projection of the
   provider's current answer, and replacing it wholesale is the correct way to keep it true.
-- `holding_snapshots` is the **history**, captured inside the replacing transaction *before* the
-  delete. That is the row #1569 protects, and it is history-bearing, cascade-guarded and
+- `holding_snapshots` is the **history**, and it is history-bearing, cascade-guarded and
   delete-guarded.
 
-The same split applies to liabilities. The thing that makes this safe is the ordering — the capture
-happens in the same transaction as the replace — and the thing that would break it is capturing
-outside that transaction or skipping the capture on a partial response, both of which are pinned by
-`TestHistorySnapshot_*`.
+**The capture runs AFTER the INSERTs, not before the DELETE, and that distinction matters.**
+`captureHoldingSnapshots` sits at the tail of `ReplaceForAccount`, after the insert loop, and derives
+the snapshot from the rows just written — `holding_snapshot_repository.go` says so in as many words:
+*"after its INSERTs. So the history row is derived from the committed current state."*
+`liability_statement_repository.go` is the same shape.
+
+So the pre-replace state is **not** preserved by this mechanism, and reading it that way sends you
+looking in the wrong place. What preserves the past is **earlier days' captures**: each sync records
+what was true that day, and yesterday's row is what makes yesterday recoverable. Today's replace
+destroys today's earlier live state and nothing tries to keep it.
+
+Two properties do the work, and both are real:
+
+- **Same transaction.** The capture and the replace commit or roll back together, so the history can
+  never disagree with the state it describes.
+- **Derived from the written rows**, not from the caller's input, so a partial write cannot produce a
+  history row claiming more than was stored.
+
+The upstream guard against an empty or partial provider response wiping live state is separate and
+lives in `SyncHoldings`' roster gate; this repository is reached only once that has passed. All of it
+is pinned by `TestHistorySnapshot_*`.
 
 ---
 

@@ -136,10 +136,18 @@ Before writing anything that removes a row, classify it:
 Corollaries: the provider is not the user (Plaid removing an item is not a deletion request), and
 "I want to stop" is not "I want it gone".
 
-⚠ **There is no restore endpoint for anything** (`grep -iE "restore|undelete|recover" api/openapi.yaml`
-returns zero). A tombstone means **retained and permanently invisible**, not recoverable — it exists
-so the history children survive and past days keep rendering, not so the user can change their mind.
-Never write confirm copy promising reversibility.
+⚠ **No user-initiated restore exists.** No endpoint restores anything
+(`grep -icE "restore|undelete|recover" api/openapi.yaml` → 0), and **nothing anywhere sets
+`deleted_at = NULL`** — the six `deleted_at` tombstones (`transactions`, `savings_goals`, `boosts`,
+`budgets`, `budget_categories`, `custom_categories`) mean **retained and permanently invisible**.
+Never write confirm copy promising the user they can restore it.
+
+⚠ **The one exception is cause-scoped, and it is deliberate.** `accounts` records WHY it was removed:
+`RestoreProviderRemovedAccount` un-removes a row only when
+`status='removed' AND removed_reason='provider_absent'` (the bank stopped reporting it), called from
+`restoreReappearedAccount` on sync. A `user_disconnect` tombstone — and a legacy NULL cause — is
+refused with `ErrAccountNotRestorable` and is **never** undone by a sync. If you add a removal path,
+stamp the cause; if you add a restore, scope it to a cause you can prove.
 
 ⚠ Enforced mechanically, and each guard's meta-tests construct the violation and prove it fails:
 - `TestNoUnallowlistedCascadeIntoHistoryTable` (G1) — new `ON DELETE CASCADE` into a history-bearing
