@@ -107,6 +107,14 @@ func TestHouseholdShareAsOf_IntervalIsHalfOpen(t *testing.T) {
 	// the only thing that can differ between them is the grant-interval predicate itself.
 	owner, _, scope := departedMemberFixture(t, pool, sharedAt, revokedAt, now.AddDate(0, 0, -70), 42)
 
+	// The LOWER bound's refusal direction. Without this probe the whole "window opened too
+	// wide" direction is unpinned: widening shared_at's comparison shows the household data
+	// from BEFORE the grant existed, which is a privacy leak rather than a missing row, and
+	// every other assertion in this file stays green through it.
+	beforeStart, err := repo.GetSnapshotsAsOfForHousehold(ctx, owner, scope, sharedAt.Add(-time.Microsecond))
+	require.NoError(t, err)
+	assert.Empty(t, beforeStart, "one microsecond BEFORE shared_at the grant did not exist yet")
+
 	atStart, err := repo.GetSnapshotsAsOfForHousehold(ctx, owner, scope, sharedAt)
 	require.NoError(t, err)
 	assert.Len(t, atStart, 1, "asOf == shared_at is INSIDE the half-open interval")
@@ -299,4 +307,56 @@ func TestHouseholdShareAsOf_RepeatingTheCurrentVisibilityDoesNotChurnIntervals(t
 		`SELECT COUNT(*) FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
 		hh, ua).Scan(&total))
 	assert.Equal(t, 1, total, "no-op PATCHes must not accumulate zero-length intervals")
+}
+
+// TestHouseholdShareAsOf_EqualSharedAtTieBreaksOnLowestID pins the DIRECTION of the grant
+// dedup's final tiebreak. Every other fixture in this file has distinct shared_at values, so
+// `has.id` never actually decides anything there and flipping it to `has.id DESC` leaves the
+// suite green. Either direction is deterministic, so this is about pinning the choice, not
+// about correctness — but an unpinned tiebreak is one refactor away from being no tiebreak.
+//
+// Observability trick, same as the overlapping-rows test: the winner is invisible directly (the
+// as-of reads project no grant id), so a SECOND account is given the winner's fingerprint. If
+// the intended row won, the two collide in the joint-account dedup and one account comes back.
+func TestHouseholdShareAsOf_EqualSharedAtTieBreaksOnLowestID(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	acctRepo := repository.NewAccountRepository(pool, nil)
+
+	now := time.Now().UTC()
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	target := setupHouseholdMemberAccount(t, pool, member)
+	sibling := setupHouseholdMemberAccount(t, pool, member)
+
+	fpA := "fp-a-" + hh
+	fpB := "fp-b-" + hh
+	idA := insertHouseholdShare(t, pool, hh, target.UserAccountID, &fpA, domain.ShareVisibilityShared, now.AddDate(0, 0, -60))
+	revokeShareAt(t, pool, hh, target.UserAccountID, now.AddDate(0, 0, -5))
+	idB := insertHouseholdShare(t, pool, hh, target.UserAccountID, &fpB, domain.ShareVisibilityShared, now.AddDate(0, 0, -60))
+	revokeShareAt(t, pool, hh, target.UserAccountID, now.AddDate(0, 0, -5))
+
+	// Force the tie the rest of the suite never produces: identical shared_at AND revoked_at,
+	// so `has.id` is the only remaining discriminator.
+	_, err := pool.Exec(ctx, `
+		UPDATE household_account_shares SET shared_at = $1, revoked_at = $2
+		WHERE household_id = $3 AND user_account_id = $4
+	`, now.AddDate(0, 0, -60), now.AddDate(0, 0, -5), hh, target.UserAccountID)
+	require.NoError(t, err)
+
+	// ASC means the lowest id wins; give the sibling account that row's fingerprint.
+	winnerFP := fpA
+	if idB < idA {
+		winnerFP = fpB
+	}
+	insertHouseholdShare(t, pool, hh, sibling.UserAccountID, &winnerFP, domain.ShareVisibilityShared, now.AddDate(0, 0, -60))
+	revokeShareAt(t, pool, hh, sibling.UserAccountID, now.AddDate(0, 0, -5))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner}}
+	got, err := acctRepo.GetForHouseholdScope(ctx, owner, scope, now.AddDate(0, 0, -30))
+	require.NoError(t, err)
+	assert.Len(t, got, 1,
+		"with shared_at tied, the LOWEST-id interval must win: its fingerprint collides with the "+
+			"sibling account's, so the two collapse. A length of 2 means the tiebreak runs the other way")
 }
