@@ -60,10 +60,17 @@ var allowedHistoryDeletes = map[string]string{
 	// The three cascade edges in allowedHistoryCascades are the schema half of the same decision.
 	"repository/account_repository.go#PurgeAccount|balance_snapshots": "explicit account purge: balance_snapshots has ON DELETE SET NULL from accounts, so the cascade would orphan rather than remove them",
 	"repository/account_repository.go#PurgeAccount|accounts":          "explicit account purge: this IS the purge",
+	// Scoped to `deleted_at IS NOT NULL` — the user has ALREADY deleted the goal, which is exactly
+	// PurgeGoal's own precondition. A live goal is not matched and still blocks the purge via
+	// migration 000150's RESTRICT. Without this the purge was permanently unreachable for any
+	// account that had ever had a goal: the tombstone leaves account_id set, so "delete the goal
+	// first, then try again" could never be satisfied (#1569 task 21, defect C1).
+	"repository/account_repository.go#PurgeAccount|savings_goals": "explicit account purge, tombstoned goals only: the user already deleted the goal, which is PurgeGoal's precondition; a live goal still blocks via RESTRICT",
 
 	// The linked-item purge. Same shape, one level up: the user disconnects AND purges an
 	// institution. A plain disconnect soft-removes and keeps everything.
 	"repository/linked_item_repository.go#PurgeLinkedItem|balance_snapshots": "explicit institution purge, same reason as PurgeAccount",
+	"repository/linked_item_repository.go#PurgeLinkedItem|savings_goals":    "explicit institution purge, tombstoned goals only: same scope and same reason as PurgeAccount's entry above",
 
 	// The savings-goal purge. Distinct from DeleteGoal, which tombstones (#1569 task 8).
 	"repository/savings_goal_repository.go#PurgeGoal|savings_goals": "explicit goal purge; the ordinary DeleteGoal path tombstones instead",

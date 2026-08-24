@@ -335,3 +335,50 @@ func TestLinkedItemRepository_PurgeLinkedItem_Integration_RefusesWhileAnAccountI
 	require.NoError(t, repo.PurgeLinkedItem(ctx, f.LinkedItemID.String(), f.UserID.String(), nil))
 	assert.Equal(t, 0, countRows(ctx, t, pool, "linked_items", "id", f.LinkedItemID))
 }
+
+// TestLinkedItemRepository_PurgeLinkedItem_Integration_TombstonedSavingsGoalDoesNotBlock is the
+// institution-level half of defect C1 — the same dead verb, one level up.
+//
+// The test above proves a LIVE goal on ANY account under the item blocks the whole purge, and it
+// still does. This one proves the complement: once the user has actually deleted that goal, the
+// purge goes through. Before the fix it did not, and there was no further step available — the
+// tombstone leaves account_id set, so the FK fired forever and the goal could not be deleted twice.
+//
+// Both halves are asserted because fixing only the account-level path would have left the
+// institution-level path dead for exactly the same population (#1569 task 21).
+func TestLinkedItemRepository_PurgeLinkedItem_Integration_TombstonedSavingsGoalDoesNotBlock(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	repo := NewLinkedItemRepository(pool, newTestFieldEncryptor(t))
+	goalRepo := NewSavingsGoalRepository(pool)
+
+	f := seedRetainedFixture(ctx, t, pool, "purge-item-tombstoned-goal-"+uuid.New().String())
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+
+	secondAccountID := uuid.New()
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, 'Second Account', 'depository', 'active')
+		RETURNING id
+	`, secondAccountID, f.LinkedItemID, f.UserID, "plaid-acct-second-"+uuid.New().String()).Scan(&secondAccountID))
+	second := retainedFixture{UserID: f.UserID, LinkedItemID: f.LinkedItemID, AccountID: secondAccountID, UserAccountID: f.UserAccountID}
+
+	goalID := seedSavingsGoal(ctx, t, pool, second)
+	require.NoError(t, goalRepo.Delete(ctx, goalID.String(), f.UserID.String(), nil))
+
+	var deletedAt *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT deleted_at FROM savings_goals WHERE id = $1`, goalID).Scan(&deletedAt))
+	require.NotNil(t, deletedAt, "the goal must be TOMBSTONED, not deleted — otherwise this test "+
+		"is not exercising the defect")
+
+	require.NoError(t, repo.MarkPlaidRemoved(ctx, []string{f.LinkedItemID.String()}))
+	disconnectItemAccountsForPurge(ctx, t, pool, f.LinkedItemID)
+
+	require.NoError(t, repo.PurgeLinkedItem(ctx, f.LinkedItemID.String(), f.UserID.String(), nil),
+		"a goal the user has already deleted must not permanently block the institution purge")
+
+	assert.Equal(t, 0, countRows(ctx, t, pool, "linked_items", "id", f.LinkedItemID), "item must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "accounts", "id", secondAccountID), "the goal's account must be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "savings_goals", "id", goalID), "the tombstoned goal goes with it")
+}

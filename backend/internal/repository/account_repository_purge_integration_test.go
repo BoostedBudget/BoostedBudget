@@ -318,3 +318,71 @@ func TestAccountRepository_PurgeAccount_Integration_MultiMemberChain_Transaction
 	assert.Contains(t, feedNames(items), "Coffee Before Purge",
 		"purging one chain member must not hide transactions the surviving active member's chain key still covers")
 }
+
+// TestAccountRepository_PurgeAccount_Integration_TombstonedSavingsGoalDoesNotBlock is the COMPOSED
+// case — the one twenty adversarial reviews did not construct, because each seeded a fixture built
+// for the mechanism under test and this defect lives BETWEEN two mechanisms.
+//
+// THE DEAD VERB. Migration 000150 made savings_goals.account_id RESTRICT specifically so PurgeAccount
+// would refuse while a goal still pointed at the account, and the 409 tells the user to "delete the
+// goal first, then try again". Task 8 then made goal deletion a TOMBSTONE, which leaves account_id
+// set. So the user does exactly what the error asks, the FK still fires, and the same 409 comes
+// back — while the goal is invisible to every read and deleting it again returns
+// ErrSavingsGoalNotFound. Explicit destruction, the ADR's one sanctioned way to destroy data, was
+// permanently unreachable for any account that had ever had a savings goal.
+//
+// THE RULING TAKEN HERE. A tombstoned goal does NOT block the purge. The user has by then performed
+// three separate explicit acts — disconnect, delete the goal, confirm the purge — and the second of
+// those is exactly PurgeGoal's own precondition (ErrSavingsGoalNotDeleted). A LIVE goal still
+// blocks, which is what makes the error text true rather than a dead end:
+// TestAccountRepository_PurgeAccount_Integration_RefusesWhileSavingsGoalReferencesAccount is
+// unchanged and still passes.
+//
+// WHAT IT COSTS, asserted rather than left to be discovered: the tombstoned goal's hand-logged
+// contributions go with it. That is the same destruction POST /savings-goals/{id}/purge would have
+// performed on the same already-tombstoned goal, so no data becomes reachable-for-destruction that
+// was not already.
+func TestAccountRepository_PurgeAccount_Integration_TombstonedSavingsGoalDoesNotBlock(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	accountRepo := NewAccountRepository(pool, newTestFieldEncryptor(t))
+	goalRepo := NewSavingsGoalRepository(pool)
+
+	f := seedRetainedFixture(ctx, t, pool, "purge-tombstoned-goal-"+uuid.New().String())
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, f.UserID) })
+
+	goalID := seedSavingsGoal(ctx, t, pool, f)
+	contributionID := uuid.New()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO savings_goal_contributions
+			(id, savings_goal_id, amount, source, status, managed_by_reconciliation, confirmed_by_user, occurred_on)
+		VALUES ($1, $2, 250.00, 'manual', 'confirmed', false, true, CURRENT_DATE)
+	`, contributionID, goalID)
+	require.NoError(t, err, "seed savings_goal_contribution")
+
+	disconnect(ctx, t, pool, f)
+
+	// Step 1: the user does exactly what the 409 told them to do.
+	require.NoError(t, goalRepo.Delete(ctx, goalID.String(), f.UserID.String(), nil),
+		"deleting the goal must succeed — this is the step the error text asks for")
+
+	// The tombstone is what makes this the composed case: the row is still there, still pointing
+	// at the account, and invisible to the user.
+	var deletedAt *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT deleted_at FROM savings_goals WHERE id = $1`, goalID).Scan(&deletedAt))
+	require.NotNil(t, deletedAt, "the goal must be TOMBSTONED, not deleted — otherwise this test "+
+		"is not exercising the defect at all")
+
+	// Step 2: "then try again". Before this fix, this line returned ErrPurgeBlockedBySavingsGoal
+	// forever and there was no third step the user could take.
+	require.NoError(t, accountRepo.PurgeAccount(ctx, f.AccountID.String(), f.UserID.String(), nil),
+		"a goal the user has already deleted must not permanently block explicit destruction")
+
+	assert.Equal(t, 0, countRows(ctx, t, pool, "accounts", "id", f.AccountID),
+		"the account must actually be gone")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "savings_goals", "id", goalID),
+		"the tombstoned goal goes with the account it pointed at")
+	assert.Equal(t, 0, countRows(ctx, t, pool, "savings_goal_contributions", "id", contributionID),
+		"and so do its contributions — the cost of the ruling, stated rather than discovered")
+}
