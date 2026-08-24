@@ -67,16 +67,16 @@ func (rt RolloverType) IsValid() bool {
 // Records when unspent funds are rolled over from one budget category to another
 // or back to unallocated funds. This provides audit trail and history for users.
 type RolloverHistory struct {
-	ID                     string         `json:"id" db:"id"`
-	UserID                 string         `json:"user_id" db:"user_id"`
+	ID     string `json:"id" db:"id"`
+	UserID string `json:"user_id" db:"user_id"`
 	// BudgetID and SourceBudgetCategoryID are POINTERS because both FKs are ON DELETE SET NULL
 	// since Issue #1569 Task 14 (migration 000164). NULL means "the budget/category this rollover
 	// moved money between has since been purged", never "there wasn't one" -- every row was written
 	// for a real pair. The row itself still records the amount, the type, the period and the user,
 	// which is what makes it worth keeping.
 	BudgetID               *string        `json:"budget_id,omitempty" db:"budget_id"`
-	BoostID                 *string        `json:"boost_id,omitempty" db:"boost_id"`
-	BoostExecutionID        *string        `json:"boost_execution_id,omitempty" db:"boost_execution_id"`
+	BoostID                *string        `json:"boost_id,omitempty" db:"boost_id"`
+	BoostExecutionID       *string        `json:"boost_execution_id,omitempty" db:"boost_execution_id"`
 	SourceBudgetCategoryID *string        `json:"source_budget_category_id,omitempty" db:"source_budget_category_id"`
 	TargetBudgetCategoryID *string        `json:"target_budget_category_id,omitempty" db:"target_budget_category_id"` // nil = to unallocated funds
 	Amount                 float64        `json:"amount" db:"amount"`

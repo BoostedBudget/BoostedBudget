@@ -39,6 +39,15 @@ type BoostExecutionService interface {
 	// Issue #38: Rules API Endpoints - Execution history with filtering.
 	GetExecutionHistoryWithFilter(ctx context.Context, boostID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error)
 
+	// GetUserExecutionHistory retrieves a user's whole automation history, orphans included.
+	//
+	// Issue #1569 Task 14. Every other read here is scoped by boost, so once
+	// fk_boost_executions_boost_id became ON DELETE SET NULL an execution whose boost had been
+	// purged was retained in the database and reachable from no client at all. This is the only
+	// path that can return it. Tenancy comes from the execution row's own user_id -- there is no
+	// parent left to check ownership against, which is precisely why the column exists.
+	GetUserExecutionHistory(ctx context.Context, userID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error)
+
 	// TestBoost performs a dry-run execution of a rule without persisting any changes.
 	// Issue #38: Rules API Endpoints - Test endpoint.
 	TestBoost(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error)
@@ -244,6 +253,20 @@ func (s *boostExecutionService) ProcessEventTrigger(ctx context.Context, userID,
 // GetBoostExecutionHistory retrieves execution history for a rule.
 func (s *boostExecutionService) GetBoostExecutionHistory(ctx context.Context, boostID string, limit, offset int) ([]*domain.BoostExecution, error) {
 	return s.executionRepo.GetByBoostID(ctx, boostID, limit, offset)
+}
+
+// GetUserExecutionHistory retrieves a user's whole automation history, orphans included.
+//
+// Issue #1569 Task 14. Ownership is enforced by the repository's `WHERE user_id = $1`, on the
+// execution row's OWN denormalised user_id -- a purged boost leaves no parent to authorise against,
+// so any check that went through boosts would either reject the orphan or crash on a NULL.
+func (s *boostExecutionService) GetUserExecutionHistory(
+	ctx context.Context,
+	userID string,
+	status *domain.ExecutionStatus,
+	limit, offset int,
+) ([]*domain.BoostExecution, int, error) {
+	return s.executionRepo.GetByUserID(ctx, userID, status, limit, offset)
 }
 
 // GetExecutionHistoryWithFilter retrieves execution history with optional status filter and total count.
