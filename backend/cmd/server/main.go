@@ -806,7 +806,7 @@ func main() {
 		// Issue #1300: Savings contribution repo + progress service.
 		// Created here so budget sync and goal services can share a single instance.
 		savingsContribRepo := repository.NewSavingsContributionRepository(db)
-		savingsProgressService := services.NewSavingsProgressService(savingsGoalRepo, savingsContribRepo, accountRepo, budgetLogger)
+		savingsProgressService := services.NewSavingsProgressService(savingsGoalRepo, savingsContribRepo, accountRepo, services.NewAccountChainResolver(accountRepo), budgetLogger)
 
 		// Issue #1300: Cross-wire budget ↔ savings-goal services for carry-forward / auto-create.
 		budgetService.SetGoalRepo(savingsGoalRepo)
