@@ -86,7 +86,7 @@
       "tags": [
         "Accounts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "destructive",
       "excluded": true,
       "description": "Permanently destroys a single account and everything derived from it — balance history, holdings, liabilities, AND investment transactions (buys, sells, dividends) for an investment account — with ownership validation. This cannot be undone. Bank transactions (from a checking/savings/credit account) are NOT destroyed; investment transactions ARE, since they have no independent existence apart from the account. Refuses if a savings goal still references this account, and refuses unless the account was already disconnected (POST .../disconnect first) — a live account cannot be purged, since the next Plaid sync would recreate it.",
       "parameters": [
@@ -107,7 +107,7 @@
       "tags": [
         "Accounts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Stops a single account from syncing and retains its financial history. Does not destroy any data — use DELETE to permanently purge an account and its history.",
       "parameters": [
@@ -204,7 +204,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "destructive",
       "excluded": true
     },
     {
@@ -237,7 +237,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "destructive",
       "excluded": true
     },
     {
@@ -259,7 +259,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true
     },
     {
@@ -270,7 +270,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true
     },
     {
@@ -307,7 +307,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Fires a Plaid webhook for testing. Requires Clerk authentication and admin authorization. Reachable in every environment, but only functions when PLAID_ENV=sandbox; it returns an error otherwise."
     },
@@ -345,7 +345,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Records that YOU removed this Plaid Item yourself in Plaid's dashboard. This is an UNVERIFIED attestation, not a proved removal: it is stored against your admin identity with your note, moves the record to admin_state 'operator_attested' so nobody is asked to redo the work, and deliberately does NOT set resolved_at (which means Plaid itself confirmed the removal), does NOT destroy the retained access token, and does NOT stop the automated retry sweep — the sweep is what can eventually confirm your claim. First-wins: if the record is already attested this returns 409 and your note is not stored. Requires admin role.",
       "parameters": [
@@ -366,7 +366,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial."
     },
@@ -492,7 +492,7 @@
       "tags": [
         "Admin Subscriptions"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Create a per-user resource limit override (e.g. transaction_history_days). Requires admin privileges.",
       "parameters": [
@@ -513,7 +513,7 @@
       "tags": [
         "Admin Subscriptions"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Manually override a user's subscription tier. Requires admin privileges.",
       "parameters": [
@@ -534,7 +534,7 @@
       "tags": [
         "Admin Subscriptions"
       ],
-      "manifestClass": "read",
+      "manifestClass": "destructive",
       "excluded": true,
       "description": "Clear a user's manual tier override, restoring their raw subscription tier and status. Idempotent — returns removed=false if no override exists. Requires admin privileges.",
       "parameters": [
@@ -648,7 +648,7 @@
       "tags": [
         "Admin"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true
     },
     {
@@ -1572,7 +1572,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Creates a new boost for the authenticated user."
     },
@@ -1605,7 +1605,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Updates a boost's configuration.",
       "parameters": [
@@ -1626,7 +1626,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Removes a boost.",
       "parameters": [
@@ -1647,7 +1647,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Disables a boost from execution.",
       "parameters": [
@@ -1668,7 +1668,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Enables a boost for execution.",
       "parameters": [
@@ -1728,7 +1728,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Executes a dry-run of the boost to preview results without persisting changes.",
       "parameters": [
@@ -1749,7 +1749,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Enables or disables a boost.",
       "parameters": [
@@ -1770,7 +1770,7 @@
       "tags": [
         "Boosts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Triggers a boost for immediate execution with optional custom data.",
       "parameters": [
@@ -2400,7 +2400,7 @@
       "tags": [
         "Dashboard"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Saves the user's dashboard layout preferences."
     },
@@ -2412,7 +2412,7 @@
       "tags": [
         "Dashboard"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Resets the user's dashboard layout to the default configuration."
     },
@@ -2436,7 +2436,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Creates a new household with the caller as owner."
     },
@@ -2469,7 +2469,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "parameters": [
         {
@@ -2489,7 +2489,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "parameters": [
         {
@@ -2520,7 +2520,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true
     },
     {
@@ -2531,7 +2531,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "destructive",
       "excluded": true,
       "description": "Owner-only. Without ?force=true, requires zero active non-owner members (409 otherwise). With ?force=true (#1371), force-removes every active non-owner member (with removal email) before dissolving the household.",
       "parameters": [
@@ -2586,7 +2586,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true
     },
     {
@@ -2597,7 +2597,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "parameters": [
         {
@@ -2628,7 +2628,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "parameters": [
         {
@@ -2865,7 +2865,7 @@
       "tags": [
         "Accounts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "destructive",
       "excluded": true,
       "description": "Permanently destroys a linked item and every account under it — balance history, holdings, liabilities, AND investment transactions (buys, sells, dividends) for any investment account — with ownership validation. This cannot be undone. Bank transactions are NOT destroyed; investment transactions ARE, since they have no independent existence apart from the account. Refuses if a savings goal still references one of its accounts, and refuses unless the institution was already disconnected. Use POST .../disconnect first.",
       "parameters": [
@@ -2886,7 +2886,7 @@
       "tags": [
         "Accounts"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Disconnects an institution (stops Plaid sync/billing) and retains all of its accounts' financial history. Does not destroy any data — use DELETE to permanently purge the institution and its accounts.",
       "parameters": [
@@ -2907,7 +2907,7 @@
       "tags": [
         "MCP Audit"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Records a security audit entry for an MCP operation. Called by the trusted MCP Worker; authenticated by CloudflareOnly middleware (X-Origin-Secret), not end-user Clerk JWT."
     },
@@ -3191,7 +3191,7 @@
       "tags": [
         "Plaid"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Exchanges a Plaid public token for an access token and links bank accounts."
     },
@@ -3203,7 +3203,7 @@
       "tags": [
         "Plaid"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Generates a Plaid Link token for initiating bank account connection flow."
     },
@@ -3215,7 +3215,7 @@
       "tags": [
         "QA"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Creates a Clerk sign-in token URL for QA test users. Only available in QA/Staging environments."
     },
@@ -3553,7 +3553,7 @@
         "Subscription",
         "Paddle"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Cancels subscription at end of current billing period. User retains access until period ends."
     },
@@ -3566,7 +3566,7 @@
         "Subscription",
         "Paddle"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Creates a Paddle checkout session for purchasing a subscription. Returns checkout URL to open in Paddle.js Overlay or as redirect."
     },
@@ -3592,7 +3592,7 @@
         "Subscription",
         "Paddle"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details."
     },
@@ -3617,7 +3617,7 @@
         "Subscription",
         "Paddle"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Updates subscription to a different tier or billing interval. Handles proration automatically."
     },
@@ -4236,7 +4236,7 @@
       "tags": [
         "Household"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Toggles whether this account is included in the household aggregate seen by other members. Active-member-only; the caller must own the account. Returns 404 if the caller is not an active member of a household, 403 if the account does not belong to the caller.",
       "parameters": [
@@ -4257,7 +4257,7 @@
       "tags": [
         "User"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Initiates account deletion with 30-day grace period. User will receive email with cancellation link."
     },
@@ -4302,7 +4302,7 @@
       "tags": [
         "Privacy"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Updates the authenticated user's privacy settings with GDPR validation."
     },
@@ -4326,7 +4326,7 @@
       "tags": [
         "Profile"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Updates the authenticated user's profile with validated data."
     },
@@ -4351,7 +4351,7 @@
         "Webhooks",
         "Paddle"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Public endpoint for Paddle to send subscription and payment event notifications. Verifies HMAC-SHA256 signature, stores in database, and enqueues async processing job."
     },
@@ -4363,7 +4363,7 @@
       "tags": [
         "Webhooks"
       ],
-      "manifestClass": "read",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Receives and processes webhook notifications from Plaid. Validates JWT signature and stores for async processing."
     }

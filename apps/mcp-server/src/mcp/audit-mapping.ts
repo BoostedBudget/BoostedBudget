@@ -18,6 +18,9 @@ export function toAuditEntry(
     grantId: actor.grantId,
     ...event,
     confirmationPresented: event.result === 'confirmation_required',
-    confirmationConfirmed: event.operationClass === 'write' && event.result === 'success',
+    // `!== 'read'` rather than `=== 'write'`: since #1569 Task 16 a confirmation-gated call can
+    // be class 'destructive', and `=== 'write'` would have silently recorded every confirmed
+    // destructive call as unconfirmed.
+    confirmationConfirmed: event.operationClass !== 'read' && event.result === 'success',
   }
 }

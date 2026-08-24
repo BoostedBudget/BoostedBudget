@@ -145,6 +145,43 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
     expect(computeCapabilitySummary(readSpecIndex()).destructiveWriteOperations).toBe(allowedDestructive.length)
   })
 
+  /**
+   * #1569 Task 16, F1. The `excluded()` helper hard-coded `class: 'read'` onto every excluded
+   * entry, so the manifest asserted that purgeAccount, deleteHousehold and 43 other mutating
+   * verbs neither change nor destroy anything. Hand-fixing those 45 entries would only hold
+   * until the next one is added, so these two guards derive the invariant from the spec index's
+   * own HTTP methods and hold automatically for every future operation.
+   */
+  const NON_MUTATING_POSTS = new Set([
+    'previewCategoryMatches', // POST /budgets/categories/preview — returns matches, writes nothing
+    'runMCPRecipe' // v1 recipes compose read-class ops only (see the manifest's own note)
+  ])
+
+  it('classifies every GET operation as read', () => {
+    const offenders = readSpecIndex()
+      .entries.filter((e) => e.method === 'GET' && e.manifestClass !== 'read')
+      .map((e) => `${e.operationId} (${e.manifestClass})`)
+    expect(offenders).toEqual([])
+  })
+
+  it('classifies every state-changing operation as write or destructive, excluded ones included', () => {
+    const offenders = readSpecIndex()
+      .entries.filter(
+        (e) =>
+          e.method !== 'GET' &&
+          e.manifestClass === 'read' &&
+          !NON_MUTATING_POSTS.has(e.operationId)
+      )
+      .map((e) => `${e.method} ${e.operationId}`)
+
+    expect(
+      offenders,
+      'These operations change state but are classified `read`. If the operation really is ' +
+        'non-mutating, add it to NON_MUTATING_POSTS with a reason; otherwise use write(), ' +
+        'excludedWrite(), or destructive() in capability-manifest.ts.'
+    ).toEqual([])
+  })
+
   it('committed JSON ends with a trailing newline (matches the generator script)', () => {
     const raw = readFileSync(COMMITTED_JSON_PATH, 'utf-8')
     expect(raw.endsWith('\n')).toBe(true)

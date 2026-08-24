@@ -106,9 +106,12 @@ describe('buildExecuteHandler', () => {
   // of recording a denial, and it was wrong about the one field an operator would
   // filter on when asking "did anyone try to reach a mutating admin operation?".
   //
-  // ⚠ This is NOT the sibling defect. The spec index's `manifestClass` field is
-  // ALSO 'read' on 45 mutating excluded entries, from the same default block. That
-  // is a different field with no consumer today and is deliberately left alone.
+  // ⚠ UPDATED by #1569 Task 16 (F1). The sibling defect this comment used to say was "deliberately
+  // left alone" — the spec index's `manifestClass` being 'read' on 45 mutating excluded entries —
+  // has been fixed: excluded entries now carry their true class. deniedOperationClass therefore
+  // reads the manifest first, and purgeAccount audits as 'destructive' rather than merely 'write'.
+  // The original claim these cases exist to defend is unchanged and strengthened: a denied
+  // mutating operation must NEVER be recorded as a read.
   const DENIAL_SPEC_ENTRIES = [
     { operationId: 'purgeAccount', method: 'DELETE', path: '/api/v1/accounts/{id}' },
     { operationId: 'grantTrial', method: 'POST', path: '/api/v1/admin/subscription/grant-trial' },
@@ -118,7 +121,7 @@ describe('buildExecuteHandler', () => {
   it.each([
     ['purgeAccount', 'DELETE'],
     ['grantTrial', 'POST'],
-  ])('audits a denied mutating operation (%s, %s) as write, not read', async (operationId) => {
+  ])('audits a denied mutating operation (%s, %s) with its true class, never read', async (operationId) => {
     const proxy = makeFailingProxy('excluded', `Operation '${operationId}' is not available via MCP`)
     const handler = buildExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
 
@@ -127,7 +130,9 @@ describe('buildExecuteHandler', () => {
     expect(auditEvents).toHaveLength(1)
     expect(auditEvents[0]?.result).toBe('denied')
     expect(auditEvents[0]?.operationClass).not.toBe('read')
-    expect(auditEvents[0]?.operationClass).toBe('write')
+    // purgeAccount hard-deletes accounts + balance_snapshots, grantTrial does not destroy: the
+    // audit row now distinguishes them instead of flattening both to 'write'.
+    expect(auditEvents[0]?.operationClass).toBe(operationId === 'purgeAccount' ? 'destructive' : 'write')
     // The deny path itself must be untouched: nothing may be invoked.
     expect(proxy.invoke).not.toHaveBeenCalled()
   })

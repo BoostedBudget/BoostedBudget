@@ -3,6 +3,7 @@ import {
   ALL_OPERATION_IDS,
   getCapability,
   isAllowed,
+  destroysData,
   isDestructive,
   isExcluded,
   isWrite,
@@ -520,32 +521,36 @@ describe('issue #1503: listAdminPlaidOrphanedItems', () => {
 
 describe('issue #1569 task 16: destructive class', () => {
   /**
-   * THE SET. Asserted as a set (not per-op existence checks) so a newly added
-   * destructive verb that nobody classified fails HERE rather than defaulting to
-   * `write` and silently becoming agent-invocable.
+   * Asserted as a SET (not per-op existence checks) so a newly added destructive verb that
+   * nobody classified fails HERE rather than defaulting to `write` and silently becoming
+   * agent-invocable. Since Task 16 gave excluded entries their true class, this also catches a
+   * newly added EXCLUDED destructive verb — the likelier way a destructive op enters, and the
+   * case the pre-Task-16 manifest could not represent at all.
    */
-  const DESTRUCTIVE_OPERATIONS = [
-    'clearMerchantOverride',
-    'deleteMCPRecipe',
-    'deleteRule',
-    'deleteSavingsGoalContribution',
-    'deleteTag',
-    'purgeSavingsGoal'
-  ]
-
-  /** Whether an agent may invoke each destructive operation at all. Pinned per operation. */
   const DESTRUCTIVE_INVOCABILITY: Record<string, boolean> = {
-    // Allowed: destroys user-authored CONFIGURATION the agent can read back before
-    // deleting and recreate afterwards. None of these touch financial history.
+    // ── INVOCABLE ── hard deletes, but of user-authored CONFIGURATION the agent can read back
+    // before deleting and recreate afterwards. None of these touch financial history.
     clearMerchantOverride: true,
     deleteMCPRecipe: true,
     deleteRule: true,
     deleteTag: true,
-    // Excluded: destroys FINANCIAL HISTORY irreversibly. Same policy as the four
-    // Plaid disconnect/purge verbs — an agent must never be able to call these.
+    // ── EXCLUDED ── destroys financial history, another user's data, or operational records.
+    // An agent must never be able to call these; each carries its reason in the manifest.
+    bulkDeleteAdminDeadLetterJobs: false,
+    deleteAdminDeadLetterJob: false,
+    deleteHousehold: false,
     deleteSavingsGoalContribution: false,
-    purgeSavingsGoal: false
+    purgeAccount: false,
+    purgeInstitution: false,
+    purgeSavingsGoal: false,
+    'remove-admin-user-tier-override': false
   }
+
+  /**
+   * THE SET, derived from the invocability table above rather than hand-maintained beside it —
+   * two parallel literal lists over the same operations would drift, and nothing would notice.
+   */
+  const DESTRUCTIVE_OPERATIONS = Object.keys(DESTRUCTIVE_INVOCABILITY).sort()
 
   /**
    * Soft-deleting verbs. These tombstone (deleted_at/deleted_reason/deleted_by) and
@@ -594,8 +599,49 @@ describe('issue #1569 task 16: destructive class', () => {
   })
 
   it('requires confirmation on every destructive-class operation', () => {
+    // True even on the excluded ones. The host-proxy throws on `excluded` long before the
+    // confirmation gate, so this is never read there; it is set as the fail-safe default for the
+    // one tier where being wrong is unrecoverable. excludedWrite() deliberately leaves
+    // confirmationRequired at excluded()'s long-standing `false`.
     for (const operationId of DESTRUCTIVE_OPERATIONS) {
       expect(requiresConfirmation(operationId), operationId).toBe(true)
+    }
+  })
+
+  it('destroysData answers for EXCLUDED destructive ops too, unlike isDestructive', () => {
+    // isDestructive() means "available and destroys data" — false for an excluded op, which is
+    // the right answer for an invocability question and the wrong one for "would this destroy
+    // my data?". destroysData() is the predicate for the latter.
+    for (const operationId of DESTRUCTIVE_OPERATIONS) {
+      expect(destroysData(operationId), operationId).toBe(true)
+    }
+    expect(destroysData('purgeAccount')).toBe(true)
+    expect(isDestructive('purgeAccount')).toBe(false)
+    expect(destroysData('deleteBudget')).toBe(false)
+    expect(destroysData('nonExistentOperation')).toBe(false)
+  })
+
+  it('gives every excluded entry the same idempotent placeholder', () => {
+    // `idempotent` is a placeholder on excluded entries and Task 16 deliberately did not re-guess
+    // it (no derivable truth, no consumer — unlike `class`, which the HTTP method settles and two
+    // guards now enforce). Pinning the uniformity turns "placeholder" into a stated convention, so
+    // a future entry that quietly asserts something about an unreachable operation stands out.
+    const odd = ALL_OPERATION_IDS.filter((id) => {
+      const e = getCapability(id)!
+      return e.excluded && e.idempotent !== true
+    })
+    expect(odd).toEqual([])
+  })
+
+  it('classifies excluded state-changing operations as write, not read', () => {
+    // Pre-Task-16 the excluded() helper hard-coded class:'read' onto all 45 excluded mutating
+    // operations. These four are status updates / schedulers, not destruction — so 'write' is
+    // their true class, and it is now recorded.
+    for (const operationId of ['deleteBoost', 'removeHouseholdMember', 'revokeHouseholdInvite', 'requestDeletion']) {
+      const entry = getCapability(operationId)
+      expect(entry?.class, operationId).toBe('write')
+      expect(entry?.destructive, operationId).toBe(false)
+      expect(entry?.excluded, operationId).toBe(true)
     }
   })
 

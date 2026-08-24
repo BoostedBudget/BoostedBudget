@@ -15,6 +15,7 @@
  */
 
 import { getCapability } from '../../manifest/capability-manifest'
+import type { OperationClass as AuditOperationClass } from '../../manifest/capability-manifest'
 import { HostProxyError } from '../../sandbox/host-proxy'
 import type { McpToolResult } from './search'
 
@@ -42,7 +43,7 @@ export interface HostProxy {
  */
 export interface ExecuteAuditEvent {
   operationId: string
-  operationClass: 'read' | 'write'
+  operationClass: AuditOperationClass
   result: 'success' | 'confirmation_required' | 'denied' | 'error'
 }
 
@@ -87,41 +88,33 @@ function buildRequestArgs(
 const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 /**
- * The class to record for a call the manifest gate REFUSED — an excluded
- * operation, or an operationId that is in no manifest at all.
+ * The class to record for a call the manifest gate REFUSED — an excluded operation, or an
+ * operationId that is in no manifest at all.
  *
- * ⚠ WHY THIS CANNOT USE THE MANIFEST. Round 14, finding CC-1: the permitted path
- * derives its class from `capability.confirmationRequired`, which is exactly the
- * field capability-manifest.ts's `excluded()` helper hard-codes to `false` for
- * every excluded entry. Reading it on the denied path therefore reported a denied
- * `purgeAccount` or `grantTrial` as `operation_class = 'read'` — the manifest has
- * no opinion about excluded operations to read, so asking it produces a confident
- * wrong answer rather than an absent one. The call never executes (host-proxy.ts
- * throws on `entry.excluded` before any confirmation gate), so what was at stake
- * was only the audit row; but a security-relevant DENIAL mislabelled as a read is
- * precisely the row an operator would miss when filtering for attempts against
- * mutating operations.
+ * ⚠ HISTORY, because the reason this function exists has changed. Round 14, finding CC-1: the
+ * permitted path used to derive its class from `capability.confirmationRequired`, which is the
+ * field capability-manifest.ts's `excluded()` helper hard-codes to `false` for every excluded
+ * entry — so a denied `purgeAccount` was recorded as `operation_class = 'read'`. The HTTP method
+ * was adopted as the honest source because the manifest genuinely had no opinion to read.
  *
- * The HTTP method is the honest source: it describes what the operation WOULD have
- * done, is present for all 195 spec entries including the excluded ones, and is
- * independent of the manifest defaults. `mcp_audit_log.operation_class` is
- * constrained to ('read','write') by migration 000084, so there is no third value
- * to record and no truthful "unknown" to record it as.
+ * Issue #1569 Task 16 (F1) fixed the underlying defect: excluded entries now carry their TRUE
+ * class (excludedWrite() / destructive({ excluded: true })), and two spec-index-driven guards in
+ * capability-summary.drift.test.ts keep every GET at 'read' and every state-changing method at
+ * 'write' or 'destructive'. So the manifest IS now the honest source, and this function reads it
+ * first. `purgeAccount` is recorded as 'destructive', not 'read' and not merely 'write'.
  *
- * ⚠ NOT the sibling defect, and deliberately not touched: the spec index's own
- * `manifestClass` field is ALSO 'read' on 45 mutating excluded entries, from the
- * same default block. That is a different field, no consumer reads it for an
- * excluded entry, and correcting it is a materially larger change.
- *
- * The no-spec-entry fallback is `write`, the fail-LOUD direction: for a
- * hallucinated or misspelled operationId there is no evidence either way, and a
- * denial that over-states its class costs an operator one dismissed row, while one
- * that under-states it is invisible to the query that would have found it.
+ * The HTTP-method path survives only as the fallback for an operationId with no manifest entry
+ * but a spec entry, and the no-evidence-at-all fallback is still `write` — the fail-LOUD
+ * direction: for a hallucinated or misspelled operationId, a denial that over-states its class
+ * costs an operator one dismissed row, while one that under-states it is invisible to the query
+ * that would have found it.
  */
 function deniedOperationClass(
   operationId: string,
   specEntries: { operationId: string; method: string; path: string }[],
-): 'read' | 'write' {
+): AuditOperationClass {
+  const capability = getCapability(operationId)
+  if (capability) return capability.class
   const spec = specEntries.find((e) => e.operationId === operationId)
   if (!spec) return 'write'
   return READ_ONLY_METHODS.has(spec.method.toUpperCase()) ? 'read' : 'write'
@@ -168,10 +161,11 @@ export function buildExecuteHandler(
         break
       }
 
-      // Only reached for a PERMITTED capability, so `confirmationRequired` is a real
-      // manifest decision here rather than the excluded() helper's placeholder. This
-      // computation must stay below the gate above for that reason.
-      const operationClass: 'read' | 'write' = capability.confirmationRequired ? 'write' : 'read'
+      // The manifest class verbatim, since #1569 Task 16: it distinguishes a destructive call
+      // from an ordinary write, which deriving from `confirmationRequired` could not (both are
+      // confirmation-gated). An operator filtering mcp_audit_log for attempts against
+      // data-destroying operations can now find them.
+      const operationClass: AuditOperationClass = capability.class
 
       const args = buildRequestArgs(call, specEntries)
 
