@@ -79,6 +79,40 @@ func NewIdempotencyRepository(db DB) IdempotencyRepository {
 	return &idempotencyRepository{db: db}
 }
 
+// idempotencyStoreQuery records the response for a key, TAKING OVER an expired row.
+//
+// #1569 task 20 (S9). This used to end `ON CONFLICT (user_id, key) DO NOTHING`, and paired with a
+// lookup predicated on `expires_at > NOW()` that made the whole mechanism silently self-disabling:
+//
+//   1. a key's row passes expires_at but DeleteExpired has not swept yet — the sweep is periodic,
+//      so this window is routine, not exotic;
+//   2. the SELECT filters on `expires_at > NOW()` and MISSES, so fn() re-executes;
+//   3. the INSERT collides with the stale row and DO NOTHING discards the fresh response.
+//
+// The row is then a tombstone: unreadable by the lookup, unreplaceable by the store. Every retry
+// of that key re-executes fn() for as long as the row survives, which for a payment or a transfer
+// is the exact double-execution the key exists to prevent — and it is INVISIBLE, because the caller
+// is told cacheHit=false and handed a correct-looking response each time.
+//
+// The `WHERE idempotency_keys.expires_at <= NOW()` on the DO UPDATE is what keeps the fix from
+// becoming a different bug. Without it this would overwrite a LIVE row, which would let a second
+// concurrent first-time caller replace the winner's stored response — and would defeat the
+// ErrIdempotencyKeyConflict check for a key reused across two operations, since the operation_id
+// would just be rewritten. A live conflict must still lose, exactly as it did before.
+//
+// expires_at is reset explicitly rather than left to the column DEFAULT: DO UPDATE does not
+// re-evaluate defaults, so the taken-over row would otherwise keep the timestamp it had already
+// passed and be re-taken on the very next call — a fix that fixes nothing. created_at is
+// deliberately NOT reset; it records when the key was first seen.
+const idempotencyStoreQuery = `
+	INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
+	VALUES ($1, $2, $3, $4::jsonb)
+	ON CONFLICT (user_id, key) DO UPDATE
+	SET operation_id  = EXCLUDED.operation_id,
+	    response_body = EXCLUDED.response_body,
+	    expires_at    = NOW() + INTERVAL '24 hours'
+	WHERE idempotency_keys.expires_at <= NOW()`
+
 func (r *idempotencyRepository) GetOrCreate(
 	ctx context.Context,
 	key, userID, operationID string,
@@ -140,9 +174,7 @@ func (r *idempotencyRepository) GetOrCreate(
 	// Store in idempotency_keys table (best-effort; failure doesn't break the operation).
 	// ON CONFLICT (user_id, key) — per-user uniqueness (migration 000087).
 	_, storeErr := r.db.Exec(ctx,
-		`INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
-		 VALUES ($1, $2, $3, $4::jsonb)
-		 ON CONFLICT (user_id, key) DO NOTHING`,
+		idempotencyStoreQuery,
 		key, userID, operationID, resultJSON,
 	)
 	// Best-effort: if store fails, operation still succeeded; dedup may not work on next retry
@@ -209,9 +241,7 @@ func (r *idempotencyRepository) GetOrCreateInTx(
 	// Store inside the tx so the reservation commits atomically with the entity write.
 	// ON CONFLICT (user_id, key) — per-user uniqueness (migration 000087).
 	_, storeErr := tx.Exec(ctx,
-		`INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
-		 VALUES ($1, $2, $3, $4::jsonb)
-		 ON CONFLICT (user_id, key) DO NOTHING`,
+		idempotencyStoreQuery,
 		key, userID, operationID, resultJSON,
 	)
 	// Best-effort; if store fails the operation still succeeded.
