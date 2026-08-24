@@ -2,6 +2,7 @@ package repository
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -77,6 +78,7 @@ var historyBearingTables = map[string]string{
 	"balance_snapshots":          "daily account balances; the only record of what a balance was on a past day",
 	"holding_snapshots":          "daily investment positions; Plaid does not backfill them",
 	"liability_statements":       "captured statement terms and APRs; the provider reports only the current one",
+	"portfolio_snapshots":        "the per-day portfolio total (value, cost basis, gain/loss); the only record of what a portfolio was worth on a past day",
 	"portfolio_snapshot_repairs": "the audit trail of snapshot repairs",
 	"rule_execution_history":     "what an automation rule did and when",
 	"boost_executions":           "what a boost moved and when",
@@ -105,6 +107,18 @@ var historyBearingTables = map[string]string{
 var deliberatelyNotHistoryBearing = map[string]string{
 	"budget_period_events": "exactly-once scanner marker, not history; its CASCADE from budgets is " +
 		"its only route to GDPR erasure and must stay CASCADE (#1569 task 14)",
+
+	// The rest are here because TestEveryHistoryShapedTableIsClassified demands a verdict on every
+	// table whose NAME reads like history. Each of these is a system record, not the user's
+	// financial history: nothing here is something the user would notice losing, and none of it is
+	// what #1569 promised to retain.
+	"audit_logs": "system/compliance record of who did what, not the user's financial history. Its " +
+		"PII payload is REDACTED rather than retained on erasure (ADR 2026-08-01)",
+	"mcp_audit_log":         "MCP tool-call audit trail; a system record, hard-deleted on erasure",
+	"webhook_events":        "inbound provider webhook receipts, kept for replay/idempotency only",
+	"paddle_webhook_events": "inbound Paddle webhook receipts, kept for replay/idempotency only",
+	"savings_impact_snapshots": "a GLOBAL aggregate, not scoped to any user; there is no user history " +
+		"in it to retain or erase",
 }
 
 // allowedHistoryCascades is the pinned set of CASCADE edges into those tables, each with the reason
@@ -123,6 +137,7 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	{child: "holding_snapshots", parent: "users", constraint: "fk_holding_snapshots_user_id"}:                     "GDPR erasure path off users",
 	{child: "liability_statements", parent: "users", constraint: "fk_liability_statements_user_id"}:               "GDPR erasure path off users",
 	{child: "portfolio_snapshot_repairs", parent: "users", constraint: "portfolio_snapshot_repairs_user_id_fkey"}: "GDPR erasure path off users",
+	{child: "portfolio_snapshots", parent: "users", constraint: "fk_portfolio_snapshots_user_id"}:                 "GDPR erasure path off users",
 	{child: "rollover_history", parent: "users", constraint: "fk_rollover_history_user_id"}:                       "GDPR erasure path off users",
 	{child: "rule_execution_history", parent: "users", constraint: "fk_rule_execution_history_user_id"}:           "GDPR erasure path off users",
 	{child: "savings_goals", parent: "users", constraint: "fk_savings_goals_user_id"}:                             "GDPR erasure path off users",
@@ -150,6 +165,44 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	{child: "accounts", parent: "linked_items", constraint: "fk_accounts_linked_item_id"}:                         "linked_items rows are themselves purged only by an explicit disconnect-and-purge; a disconnect soft-removes and keeps the row",
 	{child: "budget_categories", parent: "custom_categories", constraint: "fk_budget_categories_custom_category"}: "custom_categories is tombstoned, so this cascade fires only under GDPR erasure",
 	{child: "budget_categories", parent: "savings_goals", constraint: "fk_budget_categories_savings_goal"}:        "savings_goals is tombstoned, so this cascade fires only under GDPR erasure",
+}
+
+// historyShapedTableName matches the table names that READ as a record of something that happened.
+// It is the completeness net: G1 and G2 both work off a hand-maintained list, and a hand-maintained
+// list has no way to notice a table nobody added to it. `portfolio_snapshots` was exactly that —
+// per-day total_value/total_cost_basis/total_gain_loss, cascading from users, and invisible to both
+// guards, while its own REPAIRS table was protected.
+//
+// Name-shaped rather than column-shaped on purpose. A column heuristic ("has user_id and a date")
+// sweeps in join tables and settings rows, and the argument about whether each one counts is
+// exactly the argument that stops people running the guard. A name ending in _history, _snapshots,
+// _events, _executions, _statements, _contributions, _repairs, _log or _audit is a claim the author
+// made about what the table is; this test only asks them to finish the sentence.
+//
+// It is a net, not a definition: a history table named `daily_totals` still slips past. Adding one
+// to historyBearingTables by hand remains correct and is not made redundant by this.
+var historyShapedTableName = regexp.MustCompile(
+	`(_history|_histories|_snapshot|_snapshots|_event|_events|_executions|_statements|` +
+		`_contributions|_repairs|_log|_logs|_audit)$`)
+
+// unclassifiedHistoryShapedTables returns the history-shaped table names that appear in NEITHER
+// map. Kept pure so the meta-test can construct the case.
+func unclassifiedHistoryShapedTables(tables []string, history, notHistory map[string]string) []string {
+	var out []string
+	for _, tbl := range tables {
+		if !historyShapedTableName.MatchString(tbl) {
+			continue
+		}
+		if _, ok := history[tbl]; ok {
+			continue
+		}
+		if _, ok := notHistory[tbl]; ok {
+			continue
+		}
+		out = append(out, tbl)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // historyCascadeVerdict is the whole decision procedure, kept pure so that the meta-tests below can
@@ -274,5 +327,48 @@ func TestHistoryCascadeGuard_BudgetPeriodEventsStaysOutOfScope(t *testing.T) {
 		historyBearingTables, allowedHistoryCascades)
 	if len(bad) != 0 {
 		t.Fatalf("budget_period_events must stay CASCADE and must not be flagged; got %v", bad)
+	}
+}
+
+// TestHistoryShapedTableClassification_FlagsAnUnclassifiedTable is the case F3 exists for: a new
+// migration adds a per-day table and nobody remembers the two maps, so G1 and G2 both go on being
+// green about a table they cannot see.
+func TestHistoryShapedTableClassification_FlagsAnUnclassifiedTable(t *testing.T) {
+	got := unclassifiedHistoryShapedTables(
+		[]string{"net_worth_snapshots", "balance_snapshots", "budget_period_events", "users", "accounts"},
+		historyBearingTables, deliberatelyNotHistoryBearing)
+	if len(got) != 1 || got[0] != "net_worth_snapshots" {
+		t.Fatalf("only the unclassified history-shaped table should be reported, got %v", got)
+	}
+}
+
+// TestHistoryShapedTableClassification_EitherMapSatisfiesIt pins that the requirement is a VERDICT,
+// not a particular verdict. Forcing every shaped table into historyBearingTables would be the wrong
+// fix, and is how budget_period_events would get reclassified.
+func TestHistoryShapedTableClassification_EitherMapSatisfiesIt(t *testing.T) {
+	if got := unclassifiedHistoryShapedTables([]string{"rollover_history"},
+		historyBearingTables, deliberatelyNotHistoryBearing); len(got) != 0 {
+		t.Fatalf("a table in historyBearingTables is classified; got %v", got)
+	}
+	if got := unclassifiedHistoryShapedTables([]string{"budget_period_events"},
+		historyBearingTables, deliberatelyNotHistoryBearing); len(got) != 0 {
+		t.Fatalf("a table in deliberatelyNotHistoryBearing is classified; got %v", got)
+	}
+	if got := unclassifiedHistoryShapedTables([]string{"user_preferences", "merchants"},
+		historyBearingTables, deliberatelyNotHistoryBearing); len(got) != 0 {
+		t.Fatalf("a table whose name is not history-shaped is out of scope; got %v", got)
+	}
+}
+
+// TestHistoryShapedTableClassification_MapsAgreeOnNothing keeps a table from being in both maps,
+// which would let a reader take whichever answer suited them.
+func TestHistoryShapedTableClassification_MapsAgreeOnNothing(t *testing.T) {
+	for tbl := range deliberatelyNotHistoryBearing {
+		if _, ok := historyBearingTables[tbl]; ok {
+			t.Errorf("%s is in BOTH historyBearingTables and deliberatelyNotHistoryBearing", tbl)
+		}
+		if strings.TrimSpace(deliberatelyNotHistoryBearing[tbl]) == "" {
+			t.Errorf("%s is excluded with no reason; the reason is the point", tbl)
+		}
 	}
 }
