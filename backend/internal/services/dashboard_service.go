@@ -429,6 +429,17 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 // `status IN ('active','replaced')` and so misses 'expired', which is what
 // ExpireAccountsByFingerprint writes for a fully-disconnected chain.)
 //
+// One consequence of that switch is deliberate rather than overlooked (#1569 Task 18): an account
+// with no recorded 'active' interval AT ALL is outside this universe at every cutoff, where
+// AllStatuses would have admitted it. 000152's backfill produces that shape for a pre-existing
+// terminal-status row whose transition timestamp is not strictly after created_at — the row was
+// never observably live for a nonzero duration, so claiming it was would be inventing history.
+// It is also the only way to reach that shape: the NULL-timestamp variant is refused by three
+// validated CHECK constraints plus updated_at's NOT NULL, and every account created after 000152
+// gets its 'active' interval from the AFTER INSERT trigger. Both halves are pinned by
+// repository/account_status_history_degenerate_backfill_integration_test.go, which asserts the
+// as-of universe through this very call (GetAccountsWithInstitutionFiltered + AsOf).
+//
 // IncludeHidden is true to match GetByUserID, which applies no is_hidden predicate at all —
 // a baseline source that defaults to hiding hidden accounts would silently change which accounts
 // count toward it.
