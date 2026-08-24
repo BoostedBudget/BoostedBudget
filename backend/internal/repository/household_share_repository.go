@@ -44,13 +44,21 @@ type HouseholdShareRepository interface {
 	// row itself belongs to GDPR alone, and reaches it by cascade from user_accounts.
 	RevokeSharesForUser(ctx context.Context, householdID, userID string) error
 
-	// SetShareVisibility upserts the single active grant row (revoked_at IS NULL) for
-	// (householdID, userAccountID) to the given visibility. It NEVER writes revoked_at —
-	// revocation is reserved for RevokeSharesForUser (member removal). Hiding an account
-	// keeps its row active (visibility='hidden', revoked_at=NULL) so a later member
-	// removal still finds and revokes it. Race-safe under concurrent callers via
+	// SetShareVisibility makes `visibility` the CURRENT state of (householdID,
+	// userAccountID), leaving exactly one open grant row (revoked_at IS NULL) behind.
+	// Hiding an account keeps an open row (visibility='hidden', revoked_at=NULL) so a later
+	// member removal still finds and revokes it. Race-safe under concurrent callers via
 	// INSERT ... ON CONFLICT targeting the partial unique index
 	// uq_household_account_shares_active. #1368 — Phase 4.
+	//
+	// #1569 T7: a visibility CHANGE now closes the outgoing state's interval and opens a new
+	// one, instead of overwriting `visibility` on the single row. It used to overwrite, which
+	// meant the row's one [shared_at, revoked_at) interval carried whatever the member last
+	// chose — so hiding an account rewrote its entire history, and an as-of read for a date
+	// when it demonstrably WAS in the household aggregate reported that it never had been.
+	// Re-asserting the visibility a row already has is still a no-op update on that same row:
+	// only a genuine state change closes an interval, so idempotent PATCHes cannot accumulate
+	// zero-length ones. See householdAccountsCTEForBalancesAsOf for the read side.
 	SetShareVisibility(ctx context.Context, householdID, userAccountID string, physicalBlindIdx *string, visibility domain.ShareVisibility) (*domain.HouseholdAccountShare, error)
 
 	// ListMyAccountShares returns every user_accounts row owned by userID, left-joined to
@@ -120,22 +128,59 @@ func (r *householdShareRepository) RevokeSharesForUser(ctx context.Context, hous
 	return err
 }
 
+// setShareVisibilityReturning is the column list every SetShareVisibility path returns, in
+// domain.HouseholdAccountShare's scan order.
+const setShareVisibilityReturning = `id, household_id, user_account_id, visibility, shared_at, revoked_at,
+	          physical_account_blind_idx, created_at, updated_at`
+
 func (r *householdShareRepository) SetShareVisibility(ctx context.Context, householdID, userAccountID string, physicalBlindIdx *string, visibility domain.ShareVisibility) (*domain.HouseholdAccountShare, error) {
+	// Two statements, so they need a transaction: closing the outgoing interval without
+	// opening the replacement would leave the account with NO open grant — silently absent
+	// from the household aggregate, and invisible to RevokeSharesForUser at removal time.
+	// db.Begin() opens a SAVEPOINT when r.db is already a pgx.Tx (the production path —
+	// SetAccountShareVisibility runs this inside its own membership-locked transaction), so
+	// this composes rather than nesting. Same idiom as budgetRepository.CreateWithCategories.
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Close the open interval ONLY if it is a different state. `visibility <> $3` is what
+	// keeps a repeated no-op PATCH from churning out zero-length intervals, and it also takes
+	// the row lock that serializes concurrent togglers on this pair.
+	if _, err = tx.Exec(ctx, `
+		UPDATE household_account_shares SET revoked_at = now(), updated_at = now()
+		WHERE household_id = $1 AND user_account_id = $2
+		  AND revoked_at IS NULL AND visibility <> $3
+	`, householdID, userAccountID, visibility); err != nil {
+		return nil, err
+	}
+
+	// Open the new interval. ON CONFLICT still carries the whole race: a contender that was
+	// blocked on the UPDATE above wakes with a snapshot predating our INSERT, closes nothing,
+	// and lands here — where DO UPDATE absorbs it exactly as before. That path overwrites an
+	// interval instead of closing it, and is the one case where a visibility state leaves no
+	// trace; its lifetime is bounded by how long the contender was blocked, i.e. one
+	// round-trip, and the alternative (surfacing a 23505 to a user toggling a switch twice)
+	// is worse.
 	var s domain.HouseholdAccountShare
-	err := r.db.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (household_id, user_account_id) WHERE revoked_at IS NULL
 		DO UPDATE SET visibility = EXCLUDED.visibility,
 		              physical_account_blind_idx = EXCLUDED.physical_account_blind_idx,
 		              updated_at = now()
-		RETURNING id, household_id, user_account_id, visibility, shared_at, revoked_at,
-		          physical_account_blind_idx, created_at, updated_at
+		RETURNING `+setShareVisibilityReturning+`
 	`, householdID, userAccountID, physicalBlindIdx, visibility).Scan(
 		&s.ID, &s.HouseholdID, &s.UserAccountID, &s.Visibility, &s.SharedAt, &s.RevokedAt,
 		&s.PhysicalAccountBlindIdx, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return &s, nil

@@ -14,6 +14,7 @@ package repository_test
 import (
 	"context"
 	"sync"
+	"time"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -87,7 +88,7 @@ func TestHouseholdShareRepository_SetShareVisibility_ShareAndHide_Integration(t 
 	assert.Nil(t, hidden.RevokedAt)
 }
 
-func TestHouseholdShareRepository_SetShareVisibility_ToggleSameRow_Integration(t *testing.T) {
+func TestHouseholdShareRepository_SetShareVisibility_ToggleClosesAndOpensIntervals_Integration(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
 	repo := repository.NewHouseholdShareRepository(pool)
@@ -105,14 +106,28 @@ func TestHouseholdShareRepository_SetShareVisibility_ToggleSameRow_Integration(t
 	reShared, err := repo.SetShareVisibility(ctx, hh, ua, nil, domain.ShareVisibilityShared)
 	require.NoError(t, err)
 
-	assert.Equal(t, hidden.ID, reShared.ID, "re-share must toggle the same active row, not insert a second one")
+	// #1569 T7 replaced the old contract here ("re-share must toggle the same active row").
+	// Toggling in place was exactly the defect: it rewrote the account's whole history to
+	// whatever the member last chose. A toggle is a new state starting now.
+	assert.NotEqual(t, hidden.ID, reShared.ID, "a genuine state change must OPEN a new interval, not overwrite the old one")
 	assert.Equal(t, domain.ShareVisibilityShared, reShared.Visibility)
-	assert.Nil(t, reShared.RevokedAt, "revoked_at must stay NULL across the whole shared<->hidden toggle")
+	assert.Nil(t, reShared.RevokedAt, "the incoming state is the open row")
 
-	var count int
-	err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`, hh, ua).Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 1, count, "exactly one row must exist for this (household, user_account) pair")
+	var closedVisibility string
+	var closedAt *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT visibility, revoked_at FROM household_account_shares WHERE id = $1`, hidden.ID).
+		Scan(&closedVisibility, &closedAt))
+	assert.Equal(t, string(domain.ShareVisibilityHidden), closedVisibility, "the outgoing state must be retained as it was")
+	require.NotNil(t, closedAt, "and its interval must be CLOSED, not deleted")
+
+	var open, total int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT COUNT(*) FILTER (WHERE revoked_at IS NULL), COUNT(*)
+		FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2
+	`, hh, ua).Scan(&open, &total))
+	assert.Equal(t, 1, open, "exactly one OPEN row may exist for this (household, user_account) pair")
+	assert.Equal(t, 2, total, "and the closed predecessor stays as the record of the hidden period")
 }
 
 func TestHouseholdShareRepository_SetShareVisibility_ConcurrentToggle_Integration(t *testing.T) {

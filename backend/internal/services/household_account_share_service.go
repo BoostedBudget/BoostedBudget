@@ -46,6 +46,35 @@ func (s *householdService) SetAccountShareVisibility(ctx context.Context, caller
 	hhRepo := repository.NewHouseholdRepository(tx)
 	shareRepo := repository.NewHouseholdShareRepository(tx)
 
+	// Household-row lock FIRST, per this codebase's lock-ordering convention (RemoveMember,
+	// OffboardExcessMembers, ForceDisband and PurgeRemovedMembership all take it before
+	// touching household_members).
+	//
+	// #1569 T7 is what forced this method to join them. It used to lock only the member row,
+	// and got away with the inversion because SetShareVisibility's single INSERT ... ON
+	// CONFLICT always resolved to the DO UPDATE branch: an update that leaves household_id
+	// untouched fires no FK trigger, so it never took the KEY SHARE lock on households that a
+	// real insert does. Now that a visibility change closes one interval and INSERTS the next,
+	// that lock IS taken — and a concurrent RemoveMember (households FOR UPDATE, then this
+	// member's household_members row) deadlocked against it reproducibly, 2 runs in 8 under
+	// TestHouseholdServiceIntegration_SetAccountShareVisibility_RaceRemoveMember.
+	//
+	// resolveHousehold is a non-locking lookup used only to learn WHICH household to lock; the
+	// authoritative membership check is still LockActiveMembershipForUser below, so a caller
+	// with no active membership still gets ErrHouseholdNotFound and the #1368 Codex High-4
+	// serialization against a concurrent removal is unchanged.
+	resolved, _, found, cerr := hhRepo.GetHouseholdForUser(ctx, callerUserID)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if !found {
+		cerr = domain.ErrHouseholdNotFound
+		return nil, cerr
+	}
+	if _, cerr = hhRepo.LockHouseholdByID(ctx, resolved.ID); cerr != nil {
+		return nil, cerr
+	}
+
 	// Lock the caller's own active household_members row for the remainder of this
 	// transaction. This serializes against RemoveMember (self-leave or owner-removal),
 	// which updates that same row — so either we observe 404 after a removal already
