@@ -94,6 +94,9 @@ func TestPlaidCleanupService_Integration_NullStatus_RemoveAllUserItems_ActuallyD
 	fakePlaid := &countingPlaidCollaborator{}
 	svc := NewPlaidItemCleanupService(linkedItemRepo, fakePlaid)
 	svc.SetWorkClaimsRepo(claimsRepo)
+	// Issue #1569 Task 20: a no-op account-repository stand-in — see the note in
+	// plaid_item_cleanup_service_null_status_integration_test.go.
+	svc.SetAccountRepo(permissiveAccountRepoForCleanup{})
 
 	// This is the hard-deletion path's call (DeletionService.ExecuteDeletion, before
 	// DeleteUserCascade) — must not panic and must actually disconnect the NULL-status item.

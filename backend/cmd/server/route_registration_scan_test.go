@@ -543,7 +543,7 @@ func main() {
 		// Pin the real anchor and the three new fail-closed lists: the fixes must not start
 		// failing on correct code, and a guard that reports problems against today's main.go is
 		// as broken as one that reports none against a mutated one.
-		if got, want := scan.anchor, 2065; got != want {
+		if got, want := scan.anchor, 2072; got != want {
 			t.Errorf("anchor = %d (label %q), want %d — main.go's last UseMiddleware call is the "+
 				"admin middleware on line %d", got, scan.anchorLabel, want, want)
 		}

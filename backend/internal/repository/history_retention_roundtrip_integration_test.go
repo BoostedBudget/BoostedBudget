@@ -149,7 +149,7 @@ func TestHistoryRetentionRoundTrip_DisconnectKeepsEveryKindOfHistory(t *testing.
 	require.Positive(t, historyBefore, "the 000152 trigger must have recorded the account going live")
 
 	// THE ACT: the production institution-level disconnect.
-	require.NoError(t, accountRepo.MarkRemovedByLinkedItemID(ctx, f.LinkedItemID.String()))
+	require.NoError(t, accountRepo.MarkRemovedByLinkedItemID(ctx, f.LinkedItemID.String(), domain.RemovalReasonUserDisconnect))
 
 	var status string
 	var removedAt *time.Time
@@ -294,7 +294,7 @@ func TestHistoryRetentionRoundTrip_PurgeDestroysOnlyWhatItNames(t *testing.T) {
 	require.NoError(t, err)
 	siblingBalanceID := seedBalanceSnapshotAt(ctx, t, pool, f.UserID, siblingAccountID, siblingUserAccountID, lastMonth, 55.00)
 
-	require.NoError(t, accountRepo.MarkRemovedByLinkedItemID(ctx, f.LinkedItemID.String()))
+	require.NoError(t, accountRepo.MarkRemovedByLinkedItemID(ctx, f.LinkedItemID.String(), domain.RemovalReasonUserDisconnect))
 
 	// THE ACT: the one path that is allowed to destroy history.
 	require.NoError(t, accountRepo.PurgeAccount(ctx, f.AccountID.String(), f.UserID.String(), nil))

@@ -1358,6 +1358,13 @@ func main() {
 				// hold their own, different flow claim and disconnect the same user's Plaid items
 				// concurrently.
 				plaidCleanupService.SetWorkClaimsRepo(workClaimsRepo)
+				// Issue #1569 Task 20 (A2): required so that removing an item's Plaid Item also
+				// transitions its accounts to 'removed'. Without it the accounts stayed 'active'
+				// forever with no removed_at, and the frontend rendered their frozen balances as
+				// current ones (getAccountBalanceAsOfDate returns undefined for an active account).
+				// The service refuses to touch Plaid at all when this is unset, so a wiring
+				// regression here fails loudly rather than silently reproducing the defect.
+				plaidCleanupService.SetAccountRepo(accountRepo)
 				appLogger.Info("Plaid item cleanup service initialized")
 
 				// Issue #668: Wire cleanup service to deletion service (resolves nil dependency from earlier)

@@ -812,18 +812,35 @@ func (r *linkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID
 
 	// ⚠ plaid_removed_at is not by itself proof the USER disconnected this institution — #1569
 	// residual E9. The billing cleanup sweep stamps it too, for items that are merely in an error
-	// state or stale (cleanupCandidateReasonPredicate above), and
-	// PlaidItemCleanupService.RemoveItem leaves every account under such an item at
-	// status='active': accountRepository.MarkRemovedByLinkedItemID has exactly one production
-	// caller, accountService.DisconnectInstitution, and the sweep is not it. Without this second
-	// leg, a background job could silently satisfy the precondition for the most destructive verb
-	// in this file, and the retained history #1569 exists to keep would go with it.
+	// state or stale (cleanupCandidateReasonPredicate above).
+	//
+	// ⚠⚠ WHAT THIS SECOND LEG DOES AND NO LONGER DOES (#1569 task 20, A2). It used to also mean
+	// "a background job cannot reach this precondition", because PlaidItemCleanupService left every
+	// account under a swept item at status='active' and so this count was never zero for one.
+	// THAT IS NO LONGER TRUE, and deliberately so: leaving those accounts 'active' was a defect —
+	// they had stopped syncing, so their balances were frozen figures rendered as current ones with
+	// no "as of" date. The service now transitions them to 'removed' with
+	// removed_reason = 'link_removed', which means a swept item CAN now satisfy both legs of this
+	// guard without the user ever having pressed Disconnect.
+	//
+	// Accepted, with the reasoning stated rather than assumed. This guard is a PRECONDITION, not an
+	// authorisation: nothing here is reachable except through the explicit, type-to-confirm
+	// user-initiated purge operation, and the precondition it encodes ("the connection must be
+	// stopped before its history may be destroyed") is genuinely satisfied for a swept item — the
+	// Plaid Item is gone and cannot be revived. What changed is only that the user is no longer
+	// asked to press Disconnect on a connection this product already severed. If a future task wants
+	// "the USER stopped it" specifically, the queryable fact for that is now
+	// accounts.removed_reason = 'user_disconnect' versus 'link_removed' (migration 000167), NOT the
+	// account count — and it should be added as a third leg here rather than inferred.
 	//
 	// This is the institution-level equal of PurgeAccount's `status == active -> refuse` guard
 	// (account_repository.go), and it shares its sentinel with the stamp check above because the
 	// user-facing answer is identical: disconnect first. That is not a dead end —
 	// DisconnectInstitution is idempotent against an already-removed Plaid item (ITEM_NOT_FOUND
-	// maps to success) and marks the accounts removed on its way through.
+	// maps to success) and marks the accounts removed on its way through. Note that its
+	// MarkRemovedByLinkedItemID call is scoped `AND status = 'active'`, so running it over an
+	// already-swept item leaves the existing 'link_removed' reasons in place rather than rewriting
+	// them to 'user_disconnect' — the earlier, machine-written cause is the true one and is kept.
 	//
 	// Read inside the same transaction, after the FOR UPDATE on linked_items. That lock does not
 	// cover the accounts rows, so a disconnect committing concurrently could still flip one to

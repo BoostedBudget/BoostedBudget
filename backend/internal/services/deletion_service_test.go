@@ -931,6 +931,7 @@ func (m *MockPlaidItemCleanupService) DisconnectAllUserItemsIfEligible(ctx conte
 // Bare no-op (no m.Called) to avoid an unregistered-expectation panic; stubbed only to satisfy
 // the widened PlaidItemCleanupService interface.
 func (m *MockPlaidItemCleanupService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {}
+func (m *MockPlaidItemCleanupService) SetAccountRepo(repo AccountRepoForCleanup)              {}
 
 // TestExecuteDeletion_CallsPlaidCleanupBeforeDBDelete verifies that
 // ExecuteDeletion calls PlaidCleanupService.RemoveAllUserItems before DeleteUserCascade

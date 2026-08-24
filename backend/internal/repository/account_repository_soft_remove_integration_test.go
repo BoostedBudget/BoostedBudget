@@ -113,7 +113,7 @@ func TestAccountRepository_MarkRemovedByLinkedItemID_Integration_PreservesBalanc
 		VALUES ($1, $2, 500.00, 'USD', NOW(), 'manual') RETURNING id`,
 		checkingID, userID).Scan(&snapshotID))
 
-	require.NoError(t, accountRepo.MarkRemovedByLinkedItemID(ctx, item.ID))
+	require.NoError(t, accountRepo.MarkRemovedByLinkedItemID(ctx, item.ID, domain.RemovalReasonUserDisconnect))
 
 	rows, err := pool.Query(ctx, `SELECT id, status, removed_at FROM accounts WHERE linked_item_id = $1 ORDER BY id`, item.ID)
 	require.NoError(t, err)
@@ -448,7 +448,7 @@ func TestAccountRepository_SoftRemove_Integration_RetainsEveryDerivedTable(t *te
 		{
 			name: "institution disconnect",
 			remove: func(t *testing.T, f retainedFixture) {
-				require.NoError(t, repo.MarkRemovedByLinkedItemID(ctx, f.LinkedItemID.String()))
+				require.NoError(t, repo.MarkRemovedByLinkedItemID(ctx, f.LinkedItemID.String(), domain.RemovalReasonUserDisconnect))
 			},
 		},
 	} {
