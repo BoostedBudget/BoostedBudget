@@ -29,10 +29,17 @@ import (
 )
 
 // disconnectItemAccountsForPurge puts an item's accounts into the state a real user disconnect
-// leaves behind (accountRepository.MarkRemovedByLinkedItemID's statement, inlined so this test
-// file does not need the account repository). PurgeLinkedItem refuses while any account under the
-// item is still 'active' — #1569 residual E9 — so every test that purges must reach that state
-// the way production does, rather than stamping plaid_removed_at and jumping the queue.
+// leaves behind. PurgeLinkedItem refuses while any account under the item is still 'active' —
+// #1569 residual E9 — so every test that purges must reach that state the way production does,
+// rather than stamping plaid_removed_at and jumping the queue.
+//
+// ⚠ THIS SQL IS A COPY. Its source of truth is accountRepository.MarkRemovedByLinkedItemID
+// (internal/repository/account_repository.go — search for "MarkRemovedByLinkedItemID transitions
+// every ACTIVE account"), and as of this comment the two are byte-identical apart from
+// formatting. It is inlined only so this file does not have to construct an account repository
+// for one UPDATE; if the production statement changes what it stamps — a different
+// removed_reason, an extra column, a narrower WHERE — this copy must change with it, or these
+// purge tests will keep passing against a post-disconnect state production no longer produces.
 func disconnectItemAccountsForPurge(ctx context.Context, t *testing.T, pool *pgxpool.Pool, linkedItemID any) {
 	t.Helper()
 	_, err := pool.Exec(ctx, `
