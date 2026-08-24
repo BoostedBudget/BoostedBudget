@@ -64,8 +64,9 @@ written **in the same transaction** as the delete; a precondition that refuses t
 and an entry in `allowedHistoryDeletes` (guard G2) giving the reason.
 
 Today this bucket has exactly five members: `PurgeAccount`, `PurgeLinkedItem`, `PurgeGoal`,
-`DeleteContribution`, and `DeleteManagedForTransaction` — the last of which is the edge case
-described in Decision 6.
+`DeleteContribution`, and `DeleteManagedForTransaction`. The last is the edge case: it deletes only
+rows with `managed_by_reconciliation = true` — derived, regenerable rows the reconciler owns, which
+are not a record of anything the user did. A user-entered contribution does not match the predicate.
 
 ### 2. Side-effect destruction — forbidden; tombstone instead
 
@@ -154,6 +155,46 @@ A completed erasure is a real `DELETE FROM users`, and the FK graph does the res
 no retention decision may leave a row unreachable from `users`. This is the constraint that shapes
 guard G1's allowlist more than any other.
 
+### 9. There is no restore, and that is a decision, not an omission
+
+**Nothing in this application can un-delete anything.** `grep -iE "restore|undelete|recover"` over
+`api/openapi.yaml` returns zero matches: there is no restore endpoint for a transaction, a goal, a
+budget, a category, a boost, or an account.
+
+This is the sentence the rest of the document is most likely to be misread without. "Tombstone
+instead of delete" reads, to someone who has not checked, as *recoverable*. It is not. A tombstoned
+row is **retained and permanently invisible**: it survives so that its history children survive and
+so that past days keep rendering correctly, not so that the user can change their mind.
+
+Two consequences follow, and they point in opposite directions:
+
+- **The delete confirmation must not promise reversibility.** Copy saying "you can restore this
+  later" would be false. Copy saying "this cannot be undone" is accurate today, and is what the
+  dialogs say.
+- **The retention is nevertheless real.** The row is not gone; a future restore feature is a
+  possible product decision, and this schema is what makes it possible at all. It is simply not
+  something anything ships today, and no code may assume otherwise.
+
+### 10. Live state is still destructively replaced; the snapshot is the history
+
+`holdingRepository.ReplaceForAccount` still runs `DELETE FROM holdings WHERE account_id = $1 AND
+user_id = $2` on every investment sync (`backend/internal/repository/holding_repository.go`), and
+`holdings` is deliberately **absent** from `historyBearingTables`, so guard G2 does not see that
+delete and is not meant to.
+
+That is the intended design, and Decision 5 stated only half of it. The split is:
+
+- `holdings` is **live state** — what the account holds right now. It is a projection of the
+  provider's current answer, and replacing it wholesale is the correct way to keep it true.
+- `holding_snapshots` is the **history**, captured inside the replacing transaction *before* the
+  delete. That is the row #1569 protects, and it is history-bearing, cascade-guarded and
+  delete-guarded.
+
+The same split applies to liabilities. The thing that makes this safe is the ordering — the capture
+happens in the same transaction as the replace — and the thing that would break it is capturing
+outside that transaction or skipping the capture on a partial response, both of which are pinned by
+`TestHistorySnapshot_*`.
+
 ---
 
 ## How This Is Enforced
@@ -166,6 +207,8 @@ Writing a principle down does not keep it. Four mechanisms do:
 | **G2** `TestNoUnallowlistedHistoryDelete` | Go code hard-deleting a history-bearing table outside the five named purge paths | `backend/internal/repository/history_delete_guard_test.go` |
 | Tombstone read guards | A read that forgets `deleted_at IS NULL`, per reference and alias-qualified | `config_tombstone_guard_test.go`, `transaction_tombstone_guard_test.go` |
 | Round-trip acceptance | Disconnect, re-link and purge, against a real database, asserting what survives and what does not | `backend/internal/repository/history_retention_roundtrip_integration_test.go` |
+| Universe completeness | A live table named like history that is in neither classification map — the hole a hand-maintained list produces | `TestEveryHistoryShapedTableIsClassified` |
+| Account status projection | An account-shaped `SELECT` that omits `status`, which makes `isAccountDisconnected` read a removed account as live | `TestNoAccountProjectionOmitsStatus` |
 
 Both G1 and G2 fail in **two** directions: an unallowlisted violation, and an allowlist entry whose
 target no longer exists. Stale entries are how the next violation gets justified — they make a

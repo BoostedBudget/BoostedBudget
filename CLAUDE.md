@@ -136,6 +136,11 @@ Before writing anything that removes a row, classify it:
 Corollaries: the provider is not the user (Plaid removing an item is not a deletion request), and
 "I want to stop" is not "I want it gone".
 
+⚠ **There is no restore endpoint for anything** (`grep -iE "restore|undelete|recover" api/openapi.yaml`
+returns zero). A tombstone means **retained and permanently invisible**, not recoverable — it exists
+so the history children survive and past days keep rendering, not so the user can change their mind.
+Never write confirm copy promising reversibility.
+
 ⚠ Enforced mechanically, and each guard's meta-tests construct the violation and prove it fails:
 - `TestNoUnallowlistedCascadeIntoHistoryTable` (G1) — new `ON DELETE CASCADE` into a history-bearing
   table. Allowlist + reason in `backend/internal/repository/history_cascade_guard_test.go`.
