@@ -136,10 +136,14 @@ func TestAccountRepository_GetByLinkedItemID(t *testing.T) {
 			now, now,
 		)
 
+	// The balance columns come from accountBalanceProjection rather than being written out here:
+	// a hand-copied projection is a restatement that can drift from the query, and #1569 task 21
+	// (item D) changed exactly these two columns in ten places at once. Calling the renderer means
+	// this expectation cannot disagree with what the method emits.
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -188,7 +192,7 @@ func TestAccountRepository_GetByUserID(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -369,7 +373,7 @@ func TestAccountRepository_GetAccountsWithInstitution(t *testing.T) {
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
@@ -427,7 +431,7 @@ func TestAccountRepository_GetAccountsWithInstitution_Empty(t *testing.T) {
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
@@ -479,7 +483,7 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesExpired(t *testing
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
@@ -546,7 +550,7 @@ func TestAccountRepository_GetByIDAndUser_Success(t *testing.T) {
 	expectedQuery := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
 		       user_account_id, status, removed_at, replaced_at, replaced_by_id,
@@ -593,7 +597,7 @@ func TestAccountRepository_GetByIDAndUser_NotFound(t *testing.T) {
 	expectedQuery := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
 		       user_account_id, status, removed_at, replaced_at, replaced_by_id,
@@ -837,7 +841,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_ExcludeHidden(t *t
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
@@ -910,7 +914,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeHidden(t *t
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
@@ -1551,7 +1555,7 @@ func TestAccountRepository_GetByUserID_ExcludesReplaced(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -1596,7 +1600,7 @@ func TestAccountRepository_GetAccountsWithInstitution_ExcludesReplaced(t *testin
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at, a.removed_at,
 		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
@@ -1647,7 +1651,7 @@ func TestAccountRepository_GetByLinkedItemID_ExcludesReplaced(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -1705,7 +1709,7 @@ func TestAccountRepository_GetByLinkedItemIDIncludingRetained_IncludesAllStatuse
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("") + `, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       removed_reason,
 		       created_at, updated_at
@@ -1803,7 +1807,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_IncludeReplacedExc
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
@@ -1870,7 +1874,7 @@ func TestAccountRepository_GetAccountsWithInstitutionFiltered_NullLinkedItemJoin
 	expectedQuery := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
+		       ` + accountBalanceProjection("a") + `, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,

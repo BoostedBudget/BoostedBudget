@@ -194,6 +194,26 @@ describe('AccountTable', () => {
       expect(screen.getByText(/as of/i)).toBeInTheDocument()
     })
 
+    // Issue #1569 task 21, item D — the table path's half of the same ruling. AccountTable
+    // formats with `{ empty: '—' }` rather than 'N/A', so the two views need separate assertions;
+    // one passing does not imply the other.
+    it('renders an em dash, not $0.00, for a closed account with no balance', () => {
+      const accountsWithClosed = [
+        createMockAccount({
+          status: 'removed',
+          removed_at: '2026-03-01T00:00:00Z',
+          current_balance: undefined,
+          available_balance: undefined,
+        }),
+      ]
+
+      render(<AccountTable accounts={accountsWithClosed} />)
+
+      expect(screen.getByText('—')).toBeInTheDocument()
+      expect(screen.queryByText('$0.00')).toBeNull()
+      expect(screen.queryByText(/\$2,500/)).toBeNull()
+    })
+
     it('does not show a balance as-of caption for an active account', () => {
       render(<AccountTable accounts={mockAccounts} />)
       expect(screen.queryByText(/as of/i)).toBeNull()

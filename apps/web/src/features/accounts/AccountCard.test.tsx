@@ -350,6 +350,32 @@ describe('AccountCard', () => {
       expect(screen.getByText('Last known balance')).toBeInTheDocument()
       expect(screen.getByText(/as of/i)).toBeInTheDocument()
     })
+
+    // Issue #1569 task 21, item D. The user's ruling: "If account is closed, treat as empty
+    // balance, we don't want orphaned balances." The API now OMITS current_balance and
+    // available_balance for a terminal-status account, so the card receives `undefined` for both.
+    //
+    // The thing that must not happen is a rendered "$0.00": that is a positive claim that the
+    // account is empty, which is a different and false statement from "we no longer know". The
+    // fixtures in the two tests above both still carry a balance, so neither of them would notice
+    // if this regressed.
+    it('renders no balance at all — and no misleading $0.00 — for a closed account', () => {
+      const closedAccount: Account = {
+        ...mockAccount,
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+        current_balance: undefined,
+        available_balance: undefined,
+      }
+
+      renderWithRouter(<AccountCard account={closedAccount} />)
+
+      expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
+      expect(screen.queryByText('$0.00')).toBeNull()
+      expect(screen.queryByText(/\$2,500/)).toBeNull()
+      // The label still tells the truth about what the (absent) figure would have been.
+      expect(screen.getByText('Last known balance')).toBeInTheDocument()
+    })
   })
 
   describe('onDisconnect behavior (Task 8: remove window.confirm)', () => {

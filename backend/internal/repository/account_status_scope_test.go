@@ -92,7 +92,14 @@ func TestAccountStatusScope_DropsReplaced(t *testing.T) {
 // already appends after householdScopeArgs' three. Binding it anywhere else would either double-bind
 // asOf or reference an argument that does not exist.
 func TestHouseholdScopeQuery_LiveAsOf(t *testing.T) {
-	q := householdScopeQuery(householdLiveAsOf)
+	// The balance projection is stripped before the NotContains assertions below. #1569 task 21
+	// (item D) renders `CASE WHEN a.status = 'active' THEN a.current_balance END` into every account
+	// SELECT LIST — a projection, not a row filter, and it is present in the as-of variant on
+	// purpose (a closed account carries no balance whichever universe returned it). Asserting over
+	// the raw text would fail on that CASE and the obvious "fix" would be to delete the assertion,
+	// which is how a guard dies. Stripping is exact: the text comes from the same renderer the query
+	// uses, so a REAL `a.status = 'active'` WHERE predicate is still caught.
+	q := strings.ReplaceAll(householdScopeQuery(householdLiveAsOf), accountBalanceProjection("a"), "")
 	assert.Contains(t, q, wantAsOfPredicate)
 	assert.Contains(t, q, "h.account_id = a.id")
 	assert.Contains(t, q, "h.valid_from <= $4")
@@ -101,7 +108,9 @@ func TestHouseholdScopeQuery_LiveAsOf(t *testing.T) {
 		"the as-of variant must REPLACE the unconditional active predicate, not sit beside it")
 	assert.Equal(t, 1, strings.Count(q, "account_status_history"))
 
-	// The active-only variant is unchanged.
-	assert.Contains(t, householdScopeQuery(householdActiveOnly), "a.status = 'active'")
-	assert.NotContains(t, householdScopeQuery(householdActiveOnly), "account_status_history")
+	// The active-only variant is unchanged. Stripped the same way, so this asserts a real WHERE
+	// predicate rather than being satisfied by the balance CASE that every variant now carries.
+	activeOnly := strings.ReplaceAll(householdScopeQuery(householdActiveOnly), accountBalanceProjection("a"), "")
+	assert.Contains(t, activeOnly, "a.status = 'active'")
+	assert.NotContains(t, activeOnly, "account_status_history")
 }

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -783,4 +784,107 @@ func TestRoundToCents(t *testing.T) {
 	assert.Equal(t, 1.24, roundToCents(1.235))
 	assert.Equal(t, 0.0, roundToCents(0.0))
 	assert.Equal(t, 333.33, roundToCents(333.3333333))
+}
+
+// TestSavingsProgress_TerminalAccountWithNoBalance_FreezesOnBothBases is the shape the repository
+// now ACTUALLY returns, on both bases.
+//
+// The two tests above hand-build a `domain.Account{Status: removed, CurrentBalance: &bal}`. After
+// #1569 task 21 (item D) no repository read can produce that any more: a terminal account carries
+// NO balance, so the real object is terminal AND nil. Those tests still pass and are still worth
+// keeping — they pin that the STATUS alone is sufficient to freeze, independently of the balance —
+// but neither of them exercises the object the code now actually receives, and a test suite whose
+// every fixture is unreachable is a suite that has stopped watching.
+//
+// What must hold, and does: freeze, never zero, on both bases. The nil path and the terminal path
+// agree, which is why item D reinforces task 13's freeze rather than colliding with it. The order
+// of the two checks decides only which warning is logged, and is asserted for by
+// TestSavingsProgress_TerminalAccountWithNoBalance_LogsTheDisconnection below.
+func TestSavingsProgress_TerminalAccountWithNoBalance_FreezesOnBothBases(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		basis string
+		goal  func() *domain.SavingsGoal
+	}{
+		{
+			name:  "balance basis",
+			basis: domain.ProgressBasisBalance,
+			goal: func() *domain.SavingsGoal {
+				return makeGoal("g1", "u1", "acc1", domain.ProgressBasisBalance, 5000, 1000)
+			},
+		},
+		{
+			name:  "account_percentage basis",
+			basis: domain.ProgressBasisAccountPercentage,
+			goal: func() *domain.SavingsGoal {
+				g := makeGoal("g1", "u1", "acc1", domain.ProgressBasisAccountPercentage, 5000, 1000)
+				pct := 0.5
+				g.AccountPercentage = &pct
+				return g
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			goalRepo := &mockSavingsProgressGoalRepo{}
+			contribRepo := &mockSavingsProgressContribRepo{}
+			accountRepo := &mockSavingsProgressAccountRepo{}
+			svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
+
+			// Terminal AND balance-less — what GetByIDAndUser returns for a closed account now.
+			account := &domain.Account{
+				ID:               "acc1",
+				UserID:           "u1",
+				CurrentBalance:   nil,
+				AvailableBalance: nil,
+				Status:           domain.AccountStatusRemoved,
+				UpdatedAt:        time.Now(),
+			}
+
+			accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
+			goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+			goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			err := svc.RecomputeGoal(context.Background(), tc.goal())
+
+			require.NoError(t, err)
+			assertNoCallTo(t, &goalRepo.Mock, "UpdateCurrentAmount")
+			assertNoCallTo(t, &goalRepo.Mock, "MarkCompleted")
+		})
+	}
+}
+
+// TestSavingsProgress_TerminalAccountWithNoBalance_LogsTheDisconnection pins the ORDER of the two
+// skip checks, which is the only thing item D could have quietly broken here.
+//
+// A closed account now satisfies BOTH conditions: it is disconnected, and (since item D) it carries
+// no balance. The outcome is the same either way — freeze, never zero — so no behavioural test can
+// tell the orderings apart, and the ordering would have flipped unnoticed. What differs is the
+// operator-facing warning: "balance is nil ... (stale)" says a sync is late, and invites waiting for
+// one that is never coming; "basis account is no longer active" says the account is gone. The
+// specific condition must be checked before the general one.
+func TestSavingsProgress_TerminalAccountWithNoBalance_LogsTheDisconnection(t *testing.T) {
+	var logs bytes.Buffer
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	svc := NewSavingsProgressService(goalRepo, contribRepo, accountRepo, nil, logger)
+
+	account := &domain.Account{
+		ID: "acc1", UserID: "u1", CurrentBalance: nil, AvailableBalance: nil,
+		Status: domain.AccountStatusRemoved, UpdatedAt: time.Now(),
+	}
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(account, nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	goalRepo.On("MarkCompleted", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	require.NoError(t, svc.RecomputeGoal(context.Background(),
+		makeGoal("g1", "u1", "acc1", domain.ProgressBasisBalance, 5000, 1000)))
+
+	out := logs.String()
+	assert.Contains(t, out, "basis account is no longer active",
+		"a CLOSED account must be reported as closed, not as a late sync")
+	assert.NotContains(t, out, "account balance is nil",
+		"the nil check must not claim this one — since item D every closed account satisfies it too, "+
+			"so a nil-first ordering silently relabels every disconnection as 'stale'")
 }

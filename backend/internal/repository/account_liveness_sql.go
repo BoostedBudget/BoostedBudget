@@ -121,3 +121,47 @@ func accountLiveOnDateSQL(accountExpr, dateExpr string) string {
 func currentStateAccountLeg(alias string) string {
 	return alias + ".status = 'active'"
 }
+
+// accountBalanceProjection renders the `current_balance` / `available_balance` pair of an
+// account-shaped SELECT so that a TERMINAL-status account (removed / replaced / expired) carries
+// NO balance at all. Issue #1569, task 21 (item D).
+//
+// THE RULING, from the user, direct: "If account is closed, treat as empty balance, we don't want
+// orphaned balances." A closed account's `accounts.current_balance` is a figure frozen at the
+// moment it stopped syncing. It is not what the account holds — nobody has confirmed that since —
+// and it is not history either, because the column carries no as-of instant to make it one. It is
+// an orphan: a number that no longer means anything, attached to a row that still renders.
+//
+// ONE CHOKE POINT, NOT ELEVEN EDITS. Every account-shaped projection in this package renders these
+// two columns through here. That is the whole design: eleven hand-edited scan sites drift, and the
+// drift is invisible (a stale balance looks exactly like a fresh one), whereas a single renderer is
+// mutation-checkable and its absence is mechanically detectable —
+// TestNoAccountProjectionCarriesATerminalBalance judges each SELECT list on its own and cannot be
+// satisfied by a neighbouring query.
+//
+// NULL, NOT ZERO, and the difference is not cosmetic. The fields are `*float64` with
+// `json:"...,omitempty"`, so NULL vanishes from the JSON entirely: a client has nothing to render
+// and a consumer that sums has nothing to add. Zero is a NUMBER — it renders as "$0.00", which is a
+// positive claim that the account is empty, and it is summed as a real datapoint. NULL is also
+// already this field's established "no balance known" value (Plaid omits available_balance for
+// several account types), so every existing nil-check already does the right thing: savings
+// progress freezes rather than recomputing, and LinkedBalance is simply absent.
+//
+// ⚠ CURRENT UNIVERSE ONLY. This touches `accounts` projections and nothing else. Historical
+// balances come from balance_snapshots and holding_snapshots, which carry their own as_of instant
+// and are deliberately independent of the account's current status — a closed account's history
+// stays exactly as queryable as it was. An AS-OF account read (accountLiveAsOfPredicate) is
+// included in the rule rather than exempt from it: it returns the account because it was LIVE then,
+// but `accounts.current_balance` is still today's frozen column and has no as-of meaning, so the
+// balance for that instant must come from the snapshot either way.
+//
+// The INSERT path is untouched: CreateBatch writes what Plaid reported for an account it is
+// creating, which is by construction active.
+func accountBalanceProjection(alias string) string {
+	q := ""
+	if alias != "" {
+		q = alias + "."
+	}
+	return "CASE WHEN " + q + "status = 'active' THEN " + q + "current_balance END AS current_balance, " +
+		"CASE WHEN " + q + "status = 'active' THEN " + q + "available_balance END AS available_balance"
+}
