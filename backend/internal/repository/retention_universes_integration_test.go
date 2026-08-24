@@ -185,3 +185,83 @@ func TestRetentionUniverses_DisconnectedBrokerage_Integration(t *testing.T) {
 	assert.Equal(t, today.Format("2006-01-02"), hist[0].AsOfDate.Format("2006-01-02"),
 		"the historical row carries the as-of date the current-state row lacks")
 }
+
+// TestRetentionUniverses_RelinkedBrokerage_IncomeSurvives_Integration is the COMPOSED case the
+// test above cannot reach.
+//
+// TestRetentionUniverses_DisconnectedBrokerage_Integration disconnects and never re-links, so the
+// brokerage's chain has no 'active' member left — which is exactly the case
+// retainedAccountVisibilityLeg is scoped to. The complementary case is a re-link: the old account
+// goes 'replaced' and a NEW account on the SAME user_account_id goes 'active'. The retained leg
+// then deliberately does NOT fire (its NOT EXISTS finds the live successor), and visibility is
+// supposed to come from the chain-sibling leg beside it — the one
+// investmentTransactionRepository.GetByUserIDKeyset carries and IncomeSummary did not.
+//
+// The two legs are COMPLEMENTS, so omitting one leaves the whole re-link case uncovered: the
+// investments feed listed the dividend while IncomeSummary returned 0.00 over the same rows. That
+// is the same "two reads over the same rows disagree" defect task 12 fixed for the disconnect
+// case, displaced one chain hop.
+func TestRetentionUniverses_RelinkedBrokerage_IncomeSurvives_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, oldAccountID, _, today := seedRetentionUniverseFixture(ctx, t, tx, "relink")
+
+	// Give the old account a chain key, and hang the dividend off it — this is what a Plaid sync
+	// writes (transactions and investment_transactions carry user_account_id at insert time,
+	// Issue #1109).
+	userAccountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id, primary_type)
+		VALUES ($1, $2, $3, 'investment')
+	`, userAccountID, userID, "relink-inst-"+userAccountID.String())
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `UPDATE accounts SET user_account_id = $2 WHERE id = $1`, oldAccountID, userAccountID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE investment_transactions SET user_account_id = $2 WHERE account_id = $1`, oldAccountID, userAccountID)
+	require.NoError(t, err)
+
+	analyticsRepo := NewInvestmentAnalyticsRepository(tx)
+	itxnRepo := NewInvestmentTransactionRepository(tx)
+
+	start := today.AddDate(0, 0, -1)
+	end := today.AddDate(0, 0, 1)
+
+	before, err := analyticsRepo.IncomeSummary(ctx, userID.String(), start, end)
+	require.NoError(t, err)
+	require.InDelta(t, 120.0, before.TotalIncome, 0.01, "pre-relink: the dividend counts")
+
+	// ── Re-link: a NEW active account on the SAME chain replaces the old one. ─────────────
+	var linkedItemID uuid.UUID
+	require.NoError(t, tx.QueryRow(ctx, `SELECT linked_item_id FROM accounts WHERE id = $1`, oldAccountID).Scan(&linkedItemID))
+
+	newAccountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status,
+		                      current_balance, user_account_id)
+		VALUES ($1, $2, $3, $4, 'New Brokerage', 'investment', 'active', 0, $5)
+	`, newAccountID, linkedItemID, userID, "relink-acct-"+newAccountID.String(), userAccountID)
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `
+		UPDATE accounts SET status = 'replaced', replaced_at = now(), replaced_by_id = $2 WHERE id = $1
+	`, oldAccountID, newAccountID)
+	require.NoError(t, err)
+
+	// The feed over the SAME rows still shows the dividend — the chain-sibling leg fires.
+	itxns, err := itxnRepo.GetByUserID(ctx, userID.String(), 50, 0)
+	require.NoError(t, err)
+	require.Len(t, itxns, 1, "re-linked: the investment-transaction feed keeps the pre-relink dividend")
+
+	after, err := analyticsRepo.IncomeSummary(ctx, userID.String(), start, end)
+	require.NoError(t, err)
+	assert.InDelta(t, 120.0, after.TotalIncome, 0.01,
+		"re-linked: income already received must not vanish; the feed over the same rows still shows it")
+	assert.Equal(t, before.TotalIncome, after.TotalIncome,
+		"re-linking a brokerage must not change a HISTORICAL income figure at all")
+}

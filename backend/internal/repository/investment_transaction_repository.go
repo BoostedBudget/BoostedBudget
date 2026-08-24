@@ -170,7 +170,7 @@ func (r *investmentTransactionRepository) GetByUserID(ctx context.Context, userI
 		  AND (a.status = 'active'%s)
 		ORDER BY investment_transactions.date DESC
 		LIMIT $2 OFFSET $3
-	`, retainedAccountVisibilityLeg("investment_transactions", "investment_transactions.date"))
+	`, retainedAccountVisibilityLegs("investment_transactions", "investment_transactions.date"))
 
 	rows, err := r.db.Query(ctx, query, userID, limit, offset)
 	if err != nil {
@@ -358,26 +358,16 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 		FROM investment_transactions it
 		LEFT JOIN securities sec ON sec.id = it.security_id
 		WHERE it.user_id = $1
-		  -- Chain-expansion active-account filter: include pre-relink rows whose
-		  -- account_id is replaced, as long as an active account shares the same
-		  -- user_account_id (the stable chain key set at insert time — Issue #1109).
-		  -- Using EXISTS subqueries (no JOIN) avoids row duplication when multiple
-		  -- accounts share a user_account_id.
+		  -- Chain-expansion and retained legs, rendered together so neither can be dropped
+		  -- without the other — see retainedAccountVisibilityLegs (#1569 task 21 / C4).
 		  AND (
 		      EXISTS (SELECT 1 FROM accounts WHERE id = it.account_id AND status = 'active')
-		      OR (
-		          it.user_account_id IS NOT NULL
-		          AND EXISTS (
-		              SELECT 1 FROM accounts chain_a
-		              WHERE chain_a.user_account_id = it.user_account_id
-		                AND chain_a.status = 'active'
-		          )
-		      )%s
+%s
 		  )
 		%s
 		ORDER BY it.date DESC, it.id ASC
 		LIMIT $%d
-	`, retainedAccountVisibilityLeg("it", "it.date"), extraConditions, limitPH)
+	`, retainedAccountVisibilityLegs("it", "it.date"), extraConditions, limitPH)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {

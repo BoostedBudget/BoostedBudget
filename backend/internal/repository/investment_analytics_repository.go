@@ -602,7 +602,7 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 		  AND it.subtype IN (%s)
 		GROUP BY income_type
 		ORDER BY total_amount DESC
-	`, retainedAccountVisibilityLeg("it", "it.date"), inClause)
+	`, retainedAccountVisibilityLegs("it", "it.date"), inClause)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
