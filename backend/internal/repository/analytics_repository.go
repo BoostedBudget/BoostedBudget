@@ -569,37 +569,87 @@ func householdAccountsCTEForBalancesPerDay() string {
 
 // householdAccountsCTEForBalancesAsOf is the asOf-bounded, single-instant sibling of
 // householdAccountsCTEForBalancesPerDay, used by point-in-time balance lookups
-// (GetSnapshotsAsOfForHousehold) that are evaluated at a specific instant — both the
-// "current" call (asOf=now) and a "previous period" call (asOf=now-30d) reuse this same
-// query, so the joint-account fingerprint winner must be picked using "latest snapshot AT
-// OR BEFORE asOf ($4)", not "latest snapshot ever". Without this bound, a previous-period
-// query could pick the globally-freshest member's copy even when THAT copy has no snapshot
-// before the cutoff, silently returning zero data for the joint account instead of falling
-// back to the other member's genuinely earlier balance (Codex adversarial review, P1-2).
-// Unlike the per-day variant, this CTE collapses to ONE winner via DISTINCT ON, which is
-// correct here because the whole query only ever evaluates a single instant. Same three
-// leading args as householdAccountsCTEForBalancesPerDay, PLUS $4 = the asOf cutoff (reused
-// both for the winner-selection bound here and the caller's own snapshot_at <= $4 filter in
-// the outer query).
+// (GetSnapshotsAsOfForHousehold, GetForHouseholdScope, GetForHouseholdScopeLiveAsOf) that are
+// evaluated at a specific instant — both the "current" call (asOf=now) and a "previous period"
+// call (asOf=now-30d) reuse this same query, so the joint-account fingerprint winner must be
+// picked using "latest snapshot AT OR BEFORE asOf ($4)", not "latest snapshot ever". Without
+// that bound, a previous-period query could pick the globally-freshest member's copy even when
+// THAT copy has no snapshot before the cutoff, silently returning zero data for the joint
+// account instead of falling back to the other member's genuinely earlier balance (Codex
+// adversarial review, P1-2). Same three leading args as householdAccountsCTEForBalancesPerDay,
+// PLUS $4 = the asOf cutoff (reused both for the winner-selection bound here and the caller's
+// own snapshot_at <= $4 filter in the outer query).
+//
+// ── #1569 T7: the grant is a HALF-OPEN INTERVAL, and this read honours it ────────────────────
+//
+// A household_account_shares row is not a boolean "is this shared right now?". It is the
+// household's own record that user_account X was visible to it over [shared_at, revoked_at) —
+// inclusive at shared_at, EXCLUSIVE at revoked_at, the same shape account_status_history uses
+// for [valid_from, valid_to). This CTE used to read `revoked_at IS NULL` — i.e. it answered
+// "shared TODAY?" for every asOf, including asOf values months in the past. The product
+// decision is the opposite: a member leaves and the remaining members keep what was shared FOR
+// THE SHARED PERIOD ONLY. They must not gain visibility of anything after the member left, and
+// must not LOSE visibility of the period when sharing was live. `shared_at <= $4 AND
+// (revoked_at IS NULL OR revoked_at > $4)` is exactly that, in both directions.
+//
+// The boundary is load-bearing and easy to get wrong (an earlier task on this branch shipped a
+// `valid_to >` vs `>=` bug that a whole integration package missed): asOf == revoked_at is
+// OUTSIDE. Pinned by TestHouseholdShareAsOf_IntervalIsHalfOpen.
+//
+// ── What this does NOT relax: the membership guard ───────────────────────────────────────────
+//
+// `ua.user_id = ANY($3) OR has.revoked_at IS NOT NULL` deliberately keeps the pre-#1569
+// active-membership requirement for OPEN grants and lifts it only for CLOSED ones. A closed
+// grant can only exist for someone who WAS accepted into this household (InsertShare runs in
+// the accept fan-out and nowhere else), and the interval predicate above already bounds WHEN it
+// applies — so admitting it cannot show a stranger's data, nor any instant outside the window
+// the household was legitimately shown. Meanwhile at asOf = now the two clauses collapse back
+// to the old predicate exactly: no committed row has revoked_at > now(), so every closed grant
+// is filtered by the interval before the guard is reached, and every open grant still needs
+// active membership. The present-day result set is therefore unchanged, by construction rather
+// than by hope — pinned by TestHouseholdShareAsOf_OpenGrantStillRequiresActiveMembership.
+//
+// ── Why the dedup is now two-stage ───────────────────────────────────────────────────────────
+//
+// uq_household_account_shares_active constrains OPEN rows only. Once closed rows are retained
+// (they are — PurgeRemovedMembership no longer deletes them; see its own comment), a single
+// asOf instant can match SEVERAL rows for one (household, user_account): re-shares overlap, and
+// a re-fingerprinted account produces rows whose physical_account_blind_idx differs. Keying the
+// joint-account dedup on the fingerprint alone would then drop that one account into two
+// buckets and emit it TWICE. household_grants_asof collapses to one row per user_account FIRST,
+// picking the interval actually in force (latest shared_at <= asOf, ties broken by has.id so
+// the answer never varies between runs) — a nondeterministic as-of answer is worse than a
+// missing one. household_accounts then does the joint-account fingerprint dedup on top, exactly
+// as before. Pinned by TestHouseholdShareAsOf_OverlappingHistoricalRowsAreDeterministic.
 func householdAccountsCTEForBalancesAsOf() string {
-	return `household_accounts AS (
-		SELECT DISTINCT ON (COALESCE(has.physical_account_blind_idx, ua.id::text))
-			ua.id         AS user_account_id,
-			ua.user_id    AS owner_user_id,
-			has.shared_at AS share_started_at,
-			$1::uuid      AS _requesting_user_id
+	return `household_grants_asof AS (
+		SELECT DISTINCT ON (has.user_account_id)
+			has.user_account_id,
+			has.physical_account_blind_idx,
+			has.shared_at
 		FROM household_account_shares has
 		JOIN user_accounts ua ON ua.id = has.user_account_id
+		WHERE has.household_id = $2
+		  AND has.visibility  = 'shared'
+		  AND has.shared_at  <= $4
+		  AND (has.revoked_at IS NULL OR has.revoked_at > $4)
+		  AND (ua.user_id = ANY($3) OR has.revoked_at IS NOT NULL)
+		ORDER BY has.user_account_id, has.shared_at DESC, has.id
+	),
+	household_accounts AS (
+		SELECT DISTINCT ON (COALESCE(g.physical_account_blind_idx, ua.id::text))
+			ua.id        AS user_account_id,
+			ua.user_id   AS owner_user_id,
+			g.shared_at  AS share_started_at,
+			$1::uuid     AS _requesting_user_id
+		FROM household_grants_asof g
+		JOIN user_accounts ua ON ua.id = g.user_account_id
 		LEFT JOIN LATERAL (
 			SELECT MAX(bs.snapshot_at) AS latest_snapshot_at
 			FROM balance_snapshots bs
 			WHERE bs.user_account_id = ua.id AND bs.snapshot_at <= $4
 		) latest ON true
-		WHERE has.household_id = $2
-		  AND has.visibility  = 'shared'
-		  AND has.revoked_at IS NULL
-		  AND ua.user_id = ANY($3)
-		ORDER BY COALESCE(has.physical_account_blind_idx, ua.id::text), latest.latest_snapshot_at DESC NULLS LAST, ua.id
+		ORDER BY COALESCE(g.physical_account_blind_idx, ua.id::text), latest.latest_snapshot_at DESC NULLS LAST, ua.id
 	)`
 }
 

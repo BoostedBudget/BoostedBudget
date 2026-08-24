@@ -96,11 +96,18 @@ func TestAccountRepository_GetForHouseholdScope_JointAccountWinnerRespectsAsOfCu
 	now := time.Now().UTC()
 	fingerprint := "joint-fp-" + hh
 
-	shareRepo := repository.NewHouseholdShareRepository(pool)
-	require.NoError(t, shareRepo.RevokeSharesForUser(ctx, hh, owner))
-	require.NoError(t, shareRepo.RevokeSharesForUser(ctx, hh, member))
-	require.NoError(t, shareRepo.InsertShare(ctx, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared))
-	require.NoError(t, shareRepo.InsertShare(ctx, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared))
+	// Re-share both under the SAME fingerprint (simulating a joint account), with EXPLICIT
+	// interval boundaries. #1569 T7 made the as-of read honour [shared_at, revoked_at), so a
+	// re-share stamped with the database's now() is not in force at any asOf the test computes
+	// from Go's clock, and the individual grants it replaced are still retained and still in
+	// force at a past cutoff. Anchoring the swap 50 days back — inside the 2-month-old original
+	// grants opened by setupTwoMemberSharedHousehold, and before every asOf asserted below —
+	// keeps this test exercising fingerprint dedup rather than clock skew.
+	jointFrom := now.AddDate(0, 0, -50)
+	revokeShareAt(t, pool, hh, ownerAcct.UserAccountID, jointFrom)
+	revokeShareAt(t, pool, hh, memberAcct.UserAccountID, jointFrom)
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, jointFrom)
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, jointFrom)
 
 	// Owner's copy: only has an OLD snapshot (40 days ago) — no recent activity.
 	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 100, now.AddDate(0, 0, -40))
