@@ -253,11 +253,19 @@ func TestDashboard_PastAsOfDate_ResolvesTheAccountUniverseAtThatInstant_Integrat
 	// Close the recorded interval at the same instant, so the account is genuinely live at -20d and
 	// genuinely not live today. Without this the fixture would pass on "has any active interval"
 	// rather than on point-in-time liveness, which is a weaker claim than the one being made.
-	_, err = tx.Exec(ctx, `
+	ct, err := tx.Exec(ctx, `
 		UPDATE account_status_history SET valid_to = $2
-		WHERE account_id = $1 AND status = 'active' AND valid_to IS NULL`,
+		WHERE account_id = $1 AND status = 'active'`,
 		f.AccountID, now.AddDate(0, 0, -10))
 	require.NoError(t, err)
+	// `valid_to IS NULL` is NOT in that predicate, and the omission is deliberate: the UPDATE above
+	// already fired the status trigger, which closed the 'active' interval at clock_timestamp(). A
+	// `valid_to IS NULL` clause here matches nothing and updates zero rows — silently, since Exec
+	// reports no error for it — leaving the interval closed at NOW rather than at -10d. The test
+	// would still pass (now > -20d, so the account is still live at the as-of instant), but it
+	// would be passing on "has any active interval" rather than on point-in-time liveness, which is
+	// a weaker claim than the one this test makes. RowsAffected is what stops that being silent.
+	require.EqualValues(t, 1, ct.RowsAffected(), "the trigger must have recorded exactly one active interval")
 
 	svc := NewDashboardService(
 		repository.NewBalanceSnapshotRepository(tx),
@@ -352,11 +360,19 @@ func TestDashboardHousehold_PastAsOfDate_ResolvesTheAccountUniverseAtThatInstant
 		UPDATE accounts SET status = 'removed', removed_at = $2, updated_at = $2 WHERE id = $1`,
 		f.AccountID, now.AddDate(0, 0, -10))
 	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `
+	ct, err := tx.Exec(ctx, `
 		UPDATE account_status_history SET valid_to = $2
-		WHERE account_id = $1 AND status = 'active' AND valid_to IS NULL`,
+		WHERE account_id = $1 AND status = 'active'`,
 		f.AccountID, now.AddDate(0, 0, -10))
 	require.NoError(t, err)
+	// `valid_to IS NULL` is NOT in that predicate, and the omission is deliberate: the UPDATE above
+	// already fired the status trigger, which closed the 'active' interval at clock_timestamp(). A
+	// `valid_to IS NULL` clause here matches nothing and updates zero rows — silently, since Exec
+	// reports no error for it — leaving the interval closed at NOW rather than at -10d. The test
+	// would still pass (now > -20d, so the account is still live at the as-of instant), but it
+	// would be passing on "has any active interval" rather than on point-in-time liveness, which is
+	// a weaker claim than the one this test makes. RowsAffected is what stops that being silent.
+	require.EqualValues(t, 1, ct.RowsAffected(), "the trigger must have recorded exactly one active interval")
 
 	svc := NewDashboardService(
 		repository.NewBalanceSnapshotRepository(tx),
