@@ -388,6 +388,8 @@ func TestSavingsProgress_Summary_Relink_ReportsLiveBalanceNotDisconnected(t *tes
 	}
 
 	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+	// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, nil)
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-new", "u1").Return(live, nil).Maybe()
 	// Reachable on purpose — see the note in the balance re-link test.
@@ -431,6 +433,8 @@ func TestSavingsProgress_Summary_ChainHasNoLiveMember_ReportsDisconnected(t *tes
 	}
 
 	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+	// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, nil)
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil)
 
@@ -543,6 +547,8 @@ func TestSavingsProgress_Summary_AccountPercentage_ChainHasNoLiveMember_ReportsD
 	}
 
 	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+	// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, nil)
 	accountRepo.On("GetByIDAndUser", mock.Anything, "acc-old", "u1").Return(terminal, nil)
 
@@ -581,6 +587,8 @@ func TestSavingsProgress_Summary_ResolverTransportError_ReportsUnknownNotFresh(t
 	accountRepo.On("GetByIDAndUser", mock.Anything, mock.Anything, mock.Anything).Return(
 		&domain.Account{ID: "acc-old", UserID: "u1", CurrentBalance: &bal, Status: domain.AccountStatusActive}, nil).Maybe()
 	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+	// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, nil)
 
 	summary, err := svc.GetProgressSummary(context.Background(), "u1")
@@ -625,6 +633,8 @@ func TestSavingsProgress_Summary_AccountReadIsScopedToRequesterNotGoalOwner(t *t
 		Return(nil, ErrAccountNotFoundForProgress).Maybe()
 
 	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+	// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, nil)
 
 	summary, err := svc.GetProgressSummary(context.Background(), "u1")
@@ -670,6 +680,7 @@ func TestSavingsProgress_Summary_UniverseIsActiveOnly(t *testing.T) {
 	active := makeGoal("g-active", "u1", "acc-1", domain.ProgressBasisContributions, 1000, 250)
 	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{active}, nil)
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g-active").Return(250.0, nil)
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(7, nil)
 
 	summary, err := svc.GetProgressSummary(context.Background(), "u1")
 
@@ -678,10 +689,60 @@ func TestSavingsProgress_Summary_UniverseIsActiveOnly(t *testing.T) {
 	require.Len(t, summary.Goals, 1)
 	assert.Equal(t, "g-active", summary.Goals[0].GoalID)
 
-	// Consequence worth stating out loud: because the universe excludes completed goals,
-	// CompletedGoalCount — which counts goal.IsCompleted within that universe — is structurally
-	// always 0. That is a pre-existing defect in a field the JSON contract advertises, not
-	// something this task introduced; pinned here so the follow-up has a starting point.
-	assert.Equal(t, 0, summary.CompletedGoalCount,
-		"structurally zero: the universe filters is_completed = false before this is counted")
+	// The universe stays active-only, but CompletedGoalCount no longer inherits that limit: it is
+	// counted by its own query (Issue #1569 Task 20, A4). Seven completed goals, none of them in
+	// `Goals`, and the count says seven.
+	assert.Equal(t, 7, summary.CompletedGoalCount,
+		"CompletedGoalCount is counted OUTSIDE the active universe — see A4")
+}
+
+// Issue #1569 Task 20 (A4). CompletedGoalCount was derived by counting IsCompleted over
+// GetActiveByUserID's result, and that query's WHERE clause is `is_completed = false`. The count
+// was therefore structurally zero for every user alive, and the field is REQUIRED in the JSON
+// contract — so an MCP or LLM consumer asking "how many goals have I completed?" got a confident,
+// well-typed, wrong 0. There is no frontend consumer, so the whole impact was on that contract.
+//
+// The old shape is what makes this test's arrangement look odd and is the point of it: the
+// completed goal is NOT in the slice the repository returns, because it never could be. A fix that
+// merely widened the active query would show up here as a changed Goals length.
+func TestSavingsProgress_Summary_CompletedGoalCountIsNotStructurallyZero(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, &progressChainResolverStub{})
+
+	active := makeGoal("g-active", "u1", "acc-1", domain.ProgressBasisContributions, 1000, 250)
+	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{active}, nil)
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g-active").Return(250.0, nil)
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(3, nil)
+
+	summary, err := svc.GetProgressSummary(context.Background(), "u1")
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, summary.CompletedGoalCount, "the completed count must come from its own query")
+	// GoalCount stays the ACTIVE count. Asserted so a future "fix" that merges the two universes
+	// fails here rather than silently changing what every other total in this struct means.
+	assert.Equal(t, 1, summary.GoalCount)
+	assert.Len(t, summary.Goals, 1)
+	assert.Equal(t, 250.0, summary.TotalSaved)
+}
+
+// A failure counting completed goals must PROPAGATE, not default to 0. Defaulting would restore
+// the original defect on the one path where nobody would notice it, and a confidently wrong count
+// is worse for an LLM consumer than an error it can report.
+func TestSavingsProgress_Summary_CompletedCountFailurePropagates(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	svc := newChainProgressService(goalRepo, contribRepo, accountRepo, &progressChainResolverStub{})
+
+	active := makeGoal("g-active", "u1", "acc-1", domain.ProgressBasisContributions, 1000, 250)
+	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{active}, nil)
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, errors.New("db is down"))
+
+	summary, err := svc.GetProgressSummary(context.Background(), "u1")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "count completed goals")
+	assert.Nil(t, summary)
 }

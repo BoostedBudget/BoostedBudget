@@ -1053,6 +1053,18 @@ func (m *mockSavingsGoalRepository) CountByUserID(ctx context.Context, userID st
 	return count, nil
 }
 
+// Issue #1569 Task 20 (A4): completed goals live outside GetActiveByUserID's universe, so the
+// summary counts them separately. This fake mirrors CountByUserID's shape.
+func (m *mockSavingsGoalRepository) CountCompletedByUserID(ctx context.Context, userID string) (int, error) {
+	count := 0
+	for _, g := range m.goals {
+		if g.UserID == userID && g.IsCompleted {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (m *mockSavingsGoalRepository) GetByAccountID(ctx context.Context, accountID string) ([]*domain.SavingsGoal, error) {
 	var result []*domain.SavingsGoal
 	for _, g := range m.goals {

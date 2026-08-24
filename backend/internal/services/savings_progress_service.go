@@ -27,6 +27,9 @@ type SavingsProgressGoalRepo interface {
 	UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error
 	// MarkCompleted sets is_completed and sticky completed_at (Codex C5).
 	MarkCompleted(ctx context.Context, goalID string) error
+	// CountCompletedByUserID counts the user's completed goals. Required because
+	// GetActiveByUserID's universe excludes them — see Issue #1569 Task 20 (A4).
+	CountCompletedByUserID(ctx context.Context, userID string) (int, error)
 }
 
 // SavingsProgressContribRepo is the minimal interface for reading contribution totals.
@@ -387,9 +390,21 @@ func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID 
 	now := time.Now()
 	const freshnessWindow = 24 * time.Hour
 
+	// Issue #1569 Task 20 (A4). Counted with its OWN query, not by scanning `goals`: that slice
+	// comes from GetActiveByUserID, whose WHERE clause is `is_completed = false`, so counting
+	// IsCompleted within it could only ever produce 0 — which is exactly what this field reported
+	// to every consumer, including the MCP/LLM one, for every user who has ever finished a goal.
+	//
+	// A failure here is PROPAGATED rather than defaulted to 0. Falling back to zero would restore
+	// the original defect on the one path where nobody would notice, and a confidently wrong count
+	// is worse for an LLM consumer than an error it can report.
+	completedCount, err := s.goalRepo.CountCompletedByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("progress_summary: count completed goals: %w", err)
+	}
+
 	items := make([]domain.SavingsGoalProgressItem, 0, len(goals))
 	var totalSaved, totalTarget float64
-	completedCount := 0
 
 	for _, goal := range goals {
 		// Always fetch confirmed contributions (Codex C11 — show even for non-contributions bases).
@@ -451,9 +466,6 @@ func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID 
 		items = append(items, item)
 		totalSaved += goal.CurrentAmount
 		totalTarget += goal.TargetAmount
-		if goal.IsCompleted {
-			completedCount++
-		}
 	}
 
 	var overallPct float64

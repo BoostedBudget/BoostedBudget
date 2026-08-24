@@ -42,6 +42,14 @@ func (m *mockSavingsProgressGoalRepo) MarkCompleted(ctx context.Context, goalID 
 	return m.Called(ctx, goalID).Error(0)
 }
 
+// Issue #1569 Task 20 (A4). Driven by testify like the rest of this mock, so a test that forgets
+// to set an expectation FAILS rather than silently getting 0 — which is the exact value the
+// defect produced, and would make a regression indistinguishable from a passing fix.
+func (m *mockSavingsProgressGoalRepo) CountCompletedByUserID(ctx context.Context, userID string) (int, error) {
+	args := m.Called(ctx, userID)
+	return args.Int(0), args.Error(1)
+}
+
 type mockSavingsProgressContribRepo struct{ mock.Mock }
 
 func (m *mockSavingsProgressContribRepo) SumConfirmedByGoal(ctx context.Context, userID, goalID string) (float64, error) {
@@ -438,6 +446,8 @@ func TestSavingsProgress_RecomputeUser_ProcessesAllGoals(t *testing.T) {
 	g2 := makeGoal("g2", "u1", "acc1", domain.ProgressBasisContributions, 2000, 0)
 
 	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{g1, g2}, nil)
+	// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g2").Return(800.00, nil)
 	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g2", 800.00, mock.Anything, (*time.Time)(nil)).Return(nil)
 
@@ -462,6 +472,8 @@ func TestSavingsProgress_RecomputeUser_ContinuesOnGoalError(t *testing.T) {
 	g2 := makeGoal("g2", "u1", "acc1", domain.ProgressBasisContributions, 2000, 0)
 
 	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{g1, g2}, nil)
+	// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 	// g1 fails
 	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, errors.New("db error")).Once()
 	// g2 succeeds
@@ -485,6 +497,8 @@ func TestSavingsProgress_RecomputeUser_GetActiveGoalsError(t *testing.T) {
 	svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
 
 	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return(nil, errors.New("db error"))
+	// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 
 	err := svc.RecomputeUser(context.Background(), "u1")
 
@@ -554,6 +568,8 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{}, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 
 		summary, err := svc.GetProgressSummary(context.Background(), "u1")
 
@@ -579,6 +595,8 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		}
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(250.0, nil)
 
 		summary, err := svc.GetProgressSummary(context.Background(), "u1")
@@ -612,6 +630,8 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		account := &domain.Account{ID: "acct-2", UserID: "u1", CurrentBalance: &bal}
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "g2").Return(0.0, nil)
 		accountRepo.On("GetByIDAndUser", mock.Anything, "acct-2", "u1").Return(account, nil)
 
@@ -646,6 +666,8 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		account := &domain.Account{ID: "acct-3", UserID: "u1", CurrentBalance: &bal}
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "g3").Return(0.0, nil)
 		accountRepo.On("GetByIDAndUser", mock.Anything, "acct-3", "u1").Return(account, nil)
 
@@ -672,6 +694,8 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		account := &domain.Account{ID: "acct-4", UserID: "u1", CurrentBalance: &bal}
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "g4").Return(0.0, nil)
 		accountRepo.On("GetByIDAndUser", mock.Anything, "acct-4", "u1").Return(account, nil)
 
@@ -704,6 +728,8 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		}
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "g5").Return(0.0, nil)
 		accountRepo.On("GetByIDAndUser", mock.Anything, "acct-5", "u1").Return(account, nil)
 
@@ -727,6 +753,8 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		}
 
 		goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return(goals, nil)
+		// #1569 A4: CompletedGoalCount is now counted outside the active universe.
+		goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil).Maybe()
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "ga").Return(500.0, nil)
 		contribRepo.On("SumConfirmedByGoal", mock.Anything, "gb").Return(200.0, nil)
 
