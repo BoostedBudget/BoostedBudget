@@ -90,3 +90,62 @@ func TestNoUnallowlistedCascadeIntoHistoryTable(t *testing.T) {
 			len(stale), strings.Join(stale, "\n    "))
 	}
 }
+
+// TestEveryHistoryShapedTableIsClassified is the completeness check behind G1 and G2 (#1569 task 19,
+// review finding F3).
+//
+// Both guards work off `historyBearingTables`, a hand-maintained list. A hand-maintained list cannot
+// notice a table nobody added to it, and that is not hypothetical: `portfolio_snapshots` — per-day
+// total_value, total_cost_basis and total_gain_loss, cascading from `users` — was absent from both
+// maps while its own `portfolio_snapshot_repairs` audit table was protected. No live violation
+// existed, so nothing was broken; nothing would have been reported either, which is the point.
+//
+// This test does not decide whether a table is history. It requires that SOMEONE decided, and wrote
+// the reason down in one of the two maps.
+func TestEveryHistoryShapedTableIsClassified(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set — skipping integration test")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err, "connect to test database")
+	defer pool.Close()
+
+	rows, err := pool.Query(ctx, `
+		SELECT table_name FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		tables = append(tables, name)
+	}
+	require.NoError(t, rows.Err())
+	require.NotEmpty(t, tables, "no tables found — the database is not migrated and this would pass "+
+		"vacuously")
+
+	// Fail closed on the FILTER as well as the scan. If the shape regexp stopped matching, every
+	// table would be out of scope and the test would pass while checking nothing.
+	shaped := 0
+	for _, tbl := range tables {
+		if historyShapedTableName.MatchString(tbl) {
+			shaped++
+		}
+	}
+	require.GreaterOrEqual(t, shaped, 10,
+		"only %d of %d live tables matched historyShapedTableName; the shape filter is broken and "+
+			"this test is checking nothing", shaped, len(tables))
+
+	if unclassified := unclassifiedHistoryShapedTables(tables, historyBearingTables, deliberatelyNotHistoryBearing); len(unclassified) > 0 {
+		t.Errorf("%d live table(s) are named like history but appear in NEITHER historyBearingTables "+
+			"NOR deliberatelyNotHistoryBearing (#1569).\n"+
+			"G1 and G2 are both blind to them: a new ON DELETE CASCADE into one, or a DELETE FROM one, "+
+			"would pass unreported. Decide, and write the reason in whichever map is right — putting "+
+			"it in deliberatelyNotHistoryBearing is a perfectly good answer for a marker, a receipt or "+
+			"a system log:\n    %s", len(unclassified), strings.Join(unclassified, "\n    "))
+	}
+}
