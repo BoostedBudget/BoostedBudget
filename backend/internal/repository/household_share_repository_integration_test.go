@@ -307,13 +307,16 @@ func TestHouseholdShareRepository_ListMyAccountShares_Integration(t *testing.T) 
 	assert.Nil(t, byID[newAccount].Visibility, "no grant row yet -> nil, not a default")
 }
 
-// TestHouseholdShareRepository_DeleteSharesForUser_Integration proves DeleteSharesForUser's
-// subquery join (`user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $2)`)
-// is actually correct against real tables: it must hard-delete the target user's own
-// share rows within the household, but must NEVER touch another user's share rows in
-// that SAME household — a wrong join/column here would still "pass" a pgxmock regex
-// match on the query text alone (#1371 Task 0 follow-up, coordinator review).
-func TestHouseholdShareRepository_DeleteSharesForUser_Integration(t *testing.T) {
+// TestHouseholdShareRepository_RevokeSharesForUser_CrossUserIsolation_Integration proves
+// RevokeSharesForUser's subquery join (`user_account_id IN (SELECT id FROM user_accounts
+// WHERE user_id = $2)`) is actually correct against real tables: it must close the target
+// user's own grants within the household, and must NEVER touch another user's grants in
+// that SAME household — a wrong join/column here would still "pass" a pgxmock regex match
+// on the query text alone.
+//
+// This test carries over from DeleteSharesForUser, which it used to cover; #1569 T7 removed
+// the hard delete and left RevokeSharesForUser as the only writer of that subquery.
+func TestHouseholdShareRepository_RevokeSharesForUser_CrossUserIsolation_Integration(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
 	repo := repository.NewHouseholdShareRepository(pool)
@@ -332,15 +335,19 @@ func TestHouseholdShareRepository_DeleteSharesForUser_Integration(t *testing.T) 
 	_, err = repo.SetShareVisibility(ctx, hh, memberAccount, nil, domain.ShareVisibilityShared)
 	require.NoError(t, err)
 
-	require.NoError(t, repo.DeleteSharesForUser(ctx, hh, member))
+	require.NoError(t, repo.RevokeSharesForUser(ctx, hh, member))
 
-	var memberShareCount int
-	err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`, hh, memberAccount).Scan(&memberShareCount)
-	require.NoError(t, err)
-	assert.Equal(t, 0, memberShareCount, "the target member's share row must be hard-deleted")
+	var memberOpen, memberTotal int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT COUNT(*) FILTER (WHERE revoked_at IS NULL), COUNT(*)
+		FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2
+	`, hh, memberAccount).Scan(&memberOpen, &memberTotal))
+	assert.Equal(t, 0, memberOpen, "the target member's grant must be CLOSED")
+	assert.Equal(t, 1, memberTotal, "and RETAINED — closing is not deleting (#1569 T7)")
 
-	var ownerShareCount int
-	err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`, hh, ownerAccount).Scan(&ownerShareCount)
-	require.NoError(t, err)
-	assert.Equal(t, 1, ownerShareCount, "the owner's share row in the SAME household must be completely untouched")
+	var ownerOpen int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2 AND revoked_at IS NULL`,
+		hh, ownerAccount).Scan(&ownerOpen))
+	assert.Equal(t, 1, ownerOpen, "the owner's grant in the SAME household must be completely untouched")
 }

@@ -1020,7 +1020,42 @@ func (s *householdService) PurgeRemovedMembership(ctx context.Context, household
 		return cerr
 	}
 
-	if cerr = shareRepo.DeleteSharesForUser(ctx, householdID, userID); cerr != nil {
+	// #1569 T7 — THE RULING ON THE 30-DAY PURGE, written here because an undocumented
+	// status quo is the defect, not the behaviour.
+	//
+	// This used to be shareRepo.DeleteSharesForUser: a hard DELETE of every
+	// household_account_shares row for the departed member. The defensible intent was
+	// privacy — a removed member's grants should not linger in someone else's household
+	// forever. That intent is real, and it is in genuine tension with #1569's thesis that
+	// history is retained unless the user explicitly deletes it. It loses anyway, on an
+	// asymmetry:
+	//
+	//   - The departing member's FINANCIAL DATA is untouched either way. It lives in their
+	//     own user_accounts / accounts / transactions / balance_snapshots, owned by them,
+	//     and deleting the grant row moves none of it.
+	//   - What the grant row records is the OTHER direction: what the remaining members
+	//     were legitimately shown, and between which two instants. That is the household's
+	//     audit of its own past, not a copy of the leaver's data.
+	//
+	// So the delete did not protect the leaver; it destroyed the record of a disclosure
+	// that had already happened, held by the party that received it. And it did so
+	// silently: with the row gone, a point-in-time household read for a date INSIDE the
+	// shared window has nothing to resolve against and reports that nothing was ever
+	// shared — the one answer that is certainly false.
+	//
+	// The revocation, not the deletion, is what enforces the privacy interest, and it
+	// already happened at removal time (removeMemberTx -> RevokeSharesForUser, same
+	// transaction). revoked_at closes the interval, and every read is bounded by it:
+	// nothing after the departure is visible, at any asOf, ever. Re-closing here is an
+	// idempotent belt-and-braces for a grant that somehow survived the removal still open
+	// — it cannot re-open one, and the rejoin guard above has already established that
+	// this user has no live membership whose grants we could damage.
+	//
+	// If the leaver wants the row itself gone, that is GDPR erasure, and erasure still
+	// destroys it: household_account_shares.user_account_id is ON DELETE CASCADE from
+	// user_accounts, which DeleteUserCascade removes. Pinned by
+	// TestHouseholdServiceIntegration_PurgeRemovedMembership_GDPRErasureStillDestroysGrants.
+	if cerr = shareRepo.RevokeSharesForUser(ctx, householdID, userID); cerr != nil {
 		return cerr
 	}
 	// Scoped (not the broad ExpireActiveEntitlement) — a removed member may have since
