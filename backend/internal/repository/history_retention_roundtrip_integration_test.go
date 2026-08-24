@@ -86,6 +86,39 @@ func seedBalanceSnapshotAt(ctx context.Context, t *testing.T, db DB, userID, acc
 	return id
 }
 
+// seedBalanceSnapshotWithID is seedBalanceSnapshotAt with the row's UUID chosen by the caller.
+//
+// It exists because GetAggregatedHistory's per-day dedup used to pick the winning row by
+// MAX(snapshot_at) and MAX(id) INDEPENDENTLY, which meant a day with two snapshots in the same
+// re-link chain vanished entirely whenever the EARLIER row happened to have the higher UUID. With
+// random UUIDs that is a coin flip per overlap day, and a test that seeds them randomly is a
+// coin-flip test — it passed three runs in a row before failing in the full suite. Choosing the ids
+// makes the defect deterministic in the direction that fails.
+func seedBalanceSnapshotWithID(ctx context.Context, t *testing.T, db DB, id, userID, accountID, userAccountID uuid.UUID, at time.Time, balance float64) {
+	t.Helper()
+	_, err := db.Exec(ctx, `
+		INSERT INTO balance_snapshots (id, account_id, user_id, user_account_id, current_balance,
+			currency_code, snapshot_at, source)
+		VALUES ($1, $2, $3, $4, $5, 'USD', $6, 'manual')
+	`, id, accountID, userID, userAccountID, balance, at)
+	require.NoError(t, err, "seed balance_snapshot")
+}
+
+// highUUID and lowUUID produce ids that sort deterministically against each other as text.
+func highUUID(t *testing.T) uuid.UUID {
+	t.Helper()
+	u, err := uuid.Parse("ffffffff-ffff-4fff-8fff-" + uuid.New().String()[24:])
+	require.NoError(t, err)
+	return u
+}
+
+func lowUUID(t *testing.T) uuid.UUID {
+	t.Helper()
+	u, err := uuid.Parse("00000000-0000-4000-8000-" + uuid.New().String()[24:])
+	require.NoError(t, err)
+	return u
+}
+
 // TestHistoryRetentionRoundTrip_DisconnectKeepsEveryKindOfHistory is scenario 1.
 //
 // The failure it exists to catch is the one #1569 was filed for: the user presses "Disconnect",
@@ -169,7 +202,9 @@ func TestHistoryRetentionRoundTrip_InstitutionChangeKeepsLastMonthWithoutDoubleC
 
 	// The old institution: a month of history, and a morning snapshot on the switch day.
 	seedBalanceSnapshotAt(ctx, t, pool, f.UserID, f.AccountID, f.UserAccountID, lastMonthDay, 800.00)
-	seedBalanceSnapshotAt(ctx, t, pool, f.UserID, f.AccountID, f.UserAccountID, switchDay.Add(8*time.Hour), 800.00)
+	// The EARLIER row deliberately gets the HIGHER uuid — see seedBalanceSnapshotWithID.
+	seedBalanceSnapshotWithID(ctx, t, pool, highUUID(t), f.UserID, f.AccountID, f.UserAccountID,
+		switchDay.Add(8*time.Hour), 800.00)
 
 	// The new institution: a new linked_item and a new account, sharing the SAME user_account_id.
 	// That shared key is what makes the two rows one account historically.
@@ -191,7 +226,8 @@ func TestHistoryRetentionRoundTrip_InstitutionChangeKeepsLastMonthWithoutDoubleC
 		domain.AccountStatusReplaced, &newIDStr))
 
 	// The new account reports the same money later on the same day.
-	seedBalanceSnapshotAt(ctx, t, pool, f.UserID, newAccountID, f.UserAccountID, switchDay.Add(20*time.Hour), 800.00)
+	seedBalanceSnapshotWithID(ctx, t, pool, lowUUID(t), f.UserID, newAccountID, f.UserAccountID,
+		switchDay.Add(20*time.Hour), 800.00)
 
 	points, err := snapshots.GetAggregatedHistory(ctx, f.UserID.String(),
 		lastMonthDay.AddDate(0, 0, -1), now, nil)
@@ -209,7 +245,11 @@ func TestHistoryRetentionRoundTrip_InstitutionChangeKeepsLastMonthWithoutDoubleC
 	assert.InDelta(t, 800.00, byDay[lastMonthKey], 0.01)
 
 	switchKey := switchDay.Format("2006-01-02")
-	require.Contains(t, byDay, switchKey, "the switch day must be present")
+	require.Contains(t, byDay, switchKey,
+		"the switch day must be present. A MISSING day here is the MAX(snapshot_at)/MAX(id) defect: "+
+			"the dedup CTE picked the latest instant and the highest uuid independently, so when the "+
+			"earlier row had the higher uuid nothing satisfied both and the day disappeared from the "+
+			"user's balance history entirely")
 	assert.InDelta(t, 800.00, byDay[switchKey], 0.01,
 		"1600 here means the overlap day was double-counted: both the old and the new account "+
 			"contributed, and the user's net worth appears to double the day they changed banks")
