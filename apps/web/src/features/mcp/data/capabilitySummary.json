@@ -1,10 +1,10 @@
 {
-  "totalOperations": 196,
-  "allowedOperations": 133,
-  "readOperations": 87,
-  "writeOperations": 46,
-  "excludedOperations": 63,
-  "destructiveWriteOperations": 9,
+  "totalOperations": 199,
+  "allowedOperations": 134,
+  "readOperations": 89,
+  "writeOperations": 45,
+  "excludedOperations": 65,
+  "destructiveWriteOperations": 4,
   "publicBoundaries": [
     {
       "id": "bank-connections",

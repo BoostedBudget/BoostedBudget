@@ -1478,7 +1478,7 @@
       "tags": [
         "Auto-Categorization"
       ],
-      "manifestClass": "write",
+      "manifestClass": "destructive",
       "excluded": false,
       "description": "Removes a categorization rule.",
       "parameters": [
@@ -1509,6 +1509,38 @@
           "required": true,
           "description": "Rule UUID",
           "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "getUserBoostExecutions",
+      "method": "GET",
+      "path": "/api/v1/boost-executions",
+      "summary": "Get account-wide boost execution history",
+      "tags": [
+        "Boosts"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Retrieves every boost execution for the authenticated user with an optional status filter. Unlike /boosts/{id}/executions this also returns executions whose boost has since been deleted: those carry boost_id = null plus boost_name and definition_snapshot, captured at execution time.",
+      "parameters": [
+        {
+          "name": "status",
+          "in": "query",
+          "description": "Filter by status: pending, running, completed, failed",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Maximum number of results",
+          "type": "integer"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "description": "Number of results to skip",
+          "type": "integer"
         }
       ]
     },
@@ -2951,7 +2983,7 @@
       "tags": [
         "MCP Recipes"
       ],
-      "manifestClass": "write",
+      "manifestClass": "destructive",
       "excluded": false,
       "parameters": [
         {
@@ -3073,7 +3105,7 @@
       "tags": [
         "Merchants"
       ],
-      "manifestClass": "write",
+      "manifestClass": "destructive",
       "excluded": false,
       "description": "Removes the per-user override for a merchant, reverting to the system normalized name.",
       "parameters": [
@@ -3236,6 +3268,18 @@
       "description": "Retrieves all active (not completed) savings goals for the authenticated user."
     },
     {
+      "operationId": "getDeletedSavingsGoals",
+      "method": "GET",
+      "path": "/api/v1/savings-goals/deleted",
+      "summary": "Get deleted savings goals",
+      "tags": [
+        "Savings Goals"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Lists savings goals the user has deleted. Deleting a goal retains it and every contribution logged against it (Issue #1569); this endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at."
+    },
+    {
       "operationId": "getSavingsProgressSummary",
       "method": "GET",
       "path": "/api/v1/savings-goals/progress-summary",
@@ -3301,8 +3345,8 @@
         "Savings Goals",
         "Contributions"
       ],
-      "manifestClass": "write",
-      "excluded": false,
+      "manifestClass": "destructive",
+      "excluded": true,
       "description": "Removes a contribution (proposed or confirmed). Triggers goal progress recomputation.",
       "parameters": [
         {
@@ -3431,7 +3475,28 @@
       ],
       "manifestClass": "write",
       "excluded": false,
-      "description": "Removes a savings goal from the user's collection.",
+      "description": "Removes a savings goal from the user's collection. Does NOT destroy any data — every contribution logged against the goal is retained. Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its contributions.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "purgeSavingsGoal",
+      "method": "POST",
+      "path": "/api/v1/savings-goals/{id}/purge",
+      "summary": "Purge savings goal",
+      "tags": [
+        "Savings Goals"
+      ],
+      "manifestClass": "destructive",
+      "excluded": true,
+      "description": "Permanently destroys a savings goal and every contribution logged against it — including amounts the user entered by hand, which no provider can supply again. This cannot be undone. Refuses with 409 unless the goal has already been deleted (DELETE /savings-goals/{id} first); that two-step is the confirmation.",
       "parameters": [
         {
           "name": "id",
@@ -3630,7 +3695,7 @@
       "tags": [
         "Tags"
       ],
-      "manifestClass": "write",
+      "manifestClass": "destructive",
       "excluded": false,
       "description": "Removes a tag from the user's collection.",
       "parameters": [
@@ -3725,6 +3790,12 @@
           "name": "reviewed",
           "in": "query",
           "description": "Filter by review state: true (reviewed), false (unreviewed inbox), omit for both",
+          "type": "string"
+        },
+        {
+          "name": "include_reversed",
+          "in": "query",
+          "description": "Include transactions the bank REVERSED after they posted (default false). Reversed rows are returned with reversed=true and reversed_at set, and MUST be rendered distinctly — an unlabelled reversal reads as a live transaction. Transactions removed while still pending are never returned, by any value of this flag: their posted twin is already in the feed. Issue #1569.",
           "type": "string"
         },
         {
