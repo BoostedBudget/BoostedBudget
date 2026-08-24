@@ -534,7 +534,7 @@
       "tags": [
         "Admin Subscriptions"
       ],
-      "manifestClass": "destructive",
+      "manifestClass": "write",
       "excluded": true,
       "description": "Clear a user's manual tier override, restoring their raw subscription tier and status. Idempotent — returns removed=false if no override exists. Requires admin privileges.",
       "parameters": [

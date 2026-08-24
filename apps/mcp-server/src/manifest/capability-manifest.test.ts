@@ -542,8 +542,7 @@ describe('issue #1569 task 16: destructive class', () => {
     deleteSavingsGoalContribution: false,
     purgeAccount: false,
     purgeInstitution: false,
-    purgeSavingsGoal: false,
-    'remove-admin-user-tier-override': false
+    purgeSavingsGoal: false
   }
 
   /**
@@ -637,7 +636,17 @@ describe('issue #1569 task 16: destructive class', () => {
     // Pre-Task-16 the excluded() helper hard-coded class:'read' onto all 45 excluded mutating
     // operations. These four are status updates / schedulers, not destruction — so 'write' is
     // their true class, and it is now recorded.
-    for (const operationId of ['deleteBoost', 'removeHouseholdMember', 'revokeHouseholdInvite', 'requestDeletion']) {
+    for (const operationId of [
+      'deleteBoost',
+      'removeHouseholdMember',
+      'revokeHouseholdInvite',
+      'requestDeletion',
+      // Reclassified destructive -> write in round 3. Its DELETE citation pointed at
+      // DeleteOverride, a same-named method in an unrelated flow; the real path is an
+      // `UPDATE users SET manual_tier_override = NULL` that preserves the prior value in
+      // audit_logs.changes. See the manifest entry.
+      'remove-admin-user-tier-override'
+    ]) {
       const entry = getCapability(operationId)
       expect(entry?.class, operationId).toBe('write')
       expect(entry?.destructive, operationId).toBe(false)

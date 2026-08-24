@@ -19,11 +19,26 @@
  *              deleted_at/deleted_reason/deleted_by and its dependent financial history
  *              (rollover_history, contributions, transactions) is preserved.
  * - `destructive` — permanently destroys stored rows. No tombstone, no restore path.
- *              Issue #1569 Task 16: a `write` grant must not carry the power to do this.
+ *              Issue #1569 Task 16.
  *
- * ⚠ Classify by VERIFIED BACKEND BEHAVIOUR, never by the verb's name. On this branch
- * `deleteSavingsGoal` is a tombstone and `purgeSavingsGoal` is the hard DELETE; the names
- * are not a reliable guide. Each destructive entry below cites the SQL it was read from.
+ * ⚠⚠ WHAT THIS CLASS DOES **NOT** DO. There is no scope model to sit above: Clerk OAuth issues
+ * no custom scopes (see oauth/clerk-verifier.ts), so a grant is all-or-nothing and there is no
+ * "granted `write`" for a tier to outrank. `class` is consulted by exactly four non-test call
+ * sites — the spec-index build, search filtering, and two audit lines — and by NO GATE.
+ * sandbox/host-proxy.ts admits or refuses a call on `excluded` and `confirmationRequired` alone,
+ * and every invocable destructive operation already had `confirmationRequired: true` as a
+ * `write()` entry, so for those the class changes NO runtime behaviour.
+ *
+ * What it does do: make the distinction representable, enforced by tests, visible in
+ * mcp_audit_log.operation_class (migration 000166), and impossible for a new destructive verb to
+ * default out of. That is the precondition for enforcement, not enforcement. Do not read a
+ * capability boundary into this type that the runtime does not implement.
+ *
+ * ⚠ Classify by VERIFIED BACKEND BEHAVIOUR, never by the verb's name — and by the behaviour on
+ * THIS operation's own call path, not the first same-named method a grep finds (see
+ * remove-admin-user-tier-override's entry, which was wrong for exactly that reason). On this
+ * branch `deleteSavingsGoal` is a tombstone and `purgeSavingsGoal` is the hard DELETE. Each
+ * destructive entry below cites the SQL it was read from.
  *
  * `destructive` is a CLASS, not a permission: an operation can be in it and still be
  * `excluded`. See the destructive() helper.
@@ -140,10 +155,10 @@ const excludedWrite = (operationId: string, reason: string, publicBoundary?: Pub
  * it. Either way the justification lives in the manifest, not only in a PR description.
  *
  * Unlike excluded(), this helper keeps `class: 'destructive'` and `destructive: true` even
- * when the operation is excluded — the class states what the operation IS, the excluded
- * flag states whether MCP will dispatch it. (excluded() hard-codes class:'read' for its 45
- * mutating entries; that long-standing wart is documented in mcp/tools/execute.ts and is
- * deliberately not widened here.)
+ * when the operation is excluded — the class states what the operation IS, the excluded flag
+ * states whether MCP will dispatch it. (excluded() is now reserved for genuinely non-mutating
+ * excluded operations; its old habit of hard-coding class:'read' onto mutating ones was fixed in
+ * the same change that added this helper. See excluded()'s own doc above.)
  *
  * confirmationRequired is true unconditionally: on the invocable entries the host-proxy
  * enforces it, and on the excluded entries it is the fail-safe default should the exclusion
@@ -292,9 +307,21 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excludedWrite('update-admin-user-tier', REASON_ADMIN),
   // #1414: revoking a subscription comp is an irreversible, billing-adjacent admin action.
   // Excluded under the blanket admin policy — deliberately, not merely by default.
-  // Hard destruction: `DELETE FROM user_subscription_overrides`
-  // (postgres_subscription_override_repository.go:74).
-  destructive('remove-admin-user-tier-override', { excluded: true, reason: REASON_ADMIN }),
+  // ⚠ NOT destructive, and it was wrong here for one round. POST
+  // /admin/users/{user_id}/subscription/tier/clear resolves to AdminHandler.RemoveUserTierOverride
+  // -> adminUserService.RemoveUserTierOverride -> adminUserRepository.RemoveUserTierOverride ->
+  // removeUserTierOverrideQuery, which is an `UPDATE users SET manual_tier_override = NULL,
+  // manual_tier_ends_at = NULL, ...` (admin_user_repository.go:824-846) in one transaction with an
+  // audit_logs row whose `changes` payload carries prior_manual_tier_override (:927). Zero rows
+  // destroyed, prior value preserved — that is an excluded write.
+  //
+  // The earlier `destructive` classification cited `DELETE FROM user_subscription_overrides`
+  // (postgres_subscription_override_repository.go:74). That is DeleteOverride, whose only
+  // production caller is SubscriptionService.RemoveOverride (subscription_service.go:260) — an
+  // unrelated flow reached by neither this operation nor any admin route. A same-named method in a
+  // same-sounding repository: exactly the name-trap this tier exists to kill, so it is written
+  // down rather than quietly corrected.
+  excludedWrite('remove-admin-user-tier-override', REASON_ADMIN),
 
   // ── Auto-Categorization ─────────────────────────────────────────────────
   // Rule mutations un-excluded per Issue #957 (Q1 decision). Mitigations:
