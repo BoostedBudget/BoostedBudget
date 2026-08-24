@@ -25,3 +25,8 @@ BEGIN
             CHECK (operation_class IN ('read', 'write'));
     END IF;
 END $$;
+
+-- ⚠ NOTHING AUTOMATED EXERCISES THIS FILE'S DATA PATH. scripts/test-migrations.sh compares
+-- SCHEMA hashes across an up->down->up cycle, which this survives, but it never populates
+-- mcp_audit_log — so the UPDATE above is covered only by manual verification (round 2 of #1569
+-- Task 16: one 'destructive' row folded to 'write', constraint restored, re-up clean).
