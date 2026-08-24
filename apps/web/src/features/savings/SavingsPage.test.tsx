@@ -16,6 +16,7 @@ import {
   mockDeleteSavingsGoalMutateAsync,
   mockUseListSavingsGoalContributions,
   mockConfirmSavingsGoalContributionMutateAsync,
+  mockUseGetSavingsProgressSummary,
 } from '@/test/mocks/savings-goals-api'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
@@ -83,6 +84,11 @@ describe('SavingsPage', () => {
       isLoading: false,
       error: null,
       refetch: mockSavingsGoalsRefetch,
+    })
+    mockUseGetSavingsProgressSummary.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
     })
   })
 
@@ -479,6 +485,54 @@ describe('SavingsPage', () => {
       await waitFor(() => {
         expect(mockSavingsGoalsRefetch).toHaveBeenCalled()
       })
+    })
+  })
+
+  // Issue #1569 (Task 13, E14). Before this, `freshness` had no frontend consumer at all, so a
+  // goal whose linked account was gone showed a frozen number the UI could not explain.
+  describe('frozen-amount explanation from the progress summary', () => {
+    function renderWithSummary(goals: SavingsGoal[], summaryGoals: unknown[] | undefined) {
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: goals,
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      mockUseGetSavingsProgressSummary.mockReturnValue({
+        data: summaryGoals === undefined ? undefined : { goals: summaryGoals },
+        isLoading: false,
+        error: null,
+      })
+      return renderPage()
+    }
+
+    it('explains the frozen amount on the goal whose basis account is disconnected', () => {
+      renderWithSummary([baseGoal], [
+        { goal_id: baseGoal.id, freshness: 'basis_account_disconnected' },
+      ])
+      expect(screen.getByText('Account disconnected')).toBeInTheDocument()
+    })
+
+    it('leaves a healthy goal unannotated', () => {
+      renderWithSummary([baseGoal], [{ goal_id: baseGoal.id, freshness: 'fresh' }])
+      expect(screen.queryByText('Account disconnected')).not.toBeInTheDocument()
+    })
+
+    it('annotates only the affected goal when several are shown', () => {
+      const otherGoal: SavingsGoal = { ...baseGoal, id: 'goal-9', name: 'House Deposit' }
+      renderWithSummary([baseGoal, otherGoal], [
+        { goal_id: baseGoal.id, freshness: 'basis_account_disconnected' },
+        { goal_id: otherGoal.id, freshness: 'fresh' },
+      ])
+      expect(screen.getAllByText('Account disconnected')).toHaveLength(1)
+    })
+
+    it('renders normally when the summary is unavailable', () => {
+      // The summary is a secondary signal — if it fails or has not loaded, the goals list must
+      // still render rather than blocking on it.
+      renderWithSummary([baseGoal], undefined)
+      expect(screen.getByText('Vacation Fund')).toBeInTheDocument()
+      expect(screen.queryByText('Account disconnected')).not.toBeInTheDocument()
     })
   })
 })

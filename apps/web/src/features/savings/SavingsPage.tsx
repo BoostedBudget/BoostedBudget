@@ -13,6 +13,7 @@ import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { useSavingsGoals } from './hooks/useSavingsGoals'
+import { useSavingsGoalFreshness } from './hooks/useSavingsGoalFreshness'
 import { useSavingsGoalsView } from './hooks/useSavingsGoalsView'
 import type { SortKey, TabKey } from './hooks/useSavingsGoalsView'
 import type { SavingsGoal } from './types'
@@ -36,6 +37,8 @@ export function SavingsPage() {
 
   const { goals, goalsWithProgress, loading, error, refetch, deleteGoal } = useSavingsGoals()
   const { view, tab, setTab, sortKey, setSortKey } = useSavingsGoalsView(goalsWithProgress)
+  // Issue #1569 (Task 13 / E14): explains a frozen balance-basis amount on the affected card.
+  const freshnessByGoalId = useSavingsGoalFreshness()
 
   // Fire page-viewed analytics once on mount
   useEffect(() => {
@@ -195,6 +198,7 @@ export function SavingsPage() {
         onDelete={handleDeleteClick}
         emptyMessage={emptyMessage}
         onContributionChanged={() => void refetch()}
+        freshnessByGoalId={freshnessByGoalId}
       />
 
       {/* #1569 T12 gap 2: what deletion kept, and the only way to actually reclaim it. */}
