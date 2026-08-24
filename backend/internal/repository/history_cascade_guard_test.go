@@ -114,8 +114,10 @@ var deliberatelyNotHistoryBearing = map[string]string{
 	// what #1569 promised to retain.
 	"holdings": "LIVE STATE, not history: what the account holds right now. ReplaceForAccount " +
 		"deliberately deletes and re-inserts it on every sync, which is how it stays true. The " +
-		"history is holding_snapshots, captured inside that same transaction before the delete " +
-		"(ADR 2026-08-24, Decision 10). Same split for liabilities.",
+		"history is holding_snapshots, captured in that SAME transaction but AFTER the inserts, " +
+		"derived from the rows just written — it records the new state, it does not preserve the " +
+		"old one. What preserves the past is earlier days' captures (ADR 2026-08-24, Decision 10). " +
+		"Same split for liabilities.",
 	"audit_logs": "system/compliance record of who did what, not the user's financial history. Its " +
 		"PII payload is REDACTED rather than retained on erasure (ADR 2026-08-01)",
 	"mcp_audit_log":         "MCP tool-call audit trail; a system record, hard-deleted on erasure",
