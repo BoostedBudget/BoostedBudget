@@ -316,6 +316,7 @@ export * from './saveDashboardPreferencesInputBody';
 export * from './savingsGoal';
 export * from './savingsGoalContribution';
 export * from './savingsGoalProgressItem';
+export * from './savingsGoalProgressItemFreshness';
 export * from './savingsImpactAggregateBody';
 export * from './savingsProgressSummary';
 export * from './savingsRateResponse';

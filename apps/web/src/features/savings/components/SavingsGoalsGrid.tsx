@@ -4,6 +4,7 @@
  */
 
 import { SavingsGoalCard } from './SavingsGoalCard'
+import type { SavingsGoalProgressItemFreshness } from '@boostedbudget/api-client/models'
 import type { SavingsGoalWithProgress } from '../hooks/useSavingsGoals'
 import type { SavingsGoal } from '../types'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -22,7 +23,7 @@ export interface SavingsGoalsGridProps {
    * goal id -> `freshness` from the progress summary (Issue #1569 Task 13 / E14). A goal
    * missing from this map is simply not annotated.
    */
-  freshnessByGoalId?: Record<string, string>
+  freshnessByGoalId?: Record<string, SavingsGoalProgressItemFreshness>
 }
 
 export function SavingsGoalsGrid({ goals, onEdit, onDelete, emptyMessage, onContributionChanged, freshnessByGoalId }: SavingsGoalsGridProps) {

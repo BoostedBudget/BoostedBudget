@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { PlugZap } from 'lucide-react'
+import { SavingsGoalProgressItemFreshness } from '@boostedbudget/api-client/models'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { computeSavingsProgress, computeSavingsRemaining } from '../types'
@@ -23,12 +24,13 @@ export interface SavingsGoalCardProps {
    * one value the user can act on, and the only one that means the number will NEVER move
    * again. 'stale' means the balance IS still being updated, just not in the last 24 h — a
    * badge for that would be noise on every card overnight.
+   *
+   * Typed as the generated union, not `string`: the backend field carries an OpenAPI enum, so
+   * a rename on the Go side now breaks `tsc` here instead of silently switching the
+   * explanation off.
    */
-  freshness?: string;
+  freshness?: SavingsGoalProgressItemFreshness;
 }
-
-/** The one freshness value that is both permanent and actionable. */
-const FRESHNESS_BASIS_ACCOUNT_DISCONNECTED = 'basis_account_disconnected'
 
 function formatCurrency(amount: number, currencyCode: string): string {
   try {
@@ -53,7 +55,7 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds, onContribu
   const remaining = computeSavingsRemaining(goal)
   const visualWidth = Math.min(progress, 100)
   const [contributionsOpen, setContributionsOpen] = useState(false)
-  const isDisconnected = freshness === FRESHNESS_BASIS_ACCOUNT_DISCONNECTED
+  const isDisconnected = freshness === SavingsGoalProgressItemFreshness.basis_account_disconnected
 
   return (
     <Card className="flex flex-col gap-4 transition-shadow hover:shadow-md">
@@ -66,7 +68,11 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds, onContribu
             <Badge variant="success">Completed</Badge>
           )}
           {isDisconnected && (
-            <Badge variant="warning">
+            <Badge
+              variant="warning"
+              data-testid="savings-goal-disconnected-badge"
+              aria-describedby={`savings-goal-disconnected-${goal.id}`}
+            >
               <PlugZap className="mr-1 h-3 w-3" aria-hidden="true" />
               Account disconnected
             </Badge>
@@ -103,10 +109,13 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds, onContribu
       </div>
 
       {isDisconnected && (
-        // role="status" (not an alert): this is standing context about a goal, not an
-        // interruption. The badge above carries the same fact, so the notice repeats it in
-        // words — nothing here is conveyed by colour alone.
-        <p role="status" className="m-0 text-sm text-muted-foreground">
+        // NOT a live region. An earlier version used role="status", but a live region that
+        // enters the DOM already containing its text is not reliably announced by assistive
+        // technology — the comment claimed a behaviour the markup did not deliver. This is
+        // static page content, so it is reached by ordinary reading order, and the badge is
+        // tied to it via aria-describedby so the two are encountered together. Nothing here is
+        // conveyed by colour alone: both the badge and this sentence state it in words.
+        <p id={`savings-goal-disconnected-${goal.id}`} className="m-0 text-sm text-muted-foreground">
           This goal&rsquo;s linked account is no longer connected, so the amount above is frozen at its
           last known value. Reconnect the account to resume updates.
         </p>
