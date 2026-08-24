@@ -32,17 +32,17 @@ type HouseholdShareRepository interface {
 	// c.ID/ConsentedAt/CreatedAt.
 	InsertConsent(ctx context.Context, c *domain.HouseholdShareConsent) error
 
-	// RevokeSharesForUser sets revoked_at=now() on every active share grant for userID's
-	// accounts within householdID. Called on member removal/self-leave so a departed
-	// member's data stops appearing in the household aggregate (GDPR revocability).
+	// RevokeSharesForUser CLOSES the grant interval — sets revoked_at=now() on every open
+	// share grant for userID's accounts within householdID. Called on member
+	// removal/self-leave so a departed member's data stops appearing in the household
+	// aggregate from that instant onward (GDPR revocability), and again by the 30-day
+	// PurgeRemovedMembership job as an idempotent belt-and-braces close.
+	//
+	// #1569 T7: closing is the ONLY thing that ever happens to a grant row. There is no
+	// delete counterpart any more — see PurgeRemovedMembership for the ruling and
+	// householdAccountsCTEForBalancesAsOf for what reads the closed rows. Erasure of the
+	// row itself belongs to GDPR alone, and reaches it by cascade from user_accounts.
 	RevokeSharesForUser(ctx context.Context, householdID, userID string) error
-
-	// DeleteSharesForUser permanently deletes (hard delete, not revoke) every
-	// household_account_shares row for userID's accounts within householdID. Unlike
-	// RevokeSharesForUser (soft-revoke at removal time), this runs at purge time — 30
-	// days after removal — via PurgeRemovedMembership, once the share grants no longer
-	// need to be retained. #1371 — Phase 7 foundation.
-	DeleteSharesForUser(ctx context.Context, householdID, userID string) error
 
 	// SetShareVisibility upserts the single active grant row (revoked_at IS NULL) for
 	// (householdID, userAccountID) to the given visibility. It NEVER writes revoked_at —
@@ -115,15 +115,6 @@ func (r *householdShareRepository) RevokeSharesForUser(ctx context.Context, hous
 	_, err := r.db.Exec(ctx, `
 		UPDATE household_account_shares SET revoked_at = now(), updated_at = now()
 		WHERE household_id = $1 AND revoked_at IS NULL
-		  AND user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $2)
-	`, householdID, userID)
-	return err
-}
-
-func (r *householdShareRepository) DeleteSharesForUser(ctx context.Context, householdID, userID string) error {
-	_, err := r.db.Exec(ctx, `
-		DELETE FROM household_account_shares
-		WHERE household_id = $1
 		  AND user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $2)
 	`, householdID, userID)
 	return err

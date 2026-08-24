@@ -114,10 +114,6 @@ func (m *mockHouseholdShareRepo) RevokeSharesForUser(ctx context.Context, househ
 	args := m.Called(ctx, householdID, userID)
 	return args.Error(0)
 }
-func (m *mockHouseholdShareRepo) DeleteSharesForUser(ctx context.Context, householdID, userID string) error {
-	args := m.Called(ctx, householdID, userID)
-	return args.Error(0)
-}
 
 // SetShareVisibility and ListMyAccountShares (#1368 — Phase 4 writes) are not
 // exercised by these Phase 3 tests; stubbed to satisfy the expanded
@@ -1683,8 +1679,11 @@ func TestHouseholdService_PurgeRemovedMembership_Success(t *testing.T) {
 	// Not currently re-active in this household -> safe to clean up shares/entitlement.
 	pool.ExpectQuery("status = 'active'").WithArgs("hh-1", "member-1").
 		WillReturnError(pgx.ErrNoRows)
-	pool.ExpectExec("DELETE FROM household_account_shares").WithArgs("hh-1", "member-1").
-		WillReturnResult(pgxmock.NewResult("DELETE", 2))
+	// #1569 T7: the purge CLOSES any still-open grant instead of hard-deleting the
+	// household's record of what it was shown. An `ExpectExec("DELETE FROM
+	// household_account_shares")` here would now go unmatched.
+	pool.ExpectExec("UPDATE household_account_shares SET revoked_at").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 	pool.ExpectExec("source = 'household'").WithArgs("member-1", "hh-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectCommit()
@@ -1712,8 +1711,11 @@ func TestHouseholdService_PurgeRemovedMembership_LocksHouseholdBeforeDelete(t *t
 		WillReturnRows(pgxmock.NewRows([]string{"household_id", "user_id"}).AddRow("hh-1", "member-1"))
 	pool.ExpectQuery("status = 'active'").WithArgs("hh-1", "member-1").
 		WillReturnError(pgx.ErrNoRows)
-	pool.ExpectExec("DELETE FROM household_account_shares").WithArgs("hh-1", "member-1").
-		WillReturnResult(pgxmock.NewResult("DELETE", 2))
+	// #1569 T7: the purge CLOSES any still-open grant instead of hard-deleting the
+	// household's record of what it was shown. An `ExpectExec("DELETE FROM
+	// household_account_shares")` here would now go unmatched.
+	pool.ExpectExec("UPDATE household_account_shares SET revoked_at").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 	pool.ExpectExec("source = 'household'").WithArgs("member-1", "hh-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectCommit()
@@ -1785,7 +1787,7 @@ func TestHouseholdService_PurgeRemovedMembership_UserRejoined_SkipsShareAndEntit
 			"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
 			"prior_subscription_tier", "prior_subscription_status", "created_at", "updated_at",
 		}).AddRow("mem-new", "hh-1", "member-1", "member", "active", time.Now(), nil, nil, nil, time.Now(), time.Now()))
-	// No DELETE FROM household_account_shares, no entitlement UPDATE — must not run.
+	// No share write, no entitlement UPDATE — must not run.
 	pool.ExpectCommit()
 
 	err := svc.PurgeRemovedMembership(context.Background(), "hh-1", "member-row-old")
