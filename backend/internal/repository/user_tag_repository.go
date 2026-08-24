@@ -189,6 +189,34 @@ func (r *userTagRepository) GetByName(ctx context.Context, userID, name string) 
 }
 
 // Update updates an existing tag
+// Update renames or recolours a registry tag.
+//
+// ⚠ IT DOES NOT TOUCH transactions.tags, AND THAT IS NOT AN OVERSIGHT TO FIX IN ISOLATION.
+// Re-derived for #1569 task 20; recorded here so the next reader does not have to.
+//
+// The census entry for this said "a rename doesn't propagate", implying a coupling that has come
+// loose. There is no coupling, in either direction, and never has been:
+//
+//   * transactions.tags and transactions.tags_source are free-text JSONB written by
+//     transactionService.UpdateTransactionTags, which never consults user_tags. Tagging a
+//     transaction does not create a registry row.
+//   * usage_count has NO production writer. IncrementUsageCount and DecrementUsageCount exist on
+//     this repository and are called by nothing outside tests — verified over the tracked tree
+//     with `git ls-files | xargs /usr/bin/grep -ln "IncrementUsageCount\|DecrementUsageCount"`,
+//     which returns this file and three test files, and by
+//     `git ls-files '*.go' | xargs /usr/bin/grep -ln user_tags`, which returns only this file.
+//
+// So user_tags is a standalone picker list, not an index over the tags actually in use. Making
+// RENAME the one operation that reaches across into transactions would create a coupling in a
+// single direction, which reads as intentional and is worse than the honest decoupling: a tag
+// created on a transaction would still never appear here, and usage_count would still be a number
+// nothing maintains.
+//
+// What a rename DOES cost today, stated exactly: transactions keep the old string, so the tag
+// filter (`tags ? $n` / `tags ?| $n` in transaction_repository.go) matches them under the old name
+// and not the new one. No annotation is destroyed — the strings are still on the rows — but the
+// renamed tag stops finding them. Fixing that properly means deciding what user_tags is FOR, which
+// is a design question and a ticket, not a line of SQL.
 func (r *userTagRepository) Update(ctx context.Context, tag *domain.UserTag) error {
 	tag.UpdatedAt = time.Now()
 

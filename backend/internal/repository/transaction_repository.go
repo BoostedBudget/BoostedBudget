@@ -1359,6 +1359,27 @@ func (r *transactionRepository) SetReviewed(ctx context.Context, userID string, 
 }
 
 // BulkUpdateCategory recategorizes many transactions in one UPDATE (Issue #1210).
+//
+// ⚠ NO PRIOR VALUE IS RECORDED, and the same is true of the single-row UpdateCategory above.
+// Re-derived for #1569 task 20 (N9) and recorded here rather than fixed; the reasoning, so the
+// next reader does not repeat the investigation:
+//
+//   * The census framed this as a BULK defect. It is not: neither path records what the category
+//     was. There is no audit_logs entry for a recategorisation on either path — transaction_service
+//     fires only a PostHog `transaction_recategorized` event, which carries the new kind and a
+//     count, never the old value, and is analytics rather than a record of the user's data.
+//   * What is NOT lost: the PROVIDER's categorisation. pfc_primary and pfc_detailed are never
+//     written by these statements — the override lives in the separate
+//     category_override_kind / pfc_*_override / custom_category_override_id columns, and
+//     effective_category_name is derived from them. So the original always survives, and clearing
+//     the override restores it. That is what makes this different from the defects this issue
+//     closed, where the ORIGINAL was the thing being overwritten.
+//   * What IS lost: a PREVIOUS USER OVERRIDE, replaced by a newer user override. That is the user
+//     changing their own mind, which is the one act #1569's principle explicitly permits.
+//
+// Giving categorisation an undo would mean a history table, a writer on both paths and a read
+// path — a feature, not a line of SQL, and it should be a ticket rather than a side effect of a
+// retention sweep. Recorded so the absence is a known one.
 // Single statement (atomic by definition) — no explicit transaction needed.
 // IDs not owned by userID are silently skipped; returns rows affected.
 func (r *transactionRepository) BulkUpdateCategory(ctx context.Context, userID string, transactionIDs []string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) (int64, error) {
