@@ -117,7 +117,11 @@ export function computeCapabilitySummary(specIndex: SpecIndex): CapabilitySummar
       readOperations++
     } else if (entry.manifestClass === 'write' || entry.manifestClass === 'destructive') {
       writeOperations++
-      if (capability.destructive) destructiveWriteOperations++
+      // Counted off the CLASS, not off capability.destructive. Both are kept in lockstep by
+      // capability-manifest.test.ts, but reading the flag made this aggregate blind to a
+      // destructive→write reclassification (the flag stayed true, the op just moved buckets),
+      // and an aggregate that cannot move is an aggregate the drift test cannot police.
+      if (entry.manifestClass === 'destructive') destructiveWriteOperations++
     }
   }
 
