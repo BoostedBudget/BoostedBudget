@@ -6,7 +6,12 @@
  */
 
 import { describe, it, expect } from 'bun:test'
-import { getAccountTypeLabel, formatAccountBalance, getAccountBalanceAsOfDate } from './utils'
+import {
+  getAccountTypeLabel,
+  formatAccountBalance,
+  accountMatchesBalanceRange,
+  compareAccountsByBalance,
+} from './utils'
 import type { Account } from './types'
 
 const baseAccount: Account = {
@@ -231,49 +236,93 @@ describe('formatAccountBalance', () => {
     })
   })
 })
-
 // ---------------------------------------------------------------------------
-// getAccountBalanceAsOfDate
+// accountMatchesBalanceRange / compareAccountsByBalance  (Issue #1580)
 // ---------------------------------------------------------------------------
 
-describe('getAccountBalanceAsOfDate', () => {
-  // Issue #1569: a retained (non-active) account's current_balance is frozen at the moment it
-  // stopped being active. Callers must render that as "last known balance, as of <date>", never
-  // as a live figure. The instant differs by status — 'removed' and 'replaced' each have a
-  // dedicated timestamp; 'expired' has none, so updated_at is the best available proxy (see
-  // ExpireAccountsByFingerprint in account_repository.go, which sets only updated_at).
+describe('accountMatchesBalanceRange', () => {
+  // A closed account carries NO current balance (user ruling, #1569): every account-shaped read
+  // renders current_balance through accountBalanceProjection, which emits NULL — not zero — for
+  // any terminal status. The page used to coalesce that to 0, which made the bug run BOTH ways:
+  // a min-$1 filter EXCLUDED closed accounts, a max-$100 filter INCLUDED them, and neither answer
+  // meant "unknown". An absent balance matches no bounded range in either direction.
 
-  it('returns undefined for an active account (no freeze to report)', () => {
-    expect(getAccountBalanceAsOfDate({ ...baseAccount, status: 'active' })).toBeUndefined()
+  const closed: Account = { ...baseAccount, status: 'removed' }
+  const live = (current_balance: number): Account => ({ ...baseAccount, current_balance })
+
+  it('keeps every account when the range carries no bound at all', () => {
+    expect(accountMatchesBalanceRange(closed, {})).toBe(true)
+    expect(accountMatchesBalanceRange(live(50), {})).toBe(true)
   })
 
-  it('prefers removed_at for a removed account', () => {
-    const account: Account = {
-      ...baseAccount,
-      status: 'removed',
-      removed_at: '2026-03-01T00:00:00Z',
-      replaced_at: '2026-02-01T00:00:00Z',
-      updated_at: '2026-04-01T00:00:00Z',
-    }
-    expect(getAccountBalanceAsOfDate(account)).toBe('2026-03-01T00:00:00Z')
+  it('keeps every account when there is no range', () => {
+    expect(accountMatchesBalanceRange(closed, null)).toBe(true)
+    expect(accountMatchesBalanceRange(closed, undefined)).toBe(true)
   })
 
-  it('prefers replaced_at for a replaced account', () => {
-    const account: Account = {
-      ...baseAccount,
-      status: 'replaced',
-      replaced_at: '2026-02-01T00:00:00Z',
-      updated_at: '2026-04-01T00:00:00Z',
-    }
-    expect(getAccountBalanceAsOfDate(account)).toBe('2026-02-01T00:00:00Z')
+  it('excludes a balance-less account from a min-only range', () => {
+    expect(accountMatchesBalanceRange(closed, { min: 1 })).toBe(false)
   })
 
-  it('falls back to updated_at for an expired account (no dedicated timestamp)', () => {
-    const account: Account = {
-      ...baseAccount,
-      status: 'expired',
-      updated_at: '2026-04-01T00:00:00Z',
-    }
-    expect(getAccountBalanceAsOfDate(account)).toBe('2026-04-01T00:00:00Z')
+  it('excludes a balance-less account from a max-only range — the direction the old ?? 0 got wrong', () => {
+    // With `?? 0` this returned true: 0 <= 100. A closed account was silently counted as broke.
+    expect(accountMatchesBalanceRange(closed, { max: 100 })).toBe(false)
+  })
+
+  it('excludes a balance-less account from a range that straddles zero', () => {
+    expect(accountMatchesBalanceRange(closed, { min: -10, max: 10 })).toBe(false)
+  })
+
+  it('still applies both bounds to an account that has a balance', () => {
+    expect(accountMatchesBalanceRange(live(50), { min: 1, max: 100 })).toBe(true)
+    expect(accountMatchesBalanceRange(live(0), { min: 1, max: 100 })).toBe(false)
+    expect(accountMatchesBalanceRange(live(500), { min: 1, max: 100 })).toBe(false)
+    expect(accountMatchesBalanceRange(live(1), { min: 1, max: 100 })).toBe(true)
+    expect(accountMatchesBalanceRange(live(100), { min: 1, max: 100 })).toBe(true)
+  })
+})
+
+describe('compareAccountsByBalance', () => {
+  // Sorting by balance groups the balance-less accounts together at the END, and that grouping is
+  // DIRECTION-INDEPENDENT: "no balance" is not a quantity, so it can neither be the largest nor
+  // the smallest. Reversing the sort must reverse the ordering of the accounts that HAVE a
+  // balance without promoting the ones that do not to the top.
+
+  const closedA: Account = { ...baseAccount, id: 'closed-a', status: 'removed' }
+  const closedB: Account = { ...baseAccount, id: 'closed-b', status: 'expired' }
+  const low: Account = { ...baseAccount, id: 'low', current_balance: -50 }
+  const high: Account = { ...baseAccount, id: 'high', current_balance: 900 }
+
+  const sorted = (accounts: Account[], direction: 'asc' | 'desc') =>
+    [...accounts]
+      .sort((a, b) => compareAccountsByBalance(a, b, direction))
+      .map((a) => a.id)
+
+  it('sorts accounts that have a balance ascending', () => {
+    expect(sorted([high, low], 'asc')).toEqual(['low', 'high'])
+  })
+
+  it('sorts accounts that have a balance descending', () => {
+    expect(sorted([low, high], 'desc')).toEqual(['high', 'low'])
+  })
+
+  it('puts balance-less accounts last when ascending', () => {
+    expect(sorted([closedA, high, low], 'asc')).toEqual(['low', 'high', 'closed-a'])
+  })
+
+  it('puts balance-less accounts last when descending too — not first', () => {
+    // The bug: with `?? 0` a closed account sorted as if it held exactly $0, so it landed
+    // between the negative and positive balances, and a desc sort could put it above a real one.
+    expect(sorted([closedA, low, high], 'desc')).toEqual(['high', 'low', 'closed-a'])
+  })
+
+  it('treats two balance-less accounts as tied, in both directions', () => {
+    expect(compareAccountsByBalance(closedA, closedB, 'asc')).toBe(0)
+    expect(compareAccountsByBalance(closedA, closedB, 'desc')).toBe(0)
+  })
+
+  it('does not let a real $0 balance outrank a positive one on a desc sort', () => {
+    const zero: Account = { ...baseAccount, id: 'zero', current_balance: 0 }
+    expect(sorted([zero, high, closedA], 'desc')).toEqual(['high', 'zero', 'closed-a'])
   })
 })

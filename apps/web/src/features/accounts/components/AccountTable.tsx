@@ -7,8 +7,7 @@ import type { Account } from '@boostedbudget/api-client/models'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
-import { getAccountTypeLabel, formatAccountBalance, getAccountBalanceAsOfDate } from '../utils'
-import { formatHistoryLabel } from '@/shared/dates/utils'
+import { getAccountTypeLabel, formatAccountBalance } from '../utils'
 import { isInactive } from '../hooks/useActiveAccounts'
 
 export type SortColumn = 'institution' | 'name' | 'type' | 'balance'
@@ -211,8 +210,17 @@ export function AccountTable({
       minSize: 120,
       maxSize: 220,
       render: (row) => {
-        const isNegative = row.current_balance !== undefined && row.current_balance < 0
-        const asOfDate = getAccountBalanceAsOfDate(row)
+        // Issue #1580: a closed account carries no current balance — accountBalanceProjection
+        // emits NULL for every terminal status — so the cell states that rather than leaving a
+        // bare em dash. It replaces the former "as of <date>" caption, which was built for a
+        // world where a closed account still held a frozen figure and ended up rendering
+        // "— / as of Jun 4, 2025": a date attached to nothing.
+        //
+        // Driven off `status` (isInactive), not off a missing balance, so it says "closed" only
+        // when the account is closed; an active account whose balance has not synced yet still
+        // gets a plain em dash and no claim about why.
+        const isClosed = isInactive(row)
+        const isNegative = !isClosed && row.current_balance !== undefined && row.current_balance < 0
         return (
           <div className="flex flex-col items-end">
             <span
@@ -223,14 +231,12 @@ export function AccountTable({
                   : 'account-table__balance--positive text-foreground'
               )}
             >
-              {formatAccountBalance(row.current_balance, row.currency_code, { empty: '—' })}
+              {isClosed
+                ? '—'
+                : formatAccountBalance(row.current_balance, row.currency_code, { empty: '—' })}
             </span>
-            {/* Issue #1569: a retained account's balance is frozen at disconnect — never render
-                it as a live figure. */}
-            {asOfDate && (
-              <span className="text-xs text-muted-foreground">
-                as of {formatHistoryLabel(asOfDate, 'MMM d, yyyy')}
-              </span>
+            {isClosed && (
+              <span className="text-xs font-normal text-muted-foreground">No current balance</span>
             )}
           </div>
         )

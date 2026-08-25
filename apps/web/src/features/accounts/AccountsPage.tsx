@@ -4,7 +4,7 @@ import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff, Landmark, Archive } from 'lucide-react'
-import { getAccountTypeLabel } from './utils'
+import { getAccountTypeLabel, accountMatchesBalanceRange, compareAccountsByBalance } from './utils'
 import { toast } from 'sonner'
 import { mutationFailureMessage } from '@/features/admin/lib/mutationFailureMessage'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -338,13 +338,10 @@ export function AccountsPage() {
       })
     }
 
+    // Issue #1580: a closed account carries no current balance, so it matches no bounded range.
+    // See accountMatchesBalanceRange — the previous `?? 0` here got BOTH directions wrong.
     if (balanceRange) {
-      filtered = filtered.filter(acc => {
-        const balance = acc.current_balance ?? 0
-        if (balanceRange.min !== undefined && balance < balanceRange.min) return false
-        if (balanceRange.max !== undefined && balance > balanceRange.max) return false
-        return true
-      })
+      filtered = filtered.filter(acc => accountMatchesBalanceRange(acc, balanceRange))
     }
 
     if (sortColumn) {
@@ -370,12 +367,11 @@ export function AccountsPage() {
             comparison = typeA.localeCompare(typeB)
             break
           }
-          case 'balance': {
-            const balA = a.current_balance ?? 0
-            const balB = b.current_balance ?? 0
-            comparison = balA - balB
-            break
-          }
+          // Issue #1580: balance-less (closed) accounts form their own group, always last, in
+          // BOTH directions — so this case returns outright rather than falling through to the
+          // `sortDirection` negation below, which would flip the grouping too.
+          case 'balance':
+            return compareAccountsByBalance(a, b, sortDirection)
         }
 
         return sortDirection === 'asc' ? comparison : -comparison

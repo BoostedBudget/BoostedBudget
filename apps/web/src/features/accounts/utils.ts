@@ -6,25 +6,68 @@
  * each consumer previously produced inline.
  */
 
-import { isInactive } from './hooks/useActiveAccounts'
 import type { Account } from './types'
 
 /**
- * Returns the instant a retained (non-active) account's balance was frozen, or `undefined` for
- * an active account. Callers must render `current_balance` (and `available_balance`) as
- * "last known balance, as of <date>" for any account this returns a date for — never as a live
- * figure, since the backend stops updating that column once the account stops being active
- * (Issue #1569).
+ * True when `account` satisfies a balance-range predicate (Issue #1580).
  *
- * Precedence mirrors which timestamp the backend actually stamps for each status:
- * - 'removed': `removed_at` (accountRepository.MarkRemovedByLinkedItemID / UpdateStatus)
- * - 'replaced': `replaced_at` (accountRepository.UpdateStatus)
- * - 'expired': no dedicated timestamp exists — ExpireAccountsByFingerprint only touches
- *   `updated_at`, so that is the best available proxy for when the freeze happened.
+ * ⚠ An account with NO current balance matches no bounded range, in either direction.
+ *
+ * A closed account carries no current balance (user ruling, Issue #1569): every account-shaped
+ * read renders `current_balance` through `accountBalanceProjection`
+ * (backend/internal/repository/account_liveness_sql.go), which emits NULL — not zero — for any
+ * terminal status (`removed` / `replaced` / `expired`). The page previously coalesced that to 0
+ * before comparing, which made the defect run BOTH ways: a `min: 1` filter EXCLUDED closed
+ * accounts and a `max: 100` filter INCLUDED them, and neither of those answers meant "unknown".
+ * Excluding is the honest reading — "between $1 and $100" is a claim about a number, and there
+ * is no number here.
+ *
+ * A range with neither bound is not a predicate, so it filters nothing out.
  */
-export function getAccountBalanceAsOfDate(account: Account): string | undefined {
-  if (!isInactive(account)) return undefined
-  return account.removed_at ?? account.replaced_at ?? account.updated_at
+export function accountMatchesBalanceRange(
+  account: Account,
+  range: { min?: number; max?: number } | null | undefined
+): boolean {
+  if (!range) return true
+  const { min, max } = range
+  if (min === undefined && max === undefined) return true
+
+  const balance = account.current_balance
+  if (balance === undefined || balance === null) return false
+
+  if (min !== undefined && balance < min) return false
+  if (max !== undefined && balance > max) return false
+  return true
+}
+
+/**
+ * Comparator for the accounts list's "Balance" sort (Issue #1580).
+ *
+ * Accounts with no current balance (see `accountMatchesBalanceRange` for why that happens) form
+ * their own group, always LAST, and that grouping is **direction-independent**: "no balance" is
+ * not a quantity, so it can be neither the largest nor the smallest value. The previous `?? 0`
+ * placed a closed account at exactly $0 — between the overdrawn accounts and the funded ones —
+ * and a descending sort could lift it above an account that really holds money.
+ *
+ * `direction` is applied INSIDE the comparator rather than by negating its result at the call
+ * site, because negating would flip the grouping too.
+ */
+export function compareAccountsByBalance(
+  a: Account,
+  b: Account,
+  direction: 'asc' | 'desc'
+): number {
+  const balA = a.current_balance
+  const balB = b.current_balance
+  const hasA = balA !== undefined && balA !== null
+  const hasB = balB !== undefined && balB !== null
+
+  if (!hasA && !hasB) return 0
+  if (!hasA) return 1
+  if (!hasB) return -1
+
+  const comparison = balA - balB
+  return direction === 'asc' ? comparison : -comparison
 }
 
 /**

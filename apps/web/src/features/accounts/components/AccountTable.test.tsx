@@ -183,15 +183,66 @@ describe('AccountTable', () => {
       expect(screen.getByText('Closed')).toBeInTheDocument()
     })
 
-    it('shows the balance as-of date for a closed account', () => {
+    // Issue #1580. The old assertion here read `getByText(/as of/i)` against a fixture where a
+    // REMOVED account still carried current_balance: 2500.50 — a row production cannot produce,
+    // since accountBalanceProjection nulls both balance columns for every terminal status. So it
+    // pinned a caption ("as of Mar 1, 2026") that in production only ever appeared underneath an
+    // em dash. The caption is gone; the cell now says why the figure is absent.
+    it('never renders a stranded "as of" caption for a closed account', () => {
       const accountsWithClosed = [
-        createMockAccount({ status: 'removed', removed_at: '2026-03-01T00:00:00Z' }),
+        createMockAccount({
+          status: 'removed',
+          removed_at: '2026-03-01T00:00:00Z',
+          current_balance: undefined,
+          available_balance: undefined,
+        }),
         ...mockAccounts.slice(1),
       ]
 
       render(<AccountTable accounts={accountsWithClosed} />)
 
-      expect(screen.getByText(/as of/i)).toBeInTheDocument()
+      expect(screen.queryByText(/as of/i)).toBeNull()
+    })
+
+    it('says the closed account has no current balance instead of leaving a bare em dash', () => {
+      const accountsWithClosed = [
+        createMockAccount({
+          status: 'removed',
+          removed_at: '2026-03-01T00:00:00Z',
+          current_balance: undefined,
+          available_balance: undefined,
+        }),
+      ]
+
+      render(<AccountTable accounts={accountsWithClosed} />)
+
+      expect(screen.getByText('No current balance')).toBeInTheDocument()
+    })
+
+    // Mutation-driven: dropping the isClosed guard on the amount survived every other test in
+    // this block, because a production closed row carries no balance and formatAccountBalance
+    // renders '—' anyway. The guard is defence in depth against a stale cache or a hand-built
+    // payload restating a frozen figure as a current one, and this is the only test that sees it.
+    it('refuses to render a balance even if a closed row somehow carries one', () => {
+      const accountsWithClosed = [
+        createMockAccount({
+          status: 'removed',
+          removed_at: '2026-03-01T00:00:00Z',
+          current_balance: 2500.5,
+          available_balance: 2500.5,
+        }),
+      ]
+
+      render(<AccountTable accounts={accountsWithClosed} />)
+
+      expect(screen.queryByText(/\$2,500/)).toBeNull()
+      expect(screen.getByText('—')).toBeInTheDocument()
+      expect(screen.getByText('No current balance')).toBeInTheDocument()
+    })
+
+    it('does not claim "no current balance" for an active account', () => {
+      render(<AccountTable accounts={mockAccounts} />)
+      expect(screen.queryByText('No current balance')).toBeNull()
     })
 
     // Issue #1569 task 21, item D — the table path's half of the same ruling. AccountTable
@@ -214,10 +265,6 @@ describe('AccountTable', () => {
       expect(screen.queryByText(/\$2,500/)).toBeNull()
     })
 
-    it('does not show a balance as-of caption for an active account', () => {
-      render(<AccountTable accounts={mockAccounts} />)
-      expect(screen.queryByText(/as of/i)).toBeNull()
-    })
   })
 
   describe('Row Actions', () => {

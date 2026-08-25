@@ -172,25 +172,50 @@ describe('AccountSummaryHeader', () => {
     expect(screen.getByText('****9999')).toBeInTheDocument()
   })
 
-  // Issue #1569: a retained (non-active) account's balance is frozen at disconnect and must
-  // never read as a live figure.
-  describe('asOfDate (frozen balance)', () => {
-    it('labels the balance "Current Balance" when asOfDate is not provided', () => {
+  // Issue #1580: a closed account carries NO current balance — accountBalanceProjection emits
+  // NULL for every terminal status. The previous "Last known balance … as of <date>" affordance
+  // was built for a world where the closed account still held a frozen figure, so it survived as
+  // a label with nothing to label ("Last known balance: N/A … as of Jun 4, 2025"). It is gone;
+  // what remains says why the figure is absent.
+  describe('isClosed (a closed account has no current balance)', () => {
+    it('labels the balance "Current Balance" for a live account, with no closed-account note', () => {
       render(<AccountSummaryHeader {...baseProps} />)
       expect(screen.getByText('Current Balance')).toBeInTheDocument()
+      expect(screen.queryByText(/closed accounts/i)).toBeNull()
     })
 
-    it('labels the balance "Last known balance" and shows the as-of date when asOfDate is provided', () => {
-      render(<AccountSummaryHeader {...baseProps} asOfDate="2026-03-15T00:00:00Z" />)
-      expect(screen.getByText('Last known balance')).toBeInTheDocument()
+    it('drops the live "Current Balance" label for a closed account', () => {
+      render(<AccountSummaryHeader {...baseProps} currentBalance={undefined} isClosed />)
       expect(screen.queryByText('Current Balance')).toBeNull()
-      expect(screen.getByText(/as of/i)).toBeInTheDocument()
+      expect(screen.getByText('Balance')).toBeInTheDocument()
     })
 
-    it('still renders the balance amount with data-ph-mask when asOfDate is provided', () => {
-      render(<AccountSummaryHeader {...baseProps} asOfDate="2026-03-15T00:00:00Z" />)
-      const balanceEl = screen.getByText('$2,500.50')
-      expect(balanceEl).toHaveAttribute('data-ph-mask')
+    it('never renders a stranded "as of" caption, nor "Last known balance"', () => {
+      render(<AccountSummaryHeader {...baseProps} currentBalance={undefined} isClosed />)
+      expect(screen.queryByText(/as of/i)).toBeNull()
+      expect(screen.queryByText(/last known/i)).toBeNull()
+    })
+
+    it('explains WHY the figure is absent rather than leaving a bare N/A', () => {
+      render(<AccountSummaryHeader {...baseProps} currentBalance={undefined} isClosed />)
+      expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
+      expect(screen.getByText(/history is kept/i)).toBeInTheDocument()
+    })
+
+    it('refuses to render a balance even if one is somehow supplied for a closed account', () => {
+      // Defence in depth: the ruling is "a closed account carries no current balance", and this
+      // component must not restate a stale figure as a current one if a cached or hand-built
+      // payload ever carries one.
+      render(<AccountSummaryHeader {...baseProps} isClosed />)
+      expect(screen.queryByText('$2,500.50')).toBeNull()
+      expect(screen.queryByText('$0.00')).toBeNull()
+    })
+
+    it('hides the available-balance row for a closed account', () => {
+      render(
+        <AccountSummaryHeader {...baseProps} availableBalance={2000} isClosed />
+      )
+      expect(screen.queryByText(/available balance/i)).toBeNull()
     })
   })
 })

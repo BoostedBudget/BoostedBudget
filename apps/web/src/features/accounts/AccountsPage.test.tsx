@@ -12,7 +12,7 @@
  * confirmation-dialog.test.tsx run in separate groups within test-conflict-files.sh.
  */
 
-import { describe, it, expect, mock, beforeEach, spyOn } from 'bun:test'
+import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { createLocationHarness } from '@/test/utils/locationProbe'
@@ -125,12 +125,24 @@ mock.module('./hooks/useAccountCustomization', () => ({
   useAccountCustomization: () => ({ updateAccount: mock(async () => {}), isUpdating: false }),
 }))
 
-// Mock useAccountFilters
+// Mock useAccountFilters.
+//
+// Issue #1580: `balanceRange` and `sort` are read from a mutable stub object rather than being
+// hard-coded, so a test can exercise the page's own balance filter and balance sort — the two
+// call sites that used to coalesce a closed account's absent balance to 0. Both default to the
+// inert value, so every pre-existing test in this file is unaffected.
+export const accountFiltersStub: {
+  balanceRange: { min?: number; max?: number } | null
+  sort: { columnId: string; direction: 'asc' | 'desc' } | null
+} = { balanceRange: null, sort: null }
+
 mock.module('./hooks/useAccountFilters', () => ({
   useAccountFilters: () => ({
     institutionFilter: [],
     typeFilter: [],
-    balanceRange: undefined,
+    balanceRange: accountFiltersStub.balanceRange,
+    sort: accountFiltersStub.sort,
+    setSort: mock(() => {}),
     setInstitutionFilter: mock(() => {}),
     setTypeFilter: mock(() => {}),
     setBalanceRange: mock(() => {}),
@@ -826,5 +838,108 @@ describe('AccountsPage', () => {
 
       consoleErrorSpy.mockRestore()
     })
+  })
+})
+
+// ── Issue #1580: the page must not invent a balance for an account that has none ─────────────
+//
+// A closed account carries no current balance (user ruling, #1569): accountBalanceProjection
+// emits NULL — not zero — for every terminal status. The page used to coalesce that to 0 before
+// filtering and before sorting, which made the defect run BOTH ways: a min-$1 filter EXCLUDED
+// closed accounts, a max-$100 filter INCLUDED them.
+//
+// The predicates themselves are unit-tested in utils.test.ts. These tests exist because those
+// unit tests cannot see the WIRING: reverting either call site here to `?? 0` leaves utils.test
+// entirely green. The card view is used because the table is stubbed at the top of this file.
+describe('balance filter and sort with a balance-less (closed) account', () => {
+  const funded = {
+    id: 'acc-funded',
+    name: 'Funded Checking',
+    linked_item_id: 'item-1',
+    institution_name: 'Chase',
+    type: 'depository',
+    status: 'active',
+    is_hidden: false,
+    current_balance: 2000,
+    created_at: '2025-01-01T00:00:00Z',
+  }
+  const overdrawn = {
+    ...funded,
+    id: 'acc-overdrawn',
+    name: 'Overdrawn Checking',
+    current_balance: -25,
+    created_at: '2025-01-02T00:00:00Z',
+  }
+  // Exactly what the API sends for a terminal-status account: both balance keys omitted.
+  const closed = {
+    id: 'acc-closed',
+    name: 'Closed Savings',
+    linked_item_id: 'item-1',
+    institution_name: 'Chase',
+    type: 'depository',
+    status: 'removed',
+    removed_at: '2025-05-01T00:00:00Z',
+    is_hidden: false,
+    created_at: '2025-01-03T00:00:00Z',
+  }
+
+  function renderWithClosedShown() {
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [funded, overdrawn, closed] },
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+    renderAccountsPage()
+    fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+  }
+
+  const renderedNames = () =>
+    screen.getAllByTestId('account-card').map((el) => el.textContent?.replace(/Disconnect|Delete from history/g, '').trim())
+
+  beforeEach(() => {
+    accountFiltersStub.balanceRange = null
+    accountFiltersStub.sort = null
+    // The table is stubbed at the top of this file, so ordering is only observable in the card
+    // view. An earlier test in this file flips the persisted view to 'table'.
+    localStorage.setItem('accounts-list-view', 'cards')
+  })
+
+  afterEach(() => {
+    accountFiltersStub.balanceRange = null
+    accountFiltersStub.sort = null
+  })
+
+  it('shows the closed account when no balance filter is applied', () => {
+    renderWithClosedShown()
+    expect(renderedNames()).toContain('Closed Savings')
+  })
+
+  it('excludes the closed account from a min-only balance filter', () => {
+    accountFiltersStub.balanceRange = { min: 1 }
+    renderWithClosedShown()
+    expect(renderedNames()).toEqual(['Funded Checking'])
+  })
+
+  it('excludes the closed account from a max-only balance filter — the direction `?? 0` got wrong', () => {
+    // With the old `?? 0`, the closed account compared as exactly $0 and passed `max: 100`,
+    // appearing in a list of accounts the user asked to see BECAUSE they hold under $100.
+    accountFiltersStub.balanceRange = { max: 100 }
+    renderWithClosedShown()
+    expect(renderedNames()).toEqual(['Overdrawn Checking'])
+  })
+
+  it('sorts the closed account last when sorting by balance ascending', () => {
+    accountFiltersStub.sort = { columnId: 'balance', direction: 'asc' }
+    renderWithClosedShown()
+    expect(renderedNames()).toEqual(['Overdrawn Checking', 'Funded Checking', 'Closed Savings'])
+  })
+
+  it('sorts the closed account last when sorting by balance descending too, not first', () => {
+    // With the old `?? 0` the closed account sat at zero, so a descending sort placed it above
+    // the overdrawn account — a row with no balance outranking one that has a real number.
+    accountFiltersStub.sort = { columnId: 'balance', direction: 'desc' }
+    renderWithClosedShown()
+    expect(renderedNames()).toEqual(['Funded Checking', 'Overdrawn Checking', 'Closed Savings'])
   })
 })

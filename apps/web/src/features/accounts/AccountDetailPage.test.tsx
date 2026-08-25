@@ -425,7 +425,7 @@ describe('AccountDetailPage — closed accounts (Issue #1569)', () => {
     expect(screen.getByText('Old Savings')).toBeInTheDocument()
   })
 
-  it('labels the absent balance as last known, with an as-of date', () => {
+  it('states why a closed account has no balance, with no stranded as-of date', () => {
     mockUseGetAccounts.mockReturnValue({
       data: { accounts: [closedAccount] },
       isLoading: false,
@@ -440,9 +440,10 @@ describe('AccountDetailPage — closed accounts (Issue #1569)', () => {
     // (now absent) balance was labelled "Current Balance" — a live label on a figure that does
     // not exist. AccountCard has said "Last known balance" since task 2; the two surfaces
     // disagreed about the same account.
-    expect(screen.getByText('Last known balance')).toBeInTheDocument()
+    expect(screen.queryByText(/last known/i)).toBeNull()
     expect(screen.queryByText('Current Balance')).toBeNull()
-    expect(screen.getByText(/as of/i)).toBeInTheDocument()
+    expect(screen.queryByText(/as of/i)).toBeNull()
     expect(screen.queryByText('$0.00')).toBeNull()
+    expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
   })
 })

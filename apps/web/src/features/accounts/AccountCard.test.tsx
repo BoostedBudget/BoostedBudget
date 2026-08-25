@@ -338,17 +338,25 @@ describe('AccountCard', () => {
       expect(screen.queryByText('Closed')).toBeNull()
     })
 
-    it('renders the balance as "last known" with an as-of date for a removed account', () => {
+    // Issue #1580. This test used to assert 'Last known balance' + /as of/ against a fixture
+    // where a REMOVED account still carried current_balance: 2500.50 — a shape production cannot
+    // produce (accountBalanceProjection nulls both balance columns for every terminal status).
+    // The real rendering was "Last known balance: N/A … as of Mar 1, 2026": a label, and a date,
+    // with nothing between them.
+    it('shows no "last known" label and no as-of date for a removed account', () => {
       const removedAccount: Account = {
         ...mockAccount,
         status: 'removed',
         removed_at: '2026-03-01T00:00:00Z',
+        current_balance: undefined,
+        available_balance: undefined,
       }
 
       renderWithRouter(<AccountCard account={removedAccount} />)
 
-      expect(screen.getByText('Last known balance')).toBeInTheDocument()
-      expect(screen.getByText(/as of/i)).toBeInTheDocument()
+      expect(screen.queryByText(/last known/i)).toBeNull()
+      expect(screen.queryByText(/as of/i)).toBeNull()
+      expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
     })
 
     // Issue #1569 task 21, item D. The user's ruling: "If account is closed, treat as empty
@@ -370,11 +378,11 @@ describe('AccountCard', () => {
 
       renderWithRouter(<AccountCard account={closedAccount} />)
 
-      expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
       expect(screen.queryByText('$0.00')).toBeNull()
       expect(screen.queryByText(/\$2,500/)).toBeNull()
-      // The label still tells the truth about what the (absent) figure would have been.
-      expect(screen.getByText('Last known balance')).toBeInTheDocument()
+      // Issue #1580: and the reason is stated, rather than left as a bare N/A the user has to
+      // interpret.
+      expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
     })
   })
 
