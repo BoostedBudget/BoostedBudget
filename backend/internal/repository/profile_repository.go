@@ -2464,9 +2464,13 @@ const expiredRetentionClockPredicate = `
 //
 // SAFE TO RE-CHECK AT CLAIM TIME (retentionDeletionClaimPredicate splices this too, so the two can
 // never drift the way they did in #1440 T0-retention). The markers are not strictly monotonic —
-// ClearRetentionDates and admin_user_repository.go's re-arm both NULL them — but each of those
-// clears retention_expires_at in the SAME statement, which expiredRetentionClockPredicate already
-// refuses. So the re-check can only ever agree with a refusal the clock test has already made; it
+// ClearRetentionDates and admin_user_repository.go's re-arm both NULL them — but neither can leave
+// a row that this gate then refuses unfairly. ClearRetentionDates NULLs retention_expires_at in the
+// SAME statement, which expiredRetentionClockPredicate already refuses. The admin re-arm is the
+// subtler one and is worth spelling out so nobody re-derives it: it sets a FUTURE
+// retention_expires_at, which WOULD restore the notice sweep's reach — and it fires only for a user
+// carrying a manual_tier_override, whom noManualOverrideAtAllPredicate excludes from this query
+// anyway. So the re-check can only ever agree with a refusal another clause has already made; it
 // can never turn a legitimate candidate into a false refusal.
 const retentionNoticesDeliveredPredicate = `
 	  AND retention_notice_30d_sent_at IS NOT NULL
@@ -4604,20 +4608,17 @@ type RetentionWithholdingCounts struct {
 	// retentionNoticesDeliveredPredicate. Every one of these accounts is held indefinitely, because
 	// the notice queries cannot reach a user whose clock has already run out (see below).
 	WithheldNoticeMissing int
-	// WithheldNoNoticeAddress is the SUBSET of WithheldNoticeMissing with no email address on file
-	// — unaddressable for a per-user reason rather than a deployment one. A subset, not a separate
-	// population: never add it to WithheldNoticeMissing.
-	WithheldNoNoticeAddress int
-	// NoticePending is the HEALTHY population and is deliberately disjoint from the two above: a
+	// NoticePending is the HEALTHY population and is deliberately disjoint from the one above: a
 	// user whose retention clock is still RUNNING with a notice marker still NULL. Reported so the
-	// alert on the withheld counts can be shown not to be firing on ordinary cancellations.
+	// alert on the withheld count can be shown not to be firing on ordinary cancellations.
 	NoticePending int
 }
 
 // CountRetentionDeletionsWithheld reports how many accounts the Issue #1569 T1 notice gate is
-// holding back from hard deletion, and why. It is the observability half of that gate and it is not
-// optional: retentionNoticesDeliveredPredicate converts "deleted with no warning ever sent" into
-// "retained indefinitely", and a refusal nobody can see is how an account accumulates in silence.
+// holding back from hard deletion, and how many are merely awaiting a notice that is still due. It
+// is the observability half of that gate and it is not optional:
+// retentionNoticesDeliveredPredicate converts "deleted with no warning ever sent" into "retained
+// indefinitely", and a refusal nobody can see is how an account accumulates in silence.
 //
 // ⚠ WHY THE CLOCK SPLITS THE POPULATION, and why an alert that ignores it is worthless.
 // `retention_notice_30d_sent_at IS NULL` means two completely different things:
@@ -4630,45 +4631,59 @@ type RetentionWithholdingCounts struct {
 //     bound being the opposite one. The missing notice will not arrive by any existing path, so the
 //     gate holds the row forever. Counted as WithheldNoticeMissing, and this is the alert.
 //
-// The process-level half of the reason (is an email service wired at all?) is not visible to SQL and
-// is applied by the caller — see RetentionCleanupCheckWorker.monitorRetentionDeletionsWithheld.
+// ⚠ ONE REASON THIS COUNT DELIBERATELY CANNOT SEE: a withheld user with NO EMAIL ADDRESS on file.
+// canSendRetentionNotice (queue/jobs/retention_cleanup_check.go) checks exactly that, on the
+// DECRYPTED value, and it is a genuinely distinct reason a notice can never be sent. No SQL
+// predicate here can reproduce it, and the first draft of this method that tried
+// (`email IS NULL OR email = ''`) was silently dead code: users.email stores CIPHERTEXT, and
+// FieldEncryptor.EncryptString returns "ENC$"+ct for EVERY input INCLUDING the empty string
+// (crypto/field_encryptor.go), so an addressless encrypted row never matches an empty-string test.
+// The deterministic email_blind_idx COULD discriminate, as GetUserByEmail does — but migration
+// 000061 puts a FULL UNIQUE index on that column, so at most ONE row in the entire database can
+// carry the empty address, and a Prometheus reason label whose population is capped at one is not
+// worth its cardinality. Such a user is therefore counted in WithheldNoticeMissing like any other:
+// correct for the alert (it IS withheld, and the alert fires), merely imprecise for the diagnosis.
 //
-// One round trip, three FILTERed aggregates, no row loading: this runs on every scheduled pass and
+// The process-level half of the reason (is an email service wired at all?) is likewise invisible to
+// SQL and is applied by the caller — see
+// RetentionCleanupCheckWorker.monitorRetentionDeletionsWithheld.
+//
+// ⚠ WHAT IS SPLICED AND WHAT IS NOT, stated precisely because the first version of this comment
+// claimed the whole predicate was spliced when only one constant was:
+//   - The WITHHELD half — the alerted number — splices expiredRetentionClockPredicate and
+//     noManualOverrideAtAllPredicate verbatim from the sweep, so adding a status or a clause to
+//     either cannot desync this metric from the gate it measures. Only `is_deleted = FALSE` and
+//     `deletion_requested_at IS NULL` are restated, exactly as GetUsersWithExpiredRetentionPage
+//     itself restates them.
+//   - The PENDING half CANNOT splice expiredRetentionClockPredicate: its clock bound is the
+//     OPPOSITE one (`> NOW()`), which is the very reason that constant's own doc comment gives for
+//     not applying it to GetUsersNeedingRetention30dNotice/7dNotice either. Its status test is
+//     restated, as those two queries also restate it. A status added to
+//     expiredRetentionClockPredicate would therefore reach the withheld count but not the pending
+//     count — acceptable, because pending is never alerted on, but do not read the two halves as
+//     equally protected.
+//
+// One round trip, two counting subqueries, no row loading: this runs on every scheduled pass and
 // the population it reports should normally be empty.
-//
-// ⚠ THE PREDICATE IS SPLICED, not restated, for the reason expiredRetentionClockPredicate's own doc
-// comment gives: a hand-copied twin of the sweep's conditions would drift, and this count would then
-// report a population that is not the one actually being withheld.
 func (r *profileRepository) CountRetentionDeletionsWithheld(ctx context.Context) (RetentionWithholdingCounts, error) {
 	var counts RetentionWithholdingCounts
-	// The shared base: everything the sweep requires EXCEPT the notice markers and the clock
-	// comparison, which are what the three aggregates below discriminate on.
-	err := r.db.QueryRow(ctx, `
+	const query = `
 		SELECT
-			COUNT(*) FILTER (
-				WHERE retention_expires_at <= NOW()
-				  AND (retention_notice_30d_sent_at IS NULL OR retention_notice_7d_sent_at IS NULL)
-			),
-			COUNT(*) FILTER (
-				WHERE retention_expires_at <= NOW()
-				  AND (retention_notice_30d_sent_at IS NULL OR retention_notice_7d_sent_at IS NULL)
-				  AND (email IS NULL OR email = '')
-			),
-			COUNT(*) FILTER (
-				WHERE retention_expires_at > NOW()
-				  AND (retention_notice_30d_sent_at IS NULL OR retention_notice_7d_sent_at IS NULL)
-			)
-		FROM users
-		WHERE is_deleted = FALSE
-		  AND deletion_requested_at IS NULL
-		  AND retention_expires_at IS NOT NULL
-		  AND subscription_status IN ('inactive', 'cancelled')
-	` + noManualOverrideAtAllPredicate).Scan(
-		&counts.WithheldNoticeMissing,
-		&counts.WithheldNoNoticeAddress,
-		&counts.NoticePending,
-	)
-	if err != nil {
+			(SELECT COUNT(*) FROM users
+			  WHERE is_deleted = FALSE
+			    AND deletion_requested_at IS NULL
+			` + expiredRetentionClockPredicate + noManualOverrideAtAllPredicate + `
+			    AND (retention_notice_30d_sent_at IS NULL OR retention_notice_7d_sent_at IS NULL)),
+			(SELECT COUNT(*) FROM users
+			  WHERE is_deleted = FALSE
+			    AND deletion_requested_at IS NULL
+			    AND retention_expires_at IS NOT NULL
+			    AND retention_expires_at > NOW()
+			    AND subscription_status IN ('inactive', 'cancelled')
+			` + noManualOverrideAtAllPredicate + `
+			    AND (retention_notice_30d_sent_at IS NULL OR retention_notice_7d_sent_at IS NULL))
+	`
+	if err := r.db.QueryRow(ctx, query).Scan(&counts.WithheldNoticeMissing, &counts.NoticePending); err != nil {
 		return RetentionWithholdingCounts{}, fmt.Errorf("CountRetentionDeletionsWithheld: %w", err)
 	}
 	return counts, nil

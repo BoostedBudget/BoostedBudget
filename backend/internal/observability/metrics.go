@@ -680,14 +680,19 @@ var (
 	//   * notice_impossible_no_email_service — the clock has run out AND this process has no email
 	//     service wired, which is production today. Remedy: wire it. Reported for the whole withheld
 	//     population, because this cause dominates every per-user one.
-	//   * notice_impossible_no_address — the clock has run out and the user has no address on file.
-	//     Remedy is per-user, not a deployment change.
-	//   * notice_impossible_window_passed — the clock has run out with a service wired and an
-	//     address present. Nothing will send the missing notice anyway: the two notice queries
-	//     require retention_expires_at > NOW(), so this user is permanently outside their reach.
-	//     This is the backlog that accrued before the gate existed.
+	//   * notice_impossible_window_passed — the clock has run out and a service IS wired. Wiring it
+	//     was still not enough: the two notice queries require retention_expires_at > NOW(), so no
+	//     existing query can even SELECT these users to notify them. This is the backlog that
+	//     accrued before the gate existed, and draining it needs a selection path that does not yet
+	//     exist (see monitorRetentionDeletionsWithheld's TODO).
 	//
-	// ⚠ ALERT ON THE SUM OF THE THREE notice_impossible_* REASONS BEING SUSTAINED ABOVE ZERO, never
+	// ⚠ A FOURTH REASON IS REAL BUT NOT REPORTED: a withheld user with no address on file. It is
+	// folded into whichever label above applies, because no SQL predicate can single it out
+	// (users.email is ciphertext; EncryptString("") is still "ENC$"+ct) and the one column that
+	// could, email_blind_idx, carries a UNIQUE index that caps the population at one row
+	// database-wide. canSendRetentionNotice is where that state is actually seen, post-decryption.
+	//
+	// ⚠ ALERT ON THE SUM OF THE TWO notice_impossible_* REASONS BEING SUSTAINED ABOVE ZERO, never
 	// on the total: notice_pending is the healthy state. Alert on absence too — see below. The rules
 	// live in prose because this repo has no alert-rule file to put them in.
 	//
@@ -698,7 +703,7 @@ var (
 	// that failed.
 	RetentionDeletionsWithheld = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "retention_deletions_withheld",
-		Help: "Accounts whose retention hard-deletion is being withheld because a promised pre-deletion notice was never recorded, by reason. notice_pending is HEALTHY (the retention clock is still running and the notice sweep can still reach the user) and must never be alerted on. The three notice_impossible_* reasons are accounts the gate will hold indefinitely because no existing path can send the missing notice: alert on their sum being sustained above zero. no_email_service means this process has no email service wired at all and dominates every per-user reason; no_address means the user has no address on file; window_passed is the backlog that accrued before the gate existed. Not published at all on a failed read, so alert on absence too.",
+		Help: "Accounts whose retention hard-deletion is being withheld because a promised pre-deletion notice was never recorded, by reason. notice_pending is HEALTHY (the retention clock is still running and the notice sweep can still reach the user) and must never be alerted on. The two notice_impossible_* reasons are accounts the gate will hold indefinitely because no existing path can send the missing notice: alert on their sum being sustained above zero. no_email_service means this process has no email service wired at all, and wiring it is the remedy for the whole population; window_passed means a service IS wired and it still cannot help, because the notice queries only select users whose clock has not yet run out. A withheld user with no address on file is a real third reason but is folded into these two — see the metric declaration for why it cannot be separated. Not published at all on a failed read, so alert on absence too.",
 	}, []string{"reason"})
 
 	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.
@@ -854,6 +859,13 @@ var (
 // ⚠ EVERY ONE OF THESE MUST BE Set ON EVERY PASS, and nothing enforces it: a label value that is
 // never Set simply does not exist in the scrape, so an omitted reason does not fail loudly — its
 // accounts just vanish and the gauge quietly stops summing to the withheld population.
+//
+// ⚠ THERE IS DELIBERATELY NO no_address REASON. users.email stores ciphertext and
+// FieldEncryptor.EncryptString returns "ENC$"+ct even for the empty string, so no SQL predicate can
+// see an addressless row; email_blind_idx could, but its UNIQUE index caps that population at one
+// row database-wide. The state is real and is checked post-decryption in canSendRetentionNotice —
+// it is simply folded into whichever reason below applies rather than given a label that would
+// report at most 1.
 const (
 	// RetentionWithheldNoticePending is the HEALTHY state: the retention clock is still running, so
 	// GetUsersNeedingRetention30dNotice / its 7d sibling can still select this user. Never alert.
@@ -862,9 +874,7 @@ const (
 	// service wired, so no notice can be sent at all. Reported for the whole withheld population
 	// because this process-wide cause dominates every per-user one.
 	RetentionWithheldNoEmailService = "notice_impossible_no_email_service"
-	// RetentionWithheldNoAddress means the clock has run out and the user has no address on file.
-	RetentionWithheldNoAddress = "notice_impossible_no_address"
-	// RetentionWithheldWindowPassed means the clock has run out with a service wired and an address
-	// present: the notice queries require retention_expires_at > NOW(), so nothing will ever send it.
+	// RetentionWithheldWindowPassed means the clock has run out and a service IS wired: the notice
+	// queries require retention_expires_at > NOW(), so nothing existing will ever send the notice.
 	RetentionWithheldWindowPassed = "notice_impossible_window_passed"
 )

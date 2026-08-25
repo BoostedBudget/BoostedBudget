@@ -1588,8 +1588,25 @@ func (w *RetentionCleanupCheckWorker) monitorOrphanedFKlessRows(ctx context.Cont
 //
 // REASON PRECEDENCE, deliberate: a nil emailService is a process-wide cause that dominates every
 // per-user one, so when it holds, the ENTIRE withheld population is reported under
-// RetentionWithheldNoEmailService rather than sliced by address. Wiring the service is the single
-// remedy for all of them, and splitting the number would suggest several.
+// RetentionWithheldNoEmailService. Wiring the service is the single remedy for all of them, and
+// splitting the number would suggest several. With a service wired, the same population reports as
+// RetentionWithheldWindowPassed: the notice queries require retention_expires_at > NOW(), so a
+// wired service still cannot reach these users.
+//
+// ⚠ A THIRD REASON EXISTS AND IS NOT REPORTED SEPARATELY: a withheld user with no address on file,
+// which canSendRetentionNotice checks a few lines above on the DECRYPTED value. It is folded into
+// whichever of the two labels applies. See CountRetentionDeletionsWithheld's own doc comment for
+// why no SQL predicate can single it out (users.email is ciphertext and EncryptString("") is still
+// "ENC$"+ct) and why the one column that could — email_blind_idx — is not worth a label: migration
+// 000061's UNIQUE index caps that population at one row database-wide.
+//
+// TODO(#1569 T9 / email work): the accounts counted under RetentionWithheldWindowPassed are a
+// BACKLOG NOTHING CAN DRAIN. Wiring an email service is necessary but NOT sufficient for them,
+// because GetUsersNeedingRetention30dNotice and its 7d sibling both require
+// retention_expires_at > NOW() and these users are past that — so no existing query can even
+// SELECT them to notify. Whoever implements the notice email must take a deliberate decision for
+// this population (send late against a re-armed clock, or waive the notice and record the waiver),
+// and it needs a selection path of its own. Until then they are retained indefinitely, visibly.
 //
 // ⚠ EVERY REASON LABEL MUST BE Set ON EVERY PASS. The enumeration below is by hand and the compiler
 // will not say so — a GaugeVec label that is never Set does not exist in the scrape, so an omitted
@@ -1610,20 +1627,17 @@ func (w *RetentionCleanupCheckWorker) monitorRetentionDeletionsWithheld(ctx cont
 		return fmt.Errorf("failed to count retention hard-deletions withheld for want of a notice: %w", err)
 	}
 
-	noEmailService, noAddress, windowPassed := 0, 0, 0
+	noEmailService, windowPassed := 0, 0
 	if w.emailService == nil {
 		noEmailService = counts.WithheldNoticeMissing
 	} else {
-		noAddress = counts.WithheldNoNoticeAddress
-		windowPassed = counts.WithheldNoticeMissing - counts.WithheldNoNoticeAddress
+		windowPassed = counts.WithheldNoticeMissing
 	}
 
 	observability.RetentionDeletionsWithheld.
 		WithLabelValues(observability.RetentionWithheldNoticePending).Set(float64(counts.NoticePending))
 	observability.RetentionDeletionsWithheld.
 		WithLabelValues(observability.RetentionWithheldNoEmailService).Set(float64(noEmailService))
-	observability.RetentionDeletionsWithheld.
-		WithLabelValues(observability.RetentionWithheldNoAddress).Set(float64(noAddress))
 	observability.RetentionDeletionsWithheld.
 		WithLabelValues(observability.RetentionWithheldWindowPassed).Set(float64(windowPassed))
 
@@ -1639,7 +1653,6 @@ func (w *RetentionCleanupCheckWorker) monitorRetentionDeletionsWithheld(ctx cont
 		"job_id", jobID,
 		"withheld_total", counts.WithheldNoticeMissing,
 		"withheld_no_email_service", noEmailService,
-		"withheld_no_address", noAddress,
 		"withheld_window_passed", windowPassed,
 		"notice_pending_healthy", counts.NoticePending,
 	)
