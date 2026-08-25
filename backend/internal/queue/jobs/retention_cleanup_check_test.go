@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
@@ -2534,7 +2533,13 @@ func TestRetentionCleanupCheck_30dNotice_DisclosesWhatGetsDeleted(t *testing.T) 
 
 	mockEmail.On("SendRetentionNoticeEmail", ctx, "user1@example.com", mock.AnythingOfType("string"),
 		mock.MatchedBy(func(body string) bool {
-			return strings.Contains(body, "automation rules") && strings.Contains(body, "transaction history")
+			// Issue #1581: pinned to the rendered body, not to two phrases. Asserting that a
+			// couple of phrases are PRESENT is what let the enumeration fall ~50 tables behind
+			// what DeleteUserCascade destroys without a single test going red. What the
+			// enumeration must COVER is checked against the live schema by
+			// TestRetentionNoticeEnumerationCoversEverythingDeleted; this only pins that the body
+			// the worker sends is that same rendered text.
+			return body == retentionNotice30dBody
 		}),
 	).Return(nil)
 
@@ -2576,7 +2581,13 @@ func TestRetentionCleanupCheck_7dNotice_DisclosesWhatGetsDeleted(t *testing.T) {
 
 	mockEmail.On("SendRetentionNoticeEmail", ctx, "user3@example.com", mock.AnythingOfType("string"),
 		mock.MatchedBy(func(body string) bool {
-			return strings.Contains(body, "automation rules") && strings.Contains(body, "transaction history")
+			// Issue #1581: pinned to the rendered body, not to two phrases. Asserting that a
+			// couple of phrases are PRESENT is what let the enumeration fall ~50 tables behind
+			// what DeleteUserCascade destroys without a single test going red. What the
+			// enumeration must COVER is checked against the live schema by
+			// TestRetentionNoticeEnumerationCoversEverythingDeleted; this only pins that the body
+			// the worker sends is that same rendered text.
+			return body == retentionNotice7dBody
 		}),
 	).Return(nil)
 

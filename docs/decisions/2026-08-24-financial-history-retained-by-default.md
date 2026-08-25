@@ -122,11 +122,29 @@ direction, per the #1569 ruling, but trading a silent destruction for a silent r
 other half of that fix and is not optional. Read the rest of this section as describing what the
 sweep *would* destroy once an email service is wired, not what it destroys today.
 
-⚠ **OPEN COMPLIANCE ITEM: the sweep's warning emails do not enumerate everything the sweep
-destroys, and this branch is part of why.** Both notices
-(`backend/internal/queue/jobs/retention_cleanup_check.go:742` and `:769`) name exactly *"your
-automation rules, transaction history, and balance history"*. The sweep runs `DeleteUserCascade` —
-a real `DELETE FROM users`.
+✅ **CLOSED (#1581, 2026-08-25). The sweep's warning emails now enumerate what the sweep destroys,
+and a guard keeps them from falling behind again.** They previously named exactly *"your automation
+rules, transaction history, and balance history"* while `DeleteUserCascade` ran a real
+`DELETE FROM users` across the whole closure below — a gap this branch widened, because #1569
+newly RETAINS history past a disconnect, a goal deletion and a budget deletion, which makes this
+sweep the first thing that destroys it. Since Decision 3 permits this one AUTOMATIC destroyer
+*because* the notices enumerate what it destroys, the branch had invalidated its own justification.
+
+Both notices are now rendered from `retentionDeletionItems`
+(`backend/internal/queue/jobs/retention_cleanup_check.go`): a categorical sentence — *everything in
+your BoostedBudget account*, *there is no way to restore it* — followed by a thirteen-item list, each
+item carrying the set of tables it claims to cover.
+`TestRetentionNoticeEnumerationCoversEverythingDeleted` re-derives the destruction set from the LIVE
+schema (the recursive `pg_constraint` walk below) plus the `DELETE FROM`s parsed out of
+`DeleteUserCascade`'s own source, and fails when any destroyed table is unclaimed or any claim is
+stale. A new migration hanging a cascading table off `users` therefore cannot land without someone
+deciding, in words, whether the deletion email already tells the user about it — proven by creating
+such a table and watching the guard name it.
+
+Counting note, since three numbers are in play: the guard's destruction set is **53** — the 48
+cascade children tabulated below, plus `users` itself, plus the 3 explicit FK-less deletes, plus
+`audit_logs` (whose delete is partial; the guard includes it because understating what survives is
+the safe direction for a deletion warning). The **51** quoted below counts 48 + 3.
 
 **Corrected count (2026-08-25, T8), derived from the live schema rather than from a guard's
 hand-maintained list.** Walking `pg_constraint` for `contype='f' AND confdeltype='c'` on the
@@ -222,14 +240,18 @@ of the 48 tables. It is now derived by a recursive walk of `pg_constraint` on th
 **Re-derive it from the schema whenever it is quoted**, not from this table: migrations land, and a
 hand-edited copy of a schema fact goes stale exactly the way the "~37" did.
 
-**This branch narrowed the gap in the code and widened it in the copy.** It is recorded here rather
-than fixed here: rewriting a user-facing deletion warning is a compliance-adjacent change that
-needs its own review against the privacy policy's Section 8.4, and it should be a ticket. A correct
-enumeration would be **category-level rather than table-level**, so it does not go stale the next
-time a table is added — e.g. *"everything in your account: your accounts and their balance and
-holdings history, your transactions, your budgets, your savings goals and the contributions you
-logged by hand, and your automation rules and their execution history."* Until that lands, the
-sweep's claim to be a *published* retention policy is weaker than this document previously stated.
+**This branch narrowed the gap in the code and widened it in the copy; #1581 closed it.** The
+enumeration is deliberately **category-level rather than table-level** — the user has never heard of
+`holding_snapshots` — with the table-level coverage checked mechanically instead of being written
+into the copy.
+
+⚠ **The privacy policy has NOT been widened to match, and that is now an inconsistency in the other
+direction.** `apps/web/src/legal/PrivacyPolicy.tsx` § 8.4 still promises deletion of *"your
+automation rules, transaction history, and balance history"*, and § 8.2 lists four bullets of which
+only *"Automation rules and transaction history are erased"* speaks to financial history. The
+emails are now broader and more accurate than the policy they were written to match. This is a
+disclosure gap, not a data gap — the policy understates what deletion destroys — and it is reported
+rather than fixed here because legal copy is not a backend change.
 
 ---
 
