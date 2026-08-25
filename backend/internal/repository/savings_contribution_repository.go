@@ -105,8 +105,10 @@ type SavingsContributionRepository interface {
 	// Returns ErrContributionNotFound if id does not exist or does not belong to userID.
 	DeleteContribution(ctx context.Context, userID, id string) error
 
-	// DeleteManagedForTransaction removes all managed_by_reconciliation rows for a transaction.
-	// Called before deleting a transaction to avoid phantom progress (Codex C4).
+	// DeleteManagedForTransaction removes managed_by_reconciliation rows for a transaction whose
+	// goal is still LIVE. Called before removing a transaction to avoid phantom progress (Codex C4).
+	// Rows belonging to a TOMBSTONED goal are left alone: they are that goal's retained ledger and a
+	// provider re-statement is not a deletion request (#1569 C1).
 	DeleteManagedForTransaction(ctx context.Context, transactionID string) error
 
 	// ArchiveByGoal clears managed_by_reconciliation on all rows for a goal so the
@@ -809,12 +811,28 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 	return contrib, nil
 }
 
-// DeleteManagedForTransaction removes all reconciler-owned contributions for a transaction.
-// Must be called BEFORE deleting the transaction to prevent phantom progress (Codex C4).
+// DeleteManagedForTransaction removes reconciler-owned contributions for a transaction whose
+// goal is still LIVE, so a removed transaction cannot leave phantom progress behind (Codex C4).
+//
+// The `g.deleted_at IS NULL` join is load-bearing and is #1569 whole-branch review C1. Without it a
+// Plaid `removed` entry arriving weeks after the user deleted a goal silently shrank that goal's
+// RETAINED ledger — side-effect destruction, the class the ADR forbids, on the exact surface T2/T7
+// built to prove retention. The tempting refutation ("ConfirmContribution clears
+// managed_by_reconciliation, so a managed row is never confirmed") is false: UpsertFromTransaction
+// INSERTS status='confirmed' with managed_by_reconciliation=true — reached from
+// transferCorrelationService.createBoostMatchContribution with source='boost_match' — and its
+// ON CONFLICT DO UPDATE promotes a proposed row to confirmed without clearing the flag. So the rows
+// this predicate matches are NOT uniformly derived-and-regenerable. For a deleted goal there is no
+// progress left to keep honest (nothing reads it into progress), only a ledger to preserve.
+// Regression: TestDeleteManagedForTransaction_DeletedGoalLedgerSurvives_Integration.
 func (r *savingsContributionRepository) DeleteManagedForTransaction(ctx context.Context, transactionID string) error {
 	query := `
-		DELETE FROM savings_goal_contributions
-		WHERE transaction_id = $1 AND managed_by_reconciliation = true
+		DELETE FROM savings_goal_contributions c
+		USING savings_goals g
+		WHERE c.savings_goal_id = g.id
+		  AND c.transaction_id = $1
+		  AND c.managed_by_reconciliation = true
+		  AND g.deleted_at IS NULL
 	`
 	_, err := r.db.Exec(ctx, query, transactionID)
 	return err

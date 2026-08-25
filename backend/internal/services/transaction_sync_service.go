@@ -1332,8 +1332,11 @@ func (s *transactionSyncService) detectAndUpsertProposedContributions(ctx contex
 //      one; omitting the column from CreateBatch's ON CONFLICT SET clause, which an earlier draft of
 //      this note recommended, would have made the first of those impossible;
 //   3. the annotation move is a data-modifying CTE inside TombstoneByExternalID's single statement,
-//      so it is atomic with the tombstoning with no transaction to introduce and no window in which
-//      a crash could leave the annotations on both rows, i.e. double-categorised;
+//      so it is atomic with the tombstoning and there is no window in which a crash could leave the
+//      annotations on both rows, i.e. double-categorised. (This line used to add "with no
+//      transaction to introduce". T4 wrote that; T6 falsified it five commits later by routing the
+//      statement through runCapturingStatement, which opens one -- see
+//      repository/transaction_annotation_capture.go:~249.);
 //   4. the refusal to overwrite the note asked for is implemented as two predicates: a MANUAL
 //      category already on the twin wins over the pending row's, and tags move only onto a twin that
 //      has none. A twin categorised by a RULE does NOT block the move -- rules run in place before
@@ -1391,8 +1394,17 @@ func (s *transactionSyncService) processRemovedTransactions(
 			continue
 		}
 
-		// Issue #1300 G2 (Codex C4): clean up auto-derived contribution rows BEFORE
-		// hard-deleting the transaction so ON DELETE SET NULL doesn't orphan managed rows.
+		// Issue #1300 G2 (Codex C4): clean up reconciler-owned contribution rows for this
+		// transaction, so a live contributions-basis goal stops counting money the bank withdrew.
+		//
+		// ⚠ The reason this comment used to give — "BEFORE hard-deleting the transaction so
+		// ON DELETE SET NULL doesn't orphan managed rows" — went stale five commits after it was
+		// written: T7 turned the removal below into a TOMBSTONE (TombstoneByExternalID), so nothing
+		// is hard-deleted here and fk_contributions_transaction's SET NULL never fires. The call
+		// still earns its place for a different reason: it also dedups against the posted twin,
+		// whose own contribution the reconciler derives separately.
+		//
+		// The cleaner is scoped to LIVE goals (#1569 C1); a deleted goal's ledger is retained.
 		if s.savingsContribCleaner != nil {
 			// Look up internal UUID (encrypted external ID needs repo lookup)
 			if internalTxn, lookupErr := s.transactionRepo.GetByExternalID(ctx, domain.SourcePlaid, *removedTxn.TransactionId, linkedItem.UserID); lookupErr == nil {
