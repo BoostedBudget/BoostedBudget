@@ -549,9 +549,13 @@ func buildPlaceholders(count, startIndex int) []string {
 //     which fails at $120-vs-$60 under exactly that mutation.
 //
 //  2. `share_started_at` / `share_ended_at` are emitted ALREADY converted to UTC wall time. The
-//     predicate compares them against `t.date` once per (transaction, grant) pair; converting here
-//     does it 68 times instead of ~320,000. Measured: 150ms -> 132ms. The comparison rule is
-//     unchanged — see householdSharedTransactionPredicate, whose two bounds are mutation-pinned.
+//     predicate compares them against `t.date` once per (transaction, grant) pair, so the CTE does
+//     68 conversions where the join filter did hundreds of thousands. Derived from the plan rather
+//     than estimated: the semi-join tested 126,472 + 116,249 = 242,721 pairs (its `rows` plus its
+//     `Rows Removed by Join Filter`), each evaluating the opening bound and, unless `share_ended_at`
+//     is NULL, the closing one too — so between ~243,000 and ~486,000 conversions.
+//     Measured: 150ms -> 132ms. The comparison rule is unchanged — see
+//     householdSharedTransactionPredicate, whose two bounds are mutation-pinned.
 //
 // ⚠ What was TRIED and is measurably WRONG here, so nobody re-proposes it:
 //
