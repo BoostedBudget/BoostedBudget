@@ -585,6 +585,37 @@ describe('AccountsPage', () => {
       expect(desc.textContent).toContain('savings goal')
     })
 
+    // Issue #1569 T8: the investment-deletion sentence used to be gated on
+    // `account.type === 'investment'`, while fk_inv_txn_account_id — ON DELETE CASCADE — does not
+    // consult type at all. `brokerage` is a SEPARATE valid type in this domain
+    // (backend/internal/domain/user_account.go:84-88 accepts depository, credit, loan, investment,
+    // brokerage, other), so a brokerage account holding investment transactions was warned about
+    // nothing. `closedAccount` above is type 'depository', which is exactly the shape that used to
+    // render the sentence away, so a regression to ANY type gate turns the first case red.
+    it('warns that investment transactions are destroyed, whatever the account type', () => {
+      const openPurgeDialog = () => {
+        fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+        fireEvent.click(screen.getAllByText('Delete from history')[0])
+        return screen.getByTestId('dialog-description')
+      }
+
+      for (const type of ['depository', 'brokerage', 'investment']) {
+        mockUseGetAccounts.mockReturnValue({
+          data: { accounts: [{ ...closedAccount, type }] },
+          isLoading: false,
+          error: null,
+          refetch: mockRefetchAccounts,
+        })
+        const { unmount } = renderAccountsPage()
+        const text = openPurgeDialog().textContent ?? ''
+        expect(text).toContain('investment transactions')
+        // The claim must stay true of an account that holds none, so it is conditional in wording
+        // rather than conditional in rendering.
+        expect(text).toContain('Any investment transactions recorded against it')
+        unmount()
+      }
+    })
+
     // Issue #1569 F5: the purge dialog used to end with "The bank connection to <bank> will also
     // be disconnected", gated on isLastAccountForItem — a predicate that counts ACTIVE accounts.
     // A purge target is by definition inactive, so it is never in that count, and the branch fired

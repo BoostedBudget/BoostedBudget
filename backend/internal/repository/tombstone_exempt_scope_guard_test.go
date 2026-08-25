@@ -194,12 +194,15 @@ var allTombstoneAuditedTables = func() []string {
 	return out
 }()
 
-// TestEveryTombstoneExemptTokenNamesItsReference rejects the old bare form outright, and rejects a
-// parenthesised token that names a table no guard audits (a typo exempts nothing, silently).
+// TestEveryTombstoneExemptTokenNamesItsReference rejects the old bare form outright, rejects a
+// parenthesised token that names a table no guard audits (a typo exempts nothing, silently), and
+// rejects a DEAD exemption — one whose named reference does not appear anywhere in the enclosing
+// statement.
 //
-// It deliberately does NOT check that the named reference exists in the statement: a query is
-// assembled from fragments, and the fragment carrying the reason is not always the fragment
-// carrying the FROM.
+// The dead-exemption rule matters because an exemption that names nothing is indistinguishable
+// from one that names the wrong thing, and both read as "this was considered". The check is done
+// at STATEMENT scope rather than per string literal, because a query is assembled from fragments
+// and the fragment carrying the reason is not always the fragment carrying the FROM.
 func TestEveryTombstoneExemptTokenNamesItsReference(t *testing.T) {
 	root := repoInternalRoot(t)
 
@@ -267,6 +270,100 @@ func TestEveryTombstoneExemptTokenNamesItsReference(t *testing.T) {
 			"%d malformed tombstone exemption(s) (#1569 T8). The token must NAME what it excuses:\n"+
 				"  -- tombstone-exempt(<table>[ <alias>], ...): <reason>\n"+
 				"A bare token blankets every reference in the statement, including ones added later:\n  %s",
+			len(offenders), strings.Join(offenders, "\n  "))
+	}
+}
+
+// TestNoDeadTombstoneExemption reports an exemption whose named reference is nowhere in its
+// statement. Statement scope, and over the UNION of every audited table, so an exemption written
+// for one guard is not called dead by another.
+func TestNoDeadTombstoneExemption(t *testing.T) {
+	root := repoInternalRoot(t)
+	all := allTombstoneAuditedTables
+	readRef := tombstoneReadRefRegexp(all)
+	writeRef := tombstoneWriteTargetRegexp(all)
+
+	var offenders []string
+	statements := 0
+
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() && info.Name() == "testdata" {
+			return filepath.SkipDir
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, 0)
+		if parseErr != nil {
+			return parseErr
+		}
+		rel, _ := filepath.Rel(root, path)
+
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch n.(type) {
+			case *ast.AssignStmt, *ast.ValueSpec, *ast.ReturnStmt, *ast.ExprStmt:
+			default:
+				return true
+			}
+			var parts []string
+			ast.Inspect(n, func(m ast.Node) bool {
+				lit, ok := m.(*ast.BasicLit)
+				if ok && lit.Kind == token.STRING {
+					if str, e := strconv.Unquote(lit.Value); e == nil {
+						parts = append(parts, str)
+					}
+				}
+				return true
+			})
+			sql := strings.Join(parts, "\n")
+			exempt := tombstoneExemptRefs(sql)
+			if len(exempt) == 0 {
+				return true
+			}
+			statements++
+
+			present := map[string]bool{}
+			code := stripSQLComments(sql)
+			for _, re := range []*regexp.Regexp{readRef, writeRef} {
+				for _, m := range re.FindAllStringSubmatch(code, -1) {
+					table, alias := m[len(m)-2], m[len(m)-1]
+					if sqlKeywordsAfterTableName[strings.ToLower(alias)] {
+						alias = ""
+					}
+					present[strings.ToLower(table)] = true
+					if alias != "" {
+						present[strings.ToLower(table+" "+alias)] = true
+					}
+				}
+			}
+			line := fset.Position(n.Pos()).Line
+			for ref := range exempt {
+				if !present[ref] {
+					offenders = append(offenders,
+						rel+":"+strconv.Itoa(line)+" exempts "+strconv.Quote(ref)+
+							", which is not a reference in that statement")
+				}
+			}
+			return false
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking internal/: %v", err)
+	}
+	if statements < 20 {
+		t.Fatalf("only %d statement(s) carry an exemption; there were 28 when this was written. "+
+			"The walk is broken and a pass here would be vacuous", statements)
+	}
+
+	if len(offenders) > 0 {
+		sort.Strings(offenders)
+		t.Fatalf("%d dead tombstone exemption(s) (#1569 T8). An exemption that names nothing reads "+
+			"as \"this was considered\" and excuses nothing. Delete it, or fix the name:\n  %s",
 			len(offenders), strings.Join(offenders, "\n  "))
 	}
 }
