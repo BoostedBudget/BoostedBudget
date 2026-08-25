@@ -754,13 +754,13 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 // and the two most elastic phrases (the internal-records item and "saved automation recipes") are
 // the ones to re-read first.
 //
-// ⚠ The `phrase` field used to be pinned by nothing at all — issue #1593. Every assertion on it was
-// either a non-emptiness check or require.Contains(body, item.phrase), and `body` is RENDERED from
-// these phrases, so it contains them by construction. An assertion that renders from the source it
+// ⚠ Twelve of these thirteen phrases used to be pinned by nothing at all — issue #1593. Apart from
+// the audit_logs item, which was singled out by name, every assertion on `phrase` was either a
+// non-emptiness check or require.Contains(body, item.phrase) — and `body` is RENDERED from these
+// phrases, so it contains them by construction. An assertion that renders from the source it
 // checks cannot detect a change to that source: item 2's phrase was replaced with the outright lie
 // "nothing at all, we keep your balance history forever" and the whole package stayed green
-// (re-confirmed here before the fix). Only the audit_logs item carried a content-bearing pin, 1 of
-// 13. It is now testdata/retention_notice.golden — a reviewed snapshot of both rendered bodies plus
+// (re-confirmed here before the fix). The pin is now testdata/retention_notice.golden — a reviewed snapshot of both rendered bodies plus
 // the phrase -> tables mapping — that pins all thirteen, backed by the per-item `mustMention` floor
 // below. If you edit a phrase, expect TestRetentionNoticeMatchesReviewedGolden to fail; that is the
 // point, and its failure message says what to check before promoting the new text.
@@ -772,14 +772,19 @@ type retentionDeletionItem struct {
 	phrase string
 	tables []string
 	// mustMention are terms the phrase must still contain, matched case-insensitively by
-	// TestEveryRetentionDeletionItemNamesItsSubject (#1593). They are the subject nouns a reader
-	// has to find in the sentence for it to be about this item's data at all.
+	// TestEveryRetentionDeletionItemNamesItsSubject (#1593). Each must be at least three
+	// characters and appear in no more than three of the thirteen phrases, so that a term is
+	// capable of failing and capable of telling THIS item apart from its siblings.
 	//
 	// ⚠ This is a floor, not a truth check, and it is the deliberately WEAK half of the #1593 pin.
-	// It catches an emptied or subject-swapped phrase; it does not catch a lie that keeps the noun
-	// ("we keep your balance history forever" still says "balance history"). Its one job the
-	// golden cannot do is SURVIVE a thoughtless golden regeneration: it lives here, next to the
-	// phrase, and nothing regenerates it. If you reword a phrase, update these in the same edit.
+	// Measured, not guessed: for twelve of the thirteen items a "we keep this forever" inversion
+	// retains every term here and is caught by the GOLDEN alone. Item 13 is the exception, and
+	// only because its term is the QUALIFICATION rather than a subject noun — which is the better
+	// pattern to copy when a phrase has something falsifiable to hold onto.
+	//
+	// Its one job the golden cannot do is SURVIVE a thoughtless golden regeneration: it lives here,
+	// next to the phrase, and nothing regenerates it. If you reword a phrase, update these in the
+	// same edit — and prefer a term the inverted sentence could not keep.
 	mustMention []string
 }
 
