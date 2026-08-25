@@ -773,6 +773,11 @@ func main() {
 		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo, customCategoryRepo)
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
 		ruleApplicationService.SetAnalytics(phClient)
+		// Issue #1569 Task 5 (#1572): the automation audit trail's writer. Until this line
+		// rule_execution_history had no production writer at all — it was backfilled by migration
+		// 000164 and then never written to again, so the trail was permanently empty.
+		ruleExecutionHistoryRepo := repository.NewRuleExecutionHistoryRepository(db)
+		ruleApplicationService.SetRuleExecutionHistoryRepository(ruleExecutionHistoryRepo)
 		// Issue #354: Cash flow analytics and dashboard preferences services
 		analyticsServiceImpl := services.NewAnalyticsService(analyticsRepo)
 		analyticsServiceImpl.SetBalanceSnapshotRepo(balanceSnapshotRepo) // wires snapshot repo for GetNetWorthTrend (Issue #1215 PR3)
@@ -2156,6 +2161,13 @@ func main() {
 		humaRuleHandler := operations.NewCategorizationRuleHandler(categorizationRuleService)
 		operations.RegisterCategorizationRuleRoutes(humaAPI, humaRuleHandler)
 		appLogger.Info("Huma categorization rule routes registered")
+
+		// Issue #1569 Task 5 (#1572): the automation audit trail's read path. The writer half is
+		// wired above, onto ruleApplicationService. A sibling path, not a child of
+		// /api/v1/auto-categorization — see RegisterRuleExecutionRoutes for why.
+		operations.RegisterRuleExecutionRoutes(humaAPI,
+			operations.NewRuleExecutionHandler(services.NewRuleExecutionHistoryService(ruleExecutionHistoryRepo)))
+		appLogger.Info("Huma rule execution history routes registered")
 
 		// Register Huma merchant routes (Issue #957: Merchant name handling)
 		merchantOverrideRepo := repository.NewMerchantOverrideRepository(db)
