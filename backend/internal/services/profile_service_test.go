@@ -221,6 +221,12 @@ func (m *MockProfileRepository) ExpireTrialIfNoOverride(ctx context.Context, use
 
 // ClaimForDeletion (Issue #1413 Codex review round 3) is not exercised by these profile-service
 // tests; stubbed to satisfy the widened ProfileRepository interface.
+// CountRetentionDeletionsWithheld is Issue #1569 T1's withholding-count read. Never exercised by
+// this suite: it exists so MockProfileRepository keeps satisfying repository.ProfileRepository.
+func (m *MockProfileRepository) CountRetentionDeletionsWithheld(ctx context.Context) (repository.RetentionWithholdingCounts, error) {
+	return repository.RetentionWithholdingCounts{}, nil
+}
+
 func (m *MockProfileRepository) ClaimForDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) (bool, error) {
 	return false, nil
 }

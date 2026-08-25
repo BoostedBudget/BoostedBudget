@@ -357,6 +357,16 @@ type RetentionProfileRepository interface {
 	// Deliberately NOT part of the broad canonical ProfileRepository interface, for the same reason
 	// as its siblings above.
 	GetOrphanedFKlessUserScopedRowCounts(ctx context.Context) (repository.OrphanedFKlessUserScopedRowCounts, error)
+
+	// CountRetentionDeletionsWithheld is Issue #1569 T1's monitoring query, called by
+	// monitorRetentionDeletionsWithheld at Step 2b of every Work() pass. It reports the accounts
+	// the notice gate is refusing to hard-delete, split from the healthy population whose retention
+	// clock is still running. See its full doc comment on profileRepository
+	// (profile_repository.go) for why that split is the whole value of the metric.
+	//
+	// Deliberately NOT part of the broad canonical ProfileRepository interface, for the same reason
+	// as its siblings above.
+	CountRetentionDeletionsWithheld(ctx context.Context) (repository.RetentionWithholdingCounts, error)
 }
 
 // RetentionDeletionService defines the deletion methods needed for retention cleanup.
@@ -679,6 +689,19 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 		w.logger.Error("failed to process 7d retention notices",
 			"job_id", job.ID,
 			"error", notice7Err,
+		)
+		// Don't fail job — continue with other steps
+	}
+
+	// Step 2b: Issue #1569 T1 monitoring pass — report how many accounts Step 3 is REFUSING to
+	// delete because a promised pre-deletion notice was never recorded, and why. Runs immediately
+	// before Step 3 because it measures exactly what Step 3 is about to decline to do. Non-fatal
+	// for the same reason Steps 0c/0d/0e are: this is an observability check that makes no write,
+	// and must never block GDPR notices or expired-account deletion.
+	if monitorErr := w.monitorRetentionDeletionsWithheld(ctx, job.ID); monitorErr != nil {
+		w.logger.Error("failed to count retention hard-deletions withheld for want of a pre-deletion notice",
+			"job_id", job.ID,
+			"error", monitorErr,
 		)
 		// Don't fail job — continue with other steps
 	}
@@ -1536,6 +1559,89 @@ func (w *RetentionCleanupCheckWorker) monitorOrphanedFKlessRows(ctx context.Cont
 		"dead_letter_jobs_orphaned", counts.DeadLetterJobs,
 		"idempotency_keys_orphaned", counts.IdempotencyKeys,
 		"mcp_audit_log_orphaned", counts.MCPAuditLog,
+	)
+	return nil
+}
+
+// monitorRetentionDeletionsWithheld is Issue #1569 T1's alerting pass (Step 2b) — THE HALF OF THAT
+// FIX THAT IS NOT OPTIONAL.
+//
+// WHAT T1 CHANGED AND WHAT IT COST. apps/web/src/legal/PrivacyPolicy.tsx promises a cancelled user
+// notice at 30 days and again at 7 days before their data is destroyed. Nothing enforced it: the
+// hard-delete sweep never referenced retention_notice_30d_sent_at / _7d_sent_at, and no EmailService
+// is passed to this worker in ANY environment (cmd/server/main.go), so canSendRetentionNotice
+// returns false before the work-claim is taken and the markers stay NULL forever. Accounts were
+// hard-deleted having been warned zero times. retentionNoticesDeliveredPredicate now gates the sweep
+// and the claim — which is the safe direction to fail, and which converts a silent DESTRUCTION into
+// a silent RETENTION. This pass is what stops the second one being silent.
+//
+// ⚠ WHY THE REASON MATTERS MORE THAN THE COUNT. A NULL marker means two unrelated things, and an
+// alert on the undifferentiated NULL count would fire on every ordinary cancellation:
+//   - the retention clock is still RUNNING, so GetUsersNeedingRetention30dNotice and its 7d sibling
+//     can still select this user (both bound their population by retention_expires_at > NOW()). The
+//     notice is simply not due yet. Healthy, and normally the largest number here.
+//   - the clock has RUN OUT, so those two queries can never select the user again — their bound is
+//     the opposite one. Nothing existing will ever send the missing notice, so the gate holds the
+//     account indefinitely. That is the alert.
+// The SQL half of that split is CountRetentionDeletionsWithheld's; the process half — whether an
+// email service is wired at all — is not visible to SQL and is applied here.
+//
+// REASON PRECEDENCE, deliberate: a nil emailService is a process-wide cause that dominates every
+// per-user one, so when it holds, the ENTIRE withheld population is reported under
+// RetentionWithheldNoEmailService rather than sliced by address. Wiring the service is the single
+// remedy for all of them, and splitting the number would suggest several.
+//
+// ⚠ EVERY REASON LABEL MUST BE Set ON EVERY PASS. The enumeration below is by hand and the compiler
+// will not say so — a GaugeVec label that is never Set does not exist in the scrape, so an omitted
+// reason does not fail loudly: its accounts simply vanish and the gauge stops summing to the
+// population. Same hazard, and the same warning, as monitorOrphanedPlaidItems's admin_state loop.
+//
+// NOTHING IS PUBLISHED ON A FAILED READ. Setting the gauges to 0 would tell an alert "no account is
+// being withheld", which is a claim nothing checked — the same unknown-is-not-zero rule Steps 0c and
+// 0e already apply. The gauges keep their last reading, and staleness/absent() plus the Error log
+// the caller writes are what report the breakage.
+//
+// Deliberately GAUGES reset to 0 on a clean pass: an operator who wires the email service and lets
+// the backlog drain must see the alert CLEAR. A counter, or a gauge only ever written when non-zero,
+// would latch forever.
+func (w *RetentionCleanupCheckWorker) monitorRetentionDeletionsWithheld(ctx context.Context, jobID int64) error {
+	counts, err := w.profileRepo.CountRetentionDeletionsWithheld(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to count retention hard-deletions withheld for want of a notice: %w", err)
+	}
+
+	noEmailService, noAddress, windowPassed := 0, 0, 0
+	if w.emailService == nil {
+		noEmailService = counts.WithheldNoticeMissing
+	} else {
+		noAddress = counts.WithheldNoNoticeAddress
+		windowPassed = counts.WithheldNoticeMissing - counts.WithheldNoNoticeAddress
+	}
+
+	observability.RetentionDeletionsWithheld.
+		WithLabelValues(observability.RetentionWithheldNoticePending).Set(float64(counts.NoticePending))
+	observability.RetentionDeletionsWithheld.
+		WithLabelValues(observability.RetentionWithheldNoEmailService).Set(float64(noEmailService))
+	observability.RetentionDeletionsWithheld.
+		WithLabelValues(observability.RetentionWithheldNoAddress).Set(float64(noAddress))
+	observability.RetentionDeletionsWithheld.
+		WithLabelValues(observability.RetentionWithheldWindowPassed).Set(float64(windowPassed))
+
+	if counts.WithheldNoticeMissing == 0 {
+		return nil
+	}
+
+	// Logged as well as gauged, because a gauge nobody has wired an alert to is still invisible, and
+	// this repo has no alert-rule file (see observability.RetentionDeletionsWithheld). No user id or
+	// address is logged: the population is identifiable from the database by an operator who needs
+	// it, and a log line is not an authenticated surface.
+	w.logger.Warn("retention hard-deletions are being WITHHELD because the promised 30d/7d pre-deletion notices were never recorded — these accounts are retained past their stated window and no existing path can send the missing notice",
+		"job_id", jobID,
+		"withheld_total", counts.WithheldNoticeMissing,
+		"withheld_no_email_service", noEmailService,
+		"withheld_no_address", noAddress,
+		"withheld_window_passed", windowPassed,
+		"notice_pending_healthy", counts.NoticePending,
 	)
 	return nil
 }

@@ -1047,7 +1047,24 @@ func main() {
 		// auto-deletion (deleteExpiredAccounts nil-guards it and logs a warning instead of
 		// panicking); Steps 0/0b/1/2 (retention-clock repair, Plaid-disconnect repair, 30d/7d
 		// notices) all run regardless, since none of them touch deletionService at all.
-		// Note: EmailService is nil in MVP — notice emails are skipped until Phase 3 email templates
+		// ⚠ EmailService IS DELIBERATELY LEFT NIL, AND THAT NOW WITHHOLDS DELETIONS. The general email
+		// service constructed above (SendGrid or its mock) does not implement
+		// jobs.RetentionEmailService.SendRetentionNoticeEmail at all, so there is nothing to pass here:
+		// the 30d/7d pre-deletion notices apps/web/src/legal/PrivacyPolicy.tsx promises are not sent in
+		// any environment, and canSendRetentionNotice returns false before the work-claim is taken, so
+		// retention_notice_30d_sent_at / _7d_sent_at are never stamped. Email lands after go-live.
+		//
+		// ⚠ WHAT THIS COMMENT USED TO OMIT, and the omission is how Issue #1569 defect C1 survived: it
+		// said only that notices were skipped, and never that Step 3 DELETED THE ACCOUNT ANYWAY. It did
+		// — GetUsersWithExpiredRetentionPage had no predicate on the notice markers — so a cancelled
+		// user's data was hard-deleted at the end of the retention window having been warned zero times.
+		// Since #1569 T1 the sweep and the deletion claim both require BOTH markers
+		// (retentionNoticesDeliveredPredicate), so with EmailService nil the consequence is inverted:
+		// expired accounts are RETAINED INDEFINITELY rather than deleted. That is deliberate — retain is
+		// the safe direction to fail — and it is made visible, not silent, by Step 2b
+		// (monitorRetentionDeletionsWithheld / observability.RetentionDeletionsWithheld). The
+		// privacy-policy text still promises deletion after the window and is knowingly out of step
+		// until the notice email exists; it belongs with that work, not with the gate.
 		retentionCleanupCheckWorker = jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{
 			ProfileRepo:     profileRepo,
 			DeletionService: deletionService,
