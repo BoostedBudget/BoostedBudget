@@ -83,9 +83,8 @@ func TestRetentionCleanupCheck_MonitorWithheld_NoEmailService_AlertsAsImpossible
 	mockRepo := new(MockRetentionProfileRepository)
 	setupWithheldMonitorMocks(ctx, mockRepo)
 	mockRepo.On("CountRetentionDeletionsWithheld", ctx).Return(repository.RetentionWithholdingCounts{
-		WithheldNoticeMissing:   4,
-		WithheldNoNoticeAddress: 1,
-		NoticePending:           9,
+		WithheldNoticeMissing: 4,
+		NoticePending:         9,
 	}, nil)
 
 	var logBuf bytes.Buffer
@@ -99,10 +98,8 @@ func TestRetentionCleanupCheck_MonitorWithheld_NoEmailService_AlertsAsImpossible
 		testutil.ToFloat64(observability.RetentionDeletionsWithheld.WithLabelValues(observability.RetentionWithheldNoEmailService)),
 		"with no email service wired, every withheld account is held for that one process-wide reason, and wiring the service is the whole remedy")
 	assert.Equal(t, float64(0),
-		testutil.ToFloat64(observability.RetentionDeletionsWithheld.WithLabelValues(observability.RetentionWithheldNoAddress)),
-		"the missing-address remedy is per-user and must not be reported while the process-wide cause dominates it")
-	assert.Equal(t, float64(0),
-		testutil.ToFloat64(observability.RetentionDeletionsWithheld.WithLabelValues(observability.RetentionWithheldWindowPassed)))
+		testutil.ToFloat64(observability.RetentionDeletionsWithheld.WithLabelValues(observability.RetentionWithheldWindowPassed)),
+		"window_passed means a service IS wired and still cannot help; attributing this population to it would point an operator at the wrong remedy")
 
 	// ⚠ THE ASSERTION THAT REFUTES THE CONFLATION. 9 healthy accounts are awaiting a notice that is
 	// still ahead of them; reporting them under any notice_impossible reason would fire the alert on
@@ -113,11 +110,56 @@ func TestRetentionCleanupCheck_MonitorWithheld_NoEmailService_AlertsAsImpossible
 		"a user whose retention clock is still running is not withheld — the notice sweep can still reach them")
 
 	logged := logBuf.String()
-	assert.Contains(t, logged, "level=WARN",
+	// ⚠ Asserting only `level=WARN` here would be VACUOUS: the orphaned-Plaid-Item pass logs a WARN
+	// on every run of this fixture (no repository is wired), so a bare level check stays green even
+	// with Step 2b removed entirely. The assertion names THIS pass's own message.
+	assert.Contains(t, logged, `level=WARN msg="retention hard-deletions are being WITHHELD`,
 		"a gauge nobody has wired an alert to is still invisible; this repo has no alert-rule file, so the log line is the other half")
 	assert.Contains(t, logged, "withheld_no_email_service=4")
 
 	mockRepo.AssertExpectations(t)
+}
+
+// THE OTHER BRANCH, which had no coverage at all in the first version of this file: with an email
+// service WIRED, the same withheld population must report under window_passed instead — because
+// wiring the service is necessary but NOT sufficient. GetUsersNeedingRetention30dNotice and its 7d
+// sibling both require retention_expires_at > NOW(), and every withheld account is past that, so a
+// wired service still cannot reach them. The two labels name two different operator actions
+// (deploy an email service vs. build a selection path for the backlog), so reporting one population
+// under the other would send an operator to the wrong remedy.
+//
+// ⚠ This is the ONE test in this file that injects an email service, and it does so precisely
+// because the branch under test is "a service exists" — not to make notices succeed.
+func TestRetentionCleanupCheck_MonitorWithheld_EmailServiceWired_AlertsAsWindowPassed(t *testing.T) {
+	ctx := context.Background()
+	resetWithheldGauges()
+
+	mockRepo := new(MockRetentionProfileRepository)
+	setupWithheldMonitorMocks(ctx, mockRepo)
+	mockRepo.On("CountRetentionDeletionsWithheld", ctx).Return(repository.RetentionWithholdingCounts{
+		WithheldNoticeMissing: 6,
+		NoticePending:         2,
+	}, nil)
+
+	var logBuf bytes.Buffer
+	worker := newWithheldMonitorWorker(&logBuf, mockRepo)
+	worker.emailService = new(MockRetentionEmailService)
+	require.NotNil(t, worker.emailService)
+
+	require.NoError(t, worker.Work(ctx, newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})))
+
+	assert.Equal(t, float64(6),
+		testutil.ToFloat64(observability.RetentionDeletionsWithheld.WithLabelValues(observability.RetentionWithheldWindowPassed)),
+		"with a service wired the whole withheld population is past the notice queries' reach, and that is a different remedy from wiring the service")
+	assert.Equal(t, float64(0),
+		testutil.ToFloat64(observability.RetentionDeletionsWithheld.WithLabelValues(observability.RetentionWithheldNoEmailService)),
+		"a service IS wired, so blaming its absence would be a false diagnosis")
+	assert.Equal(t, float64(2),
+		testutil.ToFloat64(observability.RetentionDeletionsWithheld.WithLabelValues(observability.RetentionWithheldNoticePending)),
+		"the healthy population is unaffected by which impossible-reason applies")
+
+	assert.Contains(t, logBuf.String(), "withheld_window_passed=6")
+	assert.Contains(t, logBuf.String(), "withheld_no_email_service=0")
 }
 
 // The clean case must CLEAR the alert, not latch it: an operator who wires the email service and

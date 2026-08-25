@@ -44,8 +44,11 @@ import (
 // with middleware missing, which is #1560 reintroduced through the guard:
 //
 //   - the RECEIVER of UseMiddleware was never checked, so `internalHumaAPI.UseMiddleware(cache…)` —
-//     a one-token typo on main.go:1909 — left the anchor at 2031 and the guard green while every
-//     post-anchor secured mutating route ran with no cache invalidation. A UseMiddleware call now
+//     a one-token typo at the cache-invalidation UseMiddleware call — left the anchor stuck at the
+//     PREVIOUS middleware call and the guard green while every post-anchor secured mutating route
+//     ran with no cache invalidation. (Deliberately no line numbers: this records a demonstration
+//     run against a main.go that has since moved, and #1569 T1 shifted every line below 1050 by
+//     +17. Half-shifted numbers in a historical narrative are worse than none.) A UseMiddleware call now
 //     counts toward the chain only when its receiver is the identifier the guarded routes register
 //     on (guardedAPIIdent); anything else is recorded in middlewareOtherReceiver and FAILS.
 //   - an anchor could be found OUTSIDE func main(). Hoisting the four calls into

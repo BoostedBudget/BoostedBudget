@@ -180,6 +180,16 @@ func TestRetentionNoticeGate_Integration_ClaimRefusesUnwarnedUser(t *testing.T) 
 //   - retention_expires_at <= NOW() — the clock has run out. Those same two queries can never
 //     select this user again (their bound is the opposite one), so the missing notice will never be
 //     sent by any existing path and the gate holds the account indefinitely. THIS is the alert.
+//
+// ⚠ WHAT THIS TEST DELIBERATELY NO LONGER ASSERTS. Its first version seeded a user with
+// `email = ''` written straight to the column and asserted a separate no-address count. That row
+// shape CANNOT OCCUR IN PRODUCTION: users.email holds ciphertext, and
+// FieldEncryptor.EncryptString returns "ENC$"+ct even for the empty string, so the only way to
+// produce a bare '' is to bypass the encryption path — which is what the test did. It passed while
+// validating a state the system cannot reach. The no-address reason was removed rather than
+// re-tested through the real path, because email_blind_idx (the one column that could discriminate)
+// carries a UNIQUE index, capping that population at one row database-wide. See
+// CountRetentionDeletionsWithheld's doc comment.
 func TestRetentionNoticeGate_Integration_WithholdingCountsSeparatePendingFromImpossible(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -192,12 +202,10 @@ func TestRetentionNoticeGate_Integration_WithholdingCountsSeparatePendingFromImp
 	before, err := repo.CountRetentionDeletionsWithheld(ctx)
 	require.NoError(t, err)
 
-	// Withheld: expired clock, no notices, has an address.
-	withheld := seedNoticeGateUser(t, ctx, pool, repo, "withheld", nil, nil)
-	// Withheld AND unaddressable: expired clock, no notices, no email on file.
-	noAddress := seedNoticeGateUser(t, ctx, pool, repo, "noaddr", nil, nil)
-	_, err = pool.Exec(ctx, `UPDATE users SET email = '' WHERE id = $1`, noAddress.ID)
-	require.NoError(t, err)
+	// Withheld: expired clock, neither notice recorded.
+	withheldA := seedNoticeGateUser(t, ctx, pool, repo, "withheld_a", nil, nil)
+	// Withheld on the OTHER marker only, so the count cannot be satisfied by testing just one.
+	withheldB := seedNoticeGateUser(t, ctx, pool, repo, "withheld_b", &sent30, nil)
 	// NOT withheld: fully warned, so the gate lets it through and it is nobody's alert.
 	_ = seedNoticeGateUser(t, ctx, pool, repo, "warned", &sent30, &sent7)
 	// NOT withheld: the clock is still running, so the notice sweep can still reach this user.
@@ -208,9 +216,7 @@ func TestRetentionNoticeGate_Integration_WithholdingCountsSeparatePendingFromImp
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, after.WithheldNoticeMissing-before.WithheldNoticeMissing,
-		"both expired, never-warned users must be counted as withheld: %s and %s", withheld.ID, noAddress.ID)
-	assert.Equal(t, 1, after.WithheldNoNoticeAddress-before.WithheldNoNoticeAddress,
-		"the user with no address on file is unaddressable for a different reason and needs its own remedy")
+		"both expired users missing a notice must be counted as withheld: %s (neither) and %s (7d only)", withheldA.ID, withheldB.ID)
 	assert.Equal(t, 1, after.NoticePending-before.NoticePending,
 		"a user whose clock is still running (%s) is healthy — counting it as withheld would fire the alert on every ordinary cancellation", pending.ID)
 
