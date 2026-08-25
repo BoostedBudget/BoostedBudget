@@ -1135,6 +1135,14 @@ func TestTransactionRepository_UpdateCategory_PFCOverride(t *testing.T) {
 	kind := "pfc"
 	primary := "FOOD_AND_DRINK"
 
+	// Lock-first (#1569 Task 6, review fix R79): the capture now runs inside a transaction that has
+	// already taken the row lock, so the mock has to see Begin -> the FOR UPDATE -> the capturing
+	// query -> Commit. A mock cannot prove the lock WORKS — that is
+	// TestAnnotationHistory_ConcurrentWriteDoesNotFabricateATransition_Integration's job — but it can
+	// prove the sequence is still issued.
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	// #1569 Task 6 (#1579): the statement is now a CTE that also records the prior annotation, so
 	// it is a QUERY returning the `updated` CTE's count rather than an Exec whose statement tag is
 	// read. The tag would now count the recording INSERT, which is 0 for a write that changed
@@ -1152,6 +1160,7 @@ func TestTransactionRepository_UpdateCategory_PFCOverride(t *testing.T) {
 			userID,
 		).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectCommit()
 
 	err = repo.UpdateCategory(ctx, txID, userID, &kind, &primary, nil, nil, domain.CategorySourceManual)
 	assert.NoError(t, err)
@@ -1171,9 +1180,13 @@ func TestTransactionRepository_SetReviewed(t *testing.T) {
 	userID := "user-123"
 	ids := []string{"tx-1", "tx-2"}
 
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(true, pgxmock.AnyArg(), userID, ids).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(2)))
+	mock.ExpectCommit()
 
 	n, err := repo.SetReviewed(ctx, userID, ids, true)
 	require.NoError(t, err)
@@ -1192,9 +1205,13 @@ func TestTransactionRepository_SetReviewed_Unreview(t *testing.T) {
 	userID := "user-123"
 	ids := []string{"tx-1"}
 
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(false, (*time.Time)(nil), userID, ids).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectCommit()
 
 	n, err := repo.SetReviewed(ctx, userID, ids, false)
 	require.NoError(t, err)
@@ -1227,6 +1244,9 @@ func TestTransactionRepository_UpdateCategory_ClearOverride(t *testing.T) {
 	txID := "tx-clear"
 	userID := "user-123"
 
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(
 			(*string)(nil), // category_override_kind
@@ -1240,6 +1260,7 @@ func TestTransactionRepository_UpdateCategory_ClearOverride(t *testing.T) {
 			userID,
 		).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectCommit()
 
 	err = repo.UpdateCategory(ctx, txID, userID, nil, nil, nil, nil, domain.CategorySourceManual)
 	assert.NoError(t, err)
@@ -3640,9 +3661,13 @@ func TestBulkUpdateCategory_Success(t *testing.T) {
 	pfcPrimary := "FOOD_AND_DRINK"
 	ids := []string{uuid.New().String(), uuid.New().String()}
 
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery(regexp.QuoteMeta("UPDATE transactions")).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(2)))
+	mock.ExpectCommit()
 
 	n, err := repo.BulkUpdateCategory(ctx, userID, ids, ptrStr("pfc"), &pfcPrimary, nil, nil, domain.CategorySourceManual)
 	require.NoError(t, err)
@@ -3680,9 +3705,13 @@ func TestBulkUpdateCategory_PartialOwnership(t *testing.T) {
 	userID := "user-222"
 	ids := []string{uuid.New().String(), uuid.New().String(), uuid.New().String()} // 3 requested
 
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery(regexp.QuoteMeta("UPDATE transactions")).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1))) // only 1 owned
+	mock.ExpectCommit()
 
 	n, err := repo.BulkUpdateCategory(ctx, userID, ids, nil, nil, nil, nil, domain.CategorySourceManual)
 	require.NoError(t, err)

@@ -154,21 +154,17 @@ func TestAnnotationCaptureSourcesMatchTheCheckConstraint(t *testing.T) {
 			"migration, or the constraint was widened speculatively")
 }
 
-// TestAnnotationCaptureIsUsedByEveryAnnotationWritingStatement. The capture is a CTE the three
-// statements have to opt into, and the failure mode of that design is a FOURTH statement — or a
-// rewrite of one of these three — that quietly drops it and starts losing prior values again with
-// every test still green. This pins the count and the sources.
-func TestAnnotationCaptureIsUsedByEveryAnnotationWritingStatement(t *testing.T) {
+// TestAnnotationCaptureSourceAttributionIsUnchanged pins WHICH source each statement records.
+// The structural question — does every annotation-writing statement carry the capture at all — is
+// TestAnnotationCaptureIsUsedByEveryAnnotationWritingStatement's, in annotation_capture_guard_test.go,
+// which walks internal/ by AST. This one is the narrower claim that a string count can actually
+// support: the two category statements attribute to 'category' and the single review statement to
+// 'review'.
+func TestAnnotationCaptureSourceAttributionIsUnchanged(t *testing.T) {
 	src, err := os.ReadFile("transaction_repository.go")
 	require.NoError(t, err)
 	text := string(src)
 
-	assert.Equal(t, 3, strings.Count(text, "annotationCaptureInsert("),
-		"UpdateCategory, BulkUpdateCategory and SetReviewed each carry the capture; a change to "+
-			"this count is either a new annotation-writing statement that must carry it too, or one "+
-			"of the three losing it")
-	assert.Equal(t, 3, strings.Count(text, "annotationCaptureReturning"),
-		"a capture INSERT with no matching RETURNING list cannot compile the columns it selects")
 	assert.Equal(t, 2, strings.Count(text, "domain.TransactionAnnotationChangeCategory"),
 		"both category statements attribute their rows to the category source")
 	assert.Equal(t, 1, strings.Count(text, "domain.TransactionAnnotationChangeReview"),

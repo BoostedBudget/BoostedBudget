@@ -227,7 +227,7 @@ func TestAnnotationHistory_SingleCategoryUpdateRecordsPriorOverrideAndReviewedAt
 	assert.False(t, row.ChangedAt.IsZero())
 }
 
-// TestAnnotationHistory_ChainedUpdatesRecordTheImmEDIATELYPriorValue_Integration is the atomic-
+// TestAnnotationHistory_ChainedUpdatesRecordTheImmediatelyPriorValue_Integration is the atomic-
 // capture property stated as behaviour: the second write's `prior` is the first write's `new`,
 // not the value the transaction was created with. A SELECT-then-UPDATE writer can satisfy this
 // serially and still be wrong under concurrency, which is why the capture is a CTE in the same
@@ -408,4 +408,40 @@ func TestAnnotationHistory_ATombstonedTransactionIsStillRecorded_Integration(t *
 	rows, total := f.history(t)
 	require.Equal(t, 1, total)
 	assert.Equal(t, txn.ID, rows[0].TransactionID)
+}
+
+// TestAnnotationHistory_SingleUpdateNeverTouchesAnotherUsersTransaction_Integration closes the gap
+// review found in the first round's mutation set: M3 widened only the BULK tenancy predicate, so
+// `t.user_id = $9` on the single-row statement had no test that would notice it going away.
+//
+// It calls the REPOSITORY, not the service, on purpose. UpdateTransactionCategory checks ownership
+// with GetTransactionByID before it ever reaches the statement, so a service-level test would be
+// satisfied by that check and would keep passing with the SQL predicate deleted. The claim under
+// test is that the statement is single-tenant BY SQL CONSTRUCTION, which is exactly what survives
+// if someone later adds a caller that skips the service.
+func TestAnnotationHistory_SingleUpdateNeverTouchesAnotherUsersTransaction_Integration(t *testing.T) {
+	f := seedAnnotationHistoryFixture(t)
+	ctx := context.Background()
+
+	theirs := f.seedTransaction(t, f.otherUserID, "Not Mine", true)
+
+	err := f.txRepo.UpdateCategory(ctx, theirs.ID, f.userID,
+		strPtr("custom"), nil, nil, &f.customCatID, domain.CategorySourceManual)
+	require.ErrorIs(t, err, repository.ErrTransactionNotFound,
+		"another user's transaction id must match zero rows, not one")
+
+	_, total := f.history(t)
+	assert.Equal(t, 0, total, "nothing was updated, so nothing may be recorded")
+
+	otherRows, otherTotal, err := f.histRepo.GetByUserID(ctx, f.otherUserID, 100, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 0, otherTotal, "and nothing may be recorded against the owner either")
+	assert.Empty(t, otherRows)
+
+	// The row itself is untouched: the override it was seeded with is still there.
+	var kind *string
+	require.NoError(t, f.tx.QueryRow(ctx,
+		`SELECT pfc_primary_override FROM transactions WHERE id = $1`, theirs.ID).Scan(&kind))
+	require.NotNil(t, kind)
+	assert.Equal(t, "ENTERTAINMENT", *kind)
 }
