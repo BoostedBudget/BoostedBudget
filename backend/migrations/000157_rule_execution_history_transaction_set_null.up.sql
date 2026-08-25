@@ -1,4 +1,12 @@
 -- Issue #1569 Task 7: keep the automation trail when a transaction is tombstoned or erased.
+-- ⚠ SUPERSEDED CLAIM (2026-08-25, #1569 T8). The statements below asserting that
+-- `grep -rn 'rule_execution_history' backend --include='*.go'` matches nothing outside migrations
+-- were TRUE WHEN WRITTEN and are now FALSE: #1569 T5 shipped
+-- backend/internal/repository/rule_execution_history_repository.go, which both writes and reads
+-- this table, plus a service and an endpoint. Nothing about the SCHEMA below changes -- this is a
+-- comment-only amendment, made here rather than only in the Go file because a reader who opens
+-- this migration has no way to discover a correction that lives somewhere else.
+--
 --
 -- Migration 000020:161 gave rule_execution_history.transaction_id an ON DELETE CASCADE FK. Paired
 -- with the hard `DELETE FROM transactions` that Plaid's `removed` array used to trigger, that meant

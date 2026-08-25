@@ -85,6 +85,12 @@ var historyBearingTables = map[string]string{
 		"review-state overwrite on a transaction (#1569 task 6 / #1579); the prior override and " +
 		"the pre-existing reviewed_at survive nowhere else, because the UPDATE that wrote each " +
 		"row is what removed them",
+	"investment_transactions": "the append-only record of every buy, sell, dividend and fee Plaid " +
+		"ever reported, upserted by plaid_investment_transaction_id and read by the investment " +
+		"analytics, the unified transaction feed and the account-liveness baseline; it has no " +
+		"deleted_at, no Go delete path at all, and both its user_id and its account_id FK are " +
+		"ON DELETE CASCADE, so a cascade destroys money history the provider will not re-report " +
+		"(#1569 T8 — derived from the live schema, not inherited from a list)",
 	"boost_executions":           "what a boost moved and when",
 	"rollover_history":           "budget rollovers between periods",
 	"savings_goal_contributions": "the contributions that make up a goal's progress",
@@ -154,6 +160,19 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	{child: "savings_goals", parent: "users", constraint: "fk_savings_goals_user_id"}:                                   "GDPR erasure path off users",
 	{child: "transactions", parent: "users", constraint: "fk_transactions_user_id"}:                                     "GDPR erasure path off users",
 	{child: "accounts", parent: "users", constraint: "fk_accounts_user_id"}:                                             "GDPR erasure path off users",
+	{child: "investment_transactions", parent: "users", constraint: "fk_inv_txn_user_id"}:                               "GDPR erasure path off users",
+
+	// ---- investment_transactions off accounts. -------------------------------------------------
+	// Re-derived for #1569 T8 rather than assumed. `accounts` is soft-removed, so this edge only
+	// fires when an accounts ROW is genuinely hard-deleted, and there is exactly one statement in
+	// the tree that does that: account_repository.go:1091, inside PurgeAccount — an explicit,
+	// user-invoked destruction with its own endpoint, its own audit row and a live-data
+	// precondition. (`DELETE FROM accounts` appears nowhere else in non-test Go.) Migration 000151's
+	// header anticipated this path and left the edge CASCADE deliberately: a purged account's
+	// investment transactions are precisely what the user asked to destroy, and leaving them behind
+	// orphaned would be the residue the purge exists to remove. The second route to this edge is
+	// the users cascade above, which reaches accounts first.
+	{child: "investment_transactions", parent: "accounts", constraint: "fk_inv_txn_account_id"}: "explicit user-invoked PurgeAccount (account_repository.go:1091) is the only hard DELETE FROM accounts; the row is what the user asked to destroy",
 
 	// ---- The three tables whose ONLY erasure route is this edge. -------------------------------
 	// None of these three has a foreign key to `users`, so `DELETE FROM users` reaches them only
@@ -203,16 +222,27 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 // _events, _executions, _statements, _contributions, _repairs, _log or _audit is a claim the author
 // made about what the table is; this test only asks them to finish the sentence.
 //
-// ⚠ HOW MUCH IT ACTUALLY COVERS, measured rather than assumed: **7 of the 17 tables already in
+// ⚠ HOW MUCH IT ACTUALLY COVERS, measured rather than assumed: **8 of the 18 tables already in
 // historyBearingTables do not match this regexp** — accounts, boosts, budget_categories, budgets,
-// custom_categories, savings_goals, transactions. That is 41%, and it is the LARGEST class the
-// guards protect: the tombstoned parents. The net is structurally incapable of finding another one
-// of those, because their names describe a thing rather than a record of a thing.
+// custom_categories, investment_transactions, savings_goals, transactions. That is 44%, and it is
+// the LARGEST class the guards protect: the tombstoned parents. The net is structurally incapable
+// of finding another one of those, because their names describe a thing rather than a record of a
+// thing.
+//
+// ⚠ AND THE EIGHTH IS NOT A TOMBSTONED PARENT — it is a third failure mode. `investment_transactions`
+// (#1569 T8) is a genuine append-only provider record whose name simply ends in a suffix nobody put
+// on the list. It was in NEITHER classification map, matched NEITHER the net, and carried an
+// ON DELETE CASCADE from a soft-removed parent — invisible to G1, G2 and the completeness check
+// simultaneously, which is the exact hole all three exist to close. Widening the regexp to
+// `_transactions` was considered and rejected: it would demand a verdict on `transactions` (already
+// classified) and `paddle_transactions` (billing, not financial history) without finding anything
+// the hand list does not already have, and a net tuned after the fact to catch the one case that
+// escaped it is not evidence about the next one.
 //
 // It caught `portfolio_snapshots` because that table happened to be shaped like history. Read this
 // as "it will catch the next _snapshots table", not as "the universe is now complete". Adding a
 // table to historyBearingTables by hand remains the primary mechanism and is not made redundant by
-// this. TestHistoryShapedTableClassification_TheNetMissesMostOfWhatItProtects pins the 7 so this
+// this. TestHistoryShapedTableClassification_TheNetMissesMostOfWhatItProtects pins the 8 so this
 // paragraph cannot quietly become false.
 //
 // ⚠ AND IT IS ONE LINE TO UNDO, demonstrated, not hypothesised. Moving `portfolio_snapshots` out of
@@ -423,7 +453,8 @@ func TestHistoryShapedTableClassification_MapsAgreeOnNothing(t *testing.T) {
 func TestHistoryShapedTableClassification_TheNetMissesMostOfWhatItProtects(t *testing.T) {
 	want := map[string]bool{
 		"accounts": true, "boosts": true, "budget_categories": true, "budgets": true,
-		"custom_categories": true, "savings_goals": true, "transactions": true,
+		"custom_categories": true, "investment_transactions": true, "savings_goals": true,
+		"transactions": true,
 	}
 	got := map[string]bool{}
 	for tbl := range historyBearingTables {

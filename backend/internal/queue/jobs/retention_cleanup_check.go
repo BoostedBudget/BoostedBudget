@@ -126,8 +126,10 @@ const expiredRetentionPageSize = 500
 // comparable: ScheduledDeletionCheckWorker's loop body is a single River enqueue (cheap, and the
 // actual deletion happens later in AccountDeletionWorker, still gated by ExecuteDeletion's claim),
 // whereas this loop body IS the deletion — a synchronous ExecuteDeletion per row, which acquires a
-// work claim, disconnects Plaid, and runs DeleteUserCascade's `DELETE FROM users` against ~37
-// cascading foreign keys. Nothing between this loop and irreversible data loss.
+// work claim, disconnects Plaid, and runs DeleteUserCascade's `DELETE FROM users` against 44
+// cascading foreign keys spanning 42 tables directly, 48 transitively (measured by walking
+// pg_constraint on the live schema, #1569 T8 — the "~37" this comment used to quote was stale).
+// Nothing between this loop and irreversible data loss.
 //
 // Derivation of 1,000:
 //   - Upper side: 1,000 is a ceiling **per sweep invocation**, and deliberately not described as a

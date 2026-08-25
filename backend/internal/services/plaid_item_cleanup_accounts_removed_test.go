@@ -17,7 +17,7 @@ import (
 // WHY THAT IS A LIVE-NUMBER DEFECT, not bookkeeping. Once plaid_removed_at is stamped the account
 // stops syncing, so current_balance is frozen at whatever it last was. The frontend decides whether
 // to caption a balance "as of <date>" purely from the account's status —
-// apps/web/src/features/accounts/utils.ts getAccountBalanceAsOfDate returns undefined for an
+// apps/web/src/features/accounts/utils.ts getAccountClosedDate returns undefined for an
 // isInactive()==false account — so a frozen figure was rendered as a current one, with no date and
 // no qualification, on the accounts list and in every total built from it.
 //
