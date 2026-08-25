@@ -1,0 +1,138 @@
+package jobs
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+// retentionNoticeGoldenPath is the reviewed snapshot of the retention deletion notices.
+const retentionNoticeGoldenPath = "testdata/retention_notice.golden"
+
+// TestRetentionNoticeMatchesReviewedGolden is the #1593 guard: a content-bearing pin on all
+// thirteen phrases, not just the audit_logs one.
+//
+// What was wrong. retentionDeletionItems is the enumeration both pre-deletion notices are BUILT
+// from, and every assertion on item.phrase was either a non-emptiness check or
+// require.Contains(body, item.phrase) — where `body` is rendered from those same phrases. An
+// assertion that renders from the source it checks cannot detect a change to that source: item 2's
+// phrase could be replaced with the outright lie "nothing at all, we keep your balance history
+// forever" and ./internal/queue/jobs/ stayed fully green (demonstrated by two independent
+// reviewers; the audit_logs pin was the only content-bearing one, 1 of 13).
+//
+// What this fixes it with. A golden file holds the rendered text of both notices together with the
+// item -> tables mapping each phrase claims. The golden is NOT rendered from retentionDeletionItems
+// at test time — it is a checked-in artefact a human reviewed — so any edit to any phrase, in
+// either direction, fails here and has to be looked at before it ships.
+//
+// ⚠ What this does NOT do, stated plainly so the next reader does not over-trust it: it does not
+// check TRUTHFULNESS. Nothing mechanical can decide whether "your day-by-day balance history for
+// every account" honestly describes the rows in balance_snapshots. The golden buys exactly one
+// thing — a change to compliance-adjacent copy cannot reach a user without a human diffing it —
+// and the mapping is in the file so the human diffing it can see, in the same hunk, which tables
+// the reworded phrase is now claiming. The judgement is still the reviewer's.
+//
+// ⚠ There is deliberately NO -update flag. A golden that a flag regenerates on autopilot
+// reproduces the same hole one level up. On a mismatch this test writes the candidate to a
+// .actual sibling and tells the reviewer what to verify; promoting it is a separate, manual act
+// that shows up in the diff.
+func TestRetentionNoticeMatchesReviewedGolden(t *testing.T) {
+	candidate := renderRetentionNoticeGolden()
+	actualPath := retentionNoticeGoldenPath + ".actual"
+
+	recorded, err := os.ReadFile(retentionNoticeGoldenPath)
+	if err != nil || string(recorded) != candidate {
+		require.NoError(t, os.MkdirAll(filepath.Dir(actualPath), 0o755))
+		require.NoError(t, os.WriteFile(actualPath, []byte(candidate), 0o644))
+
+		reason := "the rendered retention notices differ from the reviewed golden"
+		if err != nil {
+			reason = fmt.Sprintf("the reviewed golden could not be read (%v)", err)
+		}
+		t.Fatalf("%s.\n\n"+
+			"These are the 30-day and 7-day pre-deletion notices. The retention sweep is the ONE\n"+
+			"automatic destroyer the retention ADR permits, and it is permitted BECAUSE these\n"+
+			"notices enumerate what it destroys — so this copy is compliance-adjacent, not cosmetic.\n\n"+
+			"The candidate has been written to %s. Do NOT promote it until you have\n"+
+			"answered these, item by item, for every line the diff touches:\n"+
+			"  1. Is the new wording TRUE of the tables that item claims? Read the `tables:` line in\n"+
+			"     the same hunk and satisfy yourself that a user reading the phrase would recognise\n"+
+			"     the rows in those tables — and that the phrase does not promise destruction of\n"+
+			"     anything the delete leaves behind.\n"+
+			"  2. Does it still claim destruction at all? An emptied or inverted phrase ('we keep\n"+
+			"     this forever') is the failure this test exists for.\n"+
+			"  3. Does the item claiming audit_logs still QUALIFY its claim? audit_logs.user_id is\n"+
+			"     ON DELETE SET NULL and most rows survive; over-claiming erasure is the unsafe\n"+
+			"     direction for a deletion notice.\n\n"+
+			"Then, and only then:  mv %s %s\n\n"+
+			"Coverage and staleness of the `tables` sets are a different question, checked by\n"+
+			"TestRetentionNoticeEnumerationCoversEverythingDeleted against the live schema. This\n"+
+			"test says nothing about them, and that test says nothing about the words.",
+			reason, actualPath, actualPath, retentionNoticeGoldenPath)
+	}
+
+	// A stale .actual from an earlier failing run is noise in `git status` and, worse, invites a
+	// later `mv` of copy nobody reviewed. Once the golden matches, it has no reason to exist.
+	_ = os.Remove(actualPath)
+}
+
+// TestEveryRetentionDeletionItemNamesItsSubject is the half of the #1593 pin that SURVIVES a
+// thoughtless golden regeneration.
+//
+// The golden's known failure mode is that someone runs the mv without reading. mustMention is
+// declared next to the phrase and is not regenerated by anything, so a phrase that has stopped
+// naming its own subject fails here even after the golden has been promoted.
+//
+// ⚠ Weaker than the golden, and honestly so: it catches an emptied or subject-swapped phrase, not
+// a lie that keeps the noun. "nothing at all, we keep your balance history forever" still contains
+// "balance history" and passes this test — it is the golden that catches that one. Neither test
+// checks truthfulness; see TestRetentionNoticeMatchesReviewedGolden.
+func TestEveryRetentionDeletionItemNamesItsSubject(t *testing.T) {
+	require.NotEmpty(t, retentionDeletionItems)
+	for i, item := range retentionDeletionItems {
+		require.NotEmpty(t, item.mustMention,
+			"retentionDeletionItems[%d] (%q) declares no mustMention terms — an item with an empty "+
+				"list is pinned by nothing but the golden, which is the hole #1593 closed", i, item.phrase)
+		lowered := strings.ToLower(item.phrase)
+		for _, term := range item.mustMention {
+			require.Contains(t, lowered, strings.ToLower(term),
+				"retentionDeletionItems[%d] no longer says %q.\n"+
+					"Its tables are %v and its phrase is now %q. Either the phrase stopped naming "+
+					"the data it destroys — which is the #1593 failure — or the rewording is "+
+					"deliberate, in which case update mustMention IN THE SAME EDIT and say why the "+
+					"new wording is still true of those tables.",
+				i, term, item.tables, item.phrase)
+		}
+	}
+}
+
+// renderRetentionNoticeGolden produces the reviewed-snapshot text: the item -> tables mapping,
+// then both notice bodies verbatim. The mapping is included because the question a reviewer must
+// answer about a copy change is "is this true of the tables it claims", and that is unanswerable
+// from the prose alone.
+func renderRetentionNoticeGolden() string {
+	var b strings.Builder
+	b.WriteString("# Retention deletion notice — reviewed snapshot (#1581, #1593)\n")
+	b.WriteString("#\n")
+	b.WriteString("# This file is a HUMAN-REVIEWED artefact, not a build product. It is regenerated only\n")
+	b.WriteString("# by reviewing the .actual file TestRetentionNoticeMatchesReviewedGolden writes and\n")
+	b.WriteString("# renaming it by hand. Read that test's failure message before you do.\n")
+	b.WriteString("#\n")
+	b.WriteString("# The `tables:` line under each phrase is what that phrase claims to cover. When a\n")
+	b.WriteString("# phrase changes, the reviewer's job is to decide whether the NEW words are true of\n")
+	b.WriteString("# THOSE tables. No test can decide that.\n")
+	for i, item := range retentionDeletionItems {
+		fmt.Fprintf(&b, "\n### item %02d\ntables: %s\nphrase: %s\n", i+1, strings.Join(item.tables, ", "), item.phrase)
+	}
+	b.WriteString("\n### BEGIN 30-day notice body\n")
+	b.WriteString(retentionNotice30dBody)
+	b.WriteString("\n### END 30-day notice body\n")
+	b.WriteString("\n### BEGIN 7-day notice body\n")
+	b.WriteString(retentionNotice7dBody)
+	b.WriteString("\n### END 7-day notice body\n")
+	return b.String()
+}

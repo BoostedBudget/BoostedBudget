@@ -753,9 +753,34 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 // decide whether a phrase honestly describes the rows it claims; that judgement is the reviewer's,
 // and the two most elastic phrases (the internal-records item and "saved automation recipes") are
 // the ones to re-read first.
+//
+// ⚠ The `phrase` field used to be pinned by nothing at all — issue #1593. Every assertion on it was
+// either a non-emptiness check or require.Contains(body, item.phrase), and `body` is RENDERED from
+// these phrases, so it contains them by construction. An assertion that renders from the source it
+// checks cannot detect a change to that source: item 2's phrase was replaced with the outright lie
+// "nothing at all, we keep your balance history forever" and the whole package stayed green
+// (re-confirmed here before the fix). Only the audit_logs item carried a content-bearing pin, 1 of
+// 13. It is now testdata/retention_notice.golden — a reviewed snapshot of both rendered bodies plus
+// the phrase -> tables mapping — that pins all thirteen, backed by the per-item `mustMention` floor
+// below. If you edit a phrase, expect TestRetentionNoticeMatchesReviewedGolden to fail; that is the
+// point, and its failure message says what to check before promoting the new text.
+//
+// ⚠ Still not truthfulness. The golden forces a HUMAN to look at a copy change to a legal notice;
+// it cannot decide whether the new words honestly describe the rows. Neither can mustMention. That
+// judgement has no mechanical substitute and is not going to get one.
 type retentionDeletionItem struct {
 	phrase string
 	tables []string
+	// mustMention are terms the phrase must still contain, matched case-insensitively by
+	// TestEveryRetentionDeletionItemNamesItsSubject (#1593). They are the subject nouns a reader
+	// has to find in the sentence for it to be about this item's data at all.
+	//
+	// ⚠ This is a floor, not a truth check, and it is the deliberately WEAK half of the #1593 pin.
+	// It catches an emptied or subject-swapped phrase; it does not catch a lie that keeps the noun
+	// ("we keep your balance history forever" still says "balance history"). Its one job the
+	// golden cannot do is SURVIVE a thoughtless golden regeneration: it lives here, next to the
+	// phrase, and nothing regenerates it. If you reword a phrase, update these in the same edit.
+	mustMention []string
 }
 
 // retentionDeletionItems is the enumeration. Order is the order the user reads it in: the money
@@ -782,56 +807,69 @@ type retentionDeletionItem struct {
 // §8.4 legal retention), which an unqualified "everything" silently dropped.
 var retentionDeletionItems = []retentionDeletionItem{
 	{
-		phrase: "your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed",
-		tables: []string{"linked_items", "accounts", "user_accounts", "account_status_history"},
+		phrase:      "your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed",
+		tables:      []string{"linked_items", "accounts", "user_accounts", "account_status_history"},
+		mustMention: []string{"bank connections", "accounts"},
 	},
 	{
-		phrase: "your day-by-day balance history for every account",
-		tables: []string{"balance_snapshots"},
+		phrase:      "your day-by-day balance history for every account",
+		tables:      []string{"balance_snapshots"},
+		mustMention: []string{"balance history"},
 	},
 	{
-		phrase: "your transactions, together with every category, note, tag and merchant name you set on them, and the record of those edits",
-		tables: []string{"transactions", "transaction_annotation_history", "user_tags", "merchant_name_overrides", "custom_categories"},
+		phrase:      "your transactions, together with every category, note, tag and merchant name you set on them, and the record of those edits",
+		tables:      []string{"transactions", "transaction_annotation_history", "user_tags", "merchant_name_overrides", "custom_categories"},
+		mustMention: []string{"transactions", "tag", "merchant"},
 	},
 	{
-		phrase: "your investment holdings and their day-by-day snapshots, every buy and sell recorded against them, and your portfolio value history",
-		tables: []string{"holdings", "holding_snapshots", "investment_transactions", "portfolio_snapshots", "portfolio_snapshot_repairs"},
+		phrase:      "your investment holdings and their day-by-day snapshots, every buy and sell recorded against them, and your portfolio value history",
+		tables:      []string{"holdings", "holding_snapshots", "investment_transactions", "portfolio_snapshots", "portfolio_snapshot_repairs"},
+		mustMention: []string{"holdings", "portfolio"},
 	},
 	{
-		phrase: "your credit card, mortgage and student loan records, including their statements and APR schedules",
-		tables: []string{"credit_liabilities", "credit_liability_aprs", "liability_statements", "mortgage_liabilities", "student_loan_liabilities"},
+		phrase:      "your credit card, mortgage and student loan records, including their statements and APR schedules",
+		tables:      []string{"credit_liabilities", "credit_liability_aprs", "liability_statements", "mortgage_liabilities", "student_loan_liabilities"},
+		mustMention: []string{"credit card", "mortgage", "student loan", "statements"},
 	},
 	{
-		phrase: "your budgets, their categories, their period history and every rollover",
-		tables: []string{"budgets", "budget_categories", "budget_period_events", "rollover_history"},
+		phrase:      "your budgets, their categories, their period history and every rollover",
+		tables:      []string{"budgets", "budget_categories", "budget_period_events", "rollover_history"},
+		mustMention: []string{"budgets", "rollover"},
 	},
 	{
-		phrase: "your savings goals and every contribution you logged against them by hand",
-		tables: []string{"savings_goals", "savings_goal_contributions", "savings_goal_category_detach"},
+		phrase:      "your savings goals and every contribution you logged against them by hand",
+		tables:      []string{"savings_goals", "savings_goal_contributions", "savings_goal_category_detach"},
+		mustMention: []string{"savings goals", "contribution"},
 	},
 	{
-		phrase: "your boosts and the record of every boost that ran",
-		tables: []string{"boosts", "boost_executions"},
+		phrase:      "your boosts and the record of every boost that ran",
+		tables:      []string{"boosts", "boost_executions"},
+		mustMention: []string{"boosts"},
 	},
 	{
-		phrase: "your automation rules, the record of every rule that ran, and your transfer suggestions",
-		tables: []string{"categorization_rules", "rule_execution_history", "transfer_suggestions"},
+		phrase:      "your automation rules, the record of every rule that ran, and your transfer suggestions",
+		tables:      []string{"categorization_rules", "rule_execution_history", "transfer_suggestions"},
+		mustMention: []string{"automation rules", "transfer suggestions"},
 	},
 	{
-		phrase: "your membership of a household, its invitations, its sharing consents, and the accounts shared into it (and the household itself, if you are its only member)",
-		tables: []string{"households", "household_members", "household_invites", "household_share_consents", "household_account_shares"},
+		phrase:      "your membership of a household, its invitations, its sharing consents, and the accounts shared into it (and the household itself, if you are its only member)",
+		tables:      []string{"households", "household_members", "household_invites", "household_share_consents", "household_account_shares"},
+		mustMention: []string{"household"},
 	},
 	{
-		phrase: "your subscription, billing and payment records, and your referrals",
-		tables: []string{"subscription_entitlements", "paddle_transactions", "user_subscription_overrides", "referrals", "referral_codes"},
+		phrase:      "your subscription, billing and payment records, and your referrals",
+		tables:      []string{"subscription_entitlements", "paddle_transactions", "user_subscription_overrides", "referrals", "referral_codes"},
+		mustMention: []string{"subscription", "billing", "referrals"},
 	},
 	{
-		phrase: "your profile and sign-in identities, notifications, dashboard layout, privacy settings and saved automation recipes",
-		tables: []string{"users", "user_identities", "user_email_prefix_indices", "notifications", "user_dashboard_preferences", "privacy_settings", "mcp_recipes"},
+		phrase:      "your profile and sign-in identities, notifications, dashboard layout, privacy settings and saved automation recipes",
+		tables:      []string{"users", "user_identities", "user_email_prefix_indices", "notifications", "user_dashboard_preferences", "privacy_settings", "mcp_recipes"},
+		mustMention: []string{"profile", "notifications", "dashboard", "privacy settings"},
 	},
 	{
-		phrase: "the internal job and activity records tied to your account — deleted, or stripped of their contents and disconnected from you where we are required to keep a record",
-		tables: []string{"audit_logs", "dead_letter_jobs", "idempotency_keys", "mcp_audit_log"},
+		phrase:      "the internal job and activity records tied to your account — deleted, or stripped of their contents and disconnected from you where we are required to keep a record",
+		tables:      []string{"audit_logs", "dead_letter_jobs", "idempotency_keys", "mcp_audit_log"},
+		mustMention: []string{"required to keep a record"},
 	},
 }
 
