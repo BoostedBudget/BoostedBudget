@@ -16,6 +16,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { mockToastError } from '@/test/mocks/sonner'
 import {
   mockUseGetDeletedSavingsGoals,
+  mockUseListDeletedSavingsGoalContributions,
   mockUsePurgeSavingsGoal,
   mockPurgeSavingsGoalMutateAsync,
   mockDeletedSavingsGoalsRefetch,
@@ -238,5 +239,205 @@ describe('DeletedGoalsPanel', () => {
       render(<DeletedGoalsPanel />)
       expect(screen.getByRole('heading', { name: /deleted goals/i })).toBeTruthy()
     })
+  })
+})
+
+// ── #1569 T7 / C2: the retained ledger has to be reachable from the user's seat ──────────────
+//
+// T2 made a deleted goal's contributions readable at
+// GET /api/v1/savings-goals/deleted/{goalID}/contributions. With no UI, the DELETE description's
+// promise ("every contribution logged against the goal is retained") was true for an API consumer
+// and still false for the person who typed the amounts in. Hand-logged contributions are the case
+// that matters: no provider can supply them again, so if the user cannot see them, retaining them
+// buys the user nothing.
+describe('DeletedGoalsPanel — retained contributions', () => {
+  const manualContribution = {
+    id: 'contrib-1',
+    savings_goal_id: 'goal-9',
+    amount: 500,
+    occurred_on: '2025-03-14',
+    // The tuple Insert (the hand-logging path) actually writes — see
+    // savings_contribution_repository.go. A fixture with any other source is a row production
+    // cannot produce; the valid_contribution_source CHECK rejects invented ones outright.
+    source: 'manual',
+    status: 'confirmed',
+    confirmed_by_user: true,
+    managed_by_reconciliation: false,
+    created_at: '2025-03-14T00:00:00Z',
+    updated_at: '2025-03-14T00:00:00Z',
+  }
+  const detectedContribution = {
+    ...manualContribution,
+    id: 'contrib-2',
+    amount: 750,
+    occurred_on: '2025-04-02',
+    // The tuple UpsertProposedFromTransaction writes once confirmed.
+    source: 'confirmed_transfer',
+    confirmed_by_user: false,
+    managed_by_reconciliation: true,
+  }
+  const proposedContribution = {
+    ...detectedContribution,
+    id: 'contrib-3',
+    amount: 99,
+    occurred_on: '2025-05-05',
+    status: 'proposed',
+  }
+
+  function withLedger(body: unknown, extra: Record<string, unknown> = {}) {
+    mockUseListDeletedSavingsGoalContributions.mockReturnValue({
+      data: body,
+      isLoading: false,
+      error: null,
+      ...extra,
+    } as unknown as ReturnType<typeof mockUseListDeletedSavingsGoalContributions>)
+  }
+
+  beforeEach(() => {
+    mockUseListDeletedSavingsGoalContributions.mockClear()
+    withDeleted([deletedGoal])
+    withLedger({
+      contributions: [manualContribution, detectedContribution, proposedContribution],
+      total_confirmed: 1250,
+    })
+  })
+
+  function openLedger() {
+    render(<DeletedGoalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+    fireEvent.click(screen.getByRole('button', { name: /contributions: japan trip/i }))
+  }
+
+  it('does not read the ledger until the user asks for it', () => {
+    render(<DeletedGoalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+    expect(mockUseListDeletedSavingsGoalContributions).not.toHaveBeenCalled()
+  })
+
+  it('reads the ledger for the goal whose row was expanded', () => {
+    openLedger()
+    expect(mockUseListDeletedSavingsGoalContributions).toHaveBeenCalled()
+    expect(mockUseListDeletedSavingsGoalContributions.mock.calls[0][0]).toBe('goal-9')
+  })
+
+  it('shows every retained contribution, with its date and amount', () => {
+    openLedger()
+    expect(screen.getByText('$500.00')).toBeTruthy()
+    expect(screen.getByText('$750.00')).toBeTruthy()
+    expect(screen.getByText('$99.00')).toBeTruthy()
+    expect(document.body.textContent).toMatch(/2025/)
+  })
+
+  it('marks the hand-logged contribution as hand-logged — the one no provider can replace', () => {
+    openLedger()
+    expect(screen.getByText(/entered by hand/i)).toBeTruthy()
+  })
+
+  it('distinguishes a proposed contribution from a confirmed one in TEXT, not colour alone', () => {
+    openLedger()
+    expect(screen.getByText(/proposed/i)).toBeTruthy()
+  })
+
+  it('shows the confirmed total the endpoint computed, not a client-side guess', () => {
+    openLedger()
+    // 500 + 750; the proposed 99 is excluded by the endpoint, so a UI that summed the rows
+    // itself would show $1,349.00 here.
+    expect(screen.getByText('$1,250.00')).toBeTruthy()
+  })
+
+  it('says so plainly when a deleted goal has no contributions at all', () => {
+    withLedger({ contributions: [], total_confirmed: 0 })
+    openLedger()
+    expect(screen.getByText(/no contributions were ever logged/i)).toBeTruthy()
+  })
+
+  it('treats a null contributions array as empty rather than crashing', () => {
+    withLedger({ contributions: null, total_confirmed: 0 })
+    openLedger()
+    expect(screen.getByText(/no contributions were ever logged/i)).toBeTruthy()
+  })
+
+  it('reports a failed read instead of implying the money was never there', () => {
+    withLedger(undefined, { error: new Error('boom') })
+    openLedger()
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toMatch(/could not load/i)
+    // The dangerous failure mode is a silent empty list that reads as "nothing was kept".
+    expect(document.body.textContent).not.toMatch(/no contributions were ever logged/i)
+  })
+
+  it('announces the load rather than rendering a blank region', () => {
+    withLedger(undefined, { isLoading: true })
+    openLedger()
+    expect(screen.getByRole('status').textContent).toMatch(/loading/i)
+  })
+
+  it('collapses again, and stops reading, when the user closes the row', () => {
+    openLedger()
+    expect(screen.getByText('$500.00')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /contributions: japan trip/i }))
+    expect(screen.queryByText('$500.00')).toBeNull()
+  })
+
+  it('exposes the row disclosure state with aria-expanded', () => {
+    render(<DeletedGoalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+    const toggle = screen.getByRole('button', { name: /contributions: japan trip/i })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('names each row disclosure after its own goal', () => {
+    withDeleted([deletedGoal, { ...deletedGoal, id: 'goal-10', name: 'New Roof' }])
+    render(<DeletedGoalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+    expect(screen.getByRole('button', { name: /contributions: japan trip/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /contributions: new roof/i })).toBeTruthy()
+  })
+
+  // Mutation-driven: hard-coding the child's goalId to goals[0].id survived every other test,
+  // because they all expand the first row. Opening the SECOND goal's ledger and reading back
+  // which id was requested is the only thing that distinguishes "this goal's money" from
+  // "whichever goal happens to be first".
+  it('reads the SECOND goal\'s ledger when the second goal is the one expanded', () => {
+    withDeleted([deletedGoal, { ...deletedGoal, id: 'goal-10', name: 'New Roof' }])
+    render(<DeletedGoalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+    fireEvent.click(screen.getByRole('button', { name: /contributions: new roof/i }))
+
+    expect(mockUseListDeletedSavingsGoalContributions).toHaveBeenCalled()
+    const requested = mockUseListDeletedSavingsGoalContributions.mock.calls.map((c) => c[0])
+    expect(requested).toContain('goal-10')
+    expect(requested).not.toContain('goal-9')
+  })
+
+  it('emits no duplicate element ids once a ledger is open', () => {
+    withDeleted([deletedGoal, { ...deletedGoal, id: 'goal-10', name: 'New Roof' }])
+    render(<DeletedGoalsPanel />)
+    fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+    fireEvent.click(screen.getByRole('button', { name: /contributions: japan trip/i }))
+    const ids = Array.from(document.body.querySelectorAll('[id]')).map((el) => el.id)
+    expect(ids.length).toBe(new Set(ids).size)
+  })
+
+  it('masks every ledger amount for session replay', () => {
+    openLedger()
+    const masked = Array.from(document.body.querySelectorAll('[data-ph-mask]'))
+    for (const amount of ['$500.00', '$750.00', '$99.00', '$1,250.00']) {
+      expect(masked.some((el) => el.textContent?.includes(amount))).toBe(true)
+    }
+  })
+
+  it('writes no ledger amount into an attribute, which replay records verbatim', () => {
+    openLedger()
+    for (const el of Array.from(document.body.querySelectorAll('*'))) {
+      for (const attr of Array.from(el.attributes)) {
+        for (const amount of ['500.00', '750.00', '99.00', '1,250.00']) {
+          expect(attr.value).not.toContain(amount)
+        }
+        expect(attr.value).not.toContain('Japan Trip')
+      }
+    }
   })
 })

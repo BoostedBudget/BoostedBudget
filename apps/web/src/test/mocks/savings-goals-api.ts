@@ -56,6 +56,16 @@ export const mockUsePurgeSavingsGoal = mock(() => ({
 }))
 export const mockGetGetDeletedSavingsGoalsQueryKey = mock(() => ['getDeletedSavingsGoals'])
 
+// #1569 T7 / C2: the retained ledger under a DELETED goal. The live contributions read returns
+// nothing once the goal is tombstoned, so this is the only way a user can see money they logged
+// by hand.
+export const mockUseListDeletedSavingsGoalContributions = mock(() => ({
+  data: undefined as any,
+  isLoading: false,
+  error: null,
+  refetch: mock(() => Promise.resolve(null as any)),
+}))
+
 // #1569 Task 13 (E14): basis-aware progress summary — the only source of the `freshness`
 // flag that explains a frozen balance-basis amount.
 export const mockUseGetSavingsProgressSummary = mock(() => ({
@@ -145,6 +155,7 @@ mock.module('@boostedbudget/api-client/endpoints/savings-goals/savings-goals', (
   useGetDeletedSavingsGoals: mockUseGetDeletedSavingsGoals,
   usePurgeSavingsGoal: mockUsePurgeSavingsGoal,
   getGetDeletedSavingsGoalsQueryKey: mockGetGetDeletedSavingsGoalsQueryKey,
+  useListDeletedSavingsGoalContributions: mockUseListDeletedSavingsGoalContributions,
   useCreateSavingsGoal: mockUseCreateSavingsGoal,
   useUpdateSavingsGoal: mockUseUpdateSavingsGoal,
   useDeleteSavingsGoal: mockUseDeleteSavingsGoal,
