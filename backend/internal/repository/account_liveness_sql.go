@@ -165,3 +165,100 @@ func accountBalanceProjection(alias string) string {
 	return "CASE WHEN " + q + "status = 'active' THEN " + q + "current_balance END AS current_balance, " +
 		"CASE WHEN " + q + "status = 'active' THEN " + q + "available_balance END AS available_balance"
 }
+
+// ─── #1591: THE OTHER HALF — a closed account's LAST KNOWN balance ───────────────────────────
+//
+// accountBalanceProjection above says a terminal account carries no CURRENT balance, and that
+// stays. This says what it may carry instead: one figure from `balance_snapshots`, with the
+// instant it was true, rendered as `last_known_balance` / `last_known_balance_at`.
+//
+// The two are complements, not a contradiction. `accounts.current_balance` is a column with no
+// as-of instant, so a terminal account's copy of it is an orphan — a number that stopped meaning
+// anything the day the account stopped syncing, and that nothing on screen can honestly label. A
+// `balance_snapshots` row is the opposite: it carries `snapshot_at`, so it can be stated as what
+// it is — "$1,234.56, as of 4 Jun 2025" — a sentence that stays true forever.
+//
+// ── DECISION 1: extend an existing read, do not add one. ────────────────────────────────────
+// #1591 asks whether a "detail read" should fan out to snapshots. There is no detail read to
+// extend: apps/web/src/features/accounts/AccountDetailPage.tsx has no single-account endpoint to
+// call and instead fetches GET /api/v1/accounts with `status=all_statuses` and finds the row
+// client-side (its own comment records why). The accounts LIST is the detail read, so the choice
+// collapses — and the cost objection to a list read collapses with it, because this is a
+// LEFT JOIN LATERAL and not a fan-out: one query, one round trip, one index probe per terminal
+// row on idx_balance_snapshots_account_at (account_id, snapshot_at DESC), which is exactly the
+// as-of index. An active account probes nothing: `a.status <> 'active'` sits INSIDE the lateral's
+// WHERE, so the subquery yields no row and both columns come back NULL.
+//
+// ── DECISION 2: exactly ONE of the ten account reads carries it. ────────────────────────────
+// GetAccountsWithInstitutionFiltered, and only when the caller opts in. Two separate rules put
+// the other nine out of scope, and they are different rules:
+//
+//	(a) No renderer. GetByIDAndUser, GetByUserAccountIDAndUser, GetByLinkedItemID{,IncludingRetained},
+//	    GetByUserID, GetByUserAccountAndStatus, GetByUserAccountID and GetAccountsWithInstitution
+//	    feed sync, ownership checks, boost validation and savings progress. None of them reaches a
+//	    surface that could print a date beside the number, and an unlabelled historical figure in a
+//	    struct that also has CurrentBalance is precisely the confusion this field exists to avoid.
+//	(b) Wrong universe, and this one is the load-bearing half. GetForHouseholdScopeLiveAsOf — and
+//	    GetAccountsWithInstitutionFiltered's OWN as-of mode (accountStatusLiveAsOf, used by
+//	    dashboard_service's baseline) — resolve the account universe at a PAST instant via
+//	    accountLiveAsOfPredicate. "The latest snapshot ever recorded" is not an as-of answer: for a
+//	    read anchored to 4 Jun it would hand back a figure from 20 Aug and label it with 20 Aug,
+//	    inside a response whose every other number is dated 4 Jun. That is the blend every
+//	    regression in this area has been. It is refused mechanically, not by convention:
+//	    GetAccountsWithInstitutionFiltered returns ErrAccountFilterLastKnownAsOfConflict when both
+//	    are set, so a caller cannot combine them by accident. An as-of last-known balance is a real
+//	    question — it wants `snapshot_at <= $asOf` on this same lateral — and it is deliberately
+//	    not answered here, because no caller asks it yet and an unasked half-answer is how the
+//	    universes got blended before.
+//
+// ── DECISION 3: the no-snapshot rule. ───────────────────────────────────────────────────────
+// A terminal account with zero snapshots yields NULL for BOTH columns, which `omitempty` drops
+// from the JSON entirely, and the UI renders no caption at all — the Closed badge and its closure
+// date (getAccountClosedDate) still show, unattached to any balance claim, exactly as #1569 T7
+// left them. Three states, three renderings, all distinguishable:
+//
+//	closed, snapshot on record        → "Last known balance: $1,234.56 · as of 4 Jun 2025"
+//	closed, snapshot recorded a zero  → "Last known balance: $0.00 · as of 4 Jun 2025"   ← a FACT
+//	closed, no snapshot ever          → no last-known line; nothing is claimed
+//
+// The middle row is why NULL and zero must not be conflated, and it is not hypothetical: an
+// account emptied before it was closed has a genuine 0.00 snapshot. `null < 1` and `null > 100`
+// are BOTH false, so any comparison that reaches a NULL admits it to every range while reading as
+// correct — the trap utils.ts's balanceMatchesRange documents. Nothing here compares these values
+// at all, which is the point of Decision 2's split.
+//
+// ── WHY holding_snapshots IS NOT CONSULTED. ─────────────────────────────────────────────────
+// #1591 asks about investment accounts. They are already covered: transactionSyncService's
+// snapshot pass walks EVERY active account returned by Plaid /accounts/get, whatever its type, so
+// an investment account accrues balance_snapshots rows like any other. holding_snapshots is a
+// different grain — one row per security position, with no account-level total — so reading it
+// here would mean summing positions into a figure that no single row asserts, at prices frozen on
+// different days. balance_snapshots already holds the account-level number Plaid itself reported.
+//
+// ── GUARD COMPATIBILITY, stated so a reviewer can check rather than trust. ──────────────────
+// TestNoAccountProjectionCarriesATerminalBalance flags any `current_balance` / `available_balance`
+// in an account-shaped select list outside accountBalanceProjection. The lateral renames inside
+// its OWN select list (`bs.current_balance AS amount`), whose list carries no `plaid_account_id`
+// marker and is therefore judged separately; the outer list names only `lkb.amount` / `lkb.at`.
+// TestNoRawAccountBalanceReadWithoutTheCurrentStateLeg is keyed on the alias that carries the
+// balance column, and that alias here is `bs` over `balance_snapshots` — history, the seam the
+// whole ruling turns on — not `a` over `accounts`.
+const lastKnownBalanceLateral = `
+	LEFT JOIN LATERAL (
+	    SELECT bs.current_balance AS amount, bs.snapshot_at AS at
+	    FROM balance_snapshots bs
+	    WHERE bs.account_id = $ALIAS.id
+	      AND $ALIAS.status <> 'active'
+	    ORDER BY bs.snapshot_at DESC
+	    LIMIT 1
+	) lkb ON TRUE`
+
+// lastKnownBalanceLateralSQL renders lastKnownBalanceLateral for the accounts alias of one caller.
+func lastKnownBalanceLateralSQL(alias string) string {
+	return strings.ReplaceAll(lastKnownBalanceLateral, "$ALIAS", alias)
+}
+
+// lastKnownBalanceProjection is the pair of select-list columns lastKnownBalanceLateral feeds.
+// Kept beside it so the two cannot be added independently — a projection with no lateral is a
+// syntax error, and a lateral with no projection is dead weight nobody would notice.
+const lastKnownBalanceProjection = "lkb.amount AS last_known_balance, lkb.at AS last_known_balance_at"

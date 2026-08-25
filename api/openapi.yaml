@@ -102,6 +102,12 @@ components:
           type: string
         is_hidden:
           type: boolean
+        last_known_balance:
+          format: double
+          type: number
+        last_known_balance_at:
+          format: date-time
+          type: string
         linked_item_id:
           type: string
         linked_item_status:

@@ -16,7 +16,7 @@ import { useParams, Link } from 'react-router'
 import { ArrowLeft, AlertCircle } from 'lucide-react'
 import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import { AccountSummaryHeader } from './components/AccountSummaryHeader'
-import { getAccountTypeLabel, getAccountClosedDate } from './utils'
+import { getAccountTypeLabel, getAccountClosedDate, getAccountLastKnownBalance } from './utils'
 import { isInactive } from './hooks/useActiveAccounts'
 import { HoldingsTable } from '../investments/components/HoldingsTable'
 import { NetWorthSection } from '../net-worth/components/NetWorthSection'
@@ -103,6 +103,9 @@ export function AccountDetailPage() {
   }
 
   const displayName = account.nickname ?? account.official_name ?? account.name
+  // Issue #1591: the pair is resolved once, by the helper that owns the "both or neither" rule, so
+  // the page never decides on its own whether a half-pair is renderable.
+  const lastKnown = getAccountLastKnownBalance(account)
   const isInvestment = account.type === 'investment'
 
   return (
@@ -125,6 +128,8 @@ export function AccountDetailPage() {
           customColor={account.custom_color}
           isClosed={isInactive(account)}
           closedOn={getAccountClosedDate(account)}
+          lastKnownBalance={lastKnown?.amount}
+          lastKnownBalanceAt={lastKnown?.at}
         />
 
         {/* Investment-only sections */}

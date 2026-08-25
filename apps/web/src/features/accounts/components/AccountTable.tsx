@@ -7,7 +7,12 @@ import type { Account } from '@boostedbudget/api-client/models'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
-import { getAccountTypeLabel, formatAccountBalance, getAccountClosedDate } from '../utils'
+import {
+  getAccountTypeLabel,
+  formatAccountBalance,
+  getAccountClosedDate,
+  getAccountLastKnownBalance,
+} from '../utils'
 import { formatHistoryLabel } from '@/shared/dates/utils'
 import { isInactive } from '../hooks/useActiveAccounts'
 
@@ -232,6 +237,12 @@ export function AccountTable({
         // gets a plain em dash and no claim about why.
         const isClosed = isInactive(row)
         const isNegative = !isClosed && row.current_balance !== undefined && row.current_balance < 0
+        // Issue #1591: the sub-line becomes a DATED historical figure when one exists. "No current
+        // balance" is what we say when there is nothing else to say — it is a statement about the
+        // absence, so a real last-known balance replaces it rather than stacking a third line into
+        // a 160px numeric column. The primary line stays an em dash either way: this figure is not
+        // a current balance and must never occupy the slot where one would appear.
+        const lastKnown = getAccountLastKnownBalance(row)
         return (
           <div className="flex flex-col items-end">
             <span
@@ -246,9 +257,31 @@ export function AccountTable({
                 ? '—'
                 : formatAccountBalance(row.current_balance, row.currency_code, { empty: '—' })}
             </span>
-            {isClosed && (
-              <span className="text-xs font-normal text-muted-foreground">No current balance</span>
-            )}
+            {isClosed &&
+              (lastKnown ? (
+                /*
+                  One element, two lines: to a screen reader this reads as the single phrase
+                  "Last known $4,321.00 as of Feb 24, 2026", so the historical qualifier can never
+                  be read apart from the number it qualifies. The `title` is DE-PII'd on purpose —
+                  attributes are recorded verbatim by session replay and cannot be masked, so the
+                  amount must not appear in one (the whole <td> is masked via `maskedColumnIds`,
+                  which covers the text and not the attribute).
+                */
+                <span
+                  className="text-xs font-normal text-muted-foreground text-right"
+                  title="The last balance recorded before this account closed"
+                >
+                  <span className="block">
+                    Last known{' '}
+                    {formatAccountBalance(lastKnown.amount, row.currency_code, { empty: '—' })}
+                  </span>
+                  <span className="block">
+                    as of {formatHistoryLabel(lastKnown.at, 'MMM d, yyyy')}
+                  </span>
+                </span>
+              ) : (
+                <span className="text-xs font-normal text-muted-foreground">No current balance</span>
+              ))}
           </div>
         )
       },

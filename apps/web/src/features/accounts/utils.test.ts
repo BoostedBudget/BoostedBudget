@@ -10,6 +10,7 @@ import {
   getAccountTypeLabel,
   formatAccountBalance,
   getAccountClosedDate,
+  getAccountLastKnownBalance,
   accountMatchesBalanceRange,
   compareAccountsByBalance,
 } from './utils'
@@ -416,5 +417,127 @@ describe('getAccountClosedDate', () => {
       updated_at: '2026-04-01T00:00:00Z',
     }
     expect(getAccountClosedDate(account)).toBe('2026-04-01T00:00:00Z')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// getAccountLastKnownBalance  (Issue #1591)
+// ---------------------------------------------------------------------------
+
+describe('getAccountLastKnownBalance', () => {
+  // The other half of the closed-account story. `current_balance` is NULL for a terminal account
+  // and stays that way; `last_known_balance` + `last_known_balance_at` come from
+  // balance_snapshots, carry their own instant, and are therefore a HISTORICAL claim the UI can
+  // state truthfully.
+  //
+  // The helper's whole job is the "both or neither" rule. An amount with no date is the mirror
+  // image of the caption T7 deleted (a date with no amount), and neither is renderable.
+
+  it('returns the pair for a closed account that has one', () => {
+    const account: Account = {
+      ...baseAccount,
+      status: 'removed',
+      current_balance: undefined,
+      last_known_balance: 4321,
+      last_known_balance_at: '2026-06-04T00:00:00Z',
+    }
+    expect(getAccountLastKnownBalance(account)).toEqual({
+      amount: 4321,
+      at: '2026-06-04T00:00:00Z',
+    })
+  })
+
+  it('preserves a genuine recorded ZERO — it is a fact, not an absence', () => {
+    // An account emptied before it closed really did hold $0.00 on a real date. A truthy check
+    // here would erase it, and the erasure would read as "we never recorded one".
+    const account: Account = {
+      ...baseAccount,
+      status: 'removed',
+      current_balance: undefined,
+      last_known_balance: 0,
+      last_known_balance_at: '2026-06-04T00:00:00Z',
+    }
+    expect(getAccountLastKnownBalance(account)).toEqual({
+      amount: 0,
+      at: '2026-06-04T00:00:00Z',
+    })
+  })
+
+  it('returns undefined for a closed account with no snapshot on record', () => {
+    const account: Account = {
+      ...baseAccount,
+      status: 'removed',
+      current_balance: undefined,
+    }
+    expect(getAccountLastKnownBalance(account)).toBeUndefined()
+  })
+
+  it('returns undefined when the amount arrives without its instant', () => {
+    const account: Account = {
+      ...baseAccount,
+      status: 'removed',
+      current_balance: undefined,
+      last_known_balance: 4321,
+    }
+    expect(getAccountLastKnownBalance(account)).toBeUndefined()
+  })
+
+  it('returns undefined when the instant arrives without its amount', () => {
+    const account: Account = {
+      ...baseAccount,
+      status: 'removed',
+      current_balance: undefined,
+      last_known_balance_at: '2026-06-04T00:00:00Z',
+    }
+    expect(getAccountLastKnownBalance(account)).toBeUndefined()
+  })
+
+  it('returns undefined for an ACTIVE account even if the fields are populated', () => {
+    // The backend only populates these for terminal accounts, but the renderer must not depend on
+    // that: an active account HAS a current balance, and showing a second, older figure beside it
+    // is the "two balances, one account" confusion the whole ruling exists to prevent.
+    const account: Account = {
+      ...baseAccount,
+      status: 'active',
+      current_balance: 100,
+      last_known_balance: 4321,
+      last_known_balance_at: '2026-06-04T00:00:00Z',
+    }
+    expect(getAccountLastKnownBalance(account)).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A last-known balance is NOT a current balance  (Issue #1591, regression pin)
+// ---------------------------------------------------------------------------
+
+describe('last-known balance stays out of the current-balance predicates', () => {
+  // balanceMatchesRange and compareBalanceValues are shared between the Accounts list and the Net
+  // Worth breakdown. They answer questions about what an account HOLDS. Letting a dated historical
+  // figure satisfy them would make a closed account match "between $1 and $100" again — the exact
+  // behaviour #1580 removed, reintroduced through a new door.
+
+  const closedWithHistory: Account = {
+    ...baseAccount,
+    id: 'closed-with-history',
+    status: 'removed',
+    current_balance: undefined,
+    last_known_balance: 50,
+    last_known_balance_at: '2026-06-04T00:00:00Z',
+  }
+
+  it('does not match a bounded range that its last-known balance would satisfy', () => {
+    expect(accountMatchesBalanceRange(closedWithHistory, { min: 1, max: 100 })).toBe(false)
+  })
+
+  it('still matches no range in the other direction either', () => {
+    expect(accountMatchesBalanceRange(closedWithHistory, { max: 100 })).toBe(false)
+    expect(accountMatchesBalanceRange(closedWithHistory, { min: 1 })).toBe(false)
+  })
+
+  it('still sorts into the no-balance group, last, in both directions', () => {
+    const funded: Account = { ...baseAccount, id: 'funded', current_balance: 10 }
+    expect(compareAccountsByBalance(closedWithHistory, funded, 'asc')).toBeGreaterThan(0)
+    expect(compareAccountsByBalance(closedWithHistory, funded, 'desc')).toBeGreaterThan(0)
   })
 })

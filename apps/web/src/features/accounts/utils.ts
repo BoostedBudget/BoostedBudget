@@ -37,6 +37,48 @@ export function getAccountClosedDate(account: Account): string | undefined {
 }
 
 /**
+ * The last balance this app ever recorded for a CLOSED account, and the instant it was true
+ * (Issue #1591) — or `undefined` when there is no such pair.
+ *
+ * ⚠ THIS IS NOT A CURRENT BALANCE, and nothing that answers "what does this account hold" may
+ * read it. `balanceMatchesRange` and `compareBalanceValues` read `current_balance` and nothing
+ * else, deliberately: a closed account matches no bounded range and sorts into its own group, and
+ * routing a dated historical figure into either would undo #1580 through a new door. A test in
+ * utils.test.ts pins that separation.
+ *
+ * WHERE THE NUMBER COMES FROM. `accounts.current_balance` is frozen at the moment an account
+ * stopped syncing and carries no as-of instant, so `accountBalanceProjection`
+ * (backend/internal/repository/account_liveness_sql.go) sends NULL for it on every terminal
+ * account, and that stays. These two fields come from `balance_snapshots` instead — the newest row
+ * for the account — which carries `snapshot_at`. That is the whole difference: a figure that can
+ * say WHEN it was true is a historical claim, not an orphan.
+ *
+ * BOTH OR NEITHER, which is the only rule this helper enforces. #1569 T7 deleted a caption that
+ * rendered "Last known balance: N/A … as of Jun 4, 2025" — a date with nothing to label. An
+ * amount with no date is the same defect pointed the other way, and would be worse: an undated
+ * figure beside a closed account reads exactly like a current one. The backend populates the pair
+ * from a single snapshot row so a half-pair should be unreachable; this refuses to render one
+ * anyway, because "unreachable" is a claim about today's query.
+ *
+ * ⚠ `0` IS A VALUE, NOT AN ABSENCE. An account emptied before it was closed has a genuine 0.00
+ * snapshot on a real date. A truthiness check here would erase it and the erasure would render
+ * identically to "we never recorded one", which is a different and false statement. The explicit
+ * `== null` comparisons below are the point.
+ *
+ * Gated on `isInactive` rather than trusting the server's own gating: an ACTIVE account has a
+ * current balance, and a second, older figure beside it is the "two balances, one account"
+ * confusion the whole ruling exists to prevent.
+ */
+export function getAccountLastKnownBalance(
+  account: Account
+): { amount: number; at: string } | undefined {
+  if (!isInactive(account)) return undefined
+  const { last_known_balance: amount, last_known_balance_at: at } = account
+  if (amount == null || at == null) return undefined
+  return { amount, at }
+}
+
+/**
  * True when `account` satisfies a balance-range predicate (Issue #1580).
  *
  * ⚠ An account with NO current balance matches no bounded range, in either direction.

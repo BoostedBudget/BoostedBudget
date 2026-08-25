@@ -31,6 +31,20 @@ var (
 	// rather than picking one. Issue #1569.
 	ErrAccountFilterAsOfConflict = errors.New("AccountFilterOptions.AsOf cannot be combined with ReplacedOnly or AllStatuses")
 
+	// ErrAccountFilterLastKnownAsOfConflict is returned when
+	// AccountFilterOptions.IncludeLastKnownBalance is combined with AsOf (Issue #1591).
+	//
+	// The last-known balance is "the most recent snapshot on record, full stop". An as-of read
+	// resolves the account universe at a PAST instant, and answering it with today's snapshot
+	// would put an August figure, correctly labelled August, inside a response whose every other
+	// number is dated June. Blending the current and historical universes is the regression this
+	// whole branch exists to stop, so the combination is refused rather than silently ignored —
+	// an ignored option is indistinguishable from a working one at the call site.
+	//
+	// An AS-OF last-known balance is a coherent question (`snapshot_at <= $asOf` on the same
+	// lateral). It is deliberately not answered until a caller asks it.
+	ErrAccountFilterLastKnownAsOfConflict = errors.New("AccountFilterOptions.IncludeLastKnownBalance cannot be combined with AsOf")
+
 	// ErrPurgeBlockedBySavingsGoal is returned by PurgeAccount/PurgeLinkedItem when a savings
 	// goal still points at one of the accounts being purged. Migration 000150 made
 	// savings_goals.account_id ON DELETE RESTRICT specifically so this refusal is enforced by the
@@ -139,6 +153,15 @@ type AccountFilterOptions struct {
 	// ErrAccountFilterAsOfConflict — see resolveAccountStatusScope for the full precedence
 	// table. Issue #1569.
 	AsOf *time.Time
+
+	// IncludeLastKnownBalance populates domain.Account.LastKnownBalance / LastKnownBalanceAt for
+	// TERMINAL accounts only, from the newest balance_snapshots row (Issue #1591). Opt-in, and
+	// deliberately so: three callers share this read and only one of them renders accounts to a
+	// person. See lastKnownBalanceLateral in account_liveness_sql.go for the full three-decision
+	// note — which reads carry it, and why an as-of read must not.
+	//
+	// Combining it with AsOf returns ErrAccountFilterLastKnownAsOfConflict.
+	IncludeLastKnownBalance bool
 }
 
 // AccountRepository defines the interface for account data access
@@ -1416,6 +1439,11 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
+	// Refused, not ignored (Issue #1591): "the newest snapshot" is not an as-of answer, and a
+	// silently-dropped option looks identical to a working one from the call site.
+	if opts.IncludeLastKnownBalance && opts.AsOf != nil {
+		return nil, ErrAccountFilterLastKnownAsOfConflict
+	}
 	if statusScope.dropsReplaced() {
 		observability.AccountsReplacedFiltered.WithLabelValues("accounts_list").Inc()
 	}
@@ -1441,6 +1469,15 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	}
 	statusClause := statusScope.clause(asOfPH)
 
+	// The projection and the join move together — see lastKnownBalanceProjection's comment. Both
+	// are empty unless the caller opted in, so the shared callers (dashboard baseline, transaction
+	// enrichment) issue byte-for-byte the query they issued before Issue #1591.
+	lastKnownProjection, lastKnownJoin := "", ""
+	if opts.IncludeLastKnownBalance {
+		lastKnownProjection = ", " + lastKnownBalanceProjection
+		lastKnownJoin = lastKnownBalanceLateralSQL("a")
+	}
+
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
@@ -1448,9 +1485,9 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id, a.removed_at,
-		       a.created_at, a.updated_at, l.institution_name, l.status
+		       a.created_at, a.updated_at, l.institution_name, l.status` + lastKnownProjection + `
 		FROM accounts a
-		LEFT JOIN linked_items l ON a.linked_item_id = l.id
+		LEFT JOIN linked_items l ON a.linked_item_id = l.id` + lastKnownJoin + `
 		WHERE a.user_id = $1` + statusClause + hiddenClause + userAccountClause + `
 		ORDER BY COALESCE(a.display_order, 999999) ASC, a.created_at ASC`
 
@@ -1472,7 +1509,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 		// intermediates. A NULL status normalizes to "active" via normalizeLinkedItemStatus (the
 		// established rule elsewhere in this package); a NULL institution_name surfaces as "".
 		var institutionNameRaw, linkedItemStatusRaw *string
-		err := rows.Scan(
+		dest := []any{
 			&account.ID, &account.LinkedItemID, &account.UserID, &account.PlaidAccountID,
 			&account.Name, &account.OfficialName, &account.Type, &account.Subtype, &account.Mask,
 			&account.CurrentBalance, &account.AvailableBalance, &account.CurrencyCode,
@@ -1480,8 +1517,14 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 			&account.DisplayOrder, &account.IsHidden,
 			&account.UserAccountID, &account.Status, &account.ReplacedAt, &account.ReplacedByID, &account.RemovedAt,
 			&account.CreatedAt, &account.UpdatedAt, &institutionNameRaw, &linkedItemStatusRaw,
-		)
-		if err != nil {
+		}
+		// Appended in the same `if` shape as the projection so the scan list and the select list
+		// cannot disagree about their length — the failure pgx reports as an unhelpful
+		// "number of field descriptions must equal number of destinations".
+		if opts.IncludeLastKnownBalance {
+			dest = append(dest, &account.LastKnownBalance, &account.LastKnownBalanceAt)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, err
 		}
 		if institutionNameRaw != nil {

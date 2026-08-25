@@ -1252,6 +1252,18 @@ func (s *accountService) GetAccountsFiltered(ctx context.Context, userID string,
 		AllStatuses:     opts.StatusFilter == "all_statuses",
 		UserAccountID:   opts.UserAccountID,
 		AsOf:            opts.AsOf,
+
+		// Issue #1591: the accounts list is also the accounts DETAIL surface — AccountDetailPage
+		// has no single-account endpoint and reads this same response — so this is the one read
+		// whose rows reach a place that can print "Last known balance: $X as of <date>" beside a
+		// Closed badge. Terminal accounts only; active ones come back with both fields nil.
+		//
+		// Gated on AsOf being absent because the repository REFUSES the combination
+		// (ErrAccountFilterLastKnownAsOfConflict): an as-of read is anchored to a past instant and
+		// "the newest snapshot on record" is not an answer to it. Asking for it here would turn
+		// every as-of listing into an error rather than a blend — correct, but the caller should
+		// not be asking. See lastKnownBalanceLateral in repository/account_liveness_sql.go.
+		IncludeLastKnownBalance: opts.AsOf == nil,
 	}
 
 	// Query accounts with filters using internal UUID
