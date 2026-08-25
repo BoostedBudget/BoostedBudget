@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { mockToastError } from '@/test/mocks/sonner'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 import {
   mockUseGetDeletedSavingsGoals,
   mockUseListDeletedSavingsGoalContributions,
@@ -295,6 +296,7 @@ describe('DeletedGoalsPanel — retained contributions', () => {
 
   beforeEach(() => {
     mockUseListDeletedSavingsGoalContributions.mockClear()
+    mockTrackEvent.mockClear()
     withDeleted([deletedGoal])
     withLedger({
       contributions: [manualContribution, detectedContribution, proposedContribution],
@@ -325,7 +327,23 @@ describe('DeletedGoalsPanel — retained contributions', () => {
     expect(screen.getByText('$500.00')).toBeTruthy()
     expect(screen.getByText('$750.00')).toBeTruthy()
     expect(screen.getByText('$99.00')).toBeTruthy()
-    expect(document.body.textContent).toMatch(/2025/)
+
+    // fix round 1, item 2: this used to be `toMatch(/2025/)` against document.body, which the
+    // PANEL'S OWN header line satisfied ("Deleted on June 1, 2025", from the fixture's
+    // deleted_at) — deleting the ledger's entire date span left the suite green, and the test's
+    // name became a false claim. Assert the formatted strings, which also pins the format AND
+    // the field: these are `occurred_on`, not `created_at` (both are in the fixture and they
+    // differ for the later two rows).
+    expect(screen.getByText('Mar 14, 2025')).toBeTruthy()
+    expect(screen.getByText('Apr 2, 2025')).toBeTruthy()
+    expect(screen.getByText('May 5, 2025')).toBeTruthy()
+  })
+
+  it('dates each row by occurred_on, not by when the row was written', () => {
+    openLedger()
+    // created_at on every fixture row is 2025-03-14; occurred_on differs. A ledger keyed on
+    // created_at would render three identical dates and still satisfy a /2025/ match.
+    expect(screen.queryAllByText('Mar 14, 2025')).toHaveLength(1)
   })
 
   it('marks the hand-logged contribution as hand-logged — the one no provider can replace', () => {
@@ -348,13 +366,19 @@ describe('DeletedGoalsPanel — retained contributions', () => {
   it('says so plainly when a deleted goal has no contributions at all', () => {
     withLedger({ contributions: [], total_confirmed: 0 })
     openLedger()
-    expect(screen.getByText(/no contributions were ever logged/i)).toBeTruthy()
+    // fix round 1, item 3: NOT "were ever logged". A user can hard-delete an individual
+    // contribution (DELETE /savings-goals/{goalID}/contributions/{id}, wired at
+    // GoalContributionsSheet.tsx; DeleteContribution is in allowedHistoryDeletes), so an empty
+    // ledger can mean "you deleted them" — and asserting the opposite is a false claim about the
+    // user's money on the one surface built to avoid exactly that.
+    expect(screen.getByText(/no contributions are recorded for this goal/i)).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/ever logged/i)
   })
 
   it('treats a null contributions array as empty rather than crashing', () => {
     withLedger({ contributions: null, total_confirmed: 0 })
     openLedger()
-    expect(screen.getByText(/no contributions were ever logged/i)).toBeTruthy()
+    expect(screen.getByText(/no contributions are recorded for this goal/i)).toBeTruthy()
   })
 
   it('reports a failed read instead of implying the money was never there', () => {
@@ -363,7 +387,7 @@ describe('DeletedGoalsPanel — retained contributions', () => {
     const alert = screen.getByRole('alert')
     expect(alert.textContent).toMatch(/could not load/i)
     // The dangerous failure mode is a silent empty list that reads as "nothing was kept".
-    expect(document.body.textContent).not.toMatch(/no contributions were ever logged/i)
+    expect(document.body.textContent).not.toMatch(/no contributions are recorded/i)
   })
 
   it('announces the load rather than rendering a blank region', () => {
@@ -410,6 +434,79 @@ describe('DeletedGoalsPanel — retained contributions', () => {
     const requested = mockUseListDeletedSavingsGoalContributions.mock.calls.map((c) => c[0])
     expect(requested).toContain('goal-10')
     expect(requested).not.toContain('goal-9')
+  })
+
+  // ── fix round 1, item 4: the region the toggle's aria-controls targets must be NAMED ────────
+  //
+  // Removing aria-labelledby from the populated branch left the suite green, and the isLoading,
+  // error and empty branches never had it at all — so in three of four states a screen-reader
+  // user following aria-controls landed in an unnamed region.
+  describe('the ledger region is named in every state', () => {
+    function regionFor(state: 'loaded' | 'loading' | 'error' | 'empty') {
+      if (state === 'loading') withLedger(undefined, { isLoading: true })
+      if (state === 'error') withLedger(undefined, { error: new Error('boom') })
+      if (state === 'empty') withLedger({ contributions: [], total_confirmed: 0 })
+      render(<DeletedGoalsPanel />)
+      fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+      const toggle = screen.getByRole('button', { name: /contributions: japan trip/i })
+      fireEvent.click(toggle)
+      const controls = toggle.getAttribute('aria-controls')
+      expect(controls).toBeTruthy()
+      const region = document.getElementById(controls!)
+      expect(region).not.toBeNull()
+      return region!
+    }
+
+    for (const state of ['loaded', 'loading', 'error', 'empty'] as const) {
+      it(`names the region in the ${state} state`, () => {
+        const region = regionFor(state)
+        const labelledBy = region.getAttribute('aria-labelledby')
+        expect(labelledBy).toBeTruthy()
+        // It must point at the already-masked goal-name element, not carry the name itself.
+        const label = document.getElementById(labelledBy!)
+        expect(label).not.toBeNull()
+        expect(label!.textContent).toBe('Japan Trip')
+        expect(label!.hasAttribute('data-ph-mask')).toBe(true)
+      })
+    }
+  })
+
+  // ── fix round 1, item 5: WCAG AA ───────────────────────────────────────────────────────────
+  //
+  // The row's status pill was bg-muted/text-muted-foreground, which computes 4.34:1 at 12px in
+  // the light theme — under the 4.5:1 floor. That pill is exactly where "Entered by hand /
+  // Detected transfer / Proposed / Rejected" lives, i.e. the information that must not ride on
+  // colour. The shared Badge's `secondary` pair clears AA in both themes.
+  it('renders each row label through the shared Badge, not an ad-hoc muted pill', () => {
+    openLedger()
+    const pill = screen.getByText('Entered by hand')
+    expect(pill.getAttribute('data-slot')).toBe('badge')
+    expect(pill.className).toContain('bg-secondary')
+    expect(pill.className).toContain('text-secondary-foreground')
+    expect(pill.className).not.toContain('text-muted-foreground')
+  })
+
+  // ── fix round 1, item 6: measurement ───────────────────────────────────────────────────────
+  //
+  // "Did anyone actually go and look at the money we kept?" is the single question #1569 most
+  // wants answered, and nothing was recording it.
+  describe('analytics', () => {
+    it('records that a user opened a retained ledger', () => {
+      openLedger()
+      expect(mockTrackEvent).toHaveBeenCalledWith('savings_goal_deleted_ledger_viewed')
+    })
+
+    it('does not record a view merely for listing the deleted goals', () => {
+      render(<DeletedGoalsPanel />)
+      fireEvent.click(screen.getByRole('button', { name: /deleted goals/i }))
+      expect(mockTrackEvent).not.toHaveBeenCalled()
+    })
+
+    it('does not record a second view when the row is collapsed again', () => {
+      openLedger()
+      fireEvent.click(screen.getByRole('button', { name: /contributions: japan trip/i }))
+      expect(mockTrackEvent).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('emits no duplicate element ids once a ledger is open', () => {

@@ -28,6 +28,7 @@ import {
   useListDeletedSavingsGoalContributions,
 } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals'
 import type { SavingsGoalContribution } from '@boostedbudget/api-client/models'
+import { Badge } from '@/components/ui/badge'
 import { formatCurrencyFull } from '@/shared/charts/formatters'
 import { formatHistoryLabel } from '@/shared/dates/utils'
 
@@ -61,9 +62,14 @@ export function DeletedGoalContributions({
 }: DeletedGoalContributionsProps) {
   const { data, isLoading, error } = useListDeletedSavingsGoalContributions(goalId)
 
+  // Fix round 1, item 4: `aria-labelledby` is hoisted onto EVERY branch. The row's toggle points
+  // `aria-controls` at this id in all four states, and three of them previously rendered an
+  // unnamed region — a screen-reader user following the control landed nowhere identifiable.
+  const region = { id: regionId, 'aria-labelledby': labelledBy }
+
   if (isLoading) {
     return (
-      <div id={regionId} role="status" className="px-4 py-3 text-xs text-muted-foreground">
+      <div {...region} role="status" className="px-4 py-3 text-xs text-muted-foreground">
         Loading contributions…
       </div>
     )
@@ -74,7 +80,7 @@ export function DeletedGoalContributions({
     // logged" is a claim about the user's money, and getting it wrong here says the retention
     // failed when it did not.
     return (
-      <div id={regionId} role="alert" className="px-4 py-3 text-xs text-destructive">
+      <div {...region} role="alert" className="px-4 py-3 text-xs text-destructive">
         We could not load the contributions for this goal. They are still kept — try again in a
         moment.
       </div>
@@ -85,18 +91,21 @@ export function DeletedGoalContributions({
 
   if (contributions.length === 0) {
     return (
-      <div id={regionId} className="px-4 py-3 text-xs text-muted-foreground">
-        No contributions were ever logged against this goal.
+      <div {...region} className="px-4 py-3 text-xs text-muted-foreground">
+        {/*
+          Fix round 1, item 3: NOT "were ever logged". A user can hard-delete an individual
+          contribution (DELETE /savings-goals/{goalID}/contributions/{id}, wired at
+          GoalContributionsSheet.tsx; `DeleteContribution` is in `allowedHistoryDeletes`), so an
+          empty ledger can equally mean "you deleted them". Asserting they never existed is a
+          false claim about the user's money — on the one surface built to avoid exactly that.
+        */}
+        No contributions are recorded for this goal.
       </div>
     )
   }
 
   return (
-    <div
-      id={regionId}
-      aria-labelledby={labelledBy}
-      className="rounded-lg border border-border bg-background px-4 py-3"
-    >
+    <div {...region} className="rounded-lg border border-border bg-background px-4 py-3">
       <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {contributions.map((contribution) => (
           <li
@@ -106,9 +115,15 @@ export function DeletedGoalContributions({
             <span className="text-muted-foreground">
               {formatHistoryLabel(contribution.occurred_on, 'MMM d, yyyy')}
             </span>
-            <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
+            {/*
+              Fix round 1, item 5: the shared Badge, not an ad-hoc bg-muted/text-muted-foreground
+              pill — that pair computes 4.34:1 at 12px in the light theme, under the WCAG AA 4.5:1
+              floor. This pill carries the one distinction that must never ride on colour, so it
+              is the last place to accept a sub-AA contrast.
+            */}
+            <Badge variant="secondary" size="sm">
               {contributionLabel(contribution)}
-            </span>
+            </Badge>
             <span className="ml-auto font-medium tabular-nums text-foreground" data-ph-mask>
               {formatCurrencyFull(contribution.amount)}
             </span>
