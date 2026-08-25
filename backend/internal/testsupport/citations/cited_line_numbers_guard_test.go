@@ -43,15 +43,28 @@ import (
 //     (repository/cache_completeness_citations_test.go) enforces path resolution within its own
 //     scope, where the convention is fixed.
 //
-// Measured before it was written: 197 exact citations in tracked Go comments, ZERO out of range.
+// Measured before it was written, and CORRECTED after review: 196 pattern matches in Go comments
+// and SQL comments across the corpus — tracked AND untracked, since the corpus is
+// sourcefiles.Union — of which 7 are approximate and skipped and 113 resolve to a file on disk and
+// are checked. ZERO were out of range. (The header first said "197 … in tracked Go comments": the
+// count was the MATCH count, 43% of which never resolve, and "tracked" had been made false by the
+// same round that widened the corpus. Numbers re-measured by the t.Logf in the guard itself, so
+// they can be re-derived rather than believed.)
 // So this ships as a ratchet, not a cleanup, and its value is entirely in what it refuses next.
 // Mutation-checked by TestCitedLineInRange_Detects and by adding a `:99999` citation to a real
 // file and watching the corpus check name it.
 
-// citedFileLine matches `some/path/file.ext:NNN` and `…:NNN-MMM`. The negative lookbehind cannot be
-// expressed in RE2, so the `~` exemption is applied by inspecting the byte before the match.
+// citedFileLine matches `some/path/file.ext:NNN`, `…:NNN-MMM` and the APPROXIMATE form
+// `…:~NNN`, capturing the tilde so the caller can skip it.
+//
+// ⚠ The first version of this pattern was `:(\d+)` with a separate "is the byte before the path a
+// tilde?" check. That check was DEAD CODE: `(\d+)` cannot match `~339`, so `file.go:~339` was
+// excluded by the regexp and never by the branch, and deleting the branch from both guard and
+// meta-test left both PASSING. The convention is real — six `file.ext:~NNN` refs exist in the tree
+// — so the tilde is captured here instead, which makes the skip a branch that can be observed to
+// fire.
 var citedFileLine = regexp.MustCompile(
-	`\b((?:[A-Za-z0-9_./-]+/)*[A-Za-z0-9_.-]+\.(?:go|ts|tsx|sql|md|ya?ml)):(\d+)(?:-(\d+))?\b`)
+	`\b((?:[A-Za-z0-9_./-]+/)*[A-Za-z0-9_.-]+\.(?:go|ts|tsx|sql|md|ya?ml)):(~?)(\d+)(?:-(\d+))?\b`)
 
 // citedLineInRange reports whether a citation resolves and, if it does, whether it is in range.
 // resolved is false when no root produced a file, which the guard treats as silence.
@@ -90,7 +103,7 @@ func TestCitedLineNumbersAreInRange(t *testing.T) {
 	}
 
 	var offenders []string
-	checked := 0
+	var matched, approximate, checked int
 
 	for _, rel := range files {
 		path := filepath.Join(repoRoot, rel)
@@ -103,19 +116,21 @@ func TestCitedLineNumbersAreInRange(t *testing.T) {
 
 		record := func(text string, line int) {
 			for _, m := range citedFileLine.FindAllStringSubmatchIndex(text, -1) {
-				if m[0] > 0 && text[m[0]-1] == '~' {
+				if m[5] > m[4] { // the `~` of an approximate ref: "about here", exempt by convention.
+					approximate++
 					continue
 				}
 				cited := text[m[2]:m[3]]
-				lo, _ := strconv.Atoi(text[m[4]:m[5]])
+				lo, _ := strconv.Atoi(text[m[6]:m[7]])
 				hi := lo
-				if m[6] >= 0 {
-					hi, _ = strconv.Atoi(text[m[6]:m[7]])
+				if m[8] >= 0 {
+					hi, _ = strconv.Atoi(text[m[8]:m[9]])
 				}
-				end := m[5]
-				if m[6] >= 0 {
-					end = m[7]
+				end := m[7]
+				if m[8] >= 0 {
+					end = m[9]
 				}
+				matched++
 				resolved, ok, n := citedLineInRange(citingDir, roots, cited, lo, hi)
 				if !resolved {
 					continue
@@ -150,9 +165,17 @@ func TestCitedLineNumbersAreInRange(t *testing.T) {
 		})
 	}
 
-	if checked < 50 {
-		t.Fatalf("resolved only %d exact citations; there were 197 when this guard was written. "+
-			"The resolver is broken and a pass here would be vacuous", checked)
+	// ⚠ THE FLOOR IS CALIBRATED AGAINST THE RESOLVED COUNT, NOT THE MATCH COUNT, and the difference
+	// is the whole point. The first version of this guard quoted 197 in its header and set the floor
+	// at 50; 197 was the number of regexp MATCHES, of which only 113 resolve to a file — so a floor
+	// of 50 would have absorbed a 55% collapse in the resolver before firing. A vacuity detector
+	// calibrated against a phantom is worse than none, because it reads as protection.
+	t.Logf("citation corpus: %d matched, %d approximate (~) skipped, %d resolved and checked",
+		matched, approximate, checked)
+	if checked < 95 {
+		t.Fatalf("resolved only %d exact citations; %d matched the pattern and %d resolved when this "+
+			"guard was written. The resolver is broken and a pass here would be vacuous",
+			checked, 198, 113)
 	}
 
 	if len(offenders) > 0 {
@@ -203,19 +226,26 @@ func TestCitedLineInRange_Detects(t *testing.T) {
 // nothing would make the guard pass on a tree full of dangling anchors.
 func TestCitedFileLine_MatchesAndSkipsTheApproximateForm(t *testing.T) {
 	text := "see repository/foo.go:120 and services/bar.go:10-20, but not baz.go:~339"
-	var got []string
+
+	var matched, skipped []string
 	for _, m := range citedFileLine.FindAllStringSubmatchIndex(text, -1) {
-		if m[0] > 0 && text[m[0]-1] == '~' {
+		end := m[7]
+		if m[8] >= 0 {
+			end = m[9]
+		}
+		if m[5] > m[4] {
+			skipped = append(skipped, text[m[2]:end])
 			continue
 		}
-		end := m[5]
-		if m[6] >= 0 {
-			end = m[7]
-		}
-		got = append(got, text[m[2]:end])
+		matched = append(matched, text[m[2]:end])
 	}
-	want := "repository/foo.go:120,services/bar.go:10-20"
-	if strings.Join(got, ",") != want {
-		t.Fatalf("got %v, want %s", got, want)
+
+	// The approximate ref must be MATCHED and then SKIPPED, not simply unmatched. Asserting only
+	// the first list is what let the previous version of this test pass with the skip deleted.
+	if got, want := strings.Join(matched, ","), "repository/foo.go:120,services/bar.go:10-20"; got != want {
+		t.Fatalf("matched %v, want %s", got, want)
+	}
+	if got, want := strings.Join(skipped, ","), "baz.go:~339"; got != want {
+		t.Fatalf("skipped %v, want %s — the tilde branch is not firing, so it is dead code", got, want)
 	}
 }
