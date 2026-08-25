@@ -111,6 +111,136 @@ run_psql() {
 # containerised psql could not read.
 PG_DUMP="${PG_DUMP:-pg_dump}"
 
+# =============================================================================
+# Destructive-target guard (#1589)
+# =============================================================================
+#
+# This suite is not a read-only checker. clean_database() runs `DROP SCHEMA public CASCADE` and
+# rollback_migrations() runs `migrate down -all`, both against whatever DATABASE_URL names, and
+# both before any test output appears. Until #1589 the only thing checked about that database was
+# that the variable was non-empty (`${DATABASE_URL:?...}` above), so a shell that still had
+# DATABASE_URL exported for `make -C backend migrate-up`, a `make dev` session, or a Fly proxy
+# destroyed whatever it pointed at. There is no Makefile target wrapping this script, so it is run
+# by hand from exactly such shells.
+#
+# The guard below is deliberately shaped so the SAFE path is the default and the destructive path
+# is explicit *per invocation*:
+#
+#   - A database whose name is recognisably disposable runs with no ceremony. That covers the two
+#     names this repository actually uses: `freshcheck` (the local scratch database) and `test`
+#     (what .github/workflows/test.yml builds its DATABASE_URL around).
+#   - Anything else requires `--yes-destroy <name>` on the command line, and that name must EQUAL
+#     the database in DATABASE_URL. Naming the database you *think* you are pointing at is what
+#     catches the stale-export case: the flag and the URL disagree, and the run stops.
+#
+# ⚠ Deliberately NOT an environment variable. An opt-out like `I_KNOW_THIS_DESTROYS_THE_DB=1` is
+# exported once into a shell profile and then silently disarms the guard for every future run from
+# that shell — which is the same failure mode as the stale DATABASE_URL export the guard exists to
+# catch. A command-line flag cannot be left behind in an environment.
+#
+# ⚠ Widening DISPOSABLE_DB_PATTERN is how this guard dies quietly. `boostedbudget` must never
+# match it; scripts/__tests__/test-migrations-target-guard.test.sh constructs that refusal, and
+# also runs a mutant with the call site deleted to prove the refusal is bound to the guard rather
+# than to the unreachable host the test points at.
+#
+# ⚠ NOT overridable from the environment (no `${DISPOSABLE_DB_PATTERN:-...}` indirection). An
+# environment-overridable pattern is an opt-out env var wearing a different hat: `export
+# DISPOSABLE_DB_PATTERN=.` in a profile disarms the guard for every future run from that shell.
+DISPOSABLE_DB_PATTERN='^(test|freshcheck|[A-Za-z0-9]+_test|test_[A-Za-z0-9_]+|[A-Za-z0-9_]*scratch[A-Za-z0-9_]*|[A-Za-z0-9_]+_ci)$'
+
+# Exit status used for every guard refusal. Distinct from 1 (a normal failure, including the
+# connectivity preflight) so the test suite can tell "refused this target" apart from "could not
+# reach it" — the two are indistinguishable by message alone when the target is unreachable.
+GUARD_REFUSED_EXIT=3
+
+# Set only by --yes-destroy on the command line. Never read from the environment; see above.
+YES_DESTROY_DB=""
+
+# Extracts the database name from a libpq URL: strip any query string, then take the last path
+# segment. `postgres://u:p@h:5432/boostedbudget?sslmode=disable` -> `boostedbudget`.
+database_name_from_url() {
+    local url="$1"
+    url="${url%%\?*}"
+    url="${url##*/}"
+    printf '%s' "$url"
+}
+
+assert_target_is_disposable() {
+    local db
+    db="$(database_name_from_url "$DATABASE_URL")"
+
+    if [ -z "$db" ]; then
+        log_error "Refusing to run: DATABASE_URL names no database."
+        log_error "  DATABASE_URL=$DATABASE_URL"
+        log_error "This suite DROPs the schema it is pointed at; it will not guess a target."
+        exit $GUARD_REFUSED_EXIT
+    fi
+
+    if [ -n "$YES_DESTROY_DB" ]; then
+        if [ "$YES_DESTROY_DB" = "$db" ]; then
+            log_warning "--yes-destroy '$db' matches DATABASE_URL. This run WILL drop and rebuild that database."
+            return 0
+        fi
+        log_error "Refusing to run: --yes-destroy '$YES_DESTROY_DB' does not match the database in DATABASE_URL ('$db')."
+        log_error "  DATABASE_URL=$DATABASE_URL"
+        log_error "You named one database and pointed at another. Fix whichever is wrong."
+        exit $GUARD_REFUSED_EXIT
+    fi
+
+    if [[ "$db" =~ $DISPOSABLE_DB_PATTERN ]]; then
+        return 0
+    fi
+
+    log_error "Refusing to run: '$db' is not a recognisably disposable database."
+    log_error "  DATABASE_URL=$DATABASE_URL"
+    log_error ""
+    log_error "This suite runs 'DROP SCHEMA public CASCADE' and 'migrate down -all' against that"
+    log_error "database. Everything in it would be gone, unrecoverably, before the first test ran."
+    log_error ""
+    log_error "Point it at a scratch database instead:"
+    log_error "  createdb freshcheck   # or any name matching $DISPOSABLE_DB_PATTERN"
+    log_error "  DATABASE_URL=postgres://devuser:devpass@localhost:5434/freshcheck?sslmode=disable $0"
+    log_error ""
+    log_error "If destroying '$db' really is what you want, say so explicitly on this invocation:"
+    log_error "  $0 --yes-destroy $db"
+    exit $GUARD_REFUSED_EXIT
+}
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --yes-destroy)
+                if [ $# -lt 2 ]; then
+                    log_error "--yes-destroy requires the database name it is confirming"
+                    exit 2
+                fi
+                YES_DESTROY_DB="$2"
+                shift 2
+                ;;
+            --yes-destroy=*)
+                YES_DESTROY_DB="${1#*=}"
+                shift
+                ;;
+            -h|--help)
+                echo "Usage: DATABASE_URL=... $0 [--yes-destroy <dbname>]"
+                echo ""
+                echo "Runs the migration test suites against DATABASE_URL. The suite DROPS and"
+                echo "rebuilds that database, so a target whose name is not recognisably disposable"
+                echo "requires --yes-destroy naming that exact database."
+                exit 0
+                ;;
+            *)
+                # Never ignored: a mistyped --yes-destroy that was silently dropped would leave the
+                # developer believing they had confirmed while the guard was still armed (or, worse,
+                # a future flag silently doing nothing).
+                log_error "Unknown argument: $1"
+                log_error "Usage: DATABASE_URL=... $0 [--yes-destroy <dbname>]"
+                exit 2
+                ;;
+        esac
+    done
+}
+
 get_schema_hash() {
     # Capture pg_dump's raw output SEPARATELY from the restrict/unrestrict filter below, and check
     # ITS exit status directly via `|| dump_exit=$?` — NOT `local raw_dump=$(...)`, which would mask
@@ -1196,6 +1326,8 @@ test_rollback() {
 # =============================================================================
 
 main() {
+    parse_args "$@"
+
     log_section "MIGRATION TESTING FRAMEWORK"
     log_info "Issue #326: Comprehensive Migration Testing (golang-migrate + Squawk)"
     log_info "Database: $DATABASE_URL"
@@ -1205,6 +1337,12 @@ main() {
     # was exactly the previous bug (Task S3-6).
     log_info "Migrations: $ABS_MIGRATIONS_DIR (from MIGRATIONS_DIR=$MIGRATIONS_DIR)"
     echo ""
+
+    # FIRST, before the prerequisite checks and before any connection is opened (#1589). The order
+    # matters twice over: a developer who pointed at the wrong database gets a refusal instead of a
+    # connection, and the guard's own test suite can point at an unreachable host and still tell a
+    # refusal (exit 3) apart from a failure to connect (exit 1).
+    assert_target_is_disposable
 
     # Check prerequisites
     if [ ! -d "$ABS_MIGRATIONS_DIR" ]; then
@@ -1303,5 +1441,5 @@ main() {
 # extract_object_identities/assert_clean_rollback_state/is_allowlisted_residue directly, with
 # synthetic inventory strings, without touching a real database or running the full suite.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    main
+    main "$@"
 fi
