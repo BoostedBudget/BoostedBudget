@@ -167,4 +167,73 @@ describe('applyFilterAndSort', () => {
     expect(result[0].id).toBe('r-1') // Chase, highest balance
     expect(result[1].id).toBe('r-3') // Chase, lower balance
   })
+
+  // Issue #1569 whole-branch review, I1. A row can carry NO balance (an active account whose
+  // first sync has not landed). `null` compares false against BOTH bounds — `null < 1` and
+  // `null > 100` are each false — so a bare comparison silently ADMITS such a row to every
+  // range while reading as correct. The Accounts page settled this: no balance is not a
+  // quantity, so it satisfies no bounded range and sorts into its own group, last, in BOTH
+  // directions. These rows go through the same shared helpers, so the two surfaces cannot drift
+  // apart again.
+  describe('a row with no balance', () => {
+    const noBalance = makeRow({ id: 'r-nb', currentBalance: null, percentOfSide: null })
+    const funded = makeRow({ id: 'r-f', currentBalance: 50, percentOfSide: 50 })
+
+    it('is excluded by a minimum bound', () => {
+      const result = applyFilterAndSort([noBalance, funded], { ...emptyFilters, balanceMin: 1 }, null)
+      expect(result.map((r) => r.id)).toEqual(['r-f'])
+    })
+
+    it('is excluded by a maximum bound — not admitted by it', () => {
+      const result = applyFilterAndSort([noBalance, funded], { ...emptyFilters, balanceMax: 100 }, null)
+      expect(result.map((r) => r.id)).toEqual(['r-f'])
+    })
+
+    it('is excluded by a two-sided range', () => {
+      const result = applyFilterAndSort(
+        [noBalance, funded],
+        { ...emptyFilters, balanceMin: 1, balanceMax: 100 },
+        null
+      )
+      expect(result.map((r) => r.id)).toEqual(['r-f'])
+    })
+
+    it('survives a range with neither bound (that is not a predicate)', () => {
+      const result = applyFilterAndSort([noBalance, funded], emptyFilters, null)
+      expect(result.map((r) => r.id)).toEqual(['r-nb', 'r-f'])
+    })
+
+    it('sorts last ascending, below a negative-magnitude row', () => {
+      const overdrawn = makeRow({ id: 'r-o', currentBalance: -10, percentOfSide: 10 })
+      const result = applyFilterAndSort(
+        [noBalance, funded, overdrawn],
+        emptyFilters,
+        { column: 'balance', direction: 'asc' }
+      )
+      expect(result.map((r) => r.id)).toEqual(['r-o', 'r-f', 'r-nb'])
+    })
+
+    it('sorts last DESCENDING too — it is neither the largest nor the smallest', () => {
+      const overdrawn = makeRow({ id: 'r-o', currentBalance: -10, percentOfSide: 10 })
+      const result = applyFilterAndSort(
+        [noBalance, funded, overdrawn],
+        emptyFilters,
+        { column: 'balance', direction: 'desc' }
+      )
+      expect(result.map((r) => r.id)).toEqual(['r-f', 'r-o', 'r-nb'])
+    })
+
+    it('sorts last on the percent column in both directions', () => {
+      const asc = applyFilterAndSort([noBalance, funded], emptyFilters, {
+        column: 'percent',
+        direction: 'asc',
+      })
+      expect(asc.map((r) => r.id)).toEqual(['r-f', 'r-nb'])
+      const desc = applyFilterAndSort([noBalance, funded], emptyFilters, {
+        column: 'percent',
+        direction: 'desc',
+      })
+      expect(desc.map((r) => r.id)).toEqual(['r-f', 'r-nb'])
+    })
+  })
 })
