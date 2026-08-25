@@ -235,6 +235,14 @@ export function AccountsPage() {
   // view. That is the only destruction here the user gets no second prompt for, which is exactly
   // why it belongs in the enumeration and not only in the advice.
   //
+  // ⚠ THE HOUSEHOLD QUALIFICATION IS NOT HEDGING (#1569 whole-branch review, minor 1). "They
+  // remain visible" was unqualified and false in household scope: every solo analytics read is
+  // `LEFT JOIN accounts`, every household read is `JOIN accounts`. After a purge
+  // `transactions.account_id` is NULL, so the rows stay in personal analytics and drop out of
+  // household-scoped spending, income, cash-flow and savings-rate. That is semantically forced —
+  // the share cannot be resolved without the account row — but it is a real consequence of
+  // pressing this button, so it is stated rather than discovered.
+  //
   // ⚠ THE INVESTMENT SENTENCE IS UNCONDITIONAL, and that is a #1569 T8 correction, not sloppiness.
   // It used to be gated on `account.type === 'investment'`, while the thing it describes —
   // fk_inv_txn_account_id, ON DELETE CASCADE — does not consult type at all. `brokerage` is a
@@ -252,7 +260,7 @@ export function AccountsPage() {
         You are about to permanently delete <strong data-ph-mask>{displayName}{maskPart}</strong> and all of its balance history, holdings, liabilities, and any savings goal you have already deleted that was tracking it (including the contributions you logged by hand against it).
         <br /><strong>This cannot be undone.</strong>
         <br /><strong>Any investment transactions recorded against it (buys, sells, dividends) will also be permanently deleted</strong> — unlike bank transactions, they have no independent existence apart from the account.
-        <br />Your bank transactions will NOT be deleted — if another connection to this same account exists, they will continue to appear there; otherwise they remain visible with no linked account.
+        <br />Your bank transactions will NOT be deleted — if another connection to this same account exists, they will continue to appear there; otherwise they stay in your own spending and reports with no linked account. <strong>In a household, they stop counting towards shared totals</strong> — household views resolve every transaction through its account, and this one no longer has one.
         <br />If a savings goal still tracks this account, the purge will be refused until you delete or re-link that goal. <strong>Deleting the goal first means it is destroyed here too</strong> — along with every contribution you logged by hand against it.
       </span>
     )

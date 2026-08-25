@@ -573,6 +573,24 @@ describe('AccountsPage', () => {
       expect(screen.getByTestId('confirm-delete-dialog')).toHaveAttribute('data-confirm-text', 'Chase Checking')
     })
 
+    // Issue #1569 whole-branch review, minor 1. "they remain visible" was unqualified and false
+    // in household scope: every solo analytics read is `LEFT JOIN accounts` while every
+    // household read is `JOIN accounts`, so once `transactions.account_id` is NULL the rows stay
+    // in personal analytics and vanish from household-scoped spending, income, cash-flow and
+    // savings-rate. That is semantically forced — a share cannot be resolved without the account
+    // row — but the user has to be told, not left to discover it.
+    it('qualifies the transaction-survival promise for household scope', () => {
+      renderAccountsPage()
+
+      fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
+      fireEvent.click(screen.getByText('Delete from history'))
+
+      const text = screen.getByTestId('dialog-description').textContent ?? ''
+      expect(text).toMatch(/household/i)
+      // The survival claim must be scoped to the user's OWN views, never left absolute.
+      expect(text).not.toMatch(/otherwise they remain visible with no linked account/i)
+    })
+
     it('states the purge is permanent, that transactions survive, and that a savings goal blocks it', () => {
       renderAccountsPage()
 

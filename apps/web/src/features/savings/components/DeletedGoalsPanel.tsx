@@ -231,6 +231,7 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
                   <div className="mt-3">
                     <DeletedGoalContributions
                       goalId={goal.id}
+                      progressBasis={goal.progress_basis}
                       regionId={`${panelId}-ledger-${goal.id}`}
                       labelledBy={`${panelId}-name-${goal.id}`}
                     />
