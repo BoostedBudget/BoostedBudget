@@ -178,6 +178,45 @@ func tombstoneReadOffenders(sql string, tables []string, deleteRef *regexp.Regex
 	return offenders
 }
 
+// ---- Vacuity floors ---------------------------------------------------------------------------
+
+// tombstoneRefsSeen counts the references to `tables` in one statement — read references and write
+// targets alike, guarded or not, exempt or not. It is the corpus measure the three headline guards
+// are calibrated against, and it exists because they had NO floor at all (#1569 whole-branch review
+// I3).
+//
+// PROVEN FAIL-OPEN, which is why this is not a nicety: planting a real
+// `DELETE FROM transactions WHERE user_id = $1` in linked_item_repository.go AND narrowing `root`
+// to internal/queue left TestNoTransactionReadForgetsTheTombstoneFilter GREEN — passing with #1569's
+// founding defect live in the tree. Every sibling guard in this package already fails closed on a
+// collapsed corpus (encrypted_column_literal_guard_test.go, typographic_quotes_guard_test.go,
+// no_matcher_guard_test.go, and TestNoDeadTombstoneExemption right here); these three did not.
+//
+// The floor is on REFERENCES rather than files because it then catches both halves: a narrowed or
+// broken walk (fewer files, so fewer references) and a reference regexp that stops matching (same
+// files, no references). A file count alone would miss the second.
+func tombstoneRefsSeen(sql string, tables []string, deleteRef *regexp.Regexp) int {
+	code := stripSQLComments(sql)
+	n := len(tombstoneReadRefRegexp(tables).FindAllString(deleteRef.ReplaceAllString(code, ""), -1))
+	return n + len(tombstoneWriteTargetRegexp(tables).FindAllString(code, -1))
+}
+
+// requireTombstoneCorpus fails the guard closed when its corpus has collapsed. `was` records what
+// was measured when the floor was set, so a future reader can tell a deliberate shrink from a
+// broken walk instead of guessing at the constant.
+func requireTombstoneCorpus(t *testing.T, guard string, files, refs, minFiles, minRefs, wasFiles, wasRefs int) {
+	t.Helper()
+	t.Logf("%s corpus: %d production Go files scanned, %d reference(s) to the audited table(s)",
+		guard, files, refs)
+	if files < minFiles || refs < minRefs {
+		t.Fatalf("%s scanned %d file(s) and found %d reference(s); %d and %d were present when the "+
+			"floor was set. The walk or the reference pattern is broken and a pass here would be "+
+			"vacuous — this guard was measured passing with a real `DELETE FROM transactions` live "+
+			"in the tree once the corpus was narrowed (#1569 I3)",
+			guard, files, refs, wasFiles, wasRefs)
+	}
+}
+
 func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 	root := repoInternalRoot(t)
 
@@ -186,6 +225,7 @@ func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 	deleteRef := regexp.MustCompile(`(?is)\bDELETE\s+FROM\s+(` + strings.Join(configTombstoneTables, "|") + `)\b`)
 
 	var offenders []string
+	var filesScanned, refsSeen int
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -205,6 +245,7 @@ func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 			return parseErr
 		}
 		rel, _ := filepath.Rel(root, path)
+		filesScanned++
 
 		ast.Inspect(file, func(n ast.Node) bool {
 			switch n.(type) {
@@ -227,6 +268,7 @@ func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 				return true
 			})
 			sql := strings.Join(sqlParts, "\n")
+			refsSeen += tombstoneRefsSeen(sql, configTombstoneTables, deleteRef)
 
 			bad := tombstoneReadOffenders(sql, configTombstoneTables, deleteRef)
 			bad = append(bad, tombstoneWriteOffenders(sql, configTombstoneTables)...)
@@ -247,13 +289,18 @@ func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 		t.Fatalf("walking internal/: %v", err)
 	}
 
+	requireTombstoneCorpus(t, "TestNoConfigReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 300, 60, 362, 84)
+
 	if len(offenders) > 0 {
 		t.Fatalf(
 			"%d read reference(s) to %v carry no tombstone predicate OF THEIR OWN (#1569).\n"+
 				"Add `AND <that reference's alias>.deleted_at IS NULL` — another table's predicate in\n"+
 				"the same statement does NOT count — or, if the predicate is genuinely supplied\n"+
 				"elsewhere, an SQL comment naming THIS reference inside the literal:\n"+
-				"  -- tombstone-exempt(<table>[ <alias>]): <why>\n%s",
+				"  -- tombstone-exempt(<table>[ <alias>]): <why>            (excuses a READ reference)\n"+
+				"  -- tombstone-exempt(write:<table>[ <alias>]): <why>      (excuses an UPDATE/DELETE\n"+
+				"     TARGET; the two key spaces are separate, and an offender reported as\n"+
+				"     `write:...` is only excused by the `write:` form)\n%s",
 			len(offenders), configTombstoneTables, strings.Join(offenders, "\n  "))
 	}
 }
@@ -284,6 +331,17 @@ func tombstoneWriteTargetRegexp(tables []string) *regexp.Regexp {
 // tombstoneWriteOffenders returns the write targets in one statement that carry no tombstone
 // predicate of their own and no exemption naming them. The reported reference is prefixed `write:`
 // so a failure cannot be mistaken for the read rule, which has a different remedy.
+//
+// THE EXEMPTION KEY IS `write:<table>[ <alias>]`, IN ITS OWN NAMESPACE (#1569 whole-branch review
+// I4). It used to be the same key the read rule consults, so one unaliased
+// `tombstone-exempt(transactions)` excused the write target AND every unfiltered read reference to
+// the same table in that statement, in both directions, no matter how narrow the reason underneath
+// it was. Measured: injecting a wholly unfiltered `EXISTS (SELECT 1 FROM transactions ...)` read
+// into the tombstoning UPDATE in transaction_repository.go — whose token's reason is explicitly
+// about the WRITE target — left all three tombstone guards green. T8's per-reference fix closed the
+// ALIASED case only incidentally (the two roles happened to use different aliases); twelve live
+// tokens were unaliased and blanketed both. The remedies differ, so considering one role is not
+// considering the other. Constructed both ways in TestTombstoneExemptionIsPerReference.
 func tombstoneWriteOffenders(sql string, tables []string) []string {
 	exempt := tombstoneExemptRefs(sql)
 	code := stripSQLComments(sql)
@@ -298,7 +356,7 @@ func tombstoneWriteOffenders(sql string, tables []string) []string {
 		if alias != "" {
 			ref = table + " " + alias
 		}
-		if exempt[strings.ToLower(ref)] {
+		if exempt["write:"+strings.ToLower(ref)] {
 			continue
 		}
 		var ok bool

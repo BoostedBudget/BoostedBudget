@@ -136,11 +136,51 @@ func TestTombstoneExemptionIsPerReference(t *testing.T) {
 		}
 	})
 
-	t.Run("a named exemption covers the write target", func(t *testing.T) {
-		sql := `-- tombstone-exempt(transactions): the purge finishes what the tombstone deferred.
+	// THE READ KEY SPACE AND THE WRITE KEY SPACE ARE SEPARATE (#1569 whole-branch review I4).
+	//
+	// They used to be one. `tombstone-exempt(transactions)` therefore excused the statement's
+	// UPDATE/DELETE target AND every unfiltered read reference to the same table, in either
+	// direction, however narrow the reason underneath it was. Measured on a live statement:
+	// transaction_repository.go's tombstoning UPDATE carries a token whose reason is explicitly
+	// about the WRITE target, and injecting a wholly unfiltered
+	// `EXISTS (SELECT 1 FROM transactions ...)` read into it left all three guards green. The
+	// per-reference fix of T8 closed the ALIASED case only because an alias happens to differ
+	// between the two roles; twelve live tokens were unaliased and blanketed both.
+	//
+	// A write target is now named `write:<table>[ <alias>]`. The two remedies differ — a read
+	// forgetting the filter shows a deleted row, a write forgetting it mutates one — so an author
+	// who considered one has not thereby considered the other.
+	t.Run("a named write exemption covers the write target", func(t *testing.T) {
+		sql := `-- tombstone-exempt(write:transactions): the purge finishes what the tombstone deferred.
 			DELETE FROM transactions WHERE id = $1`
 		if got := tombstoneWriteOffenders(sql, tables); len(got) != 0 {
 			t.Fatalf("named write exemption not honoured: %v", got)
+		}
+	})
+
+	t.Run("a READ exemption does not cover the write target", func(t *testing.T) {
+		sql := `-- tombstone-exempt(transactions): this READ of the tombstone listing is deliberate.
+			UPDATE transactions SET reviewed = true WHERE id = $1`
+		got := tombstoneWriteOffenders(sql, tables)
+		want := []string{"write:transactions"}
+		if !equalStrings(got, want) {
+			t.Fatalf("a read-scoped exemption still blankets the write target:\n  got  %v\n  want %v",
+				got, want)
+		}
+	})
+
+	t.Run("a WRITE exemption does not cover an unfiltered read", func(t *testing.T) {
+		// UNALIASED on purpose: this is the shape the old shared key space could not tell apart.
+		// With one key space `tombstone-exempt(transactions)` excused both roles; with two, a
+		// write-scoped token leaves the read reference reported.
+		sql := `-- tombstone-exempt(write:transactions): tombstoning IS the write.
+			UPDATE transactions SET deleted_at = NOW()
+			WHERE id = $1 AND EXISTS (SELECT 1 FROM transactions WHERE user_id = $2)`
+		got := tombstoneReadOffenders(sql, tables, deleteRef)
+		want := []string{"transactions"}
+		if !equalStrings(got, want) {
+			t.Fatalf("a write-scoped exemption still blankets a read reference:\n  got  %v\n  want %v",
+				got, want)
 		}
 	})
 
@@ -248,12 +288,23 @@ func TestEveryTombstoneExemptTokenNamesItsReference(t *testing.T) {
 					fields := strings.Fields(strings.ToLower(strings.TrimSpace(ref)))
 					if len(fields) == 0 || len(fields) > 2 {
 						offenders = append(offenders,
-							at+" exemption target "+strconv.Quote(ref)+" is not `<table>[ <alias>]`")
+							at+" exemption target "+strconv.Quote(ref)+" is not "+
+								"`[write:]<table>[ <alias>]`")
 						continue
 					}
-					if !audited[fields[0]] {
+					// `write:` scopes the exemption to the statement's UPDATE/DELETE TARGET; without
+					// it the token excuses read references only (#1569 whole-branch review I4). A
+					// near-miss prefix (`writes:`, `w:`) must be reported rather than read as a
+					// table name, or a typo silently re-opens the write rule.
+					table := strings.TrimPrefix(fields[0], "write:")
+					if table != fields[0] && table == "" {
 						offenders = append(offenders,
-							at+" exempts "+strconv.Quote(fields[0])+", which no tombstone guard audits")
+							at+" exemption target "+strconv.Quote(ref)+" names no table after `write:`")
+						continue
+					}
+					if !audited[table] {
+						offenders = append(offenders,
+							at+" exempts "+strconv.Quote(table)+", which no tombstone guard audits")
 					}
 				}
 			}
@@ -326,19 +377,28 @@ func TestNoDeadTombstoneExemption(t *testing.T) {
 			}
 			statements++
 
+			// READ references and WRITE targets live in separate key spaces (#1569 whole-branch
+			// review I4), so deadness is judged per space: a `write:` token is dead unless the
+			// statement really has that write target, and a plain token is dead unless it really
+			// has that read reference. Judging both against one merged set would call a token
+			// alive because the OTHER role happens to name the same table — which is precisely the
+			// conflation the prefix exists to remove.
 			present := map[string]bool{}
-			code := stripSQLComments(sql)
-			for _, re := range []*regexp.Regexp{readRef, writeRef} {
-				for _, m := range re.FindAllStringSubmatch(code, -1) {
-					table, alias := m[len(m)-2], m[len(m)-1]
-					if sqlKeywordsAfterTableName[strings.ToLower(alias)] {
-						alias = ""
-					}
-					present[strings.ToLower(table)] = true
-					if alias != "" {
-						present[strings.ToLower(table+" "+alias)] = true
-					}
+			mark := func(prefix, table, alias string) {
+				if sqlKeywordsAfterTableName[strings.ToLower(alias)] {
+					alias = ""
 				}
+				present[prefix+strings.ToLower(table)] = true
+				if alias != "" {
+					present[prefix+strings.ToLower(table+" "+alias)] = true
+				}
+			}
+			code := stripSQLComments(sql)
+			for _, m := range readRef.FindAllStringSubmatch(code, -1) {
+				mark("", m[len(m)-2], m[len(m)-1])
+			}
+			for _, m := range writeRef.FindAllStringSubmatch(code, -1) {
+				mark("write:", m[len(m)-2], m[len(m)-1])
 			}
 			line := fset.Position(n.Pos()).Line
 			for ref := range exempt {

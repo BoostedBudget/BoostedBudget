@@ -630,7 +630,7 @@ func backfillDownstreamUserAccountIDs(ctx context.Context, db *pgxpool.Pool) err
 	steps := []cascade{
 		{
 			table: "transactions",
-			query: `-- tombstone-exempt(transactions t): one-time backfill; filtering deleted_at would
+			query: `-- tombstone-exempt(write:transactions t): one-time backfill; filtering deleted_at would
 				-- leave exactly the retained history unrepairable (#1569 T8).
 				UPDATE transactions t SET user_account_id = a.user_account_id
 				FROM accounts a
@@ -668,7 +668,7 @@ func backfillDownstreamUserAccountIDs(ctx context.Context, db *pgxpool.Pool) err
 		},
 		{
 			table: "savings_goals",
-			query: `-- tombstone-exempt(savings_goals sg): one-time backfill; same reason as the
+			query: `-- tombstone-exempt(write:savings_goals sg): one-time backfill; same reason as the
 				-- transactions step above (#1569 T8).
 				UPDATE savings_goals sg SET user_account_id = a.user_account_id
 				FROM accounts a

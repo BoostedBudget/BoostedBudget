@@ -886,7 +886,7 @@ func (r *linkedItemRepository) PurgeLinkedItem(ctx context.Context, linkedItemID
 	// #1569, task 21 (defect C1). Without this, the institution-level purge is dead for exactly the
 	// same population as the account-level one, and for exactly the same reason.
 	if _, err := tx.Exec(ctx, `
-		-- tombstone-exempt(savings_goals): inverted predicate, identical to PurgeAccount's block --
+		-- tombstone-exempt(write:savings_goals): inverted predicate, identical to PurgeAccount's block --
 		-- see account_repository.go PurgeAccount for the full reasoning (#1569 T8 write-target audit).
 		DELETE FROM savings_goals
 		WHERE user_id = $2
