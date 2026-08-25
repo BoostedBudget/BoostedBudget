@@ -49,6 +49,7 @@ import {
   mockUseGetDeletedSavingsGoals,
   mockUsePurgeSavingsGoal,
   mockPurgeSavingsGoalMutateAsync,
+  mockUseListDeletedSavingsGoalContributions,
 } from '@/test/mocks/savings-goals-api'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import {
@@ -3012,6 +3013,52 @@ describe('PII coverage — #1569 T12: DeletedGoalsPanel (deleted savings goals +
     await user.click(screen.getByRole('button', { name: /deleted goals/i }))
     await waitForSentinels(sentinels)
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  // ── #1569 T7 fix round 1 (item 7) ────────────────────────────────────────────────────────
+  //
+  // T7 added a THIRD surface under this panel — the retained ledger — and did not add it here.
+  // Masking is asserted in DeletedGoalsPanel.test.tsx, so this was a coverage-location gap rather
+  // than an unguarded surface, but nothing enforces that this hand-written list is complete: the
+  // next surface to be added would be invisible in exactly the same way.
+  //
+  // The ledger's amounts are the point. They include money the user typed in by hand, which no
+  // provider can supply again, and they are read on a screen someone is looking at precisely
+  // because they are wondering what happened to it.
+  test('the retained contributions ledger masks every amount it renders', async () => {
+    mockUseListDeletedSavingsGoalContributions.mockReturnValue({
+      data: {
+        contributions: [
+          {
+            id: 'contrib-pii-1',
+            savings_goal_id: 'goal-pii-1',
+            amount: 91827.36,
+            occurred_on: '2025-03-14',
+            source: 'manual',
+            status: 'confirmed',
+            confirmed_by_user: true,
+            managed_by_reconciliation: false,
+            created_at: '2025-03-14T00:00:00Z',
+            updated_at: '2025-03-14T00:00:00Z',
+          },
+        ],
+        total_confirmed: 91827.36,
+      },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof mockUseListDeletedSavingsGoalContributions>)
+
+    const ledgerSentinels: PIISentinel[] = [
+      { value: '91,827.36', fieldDescription: 'retained contribution amount (#1569 T7)' },
+      { value: SENTINEL_GOAL_NAME, fieldDescription: 'deleted savings goal name (#1569 T12)' },
+    ]
+
+    const user = userEvent.setup()
+    render(<DeletedGoalsPanel />, { wrapper: createWrapper() })
+    await user.click(screen.getByRole('button', { name: /deleted goals/i }))
+    await user.click(screen.getByRole('button', { name: /contributions:/i }))
+    await waitForSentinels(ledgerSentinels)
+    expect(scanForUnmaskedPII(document.body, ledgerSentinels)).toEqual([])
   })
 
   // The confirmation dialog repeats the goal name, and it is the surface a user stares at while

@@ -77,6 +77,10 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
       if (!next.delete(goalId)) next.add(goalId)
       return next
     })
+    // Fired on OPEN only, and outside the updater — a React state updater can be invoked twice
+    // under StrictMode, which would double-count. Deliberately carries no goal identity: this is
+    // a rate ("did anyone go and look at the money we kept?"), not a record of whose goal it was.
+    if (!openLedgers.has(goalId)) trackEvent(ANALYTICS_EVENTS.SAVINGS_GOAL_DELETED_LEDGER_VIEWED)
   }
 
   async function handlePurge(goal: SavingsGoal) {

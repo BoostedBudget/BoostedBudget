@@ -222,6 +222,11 @@ export const ANALYTICS_EVENTS = {
   // Issue #1569 T12: a deleted savings goal was erased for good, destroying hand-logged
   // contributions. Deliberately carries no goal identity — it is a rate, not a record.
   SAVINGS_GOAL_PURGED: 'savings_goal_purged',
+  // Issue #1569 T7: a user opened the contributions retained under a DELETED goal. The whole
+  // thesis of #1569 is what the user can SEE, and this is the one measurement that answers
+  // "did anyone actually go and look at the money we kept?". Like SAVINGS_GOAL_PURGED it carries
+  // no goal identity — it is a rate, not a record.
+  SAVINGS_GOAL_DELETED_LEDGER_VIEWED: 'savings_goal_deleted_ledger_viewed',
   INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED: 'investment_activity_type_filter_applied',
   INVESTMENT_DETAIL_DRAWER_OPENED: 'investment_detail_drawer_opened',
 
