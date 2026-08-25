@@ -197,69 +197,74 @@ strand it forever. Two other tables are in the same position for the same reason
 only through their tombstoned parent. This is why guard G1 is an *allowlist with reasons* rather
 than a ban.
 
-### 7. Retention never overrides another person's privacy bound — on the BALANCE reads. The spending reads still over-erase, and that is a deferral, not an oversight
+### 7. Retention never overrides another person's privacy bound — and the balance and spending reads now agree about it
 
-In a household, one member's history should be visible to the household exactly for the interval it
-was actually shared. That rule shipped on the **balance / net-worth** reads and **not** on the
-**spending, income and savings-rate** reads. The two therefore disagree about the same days. This
-was ruled a deliberate deferral and it stands; the reason is a money double-count, below.
+In a household, one member's history is visible to the household exactly for the interval it was
+actually shared. A member leaves; the remaining members keep what was shared **for the shared period
+only**. They gain nothing after the departure, and they lose nothing from before it.
 
-**What shipped.** `householdAccountsCTEForBalancesPerDay`
-(`backend/internal/repository/analytics_repository.go:578-593`) and its point-in-time sibling
-`householdAccountsCTEForBalancesAsOf` (`:654-`) admit closed grants —
-`(ua.user_id = ANY($3) OR has.revoked_at IS NOT NULL)` — and carry `share_ended_at` (or bound on
-`$4`) so the series is clipped at the revocation **instant**, not the revocation **day**. A
-departed member's shared period survives in the household net-worth chart. The first version of
-this rule dropped the departure day whole, on a false binary — "drop the member's last partial day,
-or admit a post-departure instant". Clipping `bs.snapshot_at` directly against `share_started_at` /
-`share_ended_at` does neither: the household keeps every instant it was genuinely entitled to and
-gets nothing outside them. Pinned by
+This rule shipped first on the **balance / net-worth** reads and, for one round, not on the
+**spending, income and savings-rate** reads — the two answered about the same days out of different
+account universes. **That divergence is now closed.** All of it is one rule again.
+
+**The balance reads.** `householdAccountsCTEForBalancesPerDay` and its point-in-time sibling
+`householdAccountsCTEForBalancesAsOf` (`backend/internal/repository/analytics_repository.go`) admit
+closed grants — `(ua.user_id = ANY($3) OR has.revoked_at IS NOT NULL)` — and carry `share_ended_at`
+(or bound on `$4`) so the series is clipped at the revocation **instant**, not the revocation
+**day**. The first version of this rule dropped the departure day whole, on a false binary — "drop
+the member's last partial day, or admit a post-departure instant". Clipping `bs.snapshot_at`
+directly against `share_started_at` / `share_ended_at` does neither. Pinned by
 `TestHouseholdShareRange_RevocationDayKeepsOnlyPreRevocationInstants` and its mirror
 `TestHouseholdShareRange_ShareStartDayExcludesPreGrantInstants`. **More retention is not
-automatically better** — the answer here was exactness in both directions, and the opening bound
-was leaking.
+automatically better** — the answer was exactness in both directions, and the opening bound was
+leaking.
 
-**What did not.** `householdAccountsCTE` (`:514-534`) still carries **both**
-`has.revoked_at IS NULL` **and** `ua.user_id = ANY($3)`. A departed member's **entire** past —
-not merely the post-revocation part — disappears from household spending, income and savings-rate.
-Nine date-ranged household reads consume it, every one joining
-`household_accounts ha ON ha.user_account_id = a.user_account_id`:
+**The spending reads.** `householdAccountsCTE` used to carry both `has.revoked_at IS NULL` and
+`ua.user_id = ANY($3)`, so a departed member's **entire** past — not merely the post-revocation
+part — disappeared from household spending, income and savings-rate across nine date-ranged reads.
+It is now `householdGrantsCTE`, which emits every grant as a half-open interval on the same
+membership relaxation the balance CTEs use.
 
-| Line | Method |
-|---|---|
-| `:171` | `getCashFlowAggregationHousehold` |
-| `:321` | `getCashFlowGroupedHousehold` |
-| `:846` | `getSpendingByCategoryHousehold` |
-| `:948` | `getSpendingByMerchantHousehold` |
-| `:1077` | `getSpendingTrendsHousehold` |
-| `:1222` | `getAverageMonthlySpendHousehold` |
-| `:1354` | `getSavingsRateForPeriodHousehold` |
-| `:1463` | `getMonthOverMonthSpendingHousehold` |
-| `:1651` | `getIncomeSourceBreakdownHousehold` |
-
-*Method:* `/usr/bin/grep -n "householdAccountsCTE()" internal/repository/analytics_repository.go`
-returns **10** rows — the nine above plus the definition at `:514` (the two balance siblings have
-different names and are excluded by the exact-match `()`). Then
-`/usr/bin/grep -c "household_accounts ha" internal/repository/analytics_repository.go` returns
-**9**, all the identical `ON ha.user_account_id = a.user_account_id`, confirming the join column at
-every site.
-
-**Why widening that CTE naively is WORSE than the divergence.** It is
+**Why the fix is a semi-join, and why that detail is load-bearing.** The old CTE was
 `DISTINCT ON (COALESCE(has.physical_account_blind_idx, ua.id::text))` — one row per **fingerprint**,
-not per `user_account`. Drop `revoked_at IS NULL` and a re-fingerprinted account with two closed
-grants yields **two** rows carrying the same `user_account_id`; because all nine sites join on
-`ha.user_account_id`, every matching transaction lands twice in `SUM()` and `COUNT()`. That is a
-money double-count, and showing a household a doubled spend total is worse than showing it too
-little. A date clip does not rescue it either: the `DISTINCT ON` collapses to one row keeping the
-earliest `shared_at`, so the surviving row has no `revoked_at` to clip against.
+not per `user_account` — and all nine consumers did `JOIN household_accounts ha ON
+ha.user_account_id = a.user_account_id`. Simply dropping `revoked_at IS NULL` from that shape would
+have been **worse than the bug it fixed**: one account with two closed grants (a re-fingerprinted
+account, which a Plaid re-link produces) emits two rows, every transaction matches both, and each
+lands twice in `SUM()` and `COUNT()`. Showing a household a doubled spend total is worse than
+showing it too little. A date clip does not rescue it either — the `DISTINCT ON` keeps the earliest
+`shared_at`, leaving no `revoked_at` to clip against.
 
-**What a correct fix costs.** The same interval-emission-then-collapse restructuring the balance
-side got, re-derived for a **per-transaction** aggregation shape rather than a per-day one, and
-carried across all nine sites with coverage at each. That was judged out of scope for #1569.
+So the `JOIN` is gone. Inclusion is decided by `householdSharedTransactionPredicate`, an `EXISTS`:
+a transaction is in because *some* covering grant exists, and a semi-join yields at most one row
+however many grants cover it. The double-count is not collapsed away, it is **unrepresentable**.
+Pinned by `TestAnalyticsRepository_GetSpendingByCategory_Household_RefingerprintedClosedGrantsCountedOnce`,
+which asserts the exact total — a tolerant assertion would not see a doubling.
 
-**Until it lands, read the two charts as different universes.** A household spending chart means
-"the accounts *currently* shared by *current* members"; a household net-worth chart means "what the
-household was entitled to see on each day". **No test asserts they agree, because they do not.**
+**Clipping resolution differs from the balance side on purpose.** `balance_snapshots.snapshot_at` is
+a `TIMESTAMPTZ`, so those reads compare instants. `transactions.date` is a **DATE**: a transaction
+carries no time of day, so there is no instant to compare, and an instant-resolution predicate would
+silently test the day's midnight against the grant boundary — exact-looking and wrong. What a DATE
+denotes is the whole day, so the test is **interval overlap**: the day `[date, date+1)` against the
+grant `[share_started_at, share_ended_at)`. Both ends get the *same* rule with the same tolerance in
+the same direction — a boundary day counts if any instant of it was shared. Being strict at one end
+and generous at the other is the defect that review F4 found on the balance side, not the fix.
+
+**The joint-account winner is now resolved per transaction.** Two members who each link the same
+real-world bank account hold two `user_accounts` with two copies of the same transactions, so exactly
+one copy may count — that is what `physical_account_blind_idx` is for (migration 000110). The old
+`DISTINCT ON` picked that winner **once, globally**, which cannot survive retention: a copy shared
+for only part of the range would erase the other member's genuinely-earlier data from the whole
+range. The winner is now chosen among the grants covering **that transaction**, by the same order the
+`DISTINCT ON` used (earliest `share_started_at`, ties broken by `user_account_id`). Because a minimum
+is unique, exactly one `user_account` per (fingerprint, day) passes. Pinned by
+`TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountCountedOnce`.
+
+**The two universes are now asserted to agree**, by
+`TestAnalyticsRepository_Household_BalanceAndSpendingUniversesAgreeOverSharedPeriod` — a departed
+member with one closed grant, one transaction and one balance snapshot inside the shared period, and
+both reads must see the account. The earlier revision of this decision said "no test asserts they
+agree, because they do not"; that sentence is retired along with the divergence.
 
 ### 8. GDPR erasure is the one thing that overrides all of this
 
@@ -449,6 +454,7 @@ Writing a principle down does not keep it. Four mechanisms do:
 | Round-trip acceptance | Disconnect, re-link and purge, against a real database, asserting what survives and what does not | `backend/internal/repository/history_retention_roundtrip_integration_test.go` |
 | Universe completeness | A live table named like history that is in neither classification map — the hole a hand-maintained list produces | `TestEveryHistoryShapedTableIsClassified` |
 | Account status projection | An account-shaped `SELECT` that omits `status`, which makes `isAccountDisconnected` read a removed account as live | `TestNoAccountProjectionOmitsStatus` |
+| Household universe parity | A household spending read drifting from the balance reads about the same shared period, or a retained grant double-counting money | `TestAnalyticsRepository_Household_BalanceAndSpendingUniversesAgreeOverSharedPeriod`, `TestAnalyticsRepository_GetSpendingByCategory_Household_RefingerprintedClosedGrantsCountedOnce` |
 
 Both G1 and G2 fail in **two** directions: an unallowlisted violation, and an allowlist entry whose
 target no longer exists. Stale entries are how the next violation gets justified — they make a
