@@ -788,7 +788,7 @@ func TestCategoryTombstone_EngineRefusesARuleReArmedOntoATombstone_Integration(t
 	assert.Equal(t, pfcRuleID, enabled[0].ID)
 }
 
-// 13. FIX ROUND 1 (review finding M3): the owning-budget scoping subquery must NOT filter
+//  13. FIX ROUND 1 (review finding M3): the owning-budget scoping subquery must NOT filter
 //     tombstoned budgets.
 //
 // The subquery answers "whose budget is this line on", and a tombstoned budget is still the same

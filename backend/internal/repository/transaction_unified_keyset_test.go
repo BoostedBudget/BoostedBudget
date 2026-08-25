@@ -62,46 +62,46 @@ func unifiedFeedColumns() []string {
 func makeUnifiedFeedRow(userID, accountID string) []interface{} {
 	src := "investment"
 	return []interface{}{
-		"txn-id-1",   // id
-		userID,       // user_id
-		accountID,    // account_id
-		nil,          // sort_date (time.Time)
-		src,          // source_disc
-		nil,          // date
-		100.00,       // amount
-		"Buy AAPL",   // name
-		(*string)(nil), // user_account_id
-		(*string)(nil), // linked_item_id
-		(*string)(nil), // authorized_date
-		(*string)(nil), // merchant_name
-		(*string)(nil), // merchant_id
-		(*string)(nil), // data_source
-		(*string)(nil), // external_transaction_id
-		(*string)(nil), // pfc_primary
-		(*string)(nil), // pfc_detailed
-		(*string)(nil), // pfc_confidence_level
-		(*string)(nil), // pfc_category_icon_url
-		(*string)(nil), // pfc_primary_override
-		(*string)(nil), // pfc_detailed_override
-		(*string)(nil), // custom_category_override_id
-		(*string)(nil), // payment_channel
-		(*bool)(nil),   // pending
-		(*string)(nil), // user_notes
-		(*string)(nil), // category_override_kind
-		(*string)(nil), // effective_pfc_primary
-		(*string)(nil), // effective_pfc_detailed
-		(*string)(nil), // effective_category_name
+		"txn-id-1",        // id
+		userID,            // user_id
+		accountID,         // account_id
+		nil,               // sort_date (time.Time)
+		src,               // source_disc
+		nil,               // date
+		100.00,            // amount
+		"Buy AAPL",        // name
+		(*string)(nil),    // user_account_id
+		(*string)(nil),    // linked_item_id
+		(*string)(nil),    // authorized_date
+		(*string)(nil),    // merchant_name
+		(*string)(nil),    // merchant_id
+		(*string)(nil),    // data_source
+		(*string)(nil),    // external_transaction_id
+		(*string)(nil),    // pfc_primary
+		(*string)(nil),    // pfc_detailed
+		(*string)(nil),    // pfc_confidence_level
+		(*string)(nil),    // pfc_category_icon_url
+		(*string)(nil),    // pfc_primary_override
+		(*string)(nil),    // pfc_detailed_override
+		(*string)(nil),    // custom_category_override_id
+		(*string)(nil),    // payment_channel
+		(*bool)(nil),      // pending
+		(*string)(nil),    // user_notes
+		(*string)(nil),    // category_override_kind
+		(*string)(nil),    // effective_pfc_primary
+		(*string)(nil),    // effective_pfc_detailed
+		(*string)(nil),    // effective_category_name
 		(*bool)(nil),      // reviewed
 		(*time.Time)(nil), // reviewed_at
 		(*[]byte)(nil),    // tags (jsonb)
-		(*string)(nil), // security_id
-		(*string)(nil), // ticker_symbol
-		(*string)(nil), // security_name
-		(*string)(nil), // type (investment)
-		(*string)(nil), // subtype (investment)
-		(*float64)(nil), // quantity
-		(*float64)(nil), // price
-		(*float64)(nil), // fees
+		(*string)(nil),    // security_id
+		(*string)(nil),    // ticker_symbol
+		(*string)(nil),    // security_name
+		(*string)(nil),    // type (investment)
+		(*string)(nil),    // subtype (investment)
+		(*float64)(nil),   // quantity
+		(*float64)(nil),   // price
+		(*float64)(nil),   // fees
 	}
 }
 

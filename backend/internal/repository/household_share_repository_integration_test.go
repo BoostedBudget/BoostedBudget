@@ -14,8 +14,8 @@ package repository_test
 import (
 	"context"
 	"sync"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"

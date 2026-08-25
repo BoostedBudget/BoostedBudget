@@ -568,11 +568,11 @@ func TestInvestment_UnifiedFeed_ActivityTypesExcludesBanking_Integration(t *test
 // ── R2-1: user_account_id re-link propagation ───────────────────────────────
 
 // TestInvestment_UserAccountID_SurvivesRelink_Integration proves that:
-// 1. UpsertBatch populates user_account_id at INSERT time (GAP D fix).
-// 2. A second UpsertBatch with the same plaid_investment_transaction_id and a
-//    non-nil UserAccountID backfills user_account_id on pre-fix NULL rows (R2-5 bulk-backfill).
-// 3. GetByUserIDKeyset filtered by a NEW account_id (post-relink) still returns the
-//    pre-relink transactions via chain-expansion through user_account_id.
+//  1. UpsertBatch populates user_account_id at INSERT time (GAP D fix).
+//  2. A second UpsertBatch with the same plaid_investment_transaction_id and a
+//     non-nil UserAccountID backfills user_account_id on pre-fix NULL rows (R2-5 bulk-backfill).
+//  3. GetByUserIDKeyset filtered by a NEW account_id (post-relink) still returns the
+//     pre-relink transactions via chain-expansion through user_account_id.
 func TestInvestment_UserAccountID_SurvivesRelink_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()

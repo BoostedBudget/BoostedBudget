@@ -622,10 +622,17 @@ func backfillDownstreamUserAccountIDs(ctx context.Context, db *pgxpool.Pool) err
 		query string
 		table string
 	}
+	// ONE-TIME BACKFILL of a denormalised FK. Every step fills user_account_id where it is NULL and
+	// nowhere else. A tombstoned row needs it as much as a live one — more so, because nothing will
+	// ever run again to fill it, and #1569's whole point is that the tombstoned row stays
+	// queryable. The two steps whose table is tombstoned carry the exemption inside their SQL, where
+	// the guard reads it (#1569 T8 write-target audit).
 	steps := []cascade{
 		{
 			table: "transactions",
-			query: `UPDATE transactions t SET user_account_id = a.user_account_id
+			query: `-- tombstone-exempt(transactions t): one-time backfill; filtering deleted_at would
+				-- leave exactly the retained history unrepairable (#1569 T8).
+				UPDATE transactions t SET user_account_id = a.user_account_id
 				FROM accounts a
 				WHERE t.account_id = a.id AND t.user_account_id IS NULL AND a.user_account_id IS NOT NULL`,
 		},
@@ -661,7 +668,9 @@ func backfillDownstreamUserAccountIDs(ctx context.Context, db *pgxpool.Pool) err
 		},
 		{
 			table: "savings_goals",
-			query: `UPDATE savings_goals sg SET user_account_id = a.user_account_id
+			query: `-- tombstone-exempt(savings_goals sg): one-time backfill; same reason as the
+				-- transactions step above (#1569 T8).
+				UPDATE savings_goals sg SET user_account_id = a.user_account_id
 				FROM accounts a
 				WHERE sg.account_id = a.id AND sg.user_account_id IS NULL AND a.user_account_id IS NOT NULL`,
 		},

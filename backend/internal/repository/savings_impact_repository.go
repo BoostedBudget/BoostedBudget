@@ -34,7 +34,7 @@ type SavingsImpactRepository interface {
 
 // savingsImpactRepository implements SavingsImpactRepository using PostgreSQL.
 type savingsImpactRepository struct {
-	db  DB
+	db DB
 	// enc resolves and decrypts destination account names for recent items.
 	// Nil when the FieldEncryptor is not available (e.g., integration tests without
 	// encryption config, or when ClerkSecretKey is not set in prod).

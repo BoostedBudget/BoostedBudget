@@ -30,7 +30,6 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
-
 type settlementFixture struct {
 	tx   pgx.Tx
 	repo TransactionRepository

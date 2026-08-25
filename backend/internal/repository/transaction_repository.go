@@ -591,7 +591,10 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		    -- teaches a stored row its pending twin; a NULL arrival (every ordinary modification of
 		    -- a transaction that is not a settlement) must not erase what we already know.
 		    pending_transaction_id_blind_idx = COALESCE($18, pending_transaction_id_blind_idx),
-		    -- tombstone-exempt(custom_categories): HISTORICAL name resolution (#1569 Task 9). This recomputes the
+		    -- tombstone-exempt(custom_categories, transactions): HISTORICAL name resolution (#1569 Task 9),
+		    -- and the UPDATE target is unfiltered because liveness is the sync path's concern, not this
+		    -- statement's: a tombstoned transaction Plaid still reports must keep a correct name
+		    -- (#1569 T8 write-target audit). This recomputes the
 		    -- denormalised name for a row that ALREADY carries this override. Filtering
 		    -- tombstones here would set effective_category_name to NULL on every transaction
 		    -- filed under a deleted category the next time Plaid refreshed it — the silent
@@ -778,14 +781,17 @@ func (r *transactionRepository) TombstoneByExternalID(
 		),
 		moved AS (
 			-- twin.deleted_at IS NULL is in this statement's own WHERE, below. It is NOT there
-			-- because a guard asked: TestNoTransactionReadForgetsTheTombstoneFilter audits read
-			-- REFERENCES and still never looks at an UPDATE's target, so nothing would complain if
-			-- it went. Do not remove it -- donating a settled pending's annotations onto an
+			-- because a guard asked -- it predates the rule. THAT IS NO LONGER THE STANDING
+			-- POSITION: #1569 T8 taught the guard to audit an UPDATE's and a DELETE's TARGET as
+			-- well as its read references, so removing this predicate now turns
+			-- TestNoTransactionReadForgetsTheTombstoneFilter red rather than passing in silence.
+			-- Do not remove it anyway -- donating a settled pending's annotations onto an
 			-- already-tombstoned row would write user work onto a second row that renders nowhere.
-			-- (An earlier version of this note added that deleting the exemption token below left
-			-- the package green. That was true of the guard as it then stood and is no longer:
-			-- #1569 T8 taught it to see an aliased reference in a comma join list, which is
-			-- precisely what "transactions prior" is, so the token is now load-bearing.)
+			-- (Two earlier versions of this note are superseded. It once said the guard "never
+			-- looks at an UPDATE's target", and once that deleting the exemption token below left
+			-- the package green. Both were true when written; T8 falsified the first by adding the
+			-- write rule and the second by teaching the guard to see an aliased reference in a
+			-- comma join list, which is precisely what "transactions prior" is.)
 			UPDATE transactions AS twin
 			SET user_notes = COALESCE(twin.user_notes, s.user_notes),
 
@@ -822,8 +828,8 @@ func (r *transactionRepository) TombstoneByExternalID(
 			       OR s.category_source = '%[5]s'
 			       OR %[6]s
 			       OR COALESCE(jsonb_array_length(s.tags), 0) > 0)
-			RETURNING ` + annotationCaptureReturning("twin") + `
-		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeSettlement, "moved") + `
+			RETURNING `+annotationCaptureReturning("twin")+`
+		)`+annotationCaptureInsert(domain.TransactionAnnotationChangeSettlement, "moved")+`
 		SELECT deleted_reason FROM tombstoned
 	`,
 		domain.TxnDeletedProviderRemovedPending,
@@ -1535,6 +1541,10 @@ func (r *transactionRepository) UpdateTags(ctx context.Context, id string, userI
 	}
 
 	query := `
+		-- tombstone-exempt(transactions): liveness is the SERVICE layer's gate, exactly as for
+		-- UpdateCategory below (#1569 T8 write-target audit). Narrowing the write predicate would
+		-- change WHICH ROWS ARE AFFECTED, which is a behaviour change, and would make this statement
+		-- disagree with the annotation capture that mirrors it.
 		UPDATE transactions
 		SET tags = $1, tags_source = $2, updated_at = $3
 		WHERE id = $4 AND user_id = $5
@@ -1571,7 +1581,9 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 		    category_override_date = $6,
 		    reviewed = true,
 		    reviewed_at = $6,
-		    -- tombstone-exempt(custom_categories): name resolution for the category being assigned (#1569 Task 9).
+		    -- tombstone-exempt(custom_categories, transactions t): name resolution for the category being
+		    -- assigned (#1569 Task 9); the UPDATE target is unfiltered because liveness is the service
+		    -- layer's gate and narrowing it would change which rows the write affects (#1569 T8).
 		    -- Liveness is enforced at the service layer, which validates the id through
 		    -- CustomCategoryRepository.GetByID (tombstone-filtered) before calling this —
 		    -- see transaction_service.UpdateTransactionCategory. Filtering here as well would
@@ -1583,11 +1595,13 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 		        ELSE t.pfc_primary
 		    END,
 		    updated_at = $7
-		-- tombstone-exempt(transactions prior): the prior alias is the PRE-IMAGE of the row this statement is already
+		-- tombstone-exempt(transactions prior, transactions t): the prior alias is the PRE-IMAGE of the row this statement is already
 		-- updating (prior.id = t.id), not an independent read. Adding prior.deleted_at IS NULL here
 		-- would not filter a read -- it would narrow WHICH ROWS THE UPDATE AFFECTS, a behaviour
 		-- change well outside #1579's "record the prior value", and it would make the capture
-		-- disagree with the write it is capturing. The statement's own tombstone position is
+		-- disagree with the write it is capturing. The UPDATE target t is unfiltered for the same
+		-- reason and by the same decision: liveness is the service layer's gate (#1569 T8
+		-- write-target audit). The statement's own tombstone position is
 		-- unchanged and is documented above (#1569 Task 6).
 		FROM transactions prior
 		WHERE prior.id = t.id
@@ -1634,11 +1648,13 @@ func (r *transactionRepository) SetReviewed(ctx context.Context, userID string, 
 		WITH updated AS (
 		UPDATE transactions t
 		SET reviewed = $1, reviewed_at = $2, updated_at = NOW()
-		-- tombstone-exempt(transactions prior): the prior alias is the PRE-IMAGE of the row this statement is already
+		-- tombstone-exempt(transactions prior, transactions t): the prior alias is the PRE-IMAGE of the row this statement is already
 		-- updating (prior.id = t.id), not an independent read. Adding prior.deleted_at IS NULL here
 		-- would not filter a read -- it would narrow WHICH ROWS THE UPDATE AFFECTS, a behaviour
 		-- change well outside #1579's "record the prior value", and it would make the capture
-		-- disagree with the write it is capturing. The statement's own tombstone position is
+		-- disagree with the write it is capturing. The UPDATE target t is unfiltered for the same
+		-- reason and by the same decision: liveness is the service layer's gate (#1569 T8
+		-- write-target audit). The statement's own tombstone position is
 		-- unchanged and is documented above (#1569 Task 6).
 		FROM transactions prior
 		WHERE prior.id = t.id
@@ -1704,7 +1720,8 @@ func (r *transactionRepository) BulkUpdateCategory(ctx context.Context, userID s
 		    category_override_date      = $6,
 		    reviewed                    = true,
 		    reviewed_at                 = $6,
-		    -- tombstone-exempt(custom_categories): same as UpdateCategory above (#1569 Task 9) — liveness is the
+		    -- tombstone-exempt(custom_categories, transactions t): same as UpdateCategory above (#1569 Task 9)
+		    -- — and the UPDATE target is unfiltered for the same reason (#1569 T8). Liveness is the
 		    -- service layer's gate (transaction_service.BulkUpdateTransactionCategory validates
 		    -- through the tombstone-filtered GetByID); this subquery only resolves the name.
 		    effective_category_name     = CASE
@@ -1714,11 +1731,13 @@ func (r *transactionRepository) BulkUpdateCategory(ctx context.Context, userID s
 		        ELSE t.pfc_primary
 		    END,
 		    updated_at = $7
-		-- tombstone-exempt(transactions prior): the prior alias is the PRE-IMAGE of the row this statement is already
+		-- tombstone-exempt(transactions prior, transactions t): the prior alias is the PRE-IMAGE of the row this statement is already
 		-- updating (prior.id = t.id), not an independent read. Adding prior.deleted_at IS NULL here
 		-- would not filter a read -- it would narrow WHICH ROWS THE UPDATE AFFECTS, a behaviour
 		-- change well outside #1579's "record the prior value", and it would make the capture
-		-- disagree with the write it is capturing. The statement's own tombstone position is
+		-- disagree with the write it is capturing. The UPDATE target t is unfiltered for the same
+		-- reason and by the same decision: liveness is the service layer's gate (#1569 T8
+		-- write-target audit). The statement's own tombstone position is
 		-- unchanged and is documented above (#1569 Task 6).
 		FROM transactions prior
 		WHERE prior.id = t.id
@@ -1816,12 +1835,12 @@ func (r *transactionRepository) GetReviewSummary(ctx context.Context, userID str
 	row := r.db.QueryRow(ctx, query, args...)
 
 	var (
-		unreviewedCount        int64
-		reviewedByRuleCount    int64
-		reviewedByManualCount  int64
-		reviewedByPlaidCount   int64
-		avgIngestionSec        *float64
-		topCategoriesJSON      []byte
+		unreviewedCount       int64
+		reviewedByRuleCount   int64
+		reviewedByManualCount int64
+		reviewedByPlaidCount  int64
+		avgIngestionSec       *float64
+		topCategoriesJSON     []byte
 	)
 
 	err := row.Scan(
@@ -2299,7 +2318,9 @@ func (r *transactionRepository) UpdateEffectiveCategoryNameByCustomCategoryID(ct
 	query := `
 		UPDATE transactions
 		SET effective_category_name = (
-			-- tombstone-exempt(custom_categories): HISTORICAL name resolution (#1569 Task 9). A rename job that
+			-- tombstone-exempt(custom_categories, transactions): HISTORICAL name resolution (#1569 Task 9),
+			-- with the UPDATE target unfiltered so a tombstoned transaction keeps a correct name rather
+			-- than a NULL one (#1569 T8 write-target audit). A rename job that
 			-- lands after the category was deleted must still write the name, not NULL. The
 			-- rename itself is gated upstream by the tombstone-filtered GetByID.
 			SELECT name FROM custom_categories
@@ -3239,31 +3260,31 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	var items []*domain.ActivityItem
 	for rows.Next() {
 		var (
-			id, userIDCol, sourceDisc, name string
-			accountID                        *string
-			sortDate, date                             time.Time
-			amount                                     float64
-			userAccountID, linkedItemID                *string
-			authorizedDate                             *time.Time
-			merchantName, merchantID, dataSource       *string
-			externalTxnID                              *string
-			pfcPrimary, pfcDetailed                    *string
-			pfcConfidenceLevel, pfcCategoryIconURL     *string
-			pfcPrimaryOverride, pfcDetailedOverride    *string
-			customCategoryOverrideID                   *string
-			paymentChannel                             *string
-			pending                                    *bool
-			userNotes, categoryOverrideKind            *string
-			effectivePFCPrimary, effectivePFCDetailed  *string
-			effectiveCategoryName                      *string
-			reviewed                                   *bool
-			deletedAt                                  *time.Time
-			deletedReason                              *string
-			reviewedAt                                 *time.Time
-			tagsJSON                                   []byte
-			securityID, tickerSymbol, securityName     *string
-			invType, invSubtype                        *string
-			invQuantity, invPrice, invFees             *float64
+			id, userIDCol, sourceDisc, name           string
+			accountID                                 *string
+			sortDate, date                            time.Time
+			amount                                    float64
+			userAccountID, linkedItemID               *string
+			authorizedDate                            *time.Time
+			merchantName, merchantID, dataSource      *string
+			externalTxnID                             *string
+			pfcPrimary, pfcDetailed                   *string
+			pfcConfidenceLevel, pfcCategoryIconURL    *string
+			pfcPrimaryOverride, pfcDetailedOverride   *string
+			customCategoryOverrideID                  *string
+			paymentChannel                            *string
+			pending                                   *bool
+			userNotes, categoryOverrideKind           *string
+			effectivePFCPrimary, effectivePFCDetailed *string
+			effectiveCategoryName                     *string
+			reviewed                                  *bool
+			deletedAt                                 *time.Time
+			deletedReason                             *string
+			reviewedAt                                *time.Time
+			tagsJSON                                  []byte
+			securityID, tickerSymbol, securityName    *string
+			invType, invSubtype                       *string
+			invQuantity, invPrice, invFees            *float64
 		)
 
 		if err := rows.Scan(
@@ -3289,20 +3310,20 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		}
 
 		item := &domain.ActivityItem{
-			Source:                sourceDisc,
-			SortDate:              sortDate,
-			ID:                    id,
-			UserID:                userIDCol,
-			AccountID:             nilOrEmpty(accountID),
-			Date:                  date,
-			Amount:                amount,
-			Name:                  name,
-			UserAccountID:         userAccountID,
-			LinkedItemID:          linkedItemID,
-			AuthorizedDate:        authorizedDate,
-			MerchantName:          merchantName,
-			MerchantID:            merchantID,
-			DataSource:            dataSource,
+			Source:                   sourceDisc,
+			SortDate:                 sortDate,
+			ID:                       id,
+			UserID:                   userIDCol,
+			AccountID:                nilOrEmpty(accountID),
+			Date:                     date,
+			Amount:                   amount,
+			Name:                     name,
+			UserAccountID:            userAccountID,
+			LinkedItemID:             linkedItemID,
+			AuthorizedDate:           authorizedDate,
+			MerchantName:             merchantName,
+			MerchantID:               merchantID,
+			DataSource:               dataSource,
 			PFCPrimary:               pfcPrimary,
 			PFCDetailed:              pfcDetailed,
 			PFCConfidenceLevel:       pfcConfidenceLevel,
@@ -3311,21 +3332,21 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			PFCDetailedOverride:      pfcDetailedOverride,
 			CustomCategoryOverrideID: customCategoryOverrideID,
 			PaymentChannel:           paymentChannel,
-			Pending:               pending,
-			UserNotes:             userNotes,
-			CategoryOverrideKind:  categoryOverrideKind,
-			EffectivePFCPrimary:   effectivePFCPrimary,
-			EffectivePFCDetailed:  effectivePFCDetailed,
-			EffectiveCategoryName: effectiveCategoryName,
-			Reviewed:              reviewed,
-			ReviewedAt:            reviewedAt,
-			SecurityID:            securityID,
-			TickerSymbol:          tickerSymbol,
-			SecurityName:          securityName,
-			InvestmentSubtype:     invSubtype,
-			InvestmentQuantity:    invQuantity,
-			InvestmentPrice:       invPrice,
-			InvestmentFees:        invFees,
+			Pending:                  pending,
+			UserNotes:                userNotes,
+			CategoryOverrideKind:     categoryOverrideKind,
+			EffectivePFCPrimary:      effectivePFCPrimary,
+			EffectivePFCDetailed:     effectivePFCDetailed,
+			EffectiveCategoryName:    effectiveCategoryName,
+			Reviewed:                 reviewed,
+			ReviewedAt:               reviewedAt,
+			SecurityID:               securityID,
+			TickerSymbol:             tickerSymbol,
+			SecurityName:             securityName,
+			InvestmentSubtype:        invSubtype,
+			InvestmentQuantity:       invQuantity,
+			InvestmentPrice:          invPrice,
+			InvestmentFees:           invFees,
 		}
 
 		// #1569: a row with deleted_at set reached this feed only because the caller opted in via

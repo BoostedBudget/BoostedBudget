@@ -84,10 +84,10 @@ func NewIdempotencyRepository(db DB) IdempotencyRepository {
 // #1569 task 20 (S9). This used to end `ON CONFLICT (user_id, key) DO NOTHING`, and paired with a
 // lookup predicated on `expires_at > NOW()` that made the whole mechanism silently self-disabling:
 //
-//   1. a key's row passes expires_at but DeleteExpired has not swept yet — the sweep is periodic,
-//      so this window is routine, not exotic;
-//   2. the SELECT filters on `expires_at > NOW()` and MISSES, so fn() re-executes;
-//   3. the INSERT collides with the stale row and DO NOTHING discards the fresh response.
+//  1. a key's row passes expires_at but DeleteExpired has not swept yet — the sweep is periodic,
+//     so this window is routine, not exotic;
+//  2. the SELECT filters on `expires_at > NOW()` and MISSES, so fn() re-executes;
+//  3. the INSERT collides with the stale row and DO NOTHING discards the fresh response.
 //
 // The row is then a tombstone: unreadable by the lookup, unreplaceable by the store. Every retry
 // of that key re-executes fn() for as long as the row survives, which for a payment or a transfer

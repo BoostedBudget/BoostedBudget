@@ -80,7 +80,7 @@ var allowedHistoryDeletes = map[string]string{
 	// The linked-item purge. Same shape, one level up: the user disconnects AND purges an
 	// institution. A plain disconnect soft-removes and keeps everything.
 	"repository/linked_item_repository.go#PurgeLinkedItem|balance_snapshots": "explicit institution purge, same reason as PurgeAccount",
-	"repository/linked_item_repository.go#PurgeLinkedItem|savings_goals":    "explicit institution purge, tombstoned goals only: same scope and same reason as PurgeAccount's entry above",
+	"repository/linked_item_repository.go#PurgeLinkedItem|savings_goals":     "explicit institution purge, tombstoned goals only: same scope and same reason as PurgeAccount's entry above",
 
 	// The savings-goal purge. Distinct from DeleteGoal, which tombstones (#1569 task 8).
 	"repository/savings_goal_repository.go#PurgeGoal|savings_goals": "explicit goal purge; the ordinary DeleteGoal path tombstones instead",

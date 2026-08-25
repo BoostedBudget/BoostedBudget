@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -70,14 +70,14 @@ func TestAccountRepository_CreateBatch(t *testing.T) {
 			acc.ID,
 			acc.LinkedItemID,
 			acc.UserID,
-			acc.UserAccountID,              // nil
-			pgxmock.AnyArg(),               // plaid_account_id (encrypted by repo)
-			pgxmock.AnyArg(),               // plaid_account_id_blind_idx
-			pgxmock.AnyArg(),               // name (encrypted by repo)
-			pgxmock.AnyArg(),               // official_name (encrypted by repo)
+			acc.UserAccountID, // nil
+			pgxmock.AnyArg(),  // plaid_account_id (encrypted by repo)
+			pgxmock.AnyArg(),  // plaid_account_id_blind_idx
+			pgxmock.AnyArg(),  // name (encrypted by repo)
+			pgxmock.AnyArg(),  // official_name (encrypted by repo)
 			acc.Type,
 			acc.Subtype,
-			pgxmock.AnyArg(),               // mask (encrypted by repo)
+			pgxmock.AnyArg(), // mask (encrypted by repo)
 			acc.CurrentBalance,
 			acc.AvailableBalance,
 			acc.CurrencyCode,

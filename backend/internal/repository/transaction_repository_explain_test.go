@@ -155,10 +155,10 @@ func TestTransactionKeyset_EXPLAIN(t *testing.T) {
 	defer conn.Exec(ctx, "SET enable_sort = ON") //nolint:errcheck
 
 	type tc struct {
-		sortExpr   string // ORDER BY expression
+		sortExpr    string // ORDER BY expression
 		indexSuffix string // e.g. "date"
-		orderDir   string // ASC or DESC
-		skipAssert bool   // for merchant: EFF JOIN has no matching index
+		orderDir    string // ASC or DESC
+		skipAssert  bool   // for merchant: EFF JOIN has no matching index
 	}
 
 	cases := []tc{

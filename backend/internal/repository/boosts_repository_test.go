@@ -48,20 +48,20 @@ func TestBoostsTable_CanInsertWithJSONB(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boosts`)).WithArgs(
 		boostID,
 		userID,
-		"Test Transfer Rule",      // name
-		"Test description",        // description
-		true,                      // enabled
-		10,                        // priority
-		"transfer_suggestion",     // boost_type
-		triggerConfig,             // trigger_config
-		conditions,                // conditions
-		"AND",                     // condition_logic
-		actions,                   // actions
-		int64(0),                  // execution_count
-		pgxmock.AnyArg(),          // last_executed_at (nil)
-		pgxmock.AnyArg(),          // last_successful_at (nil)
-		pgxmock.AnyArg(),          // created_at
-		pgxmock.AnyArg(),          // updated_at
+		"Test Transfer Rule",  // name
+		"Test description",    // description
+		true,                  // enabled
+		10,                    // priority
+		"transfer_suggestion", // boost_type
+		triggerConfig,         // trigger_config
+		conditions,            // conditions
+		"AND",                 // condition_logic
+		actions,               // actions
+		int64(0),              // execution_count
+		pgxmock.AnyArg(),      // last_executed_at (nil)
+		pgxmock.AnyArg(),      // last_successful_at (nil)
+		pgxmock.AnyArg(),      // created_at
+		pgxmock.AnyArg(),      // updated_at
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	_, err := mock.Exec(ctx, `
@@ -522,19 +522,19 @@ func makeBoostRow(id, userID, name string) []interface{} {
 		id,
 		userID,
 		name,
-		(*string)(nil),       // description
-		true,                 // enabled
-		10,                   // priority
-		"transfer_suggestion",// boost_type
-		[]byte("{}"),         // trigger_config JSONB
-		[]byte("[]"),         // conditions JSONB
-		"AND",                // condition_logic
-		[]byte("{}"),         // actions JSONB
-		int64(0),             // execution_count
-		(*time.Time)(nil),    // last_executed_at
-		(*time.Time)(nil),    // last_successful_at
-		time.Now(),           // created_at
-		time.Now(),           // updated_at
+		(*string)(nil),        // description
+		true,                  // enabled
+		10,                    // priority
+		"transfer_suggestion", // boost_type
+		[]byte("{}"),          // trigger_config JSONB
+		[]byte("[]"),          // conditions JSONB
+		"AND",                 // condition_logic
+		[]byte("{}"),          // actions JSONB
+		int64(0),              // execution_count
+		(*time.Time)(nil),     // last_executed_at
+		(*time.Time)(nil),     // last_successful_at
+		time.Now(),            // created_at
+		time.Now(),            // updated_at
 	}
 }
 
@@ -546,11 +546,11 @@ func TestBoostsRepository_Create_Success(t *testing.T) {
 
 	ctx := context.Background()
 	boost := &domain.Boost{
-		UserID:   uuid.New().String(),
-		Name:     "My Boost",
+		UserID:    uuid.New().String(),
+		Name:      "My Boost",
 		BoostType: domain.BoostTypeTransferSuggestion,
-		Enabled:  true,
-		Priority: 5,
+		Enabled:   true,
+		Priority:  5,
 	}
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boosts`)).
@@ -564,7 +564,7 @@ func TestBoostsRepository_Create_Success(t *testing.T) {
 			boost.BoostType,
 			pgxmock.AnyArg(), // trigger_config JSON
 			pgxmock.AnyArg(), // conditions JSON
-			"AND", // condition_logic (defaulted to AND)
+			"AND",            // condition_logic (defaulted to AND)
 			pgxmock.AnyArg(), // actions
 			pgxmock.AnyArg(), // execution_count
 			pgxmock.AnyArg(), // last_executed_at

@@ -197,7 +197,6 @@ func (r *boostsRepository) GetByUserIDFiltered(ctx context.Context, userID strin
 		typeStrs[i] = string(bt)
 	}
 
-
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
 			boost_type, trigger_config, conditions, condition_logic,

@@ -1304,7 +1304,9 @@ func TestDeleteUserCascade_Integration_NonFKUserScopedTablesAreCleaned(t *testin
 		VALUES (1002, 'account_deletion', 'critical', '{}'::jsonb, '[]'::jsonb, 5, $1, $2)
 		RETURNING id`, now, other.ID,
 	).Scan(&otherDLQID))
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM dead_letter_jobs WHERE id IN ($1, $2)", targetDLQID, otherDLQID) })
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM dead_letter_jobs WHERE id IN ($1, $2)", targetDLQID, otherDLQID)
+	})
 
 	execNoErr(t, ctx, pool, `
 		INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
@@ -1312,7 +1314,9 @@ func TestDeleteUserCascade_Integration_NonFKUserScopedTablesAreCleaned(t *testin
 	execNoErr(t, ctx, pool, `
 		INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
 		VALUES ($1, $2, 'op-other', '{}'::jsonb)`, "idem-other-"+suffix, other.ID)
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM idempotency_keys WHERE user_id IN ($1, $2)", target.ID, other.ID) })
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM idempotency_keys WHERE user_id IN ($1, $2)", target.ID, other.ID)
+	})
 
 	var targetAuditID, otherAuditID string
 	require.NoError(t, pool.QueryRow(ctx, `
@@ -1323,7 +1327,9 @@ func TestDeleteUserCascade_Integration_NonFKUserScopedTablesAreCleaned(t *testin
 		INSERT INTO mcp_audit_log (actor_user_id, grant_id, operation_class, operation_id, result)
 		VALUES ($1, 'grant-other', 'read', 'op-2', 'success') RETURNING id`, other.ID,
 	).Scan(&otherAuditID))
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM mcp_audit_log WHERE actor_user_id IN ($1, $2)", target.ID, other.ID) })
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM mcp_audit_log WHERE actor_user_id IN ($1, $2)", target.ID, other.ID)
+	})
 
 	deleted, _, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
 	require.NoError(t, err)

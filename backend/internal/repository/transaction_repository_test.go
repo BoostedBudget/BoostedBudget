@@ -178,7 +178,6 @@ func TestTransactionRepository_Update_Success(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-
 // TestTransactionRepository_GetByUserID_Success tests retrieving transactions by user
 func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 	mock, err := pgxmock.NewPool()

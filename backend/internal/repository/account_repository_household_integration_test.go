@@ -27,8 +27,12 @@ import (
 // *FieldEncryptor, so a minimal valid instance is needed regardless.
 type plainPassthroughEncryptionService struct{}
 
-func (plainPassthroughEncryptionService) Encrypt(plaintext string) (string, error) { return plaintext, nil }
-func (plainPassthroughEncryptionService) Decrypt(ciphertext string) (string, error) { return ciphertext, nil }
+func (plainPassthroughEncryptionService) Encrypt(plaintext string) (string, error) {
+	return plaintext, nil
+}
+func (plainPassthroughEncryptionService) Decrypt(ciphertext string) (string, error) {
+	return ciphertext, nil
+}
 
 func newTestFieldEncryptor(t *testing.T) *appcrypto.FieldEncryptor {
 	t.Helper()

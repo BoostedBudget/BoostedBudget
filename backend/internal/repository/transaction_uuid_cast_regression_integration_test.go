@@ -91,10 +91,10 @@ func TestUuidCastRegression_Analytics_SpendingByMerchantWithCustomCategory(t *te
 
 	repo := NewAnalyticsRepository(tx)
 	filters := domain.SpendingFilters{
-		StartDate:        baseDate.AddDate(0, -1, 0),
-		EndDate:          baseDate.AddDate(0, 1, 0),
+		StartDate:         baseDate.AddDate(0, -1, 0),
+		EndDate:           baseDate.AddDate(0, 1, 0),
 		CustomCategoryIDs: []string{catID},
-		RollUpChildren:   true,
+		RollUpChildren:    true,
 	}
 	_, err = repo.GetSpendingByMerchant(ctx, userStr, filters, 10)
 	require.NoError(t, err)
@@ -118,10 +118,10 @@ func TestUuidCastRegression_Analytics_CategoryBreakdownWithCustomCategory(t *tes
 
 	repo := NewAnalyticsRepository(tx)
 	filters := domain.SpendingFilters{
-		StartDate:        baseDate.AddDate(0, -1, 0),
-		EndDate:          baseDate.AddDate(0, 1, 0),
+		StartDate:         baseDate.AddDate(0, -1, 0),
+		EndDate:           baseDate.AddDate(0, 1, 0),
 		CustomCategoryIDs: []string{catID},
-		RollUpChildren:   true,
+		RollUpChildren:    true,
 	}
 	_, err = repo.GetCategoryBreakdownForMerchant(ctx, userStr, merchantID, filters)
 	require.NoError(t, err)
@@ -146,7 +146,7 @@ func TestUuidCastRegression_Transactions_SearchWithCustomCategory(t *testing.T) 
 
 	repo := NewTransactionRepository(tx, enc)
 	filters := domain.TransactionFilters{
-		Search:           ptrStr("test"),
+		Search:            ptrStr("test"),
 		CustomCategoryIDs: []string{catID},
 	}
 
@@ -240,8 +240,8 @@ func TestUuidCastRegression_UnifiedFeed_SearchWithCustomCategory(t *testing.T) {
 	repo := NewTransactionRepository(tx, enc)
 	filters := domain.TransactionFilters{
 		IncludeInvestmentActivity: true,
-		Search:                    ptrStr("test"),    // activates merchantSortJoins
-		CustomCategoryIDs:         []string{catID},   // custom_categories.user_id=$1 subquery
+		Search:                    ptrStr("test"),  // activates merchantSortJoins
+		CustomCategoryIDs:         []string{catID}, // custom_categories.user_id=$1 subquery
 		SortBy:                    "date",
 	}
 	_, _, err = repo.GetByUserIDKeysetUnified(ctx, userStr, filters, nil, 10)

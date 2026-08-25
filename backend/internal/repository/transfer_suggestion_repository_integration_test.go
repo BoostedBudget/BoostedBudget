@@ -260,10 +260,10 @@ func TestReserveMatchedTransaction_CrossSyncDoubleCountGuard_Integration(t *test
 }
 
 // TestClearStaleReservations_Integration verifies the ClearStaleReservations SQL:
-//  - A pending suggestion with a past-expiry reservation has its reservation cleared (status stays pending).
-//  - An accepted suggestion with a past-expiry reservation also has its reservation cleared (status stays accepted).
-//  - A suggestion with a future-expiry reservation is NOT cleared.
-//  - A completed suggestion (even with a past-expiry matched_transaction_id) is NOT cleared.
+//   - A pending suggestion with a past-expiry reservation has its reservation cleared (status stays pending).
+//   - An accepted suggestion with a past-expiry reservation also has its reservation cleared (status stays accepted).
+//   - A suggestion with a future-expiry reservation is NOT cleared.
+//   - A completed suggestion (even with a past-expiry matched_transaction_id) is NOT cleared.
 func TestClearStaleReservations_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -479,9 +479,9 @@ func TestUpdateStatusAndComplete_StatusGuards_Integration(t *testing.T) {
 	pastExpiry := now.Add(-time.Hour)
 	futureExpiry := now.Add(30 * 24 * time.Hour)
 
-	expiredPendingID := insertSugg("pending", &pastExpiry)   // should expire
-	keptPendingID := insertSugg("pending", &futureExpiry)    // future expiry → stays pending
-	keptAcceptedID := insertSugg("accepted", &pastExpiry)    // accepted + past expiry → MUST stay accepted
+	expiredPendingID := insertSugg("pending", &pastExpiry) // should expire
+	keptPendingID := insertSugg("pending", &futureExpiry)  // future expiry → stays pending
+	keptAcceptedID := insertSugg("accepted", &pastExpiry)  // accepted + past expiry → MUST stay accepted
 
 	count, err := repo.ExpirePending(ctx)
 	require.NoError(t, err)
@@ -857,9 +857,10 @@ func TestDeclineReleasesReservationForReClaim_Integration(t *testing.T) {
 // TestClearStaleReservations_ClosesMatchNotifications_Integration verifies GAP BA:
 // when ClearStaleReservations frees a stale reservation it must also mark the
 // associated open transfer_suggestion_match notification as read so that:
-//   (a) The stale prompt is visually closed for the user.
-//   (b) The type-scoped open-notification guard in CorrelateForUser no longer
-//       suppresses re-prompting on the stranded accepted suggestion.
+//
+//	(a) The stale prompt is visually closed for the user.
+//	(b) The type-scoped open-notification guard in CorrelateForUser no longer
+//	    suppresses re-prompting on the stranded accepted suggestion.
 //
 // pgxmock cannot verify this because the two table updates are only linked by
 // the SQL CTE — a unit mock would not execute the JOIN.
