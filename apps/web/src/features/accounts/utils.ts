@@ -56,6 +56,25 @@ export function accountMatchesBalanceRange(
   account: Account,
   range: { min?: number; max?: number } | null | undefined
 ): boolean {
+  return balanceMatchesRange(account.current_balance, range)
+}
+
+/**
+ * The value-level form of `accountMatchesBalanceRange` (Issue #1569 whole-branch review, I1).
+ *
+ * Extracted so the net-worth breakdown can reuse the SAME semantics instead of re-deriving them
+ * — the two surfaces disagreeing about a balance-less account is the defect this closes. The
+ * breakdown ranges on magnitude (a liability's balance is negative there), so it passes the
+ * absolute value; the accounts list passes the signed balance. Only the sign convention differs,
+ * and it stays at the call site.
+ *
+ * ⚠ The whole point is the `null` branch. `null < min` and `null > max` are BOTH false, so a
+ * bare comparison admits a balance-less row to every range while reading as correct.
+ */
+export function balanceMatchesRange(
+  balance: number | null | undefined,
+  range: { min?: number; max?: number } | null | undefined
+): boolean {
   if (!range) return true
   const { min, max } = range
   if (min === undefined && max === undefined) return true
@@ -66,7 +85,6 @@ export function accountMatchesBalanceRange(
   // either way. Strictly better than the old `?? 0`, which answered it by asserting the account
   // holds exactly zero, but it is a behaviour change beyond closed accounts, so it is pinned by
   // its own tests rather than left to be discovered.
-  const balance = account.current_balance
   if (balance === undefined || balance === null) return false
 
   if (min !== undefined && balance < min) return false
@@ -91,10 +109,24 @@ export function compareAccountsByBalance(
   b: Account,
   direction: 'asc' | 'desc'
 ): number {
-  const balA = a.current_balance
-  const balB = b.current_balance
-  // Same non-equivalence as accountMatchesBalanceRange: the group is "has no balance", which
-  // includes an active account that has not synced yet, not only a closed one.
+  return compareBalanceValues(a.current_balance, b.current_balance, direction)
+}
+
+/**
+ * The value-level form of `compareAccountsByBalance` (Issue #1569 whole-branch review, I1).
+ *
+ * Shared with the net-worth breakdown for the same reason as `balanceMatchesRange`: the
+ * "no balance sorts into its own group, last, in both directions" rule must have exactly one
+ * definition. Callers decide what the number MEANS (signed on the accounts list, magnitude in
+ * the breakdown); this decides what happens when there isn't one.
+ */
+export function compareBalanceValues(
+  balA: number | null | undefined,
+  balB: number | null | undefined,
+  direction: 'asc' | 'desc'
+): number {
+  // Same non-equivalence as balanceMatchesRange: the group is "has no balance", which includes
+  // an active account that has not synced yet, not only a closed one.
   const hasA = balA !== undefined && balA !== null
   const hasB = balB !== undefined && balB !== null
 
