@@ -629,7 +629,7 @@ func TestCategoryTombstone_ExemptReadsStillSeeTheHistory_Integration(t *testing.
 		return n
 	}
 
-	// transaction_repository.go:526 — Update()'s effective_category_name recompute.
+	// transaction_repository.go:601 — Update()'s effective_category_name recompute.
 	t.Run("Update recomputes the name from a tombstoned category", func(t *testing.T) {
 		txn, err := txnRepo.GetByID(ctx, f.liveTxnID)
 		require.NoError(t, err)
@@ -640,7 +640,7 @@ func TestCategoryTombstone_ExemptReadsStillSeeTheHistory_Integration(t *testing.
 		assert.Equal(t, "Coffee", *got)
 	})
 
-	// transaction_repository.go:937 — buildWhereClause's CustomCategoryIDs expansion.
+	// transaction_repository.go:1142 — buildWhereClause's CustomCategoryIDs expansion.
 	t.Run("the transaction list filter still matches history", func(t *testing.T) {
 		got, err := txnRepo.GetByUserIDWithFilters(ctx, f.userID,
 			domain.TransactionFilters{CustomCategoryIDs: []string{f.coffeeID}}, 50, 0)
@@ -649,7 +649,7 @@ func TestCategoryTombstone_ExemptReadsStillSeeTheHistory_Integration(t *testing.
 		assert.Equal(t, f.liveTxnID, got[0].ID)
 	})
 
-	// transaction_repository.go:2612 — the unified (banking+investment) keyset filter.
+	// transaction_repository.go:2817 — the unified (banking+investment) keyset filter.
 	t.Run("the unified keyset filter still matches history", func(t *testing.T) {
 		items, _, err := txnRepo.GetByUserIDKeysetUnified(ctx, f.userID,
 			domain.TransactionFilters{CustomCategoryIDs: []string{f.coffeeID}}, nil, 50)
@@ -658,7 +658,7 @@ func TestCategoryTombstone_ExemptReadsStillSeeTheHistory_Integration(t *testing.
 		assert.Equal(t, f.liveTxnID, items[0].ID)
 	})
 
-	// transaction_repository.go:1316 — UpdateCategory's name resolution.
+	// transaction_repository.go:1521 — UpdateCategory's name resolution.
 	t.Run("UpdateCategory resolves the name rather than writing NULL", func(t *testing.T) {
 		require.NoError(t, txnRepo.UpdateCategory(ctx, f.liveTxnID, f.userID,
 			&custom, nil, nil, &f.coffeeID, domain.CategorySourceManual))
@@ -668,7 +668,7 @@ func TestCategoryTombstone_ExemptReadsStillSeeTheHistory_Integration(t *testing.
 		assert.Equal(t, "Coffee", *got)
 	})
 
-	// transaction_repository.go:1385 — BulkUpdateCategory's name resolution.
+	// transaction_repository.go:1590 — BulkUpdateCategory's name resolution.
 	t.Run("BulkUpdateCategory resolves the name rather than writing NULL", func(t *testing.T) {
 		n, err := txnRepo.BulkUpdateCategory(ctx, f.userID, []string{f.liveTxnID},
 			&custom, nil, nil, &f.coffeeID, domain.CategorySourceManual)
@@ -679,7 +679,7 @@ func TestCategoryTombstone_ExemptReadsStillSeeTheHistory_Integration(t *testing.
 		assert.Equal(t, "Coffee", *got)
 	})
 
-	// transaction_repository.go:1963 — the rename-propagation job.
+	// transaction_repository.go:2168 — the rename-propagation job.
 	t.Run("the rename job still writes a name for a tombstoned category", func(t *testing.T) {
 		n, err := txnRepo.UpdateEffectiveCategoryNameByCustomCategoryID(ctx, f.userID, f.coffeeID)
 		require.NoError(t, err)
@@ -692,7 +692,7 @@ func TestCategoryTombstone_ExemptReadsStillSeeTheHistory_Integration(t *testing.
 		assert.Equal(t, "Coffee", *got)
 	})
 
-	// transaction_repository.go:1636 — buildCategoryClause's PFC-primary rollup branch.
+	// transaction_repository.go:1841 — buildCategoryClause's PFC-primary rollup branch.
 	t.Run("a PFC budget line still counts spend filed under a tombstoned child", func(t *testing.T) {
 		pfc := "FOOD_AND_DRINK"
 		sum, err := txnRepo.GetSpentSumForBudgetCategory(ctx, f.userID, &domain.BudgetCategory{
@@ -703,7 +703,7 @@ func TestCategoryTombstone_ExemptReadsStillSeeTheHistory_Integration(t *testing.
 			"deleting a child category silently shrank its parent's budgeted spend")
 	})
 
-	// transaction_repository.go:1644 — buildCategoryClause's custom branch.
+	// transaction_repository.go:1849 — buildCategoryClause's custom branch.
 	t.Run("a custom budget line still counts its own history", func(t *testing.T) {
 		sum, err := txnRepo.GetSpentSumForBudgetCategory(ctx, f.userID, &domain.BudgetCategory{
 			CategoryKind: "custom", CustomCategoryID: &f.coffeeID, MatchLogic: "category_only",
