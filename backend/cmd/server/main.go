@@ -636,6 +636,9 @@ func main() {
 		}
 		profileRepo.SetOverrideTierValidator(overrideTierValidator)
 		privacyRepo := repository.NewPrivacyRepository(db)
+		// Issue #1587: GDPR data export (Article 20). Needs the field encryptor: several exported
+		// columns are stored as ENC$ ciphertext and the user must receive the plaintext.
+		dataExportRepo := repository.NewDataExportRepository(db, fieldEncryptor)
 		linkedItemRepo := repository.NewLinkedItemRepository(db, fieldEncryptor)
 		accountRepo := repository.NewAccountRepository(db, fieldEncryptor)
 		transactionRepo := repository.NewTransactionRepository(db, fieldEncryptor)
@@ -735,6 +738,8 @@ func main() {
 			JobQueue:     nil, // Set after jobQueue is created via SetJobQueue
 		})
 		privacyService := services.NewPrivacyService(privacyRepo)
+		dataExportService := services.NewDataExportService(dataExportRepo)
+		dataExportService.SetAnalytics(phClient)
 		transactionService := services.NewTransactionService(transactionRepo, customCategoryRepo)
 		transactionService.SetAnalytics(phClient)
 		transactionService.SetAccountRepository(accountRepo) // #1329: embed account in investment rows
@@ -2341,6 +2346,14 @@ func main() {
 		humaPrivacyHandler := operations.NewPrivacyHandler(privacyService)
 		operations.RegisterPrivacyRoutes(humaAPI, humaPrivacyHandler)
 		appLogger.Info("Huma privacy routes registered")
+
+		// Register the Huma data-export route (Issue #1587).
+		// ⚠ Also registered in operations.RegisterAllRoutesForSpec — `make generate-openapi` reads
+		// that function and never this file, so a route wired only here is invisible to the spec
+		// and to the generated client.
+		humaDataExportHandler := operations.NewDataExportHandler(dataExportService)
+		operations.RegisterDataExportRoutes(humaAPI, humaDataExportHandler)
+		appLogger.Info("Huma data export route registered")
 
 		// Register Huma category preview routes (Issue #559: Huma migration)
 		humaCategoryPreviewHandler := operations.NewCategoryPreviewHandler(categoryPreviewService)

@@ -46,6 +46,8 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	plaidHandler := &PlaidHandler{}
 	profileHandler := &ProfileHandler{}
 	privacyHandler := &PrivacyHandler{}
+	// Issue #1587: GDPR data export
+	dataExportHandler := &DataExportHandler{}
 	adminHandler := &AdminHandler{}
 	categoryPreviewHandler := &CategoryPreviewHandler{}
 	deletionHandler := &DeletionHandler{}
@@ -122,6 +124,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	RegisterPlaidRoutes(api, plaidHandler)
 	RegisterProfileRoutes(api, profileHandler)
 	RegisterPrivacyRoutes(api, privacyHandler)
+	RegisterDataExportRoutes(api, dataExportHandler)
 	RegisterAdminRoutes(api, adminHandler)
 	RegisterCategoryPreviewRoutes(api, categoryPreviewHandler)
 	RegisterDeletionRoutes(api, deletionHandler)
