@@ -50,8 +50,13 @@ const (
 // tags, notes and `reviewed` state that only the user could have produced, plus the
 // rule_execution_history trail behind them. The row is now retained and marked instead.
 //
-// The reason decides visibility, and the split is derivable from transactions.pending alone —
-// which matters, because this codebase does not store Plaid's pending_transaction_id.
+// The reason decides visibility, and the split is derivable from transactions.pending alone. That
+// remains true and is what this enum rests on. ⚠ The sentence that used to follow it — "because
+// this codebase does not store Plaid's pending_transaction_id" — is NO LONGER TRUE as of #1578:
+// the posted twin now carries transactions.pending_transaction_id_blind_idx, and the settlement
+// annotation move matches on it. The pointer is a LINK between the two rows; it is not, and must
+// not become, the input to this classification — a settled pending is recognised by its own
+// `pending` column under the tombstoning UPDATE's row lock, with no second read to race.
 type TransactionDeletedReason string
 
 const (
@@ -144,6 +149,21 @@ type Transaction struct {
 	// Payment details
 	PaymentChannel *string `json:"payment_channel,omitempty" db:"payment_channel"`
 	Pending        bool    `json:"pending" db:"pending"`
+
+	// PendingTransactionID is the provider's id of the PENDING transaction this one replaced.
+	// Plaid sets it on the POSTED transaction when a pending charge settles
+	// (plaid-go v23.0.0, plaid/model_transaction.go:47). Issue #1578.
+	//
+	// It is the ONLY safe way to link a settled pending to its posted twin. Matching on
+	// (account, amount, date window, merchant) instead can attach one transaction's category to a
+	// different transaction, which is worse than the bug it would fix.
+	//
+	// NOT SERIALISED and NOT a `db` column, deliberately. The plaintext is never stored and never
+	// read back: the repository derives transactions.pending_transaction_id_blind_idx from it on
+	// write and only ever MATCHES against that. So this field is write-only plumbing between the
+	// Plaid mapper and the repository, and putting it in the JSON contract would publish an
+	// external identifier the client has no use for.
+	PendingTransactionID *string `json:"-" db:"-"`
 
 	// User customization
 	UserNotes *string `json:"user_notes,omitempty" db:"user_notes"`

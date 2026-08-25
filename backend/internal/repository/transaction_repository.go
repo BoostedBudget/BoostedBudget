@@ -280,6 +280,23 @@ func (r *transactionRepository) encryptTransactionPIIFields(t *domain.Transactio
 	return extIDBlindIdx, nil
 }
 
+// pendingTwinBlindIndex derives transactions.pending_transaction_id_blind_idx from
+// domain.Transaction.PendingTransactionID (Plaid's pending_transaction_id). Issue #1578.
+//
+// It MUST use the same BlindIndex function external_transaction_id_blind_idx is derived with,
+// because the settlement move compares the two columns directly: a posted row's pointer is matched
+// against the pending row's external id. Deriving them differently would make every settlement
+// silently un-matchable, with no error anywhere.
+//
+// nil in, nil out. Almost every transaction is not a settlement, and NULL is the honest value.
+func (r *transactionRepository) pendingTwinBlindIndex(t *domain.Transaction) *string {
+	if t.PendingTransactionID == nil || *t.PendingTransactionID == "" {
+		return nil
+	}
+	blind := r.enc.BlindIndex(*t.PendingTransactionID)
+	return &blind
+}
+
 // decryptTransactionPIIFields decrypts PII fields on a transaction in-place.
 func (r *transactionRepository) decryptTransactionPIIFields(t *domain.Transaction) error {
 	decExtID, err := r.enc.DecryptNullableString(t.ExternalTransactionID)
@@ -339,7 +356,10 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	// Issue #1163: Added merchant_id (25 fields)
 	// Issue #1203: persist category override + category_source + review state on
 	// initial insert (was the documented #TODO-createbatch-overrides bug). 32 fields.
-	const numFields = 32
+	// Issue #1578: added pending_transaction_id_blind_idx (33 fields). The placeholder maths a few
+	// lines below is generated from numFields, so a new field is exactly three edits: this
+	// constant, one column name in the INSERT list, one append to valueArgs in the SAME position.
+	const numFields = 33
 	valueStrings := make([]string, 0, len(transactions))
 	valueArgs := make([]interface{}, 0, len(transactions)*numFields)
 
@@ -425,6 +445,8 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			categorySource,
 			transactions[i].Reviewed,
 			transactions[i].ReviewedAt,
+			// Issue #1578. Position must match the INSERT column list's last entry.
+			r.pendingTwinBlindIndex(&transactions[i]),
 		)
 	}
 
@@ -433,13 +455,36 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	// - UPDATE: FKs (account_id, linked_item_id, user_account_id) - changes on re-link
 	// - UPDATE: Plaid fields (amount, date, name, merchant_name, pending, etc.) - may change
 	// - UPDATE: external_transaction_id_blind_idx in case it was previously NULL
-	// - PRESERVE: User enrichments (user_notes, category_override_kind, tags, tags_source)
+	//
+	// ⚠ WHAT IS ACTUALLY PRESERVED (#1578 correction). This comment used to name FOUR columns --
+	// user_notes, category_override_kind, tags, tags_source -- and planning against that list
+	// silently drops four more. Derived from the clause below rather than from memory, the
+	// USER-AUTHORED columns this upsert preserves on conflict are:
+	//
+	//   in the INSERT list but absent from the SET clause, so EXCLUDED never reaches them:
+	//     user_notes, category_override_kind, pfc_primary_override, pfc_detailed_override,
+	//     custom_category_override_id, category_source, reviewed, reviewed_at
+	//   never in the INSERT column list AT ALL, so a conflict cannot touch them and neither can a
+	//   fresh insert -- see the tags gap noted below:
+	//     tags, tags_source, category_override_date
+	//   conditionally, via its own CASE: effective_category_name is preserved when the stored row
+	//     carries an override, and refreshed from EXCLUDED.pfc_primary when it does not.
+	//
+	// (id, user_id, source, external_transaction_id and created_at are also preserved; they are
+	// identity and provenance, not user enrichments.)
+	//
+	// ⚠ tags/tags_source ARE A PRE-EXISTING PERSISTENCE GAP, not a preservation choice. Being
+	// absent from the INSERT column list means an in-memory Tags value -- which rule application
+	// DOES produce, in-place, before this call (services/transaction_sync_service.go
+	// processAddedTransactions) -- is silently dropped on a fresh insert. #1578 does not inherit
+	// that gap into the settlement move: the move reads tags from the STORED pending row and
+	// writes them to the STORED posted row, so it is unaffected by what this INSERT omits. Closing
+	// the gap itself is a separate change to the rules-tagging path and is deliberately not made
+	// here.
 	//
 	// Issue #1213: RETURNING id, (xmax::text::bigint = 0) AS inserted
 	// xmax = 0 for a freshly inserted row; non-zero for a conflict-updated row.
 	// This lets the caller gate analytics/match-count side-effects on genuine inserts.
-	// Note: user_notes, category_override_kind, tags, tags_source are NOT in the SET
-	// clause so they will be PRESERVED on conflict.
 	query := fmt.Sprintf(`
 		INSERT INTO transactions
 		(id, user_id, account_id, linked_item_id, user_account_id,
@@ -448,7 +493,7 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 		 pfc_primary, pfc_detailed, pfc_confidence_level, pfc_category_icon_url, payment_channel, pending, user_notes,
 		 created_at, updated_at, effective_category_name,
 		 category_override_kind, pfc_primary_override, pfc_detailed_override, custom_category_override_id,
-		 category_source, reviewed, reviewed_at)
+		 category_source, reviewed, reviewed_at, pending_transaction_id_blind_idx)
 		VALUES %s
 		ON CONFLICT (source, external_transaction_id_blind_idx, user_id) DO UPDATE SET
 			account_id = EXCLUDED.account_id,
@@ -472,6 +517,24 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 			    WHEN transactions.category_override_kind IS NOT NULL THEN transactions.effective_category_name
 			    ELSE EXCLUDED.pfc_primary
 			END,
+			-- Issue #1578, and this COALESCE is the whole point of the clause.
+			--
+			-- Leaving the column OUT of this SET list would have been the obvious "preserve it"
+			-- choice, and it is wrong: a posted row already stored from an earlier delivery could
+			-- then NEVER learn a pointer that arrives later, so the settlement move would have
+			-- nothing to find and the user's work would stay stranded -- the exact bug, reached by
+			-- a slower route.
+			--
+			-- Putting it in unguarded is the opposite hazard: Plaid re-delivers transactions, and
+			-- an EXCLUDED value of NULL would erase a pointer we had already learned.
+			--
+			-- COALESCE resolves both: a non-NULL arrival wins, a NULL arrival is ignored. The
+			-- column is therefore monotonic -- once known, never unknown again. Plaid does not
+			-- repoint a settled transaction at a different pending id, so "a later non-NULL
+			-- overwrites an earlier non-NULL" is a correction, not a loss.
+			pending_transaction_id_blind_idx = COALESCE(
+			    EXCLUDED.pending_transaction_id_blind_idx,
+			    transactions.pending_transaction_id_blind_idx),
 			updated_at = NOW()
 		RETURNING id, (xmax::text::bigint = 0) AS inserted
 	`, strings.Join(valueStrings, ", "))
@@ -500,7 +563,15 @@ func (r *transactionRepository) CreateBatch(ctx context.Context, transactions []
 	return insertedIDs, nil
 }
 
-// Update updates an existing transaction
+// Update updates an existing transaction.
+//
+// #1578: this is the OTHER write path for Plaid data, and it is easy to miss. Plaid's `modified`
+// array does not go through CreateBatch -- services/transaction_sync_service.go
+// processModifiedTransactions calls this method instead -- so a posted transaction whose
+// pending_transaction_id only ever reaches us on a `modified` delivery would be permanently
+// invisible to the settlement move if this method ignored the pointer. It does not; see the
+// COALESCE on pending_transaction_id_blind_idx below, which has the same monotonic semantics as
+// CreateBatch's ON CONFLICT clause and the same reason for them.
 func (r *transactionRepository) Update(ctx context.Context, transaction *domain.Transaction) error {
 	transaction.UpdatedAt = time.Now()
 
@@ -516,6 +587,10 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		    merchant_name = $5, merchant_id = $6, pfc_primary = $7, pfc_detailed = $8, pfc_confidence_level = $9,
 		    pfc_category_icon_url = $10, payment_channel = $11, pending = $12, external_metadata = $13,
 		    user_notes = $14, updated_at = $15,
+		    -- #1578: monotonic, exactly as in CreateBatch's ON CONFLICT clause. A non-NULL arrival
+		    -- teaches a stored row its pending twin; a NULL arrival (every ordinary modification of
+		    -- a transaction that is not a settlement) must not erase what we already know.
+		    pending_transaction_id_blind_idx = COALESCE($18, pending_transaction_id_blind_idx),
 		    -- tombstone-exempt: HISTORICAL name resolution (#1569 Task 9). This recomputes the
 		    -- denormalised name for a row that ALREADY carries this override. Filtering
 		    -- tombstones here would set effective_category_name to NULL on every transaction
@@ -548,6 +623,7 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 		transaction.UpdatedAt,
 		transaction.ID,
 		transaction.UserID,
+		r.pendingTwinBlindIndex(transaction),
 	)
 
 	if err != nil {
@@ -561,7 +637,84 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 	return nil
 }
 
-// TombstoneByExternalID marks a provider-removed transaction as deleted instead of destroying it.
+// settlementCategoryMoveCond and settlementTagsMoveCond are the two "may this move" predicates used
+// by TombstoneByExternalID's settlement CTE. They are Go constants only because a SQL SET clause has
+// nowhere to name a shared expression, and each is spliced into several CASEs: one copy of the text
+// means the seven category columns cannot drift apart into an incoherent discriminated union, which
+// is the failure mode of writing the condition out seven times.
+//
+// THE CATEGORY CONDITION IS NOT "the twin is blank". It is "the twin has no MANUAL category", and
+// the difference decides whether the fix works at all. Rules are applied IN PLACE before the posted
+// twin is ever inserted (services/transaction_sync_service.go, processAddedTransactions calls
+// ApplyRulesToBatch before CreateBatch), so a posted twin ROUTINELY arrives already carrying
+// category_source = 'rule' and an override kind. A blank-row-only gate would therefore refuse the
+// move in the common case. `category_source` exists precisely to express the precedence that
+// resolves this: manual outranks rule, and the pending row's manual category is the user's own work.
+//
+// A manual category already on the twin wins, because it is NEWER user work about the same charge.
+const settlementCategoryMoveCond = `(s.category_source = 'manual' AND twin.category_source IS DISTINCT FROM 'manual')`
+
+// THE TAGS CONDITION IS "fill, do not merge". tags/tags_source are two JSONB arrays that must stay
+// in lockstep -- every tag needs its provenance entry -- and a union would have to deduplicate
+// across both, in SQL, with no test able to distinguish a correct merge from a plausible one. So
+// tags move only onto a twin that has none, and a twin with its own tags keeps them. This is the
+// refusal-to-overwrite rule the design note in processRemovedTransactions asked for; the pending
+// row retains its own copy either way, because the move copies rather than cuts.
+const settlementTagsMoveCond = `(COALESCE(jsonb_array_length(twin.tags), 0) = 0 AND COALESCE(jsonb_array_length(s.tags), 0) > 0)`
+
+// TombstoneByExternalID marks a provider-removed transaction as deleted instead of destroying it,
+// and -- when the removal is a SETTLEMENT -- moves the user's work onto the posted twin first.
+//
+// THE SETTLEMENT MOVE (#1578). When a pending charge posts, Plaid removes the pending transaction
+// and delivers the posted one as a NEW row with a different transaction_id. Task 7 made that
+// removal a tombstone rather than a DELETE, so nothing is destroyed -- but a settled pending renders
+// NOWHERE (surfacing it would double-count the same spend against its twin), so the user's category
+// override, notes, tags and `reviewed` state ended up stranded on an invisible row while the posted
+// twin arrived blank. That happened every time anybody categorised a pending charge.
+//
+// The twin is identified by Plaid's OWN pointer -- transactions.pending_transaction_id_blind_idx,
+// migration 000168, populated from Transaction.PendingTransactionId. It is NEVER identified by
+// amount/date/merchant similarity: a heuristic can attach one transaction's category to a different
+// transaction, which is an unrecoverable corruption of user data and strictly worse than the bug.
+//
+// WHY ONE STATEMENT AND NOT A TRANSACTION. The design note this implements asked for the move to
+// happen "inside its own transaction", and there was no transaction to join: this method is one bare
+// statement on r.db, and r.db is whatever the caller handed the repository. A CTE is strictly
+// better than introducing a pgx.Tx here. Both sub-statements are one statement, so they are atomic
+// against any isolation level without the repository having to own a transaction it does not own
+// today; and there is no window in which a crash could leave the annotations on both rows, i.e.
+// double-categorised, which is the failure the note was worried about.
+//
+// The CTE also gets the read-consistency right for free: `tombstoned` RETURNS the values it is
+// about to overwrite for deleted_*, and leaves the annotation columns untouched, so `moved` reads
+// exactly the pre-tombstone annotation state under the row lock the UPDATE already holds.
+//
+// WHAT MOVES. All of it -- which is more than the four columns the CreateBatch comment used to name.
+// user_notes; the seven-column category tuple (kind, pfc primary/detailed override, custom category
+// id, category_source, override date, effective_category_name); tags and tags_source; reviewed and
+// reviewed_at. See settlementCategoryMoveCond / settlementTagsMoveCond for the two refusal rules.
+//
+// WHAT DOES NOT MOVE, and why each is deliberate:
+//   - Nothing at all unless the removed row was PENDING (`AND s.pending`). A posted removal is a
+//     bank reversal, a distinct event with no twin; donating its annotations to an unrelated row
+//     carrying a stale pointer would be the corruption this design exists to avoid.
+//   - Nothing to the removed row itself (`twin.id <> s.id`), and nothing across tenants
+//     (`twin.user_id = s.user_id`). The pointer is a provider identifier; it carries no ownership.
+//   - Nothing onto a row that is itself tombstoned (`twin.deleted_at IS NULL`).
+//   - updated_at is not touched, for the same reason the tombstone does not touch it: it tracks
+//     PROVIDER-data changes, and no provider data changed on the twin.
+//   - The pending row keeps its own copy. The move COPIES; forensics on the retained row is the
+//     whole point of #1569, and a cut would empty it.
+//
+// RESIDUAL, and it is not closed here. If Plaid delivers the removal in one sync and the posted
+// twin only in a LATER one, the twin does not exist when this runs and the annotations stay on the
+// tombstone. Closing it needs the mirror hook in the storage path (on inserting a posted row with a
+// pointer, look for an already-tombstoned pending row and pull its annotations forward). Whether
+// Plaid can actually split a settlement across syncs is NOT established -- it is a question about
+// the provider's delivery semantics, not about this code -- and the common case is covered by
+// ordering: processTransactions aggregates every page before storing, then runs added and modified
+// (steps 6 and 7) before removed (step 8), so a settlement delivered together already has its twin
+// stored when this executes.
 //
 // WHY THE REASON IS COMPUTED IN SQL. The caller has no reliable way to know whether the row was
 // pending: reading it first and then updating leaves a window in which the same row posts (the
@@ -585,16 +738,68 @@ func (r *transactionRepository) TombstoneByExternalID(
 	deletedBy string,
 ) (domain.TransactionDeletedReason, error) {
 	query := fmt.Sprintf(`
-		UPDATE transactions
-		SET deleted_at     = NOW(),
-		    deleted_by     = $4,
-		    deleted_reason = CASE WHEN pending THEN '%s' ELSE '%s' END
-		WHERE source = $1
-		  AND external_transaction_id_blind_idx = $2
-		  AND user_id = $3
-		  AND deleted_at IS NULL
-		RETURNING deleted_reason
-	`, domain.TxnDeletedProviderRemovedPending, domain.TxnDeletedProviderRemovedPosted)
+		WITH tombstoned AS (
+			UPDATE transactions
+			SET deleted_at     = NOW(),
+			    deleted_by     = $4,
+			    deleted_reason = CASE WHEN pending THEN '%[1]s' ELSE '%[2]s' END
+			WHERE source = $1
+			  AND external_transaction_id_blind_idx = $2
+			  AND user_id = $3
+			  AND deleted_at IS NULL
+			RETURNING id, user_id, pending,
+			          user_notes, category_override_kind, pfc_primary_override,
+			          pfc_detailed_override, custom_category_override_id, category_source,
+			          category_override_date, effective_category_name, tags, tags_source,
+			          reviewed, reviewed_at, deleted_reason
+		),
+		moved AS (
+			-- twin.deleted_at IS NULL is in this statement's own WHERE, below. It is NOT there
+			-- because a guard asked: TestNoTransactionReadForgetsTheTombstoneFilter audits
+			-- FROM/JOIN/USING references and never looks at an UPDATE's target, so nothing would
+			-- have complained. Verified by deleting the predicate's would-be exemption token and
+			-- re-running the package: still green. Do not remove the predicate -- donating a
+			-- settled pending's annotations onto an already-tombstoned row would write user work
+			-- onto a second row that renders nowhere.
+			UPDATE transactions AS twin
+			SET user_notes = COALESCE(twin.user_notes, s.user_notes),
+
+			    category_override_kind      = CASE WHEN %[3]s THEN s.category_override_kind      ELSE twin.category_override_kind      END,
+			    pfc_primary_override        = CASE WHEN %[3]s THEN s.pfc_primary_override        ELSE twin.pfc_primary_override        END,
+			    pfc_detailed_override       = CASE WHEN %[3]s THEN s.pfc_detailed_override       ELSE twin.pfc_detailed_override       END,
+			    custom_category_override_id = CASE WHEN %[3]s THEN s.custom_category_override_id ELSE twin.custom_category_override_id END,
+			    category_source             = CASE WHEN %[3]s THEN s.category_source             ELSE twin.category_source             END,
+			    category_override_date      = CASE WHEN %[3]s THEN s.category_override_date      ELSE twin.category_override_date      END,
+			    effective_category_name     = CASE WHEN %[3]s THEN s.effective_category_name     ELSE twin.effective_category_name     END,
+
+			    tags        = CASE WHEN %[4]s THEN s.tags        ELSE twin.tags        END,
+			    tags_source = CASE WHEN %[4]s THEN s.tags_source ELSE twin.tags_source END,
+
+			    reviewed    = twin.reviewed OR s.reviewed,
+			    reviewed_at = CASE
+			        WHEN twin.reviewed THEN twin.reviewed_at
+			        WHEN s.reviewed    THEN s.reviewed_at
+			        ELSE twin.reviewed_at
+			    END
+			FROM tombstoned s
+			WHERE twin.pending_transaction_id_blind_idx = $2
+			  AND twin.user_id = s.user_id
+			  AND twin.id <> s.id
+			  AND twin.deleted_at IS NULL
+			  AND s.pending
+			  AND (s.user_notes IS NOT NULL
+			       OR s.category_source = '%[5]s'
+			       OR s.reviewed
+			       OR COALESCE(jsonb_array_length(s.tags), 0) > 0)
+		)
+		SELECT deleted_reason FROM tombstoned
+	`,
+		domain.TxnDeletedProviderRemovedPending,
+		domain.TxnDeletedProviderRemovedPosted,
+		settlementCategoryMoveCond,
+		settlementTagsMoveCond,
+		domain.CategorySourceManual,
+	)
 
 	var reason string
 	err := r.db.QueryRow(ctx, query, string(source), r.enc.BlindIndex(externalID), userID, deletedBy).Scan(&reason)
