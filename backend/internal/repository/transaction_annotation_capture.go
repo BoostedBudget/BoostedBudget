@@ -287,3 +287,54 @@ func runCapturingUpdate(
 	}
 	return updatedRows, nil
 }
+
+// runCapturingQuery is runCapturingStatement for a capturing statement whose result is a SET of
+// rows rather than one (#1590).
+//
+// The one caller is DeleteUserCascade's dangling-override clear, which projects the SURVIVING owner
+// of every row it rewrote so the caller can bump those owners' caches. That is a multi-row
+// RETURNING, so it cannot come back through QueryRow.
+//
+// ⚠ THE ROWS MUST BE FULLY DRAINED BEFORE THE COMMIT, and that is why the scan callback runs inside
+// this function rather than the rows being handed back. pgx buffers nothing: a Commit with a
+// partially-read result set discards the remainder, and here the remainder is the list of users
+// whose cache is about to serve a name that no longer exists.
+func runCapturingQuery(
+	ctx context.Context,
+	db DB,
+	lockWhere string,
+	lockArgs []any,
+	sql string,
+	args []any,
+	scan func(pgx.Rows) error,
+) error {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin annotation capture transaction: %w", err)
+	}
+	// Rollback is a no-op once Commit has succeeded. context.Background(), not ctx: a cancelled
+	// request context must still release the row locks this transaction is holding.
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	if err := annotationLockTargets(ctx, tx, lockWhere, lockArgs...); err != nil {
+		return err
+	}
+
+	rows, err := tx.Query(ctx, sql, args...)
+	if err != nil {
+		return err
+	}
+	scanErr := scan(rows)
+	rows.Close()
+	if scanErr != nil {
+		return scanErr
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit annotation capture transaction: %w", err)
+	}
+	return nil
+}

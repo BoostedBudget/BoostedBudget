@@ -161,6 +161,7 @@ func TestAnnotationCaptureSourcesMatchTheCheckConstraint(t *testing.T) {
 		domain.TransactionAnnotationChangeCategory,
 		domain.TransactionAnnotationChangeReview,
 		domain.TransactionAnnotationChangeSettlement,
+		domain.TransactionAnnotationChangeErasure,
 	} {
 		assert.True(t, allowed[source],
 			"the writer interpolates %q, which the live CHECK would reject", source)
@@ -209,7 +210,63 @@ func TestAnnotationCaptureSourceAttributionIsUnchanged(t *testing.T) {
 		"both category statements attribute their rows to the category source")
 	assert.Equal(t, 1, strings.Count(text, "domain.TransactionAnnotationChangeReview"),
 		"SetReviewed is the single statement behind BOTH review endpoints")
-	assert.Equal(t, 1, strings.Count(text, "domain.TransactionAnnotationChangeSettlement"),
-		"TombstoneByExternalID's settlement move is the fourth capturing statement (#1569 fix "+
-			"round 2 / D-4) and files its rows under their own source")
+	assert.Equal(t, 2, strings.Count(text, "domain.TransactionAnnotationChangeSettlement"),
+		"BOTH halves of the settlement move file their rows under the settlement source: "+
+			"TombstoneByExternalID's tombstone-side move (#1569 fix round 2 / D-4) and "+
+			"PullForwardSettledPendingAnnotations, the storage-side mirror that closes the "+
+			"cross-sync case (#1586). They are one event reached by two routes, so a reader must "+
+			"not have to know which route ran to interpret the row.")
+}
+
+// TestSettlementMoveSetClausesAgree is the drift guard the two settlement hooks need and cannot get
+// any other way (#1586).
+//
+// THE SHAPE OF THE PROBLEM. The same event — a pending charge settling — reaches the annotation move
+// by two routes: TombstoneByExternalID when the twin is already stored, and
+// PullForwardSettledPendingAnnotations when it arrives in a later sync. They must write the SAME
+// twelve columns under the SAME three refusal rules, or the user's annotation depends on the order
+// Plaid happened to deliver two records in, which is not a property any user could reason about.
+//
+// WHY THE SET CLAUSE IS NOT FACTORED INTO A SHARED CONSTANT, which is the obvious fix and is wrong
+// here. TestAnnotationCaptureIsUsedByEveryAnnotationWritingStatement finds annotation writes by
+// matching `<column> =` against the RENDERED TEXT of each statement. Move the SET clause into a
+// package-level string and BOTH statements stop containing any tracked column assignment: they
+// vanish from that guard's universe entirely, and the guard keeps passing on the other findings —
+// the exact "a guard can stop guarding silently" failure this repository has already hit. So the
+// duplication is deliberate, and this test is the price of it.
+//
+// The three refusal PREDICATES are genuinely shared (settlementCategoryMoveCond,
+// settlementTagsMoveCond, settlementReviewMoveCond); it is only the SET clause around them that is
+// written twice.
+func TestSettlementMoveSetClausesAgree(t *testing.T) {
+	src, err := os.ReadFile("transaction_repository.go")
+	require.NoError(t, err)
+
+	// Each clause runs from the `user_notes` assignment that opens it to the `FROM` that ends it.
+	clauseRe := regexp.MustCompile(`(?s)SET user_notes = COALESCE\(twin\.user_notes, s\.user_notes\),(.*?)\n\t*(?:--|FROM)`)
+	matches := clauseRe.FindAllStringSubmatch(string(src), -1)
+	require.Len(t, matches, 2,
+		"expected exactly two settlement SET clauses (TombstoneByExternalID and "+
+			"PullForwardSettledPendingAnnotations). Finding a different number means either a third "+
+			"hook appeared without being compared, or this regexp has stopped matching its corpus "+
+			"and the comparison below is vacuous")
+
+	normalise := func(s string) string {
+		return strings.Join(strings.Fields(s), " ")
+	}
+	assert.Equal(t, normalise(matches[0][1]), normalise(matches[1][1]),
+		"the tombstone-side move and the storage-side mirror must write the same columns under the "+
+			"same conditions; a user's annotation must not depend on which order Plaid delivered "+
+			"the removal and the posted twin in")
+
+	// A comparison of two empty strings is equal and proves nothing. Pin that the clause really
+	// carries the twelve-column move.
+	for _, col := range []string{
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
+		"effective_category_name", "tags", "tags_source", "reviewed", "reviewed_at",
+	} {
+		assert.Contains(t, matches[0][1], col+" ",
+			"the compared clause must actually contain the moved columns")
+	}
 }

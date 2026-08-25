@@ -1053,6 +1053,17 @@ func (s *transactionSyncService) processAddedTransactions(
 
 	s.logger.Info("stored added transactions", "stored", len(transactions), "skipped", len(added)-len(transactions))
 
+	// Issue #1586: the stranded-annotation mirror. TombstoneByExternalID moves a settling pending
+	// row's annotations onto its posted twin, but only a twin that is ALREADY stored — which is
+	// guaranteed within one sync by the added/modified/removed ordering and guaranteed by nothing
+	// across syncs. When Plaid delivers the removal in sync N and the posted twin in sync N+1, the
+	// user's category, notes, tags and review state stay on a row that renders nowhere.
+	//
+	// So the twin, on arrival, looks BACK for an already-tombstoned pending row it points at. Only
+	// rows carrying Plaid's own pending_transaction_id are candidates; the pairing is never a
+	// heuristic on amount/date/merchant.
+	s.pullForwardStrandedSettlements(ctx, linkedItem.UserID, transactions)
+
 	// Issue #1213: Emit analytics/match-count side-effects only for genuinely inserted rows.
 	if s.ruleApplicationService != nil && len(ruleApplications) > 0 {
 		s.ruleApplicationService.EmitBatchSideEffects(ctx, linkedItem.UserID, ruleApplications, insertedIDs)
@@ -1146,6 +1157,10 @@ func (s *transactionSyncService) processModifiedTransactions(
 	upsertedCount := 0
 	recoveredCount := 0
 
+	// #1586: rows this pass stored that carry Plaid's pending_transaction_id, collected for the
+	// stranded-settlement pull-forward after the loop.
+	var settledCandidates []domain.Transaction
+
 	// Issue #1163: Batch-upsert merchants for modified transactions (best-effort)
 	// Build domain txns temporarily just to use shared upsertMerchants helper
 	modifiedDomainTxns := make([]domain.Transaction, len(modified))
@@ -1225,6 +1240,7 @@ func (s *transactionSyncService) processModifiedTransactions(
 			s.logger.Info("upserted modified transaction that had no stored row",
 				"transaction_id", plaidTxn.TransactionId)
 			upsertedCount++
+			settledCandidates = append(settledCandidates, *newTxn)
 			continue
 		}
 
@@ -1246,13 +1262,62 @@ func (s *transactionSyncService) processModifiedTransactions(
 			return fmt.Errorf("failed to update transaction %s: %w", plaidTxn.TransactionId, err)
 		}
 
+		settledCandidates = append(settledCandidates, *newTxn)
 		successCount++
 	}
+
+	// Issue #1586: a `modified` delivery is the OTHER way a stored row can learn a pointer. Both
+	// write paths derive pending_transaction_id_blind_idx, and Update writes it as
+	// COALESCE(new, stored), so a pointer arriving on a modification is kept. Covering only the
+	// added path would leave that route stranded for exactly the same reason the ticket describes.
+	s.pullForwardStrandedSettlements(ctx, linkedItem.UserID, settledCandidates)
 
 	s.logger.Info("updated modified transactions",
 		"updated", successCount, "upserted", upsertedCount,
 		"identity_recovered_from_stored_row", recoveredCount, "skipped", skippedCount)
 	return nil
+}
+
+// pullForwardStrandedSettlements hands the repository the ids of the rows just stored that carry
+// Plaid's pending_transaction_id, so it can pull forward any annotations stranded on an
+// already-tombstoned pending twin (#1586).
+//
+// BEST-EFFORT, DELIBERATELY. It is a repair of a display problem, not part of storing the provider's
+// data: failing the sync here would stall the cursor and re-deliver the whole page for something
+// that will be retried on the next sync anyway, and #1570's storage-before-cursor contract makes
+// re-delivery the normal outcome. The repository call is idempotent, so a retry costs nothing.
+//
+// Rows with no pointer are filtered out here rather than in SQL: the overwhelming majority of a
+// sync batch is not a settlement, and there is no reason to send their ids to the database.
+func (s *transactionSyncService) pullForwardStrandedSettlements(
+	ctx context.Context,
+	userID string,
+	stored []domain.Transaction,
+) {
+	ids := make([]string, 0, len(stored))
+	for i := range stored {
+		if stored[i].PendingTransactionID == nil || *stored[i].PendingTransactionID == "" {
+			continue
+		}
+		if stored[i].ID == "" {
+			continue
+		}
+		ids = append(ids, stored[i].ID)
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	moved, err := s.transactionRepo.PullForwardSettledPendingAnnotations(ctx, userID, ids)
+	if err != nil {
+		s.logger.Warn("failed to pull forward stranded settlement annotations",
+			"user_id", userID, "candidates", len(ids), "error", err)
+		return
+	}
+	if moved > 0 {
+		s.logger.Info("pulled forward annotations stranded by a cross-sync settlement",
+			"user_id", userID, "candidates", len(ids), "moved", moved)
+	}
 }
 
 // detectAndUpsertProposedContributions creates proposed contribution rows for every

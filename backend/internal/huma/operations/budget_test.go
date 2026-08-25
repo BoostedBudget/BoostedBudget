@@ -164,6 +164,10 @@ func (m *mockTransactionRepoForBudget) CreateBatch(ctx context.Context, txs []do
 func (m *mockTransactionRepoForBudget) Update(ctx context.Context, tx *domain.Transaction) error {
 	return nil
 }
+func (m *mockTransactionRepoForBudget) PullForwardSettledPendingAnnotations(ctx context.Context, userID string, transactionIDs []string) (int64, error) {
+	return 0, nil
+}
+
 func (m *mockTransactionRepoForBudget) TombstoneByExternalID(ctx context.Context, source domain.TransactionSource, externalID string, userID string, deletedBy string) (domain.TransactionDeletedReason, error) {
 	return domain.TxnDeletedProviderRemovedPosted, nil
 }
