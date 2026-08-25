@@ -72,10 +72,11 @@ type SavingsContributionRepository interface {
 	//
 	// Both directions are pinned by TestSavingsContributions_DeletedGoal_Integration: it asserts
 	// that this read sees the tombstoned goal AND that ListByGoal, SumConfirmedByGoal and
-	// SumConfirmedByGoalInPeriod still do not. (The `tombstone-exempt:` reasons in the SQL below
-	// cite the same test, but those live in a raw string literal, which the cited-test-name guard
-	// in internal/testsupport/citations does not scan — only real Go comments like this one are
-	// checked, so this is the copy that cannot rot silently.)
+	// SumConfirmedByGoalInPeriod still do not. (This copy used to exist because the reasons in the
+	// SQL below live in a raw string literal, which the cited-test-name guard in
+	// internal/testsupport/citations could not see. It can now — #1569 T8 taught it to read SQL
+	// comments inside string literals — so both copies are checked, and this one is kept only
+	// because a reader of the interface should not have to open the implementation.)
 	ListByDeletedGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error)
 
 	// SumConfirmedByDeletedGoal is SumConfirmedByGoal for a TOMBSTONED goal: the confirmed total

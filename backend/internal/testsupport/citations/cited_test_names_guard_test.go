@@ -5,10 +5,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os/exec"
 	"path/filepath"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/sourcefiles"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -21,8 +23,9 @@ import (
 // decides a behaviour is already covered, and how a reviewer decides a change is safe. When
 // TestFoo does not exist, the comment is worse than absent, because it is believed.
 //
-// WHAT THIS GUARD DOES: every `TestXxx` identifier appearing in a comment in tracked Go source
-// under backend/ must resolve to something real — an actual `func TestXxx(`, a declared identifier
+// WHAT THIS GUARD DOES: every `TestXxx` identifier appearing in a comment in Go source under
+// backend/ — a Go comment, or an SQL comment inside a string literal (#1569 T8) — must resolve to
+// something real — an actual `func TestXxx(`, a declared identifier
 // of that name, or a PREFIX of a real test name.
 //
 // WHY THE PREFIX RULE. `go test -run TestAccountRepository_PurgeAccount` is the normal way to cite a
@@ -92,6 +95,21 @@ var brokenCitationBaseline = map[string]bool{
 
 var citedTestName = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]{4,}\b`)
 
+// sqlComment matches the two SQL comment forms as they appear inside a Go string literal.
+var sqlComment = regexp.MustCompile(`(?s)--[^\n]*|/\*.*?\*/`)
+
+// sqlCommentCitations returns the test names cited from SQL comments inside one string literal.
+// Pulled out as a function so TestSQLCommentCitations_AreExtracted can construct the case; the
+// alternative is a meta-test that can only assert the corpus is green, which is what let this hole
+// sit open.
+func sqlCommentCitations(text string) []string {
+	var out []string
+	for _, span := range sqlComment.FindAllString(text, -1) {
+		out = append(out, citedTestName.FindAllString(span, -1)...)
+	}
+	return out
+}
+
 // citationVerdict is the whole decision, pure so the meta-tests can construct each case.
 // `defined` is the set of real `func TestXxx` names; `declared` is every other identifier of that
 // shape (a struct called TestBoostOutput is not a citation).
@@ -112,9 +130,9 @@ func TestEveryCitedTestNameResolves(t *testing.T) {
 	// Repo root: backend/internal/testsupport/citations -> ... -> repo root.
 	const repoRoot = "../../../.."
 
-	out, err := exec.Command("git", "-C", repoRoot, "ls-files", "-z", "--", "backend").Output()
+	files, err := sourcefiles.Union(repoRoot, "backend", sourcefiles.HasExt(".go"))
 	if err != nil {
-		t.Fatalf("git ls-files failed: %v — this guard must fail closed rather than scan nothing", err)
+		t.Fatalf("listing backend Go source: %v — this guard must fail closed rather than scan nothing", err)
 	}
 
 	defined := map[string]bool{}
@@ -126,10 +144,7 @@ func TestEveryCitedTestNameResolves(t *testing.T) {
 	cites := map[string][]site{}
 	scanned := 0
 
-	for _, rel := range strings.Split(string(out), "\x00") {
-		if !strings.HasSuffix(rel, ".go") {
-			continue
-		}
+	for _, rel := range files {
 		fset := token.NewFileSet()
 		file, parseErr := parser.ParseFile(fset, filepath.Join(repoRoot, rel), nil, parser.ParseComments)
 		if parseErr != nil {
@@ -168,6 +183,31 @@ func TestEveryCitedTestNameResolves(t *testing.T) {
 				}
 			}
 		}
+
+		// A COMMENT IS NOT ALWAYS A GO COMMENT. file.Comments holds `//` and `/* */` only, so a
+		// citation written inside an SQL comment in a raw string literal — which is where this
+		// branch's `-- tombstone-exempt:` reasons live, four of which cite a test name — was
+		// invisible to this guard. savings_contribution_repository.go went as far as duplicating
+		// two of them into a real Go comment specifically so they would be checked.
+		//
+		// Only SQL COMMENT text is scanned, not every literal: the baseline map above and this
+		// file's own meta-tests are full of deliberately fabricated names as ordinary string data,
+		// and scanning those would make the guard report itself.
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			text, unqErr := strconv.Unquote(lit.Value)
+			if unqErr != nil {
+				return true
+			}
+			line := fset.Position(lit.Pos()).Line
+			for _, m := range sqlCommentCitations(text) {
+				cites[m] = append(cites[m], site{rel, line})
+			}
+			return true
+		})
 	}
 
 	// Fail closed. Zero scanned files, or a defined-set that failed to populate, would make every
@@ -285,5 +325,42 @@ func TestCitationBaseline_IsBoundedAndNonEmpty(t *testing.T) {
 	if len(brokenCitationBaseline) > 33 {
 		t.Fatalf("the baseline holds %d entries, above the 33 recorded when this guard was written; "+
 			"the ratchet only turns one way", len(brokenCitationBaseline))
+	}
+}
+
+// TestSQLCommentCitations_AreExtracted is the constructed case for #1569 T8. Before it, a
+// `-- tombstone-exempt:` reason citing a fabricated test name left this guard green, because
+// file.Comments does not contain the inside of a raw string literal. Three such reasons on this
+// branch cite a test name and had no other copy anywhere a guard could see.
+func TestSQLCommentCitations_AreExtracted(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want string
+	}{
+		{
+			"a line comment inside SQL",
+			// Split so this fixture is not itself a citation — the guard scans this file too.
+			"SELECT 1 FROM t\n-- tombstone-exempt(t): pinned by " + "Test" + "Fabricated_DoesNotExist.\nWHERE x = 1",
+			"Test" + "Fabricated_DoesNotExist",
+		},
+		{
+			"a block comment inside SQL",
+			"SELECT 1 /* history filter, see " + "Test" + "SomeOther_Thing */ FROM t",
+			"Test" + "SomeOther_Thing",
+		},
+		{
+			"ordinary string data is not an SQL comment",
+			`brokenCitationBaseline holds "` + "Test" + `NotACitation_JustData"`,
+			"",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := strings.Join(sqlCommentCitations(tc.text), ",")
+			if got != tc.want {
+				t.Fatalf("sqlCommentCitations = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
