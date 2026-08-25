@@ -131,6 +131,7 @@ export * from './deadLetterRetryResponse';
 export * from './deadLetterStatsResponse';
 export * from './deadLetterStatsResponseByKind';
 export * from './declineTransferSuggestionMatchOutputBody';
+export * from './deletedGoalContributionsBody';
 export * from './deleteHouseholdParams';
 export * from './deletionResidueMetrics';
 export * from './detailed';
