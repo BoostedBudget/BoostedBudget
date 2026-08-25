@@ -258,7 +258,7 @@ func (r *savingsGoalRepository) GetByUserID(ctx context.Context, userID string) 
 func (r *savingsGoalRepository) GetDeletedByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
 	query := `SELECT ` + goalSelectColsWithDeletedAt + `
 		FROM savings_goals
-		-- tombstone-exempt: THIS READ IS THE TOMBSTONE LISTING ITSELF (#1569 Task 12). Inverting
+		-- tombstone-exempt(savings_goals): THIS READ IS THE TOMBSTONE LISTING ITSELF (#1569 Task 12). Inverting
 		-- the predicate is the entire purpose; see GetDeletedByUserID's interface doc for why the
 		-- listing has to exist at all. Tenancy is unchanged and is asserted by
 		-- TestSavingsGoals_DeletedListing_Integration, which deletes a second user's goal in the
@@ -460,7 +460,7 @@ func (r *savingsGoalRepository) PurgeGoal(ctx context.Context, id, userID string
 	//
 	var deletedAt *time.Time
 	err = tx.QueryRow(ctx, `
-		-- tombstone-exempt: this is the purge path. It exists precisely to act on an
+		-- tombstone-exempt(savings_goals): this is the purge path. It exists precisely to act on an
 		-- already-tombstoned goal, so excluding tombstones here would leave it nothing to purge.
 		SELECT deleted_at FROM savings_goals WHERE id = $1 AND user_id = $2 FOR UPDATE`,
 		id, userID,

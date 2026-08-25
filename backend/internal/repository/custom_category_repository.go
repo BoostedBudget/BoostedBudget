@@ -328,7 +328,7 @@ func (r *customCategoryRepository) CountByUserID(ctx context.Context, userID str
 // See the interface method for why this one is tombstone-blind and GetLiveNamesByIDs is not.
 func (r *customCategoryRepository) GetNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
 	return r.namesByIDs(ctx, userID, ids, `
-		-- tombstone-exempt: HISTORICAL name resolution (#1569 Task 9). This is the enrichment
+		-- tombstone-exempt(custom_categories): HISTORICAL name resolution (#1569 Task 9). This is the enrichment
 		-- path for rows that ALREADY reference the category — a transaction filed under it, a
 		-- rule that targets it. Excluding tombstones here would render the user's own past
 		-- transactions with a blank category, which is the silent history rewrite this task
@@ -607,7 +607,7 @@ func (r *customCategoryRepository) DeleteWithReassignment(ctx context.Context, u
 		WHERE custom_category_id = $2
 		  AND deleted_at IS NULL
 		  AND budget_id IN (
-		    -- tombstone-exempt: OWNERSHIP SCOPING, not a listing (#1569 Task 9). This subquery
+		    -- tombstone-exempt(budgets b): OWNERSHIP SCOPING, not a listing (#1569 Task 9). This subquery
 		    -- exists to answer "whose budget is this line on", and a TOMBSTONED budget is still
 		    -- the same user's. Adding b.deleted_at IS NULL would silently skip any live budget
 		    -- line hanging off a deleted budget, leaving it pointing at a deleted category --

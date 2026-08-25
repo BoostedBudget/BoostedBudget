@@ -594,7 +594,7 @@ func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID
 			cc.parent_id, cc.parent_pfc_primary,
 			bc.savings_goal_id, bc.auto_created, bc.managed_by_goal_id,
 			sg.name AS savings_goal_name
-		-- tombstone-exempt: the cc join resolves the PARENT LINKAGE of a budget line that is
+		-- tombstone-exempt(custom_categories cc): the cc join resolves the PARENT LINKAGE of a budget line that is
 		-- itself already tombstone-filtered (bc.deleted_at IS NULL). DeleteWithReassignment
 		-- tombstones a category's budget lines in the same transaction as the category, so a live
 		-- bc never names a tombstoned cc; adding AND cc.deleted_at IS NULL would buy nothing and
@@ -672,7 +672,7 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 			cc.parent_id, cc.parent_pfc_primary,
 			bc.savings_goal_id, bc.auto_created, bc.managed_by_goal_id,
 			sg.name AS savings_goal_name
-		-- tombstone-exempt: identical to GetCategoriesByBudgetID above — the cc join is parent
+		-- tombstone-exempt(custom_categories cc): identical to GetCategoriesByBudgetID above — the cc join is parent
 		-- linkage for an already tombstone-filtered bc row. #1569 T9.
 		FROM budget_categories bc
 		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
@@ -889,7 +889,7 @@ func (r *budgetRepository) GetCategoriesMatchingTransaction(ctx context.Context,
 				bc.custom_category_id, bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 				bc.tags, bc.match_logic
 			FROM budget_categories bc
-			-- tombstone-exempt: the two custom_categories subqueries below resolve the PARENT of
+			-- tombstone-exempt(custom_categories): the two custom_categories subqueries below resolve the PARENT of
 			-- the category a transaction is already filed under, so its spend rolls up to the
 			-- right budget line. The transaction is history; if its category has since been
 			-- tombstoned, its budget lines were tombstoned with it and bc.deleted_at IS NULL

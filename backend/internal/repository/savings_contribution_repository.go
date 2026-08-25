@@ -592,7 +592,7 @@ func (r *savingsContributionRepository) ListByGoal(ctx context.Context, userID, 
 func (r *savingsContributionRepository) ListByDeletedGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error) {
 	query := `SELECT ` + contributionSelectColsJoined + `
 		FROM savings_goal_contributions c
-		-- tombstone-exempt: THIS READ IS THE DELETED GOAL'S LEDGER ITSELF (#1569 T2). Inverting the
+		-- tombstone-exempt(savings_goals g): THIS READ IS THE DELETED GOAL'S LEDGER ITSELF (#1569 T2). Inverting the
 		-- predicate is the entire purpose, exactly as in SavingsGoalRepository.GetDeletedByUserID:
 		-- the caller has deliberately named a goal it knows is deleted, from the deleted-goals
 		-- surface, and the endpoint's whole job is to prove the contributions were retained.
@@ -632,7 +632,7 @@ func (r *savingsContributionRepository) SumConfirmedByDeletedGoal(ctx context.Co
 	query := `
 		SELECT COALESCE(SUM(c.amount), 0)
 		FROM savings_goal_contributions c
-		-- tombstone-exempt: the companion sum for ListByDeletedGoal (#1569 T2) — same inverted
+		-- tombstone-exempt(savings_goals g): the companion sum for ListByDeletedGoal (#1569 T2) — same inverted
 		-- predicate, same reason, same unchanged tenancy scoping. Deliberately NOT called from
 		-- SavingsProgressService or BudgetSyncService: those must keep using SumConfirmedByGoal so
 		-- a deleted goal contributes nothing to progress or to a budget period's spend.
