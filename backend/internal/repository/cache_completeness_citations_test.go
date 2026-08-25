@@ -34,7 +34,24 @@ package repository
 //     #1565's deletions shortened to 1137 lines, and eleven main.go citations left pointing at a comment fragment,
 //     at `DB: db,` and at `})` after this branch moved main.go by ~30 lines.
 //
-//     So an IN-RANGE check is now enforced (TestExactCitationsAreInRange below) for exact
+//     ⚠ #1569 T8 EXTENDED THE IN-RANGE CHECK BEYOND THIS FILE. TestCitedLineNumbersAreInRange
+//     (internal/testsupport/citations) applies the same rule to every exact `file.go:NNN` citation
+//     in a Go comment anywhere under backend/, plus SQL comments inside string literals. It found
+//     zero out-of-range citations at the time it was written, so it is a ratchet rather than a
+//     cleanup. It does NOT subsume this file's check, which also enforces path resolution and the
+//     deferral rules within the dispositions' own convention.
+//
+//     ⚠ AND THE SEMANTIC HALF REMAINS OPEN, measured. Re-deriving every anchor in
+//     cache_completeness_repo_test.go by construct — taking the cited file AS OF the commit that
+//     last touched the citing line, reading the text at the cited line, and locating that text in
+//     the current file — found 55 anchors whose line no longer holds that text. 27 were
+//     unambiguous (one distinctive candidate line) and have been re-pointed; 12 are NOT
+//     re-derivable at all, because their anchor is a bare `}` or a blank line, or the old text now
+//     appears in several places, or nowhere. An in-range guard cannot see any of this: every one of
+//     the 55 was in range. The durable fix is to cite the METHOD, which
+//     TestMethodCitationsPointInsideTheirMethod already checks and which does not drift.
+//
+//     So an IN-RANGE check is enforced here too (TestExactCitationsAreInRange below) for exact
 //     `file.go:NNN` refs — cheap, zero false positives, and it catches precisely the class that
 //     actually occurred. Approximate `~:NNN` refs are exempt by the `~` convention: it means
 //     "about here", and holding it to an exact standard is what would generate the churn.
