@@ -1525,8 +1525,13 @@ func (r *transactionRepository) UpdateTags(ctx context.Context, id string, userI
 func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, userID string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) error {
 	now := time.Now()
 
+	// #1569 Task 6 (#1579): the annotation capture. `FROM transactions prior` is the self-join that
+	// makes `prior.*` the pre-update tuple while RETURNING gives the post-update one, so what this
+	// statement overwrites is recorded BY THE SAME STATEMENT — see transaction_annotation_capture.go
+	// for why a service-layer read-then-write records a wrong prior value under concurrency.
 	query := `
-		UPDATE transactions
+		WITH updated AS (
+		UPDATE transactions t
 		SET category_override_kind = $1,
 		    pfc_primary_override = $2,
 		    pfc_detailed_override = $3,
@@ -1542,20 +1547,32 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 		    -- write a NULL name rather than refuse the write, which is the worse failure.
 		    effective_category_name = CASE
 		        WHEN $1 = 'custom' THEN
-		            (SELECT name FROM custom_categories WHERE id = $4::uuid AND user_id = transactions.user_id)
-		        WHEN $1 = 'pfc' THEN COALESCE(NULLIF($2, ''), pfc_primary)
-		        ELSE pfc_primary
+		            (SELECT name FROM custom_categories WHERE id = $4::uuid AND user_id = t.user_id)
+		        WHEN $1 = 'pfc' THEN COALESCE(NULLIF($2, ''), t.pfc_primary)
+		        ELSE t.pfc_primary
 		    END,
 		    updated_at = $7
-		WHERE id = $8 AND user_id = $9
-	`
+		-- tombstone-exempt: the prior alias is the PRE-IMAGE of the row this statement is already
+		-- updating (prior.id = t.id), not an independent read. Adding prior.deleted_at IS NULL here
+		-- would not filter a read -- it would narrow WHICH ROWS THE UPDATE AFFECTS, a behaviour
+		-- change well outside #1579's "record the prior value", and it would make the capture
+		-- disagree with the write it is capturing. The statement's own tombstone position is
+		-- unchanged and is documented above (#1569 Task 6).
+		FROM transactions prior
+		WHERE prior.id = t.id
+		  AND t.id = $8 AND t.user_id = $9
+		RETURNING ` + annotationCaptureReturning + `
+		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeCategory)
 
-	ct, err := r.db.Exec(ctx, query, overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource, now, now, id, userID)
-	if err != nil {
+	// The count comes from the `updated` CTE, NOT from the statement tag: the tag now reports the
+	// recording INSERT, which is legitimately 0 when nothing actually changed. Reading the tag would
+	// turn a no-op re-save into a spurious ErrTransactionNotFound.
+	var updatedRows int64
+	if err := r.db.QueryRow(ctx, query, overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource, now, now, id, userID).Scan(&updatedRows); err != nil {
 		return fmt.Errorf("failed to update transaction category: %w", err)
 	}
 
-	if ct.RowsAffected() == 0 {
+	if updatedRows == 0 {
 		return ErrTransactionNotFound
 	}
 
@@ -1574,42 +1591,58 @@ func (r *transactionRepository) SetReviewed(ctx context.Context, userID string, 
 		reviewedAt = &now
 	}
 
+	// #1569 Task 6 (#1579): the annotation capture, on the statement BOTH review endpoints use.
+	// ⚠ SetTransactionReviewed is a HANDLER, not a second repository method — it calls
+	// transactionService.SetReviewed with a one-element slice — so #1579's "four methods" is three,
+	// and this one statement covers two of the four endpoints.
 	query := `
-		UPDATE transactions
+		WITH updated AS (
+		UPDATE transactions t
 		SET reviewed = $1, reviewed_at = $2, updated_at = NOW()
-		WHERE user_id = $3 AND id = ANY($4::uuid[])
-	`
+		-- tombstone-exempt: the prior alias is the PRE-IMAGE of the row this statement is already
+		-- updating (prior.id = t.id), not an independent read. Adding prior.deleted_at IS NULL here
+		-- would not filter a read -- it would narrow WHICH ROWS THE UPDATE AFFECTS, a behaviour
+		-- change well outside #1579's "record the prior value", and it would make the capture
+		-- disagree with the write it is capturing. The statement's own tombstone position is
+		-- unchanged and is documented above (#1569 Task 6).
+		FROM transactions prior
+		WHERE prior.id = t.id
+		  AND t.user_id = $3 AND t.id = ANY($4::uuid[])
+		RETURNING ` + annotationCaptureReturning + `
+		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeReview)
 
-	ct, err := r.db.Exec(ctx, query, reviewed, reviewedAt, userID, transactionIDs)
-	if err != nil {
+	// From the `updated` CTE, not the statement tag: the tag reports the recording INSERT, which is
+	// 0 when the write changed nothing — un-reviewing an already-unreviewed transaction still
+	// "affected" its row, and the caller counts rows, not history entries.
+	var updatedRows int64
+	if err := r.db.QueryRow(ctx, query, reviewed, reviewedAt, userID, transactionIDs).Scan(&updatedRows); err != nil {
 		return 0, fmt.Errorf("failed to set reviewed: %w", err)
 	}
-	return ct.RowsAffected(), nil
+	return updatedRows, nil
 }
 
 // BulkUpdateCategory recategorizes many transactions in one UPDATE (Issue #1210).
 //
-// ⚠ NO PRIOR VALUE IS RECORDED, and the same is true of the single-row UpdateCategory above.
-// Re-derived for #1569 task 20 (N9) and recorded here rather than fixed; the reasoning, so the
-// next reader does not repeat the investigation:
+// THE PRIOR VALUE IS NOW RECORDED (#1569 Task 6 / #1579). This header used to say it was not, and
+// used to argue the fix should be a ticket rather than a side effect of a retention sweep. That
+// ticket is #1579, and this is it. What the old text got right is worth keeping, because it is
+// still what bounds the feature:
 //
-//   * The census framed this as a BULK defect. It is not: neither path records what the category
-//     was. There is no audit_logs entry for a recategorisation on either path — transaction_service
-//     fires only a PostHog `transaction_recategorized` event, which carries the new kind and a
-//     count, never the old value, and is analytics rather than a record of the user's data.
-//   * What is NOT lost: the PROVIDER's categorisation. pfc_primary and pfc_detailed are never
-//     written by these statements — the override lives in the separate
-//     category_override_kind / pfc_*_override / custom_category_override_id columns, and
-//     effective_category_name is derived from them. So the original always survives, and clearing
-//     the override restores it. That is what makes this different from the defects this issue
-//     closed, where the ORIGINAL was the thing being overwritten.
-//   * What IS lost: a PREVIOUS USER OVERRIDE, replaced by a newer user override. That is the user
-//     changing their own mind, which is the one act #1569's principle explicitly permits.
+//   - The PROVIDER's categorisation was never at risk. pfc_primary and pfc_detailed are not
+//     written by these statements — the override lives in category_override_kind /
+//     pfc_*_override / custom_category_override_id, and effective_category_name is derived from
+//     them — so clearing an override has always restored the original.
+//   - What WAS lost is a PREVIOUS USER OVERRIDE replaced by a newer one, plus (the half #1579
+//     missed) the pre-existing reviewed_at, which both category statements clobber
+//     unconditionally with `reviewed = true, reviewed_at = now`.
+//   - PostHog's `transaction_recategorized` event is not a record of the user's data: it carries
+//     the new kind and a count, never the old value. It is analytics, and it stays that way.
 //
-// Giving categorisation an undo would mean a history table, a writer on both paths and a read
-// path — a feature, not a line of SQL, and it should be a ticket rather than a side effect of a
-// retention sweep. Recorded so the absence is a known one.
-// Single statement (atomic by definition) — no explicit transaction needed.
+// The old text also framed this as a BULK defect. It was not — the single-row UpdateCategory above
+// lost exactly the same thing, and both statements carry the capture now.
+//
+// Single statement (atomic by definition) — no explicit transaction needed, and the capture is
+// INSIDE it rather than beside it.
 // IDs not owned by userID are silently skipped; returns rows affected.
 func (r *transactionRepository) BulkUpdateCategory(ctx context.Context, userID string, transactionIDs []string, overrideKind *string, pfcPrimaryOverride *string, pfcDetailedOverride *string, customCategoryOverrideID *string, categorySource domain.CategorySource) (int64, error) {
 	if len(transactionIDs) == 0 {
@@ -1617,8 +1650,13 @@ func (r *transactionRepository) BulkUpdateCategory(ctx context.Context, userID s
 	}
 	now := time.Now()
 
+	// #1569 Task 6 (#1579): the annotation capture. `FROM transactions prior` is the self-join that
+	// makes `prior.*` the pre-update tuple while RETURNING gives the post-update one, so what this
+	// statement overwrites is recorded BY THE SAME STATEMENT — see transaction_annotation_capture.go
+	// for why a service-layer read-then-write records a wrong prior value under concurrency.
 	query := `
-		UPDATE transactions
+		WITH updated AS (
+		UPDATE transactions t
 		SET category_override_kind      = $1,
 		    pfc_primary_override        = $2,
 		    pfc_detailed_override       = $3,
@@ -1632,20 +1670,31 @@ func (r *transactionRepository) BulkUpdateCategory(ctx context.Context, userID s
 		    -- through the tombstone-filtered GetByID); this subquery only resolves the name.
 		    effective_category_name     = CASE
 		        WHEN $1 = 'custom' THEN
-		            (SELECT name FROM custom_categories WHERE id = $4::uuid AND user_id = transactions.user_id)
-		        WHEN $1 = 'pfc' THEN COALESCE(NULLIF($2, ''), pfc_primary)
-		        ELSE pfc_primary
+		            (SELECT name FROM custom_categories WHERE id = $4::uuid AND user_id = t.user_id)
+		        WHEN $1 = 'pfc' THEN COALESCE(NULLIF($2, ''), t.pfc_primary)
+		        ELSE t.pfc_primary
 		    END,
 		    updated_at = $7
-		WHERE user_id = $8
-		  AND id = ANY($9::uuid[])
-	`
+		-- tombstone-exempt: the prior alias is the PRE-IMAGE of the row this statement is already
+		-- updating (prior.id = t.id), not an independent read. Adding prior.deleted_at IS NULL here
+		-- would not filter a read -- it would narrow WHICH ROWS THE UPDATE AFFECTS, a behaviour
+		-- change well outside #1579's "record the prior value", and it would make the capture
+		-- disagree with the write it is capturing. The statement's own tombstone position is
+		-- unchanged and is documented above (#1569 Task 6).
+		FROM transactions prior
+		WHERE prior.id = t.id
+		  AND t.user_id = $8
+		  AND t.id = ANY($9::uuid[])
+		RETURNING ` + annotationCaptureReturning + `
+		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeCategory)
 
-	ct, err := r.db.Exec(ctx, query, overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource, now, now, userID, transactionIDs)
-	if err != nil {
+	// The count comes from the `updated` CTE, never from the statement tag: the tag now reports the
+	// recording INSERT, which is legitimately 0 when nothing actually changed.
+	var updatedRows int64
+	if err := r.db.QueryRow(ctx, query, overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource, now, now, userID, transactionIDs).Scan(&updatedRows); err != nil {
 		return 0, fmt.Errorf("failed to bulk update transaction category: %w", err)
 	}
-	return ct.RowsAffected(), nil
+	return updatedRows, nil
 }
 
 // GetReviewSummary returns review-state counts and top-5 unreviewed categories in one CTE query (Issue #1210).

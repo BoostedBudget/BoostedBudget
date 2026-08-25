@@ -81,6 +81,10 @@ var historyBearingTables = map[string]string{
 	"portfolio_snapshots":        "the per-day portfolio total (value, cost basis, gain/loss); the only record of what a portfolio was worth on a past day",
 	"portfolio_snapshot_repairs": "the audit trail of snapshot repairs",
 	"rule_execution_history":     "what an automation rule did and when",
+	"transaction_annotation_history": "the before/after record of every user category or " +
+		"review-state overwrite on a transaction (#1569 task 6 / #1579); the prior override and " +
+		"the pre-existing reviewed_at survive nowhere else, because the UPDATE that wrote each " +
+		"row is what removed them",
 	"boost_executions":           "what a boost moved and when",
 	"rollover_history":           "budget rollovers between periods",
 	"savings_goal_contributions": "the contributions that make up a goal's progress",
@@ -134,21 +138,22 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 	// ---- GDPR erasure off `users`. -------------------------------------------------------------
 	// One real `DELETE FROM users` is the whole erasure mechanism (ADR 2026-08-01). Every one of
 	// these is required: removing any of them strands personal data after a completed erasure.
-	{child: "account_status_history", parent: "users", constraint: "fk_ash_user_id"}:                              "GDPR erasure path off users",
-	{child: "balance_snapshots", parent: "users", constraint: "fk_balance_snapshots_user_id"}:                     "GDPR erasure path off users",
-	{child: "boost_executions", parent: "users", constraint: "fk_boost_executions_user_id"}:                       "GDPR erasure path off users",
-	{child: "boosts", parent: "users", constraint: "fk_boosts_user_id"}:                                           "GDPR erasure path off users",
-	{child: "budgets", parent: "users", constraint: "fk_budgets_user_id"}:                                         "GDPR erasure path off users",
-	{child: "custom_categories", parent: "users", constraint: "fk_custom_categories_user_id"}:                     "GDPR erasure path off users",
-	{child: "holding_snapshots", parent: "users", constraint: "fk_holding_snapshots_user_id"}:                     "GDPR erasure path off users",
-	{child: "liability_statements", parent: "users", constraint: "fk_liability_statements_user_id"}:               "GDPR erasure path off users",
-	{child: "portfolio_snapshot_repairs", parent: "users", constraint: "portfolio_snapshot_repairs_user_id_fkey"}: "GDPR erasure path off users",
-	{child: "portfolio_snapshots", parent: "users", constraint: "fk_portfolio_snapshots_user_id"}:                 "GDPR erasure path off users",
-	{child: "rollover_history", parent: "users", constraint: "fk_rollover_history_user_id"}:                       "GDPR erasure path off users",
-	{child: "rule_execution_history", parent: "users", constraint: "fk_rule_execution_history_user_id"}:           "GDPR erasure path off users",
-	{child: "savings_goals", parent: "users", constraint: "fk_savings_goals_user_id"}:                             "GDPR erasure path off users",
-	{child: "transactions", parent: "users", constraint: "fk_transactions_user_id"}:                               "GDPR erasure path off users",
-	{child: "accounts", parent: "users", constraint: "fk_accounts_user_id"}:                                       "GDPR erasure path off users",
+	{child: "account_status_history", parent: "users", constraint: "fk_ash_user_id"}:                                    "GDPR erasure path off users",
+	{child: "balance_snapshots", parent: "users", constraint: "fk_balance_snapshots_user_id"}:                           "GDPR erasure path off users",
+	{child: "boost_executions", parent: "users", constraint: "fk_boost_executions_user_id"}:                             "GDPR erasure path off users",
+	{child: "boosts", parent: "users", constraint: "fk_boosts_user_id"}:                                                 "GDPR erasure path off users",
+	{child: "budgets", parent: "users", constraint: "fk_budgets_user_id"}:                                               "GDPR erasure path off users",
+	{child: "custom_categories", parent: "users", constraint: "fk_custom_categories_user_id"}:                           "GDPR erasure path off users",
+	{child: "holding_snapshots", parent: "users", constraint: "fk_holding_snapshots_user_id"}:                           "GDPR erasure path off users",
+	{child: "liability_statements", parent: "users", constraint: "fk_liability_statements_user_id"}:                     "GDPR erasure path off users",
+	{child: "portfolio_snapshot_repairs", parent: "users", constraint: "portfolio_snapshot_repairs_user_id_fkey"}:       "GDPR erasure path off users",
+	{child: "transaction_annotation_history", parent: "users", constraint: "fk_transaction_annotation_history_user_id"}: "GDPR erasure path off users; the row carries no FK to transactions, so this is its ONLY route to erasure",
+	{child: "portfolio_snapshots", parent: "users", constraint: "fk_portfolio_snapshots_user_id"}:                       "GDPR erasure path off users",
+	{child: "rollover_history", parent: "users", constraint: "fk_rollover_history_user_id"}:                             "GDPR erasure path off users",
+	{child: "rule_execution_history", parent: "users", constraint: "fk_rule_execution_history_user_id"}:                 "GDPR erasure path off users",
+	{child: "savings_goals", parent: "users", constraint: "fk_savings_goals_user_id"}:                                   "GDPR erasure path off users",
+	{child: "transactions", parent: "users", constraint: "fk_transactions_user_id"}:                                     "GDPR erasure path off users",
+	{child: "accounts", parent: "users", constraint: "fk_accounts_user_id"}:                                             "GDPR erasure path off users",
 
 	// ---- The three tables whose ONLY erasure route is this edge. -------------------------------
 	// None of these three has a foreign key to `users`, so `DELETE FROM users` reaches them only
