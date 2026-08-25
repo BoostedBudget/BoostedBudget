@@ -652,7 +652,29 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 // resolves this: manual outranks rule, and the pending row's manual category is the user's own work.
 //
 // A manual category already on the twin wins, because it is NEWER user work about the same charge.
+//
+// THE SEVEN CATEGORY COLUMNS MOVE AS ONE UNIT, and the database enforces it rather than merely
+// preferring it: the `valid_category_override_discriminator` CHECK rejects a row whose
+// category_override_kind is 'custom' without a custom_category_override_id. Splitting the tuple is
+// therefore unrepresentable -- a mutation that moves the kind but not the id fails with SQLSTATE
+// 23514 rather than writing an incoherent row. That is also why one shared condition constant is
+// spliced into all seven CASEs instead of the condition being written out seven times.
 const settlementCategoryMoveCond = `(s.category_source = 'manual' AND twin.category_source IS DISTINCT FROM 'manual')`
+
+// THE REVIEWED CONDITION EXISTS BECAUSE `reviewed` IS NOT ALWAYS THE USER'S. A rule applying a
+// category counts as an automated review: rule_application_service.go sets category_source = 'rule'
+// and reviewed = true in the same block. Without a gate, `reviewed = twin.reviewed OR s.reviewed`
+// would mark the twin reviewed off the back of a RULE's review even when the category gate above
+// refused the move -- and would silently re-review a twin the user had deliberately un-reviewed.
+//
+// Rule-derived reviews are safe to drop: the same rules run on the posted twin before it is
+// inserted, so a rule that reviewed the pending row reviews its twin too. What must survive is a
+// review the USER performed, and that is what is left after excluding 'rule'.
+//
+// ⚠ The gate cannot be tightened further. SetReviewed(false) writes reviewed_at = NULL, so a
+// deliberately un-reviewed row is indistinguishable in SQL from one never reviewed -- there is no
+// column that records the un-review. Excluding 'rule' is the whole of what is knowable here.
+const settlementReviewMoveCond = `(s.reviewed AND s.category_source IS DISTINCT FROM 'rule')`
 
 // THE TAGS CONDITION IS "fill, do not merge". tags/tags_source are two JSONB arrays that must stay
 // in lockstep -- every tag needs its provenance entry -- and a union would have to deduplicate
@@ -689,10 +711,11 @@ const settlementTagsMoveCond = `(COALESCE(jsonb_array_length(twin.tags), 0) = 0 
 // about to overwrite for deleted_*, and leaves the annotation columns untouched, so `moved` reads
 // exactly the pre-tombstone annotation state under the row lock the UPDATE already holds.
 //
-// WHAT MOVES. All of it -- which is more than the four columns the CreateBatch comment used to name.
-// user_notes; the seven-column category tuple (kind, pfc primary/detailed override, custom category
-// id, category_source, override date, effective_category_name); tags and tags_source; reviewed and
-// reviewed_at. See settlementCategoryMoveCond / settlementTagsMoveCond for the two refusal rules.
+// WHAT MOVES. All twelve user-authored columns -- three times the four the CreateBatch comment used
+// to name. user_notes; the seven-column category tuple (kind, pfc primary/detailed override, custom
+// category id, category_source, override date, effective_category_name); tags and tags_source;
+// reviewed and reviewed_at. See settlementCategoryMoveCond, settlementTagsMoveCond and
+// settlementReviewMoveCond for the three refusal rules and why each is shaped the way it is.
 //
 // WHAT DOES NOT MOVE, and why each is deliberate:
 //   - Nothing at all unless the removed row was PENDING (`AND s.pending`). A posted removal is a
@@ -775,10 +798,10 @@ func (r *transactionRepository) TombstoneByExternalID(
 			    tags        = CASE WHEN %[4]s THEN s.tags        ELSE twin.tags        END,
 			    tags_source = CASE WHEN %[4]s THEN s.tags_source ELSE twin.tags_source END,
 
-			    reviewed    = twin.reviewed OR s.reviewed,
+			    reviewed    = twin.reviewed OR %[6]s,
 			    reviewed_at = CASE
 			        WHEN twin.reviewed THEN twin.reviewed_at
-			        WHEN s.reviewed    THEN s.reviewed_at
+			        WHEN %[6]s         THEN s.reviewed_at
 			        ELSE twin.reviewed_at
 			    END
 			FROM tombstoned s
@@ -789,7 +812,7 @@ func (r *transactionRepository) TombstoneByExternalID(
 			  AND s.pending
 			  AND (s.user_notes IS NOT NULL
 			       OR s.category_source = '%[5]s'
-			       OR s.reviewed
+			       OR %[6]s
 			       OR COALESCE(jsonb_array_length(s.tags), 0) > 0)
 		)
 		SELECT deleted_reason FROM tombstoned
@@ -799,6 +822,7 @@ func (r *transactionRepository) TombstoneByExternalID(
 		settlementCategoryMoveCond,
 		settlementTagsMoveCond,
 		domain.CategorySourceManual,
+		settlementReviewMoveCond,
 	)
 
 	var reason string

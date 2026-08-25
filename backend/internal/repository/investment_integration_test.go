@@ -777,7 +777,7 @@ func TestInvestment_UnifiedFeed_BankingOnlyFilter_ExcludesInvestment_Integration
 	itemsMerchant, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filtersMerchant, nil, 10)
 	require.NoError(t, err, "MerchantID filter must not error")
 	// Merchant filter returns zero rows (no txn has that merchant), confirming investment branch zeroed
-	assert.Empty(t, itemsMerchant, "MerchantID filter must zero investment rows (proves transaction_repository.go:2528-2533 branch)")
+	assert.Empty(t, itemsMerchant, "MerchantID filter must zero investment rows (proves transaction_repository.go:2552-2557 branch)")
 
 	// ── Assertion 2: AccountIDs (both-branch filter) returns investment rows ──
 	investAcctIDStr := investAcctID.String()

@@ -30,6 +30,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
+
 type settlementFixture struct {
 	tx   pgx.Tx
 	repo TransactionRepository
@@ -75,24 +76,33 @@ func seedSettlementFixture(t *testing.T) *settlementFixture {
 
 	date := time.Now().AddDate(0, 0, -2)
 	notes := "split with Sam, they owe me half"
-	overrideKind := "pfc"
-	overridePrimary := "FOOD_AND_DRINK"
-	effectiveName := "FOOD_AND_DRINK"
-	reviewedAt := time.Now().Add(-90 * time.Minute).UTC().Truncate(time.Millisecond)
 
+	// The row arrives from Plaid the way a real one does: no override, category_source 'plaid',
+	// unreviewed. user_notes is the one user-authored column CreateBatch genuinely writes.
 	_, err = f.repo.CreateBatch(ctx, []domain.Transaction{{
 		ID: f.pendingID, UserID: f.userID, AccountID: f.accountID, LinkedItemID: f.linkedItemID,
 		Source: domain.SourcePlaid, ExternalTransactionID: &f.pendingExtID,
 		Amount: 42.00, Date: date, Name: "Pending Coffee", Pending: true,
-		UserNotes:             &notes,
-		CategoryOverrideKind:  &overrideKind,
-		PFCPrimaryOverride:    &overridePrimary,
-		EffectiveCategoryName: &effectiveName,
-		CategorySourceField:   domain.CategorySourceManual,
-		Reviewed:              true,
-		ReviewedAt:            &reviewedAt,
+		PFCPrimary: strPtr("GENERAL_SERVICES"),
+		UserNotes:  &notes,
 	}})
 	require.NoError(t, err, "seed pending transaction")
+
+	// ⚠ THE USER'S CATEGORY IS SET THROUGH THE PRODUCTION WRITE PATH, NOT HAND-BUILT.
+	//
+	// An earlier version of this fixture manufactured the manual category by passing the override
+	// columns straight to CreateBatch. That produced a row state PRODUCTION CANNOT PRODUCE -- a
+	// manual category with a NULL category_override_date -- because every user-facing category
+	// write goes through UpdateCategory, which sets category_override_date, reviewed and
+	// reviewed_at in the same statement. The consequence was not a wrong assertion but a MISSING
+	// one: mutating category_override_date out of the move survived, because the fixture's value
+	// was NULL either way. Same vacuity class as writing a bare literal into an encrypted column.
+	//
+	// UpdateCategory also fills effective_category_name by resolving the category, so the fixture
+	// no longer asserts a denormalised name it wrote itself.
+	require.NoError(t, f.repo.UpdateCategory(ctx, f.pendingID, f.userID,
+		strPtr("pfc"), strPtr("FOOD_AND_DRINK"), nil, nil, domain.CategorySourceManual),
+		"seed the user's own category on the pending row")
 
 	// tags/tags_source are NOT in CreateBatch's INSERT column list (a pre-existing gap this task
 	// deliberately does not inherit — see the note on TombstoneByExternalID), so the fixture writes
@@ -166,6 +176,14 @@ func (f *settlementFixture) settle(t *testing.T, ctx context.Context) {
 		"a row Plaid removes while it is still pending is a settlement, not a reversal")
 }
 
+func (f *settlementFixture) overrideDate(t *testing.T, ctx context.Context, txnID string) *time.Time {
+	t.Helper()
+	var d *time.Time
+	require.NoError(t, f.tx.QueryRow(ctx,
+		`SELECT category_override_date FROM transactions WHERE id = $1`, txnID).Scan(&d))
+	return d
+}
+
 func (f *settlementFixture) storedPointer(t *testing.T, ctx context.Context, txnID string) *string {
 	t.Helper()
 	var ptr *string
@@ -206,6 +224,16 @@ func TestSettledPending_AnnotationsMoveToPostedTwin_Integration(t *testing.T) {
 
 	assert.True(t, posted.Reviewed, "the user already reviewed this charge; settling it is not a reason to ask again")
 	require.NotNil(t, posted.ReviewedAt)
+
+	// category_override_date is the twelfth moved column and the one a hand-built fixture cannot
+	// pin: UpdateCategory sets it, CreateBatch never does. Losing it would leave the twin claiming
+	// a manual category the user apparently never dated.
+	require.NotNil(t, posted.CategoryOverrideDate,
+		"the date the user filed this charge under their own category")
+	pendingDate := f.overrideDate(t, ctx, f.pendingID)
+	require.NotNil(t, pendingDate)
+	assert.WithinDuration(t, *pendingDate, *posted.CategoryOverrideDate, time.Millisecond,
+		"the moved date must be the one the user's own edit recorded, not a fresh NOW()")
 
 	pending := f.readAnyRow(t, ctx, f.pendingID)
 	require.NotNil(t, pending.DeletedAt, "the pending row is still tombstoned")
@@ -464,4 +492,130 @@ func TestPostedReversal_DoesNotMoveAnything_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, posted.UserNotes, "a posted reversal has no settled-pending twin to donate to")
 	assert.Empty(t, posted.Tags)
+}
+
+// TestSettledPending_AlreadyTombstonedTwinReceivesNothing_Integration closes F1. The move's
+// `twin.deleted_at IS NULL` predicate had no coverage of ANY kind before this test: the static
+// audit (TestNoTransactionReadForgetsTheTombstoneFilter) never inspects an UPDATE's target table,
+// and no behavioural test built an already-tombstoned twin -- so deleting the predicate left the
+// whole package green while the code comment above it said "do not remove".
+//
+// What it protects: donating the user's work onto a row that is ITSELF tombstoned writes it to a
+// second invisible row. For a settled-pending twin that is the original bug reproduced one hop
+// along; for a posted-reversal twin it silently re-files a reversal under a category the user
+// chose for a different charge.
+func TestSettledPending_AlreadyTombstonedTwinReceivesNothing_Integration(t *testing.T) {
+	ctx := context.Background()
+	f := seedSettlementFixture(t)
+
+	f.addPostedTwin(t, ctx, domain.Transaction{PendingTransactionID: &f.pendingExtID})
+
+	// The twin is removed by the provider first -- a reversal, so it is a real tombstone with a
+	// real reason, not a hand-written deleted_at.
+	reason, err := f.repo.TombstoneByExternalID(
+		ctx, domain.SourcePlaid, f.postedExtID, f.userID, domain.TxnDeletedByPlaidSync)
+	require.NoError(t, err)
+	require.Equal(t, domain.TxnDeletedProviderRemovedPosted, reason,
+		"the twin must be tombstoned as a posted reversal before the pending settles")
+
+	f.settle(t, ctx)
+
+	twin := f.readAnyRow(t, ctx, f.postedID)
+	require.NotNil(t, twin.DeletedAt, "the twin is still tombstoned")
+	assert.Nil(t, twin.UserNotes,
+		"the user's note must not be written onto an already-tombstoned row -- it would be just as invisible there")
+	assert.Equal(t, domain.CategorySourcePlaid, twin.CategorySourceField,
+		"the user's category must not be written onto an already-tombstoned row")
+	assert.False(t, twin.Reviewed)
+}
+
+// TestSettledPending_RuleDerivedReviewDoesNotPropagate_Integration closes F4. `reviewed` was the one
+// moved column with no refusal gate, and it is not always the user's: a rule applying a category
+// sets category_source = 'rule' AND reviewed = true in the same block
+// (rule_application_service.go). Without the gate, a rule's review on the pending row would mark
+// the twin reviewed even where the category gate refused -- including a twin the user had
+// deliberately un-reviewed.
+func TestSettledPending_RuleDerivedReviewDoesNotPropagate_Integration(t *testing.T) {
+	ctx := context.Background()
+	f := seedSettlementFixture(t)
+
+	// Reshape the pending row into what ApplyRulesToBatch produces: a rule category, reviewed.
+	// Its notes and tags are cleared so `reviewed` is the ONLY thing that could move -- otherwise
+	// the move would run for another reason and the assertion would not isolate this gate.
+	_, err := f.tx.Exec(ctx, `
+		UPDATE transactions
+		SET category_source = 'rule', reviewed = true, reviewed_at = NOW(),
+		    user_notes = NULL, tags = '[]'::jsonb, tags_source = '[]'::jsonb
+		WHERE id = $1
+	`, f.pendingID)
+	require.NoError(t, err)
+
+	// The user has deliberately un-reviewed the twin.
+	f.addPostedTwin(t, ctx, domain.Transaction{PendingTransactionID: &f.pendingExtID})
+	_, err = f.tx.Exec(ctx,
+		`UPDATE transactions SET reviewed = false, reviewed_at = NULL WHERE id = $1`, f.postedID)
+	require.NoError(t, err)
+
+	f.settle(t, ctx)
+
+	posted, err := f.repo.GetByID(ctx, f.postedID)
+	require.NoError(t, err)
+	assert.False(t, posted.Reviewed,
+		"a RULE's review on the pending row must not re-review a twin the user un-reviewed; the same rules run on the twin")
+	assert.Nil(t, posted.ReviewedAt)
+}
+
+// TestSettledPending_UserReviewStillPropagates_Integration is the other half of F4's gate: excluding
+// rule-derived reviews must not throw away a review the USER performed. Without this, the gate
+// could be "never move reviewed" and still pass the test above.
+func TestSettledPending_UserReviewStillPropagates_Integration(t *testing.T) {
+	ctx := context.Background()
+	f := seedSettlementFixture(t)
+
+	f.addPostedTwin(t, ctx, domain.Transaction{PendingTransactionID: &f.pendingExtID})
+	_, err := f.tx.Exec(ctx,
+		`UPDATE transactions SET reviewed = false, reviewed_at = NULL WHERE id = $1`, f.postedID)
+	require.NoError(t, err)
+
+	f.settle(t, ctx)
+
+	posted, err := f.repo.GetByID(ctx, f.postedID)
+	require.NoError(t, err)
+	assert.True(t, posted.Reviewed,
+		"the fixture's review came from UpdateCategory -- the user's own act -- and must survive settlement")
+	require.NotNil(t, posted.ReviewedAt)
+}
+
+// TestSettledPending_CustomCategoryOverrideMoves_Integration closes the other half of F2. The
+// discriminated union has a second branch the pfc fixture never exercises, and
+// custom_category_override_id was unpinned because of it: mutating it out of the move survived.
+// A custom category is also the branch where losing the id is worst -- the twin would keep an
+// effective_category_name naming a category it no longer points at.
+func TestSettledPending_CustomCategoryOverrideMoves_Integration(t *testing.T) {
+	ctx := context.Background()
+	f := seedSettlementFixture(t)
+
+	customID := uuid.New().String()
+	_, err := f.tx.Exec(ctx, `
+		INSERT INTO custom_categories (id, user_id, name) VALUES ($1, $2, 'Weekend Coffee')
+	`, customID, f.userID)
+	require.NoError(t, err, "seed custom category")
+
+	// Re-file the pending charge under the custom category, through the production write path.
+	require.NoError(t, f.repo.UpdateCategory(ctx, f.pendingID, f.userID,
+		strPtr("custom"), nil, nil, &customID, domain.CategorySourceManual))
+
+	f.addPostedTwin(t, ctx, domain.Transaction{PendingTransactionID: &f.pendingExtID})
+	f.settle(t, ctx)
+
+	posted, err := f.repo.GetByID(ctx, f.postedID)
+	require.NoError(t, err)
+	require.NotNil(t, posted.CategoryOverrideKind)
+	assert.Equal(t, "custom", *posted.CategoryOverrideKind)
+	require.NotNil(t, posted.CustomCategoryOverrideID,
+		"the custom category id must move, or the twin points at nothing")
+	assert.Equal(t, customID, *posted.CustomCategoryOverrideID)
+	require.NotNil(t, posted.EffectiveCategoryName)
+	assert.Equal(t, "Weekend Coffee", *posted.EffectiveCategoryName,
+		"the resolved name must travel with the id it was resolved from")
 }
