@@ -1,4 +1,4 @@
-.PHONY: help dev build test clean migrate-up migrate-down generate docker-up docker-down docker-rebuild test-fast test-all test-scripts lighthouse check-bundle-size perf-check
+.PHONY: help dev build test clean migrate-up migrate-down migrate-reset migrate-status generate docker-up docker-down docker-rebuild test-fast test-all test-scripts lighthouse check-bundle-size perf-check
 
 # Default target
 help:
@@ -28,9 +28,10 @@ help:
 	@echo "  make frontend-build   - Build frontend for production"
 	@echo ""
 	@echo "Database:"
-	@echo "  make migrate-up       - Run database migrations"
-	@echo "  make migrate-down     - Rollback database migrations"
-	@echo "  make migrate-status   - Check current database schema"
+	@echo "  make migrate-up       - Apply pending migrations (golang-migrate; honours DATABASE_URL)"
+	@echo "  make migrate-down     - Roll back ONE migration"
+	@echo "  make migrate-reset    - Roll back ALL migrations"
+	@echo "  make migrate-status   - Show the applied migration version"
 	@echo ""
 	@echo "Tools:"
 	@echo "  make generate-openapi     - Generate api/openapi.yaml from Huma routes"
@@ -220,39 +221,45 @@ test-scripts:
 	@echo "Running shell script regression suites"
 	@echo "========================================"
 	@echo ""
-	@echo "1/10: check-frontend-coverage.test.sh (exercises the real lcov merger)"
+	@echo "1/12: check-frontend-coverage.test.sh (exercises the real lcov merger)"
 	@if command -v lcov &> /dev/null; then \
 		bash scripts/check-frontend-coverage.test.sh; \
 	else \
 		echo "⚠️  lcov not installed — skipping (install: brew install lcov). CI always has lcov."; \
 	fi
 	@echo ""
-	@echo "2/10: check-orphan-chunks.test.sh"
+	@echo "2/12: check-orphan-chunks.test.sh"
 	@bash scripts/__tests__/check-orphan-chunks.test.sh
 	@echo ""
-	@echo "3/10: rollback-residue.test.sh"
+	@echo "3/12: rollback-residue.test.sh"
 	@bash scripts/__tests__/rollback-residue.test.sh
 	@echo ""
-	@echo "4/10: pg_dump-via-docker.test.sh"
+	@echo "4/12: pg_dump-via-docker.test.sh"
 	@bash scripts/__tests__/pg_dump-via-docker.test.sh
 	@echo ""
-	@echo "5/10: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
+	@echo "5/12: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
 	@bash scripts/__tests__/check-e2e-storage-state.test.sh
 	@echo ""
-	@echo "6/10: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
+	@echo "6/12: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
 	@bash scripts/__tests__/check-mcp-job-triggers.test.sh
 	@echo ""
-	@echo "7/10: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
+	@echo "7/12: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
 	@bash scripts/__tests__/check-typographic-quotes.test.sh
 	@echo ""
-	@echo "8/10: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
+	@echo "8/12: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
 	@bash scripts/__tests__/check-frontend-test-timeout.test.sh
 	@echo ""
-	@echo "9/10: check-isolated-test-lists.test.sh (#1537 — the 22 process-isolated test paths must exist and stay in sync)"
+	@echo "9/12: check-isolated-test-lists.test.sh (#1537 — the 22 process-isolated test paths must exist and stay in sync)"
 	@bash scripts/__tests__/check-isolated-test-lists.test.sh
 	@echo ""
-	@echo "10/10: check-e2e-seed-fails-loudly.test.sh (#1569 A1 — the E2E seeder must not swallow a failed seed)"
+	@echo "10/12: check-e2e-seed-fails-loudly.test.sh (#1569 A1 — the E2E seeder must not swallow a failed seed)"
 	@bash scripts/__tests__/check-e2e-seed-fails-loudly.test.sh
+	@echo ""
+	@echo "11/12: test-migrations-target-guard.test.sh (#1589 — the migration suite must refuse a non-disposable DROP target)"
+	@bash scripts/__tests__/test-migrations-target-guard.test.sh
+	@echo ""
+	@echo "12/12: root-migrate-delegation.test.sh (#1588 — one migration runner; schema_migrations cannot lie)"
+	@bash scripts/__tests__/root-migrate-delegation.test.sh
 	@echo ""
 	@echo "✅ Shell script regression suites passed!"
 
@@ -270,27 +277,44 @@ frontend-test:
 	cd apps/web && bun run test:ci
 
 # Database migrations
-migrate-up:
-	@echo "Running database migrations..."
-	@docker-compose exec -T postgres psql -U devuser -d boostedbudget -c "SELECT version();" > /dev/null 2>&1 || (echo "Error: Database not running. Run 'make dev' first." && exit 1)
-	@for file in backend/migrations/*up.sql; do \
-		echo "Applying migration: $$file"; \
-		docker-compose exec -T postgres psql -U devuser -d boostedbudget -f - < $$file; \
-	done
-	@echo "Migrations complete!"
-
-migrate-down:
-	@echo "Rolling back database migrations..."
-	@docker-compose exec -T postgres psql -U devuser -d boostedbudget -c "SELECT version();" > /dev/null 2>&1 || (echo "Error: Database not running. Run 'make dev' first." && exit 1)
-	@for file in $$(ls -r backend/migrations/*down.sql); do \
-		echo "Rolling back migration: $$file"; \
-		docker-compose exec -T postgres psql -U devuser -d boostedbudget -f - < $$file; \
-	done
-	@echo "Rollback complete!"
-
-migrate-status:
-	@echo "Checking database schema..."
-	@docker-compose exec -T postgres psql -U devuser -d boostedbudget -c "\dt" 2>/dev/null || echo "No tables found"
+#
+# ONE runner. These delegate to backend/Makefile's golang-migrate targets rather than reimplementing
+# migration in the shell (#1588, a follow-up of #1569). What was here before was a
+# `for file in backend/migrations/*up.sql; do docker-compose exec -T postgres psql -U devuser
+# -d boostedbudget -f - < $file; done` loop, and it was wrong in two ways that both failed quietly:
+#
+#   1. `-d boostedbudget` and `-U devuser` were hardcoded, so an exported DATABASE_URL had no
+#      effect whatsoever. A developer pointing at a scratch database still migrated the dev one,
+#      and a developer pointing at the dev one got no confirmation that they had.
+#   2. Shelling `psql -f` per file never writes golang-migrate's `schema_migrations` table. The
+#      version `make migrate-status` reports therefore had no relationship to the schema in the
+#      database. Measured on this branch before the fix: the dev database reported version 152
+#      while migrations 000168 and 000169 were physically applied and 000170 was not — a state no
+#      version number describes, in which code hitting 000170's widened CHECK constraint failed
+#      locally with what looked like a code bug.
+#
+# The whole point of the change is that migrate-status can no longer report a version the database
+# does not have: the same tool writes the version and reads it, against the same DATABASE_URL.
+#
+# ⚠ BEHAVIOUR CHANGE: `make migrate-down` now rolls back ONE migration (golang-migrate's `down 1`),
+# where the old psql loop replayed every *down.sql* in reverse — i.e. a full teardown. The full
+# teardown is now `make migrate-reset`. One step is the safer default for a target whose old
+# behaviour nobody could see from its name.
+#
+# ⚠ These require the golang-migrate CLI on PATH (`brew install golang-migrate`). The old loop
+# needed only docker. That is a deliberate trade: golang-migrate is the only thing that keeps
+# schema_migrations honest, and it is already required by backend/Makefile, CI, and
+# scripts/test-migrations.sh.
+#
+# DATABASE_URL comes from scripts/resolve-dev-database-url.sh: it passes an explicit DATABASE_URL
+# through untouched, and otherwise derives the compose database's URL *and verifies that the
+# published host port actually reaches the compose container* before returning it. See that script
+# for why the verification is not paranoia on this machine.
+.PHONY: migrate-up migrate-down migrate-reset migrate-status
+migrate-up migrate-down migrate-reset migrate-status:
+	@url="$$(./scripts/resolve-dev-database-url.sh)" && \
+		echo "$@ -> $$url" && \
+		DATABASE_URL="$$url" $(MAKE) --no-print-directory -C backend $@
 
 # OpenAPI spec generation from Huma
 .PHONY: generate-openapi validate-openapi
