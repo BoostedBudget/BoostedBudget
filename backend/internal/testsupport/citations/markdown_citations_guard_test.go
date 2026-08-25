@@ -3,13 +3,14 @@ package citations
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/sourcefiles"
 )
 
 // Issue #1569 Task 20 (A6). Task 19's citation guard resolves cited test names in GO COMMENTS ONLY.
@@ -204,13 +205,13 @@ func mdPathResolves(repoRoot, cited string) bool {
 
 func scopedMarkdownFiles(t *testing.T, repoRoot string) []string {
 	t.Helper()
-	out, err := exec.Command("git", "-C", repoRoot, "ls-files", "-z", "--", "*.md").Output()
+	all, err := sourcefiles.Union(repoRoot, ".", sourcefiles.HasExt(".md"))
 	if err != nil {
-		t.Fatalf("git ls-files failed: %v — this guard must fail closed rather than scan nothing", err)
+		t.Fatalf("listing Markdown: %v — this guard must fail closed rather than scan nothing", err)
 	}
 	var files []string
-	for _, rel := range strings.Split(string(out), "\x00") {
-		if rel != "" && mdInScope(rel) {
+	for _, rel := range all {
+		if mdInScope(rel) {
 			files = append(files, rel)
 		}
 	}
@@ -219,20 +220,17 @@ func scopedMarkdownFiles(t *testing.T, repoRoot string) []string {
 }
 
 // definedGoTestNames is task 19's `defined` set, rebuilt here rather than shared, because that one
-// is a local inside its guard. Both read the same tracked tree, so they cannot disagree about what
-// exists.
+// is a local inside its guard. Both read the same corpus (sourcefiles.Union), so they cannot
+// disagree about what exists.
 func definedGoTestNames(t *testing.T, repoRoot string) map[string]bool {
 	t.Helper()
-	out, err := exec.Command("git", "-C", repoRoot, "ls-files", "-z", "--", "backend").Output()
+	files, err := sourcefiles.Union(repoRoot, "backend", sourcefiles.HasExt("_test.go"))
 	if err != nil {
-		t.Fatalf("git ls-files failed: %v", err)
+		t.Fatalf("listing backend tests: %v", err)
 	}
 	re := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)\(`)
 	defined := map[string]bool{}
-	for _, rel := range strings.Split(string(out), "\x00") {
-		if !strings.HasSuffix(rel, "_test.go") {
-			continue
-		}
+	for _, rel := range files {
 		b, err := os.ReadFile(filepath.Join(repoRoot, rel))
 		if err != nil {
 			continue

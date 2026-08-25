@@ -2,14 +2,15 @@ package repository
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/sourcefiles"
 )
 
-// TestNoTypographicQuotesInTrackedGoFiles is the Go-level twin of
+// TestNoTypographicQuotesInGoSource is the Go-level twin of
 // scripts/check-typographic-quotes.sh (#1487).
 //
 // WHY IT EXISTS, and it is not redundancy. The shell guard is real and it works — it is what caught
@@ -35,7 +36,7 @@ import (
 //
 // This file itself must never contain the literal characters, or it would report itself. They are
 // written as escapes below for exactly that reason.
-func TestNoTypographicQuotesInTrackedGoFiles(t *testing.T) {
+func TestNoTypographicQuotesInGoSource(t *testing.T) {
 	const (
 		leftDoubleQuote  = "\u201C"
 		rightDoubleQuote = "\u201D"
@@ -44,17 +45,10 @@ func TestNoTypographicQuotesInTrackedGoFiles(t *testing.T) {
 	// Repo root: backend/internal/repository -> backend/internal -> backend -> root.
 	const repoRoot = "../../.."
 
-	out, err := exec.Command("git", "-C", repoRoot, "ls-files", "-z", "--", "backend").Output()
+	goFiles, err := sourcefiles.Union(repoRoot, "backend", sourcefiles.HasExt(".go"))
 	if err != nil {
-		t.Fatalf("git ls-files failed: %v -- this guard must fail closed rather than "+
+		t.Fatalf("listing backend Go source: %v -- this guard must fail closed rather than "+
 			"silently scan nothing", err)
-	}
-
-	var goFiles []string
-	for _, f := range strings.Split(string(out), "\x00") {
-		if strings.HasSuffix(f, ".go") {
-			goFiles = append(goFiles, f)
-		}
 	}
 
 	// Fail closed. A scan of zero files would pass vacuously and read as proof.

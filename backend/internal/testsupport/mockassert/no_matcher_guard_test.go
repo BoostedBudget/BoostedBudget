@@ -6,11 +6,12 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/sourcefiles"
 
 	"github.com/stretchr/testify/mock"
 )
@@ -39,11 +40,12 @@ import (
 //   - a file under its baseline means someone fixed some — lower the number, so the improvement is
 //     locked in and cannot silently be spent on a new one elsewhere in the same file.
 //
-// SCOPE, and its one hole: the scan is over `git ls-files`, so a brand-new test file that has not
-// been `git add`ed yet is INVISIBLE to this guard locally. It becomes visible the moment it is
-// staged, and CI only ever sees tracked files, so nothing reaches main unchecked — but a local
-// `go test ./...` on unstaged new work will not warn you. The same applies to
-// TestEveryCitedTestNameResolves.
+// SCOPE: sourcefiles.Union — the union of `git ls-files` and a filesystem walk. It was
+// `git ls-files` alone, which meant a brand-new test file that had not been `git add`ed yet was
+// INVISIBLE to this guard locally, so a local `go test ./...` on unstaged new work said nothing and
+// CI then failed on the staged tree. That is the worst moment for a guard to start speaking, and it
+// happened twice during #1569. The tracked list is kept alongside the walk because it is what stops
+// the scan at the repository boundary; the walk only adds what is merely untracked.
 //
 // Mutation-checked: adding one `AssertNotCalled(t, "Method")` to any file in the tree turns this
 // test red naming that file and line; see task-19-report.md.
@@ -147,18 +149,15 @@ func TestNoNewNoMatcherAssertNotCalled(t *testing.T) {
 	// Repo root: backend/internal/testsupport/mockassert -> ... -> repo root.
 	const repoRoot = "../../../.."
 
-	out, err := exec.Command("git", "-C", repoRoot, "ls-files", "-z", "--", "backend").Output()
+	files, err := sourcefiles.Union(repoRoot, "backend", sourcefiles.HasExt("_test.go"))
 	if err != nil {
-		t.Fatalf("git ls-files failed: %v — this guard must fail closed rather than scan nothing", err)
+		t.Fatalf("listing backend tests: %v — this guard must fail closed rather than scan nothing", err)
 	}
 
 	found := map[string]int{}
 	where := map[string][]int{}
 	scanned := 0
-	for _, rel := range strings.Split(string(out), "\x00") {
-		if !strings.HasSuffix(rel, "_test.go") {
-			continue
-		}
+	for _, rel := range files {
 		src, readErr := os.ReadFile(filepath.Join(repoRoot, rel))
 		if readErr != nil {
 			t.Fatalf("reading %s: %v", rel, readErr)
