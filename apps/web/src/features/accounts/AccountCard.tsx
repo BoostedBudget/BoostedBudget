@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AccountSummaryHeader } from './components/AccountSummaryHeader'
 import type { Account } from './types'
-import { getAccountTypeLabel, getAccountBalanceAsOfDate } from './utils'
+import { getAccountTypeLabel } from './utils'
 import { isInactive } from './hooks/useActiveAccounts'
 
 interface AccountCardProps {
@@ -54,7 +54,6 @@ export function AccountCard({ account, onDisconnect, onPurge, onEdit, isDragging
   // disconnected. Distinct from isDisconnected above: that's about the linked ITEM's
   // subscription state; this is about the ACCOUNT's own status.
   const isClosed = isInactive(account)
-  const balanceAsOfDate = getAccountBalanceAsOfDate(account)
 
   // Display name: nickname > official_name > name
   const displayName = nickname || official_name || name
@@ -106,7 +105,7 @@ export function AccountCard({ account, onDisconnect, onPurge, onEdit, isDragging
             customEmoji={custom_emoji}
             customIcon={custom_icon}
             customColor={custom_color}
-            asOfDate={balanceAsOfDate}
+            isClosed={isClosed}
             institutionRowTrailingSlot={
               (isDisconnected || is_hidden || isClosed) ? (
                 <>

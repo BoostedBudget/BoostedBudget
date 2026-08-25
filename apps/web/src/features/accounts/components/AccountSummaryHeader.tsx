@@ -14,7 +14,6 @@
 
 import { AccountIconDisplay } from './AccountIconDisplay'
 import { formatAccountBalance } from '../utils'
-import { formatHistoryLabel } from '@/shared/dates/utils'
 import type { AccountIcon } from '../types'
 
 export interface AccountSummaryHeaderProps {
@@ -29,12 +28,22 @@ export interface AccountSummaryHeaderProps {
   customIcon?: string | null
   customColor?: string | null
   /**
-   * When set, the account is retained but no longer active (Issue #1569): its balance was
-   * frozen at this instant and must never read as a live figure. Switches the "Current
-   * Balance"/"Available Balance" labels to "Last known balance"/"Last known available balance"
-   * and appends "as of <date>".
+   * The account is retained but no longer active (Issue #1569): `removed`, `replaced` or
+   * `expired`.
+   *
+   * A closed account carries NO current balance (user ruling, Issue #1580).
+   * `accountBalanceProjection` (backend/internal/repository/account_liveness_sql.go) emits NULL —
+   * not zero — for `current_balance` and `available_balance` at every account-shaped read, so
+   * there is no figure to show and nothing to date.
+   *
+   * This prop replaces the former `asOfDate`, which switched the labels to "Last known
+   * balance" and appended "as of <date>". That affordance was designed for a world where a
+   * closed account still carried a frozen figure; once the backend stopped sending one it
+   * rendered as "Last known balance: N/A … as of Jun 4, 2025" — a label and a date with nothing
+   * between them. We now say plainly that a closed account has no balance, and that the history
+   * is kept.
    */
-  asOfDate?: string | null
+  isClosed?: boolean
   /**
    * Optional content rendered at the start of the institution row (before institution name).
    * AccountCard uses this for the drag handle.
@@ -58,13 +67,19 @@ export function AccountSummaryHeader({
   customEmoji,
   customIcon,
   customColor,
-  asOfDate,
+  isClosed = false,
   institutionRowLeadingSlot,
   institutionRowTrailingSlot,
 }: AccountSummaryHeaderProps) {
-  const currentBalanceFormatted = formatAccountBalance(currentBalance, currencyCode, { empty: 'N/A' })
+  // A closed account has no current balance, so nothing is rendered from `currentBalance` /
+  // `availableBalance` even if a caller (a stale cache, a hand-built payload) supplies one —
+  // restating a frozen figure as a current one is the defect, not the display of it.
+  const currentBalanceFormatted = isClosed
+    ? '—'
+    : formatAccountBalance(currentBalance, currencyCode, { empty: 'N/A' })
   const availableBalanceFormatted = formatAccountBalance(availableBalance, currencyCode, { empty: 'N/A' })
-  const asOfLabel = asOfDate ? formatHistoryLabel(asOfDate, 'MMM d, yyyy') : null
+  const showAvailableBalance =
+    !isClosed && availableBalance !== undefined && availableBalance !== currentBalance
 
   return (
     <>
@@ -117,24 +132,25 @@ export function AccountSummaryHeader({
         <div className="mt-4 flex flex-col gap-3">
           <div className="flex justify-between items-center">
             <span className="text-sm text-muted-foreground">
-              {asOfLabel ? 'Last known balance' : 'Current Balance'}
+              {isClosed ? 'Balance' : 'Current Balance'}
             </span>
             <span className="text-lg font-semibold text-primary" data-ph-mask>
               {currentBalanceFormatted}
             </span>
           </div>
-          {availableBalance !== undefined && availableBalance !== currentBalance && (
+          {showAvailableBalance && (
             <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">
-                {asOfLabel ? 'Last known available balance' : 'Available Balance'}
-              </span>
+              <span className="text-sm text-muted-foreground">Available Balance</span>
               <span className="text-lg font-semibold text-primary" data-ph-mask>
                 {availableBalanceFormatted}
               </span>
             </div>
           )}
-          {asOfLabel && (
-            <p className="text-xs text-muted-foreground text-right m-0">as of {asOfLabel}</p>
+          {isClosed && (
+            <p className="text-xs text-muted-foreground m-0">
+              Closed accounts do not carry a current balance. Your transaction and balance history
+              is kept.
+            </p>
           )}
         </div>
       </div>
