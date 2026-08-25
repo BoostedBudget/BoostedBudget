@@ -25,7 +25,7 @@
  */
 
 import { useId, useState } from 'react'
-import { ChevronDown, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   useGetDeletedSavingsGoals,
@@ -38,6 +38,7 @@ import { mutationFailureMessage } from '@/features/admin/lib/mutationFailureMess
 import { formatCurrency } from '@/shared/charts/formatters'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
+import { DeletedGoalContributions } from './DeletedGoalContributions'
 import type { SavingsGoal } from '../types'
 
 function formatDeletedOn(iso: string | undefined): string {
@@ -56,6 +57,9 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
   const [isOpen, setIsOpen] = useState(false)
   const panelId = useId()
   const [goalToPurge, setGoalToPurge] = useState<SavingsGoal | null>(null)
+  // Which goals' ledgers are open. A Set, not a single id, because comparing two deleted goals
+  // is the obvious thing to want to do here.
+  const [openLedgers, setOpenLedgers] = useState<ReadonlySet<string>>(() => new Set())
   const trackEvent = useTrackEvent()
 
   const { data, isLoading, refetch } = useGetDeletedSavingsGoals()
@@ -66,6 +70,14 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
   // Nothing deleted (or nothing known yet) means no panel at all — an empty "Deleted goals (0)"
   // header is clutter that tells the user nothing.
   if (isLoading || goals.length === 0) return null
+
+  function toggleLedger(goalId: string) {
+    setOpenLedgers((open) => {
+      const next = new Set(open)
+      if (!next.delete(goalId)) next.add(goalId)
+      return next
+    })
+  }
 
   async function handlePurge(goal: SavingsGoal) {
     try {
@@ -118,9 +130,9 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
         <div id={panelId} className="mt-2 space-y-2">
           <p className="px-1 text-xs text-muted-foreground">
             Deleting a goal doesn&apos;t throw anything away on its own &mdash; every contribution
-            you logged is still saved here, so you can look back at what you put aside. Two things
-            do erase it for good: the button below, and permanently deleting the account the goal
-            was tracking.
+            you logged is still saved here, so you can look back at what you put aside. Open a goal
+            to see them. Two things do erase it for good: the button below, and permanently
+            deleting the account the goal was tracking.
           </p>
           {/*
             N identical "Delete permanently" buttons are indistinguishable in a screen reader's
@@ -139,12 +151,24 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
           <span id={`${panelId}-action`} className="sr-only">
             Delete permanently:
           </span>
+          {/*
+            Same PII reasoning as the verb span above, for the ledger disclosure: N identical
+            "Contributions" buttons are indistinguishable in a screen reader's element list, and
+            the goal name must reach assistive tech through aria-labelledby rather than an
+            aria-label, because session replay records attribute values verbatim and no mask can
+            cover them. Rendered ONCE and shared by every row — one id per row would be N
+            duplicate ids.
+          */}
+          <span id={`${panelId}-ledger-action`} className="sr-only">
+            Contributions:
+          </span>
           <ul className="space-y-2">
             {goals.map((goal) => (
               <li
                 key={goal.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3"
+                className="rounded-lg border border-border bg-muted/30 px-4 py-3"
               >
+                <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p
                     id={`${panelId}-name-${goal.id}`}
@@ -162,18 +186,52 @@ export function DeletedGoalsPanel({ onPurged }: DeletedGoalsPanelProps) {
                     saved
                   </p>
                 </div>
-                <ReadOnlyGuard>
+                <div className="flex items-center gap-2">
+                  {/*
+                    #1569 T7 / C2. Without this the retained ledger was reachable only by API:
+                    the DELETE description promised the contributions were kept, and from the
+                    user's seat that promise was unverifiable. Mounted only while expanded, so a
+                    collapsed row issues no request.
+                  */}
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     size="sm"
-                    onClick={() => setGoalToPurge(goal)}
-                    className="text-destructive hover:bg-destructive/10"
-                    aria-labelledby={`${panelId}-action ${panelId}-name-${goal.id}`}
+                    onClick={() => toggleLedger(goal.id)}
+                    aria-expanded={openLedgers.has(goal.id)}
+                    aria-controls={`${panelId}-ledger-${goal.id}`}
+                    aria-labelledby={`${panelId}-ledger-action ${panelId}-name-${goal.id}`}
                   >
-                    <Trash2 className="size-3.5" aria-hidden="true" />
-                    <span aria-hidden="true">Delete permanently</span>
+                    <ChevronRight
+                      aria-hidden="true"
+                      className={`size-3.5 transition-transform motion-reduce:transition-none ${
+                        openLedgers.has(goal.id) ? 'rotate-90' : ''
+                      }`}
+                    />
+                    <span aria-hidden="true">Contributions</span>
                   </Button>
-                </ReadOnlyGuard>
+                  <ReadOnlyGuard>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setGoalToPurge(goal)}
+                      className="text-destructive hover:bg-destructive/10"
+                      aria-labelledby={`${panelId}-action ${panelId}-name-${goal.id}`}
+                    >
+                      <Trash2 className="size-3.5" aria-hidden="true" />
+                      <span aria-hidden="true">Delete permanently</span>
+                    </Button>
+                  </ReadOnlyGuard>
+                </div>
+                </div>
+                {openLedgers.has(goal.id) && (
+                  <div className="mt-3">
+                    <DeletedGoalContributions
+                      goalId={goal.id}
+                      regionId={`${panelId}-ledger-${goal.id}`}
+                      labelledBy={`${panelId}-name-${goal.id}`}
+                    />
+                  </div>
+                )}
               </li>
             ))}
           </ul>
