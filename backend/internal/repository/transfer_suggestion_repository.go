@@ -102,7 +102,7 @@ type TransferSuggestionRepository interface {
 
 // transferSuggestionRepository implements TransferSuggestionRepository using PostgreSQL.
 type transferSuggestionRepository struct {
-	db  DB
+	db DB
 	// enc is used by GetByUserIDStatuses to decrypt user_accounts.account_name_hint
 	// (encrypted at rest) when resolving account display names. Nil is safe — the
 	// plaintext nickname/name path still works; only ciphertext hints are skipped.

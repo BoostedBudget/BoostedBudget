@@ -268,10 +268,10 @@ func TestGetUserImpact_Integration(t *testing.T) {
 // TestGetUserImpact_DestinationAccountName_Integration validates that GetUserImpact
 // resolves the human-readable destination account name for each of the four cases:
 //
-//   (a) to_account_id → Plaid-linked account: resolves COALESCE(nickname, name)
-//   (b) to_user_account_id → manual account with plaintext nickname: resolves nickname
-//   (c) to_user_account_id → manual account with ONLY encrypted account_name_hint: decrypts hint
-//   (d) to_user_account_id → manual account with neither nickname nor hint: ToAccountName == nil
+//	(a) to_account_id → Plaid-linked account: resolves COALESCE(nickname, name)
+//	(b) to_user_account_id → manual account with plaintext nickname: resolves nickname
+//	(c) to_user_account_id → manual account with ONLY encrypted account_name_hint: decrypts hint
+//	(d) to_user_account_id → manual account with neither nickname nor hint: ToAccountName == nil
 //
 // This must be a real-PG test because pgxmock cannot validate JOIN correctness or
 // in-Go decrypt logic combined with the SQL result shape.

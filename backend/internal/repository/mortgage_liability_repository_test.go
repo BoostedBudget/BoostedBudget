@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -65,6 +65,10 @@ func TestNoCustomCategoryReadForgetsTheTombstoneFilter(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		if info.IsDir() && info.Name() == "testdata" {
+			// Deliberately-broken samples for other guards; they are not production SQL.
+			return filepath.SkipDir
+		}
 		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
@@ -99,6 +103,7 @@ func TestNoCustomCategoryReadForgetsTheTombstoneFilter(t *testing.T) {
 			sql := strings.Join(sqlParts, "\n")
 
 			bad := tombstoneReadOffenders(sql, customCategoryTombstoneTables, deleteRef)
+			bad = append(bad, tombstoneWriteOffenders(sql, customCategoryTombstoneTables)...)
 			if len(bad) == 0 {
 				// Nothing to report here, but a nested unit may still contain a read -- unless this
 				// unit already matched a read, in which case descending would double-report it.
@@ -122,7 +127,8 @@ func TestNoCustomCategoryReadForgetsTheTombstoneFilter(t *testing.T) {
 				"Add `AND <that reference's alias>.deleted_at IS NULL` -- another table's predicate in\n"+
 				"the same statement does NOT count -- or, if the read must deliberately see\n"+
 				"tombstoned categories (historical name resolution, history filters), an SQL comment\n"+
-				"`-- tombstone-exempt: <why>` inside the literal:\n  %s",
+				"an SQL comment naming THIS reference inside the literal:\n"+
+				"  -- tombstone-exempt(custom_categories[ <alias>]): <why>\n%s",
 			len(offenders), customCategoryTombstoneTables, strings.Join(offenders, "\n  "))
 	}
 }

@@ -162,6 +162,16 @@ func TestRetentionNoticeEnumerationCoversEverythingDeleted(t *testing.T) {
 // DeleteUserCascade's own body. Parsing the function rather than listing its statements is what
 // makes a newly added `DELETE FROM some_table` in that method show up here as an unenumerated
 // destruction instead of passing unnoticed.
+//
+// ⚠ Scope, so a future reader does not over-trust it. None of these is reachable today (each was
+// verified absent), and each would make a real destruction invisible to this guard:
+//   - only `*ast.BasicLit` nodes inside DeleteUserCascade's OWN body are scanned, so a DELETE moved
+//     into a helper, assembled with fmt.Sprintf, or held in a package-level const is not seen;
+//   - stripping `--` spans is safe only because these literals are raw backtick strings, where a
+//     `--` can only be an SQL comment;
+//   - the table name is taken verbatim, so `DELETE FROM public.audit_logs` would register as the
+//     table `public` and report `audit_logs` as unenumerated while claiming a table that does not
+//     exist. Schema-qualify nothing, or teach this to split on the dot.
 func explicitDeletesInDeleteUserCascade(t *testing.T) []string {
 	t.Helper()
 

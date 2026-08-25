@@ -70,7 +70,7 @@ func newTestSuggestion(id, userID string) *domain.TransferSuggestion {
 	return &domain.TransferSuggestion{
 		ID:           id,
 		UserID:       userID,
-		BoostID:       &boostID,
+		BoostID:      &boostID,
 		Amount:       50.00,
 		CurrencyCode: "USD",
 		Reason:       &reason,

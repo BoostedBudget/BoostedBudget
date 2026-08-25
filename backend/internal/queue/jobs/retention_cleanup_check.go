@@ -744,8 +744,15 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 // re-derives what DeleteUserCascade actually destroys — the transitive ON DELETE CASCADE closure
 // from `users` in the LIVE schema, plus the explicit `DELETE FROM`s in DeleteUserCascade's own
 // source — and fails when any destroyed table is not claimed by some phrase here. A new migration
-// that hangs a cascading table off `users` therefore cannot land without someone deciding, in
-// words, whether the deletion email already tells the user about it.
+// that hangs a cascading table off `users` therefore cannot land without someone TOUCHING this
+// list.
+//
+// ⚠ Precisely that, and no more: the guard checks COVERAGE and STALENESS, not TRUTHFULNESS. Adding
+// a table name to an existing item's `tables` turns the suite green with zero words of copy
+// changed — falsified deliberately by a reviewer with a probe table live. Nothing mechanical can
+// decide whether a phrase honestly describes the rows it claims; that judgement is the reviewer's,
+// and the two most elastic phrases (the internal-records item and "saved automation recipes") are
+// the ones to re-read first.
 type retentionDeletionItem struct {
 	phrase string
 	tables []string
@@ -759,9 +766,20 @@ type retentionDeletionItem struct {
 // some phrase, not that each one gets its own bullet; a phrase may therefore claim several tables,
 // but it may not claim a table a reader would not recognise in it.
 //
-// `audit_logs` is the one partial case: DeleteUserCascade deletes only this user's
-// deletion-residue rows from it and redacts the rest, so "the internal records" understates what
-// survives rather than overstating what goes — the safe direction for a deletion warning.
+// ⚠ `audit_logs` is the one case where the notice must NOT claim plain destruction, and an earlier
+// draft of this list got it backwards. `audit_logs.user_id` is ON DELETE SET NULL — which is why
+// the table is absent from the CASCADE closure — and DeleteUserCascade deletes only the
+// deletion-residue rows (`resource_id = $1 AND action LIKE $2`, profile_repository.go) and blanks
+// `changes` on the rest. Every other audit row SURVIVES, still carrying action, resource_type,
+// resource_id, ip_address, user_agent, request_id, error_message and created_at.
+//
+// The earlier draft reasoned that understating what survives is the safe direction for a warning.
+// That holds only under the warning-about-LOSS reading. Under the erasure-PROMISE reading — the one
+// a regulator applies to a deletion notice — over-claiming erasure is the unsafe direction: the
+// user would be told their IP addresses and user agents are gone when they are retained. Item 13
+// and the categorical sentence are both qualified accordingly, and the qualification also carries
+// the privacy policy's own carve-outs (§8.2 anonymised retention, §8.3 90-day encrypted backups,
+// §8.4 legal retention), which an unqualified "everything" silently dropped.
 var retentionDeletionItems = []retentionDeletionItem{
 	{
 		phrase: "your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed",
@@ -800,7 +818,7 @@ var retentionDeletionItems = []retentionDeletionItem{
 		tables: []string{"categorization_rules", "rule_execution_history", "transfer_suggestions"},
 	},
 	{
-		phrase: "your household — its members, invitations, sharing consents, and the accounts shared into it",
+		phrase: "your membership of a household, its invitations, its sharing consents, and the accounts shared into it (and the household itself, if you are its only member)",
 		tables: []string{"households", "household_members", "household_invites", "household_share_consents", "household_account_shares"},
 	},
 	{
@@ -808,11 +826,11 @@ var retentionDeletionItems = []retentionDeletionItem{
 		tables: []string{"subscription_entitlements", "paddle_transactions", "user_subscription_overrides", "referrals", "referral_codes"},
 	},
 	{
-		phrase: "your profile and sign-in identities, notifications, dashboard layout, privacy settings and saved recipes",
+		phrase: "your profile and sign-in identities, notifications, dashboard layout, privacy settings and saved automation recipes",
 		tables: []string{"users", "user_identities", "user_email_prefix_indices", "notifications", "user_dashboard_preferences", "privacy_settings", "mcp_recipes"},
 	},
 	{
-		phrase: "the internal job and activity records tied to your account",
+		phrase: "the internal job and activity records tied to your account — deleted, or stripped of their contents and disconnected from you where we are required to keep a record",
 		tables: []string{"audit_logs", "dead_letter_jobs", "idempotency_keys", "mcp_audit_log"},
 	},
 }
@@ -831,13 +849,13 @@ func retentionNoticeEnumeration() string {
 // retentionNotice30dBody / retentionNotice7dBody are the notice bodies, exposed as package-level
 // values so a test can read the exact text that is sent rather than a paraphrase of it.
 var retentionNotice30dBody = "Your account data is preserved in read-only mode. In 30 days, unless you resubscribe, " +
-	"we will permanently delete everything in your BoostedBudget account. This cannot be undone, and there is no " +
-	"way to restore it afterwards. In full, we will delete:\n" + retentionNoticeEnumeration() +
+	"we will permanently delete everything in your BoostedBudget account, except where the law requires us to keep " +
+	"a record. This cannot be undone, and there is no way to restore it afterwards. In full, we will delete:\n" + retentionNoticeEnumeration() +
 	"\nIf you want to keep any of this, resubscribe at boostedbudget.com/pricing to restore full access."
 
 var retentionNotice7dBody = "This is your final warning. In 7 days, we will permanently delete everything in your " +
-	"BoostedBudget account. This cannot be undone, and there is no way to restore it afterwards. In full, we will " +
-	"delete:\n" + retentionNoticeEnumeration() +
+	"BoostedBudget account, except where the law requires us to keep a record. This cannot be undone, and there is " +
+	"no way to restore it afterwards. In full, we will delete:\n" + retentionNoticeEnumeration() +
 	"\nIf you want to keep any of this, resubscribe at boostedbudget.com/pricing within the next 7 days."
 
 // retentionNoticeSpec parameterizes processRetentionNotices over the 30-day/7-day notice

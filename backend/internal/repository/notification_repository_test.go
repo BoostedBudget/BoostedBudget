@@ -346,13 +346,13 @@ func makeNotificationRow(id, userID string) []interface{} {
 		"item_error",
 		"Test Title",
 		"Test message body",
-		(*string)(nil), // action_url
-		(*string)(nil), // action_label
-		false,          // read
-		false,          // sent_email
+		(*string)(nil),    // action_url
+		(*string)(nil),    // action_label
+		false,             // read
+		false,             // sent_email
 		(*time.Time)(nil), // email_sent_at
-		"informational", // interaction_pattern
-		(*string)(nil), // transfer_suggestion_id
+		"informational",   // interaction_pattern
+		(*string)(nil),    // transfer_suggestion_id
 		time.Now(),
 		time.Now(),
 	}

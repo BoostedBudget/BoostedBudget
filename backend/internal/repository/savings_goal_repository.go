@@ -477,7 +477,11 @@ func (r *savingsGoalRepository) PurgeGoal(ctx context.Context, id, userID string
 
 	// This is the destruction the tombstone was deferring: ON DELETE CASCADE takes
 	// savings_goal_contributions, budget_categories and savings_goal_category_detach with it.
-	ct, err := tx.Exec(ctx, `DELETE FROM savings_goals WHERE id = $1 AND user_id = $2`, id, userID)
+	ct, err := tx.Exec(ctx, `
+		-- tombstone-exempt(savings_goals): the SELECT ... FOR UPDATE above has already asserted
+		-- deleted_at IS NOT NULL and refused a live goal, so re-stating it here would only make the
+		-- two predicates able to disagree (#1569 T8 write-target audit).
+		DELETE FROM savings_goals WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return fmt.Errorf("purge savings goal %s: %w", id, err)
 	}

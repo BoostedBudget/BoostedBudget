@@ -201,7 +201,7 @@ func TestSavingsContributionRepository_Integration_CrossUserOwnership(t *testing
 	accountA := seedIntegrationAccount(t, pool, userA)
 	accountB := seedIntegrationAccount(t, pool, userB)
 
-	goalA := seedIntegrationGoal(t, pool, userA, accountA)    // owned by userA
+	goalA := seedIntegrationGoal(t, pool, userA, accountA)               // owned by userA
 	txnB := seedIntegrationTransaction(t, pool, userB, accountB, -200.0) // owned by userB
 
 	repo := repository.NewSavingsContributionRepository(pool)
@@ -336,7 +336,7 @@ func TestTransactionRepository_Integration_InflowSignMagnitude(t *testing.T) {
 	//   inflow (Plaid convention: negative)  → should appear with positive magnitude
 	//   outflow (Plaid convention: positive) → should NOT appear
 	inflowTxnID := seedIntegrationTransaction(t, pool, userID, accountID, -150.0) // inflow
-	_ = seedIntegrationTransaction(t, pool, userID, accountID, 75.0)               // outflow — excluded
+	_ = seedIntegrationTransaction(t, pool, userID, accountID, 75.0)              // outflow — excluded
 	_ = inflowTxnID
 
 	repo := repository.NewTransactionRepository(pool, repository.NewTestFieldEncryptor(t))

@@ -106,6 +106,44 @@ func TestTombstoneExemptionIsPerReference(t *testing.T) {
 		}
 	})
 
+	// The write rule (plan lines 489-493). It was dropped from T8's first pass and the note in
+	// transaction_repository.go that DOCUMENTED the hole was edited in the same commit.
+
+	t.Run("an UPDATE target with no predicate is an offender", func(t *testing.T) {
+		got := tombstoneWriteOffenders(`UPDATE transactions SET deleted_at = NOW() WHERE id = $1`, tables)
+		want := []string{"write:transactions"}
+		if !equalStrings(got, want) {
+			t.Fatalf("an UPDATE target is still invisible:\n  got  %v\n  want %v", got, want)
+		}
+	})
+
+	t.Run("a DELETE target with no predicate is an offender", func(t *testing.T) {
+		got := tombstoneWriteOffenders(`DELETE FROM transactions WHERE id = $1`, tables)
+		want := []string{"write:transactions"}
+		if !equalStrings(got, want) {
+			t.Fatalf("a DELETE target is still invisible:\n  got  %v\n  want %v", got, want)
+		}
+	})
+
+	t.Run("an aliased UPDATE target needs its own alias-qualified predicate", func(t *testing.T) {
+		guarded := `UPDATE transactions t SET x = 1 WHERE t.id = $1 AND t.deleted_at IS NULL`
+		if got := tombstoneWriteOffenders(guarded, tables); len(got) != 0 {
+			t.Fatalf("a guarded UPDATE target was reported: %v", got)
+		}
+		other := `UPDATE transactions t SET x = 1 FROM accounts a WHERE a.deleted_at IS NULL`
+		if got := tombstoneWriteOffenders(other, tables); !equalStrings(got, []string{"write:transactions t"}) {
+			t.Fatalf("another table's predicate satisfied the write rule: %v", got)
+		}
+	})
+
+	t.Run("a named exemption covers the write target", func(t *testing.T) {
+		sql := `-- tombstone-exempt(transactions): the purge finishes what the tombstone deferred.
+			DELETE FROM transactions WHERE id = $1`
+		if got := tombstoneWriteOffenders(sql, tables); len(got) != 0 {
+			t.Fatalf("named write exemption not honoured: %v", got)
+		}
+	})
+
 	t.Run("an exemption naming a different table does not cover this one", func(t *testing.T) {
 		sql := `SELECT 1
 			FROM transactions t
@@ -165,7 +203,6 @@ var allTombstoneAuditedTables = func() []string {
 func TestEveryTombstoneExemptTokenNamesItsReference(t *testing.T) {
 	root := repoInternalRoot(t)
 
-	bare := regexp.MustCompile(`tombstone-exempt\s*:`)
 	audited := map[string]bool{}
 	for _, tbl := range allTombstoneAuditedTables {
 		audited[tbl] = true
@@ -198,9 +235,10 @@ func TestEveryTombstoneExemptTokenNamesItsReference(t *testing.T) {
 			}
 			at := rel + ":" + strconv.Itoa(fset.Position(lit.Pos()).Line)
 
-			if bare.MatchString(s) {
+			if namedExemptIsBare(s, "tombstone-exempt", tombstoneExemptToken) {
 				offenders = append(offenders,
-					at+" uses the bare `tombstone-exempt:` form, which excuses nothing")
+					at+" uses `tombstone-exempt` in a form other than "+
+						"`tombstone-exempt(<table>[ <alias>], ...):`, which excuses nothing")
 			}
 			for _, m := range tombstoneExemptToken.FindAllStringSubmatch(s, -1) {
 				for _, ref := range strings.Split(m[1], ",") {

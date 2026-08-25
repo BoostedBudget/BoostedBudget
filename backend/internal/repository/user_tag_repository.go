@@ -196,10 +196,10 @@ func (r *userTagRepository) GetByName(ctx context.Context, userID, name string) 
 // The census entry for this said "a rename doesn't propagate", implying a coupling that has come
 // loose. There is no coupling, in either direction, and never has been:
 //
-//   * transactions.tags and transactions.tags_source are free-text JSONB written by
+//   - transactions.tags and transactions.tags_source are free-text JSONB written by
 //     transactionService.UpdateTransactionTags, which never consults user_tags. Tagging a
 //     transaction does not create a registry row.
-//   * usage_count has NO production writer. IncrementUsageCount and DecrementUsageCount exist on
+//   - usage_count has NO production writer. IncrementUsageCount and DecrementUsageCount exist on
 //     this repository and are called by nothing outside tests — verified over the tracked tree
 //     with `git ls-files | xargs /usr/bin/grep -ln "IncrementUsageCount\|DecrementUsageCount"`,
 //     which returns this file and three test files. `git ls-files '*.go' | xargs /usr/bin/grep -ln

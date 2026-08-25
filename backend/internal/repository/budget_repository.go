@@ -575,8 +575,8 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 		tagsJSON,
 		matchLogic,
 		category.SavingsGoalID,   // $13: nullable FK to savings_goals (Issue #1300)
-		category.AutoCreated,      // $14: bool — auto-created by savings goal linkage
-		category.ManagedByGoalID,  // $15: nullable FK — which goal manages this category
+		category.AutoCreated,     // $14: bool — auto-created by savings goal linkage
+		category.ManagedByGoalID, // $15: nullable FK — which goal manages this category
 	)
 
 	return err

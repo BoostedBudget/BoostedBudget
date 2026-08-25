@@ -513,7 +513,7 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 			return nil, fmt.Errorf("UnrealizedGainLoss scan: %w", err)
 		}
 		totalValue += ag.Value
-		totalCostBasis += ag.CostBasis         // all-non-nil → exposed TotalCostBasis
+		totalCostBasis += ag.CostBasis           // all-non-nil → exposed TotalCostBasis
 		totalKnownPairCost += costBasisKnownPair // both-non-nil → pct denominator only
 		// Accumulate per-account GL directly (already FILTER-scoped in SQL) rather than
 		// recomputing totalValue - totalCostBasis, which would mix all-holdings value

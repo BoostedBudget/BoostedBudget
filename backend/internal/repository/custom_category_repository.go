@@ -282,6 +282,11 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 	}
 
 	query := `
+		-- tombstone-exempt(custom_categories): liveness is the SERVICE layer's gate (#1569 T8
+		-- write-target audit). CustomCategoryService.Update resolves the id through the
+		-- tombstone-filtered GetByID before calling this, so a tombstoned category cannot reach it.
+		-- Narrowing the predicate here would turn a refusal into a silent zero-row update, which is
+		-- the worse failure -- the caller could not tell "not yours" from "deleted".
 		UPDATE custom_categories
 		SET name = $1, parent_pfc_primary = $2, parent_id = $3, icon = $4, color = $5, usage_count = $6, updated_at = $7
 		WHERE id = $8
@@ -589,7 +594,11 @@ func (r *customCategoryRepository) DeleteWithReassignment(ctx context.Context, u
 
 	// 3. Reparent children to top-level.
 	if _, err := tx.Exec(ctx,
-		`UPDATE custom_categories SET parent_id = NULL, updated_at = NOW() WHERE parent_id = $2 AND user_id = $1`,
+		`-- tombstone-exempt(custom_categories): reparenting must reach TOMBSTONED children too
+		 -- (#1569 T8 write-target audit). The parent is being deleted in this same transaction and
+		 -- fk_custom_categories_parent_id would otherwise strand a tombstoned child pointing at a
+		 -- row that is about to be gone, so a filter here would break the delete, not protect it.
+		 UPDATE custom_categories SET parent_id = NULL, updated_at = NOW() WHERE parent_id = $2 AND user_id = $1`,
 		userID, categoryID,
 	); err != nil {
 		return fmt.Errorf("failed to reparent children: %w", err)

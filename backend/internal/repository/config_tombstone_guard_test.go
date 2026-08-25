@@ -81,8 +81,38 @@ func tombstoneReadRefRegexp(tables []string) *regexp.Regexp {
 var tombstoneUnqualifiedPredicate = regexp.MustCompile(`(?is)(^|[^.\w])deleted_at\s+IS\s+NULL`)
 
 // tombstoneExemptToken matches an exemption and captures the references it covers:
-// `tombstone-exempt(<table>[ <alias>], ...): <reason>`.
-var tombstoneExemptToken = regexp.MustCompile(`tombstone-exempt\(([^)]*)\)\s*:`)
+// `tombstone-exempt(<table>[ <alias>], ...): <reason>`. The `\s*` before the paren is deliberate:
+// `tombstone-exempt (transactions):` with one stray space used to match NEITHER this pattern nor
+// the bare-form detector, so it excused nothing and was reported by nothing.
+var tombstoneExemptToken = namedExemptToken("tombstone-exempt")
+
+// namedExemptToken builds the matcher for a `<name>(<targets>): <reason>` exemption. Shared,
+// because a second guard (encrypted_column_literal_guard_test.go) needs the identical shape and a
+// second hand-rolled copy is how the two drift.
+func namedExemptToken(name string) *regexp.Regexp {
+	return regexp.MustCompile(regexp.QuoteMeta(name) + `\s*\(([^)]*)\)\s*:`)
+}
+
+// namedExemptTargets returns the lowercased, whitespace-collapsed targets named by every
+// `<name>(...)` token in text.
+func namedExemptTargets(text string, token *regexp.Regexp) map[string]bool {
+	targets := map[string]bool{}
+	for _, m := range token.FindAllStringSubmatch(text, -1) {
+		for _, t := range strings.Split(m[1], ",") {
+			if key := strings.Join(strings.Fields(strings.ToLower(t)), " "); key != "" {
+				targets[key] = true
+			}
+		}
+	}
+	return targets
+}
+
+// namedExemptIsBare reports whether text uses `name` in any form OTHER than the parenthesised one.
+// Built by deletion rather than by a second pattern, so `name:`, `name (x)` with no colon and a
+// bare `name` are all caught without three regexps that can disagree.
+func namedExemptIsBare(text, name string, token *regexp.Regexp) bool {
+	return strings.Contains(token.ReplaceAllString(text, ""), name)
+}
 
 // tombstoneReadOffenders returns, for one SQL statement, the read references to `tables` that carry
 // no tombstone predicate OF THEIR OWN.
@@ -161,6 +191,10 @@ func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		if info.IsDir() && info.Name() == "testdata" {
+			// Deliberately-broken samples for other guards; they are not production SQL.
+			return filepath.SkipDir
+		}
 		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
@@ -195,6 +229,7 @@ func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 			sql := strings.Join(sqlParts, "\n")
 
 			bad := tombstoneReadOffenders(sql, configTombstoneTables, deleteRef)
+			bad = append(bad, tombstoneWriteOffenders(sql, configTombstoneTables)...)
 			if len(bad) == 0 {
 				// Nothing to report here, but a nested unit may still contain a read — unless this
 				// unit already matched a read, in which case descending would double-report it.
@@ -217,7 +252,8 @@ func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 			"%d read reference(s) to %v carry no tombstone predicate OF THEIR OWN (#1569).\n"+
 				"Add `AND <that reference's alias>.deleted_at IS NULL` — another table's predicate in\n"+
 				"the same statement does NOT count — or, if the predicate is genuinely supplied\n"+
-				"elsewhere, an SQL comment `-- tombstone-exempt: <why>` inside the literal:\n  %s",
+				"elsewhere, an SQL comment naming THIS reference inside the literal:\n"+
+				"  -- tombstone-exempt(<table>[ <alias>]): <why>\n%s",
 			len(offenders), configTombstoneTables, strings.Join(offenders, "\n  "))
 	}
 }
@@ -227,15 +263,56 @@ func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 // see TestEveryTombstoneExemptTokenNamesItsReference, which reports it rather than letting it
 // quietly blanket the statement.
 func tombstoneExemptRefs(sql string) map[string]bool {
-	refs := map[string]bool{}
-	for _, m := range tombstoneExemptToken.FindAllStringSubmatch(sql, -1) {
-		for _, ref := range strings.Split(m[1], ",") {
-			if key := strings.Join(strings.Fields(strings.ToLower(ref)), " "); key != "" {
-				refs[key] = true
-			}
+	return namedExemptTargets(sql, tombstoneExemptToken)
+}
+
+// tombstoneWriteTargetRegexp finds the TARGET of an UPDATE or a DELETE and captures its alias.
+// Plan lines 489-493; #1569 T8 fix round 1.
+//
+// A read that forgets the tombstone filter shows the user a row they deleted. A WRITE that forgets
+// it does something different and in one direction worse: it mutates rows the user believes are
+// gone. The guard never looked at a write target at all — DELETE's FROM was explicitly stripped as
+// "a write, not a read", and an UPDATE's target matched no FROM/JOIN/USING — so
+// `UPDATE transactions SET deleted_at = NOW()` yielded zero offenders and a note in
+// transaction_repository.go recorded the hole rather than closing it.
+func tombstoneWriteTargetRegexp(tables []string) *regexp.Regexp {
+	return regexp.MustCompile(
+		`(?is)\b(?:UPDATE|DELETE\s+FROM)\s+(?:ONLY\s+)?(` + strings.Join(tables, "|") +
+			`)\b(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?`)
+}
+
+// tombstoneWriteOffenders returns the write targets in one statement that carry no tombstone
+// predicate of their own and no exemption naming them. The reported reference is prefixed `write:`
+// so a failure cannot be mistaken for the read rule, which has a different remedy.
+func tombstoneWriteOffenders(sql string, tables []string) []string {
+	exempt := tombstoneExemptRefs(sql)
+	code := stripSQLComments(sql)
+
+	var offenders []string
+	for _, m := range tombstoneWriteTargetRegexp(tables).FindAllStringSubmatch(code, -1) {
+		table, alias := m[1], m[2]
+		if sqlKeywordsAfterTableName[strings.ToLower(alias)] {
+			alias = ""
+		}
+		ref := table
+		if alias != "" {
+			ref = table + " " + alias
+		}
+		if exempt[strings.ToLower(ref)] {
+			continue
+		}
+		var ok bool
+		if alias != "" {
+			ok = regexp.MustCompile(`(?is)\b` + regexp.QuoteMeta(alias) + `\.deleted_at\s+IS\s+NULL`).MatchString(code)
+		} else {
+			ok = tombstoneUnqualifiedPredicate.MatchString(code) ||
+				regexp.MustCompile(`(?is)\b`+regexp.QuoteMeta(table)+`\.deleted_at\s+IS\s+NULL`).MatchString(code)
+		}
+		if !ok {
+			offenders = append(offenders, "write:"+ref)
 		}
 	}
-	return refs
+	return offenders
 }
 
 // sqlLineComment and sqlBlockComment strip SQL comments so that PROSE ABOUT a predicate is never

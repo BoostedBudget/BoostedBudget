@@ -72,15 +72,27 @@ func encryptedLiteralComparison(cols []string) *regexp.Regexp {
 			`)\s*(?:=|<>|!=|\bLIKE\b|\bILIKE\b)\s*'`)
 }
 
+// encryptedLiteralExemptToken is the opt-out, and it is PER COLUMN:
+// `encrypted-literal-exempt(<column>, ...): <reason>`.
+//
+// ⚠ THIS WAS A BLANKET `encrypted-literal-exempt:` FOR ONE COMMIT, and that is worth recording
+// rather than quietly fixing. It was character-for-character the per-statement short-circuit that
+// the commit introducing this guard's sibling had just deleted from tombstoneReadOffenders, with a
+// message explaining why it is wrong — and it failed the same way: a reason naming only
+// `clerk_user_id` silently excused `email = ''` in the same statement, which is the LITERAL
+// founding defect of this guard. Reproduced and reverted in T8 fix round 1. It shares
+// namedExemptToken with the tombstone guard now, so there is one mechanism, not two.
+var encryptedLiteralExemptToken = namedExemptToken("encrypted-literal-exempt")
+
 // encryptedColumnLiteralOffenders returns the encrypted columns one SQL statement compares to a
-// literal. The `encrypted-literal-exempt:` token opts a statement out, for the case where the
-// column genuinely holds plaintext in that context.
+// literal, minus the ones an exemption NAMES.
 func encryptedColumnLiteralOffenders(sql string, cols []string) []string {
-	if strings.Contains(sql, "encrypted-literal-exempt:") {
-		return nil
-	}
+	exempt := namedExemptTargets(sql, encryptedLiteralExemptToken)
 	var out []string
 	for _, m := range encryptedLiteralComparison(cols).FindAllStringSubmatch(stripSQLComments(sql), -1) {
+		if exempt[strings.ToLower(m[1])] {
+			continue
+		}
 		out = append(out, m[1])
 	}
 	return out
@@ -101,6 +113,20 @@ func TestEncryptedColumnLiteral_Detects(t *testing.T) {
 		{"IS NULL is legitimate", `SELECT 1 FROM users WHERE email IS NULL`, ""},
 		{"an unrelated column is not matched", `SELECT 1 FROM users WHERE subscription_tier = 'premium'`, ""},
 		{"a comment mentioning the shape is not the shape", "SELECT 1 FROM users\n-- email = '' was dead\nWHERE id = $1", ""},
+		{
+			"a named exemption excuses only the column it names",
+			"SELECT 1 FROM users\n" +
+				"-- encrypted-literal-exempt(clerk_user_id): this column is plaintext in the fixture.\n" +
+				"WHERE clerk_user_id = 'user_abc' AND email = ''",
+			"email",
+		},
+		{
+			"a bare token excuses nothing",
+			"SELECT 1 FROM users\n" +
+				"-- encrypted-literal-exempt: a reason that names no column.\n" +
+				"WHERE clerk_user_id = 'user_abc' AND email = ''",
+			"clerk_user_id,email",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -113,7 +139,15 @@ func TestEncryptedColumnLiteral_Detects(t *testing.T) {
 }
 
 func TestNoEncryptedColumnComparedToALiteral(t *testing.T) {
-	root := repoInternalRoot(t)
+	// internal/ AND cmd/. The docstring claimed both from the start while the walk covered only
+	// internal/, and cmd/server/main.go is 2000+ lines of wiring — exactly where a hand-written
+	// diagnostic query would live. Verified by planting the identical literal under cmd/server and
+	// watching it go from GREEN to reported.
+	backendRoot := filepath.Dir(repoInternalRoot(t))
+	roots := []string{
+		filepath.Join(backendRoot, "internal"),
+		filepath.Join(backendRoot, "cmd"),
+	}
 
 	cols := make([]string, 0, len(encryptedColumns))
 	for c := range encryptedColumns {
@@ -123,7 +157,7 @@ func TestNoEncryptedColumnComparedToALiteral(t *testing.T) {
 	var offenders []string
 	scanned := 0
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	walk := func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -136,11 +170,11 @@ func TestNoEncryptedColumnComparedToALiteral(t *testing.T) {
 			return parseErr
 		}
 		scanned++
-		rel, _ := filepath.Rel(root, path)
+		rel, _ := filepath.Rel(backendRoot, path)
 		// This file's own meta-test fixtures ARE the violation, deliberately. Excluding it is the
 		// same compromise the citation guard makes for its fabricated names: a guard whose
 		// examples trip itself gets its examples deleted, and then it has no examples.
-		if rel == "repository/encrypted_column_literal_guard_test.go" {
+		if rel == "internal/repository/encrypted_column_literal_guard_test.go" {
 			return nil
 		}
 
@@ -160,9 +194,11 @@ func TestNoEncryptedColumnComparedToALiteral(t *testing.T) {
 			return true
 		})
 		return nil
-	})
-	if err != nil {
-		t.Fatalf("walking internal/: %v", err)
+	}
+	for _, root := range roots {
+		if err := filepath.Walk(root, walk); err != nil {
+			t.Fatalf("walking %s: %v", root, err)
+		}
 	}
 	if scanned < 100 {
 		t.Fatalf("scanned only %d Go files; the walk is broken and a pass here would be vacuous", scanned)
@@ -175,7 +211,8 @@ func TestNoEncryptedColumnComparedToALiteral(t *testing.T) {
 				"That column stores \"ENC$\"+ciphertext, so no row production can create will ever\n"+
 				"match — the predicate is dead and any assertion resting on it is vacuous. Compare\n"+
 				"against a parameter carrying the encrypted value, or add an SQL comment\n"+
-				"`-- encrypted-literal-exempt: <why>` if the column really is plaintext here:\n  %s",
+				"an SQL comment naming THAT column if it really is plaintext here:\n"+
+				"  -- encrypted-literal-exempt(<column>, ...): <why>\n  %s",
 			len(offenders), strings.Join(offenders, "\n  "))
 	}
 }

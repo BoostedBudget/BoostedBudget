@@ -34,20 +34,20 @@ func addBoostExecutionRow(rows *pgxmock.Rows, execID, boostID string) *pgxmock.R
 	return rows.AddRow(
 		execID,
 		&boostID,
-		"user-"+execID,       // user_id (#1569 Task 14)
-		strPtr("Test Boost"),   // boost_name (#1569 Task 14)
+		"user-"+execID,                  // user_id (#1569 Task 14)
+		strPtr("Test Boost"),            // boost_name (#1569 Task 14)
 		[]byte(`{"name":"Test Boost"}`), // definition_snapshot (#1569 Task 14)
 		domain.ExecutionStatusPending,
 		time.Now(),
-		nil,       // completed_at
-		nil,       // execution_duration_ms
+		nil,          // completed_at
+		nil,          // execution_duration_ms
 		[]byte("{}"), // trigger_context JSONB
-		nil,       // input_data
-		nil,       // output_data
-		nil,       // error_code
-		nil,       // error_message
-		0,         // retry_count
-		3,         // max_retries
+		nil,          // input_data
+		nil,          // output_data
+		nil,          // error_code
+		nil,          // error_message
+		0,            // retry_count
+		3,            // max_retries
 	)
 }
 
@@ -77,20 +77,20 @@ func TestBoostExecutionRepository_Create_Success(t *testing.T) {
 		WithArgs(
 			pgxmock.AnyArg(), // id (generated)
 			execution.BoostID,
-			pgxmock.AnyArg(), // user_id (#1569 Task 14)
-			pgxmock.AnyArg(), // boost_name (#1569 Task 14)
-			pgxmock.AnyArg(), // definition_snapshot (#1569 Task 14)
+			pgxmock.AnyArg(),              // user_id (#1569 Task 14)
+			pgxmock.AnyArg(),              // boost_name (#1569 Task 14)
+			pgxmock.AnyArg(),              // definition_snapshot (#1569 Task 14)
 			domain.ExecutionStatusPending, // status (defaulted)
-			pgxmock.AnyArg(), // started_at (defaulted)
-			pgxmock.AnyArg(), // completed_at (nil)
-			pgxmock.AnyArg(), // execution_duration_ms (nil)
-			pgxmock.AnyArg(), // trigger_context (defaulted to {})
-			pgxmock.AnyArg(), // input_data
-			pgxmock.AnyArg(), // output_data
-			pgxmock.AnyArg(), // error_code
-			pgxmock.AnyArg(), // error_message
-			pgxmock.AnyArg(), // retry_count
-			3, // max_retries (defaulted to 3)
+			pgxmock.AnyArg(),              // started_at (defaulted)
+			pgxmock.AnyArg(),              // completed_at (nil)
+			pgxmock.AnyArg(),              // execution_duration_ms (nil)
+			pgxmock.AnyArg(),              // trigger_context (defaulted to {})
+			pgxmock.AnyArg(),              // input_data
+			pgxmock.AnyArg(),              // output_data
+			pgxmock.AnyArg(),              // error_code
+			pgxmock.AnyArg(),              // error_message
+			pgxmock.AnyArg(),              // retry_count
+			3,                             // max_retries (defaulted to 3)
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 

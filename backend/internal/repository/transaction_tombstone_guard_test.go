@@ -41,6 +41,18 @@ import (
 // (config_tombstone_guard_test.go). Re-audited under the strict form, THIS guard reported no new
 // offenders — the weakness was latent here, not exploited — but it was the same weakness.
 //
+// WRITES ARE AUDITED TOO, since #1569 T8. Every UPDATE and DELETE whose TARGET is one of these
+// tables must carry the same alias-qualified predicate or a named exemption. A read that forgets
+// the filter shows the user a row they deleted; a write that forgets it MUTATES one, which is
+// worse. Fourteen live sites were surfaced when the rule was switched on, every one of them
+// legitimate and every one now carrying a written reason.
+//
+// ⚠ KNOWN SCOPE LIMIT: an UNALIASED reference in a comma join list is still invisible.
+// `FROM tombstoned s, transactions` matches no FROM/JOIN/USING and is dropped by the comma rule,
+// which requires an alias -- because a bare `, transactions` also matches a qualified column
+// (`EXCLUDED.x, transactions.y`) and plain English in an email template, and both produced false
+// positives when it was tried. The aliased form, which is what real join lists use, IS seen.
+//
 // This is a syntactic check, not a semantic one — it cannot tell a correct predicate from a
 // misplaced one, and it is deliberately cheap enough to never be the reason someone skips it. Its
 // job is to make FORGETTING impossible; getting it RIGHT is what the behavioural tests are for.
@@ -65,6 +77,10 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		if info.IsDir() && info.Name() == "testdata" {
+			// Deliberately-broken samples for other guards; they are not production SQL.
+			return filepath.SkipDir
 		}
 		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
@@ -107,6 +123,7 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 			sql := strings.Join(sqlParts, "\n")
 
 			bad := tombstoneReadOffenders(sql, transactionTombstoneTables, tombstoneDeleteRef)
+			bad = append(bad, tombstoneWriteOffenders(sql, transactionTombstoneTables)...)
 			if len(bad) == 0 {
 				// Keep descending only if this unit did not itself match a read; otherwise the
 				// enclosing unit already accounts for every literal inside it and descending
@@ -130,7 +147,8 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 			"%d read reference(s) to `transactions` carry no tombstone predicate OF THEIR OWN (#1569).\n"+
 				"Add `AND <that reference's alias>.deleted_at IS NULL` — another table's predicate in\n"+
 				"the same statement does NOT count — or, if the predicate is genuinely supplied\n"+
-				"elsewhere, an SQL comment `-- tombstone-exempt: <why>` inside the literal:\n  %s",
+				"elsewhere, an SQL comment naming THIS reference inside the literal:\n"+
+				"  -- tombstone-exempt(<table>[ <alias>]): <why>\n%s",
 			len(offenders), strings.Join(offenders, "\n  "))
 	}
 }

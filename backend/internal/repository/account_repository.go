@@ -1077,6 +1077,10 @@ func (r *accountRepository) PurgeAccount(ctx context.Context, accountID, userID 
 	// and still returns ErrPurgeBlockedBySavingsGoal — which is what keeps that error's text true:
 	// deleting the goal now really does unblock the retry.
 	if _, err := tx.Exec(ctx, `
+		-- tombstone-exempt(savings_goals): the predicate is INVERTED on purpose and is right above --
+		-- deleted_at IS NOT NULL. This is the purge finishing the destruction the tombstone
+		-- deferred; a live goal is deliberately left to trip the FK and return
+		-- ErrPurgeBlockedBySavingsGoal (#1569 T8 write-target audit).
 		DELETE FROM savings_goals
 		WHERE account_id = $1 AND user_id = $2 AND deleted_at IS NOT NULL
 	`, accountID, userID); err != nil {
