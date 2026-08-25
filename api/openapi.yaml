@@ -2551,6 +2551,54 @@ components:
         - layout
         - updated_at
       type: object
+    DataExport:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/DataExport.json
+          format: uri
+          readOnly: true
+          type: string
+        excluded_tables:
+          additionalProperties:
+            type: string
+          description: Tables deliberately not exported, and why
+          type: object
+        export_version:
+          description: Schema version of this export document
+          format: int64
+          type: integer
+        generated_at:
+          description: When this export was produced (UTC)
+          format: date-time
+          type: string
+        row_count:
+          description: Total rows across all sections
+          format: int64
+          type: integer
+        sections:
+          additionalProperties:
+            items:
+              additionalProperties: {}
+              type: object
+            type:
+              - array
+              - "null"
+          description: User-scoped rows, keyed by the source table name
+          type: object
+        user_id:
+          description: The exporting user's BoostedBudget identifier
+          type: string
+      required:
+        - export_version
+        - generated_at
+        - user_id
+        - sections
+        - excluded_tables
+        - row_count
+      type: object
     DatabaseHealth:
       additionalProperties: false
       properties:
@@ -14915,6 +14963,32 @@ paths:
       summary: Set household share visibility for a user account
       tags:
         - Household
+  /api/v1/user/data-export:
+    get:
+      description: "Returns a machine-readable JSON export of the authenticated user's own data (GDPR Article 20, right to data portability). Scoped strictly to the caller: rows belonging to household peers are never included, and credentials, encrypted-at-rest secrets and third-party authentication identifiers are excluded."
+      operationId: getDataExport
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataExport"
+          description: OK
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Export my data
+      tags:
+        - Privacy
   /api/v1/user/delete:
     post:
       description: Initiates account deletion with 30-day grace period. User will receive email with cancellation link.
