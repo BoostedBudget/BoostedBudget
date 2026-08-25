@@ -17,6 +17,8 @@ import {
   mockUseListSavingsGoalContributions,
   mockConfirmSavingsGoalContributionMutateAsync,
   mockUseGetSavingsProgressSummary,
+  mockUseGetDeletedSavingsGoals,
+  mockDeletedSavingsGoalsRefetch,
 } from '@/test/mocks/savings-goals-api'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
@@ -89,6 +91,12 @@ describe('SavingsPage', () => {
       data: undefined,
       isLoading: false,
       error: null,
+    })
+    mockUseGetDeletedSavingsGoals.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+      refetch: mockDeletedSavingsGoalsRefetch,
     })
   })
 
@@ -533,6 +541,64 @@ describe('SavingsPage', () => {
       renderWithSummary([baseGoal], undefined)
       expect(screen.getByText('Vacation Fund')).toBeInTheDocument()
       expect(screen.queryByText('Account disconnected')).not.toBeInTheDocument()
+    })
+  })
+
+  // Issue #1569 whole-branch review, C2. The delete confirmation promises the contributions are
+  // kept and that the goal can be erased later "from Deleted goals". A user deleting their LAST
+  // goal landed on the zero-goals empty state, which returned before <DeletedGoalsPanel> was
+  // ever reached — so both halves of that promise were false exactly for the user who had just
+  // been told them, and POST /savings-goals/{id}/purge had no reachable caller again.
+  describe('deleted-goals disclosure with no live goals remaining', () => {
+    const deletedGoal = {
+      ...baseGoal,
+      id: 'goal-deleted-1',
+      name: 'Old Laptop Fund',
+      deleted_at: '2024-03-04T00:00:00Z',
+    }
+
+    function withDeleted(goals: unknown[], deleted: unknown[]) {
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: goals as SavingsGoal[],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+      mockUseGetDeletedSavingsGoals.mockReturnValue({
+        data: deleted as never,
+        isLoading: false,
+        error: null,
+        refetch: mockDeletedSavingsGoalsRefetch,
+      })
+      return renderPage()
+    }
+
+    it('renders the deleted-goals panel alongside the zero-goals empty state', () => {
+      withDeleted([], [deletedGoal])
+      // Both, together: the empty state is still correct (there are no live goals), and the
+      // panel must not be traded away for it.
+      expect(screen.getByText(/no savings goals yet/i)).toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: /deleted goals \(1\)/i }),
+      ).toBeInTheDocument()
+    })
+
+    it('exposes the purge verb from the zero-live-goals page', async () => {
+      const user = userEvent.setup()
+      withDeleted([], [deletedGoal])
+      await user.click(screen.getByRole('button', { name: /deleted goals \(1\)/i }))
+      // Named by goal so it is distinguishable in a screen reader's element list.
+      expect(
+        screen.getByRole('button', { name: /delete permanently: old laptop fund/i }),
+      ).toBeInTheDocument()
+    })
+
+    it('still shows nothing when there are neither live nor deleted goals', () => {
+      // The panel self-hides on an empty listing, so hoisting it must not introduce an empty
+      // "Deleted goals (0)" header onto the first-run page.
+      withDeleted([], [])
+      expect(screen.getByText(/no savings goals yet/i)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /deleted goals/i })).toBeNull()
     })
   })
 })
