@@ -1564,11 +1564,14 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 		RETURNING ` + annotationCaptureReturning + `
 		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeCategory)
 
-	// The count comes from the `updated` CTE, NOT from the statement tag: the tag now reports the
-	// recording INSERT, which is legitimately 0 when nothing actually changed. Reading the tag would
-	// turn a no-op re-save into a spurious ErrTransactionNotFound.
-	var updatedRows int64
-	if err := r.db.QueryRow(ctx, query, overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource, now, now, id, userID).Scan(&updatedRows); err != nil {
+	// Lock-first (#1569 Task 6, review fix R79): the row is locked with the write's own predicate
+	// before the capturing UPDATE runs, so `prior` cannot be read from a snapshot older than the
+	// write it describes. See transaction_annotation_capture.go for the two measured failures the
+	// self-join alone left open.
+	updatedRows, err := runCapturingUpdate(ctx, r.db,
+		"id = $1 AND user_id = $2", []any{id, userID},
+		query, []any{overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource, now, now, id, userID})
+	if err != nil {
 		return fmt.Errorf("failed to update transaction category: %w", err)
 	}
 
@@ -1611,11 +1614,14 @@ func (r *transactionRepository) SetReviewed(ctx context.Context, userID string, 
 		RETURNING ` + annotationCaptureReturning + `
 		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeReview)
 
-	// From the `updated` CTE, not the statement tag: the tag reports the recording INSERT, which is
-	// 0 when the write changed nothing — un-reviewing an already-unreviewed transaction still
-	// "affected" its row, and the caller counts rows, not history entries.
-	var updatedRows int64
-	if err := r.db.QueryRow(ctx, query, reviewed, reviewedAt, userID, transactionIDs).Scan(&updatedRows); err != nil {
+	// Lock-first (#1569 Task 6, review fix R79) — see transaction_annotation_capture.go. This path
+	// is where review measured the worse of the two races: two concurrent SetReviewed calls could
+	// destroy a committed reviewed_at and record NOTHING, because the stale prior made the write
+	// look like a no-op.
+	updatedRows, err := runCapturingUpdate(ctx, r.db,
+		"user_id = $1 AND id = ANY($2::uuid[])", []any{userID, transactionIDs},
+		query, []any{reviewed, reviewedAt, userID, transactionIDs})
+	if err != nil {
 		return 0, fmt.Errorf("failed to set reviewed: %w", err)
 	}
 	return updatedRows, nil
@@ -1688,10 +1694,13 @@ func (r *transactionRepository) BulkUpdateCategory(ctx context.Context, userID s
 		RETURNING ` + annotationCaptureReturning + `
 		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeCategory)
 
-	// The count comes from the `updated` CTE, never from the statement tag: the tag now reports the
-	// recording INSERT, which is legitimately 0 when nothing actually changed.
-	var updatedRows int64
-	if err := r.db.QueryRow(ctx, query, overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource, now, now, userID, transactionIDs).Scan(&updatedRows); err != nil {
+	// Lock-first (#1569 Task 6, review fix R79) — see transaction_annotation_capture.go. The lock
+	// SELECT carries ORDER BY id so two concurrent bulk writers over overlapping id sets take their
+	// locks in one direction.
+	updatedRows, err := runCapturingUpdate(ctx, r.db,
+		"user_id = $1 AND id = ANY($2::uuid[])", []any{userID, transactionIDs},
+		query, []any{overrideKind, pfcPrimaryOverride, pfcDetailedOverride, customCategoryOverrideID, categorySource, now, now, userID, transactionIDs})
+	if err != nil {
 		return 0, fmt.Errorf("failed to bulk update transaction category: %w", err)
 	}
 	return updatedRows, nil

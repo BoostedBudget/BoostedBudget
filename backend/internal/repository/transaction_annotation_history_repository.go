@@ -13,10 +13,19 @@ import (
 // of the three UPDATE statements in transaction_repository.go
 // (UpdateCategory, BulkUpdateCategory, SetReviewed), because the value being recorded is the value
 // that same statement destroys. Codex's finding on this task was that a SELECT-then-UPDATE writer
-// records a WRONG prior value under concurrency; putting the INSERT in the same statement removes
-// the window rather than narrowing it, and it also makes it impossible to add a fourth write path
+// records a WRONG prior value under concurrency; putting the INSERT in the same statement, behind a
+// lock taken with the write's own predicate, removes the window rather than narrowing it.
+//
+// ⚠ THIS COMMENT USED TO CLAIM that the design also made it "impossible to add a fourth write path
 // that forgets to call the writer — a new statement either carries the CTE or it does not update
-// the annotation at all.
+// the annotation at all". THAT WAS FALSE, and review disproved it: nothing structural stops an
+// `UPDATE transactions SET reviewed = ...` in a worker or a new repository, and the only
+// enforcement at the time was a string count inside transaction_repository.go alone. The claim is
+// true now because of a TEST, not the design —
+// TestAnnotationCaptureIsUsedByEveryAnnotationWritingStatement (annotation_capture_guard_test.go)
+// walks internal/ by AST and requires the capture on every statement that assigns a tracked
+// annotation column, with a mutation-proven meta-test and a two-entry allowlist. Do not assume any
+// other property of this file is self-enforcing either.
 //
 // A writer with no reader ships nothing observable (the lesson task 5 paid for on
 // rule_execution_history, which had a table and a migration and no way to see a single row), so
