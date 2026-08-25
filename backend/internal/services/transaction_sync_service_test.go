@@ -11,6 +11,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/mockassert"
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -4397,3 +4398,113 @@ func TestSyncTransactions_ProposedContributionsNilSafeWhenNotWired(t *testing.T)
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 }
+
+// ============================================================================
+// Issue #1586: the stranded-settlement pull-forward is WIRED into the storage path
+// ============================================================================
+
+// TestProcessAddedTransactions_PullsForwardStrandedSettlementAnnotations pins the wiring the
+// repository change is useless without. The SQL is proved by the integration suite
+// (repository/transaction_late_settlement_integration_test.go); what a mock can prove, and what
+// nothing else does, is that the storage path calls it at all and hands it the right ids.
+//
+// It also pins the FILTER, which is the part that is easy to get subtly wrong: only rows carrying
+// Plaid's pending_transaction_id are candidates. Sending the whole batch would work but would ask
+// the database to scan ids that cannot possibly match, on every sync.
+func TestProcessAddedTransactions_PullsForwardStrandedSettlementAnnotations(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, mockTransactionRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-1586", UserID: "user-1586"}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	settled := plaid.NewNullableString(strPtrSvc("plaid-pending-999"))
+	added := []plaid.Transaction{
+		{TransactionId: "plaid-posted-1", AccountId: "plaid-acc-1", Amount: 10, Date: "2024-01-15",
+			Name: "Posted twin", PendingTransactionId: *settled},
+		{TransactionId: "plaid-ordinary-2", AccountId: "plaid-acc-1", Amount: 20, Date: "2024-01-16",
+			Name: "Ordinary"},
+	}
+
+	var storedIDs []string
+	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
+		storedIDs = nil
+		for i := range txns {
+			storedIDs = append(storedIDs, txns[i].ID)
+		}
+		return len(txns) == 2
+	})).Return(nil, nil)
+
+	var pulledFor []string
+	mockTransactionRepo.On("PullForwardSettledPendingAnnotations", ctx, "user-1586",
+		mock.MatchedBy(func(ids []string) bool { pulledFor = ids; return true })).
+		Return(int64(1), nil)
+
+	require.NoError(t, service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil))
+
+	mockTransactionRepo.AssertExpectations(t)
+	require.Len(t, pulledFor, 1,
+		"only the row carrying Plaid's pending_transaction_id is a settlement candidate")
+	assert.Equal(t, storedIDs[0], pulledFor[0],
+		"the id handed to the repository is the id the batch was stored under, not the provider's")
+}
+
+// TestProcessAddedTransactions_NoPointerMeansNoPullForward: the overwhelming majority of every sync
+// batch is not a settlement, and a database round-trip per batch that can match nothing is a cost
+// paid on every sync of every user.
+func TestProcessAddedTransactions_NoPointerMeansNoPullForward(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, mockTransactionRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-1586b", UserID: "user-1586b"}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	added := []plaid.Transaction{
+		{TransactionId: "plaid-ordinary-1", AccountId: "plaid-acc-1", Amount: 10, Date: "2024-01-15", Name: "Ordinary"},
+	}
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, nil)
+
+	require.NoError(t, service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil))
+
+	// mockassert.NoCallTo, not AssertNotCalled with a bare method name: the latter is a NO-OP for
+	// any method taking arguments, and this repository has a guard test that says so.
+	mockassert.NoCallTo(t, &mockTransactionRepo.Mock, "PullForwardSettledPendingAnnotations")
+}
+
+// TestProcessAddedTransactions_PullForwardFailureDoesNotFailTheSync. The pull-forward repairs a
+// display problem; failing the sync for it would stall the cursor and re-deliver the whole page,
+// and the repository call is idempotent so the next sync retries for free.
+func TestProcessAddedTransactions_PullForwardFailureDoesNotFailTheSync(t *testing.T) {
+	mockTransactionRepo := new(MockTransactionRepository)
+
+	service := NewTransactionSyncService(
+		nil, nil, mockTransactionRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	).(*transactionSyncService)
+
+	ctx := context.Background()
+	linkedItem := &domain.LinkedItem{ID: "linked-item-1586c", UserID: "user-1586c"}
+	accountMap := map[string]string{"plaid-acc-1": "account-uuid-1"}
+
+	settled := plaid.NewNullableString(strPtrSvc("plaid-pending-777"))
+	added := []plaid.Transaction{
+		{TransactionId: "plaid-posted-1", AccountId: "plaid-acc-1", Amount: 10, Date: "2024-01-15",
+			Name: "Posted twin", PendingTransactionId: *settled},
+	}
+	mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, nil)
+	mockTransactionRepo.On("PullForwardSettledPendingAnnotations", ctx, "user-1586c", mock.Anything).
+		Return(int64(0), errors.New("deadlock detected"))
+
+	assert.NoError(t, service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil),
+		"a failed repair must not abort storage the provider already confirmed")
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+func strPtrSvc(s string) *string { return &s }

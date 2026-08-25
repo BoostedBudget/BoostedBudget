@@ -1660,41 +1660,100 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// exact set of rows this statement rewrote, so it can bump precisely those owners' cache scopes
 	// AFTER this transaction commits (never inside it — a cache bump is not part of the erasure and
 	// must not be able to roll it back or delay it).
-	rows, err := tx.Query(ctx, `
-		-- tombstone-exempt(write:transactions): GDPR ERASURE (#1569 T8 write-target audit). A tombstoned
-		-- transaction still holds an FK to the category about to be hard-deleted, so skipping it
-		-- would trip fk_transactions_custom_category_override and abort the erasure.
-		UPDATE transactions
-		SET custom_category_override_id = NULL, category_override_kind = NULL, effective_category_name = pfc_primary
-		WHERE custom_category_override_id IN (
-			-- tombstone-exempt(custom_categories): GDPR ERASURE (#1569 Task 9). A tombstoned category is still a row
-			-- and is about to be hard-deleted by the DELETE FROM users below; a surviving user's
-			-- transaction pointing at it would trip fk_transactions_custom_category_override
-			-- exactly as it would for a live one. Filtering here would reintroduce the residual
-			-- this statement exists to close. Pinned by
-			-- TestCategoryTombstone_GDPRErasureStillDestroysIt_Integration.
-			SELECT id FROM custom_categories WHERE user_id = $1)
-		RETURNING user_id
-	`, userID)
-	if err != nil {
-		return false, nil, fmt.Errorf("DeleteUserCascade: clear dangling custom category overrides: %w", err)
-	}
+	// #1590: THE CLEAR IS NOW RECORDED, for the surviving owners only.
+	//
+	// Everything above says why this statement must run and why the value it writes is right. What
+	// it did not say is that the row it touches can belong to a DIFFERENT, SURVIVING user, and that
+	// user's category override, override kind and effective name were destroyed with no trail — in a
+	// codebase whose whole thesis is that a user's own work is retained. Three other statements that
+	// overwrite the same columns (UpdateCategory, BulkUpdateCategory, and since #1578 the settlement
+	// move) already record what they overwrote; this one carried an allowlist exemption instead.
+	//
+	// The fix is the SAME capture CTE those three use, under a fourth change_source, 'erasure'
+	// (migration 000172). No new plumbing: the surviving owner was already in hand here, because
+	// RETURNING user_id is what feeds affectedOwnerIDs for the cache bump.
+	//
+	// ⚠ ONLY SURVIVING OWNERS ARE RECORDED — that is what the `surviving` CTE is for. The erased
+	// user's own transactions are cleared by this same statement and hard-deleted moments later by
+	// the DELETE FROM users below, and transaction_annotation_history.user_id CASCADEs from users, so
+	// a row written for them would be destroyed inside this same database transaction. Recording it
+	// would cost writes and prove nothing.
+	//
+	// ⚠ AND THAT SAME CASCADE IS WHY B'S ROW SURVIVES A'S ERASURE. The recorded user_id is inherited
+	// from the UPDATE's own RETURNING — never re-derived, never the erased user — so the history row
+	// hangs off B, whom this statement does not delete. Erasing B later still destroys it, which is
+	// the direction GDPR requires. Both are pinned:
+	// TestErasureClear_SurvivingUsersAnnotationIsRecorded_Integration and
+	// TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned.
+	//
+	// ⚠ THE SEVERITY IS DEFENCE IN DEPTH, and it is worth keeping the reason visible rather than
+	// letting the next reader infer a live bug from the length of this comment. All five writers of
+	// transactions.custom_category_override_id refuse a cross-owner value today (the two category
+	// endpoints via services/transaction_service.go, the two settlement moves via their
+	// twin.user_id = s.user_id predicate, and CreateBatch via the rule target that
+	// assertTargetCategoryOwnedAndLive validates). Nothing in the DATABASE enforces it — there is no
+	// trigger — so the row remains schema-reachable, and this records the loss if one ever exists.
+	//
+	// tombstone-exempt(transactions prior): the prior alias is the PRE-IMAGE of the very row this
+	// statement is updating (prior.id = t.id), not an independent read. The target is deliberately
+	// unfiltered (see the write: exemption below) and repeating a filter on prior would capture a
+	// DIFFERENT set of rows from the one the UPDATE touches.
+	clearDanglingOverridesSQL := `
+		WITH cleared AS (
+			-- tombstone-exempt(write:transactions t): GDPR ERASURE (#1569 T8 write-target audit). A tombstoned
+			-- transaction still holds an FK to the category about to be hard-deleted, so skipping it
+			-- would trip fk_transactions_custom_category_override and abort the erasure.
+			UPDATE transactions t
+			SET custom_category_override_id = NULL, category_override_kind = NULL, effective_category_name = t.pfc_primary
+			-- tombstone-exempt(transactions prior): the PRE-IMAGE of the row being updated
+			-- (prior.id = t.id), joined so the capture below reads what this statement destroys.
+			FROM transactions prior
+			WHERE prior.id = t.id
+			  AND t.custom_category_override_id IN (
+				-- tombstone-exempt(custom_categories): GDPR ERASURE (#1569 Task 9). A tombstoned category is still a row
+				-- and is about to be hard-deleted by the DELETE FROM users below; a surviving user's
+				-- transaction pointing at it would trip fk_transactions_custom_category_override
+				-- exactly as it would for a live one. Filtering here would reintroduce the residual
+				-- this statement exists to close. Pinned by
+				-- TestCategoryTombstone_GDPRErasureStillDestroysIt_Integration.
+				SELECT id FROM custom_categories WHERE user_id = $1)
+			RETURNING ` + annotationCaptureReturning("t") + `
+		),
+		surviving AS (
+			-- The erased user's own rows are excluded here rather than in the INSERT, because the
+			-- final SELECT below still needs the FULL set: a row belonging to the erased user is not
+			-- worth a history entry, but the caller's cache bookkeeping reads every owner.
+			SELECT * FROM cleared WHERE captured_user_id <> $1::uuid
+		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeErasure, "surviving") + `
+		SELECT captured_user_id FROM cleared
+	`
+
+	// The lock predicate is the UPDATE's own, verbatim. annotationLockTargets requires that: a lock
+	// over a smaller set than the write touches leaves rows unlocked and reintroduces the race the
+	// lock exists to close.
+	const clearDanglingOverridesLock = `custom_category_override_id IN (
+		-- tombstone-exempt(custom_categories): same reason as the statement it locks for — the
+		-- category is about to be hard-deleted whether or not it is tombstoned.
+		SELECT id FROM custom_categories WHERE user_id = $1)`
+
 	seenOwner := map[string]bool{userID: true} // the deleted user's own cache is purged separately; never re-bump it here
-	for rows.Next() {
-		var ownerID string
-		if scanErr := rows.Scan(&ownerID); scanErr != nil {
-			rows.Close()
-			return false, nil, fmt.Errorf("DeleteUserCascade: scan dangling custom category override owner: %w", scanErr)
-		}
-		if !seenOwner[ownerID] {
-			seenOwner[ownerID] = true
-			affectedOwnerIDs = append(affectedOwnerIDs, ownerID)
-		}
-	}
-	rowsErr := rows.Err()
-	rows.Close()
-	if rowsErr != nil {
-		return false, nil, fmt.Errorf("DeleteUserCascade: iterate dangling custom category override owners: %w", rowsErr)
+	if err := runCapturingQuery(ctx, tx,
+		clearDanglingOverridesLock, []any{userID},
+		clearDanglingOverridesSQL, []any{userID},
+		func(rows pgx.Rows) error {
+			for rows.Next() {
+				var ownerID string
+				if scanErr := rows.Scan(&ownerID); scanErr != nil {
+					return fmt.Errorf("DeleteUserCascade: scan dangling custom category override owner: %w", scanErr)
+				}
+				if !seenOwner[ownerID] {
+					seenOwner[ownerID] = true
+					affectedOwnerIDs = append(affectedOwnerIDs, ownerID)
+				}
+			}
+			return nil
+		}); err != nil {
+		return false, nil, fmt.Errorf("DeleteUserCascade: clear dangling custom category overrides: %w", err)
 	}
 
 	// Issue #1440 round-3 Finding 4 (Codex review): null out four ON DELETE NO ACTION references

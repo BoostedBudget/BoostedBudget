@@ -37,6 +37,24 @@ const (
 	// twin no longer agrees with the rule_execution_history entry for the rule that categorised it
 	// moments earlier in the same sync.
 	TransactionAnnotationChangeSettlement = "settlement"
+
+	// TransactionAnnotationChangeErasure marks a row written by DeleteUserCascade's dangling
+	// custom-category-override clear (#1590).
+	//
+	// It is the ONE source whose subject is not the row's own owner. When user A exercises GDPR
+	// erasure, A's custom_categories rows are hard-deleted; a transaction belonging to a DIFFERENT,
+	// surviving user B that pointed at one of them must have its override cleared first, or the
+	// ON DELETE RESTRICT foreign key would refuse the erasure entirely. B loses their annotation as
+	// a consequence of somebody else's request, and this row is what tells them so.
+	//
+	// It is its own source for the same reason 'settlement' is: the user did not ask. Filing it
+	// under 'category' would claim B recategorised their own transaction on the day a stranger was
+	// erased, which is both false and unexplainable.
+	//
+	// ⚠ Rows are written ONLY for surviving users. The erased user's own transactions are cleared by
+	// the same statement and are hard-deleted moments later in the same database transaction; a
+	// record that vanishes with the thing it records is not a record.
+	TransactionAnnotationChangeErasure = "erasure"
 )
 
 // TransactionAnnotation is the complete user-set annotation on a transaction at one moment: the

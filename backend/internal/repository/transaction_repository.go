@@ -94,6 +94,19 @@ type TransactionRepository interface {
 		deletedBy string,
 	) (domain.TransactionDeletedReason, error)
 
+	// PullForwardSettledPendingAnnotations is the storage-side MIRROR of the settlement move that
+	// TombstoneByExternalID performs (#1586). Given transactions a sync has just stored, it finds
+	// any that carry Plaid's pending_transaction_id pointing at a pending row ALREADY tombstoned as
+	// a settlement, and copies that row's stranded user annotations forward onto the visible twin.
+	//
+	// It exists because the tombstone-side move can only see a twin that is already stored: when
+	// Plaid delivers the removal in one sync and the posted twin in a later one, the user's
+	// category, notes, tags and review state stay on a row that renders nowhere.
+	//
+	// Returns the number of twins written. Idempotent: a second pass over the same ids finds the
+	// annotations already in place and both writes and records nothing.
+	PullForwardSettledPendingAnnotations(ctx context.Context, userID string, transactionIDs []string) (int64, error)
+
 	// GetByUserID retrieves transactions for a specific user with pagination
 	GetByUserID(ctx context.Context, userID string, limit, offset int) ([]domain.Transaction, error)
 
@@ -871,6 +884,159 @@ func (r *transactionRepository) TombstoneByExternalID(
 		return "", fmt.Errorf("failed to tombstone transaction: %w", err)
 	}
 	return domain.TransactionDeletedReason(reason), nil
+}
+
+// PullForwardSettledPendingAnnotations is the MIRROR of TombstoneByExternalID's settlement move,
+// for the case that move cannot reach (#1586).
+//
+// THE RESIDUAL IT CLOSES, established by measurement rather than by the ticket's framing. The move
+// folded into TombstoneByExternalID runs at the TOMBSTONE point, so it only finds a twin that is
+// already stored. Within one sync that is guaranteed by ordering (added and modified are steps 6
+// and 7, removed is step 8). Across syncs it is not: a probe against a fresh database settled the
+// pending row with no twin stored and then delivered the twin, and observed the twin arriving with
+// `notes=nil kind=nil source=plaid reviewed=false tags=[]` while the tombstoned pending row kept
+// `category_source=manual` and every annotation on it. Retained, and rendering nowhere.
+//
+// SO THIS RUNS FROM THE STORAGE SIDE, on the ids a sync just stored, and pulls forward from a
+// pending row that is ALREADY tombstoned. `s.deleted_at IS NOT NULL` is what makes the two hooks
+// disjoint rather than racing: while the pending row is live, the twin renders alongside it and the
+// tombstone-side move is the one that will run.
+//
+// THE PAIRING IS PLAID'S OWN POINTER, NEVER A HEURISTIC. twin.pending_transaction_id_blind_idx is
+// matched against s.external_transaction_id_blind_idx, both produced by
+// crypto.FieldEncryptor.BlindIndex. Matching on amount/date/merchant similarity can attach one
+// transaction's category to a DIFFERENT transaction, which is an unrecoverable corruption of the
+// user's own data and strictly worse than the bug. See migration 000168.
+//
+// THE REFUSAL RULES ARE THE SAME THREE CONSTANTS the tombstone-side move uses --
+// settlementCategoryMoveCond (manual on the twin wins), settlementTagsMoveCond (fill, do not merge)
+// and settlementReviewMoveCond (a rule's review is not the user's). They are shared rather than
+// restated so the two hooks cannot drift into disagreeing about the same event; the SET clause
+// itself is deliberately WRITTEN OUT rather than factored into a shared constant, because
+// TestAnnotationCaptureIsUsedByEveryAnnotationWritingStatement matches on the rendered text of each
+// statement and a factored-out SET clause would make BOTH statements invisible to it -- a guard
+// that silently stops guarding. TestSettlementMoveSetClausesAgree pins the duplication instead.
+//
+// IT CARRIES THE ANNOTATION CAPTURE, under change_source 'settlement'. The category leg is
+// manual-wins, not fill-only: a twin already carrying a RULE-assigned override -- the common case,
+// since rules run in place before CreateBatch -- has all seven category columns replaced. That is
+// an overwrite of a stored annotation and #1579 requires it to be recorded. Lock-first, through
+// runCapturingStatement, for the two reasons in transaction_annotation_capture.go.
+//
+// SCOPED BY ID, never a global scan. The caller passes the transactions it just stored, so this is
+// one indexed statement per sync batch rather than a sweep over the table.
+//
+// Returns the number of twins actually written.
+func (r *transactionRepository) PullForwardSettledPendingAnnotations(
+	ctx context.Context,
+	userID string,
+	transactionIDs []string,
+) (int64, error) {
+	if len(transactionIDs) == 0 {
+		return 0, nil
+	}
+
+	query := fmt.Sprintf(`
+		WITH moved AS (
+			UPDATE transactions AS twin
+			SET user_notes = COALESCE(twin.user_notes, s.user_notes),
+
+			    category_override_kind      = CASE WHEN %[3]s THEN s.category_override_kind      ELSE twin.category_override_kind      END,
+			    pfc_primary_override        = CASE WHEN %[3]s THEN s.pfc_primary_override        ELSE twin.pfc_primary_override        END,
+			    pfc_detailed_override       = CASE WHEN %[3]s THEN s.pfc_detailed_override       ELSE twin.pfc_detailed_override       END,
+			    custom_category_override_id = CASE WHEN %[3]s THEN s.custom_category_override_id ELSE twin.custom_category_override_id END,
+			    category_source             = CASE WHEN %[3]s THEN s.category_source             ELSE twin.category_source             END,
+			    category_override_date      = CASE WHEN %[3]s THEN s.category_override_date      ELSE twin.category_override_date      END,
+			    effective_category_name     = CASE WHEN %[3]s THEN s.effective_category_name     ELSE twin.effective_category_name     END,
+
+			    tags        = CASE WHEN %[4]s THEN s.tags        ELSE twin.tags        END,
+			    tags_source = CASE WHEN %[4]s THEN s.tags_source ELSE twin.tags_source END,
+
+			    reviewed    = twin.reviewed OR %[6]s,
+			    reviewed_at = CASE
+			        WHEN twin.reviewed THEN twin.reviewed_at
+			        WHEN %[6]s         THEN s.reviewed_at
+			        ELSE twin.reviewed_at
+			    END
+			-- tombstone-exempt(transactions s): the DONOR is a row that MUST be tombstoned -- this
+			-- statement exists only for annotations stranded on an already-tombstoned pending row,
+			-- and s.deleted_at IS NOT NULL is asserted explicitly below. Filtering it to live
+			-- rows would make the statement match nothing at all (#1586).
+			-- tombstone-exempt(transactions prior): the prior alias is the PRE-IMAGE of the twin this
+			-- statement is already updating (prior.id = twin.id), not an independent read. twin's
+			-- own deleted_at IS NULL predicate is below and governs which rows are touched;
+			-- repeating it on prior would filter the capture differently from the write it
+			-- captures (same reasoning as TombstoneByExternalID's moved CTE).
+			FROM transactions s, transactions prior
+			WHERE prior.id = twin.id
+			  AND twin.id = ANY($2::uuid[])
+			  AND twin.user_id = $1
+			  AND twin.deleted_at IS NULL
+			  AND twin.pending_transaction_id_blind_idx IS NOT NULL
+			  AND s.external_transaction_id_blind_idx = twin.pending_transaction_id_blind_idx
+			  AND s.source = twin.source
+			  AND s.user_id = twin.user_id
+			  AND s.id <> twin.id
+			  AND s.deleted_at IS NOT NULL
+			  -- WHY deleted_reason AND NOT s.pending. The tombstone-side move gates on s.pending
+			  -- because it reads the row's pre-image at the instant of removal, when pending IS the
+			  -- classification. Here the removal already happened, possibly syncs ago, and pending
+			  -- is a live column any later Update rewrites from the provider payload. deleted_reason
+			  -- records what the removal WAS and nothing rewrites it, so it is the authority for
+			  -- "this was a settlement, not a reversal". A reversal must never donate: its
+			  -- annotations belong to a charge the bank withdrew, and a row carrying a stale pointer
+			  -- is not the same charge (#1586).
+			  AND s.deleted_reason = '%[1]s'
+			  AND (s.user_notes IS NOT NULL
+			       OR s.category_source = '%[5]s'
+			       OR %[6]s
+			       OR COALESCE(jsonb_array_length(s.tags), 0) > 0)
+			RETURNING `+annotationCaptureReturning("twin")+`
+		)`+annotationCaptureInsert(domain.TransactionAnnotationChangeSettlement, "moved")+`
+		SELECT count(*) FROM moved
+	`,
+		// THE ARGUMENT ORDER IS THE SAME AS TombstoneByExternalID'S, DELIBERATELY. The two SET
+		// clauses are compared verbatim by TestSettlementMoveSetClausesAgree, and a differing %[n]s
+		// index would make two identical clauses read as divergent -- a guard failing on
+		// bookkeeping instead of on behaviour is how a guard gets weakened into uselessness.
+		// %[2]s (the posted-removal reason) is unused here: this statement only ever reads from a
+		// PENDING removal. Explicit argument indexes suppress fmt's EXTRA reporting, so the unused
+		// argument is inert rather than corrupting.
+		domain.TxnDeletedProviderRemovedPending,
+		domain.TxnDeletedProviderRemovedPosted,
+		settlementCategoryMoveCond,
+		settlementTagsMoveCond,
+		domain.CategorySourceManual,
+		settlementReviewMoveCond,
+	)
+
+	// Lock-first, exactly as the tombstone-side move does. BOTH sides are locked in one ORDER BY id
+	// statement: the twins this may write onto, and the tombstoned pending rows they read from.
+	// Locking only the twins would leave the donors acquired in plan order here and in id order by
+	// a concurrent bulk capture, which is the inversion ORDER BY id exists to remove.
+	//
+	// The donor leg cannot carry `deleted_at IS NULL` -- the donor is tombstoned by definition -- so
+	// the lock predicate is written without it and the write's own predicates do the filtering.
+	lockWhere := `(
+		    (id = ANY($2::uuid[]) AND user_id = $1)
+		 OR (user_id = $1 AND external_transaction_id_blind_idx IN (
+		        -- tombstone-exempt(transactions): resolving WHICH rows to lock, not reading a row's
+		        -- data. It must see tombstoned twins and tombstoned donors alike, because the
+		        -- statement's own predicates decide which of them it may touch (#1586).
+		        SELECT pending_transaction_id_blind_idx FROM transactions
+		        WHERE id = ANY($2::uuid[]) AND user_id = $1
+		          AND pending_transaction_id_blind_idx IS NOT NULL))
+		)`
+
+	var moved int64
+	err := runCapturingStatement(ctx, r.db,
+		lockWhere, []any{userID, transactionIDs},
+		query, []any{userID, transactionIDs},
+		func(row pgx.Row) error { return row.Scan(&moved) })
+	if err != nil {
+		return 0, fmt.Errorf("failed to pull forward settled pending annotations: %w", err)
+	}
+	return moved, nil
 }
 
 // GetByUserID retrieves transactions for a specific user with pagination

@@ -100,17 +100,17 @@ var annotationCaptureExemptions = map[string]string{
 	// constants, and still got it wrong, because I read "fill-only" off the reviewed/tags/notes legs
 	// and generalised. Re-derive every leg separately.
 
-	"repository/profile_repository.go:DeleteUserCascade": "" +
-		"GDPR erasure integrity, not a user annotation write. It clears " +
-		"custom_category_override_id / category_override_kind on OTHER users' transactions that " +
-		"point at a custom category belonging to the user being erased, because that category is " +
-		"about to be hard-deleted and fk_transactions_custom_category_override would refuse the " +
-		"DELETE otherwise. It writes effective_category_name = pfc_primary, which is the value the " +
-		"generated column independently computes once the override is NULL, so the row is left " +
-		"self-consistent. ⚠ It IS an unrecorded loss of a surviving user's override, and recording " +
-		"it would be a defensible improvement — but the trigger is the GDPR hard-delete exception " +
-		"(ADR 2026-08-01), not a user annotation write, so it is out of #1579's scope and is " +
-		"flagged in this task's report rather than silently absorbed here.",
+	// ⚠ DeleteUserCascade USED TO BE EXEMPT HERE, on the reason "GDPR erasure integrity, not a user
+	// annotation write ... it IS an unrecorded loss of a surviving user's override, and recording it
+	// would be a defensible improvement — but the trigger is the GDPR hard-delete exception, not a
+	// user annotation write, so it is out of #1579's scope". Unlike the three false reasons this
+	// issue produced, that one was TRUE as written — and it was still the wrong entry, because a
+	// scope boundary is not a reason a loss may go unrecorded. #1590 recorded it instead (change
+	// source 'erasure', migration 000172), so the entry is gone because the statement now carries
+	// the capture.
+	//
+	// The lesson: an exemption whose own text says "this IS an unrecorded loss" is a ticket, not a
+	// justification. Read them for that shape before adding another.
 }
 
 // annotationWriteFinding is one `UPDATE transactions` site that assigns a tracked column: either a
