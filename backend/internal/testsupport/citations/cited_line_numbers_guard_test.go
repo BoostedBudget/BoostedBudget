@@ -35,18 +35,22 @@ import (
 //   - It cannot tell a WRONG line from a right one when both are in range. An anchor that slid
 //     forty lines and now points at an unrelated function is invisible here. Only the human, or a
 //     structural anchor (cite the METHOD, which the sibling guard checks), catches that.
-//   - Approximate refs (`~:339`) are exempt by their own convention: `~` means "about here", and
-//     holding it to an exact standard is exactly the churn that gets a guard suppressed.
+//   - Approximate refs are exempt by their own convention: `~` means "about here", and holding it
+//     to an exact standard is exactly the churn that gets a guard suppressed. ALL THREE positions
+//     the tree writes count — `~file.go:339`, `file.go~:339` and `file.go:~339` — reconciled with
+//     the sibling guard's documented grammar in the #1569 whole-branch review. The BARE forms
+//     (`:339`, `~:339`) name no file, so there is nothing here to resolve; they are checked for
+//     adjacency by repository/cache_completeness_citations_test.go instead.
 //   - An unresolvable path is SILENT. Citations here are written relative to four different roots
 //     and often as a bare basename, and a resolver that guesses wrong would report hundreds of
 //     phantom failures on the first run. The dispositions guard
 //     (repository/cache_completeness_citations_test.go) enforces path resolution within its own
 //     scope, where the convention is fixed.
 //
-// Measured before it was written, and CORRECTED after review: 386 pattern matches in Go comments
-// and SQL comments, scoped Markdown and frontend .ts/.tsx across the corpus — tracked AND
-// untracked, since the corpus is sourcefiles.Union — of which 7 are approximate and skipped and
-// 189 resolve to a file on disk and are checked. ZERO were out of range. (The header first said "197 … in tracked Go comments": the
+// Measured before it was written, CORRECTED after review, and RE-MEASURED when the tilde grammar
+// was widened: 387 pattern matches in Go comments and SQL comments, scoped Markdown and frontend
+// .ts/.tsx across the corpus — tracked AND untracked, since the corpus is sourcefiles.Union — of
+// which 15 are approximate and skipped and 190 resolve to a file on disk and are checked. ZERO were out of range. (The header first said "197 … in tracked Go comments": the
 // count was the MATCH count, 43% of which never resolve, and "tracked" had been made false by the
 // same round that widened the corpus. Numbers re-measured by the t.Logf in the guard itself, so
 // they can be re-derived rather than believed.)
@@ -64,7 +68,31 @@ import (
 // — so the tilde is captured here instead, which makes the skip a branch that can be observed to
 // fire.
 var citedFileLine = regexp.MustCompile(
-	`\b((?:[A-Za-z0-9_./-]+/)*[A-Za-z0-9_.-]+\.(?:go|ts|tsx|sql|md|ya?ml)):(~?)(\d+)(?:-(\d+))?\b`)
+	`(~?)\b((?:[A-Za-z0-9_./-]+/)*[A-Za-z0-9_.-]+\.(?:go|ts|tsx|sql|md|ya?ml))(~?):(~?)(\d+)(?:-(\d+))?\b`)
+
+// Capture-group indices into citedFileLine. Named rather than numbered because the tilde may
+// appear in three places and an off-by-one silently turns an approximate ref into an exact one —
+// which is the mistake the sibling guard's own index constants were introduced to prevent
+// (repository/cache_completeness_citations_test.go, citGroupTildeBeforePath and friends).
+const (
+	citGroupTildeBeforePath = 1
+	citGroupPath            = 2
+	citGroupTildeAfterPath  = 3
+	citGroupTildeAfterColon = 4
+	citGroupLo              = 5
+	citGroupHi              = 6
+)
+
+// citedRefIsApproximate reports whether a submatch carries `~` in ANY of its three positions.
+// `~` means "about here", so the ref is exempt from the exact-range rule by convention.
+func citedRefIsApproximate(m []int) bool {
+	for _, g := range []int{citGroupTildeBeforePath, citGroupTildeAfterPath, citGroupTildeAfterColon} {
+		if m[2*g+1] > m[2*g] {
+			return true
+		}
+	}
+	return false
+}
 
 // citedLineInRange reports whether a citation resolves and, if it does, whether it is in range.
 // resolved is false when no root produced a file, which the guard treats as silence.
@@ -124,17 +152,17 @@ func TestCitedLineNumbersAreInRange(t *testing.T) {
 
 	record := func(rel, citingDir, text string, line int) {
 		for _, m := range citedFileLine.FindAllStringSubmatchIndex(text, -1) {
-			if m[5] > m[4] { // the `~` of an approximate ref: "about here", exempt by convention.
+			if citedRefIsApproximate(m) { // "about here", exempt by convention in all three slots.
 				approximate++
 				continue
 			}
-			cited := text[m[2]:m[3]]
-			lo, _ := strconv.Atoi(text[m[6]:m[7]])
+			cited := text[m[2*citGroupPath]:m[2*citGroupPath+1]]
+			lo, _ := strconv.Atoi(text[m[2*citGroupLo]:m[2*citGroupLo+1]])
 			hi := lo
-			end := m[7]
-			if m[8] >= 0 {
-				hi, _ = strconv.Atoi(text[m[8]:m[9]])
-				end = m[9]
+			end := m[2*citGroupLo+1]
+			if m[2*citGroupHi] >= 0 {
+				hi, _ = strconv.Atoi(text[m[2*citGroupHi]:m[2*citGroupHi+1]])
+				end = m[2*citGroupHi+1]
 			}
 			matched++
 			resolved, ok, n := citedLineInRange(citingDir, roots, cited, lo, hi)
@@ -144,7 +172,7 @@ func TestCitedLineNumbersAreInRange(t *testing.T) {
 			checked++
 			if !ok {
 				offenders = append(offenders, rel+":"+strconv.Itoa(line)+" cites "+
-					text[m[2]:end]+" but that file has "+strconv.Itoa(n)+" lines")
+					text[m[2*citGroupPath]:end]+" but that file has "+strconv.Itoa(n)+" lines")
 			}
 		}
 	}
@@ -202,7 +230,7 @@ func TestCitedLineNumbersAreInRange(t *testing.T) {
 	if checked < 160 {
 		t.Fatalf("resolved only %d exact citations; %d matched the pattern and %d resolved when this "+
 			"guard was written. The resolver is broken and a pass here would be vacuous",
-			checked, 386, 189)
+			checked, 387, 190)
 	}
 
 	if len(offenders) > 0 {
@@ -252,27 +280,43 @@ func TestCitedLineInRange_Detects(t *testing.T) {
 // TestCitedFileLine_MatchesAndSkipsTheApproximateForm pins the extraction. A regexp that matched
 // nothing would make the guard pass on a tree full of dangling anchors.
 func TestCitedFileLine_MatchesAndSkipsTheApproximateForm(t *testing.T) {
-	text := "see repository/foo.go:120 and services/bar.go:10-20, but not baz.go:~339"
+	// ALL THREE TILDE POSITIONS, because the tree writes all three (#1569 whole-branch review).
+	// This guard used to accept `file.go:~N` only, and the two guards disagreed about the grammar:
+	// cache_completeness_citations_test.go's reCitationAfterFragment documents four spellings and
+	// treats every one as approximate, while here `~file.go:296` was read as an EXACT citation
+	// (the tilde is not a path character, so the path matched and the tilde group stayed empty)
+	// and `file.go~:296` matched nothing at all and was invisible. One of those over-reports and
+	// the other under-reports; neither is the documented convention.
+	//
+	// The bare forms (`:296`, `~:296`) are deliberately still out of scope HERE: with no filename
+	// there is nothing to resolve and nothing to range-check. They are covered by the adjacency
+	// rule in repository/cache_completeness_citations_test.go, which reads them relative to the
+	// file the citation lives in.
+	text := "see repository/foo.go:120 and services/bar.go:10-20, " +
+		"but not baz.go:~339, nor ~qux.go:12, nor quux.go~:13"
 
 	var matched, skipped []string
 	for _, m := range citedFileLine.FindAllStringSubmatchIndex(text, -1) {
-		end := m[7]
-		if m[8] >= 0 {
-			end = m[9]
+		end := m[2*citGroupLo+1]
+		if m[2*citGroupHi] >= 0 {
+			end = m[2*citGroupHi+1]
 		}
-		if m[5] > m[4] {
-			skipped = append(skipped, text[m[2]:end])
+		ref := text[m[2*citGroupTildeBeforePath]:end]
+		if citedRefIsApproximate(m) {
+			skipped = append(skipped, ref)
 			continue
 		}
-		matched = append(matched, text[m[2]:end])
+		matched = append(matched, ref)
 	}
 
-	// The approximate ref must be MATCHED and then SKIPPED, not simply unmatched. Asserting only
+	// The approximate refs must be MATCHED and then SKIPPED, not simply unmatched. Asserting only
 	// the first list is what let the previous version of this test pass with the skip deleted.
 	if got, want := strings.Join(matched, ","), "repository/foo.go:120,services/bar.go:10-20"; got != want {
 		t.Fatalf("matched %v, want %s", got, want)
 	}
-	if got, want := strings.Join(skipped, ","), "baz.go:~339"; got != want {
-		t.Fatalf("skipped %v, want %s — the tilde branch is not firing, so it is dead code", got, want)
+	if got, want := strings.Join(skipped, ","), "baz.go:~339,~qux.go:12,quux.go~:13"; got != want {
+		t.Fatalf("skipped %v, want %s — every documented tilde position must be matched and then "+
+			"skipped; one that is unmatched is invisible and one that is read as exact is a false "+
+			"positive waiting to happen", got, want)
 	}
 }

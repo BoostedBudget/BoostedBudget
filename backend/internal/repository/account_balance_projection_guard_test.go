@@ -41,10 +41,11 @@ import (
 //     writing): they select `a.current_balance` in an aggregate over `accounts a` without ever
 //     naming `plaid_account_id`. They are correct — but by a DIFFERENT mechanism, the
 //     `currentStateAccountLeg("a")` in their WHERE, which restricts them to active accounts and
-//     which this guard cannot see. If that leg were removed those reads would surface a terminal
-//     account's frozen balance and nothing here would fire. That is a real hole, named rather than
-//     glossed; closing it wants a marker for "reads a balance from accounts", not a wider version
-//     of this one.
+//     which this guard cannot see. ⚠ NO LONGER UNGUARDED: that hole is closed by
+//     TestNoRawAccountBalanceReadWithoutTheCurrentStateLeg at the bottom of this file (#1569
+//     whole-branch review), which is keyed on "reads a balance from accounts" rather than on the
+//     projection marker, exactly as this note predicted it would have to be. This guard still
+//     cannot see those reads; the sibling can.
 //  2. It governs the `accounts` table only. A balance selected from balance_snapshots is HISTORY
 //     and is deliberately untouched — that is the seam the whole ruling turns on.
 //  3. It cannot tell whether the CASE's predicate is RIGHT, only that the fragment is verbatim.
@@ -125,5 +126,122 @@ func TestNoAccountProjectionCarriesATerminalBalance(t *testing.T) {
 	if guardedProjections < 10 {
 		t.Fatalf("this guard checked only %d account balance projection(s) under %s; there are ten, "+
 			"so the scan is broken and passing means nothing", guardedProjections, root)
+	}
+}
+
+// ── The named hole, closed ───────────────────────────────────────────────────────────────────────
+//
+// TestNoRawAccountBalanceReadWithoutTheCurrentStateLeg is blind spot (1) above, turned into a
+// check. #1569's whole-branch review flagged the same four reads independently, from the other
+// direction: CLAUDE.md says "all ten account reads" present NULL for a terminal account, which is
+// exactly right for account_repository.go and says nothing about
+// investment_analytics_repository.go's `SUM(a.current_balance)` aggregates. Those are correct today
+// — `currentStateAccountLeg("a")` in their WHERE keeps a terminal account out of the aggregate
+// entirely, which is stronger than presenting NULL — but they were correct by an UNCHECKED
+// mechanism, so deleting that one line would have surfaced a frozen balance with every guard green.
+//
+// THE RULE, deliberately narrower than the projection rule it complements: a statement that reads
+// `accounts` and names a balance column of THAT reference outside accountBalanceProjection must
+// carry that reference's current-state leg. Two mechanisms are accepted because two are legitimate
+// — render the balance through the projection (a row-shaped read, which keeps the row and nulls the
+// number) or exclude terminal accounts from the read (an aggregate, which has no row to keep).
+// Nothing else is.
+//
+// SCOPE. `accounts` only, and only the alias actually carrying the balance column, so a statement
+// joining a live `accounts a` and reading `balance_snapshots bs` is untouched — balance_snapshots
+// is HISTORY and is the seam the whole ruling turns on.
+//
+// Mutation-checked: deleting the `currentStateAccountLeg("a")` line from any one of the four
+// investment-analytics branches turns this red naming that file and line.
+
+// accountsTableRef captures the alias of a FROM/JOIN reference to `accounts`.
+var accountsTableRef = regexp.MustCompile(
+	`(?is)\b(?:FROM|JOIN)\s+accounts\b(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?`)
+
+// sqlKeywordAfterAccounts are the words that follow `FROM accounts` in a real query and are not an
+// alias. Without this, `FROM accounts WHERE ...` reads "WHERE" as the alias.
+var sqlKeywordAfterAccounts = map[string]bool{
+	"where": true, "on": true, "join": true, "left": true, "right": true, "inner": true,
+	"outer": true, "full": true, "cross": true, "group": true, "order": true, "limit": true,
+	"having": true, "union": true, "using": true, "set": true, "returning": true, "as": true,
+	"and": true, "or": true, "offset": true, "for": true, "window": true, "except": true,
+	"intersect": true, "with": true,
+}
+
+func TestNoRawAccountBalanceReadWithoutTheCurrentStateLeg(t *testing.T) {
+	root := repoInternalRoot(t)
+
+	var offenders []string
+	checkedReads := 0
+
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, 0)
+		if parseErr != nil {
+			return parseErr
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+
+		for _, expr := range sqlStringExprs(file) {
+			// The projection's own CASE is the compliant form; strip it before looking for a raw
+			// column, exactly as the sibling guard does, and for the same no-restatement reason.
+			stripped := accountBalanceProjectionFragment.ReplaceAllString(expr.SQL, " ")
+			for _, m := range accountsTableRef.FindAllStringSubmatch(expr.SQL, -1) {
+				alias := m[1]
+				if sqlKeywordAfterAccounts[strings.ToLower(alias)] {
+					alias = ""
+				}
+				// An unaliased reference is addressed by the table name, which is also how a
+				// qualified column would name it.
+				qualifier := alias
+				if qualifier == "" {
+					qualifier = "accounts"
+				}
+				raw := regexp.MustCompile(
+					`(?i)\b` + regexp.QuoteMeta(qualifier) + `\.(?:current|available)_balance\b`)
+				if !raw.MatchString(stripped) {
+					continue
+				}
+				checkedReads++
+				if strings.Contains(stripped, currentStateAccountLeg(qualifier)) {
+					continue
+				}
+				offenders = append(offenders,
+					rel+":"+strconv.Itoa(fset.Position(expr.Pos).Line)+
+						" reads "+qualifier+".current_balance/available_balance raw")
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking internal/: %v", err)
+	}
+
+	sort.Strings(offenders)
+	if len(offenders) > 0 {
+		t.Fatalf("%d read(s) take a balance straight off `accounts` with nothing excluding a "+
+			"terminal account (#1569 task 21 item D, blind spot 1).\n"+
+			"A removed/replaced/expired account's accounts.current_balance is frozen at the moment "+
+			"it stopped syncing and carries no as-of instant. Either render it through "+
+			"accountBalanceProjection(alias) — which keeps the row and nulls the number — or add "+
+			"currentStateAccountLeg(alias) to the WHERE, which is what the investment-analytics "+
+			"aggregates do because an aggregate has no row to keep:\n    %s",
+			len(offenders), strings.Join(offenders, "\n    "))
+	}
+
+	// Fail closed on the same principle as the sibling: four such reads exist, all in
+	// investment_analytics_repository.go. Zero means the reference or column pattern stopped
+	// matching, not that the tree got cleaner.
+	if checkedReads < 4 {
+		t.Fatalf("this guard examined only %d raw account-balance read(s) under %s; four were "+
+			"present when it was written, so the scan is broken and passing means nothing",
+			checkedReads, root)
 	}
 }

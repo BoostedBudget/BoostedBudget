@@ -161,7 +161,13 @@ stamp the cause; if you add a restore, scope it to a cause you can prove.
 account (`removed`/`replaced`/`expired`) presents NULL — not zero — for `current_balance` /
 `available_balance` from all ten account reads (one renderer, `accountBalanceProjection`); as-of
 balances from `balance_snapshots`/`holding_snapshots` are untouched. Current universe empty,
-historical universe intact.
+historical universe intact. ⚠ "All ten" is exact for `account_repository.go` and is NOT the whole
+story: `investment_analytics_repository.go` (four `SUM(a.current_balance)` aggregates) reads the
+column RAW and is correct by a different mechanism — `currentStateAccountLeg("a")` keeps a terminal
+account out of the aggregate entirely, which is stronger than nulling it. An aggregate has no row to
+keep, so it takes the second mechanism. Both are now enforced:
+`TestNoAccountProjectionCarriesATerminalBalance` for the projection form and
+`TestNoRawAccountBalanceReadWithoutTheCurrentStateLeg` for the raw form.
 
 ⚠ **Household spending and household net-worth do NOT agree about a departed member.** Balance /
 net-worth reads honour the shared interval; spending, income and savings-rate reads

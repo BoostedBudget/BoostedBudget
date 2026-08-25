@@ -33,10 +33,18 @@
 -- replaced.
 --
 -- NO FK ON transaction_id, DELIBERATELY. `transactions` is tombstoned rather than deleted since
--- task 7, so an FK would buy nothing on the ordinary path; on the paths that DO hard-delete a
--- transaction (GDPR erasure, the three purges) the user_id CASCADE below already reaches this
--- table. Leaving the column FK-free also means a purge of one transaction cannot silently take the
--- record of what was overwritten on it, which is the direction #1569 always resolves.
+-- task 7, so an FK would buy nothing on the ordinary path; on the ONE path that hard-deletes a
+-- transaction -- GDPR erasure, via fk_transactions_user_id ON DELETE CASCADE from `users` -- the
+-- user_id CASCADE below already reaches this table.
+--
+-- ⚠ An earlier version of this paragraph said "GDPR erasure, THE THREE PURGES". Re-derived and
+-- false: no purge hard-deletes a transaction. PurgeAccount and PurgeLinkedItem destroy their own
+-- rows, and transactions.account_id / linked_item_id are both ON DELETE SET NULL, so the
+-- transaction survives the purge with a NULL parent; `allowedHistoryDeletes` carries no
+-- `transactions` entry at all. The DECISION is unchanged and still right -- an FK-free column
+-- means nothing can silently take the record of what was overwritten -- but the reason it rests on
+-- is one erasure path, not four. Same correction applies to the fixture comment in
+-- profile_repository_delete_user_cascade_integration_test.go.
 
 CREATE TABLE IF NOT EXISTS transaction_annotation_history (
     id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),

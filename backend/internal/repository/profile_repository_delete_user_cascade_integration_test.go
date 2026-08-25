@@ -1737,8 +1737,12 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 	execNoErr(t, ctx, pool, `INSERT INTO portfolio_snapshots (user_id, snapshot_date) VALUES ($1, CURRENT_DATE)`, target.ID)
 
 	// #1569 Task 6 (#1579): the annotation trail. transaction_id is deliberately FK-free, so a row
-	// naming a transaction that does not exist is a REAL production shape (purge the transaction,
-	// keep the record) and is what this fixture seeds.
+	// naming a transaction that does not exist is a REAL production shape and is what this fixture
+	// seeds. ⚠ NOT "purge the transaction, keep the record", as this comment used to say: nothing
+	// purges a transaction. Both parent FKs are ON DELETE SET NULL and allowedHistoryDeletes has no
+	// `transactions` entry, so the only hard delete is GDPR erasure via the users CASCADE. The real
+	// shape is a row written for a transaction whose id this table never re-checks — the point of
+	// the missing FK is that this table cannot be pruned by anything happening to `transactions`.
 	execNoErr(t, ctx, pool, `
 		INSERT INTO transaction_annotation_history
 			(user_id, transaction_id, change_source, prior_reviewed, new_reviewed)
