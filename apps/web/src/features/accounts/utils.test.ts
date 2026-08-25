@@ -9,6 +9,7 @@ import { describe, it, expect } from 'bun:test'
 import {
   getAccountTypeLabel,
   formatAccountBalance,
+  getAccountClosedDate,
   accountMatchesBalanceRange,
   compareAccountsByBalance,
 } from './utils'
@@ -273,6 +274,30 @@ describe('accountMatchesBalanceRange', () => {
     expect(accountMatchesBalanceRange(closed, { min: -10, max: 10 })).toBe(false)
   })
 
+  // ── fix round 1, item 8: the predicate keys on "balance absent", NOT on "account closed" ──
+  //
+  // Those two are not the same set. An ACTIVE account can also arrive with no `current_balance`:
+  // the column is `omitempty` and a freshly-linked account has none until the first sync lands.
+  // Such an account is excluded from a bounded range too, and that is deliberate — "between $1
+  // and $100" is a claim about a number and there is no number, whichever reason it is missing.
+  // It is strictly better than `?? 0`, which asserted the account holds exactly zero, but it IS a
+  // behaviour change beyond closed accounts, so it is pinned here rather than left implicit.
+  it('excludes an ACTIVE account that has no balance yet, for the same reason', () => {
+    const unsynced: Account = { ...baseAccount, status: 'active' }
+    expect(accountMatchesBalanceRange(unsynced, { min: 1 })).toBe(false)
+    expect(accountMatchesBalanceRange(unsynced, { max: 100 })).toBe(false)
+  })
+
+  it('treats an explicit null balance the same as an absent one', () => {
+    // The generated model types `current_balance?: number`, but a hand-built payload or a
+    // JSON `null` reaches the same code path, and `null < 1` is false while `null > 100` is also
+    // false — so a bare comparison would silently ADMIT it to every range.
+    const nulled = { ...baseAccount, current_balance: null } as unknown as Account
+    expect(accountMatchesBalanceRange(nulled, { min: 1 })).toBe(false)
+    expect(accountMatchesBalanceRange(nulled, { max: 100 })).toBe(false)
+    expect(accountMatchesBalanceRange(nulled, {})).toBe(true)
+  })
+
   it('still applies both bounds to an account that has a balance', () => {
     expect(accountMatchesBalanceRange(live(50), { min: 1, max: 100 })).toBe(true)
     expect(accountMatchesBalanceRange(live(0), { min: 1, max: 100 })).toBe(false)
@@ -321,8 +346,75 @@ describe('compareAccountsByBalance', () => {
     expect(compareAccountsByBalance(closedA, closedB, 'desc')).toBe(0)
   })
 
+  // fix round 1, item 8: same non-equivalence on the sort side.
+  it('groups an ACTIVE account with no balance yet alongside the closed ones, last', () => {
+    const unsynced: Account = { ...baseAccount, id: 'unsynced', status: 'active' }
+    expect(sorted([unsynced, high, low], 'asc')).toEqual(['low', 'high', 'unsynced'])
+    expect(sorted([unsynced, low, high], 'desc')).toEqual(['high', 'low', 'unsynced'])
+  })
+
+  it('treats an explicit null balance as no balance when sorting', () => {
+    const nulled = { ...baseAccount, id: 'nulled', current_balance: null } as unknown as Account
+    expect(sorted([nulled, high, low], 'asc')).toEqual(['low', 'high', 'nulled'])
+  })
+
   it('does not let a real $0 balance outrank a positive one on a desc sort', () => {
     const zero: Account = { ...baseAccount, id: 'zero', current_balance: 0 }
     expect(sorted([zero, high, closedA], 'desc')).toEqual(['high', 'zero', 'closed-a'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// getAccountClosedDate  (fix round 1, item 1)
+// ---------------------------------------------------------------------------
+
+describe('getAccountClosedDate', () => {
+  // T7 removed getAccountBalanceAsOfDate because a closed account's BALANCE is never sent, so
+  // the caption it fed ("Last known balance: N/A … as of Jun 4, 2025") labelled nothing. But the
+  // DATE in that caption was real and correct, and it was the only place in the app it appeared —
+  // removing the caption removed the date with it. On a surface whose thesis is "your history is
+  // retained", losing the WHEN is the wrong direction, so the date comes back on its own terms.
+  //
+  // The precedence mirrors which timestamp the backend actually stamps per status:
+  //   'removed'  → removed_at   (MarkRemovedByLinkedItemID / UpdateStatus)
+  //   'replaced' → replaced_at  (UpdateStatus)
+  //   'expired'  → no dedicated column exists; ExpireAccountsByFingerprint touches only
+  //                updated_at, so that is the best available proxy.
+  // All three columns are selected by the account reads and carried over the wire — see
+  // account_repository.go GetByIDAndUser, whose comment exists precisely to stop one being
+  // dropped from a projection.
+
+  it('returns undefined for an active account — it has not closed', () => {
+    expect(getAccountClosedDate({ ...baseAccount, status: 'active' })).toBeUndefined()
+  })
+
+  it('prefers removed_at for a removed account', () => {
+    const account: Account = {
+      ...baseAccount,
+      status: 'removed',
+      removed_at: '2026-03-01T00:00:00Z',
+      replaced_at: '2026-02-01T00:00:00Z',
+      updated_at: '2026-04-01T00:00:00Z',
+    }
+    expect(getAccountClosedDate(account)).toBe('2026-03-01T00:00:00Z')
+  })
+
+  it('prefers replaced_at for a replaced account', () => {
+    const account: Account = {
+      ...baseAccount,
+      status: 'replaced',
+      replaced_at: '2026-02-01T00:00:00Z',
+      updated_at: '2026-04-01T00:00:00Z',
+    }
+    expect(getAccountClosedDate(account)).toBe('2026-02-01T00:00:00Z')
+  })
+
+  it('falls back to updated_at for an expired account (no dedicated timestamp exists)', () => {
+    const account: Account = {
+      ...baseAccount,
+      status: 'expired',
+      updated_at: '2026-04-01T00:00:00Z',
+    }
+    expect(getAccountClosedDate(account)).toBe('2026-04-01T00:00:00Z')
   })
 })

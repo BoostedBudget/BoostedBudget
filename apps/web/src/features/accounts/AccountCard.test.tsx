@@ -357,6 +357,8 @@ describe('AccountCard', () => {
       expect(screen.queryByText(/last known/i)).toBeNull()
       expect(screen.queryByText(/as of/i)).toBeNull()
       expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
+      // fix round 1, item 1: and the card still tells the user WHEN.
+      expect(screen.getByText(/closed on mar 1, 2026/i)).toBeInTheDocument()
     })
 
     // Issue #1569 task 21, item D. The user's ruling: "If account is closed, treat as empty

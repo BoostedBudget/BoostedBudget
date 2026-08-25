@@ -7,7 +7,8 @@ import type { Account } from '@boostedbudget/api-client/models'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
-import { getAccountTypeLabel, formatAccountBalance } from '../utils'
+import { getAccountTypeLabel, formatAccountBalance, getAccountClosedDate } from '../utils'
+import { formatHistoryLabel } from '@/shared/dates/utils'
 import { isInactive } from '../hooks/useActiveAccounts'
 
 export type SortColumn = 'institution' | 'name' | 'type' | 'balance'
@@ -129,6 +130,7 @@ export function AccountTable({
         // orphan cleanup removed the Plaid item successfully; status alone can't tell which.
         const isDisconnected = row.linked_item_status === 'disconnected'
         const displayName = row.nickname || row.name
+        const closedOn = getAccountClosedDate(row)
         return (
           <div className="flex items-center gap-2">
             {row.custom_emoji && <span className="text-lg">{row.custom_emoji}</span>}
@@ -138,6 +140,15 @@ export function AccountTable({
             >
               {displayName}
             </span>
+            {/*
+              Fix round 1, item 1: the badge carries the closure DATE. T7 removed the balance
+              cell's "as of <date>" caption because the balance it labelled is never sent — but
+              that caption was the only place in the whole app the closure date appeared, and on a
+              surface whose thesis is "your history is retained", losing the WHEN is the wrong
+              direction. It lives here rather than back in the balance cell because it is a fact
+              about the ACCOUNT, not about a (non-existent) figure, and because a third line would
+              not fit a 160px numeric column.
+            */}
             {isInactive(row) && (
               <Badge
                 variant="secondary"
@@ -146,7 +157,7 @@ export function AccountTable({
                 title="This account was disconnected and is no longer active; its history is retained"
               >
                 <Archive className="h-2.5 w-2.5" aria-hidden="true" />
-                Closed
+                {closedOn ? `Closed ${formatHistoryLabel(closedOn, 'MMM d, yyyy')}` : 'Closed'}
               </Badge>
             )}
             {isDisconnected && (

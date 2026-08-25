@@ -16,7 +16,7 @@ import { useParams, Link } from 'react-router'
 import { ArrowLeft, AlertCircle } from 'lucide-react'
 import { useGetAccounts } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import { AccountSummaryHeader } from './components/AccountSummaryHeader'
-import { getAccountTypeLabel } from './utils'
+import { getAccountTypeLabel, getAccountClosedDate } from './utils'
 import { isInactive } from './hooks/useActiveAccounts'
 import { HoldingsTable } from '../investments/components/HoldingsTable'
 import { NetWorthSection } from '../net-worth/components/NetWorthSection'
@@ -124,6 +124,7 @@ export function AccountDetailPage() {
           customIcon={account.custom_icon}
           customColor={account.custom_color}
           isClosed={isInactive(account)}
+          closedOn={getAccountClosedDate(account)}
         />
 
         {/* Investment-only sections */}

@@ -14,6 +14,7 @@
 
 import { AccountIconDisplay } from './AccountIconDisplay'
 import { formatAccountBalance } from '../utils'
+import { formatHistoryLabel } from '@/shared/dates/utils'
 import type { AccountIcon } from '../types'
 
 export interface AccountSummaryHeaderProps {
@@ -45,6 +46,13 @@ export interface AccountSummaryHeaderProps {
    */
   isClosed?: boolean
   /**
+   * When the account stopped being live — `getAccountClosedDate(account)` (fix round 1 of Issue
+   * #1580, item 1). T7 removed the "as of <date>" caption because the BALANCE it labelled is
+   * never sent for a terminal-status account; the date in it, however, was real, and deleting the
+   * caption left the closure date displayed nowhere in the app. Rendered only when `isClosed`.
+   */
+  closedOn?: string | null
+  /**
    * Optional content rendered at the start of the institution row (before institution name).
    * AccountCard uses this for the drag handle.
    */
@@ -68,6 +76,7 @@ export function AccountSummaryHeader({
   customIcon,
   customColor,
   isClosed = false,
+  closedOn,
   institutionRowLeadingSlot,
   institutionRowTrailingSlot,
 }: AccountSummaryHeaderProps) {
@@ -148,6 +157,7 @@ export function AccountSummaryHeader({
           )}
           {isClosed && (
             <p className="text-xs text-muted-foreground m-0">
+              {closedOn && <>Closed on {formatHistoryLabel(closedOn, 'MMM d, yyyy')}. </>}
               Closed accounts do not carry a current balance. Your transaction and balance history
               is kept.
             </p>
