@@ -181,22 +181,33 @@ func TestReviewedGoldenActuallyPinsWhatItClaims(t *testing.T) {
 	require.NoError(t, err, "read %s", retentionNoticeGoldenPath)
 	golden := string(recorded)
 
+	// require.Contains would print the WHOLE golden as the haystack on every miss — several
+	// kilobytes per failure, thirteen times over, burying the one sentence that matters. These
+	// report the needle only.
+	missing := func(needle string) bool { return !strings.Contains(golden, needle) }
+
 	require.NotEmpty(t, retentionDeletionItems)
 	for i, item := range retentionDeletionItems {
-		require.Contains(t, golden, item.phrase,
-			"retentionDeletionItems[%d]'s phrase is not physically present in %s, so the golden is "+
-				"not pinning it. Either the golden is stale, or renderRetentionNoticeGolden stopped "+
-				"writing the phrases — which would silently unpin all thirteen",
-			i, retentionNoticeGoldenPath)
-		require.Contains(t, golden, strings.Join(item.tables, ", "),
-			"retentionDeletionItems[%d]'s tables are not in %s. The mapping is what makes a copy "+
-				"change reviewable — without it the diff shows new words and no way to judge whether "+
-				"they are true of the rows the item claims", i, retentionNoticeGoldenPath)
+		// The phrase and its tables must be ADJACENT, in one block, not merely both somewhere in
+		// the file. Checking them separately looked sufficient and was not: every phrase also
+		// appears as a bullet inside the two notice bodies, so dropping the mapping's `phrase:`
+		// line and regenerating left this test green — caught by mutating it. The reviewability
+		// claim is specifically that the diff shows the new words and the tables they now claim in
+		// the SAME hunk, and only the adjacency delivers that.
+		block := fmt.Sprintf("tables: %s\nphrase: %s\n", strings.Join(item.tables, ", "), item.phrase)
+		if missing(block) {
+			t.Errorf("retentionDeletionItems[%d]'s phrase/tables block is not physically present in "+
+				"%s, so the golden is not pinning the mapping. Either the golden is stale, or "+
+				"renderRetentionNoticeGolden stopped writing the blocks — which would leave a copy "+
+				"change showing new words with no way to judge whether they are true of the rows the "+
+				"item claims.\n  expected block:\n%s", i, retentionNoticeGoldenPath, block)
+		}
 	}
 	for name, body := range map[string]string{"30-day": retentionNotice30dBody, "7-day": retentionNotice7dBody} {
-		require.Contains(t, golden, body,
-			"the %s notice body is not physically present in %s, so the golden is not pinning the "+
-				"text that actually reaches the user", name, retentionNoticeGoldenPath)
+		if missing(body) {
+			t.Errorf("the %s notice body is not physically present in %s, so the golden is not "+
+				"pinning the text that actually reaches the user", name, retentionNoticeGoldenPath)
+		}
 	}
 }
 
