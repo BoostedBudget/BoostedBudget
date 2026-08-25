@@ -161,10 +161,16 @@ func (f *annotationRaceFixture) liveAnnotation(t *testing.T) (override *string, 
 	return
 }
 
-// waitForBlockedOn fails the test unless some backend other than the one holding the lock is
-// waiting on a row lock for our transaction. This is what makes the interleaving a MEASUREMENT
-// rather than an assumption — without it, a test whose "concurrent" statement quietly ran to
-// completion first would pass while proving nothing.
+// waitForBlockedOn fails the test unless some backend is blocked SPECIFICALLY on blockerPID. This
+// is what makes the interleaving a MEASUREMENT rather than an assumption — without it, a test whose
+// "concurrent" statement quietly ran to completion first would pass while proving nothing.
+//
+// ⚠ IT USES pg_blocking_pids(), NOT a wait_event_type + query-text heuristic, and the difference
+// matters on this machine. The first version matched any active backend with wait_event_type =
+// 'Lock' and a query ILIKE '%transactions%'; this clone is shared with other agents running the
+// same suite, so ANOTHER session's unrelated lock wait could satisfy it and the test would proceed
+// believing it had won a race it never entered. pg_blocking_pids(pid) names the exact backends
+// holding what this one wants, so the check is true only for a session blocked on OUR blocker.
 func waitForBlockedOn(t *testing.T, pool *pgxpool.Pool, blockerPID int32) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -173,17 +179,16 @@ func waitForBlockedOn(t *testing.T, pool *pgxpool.Pool, blockerPID int32) {
 		require.NoError(t, pool.QueryRow(context.Background(), `
 			SELECT COUNT(*) FROM pg_stat_activity
 			WHERE pid <> $1
-			  AND wait_event_type = 'Lock'
-			  AND state = 'active'
-			  AND query ILIKE '%transactions%'
+			  AND cardinality(pg_blocking_pids(pid)) > 0
+			  AND $1 = ANY(pg_blocking_pids(pid))
 		`, blockerPID).Scan(&waiting))
 		if waiting > 0 {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("the second session never blocked on the first session's row lock; the race did not " +
-		"interleave, so this test would prove nothing about concurrency")
+	t.Fatal("no backend ever blocked on session B specifically (pg_blocking_pids); the race did " +
+		"not interleave, so this test would prove nothing about concurrency")
 }
 
 // backendPID returns the server-side PID of a connection, so waitForBlockedOn can exclude it.

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -120,23 +122,37 @@ func TestTransactionAnnotationHistoryRepository_GetByUserID_CountErrorPropagates
 	assert.Contains(t, err.Error(), "failed to count transaction annotation changes")
 }
 
-// TestAnnotationCaptureSourcesMatchTheCheckConstraint is the guard the capture SQL cites. The two
+// TestAnnotationCaptureSourcesMatchTheCheckConstraint is the guard the capture SQL cites. The
 // change_source values are INTERPOLATED into the statement rather than bound as parameters (a CTE
 // body cannot take a placeholder in a position the caller's own $n numbering does not control), so
 // a mismatch between the Go constants and the database's CHECK would fail at runtime, on a write
 // path, in production — not here. This test makes it fail here instead.
 //
-// It reads the migration rather than the live database on purpose: it must run in the unit suite,
-// with no DATABASE_URL, alongside the code it is pinning.
+// It reads the migrations rather than the live database on purpose: it must run in the unit suite,
+// with no DATABASE_URL, alongside the code it is pinning. It takes the LAST migration that defines
+// the constraint rather than naming one file, so widening it again (as 000170 widened 000169's two
+// values to three) does not silently leave this test pinning a superseded definition.
 func TestAnnotationCaptureSourcesMatchTheCheckConstraint(t *testing.T) {
-	migration, err := os.ReadFile("../../migrations/000169_record_the_prior_annotation.up.sql")
+	files, err := filepath.Glob(filepath.Join("..", "..", "migrations", "*.up.sql"))
 	require.NoError(t, err)
+	sort.Strings(files)
 
-	check := regexp.MustCompile(`change_source IN \(([^)]*)\)`).FindStringSubmatch(string(migration))
-	require.Len(t, check, 2, "the CHECK constraint is no longer where this test looks for it")
+	checkRe := regexp.MustCompile(`change_source IN \(([^)]*)\)`)
+	var latest string
+	var latestFile string
+	for _, f := range files {
+		body, readErr := os.ReadFile(f)
+		require.NoError(t, readErr)
+		if m := checkRe.FindStringSubmatch(string(body)); m != nil {
+			latest, latestFile = m[1], filepath.Base(f)
+		}
+	}
+	require.NotEmpty(t, latest,
+		"no migration defines the change_source CHECK any more; this test is pinning nothing")
+	t.Logf("live change_source CHECK comes from %s", latestFile)
 
 	allowed := map[string]bool{}
-	for _, lit := range regexp.MustCompile(`'([a-z_]+)'`).FindAllStringSubmatch(check[1], -1) {
+	for _, lit := range regexp.MustCompile(`'([a-z_]+)'`).FindAllStringSubmatch(latest, -1) {
 		allowed[lit[1]] = true
 	}
 	require.NotEmpty(t, allowed)
@@ -144,6 +160,7 @@ func TestAnnotationCaptureSourcesMatchTheCheckConstraint(t *testing.T) {
 	for _, source := range []string{
 		domain.TransactionAnnotationChangeCategory,
 		domain.TransactionAnnotationChangeReview,
+		domain.TransactionAnnotationChangeSettlement,
 	} {
 		assert.True(t, allowed[source],
 			"the writer interpolates %q, which the live CHECK would reject", source)
@@ -152,6 +169,29 @@ func TestAnnotationCaptureSourcesMatchTheCheckConstraint(t *testing.T) {
 	assert.Empty(t, allowed,
 		"the CHECK allows a value no writer emits: either a source was dropped in Go without a "+
 			"migration, or the constraint was widened speculatively")
+}
+
+// TestAnnotationCaptureFragmentsCarryNoFormatVerb is cheap insurance against a nasty failure mode.
+// Two of the four capturing statements splice the generated fragments INTO a fmt.Sprintf format
+// string (TombstoneByExternalID's whole query is a Sprintf), so a `%` appearing in a column name or
+// in the generated SQL would be eaten as a verb and produce either a corrupted statement or a
+// %!s(MISSING) in production SQL. Nothing else would catch it: the fragments are only exercised
+// end to end by the integration suite.
+func TestAnnotationCaptureFragmentsCarryNoFormatVerb(t *testing.T) {
+	fragments := map[string]string{
+		"returning(t)":       annotationCaptureReturning("t"),
+		"returning(twin)":    annotationCaptureReturning("twin"),
+		"insert(category)":   annotationCaptureInsert(domain.TransactionAnnotationChangeCategory, "updated"),
+		"insert(review)":     annotationCaptureInsert(domain.TransactionAnnotationChangeReview, "updated"),
+		"insert(settlement)": annotationCaptureInsert(domain.TransactionAnnotationChangeSettlement, "moved"),
+		"columnList(prior_)": annotationCaptureColumnList("prior_", ", "),
+		"columnList(new_)":   annotationCaptureColumnList("new_", ", "),
+	}
+	for name, frag := range fragments {
+		assert.NotContains(t, frag, "%",
+			"%s contains a %% that fmt.Sprintf would consume as a verb", name)
+		assert.NotEmpty(t, frag, "%s generated nothing, so nothing downstream is being pinned", name)
+	}
 }
 
 // TestAnnotationCaptureSourceAttributionIsUnchanged pins WHICH source each statement records.
@@ -169,4 +209,7 @@ func TestAnnotationCaptureSourceAttributionIsUnchanged(t *testing.T) {
 		"both category statements attribute their rows to the category source")
 	assert.Equal(t, 1, strings.Count(text, "domain.TransactionAnnotationChangeReview"),
 		"SetReviewed is the single statement behind BOTH review endpoints")
+	assert.Equal(t, 1, strings.Count(text, "domain.TransactionAnnotationChangeSettlement"),
+		"TombstoneByExternalID's settlement move is the fourth capturing statement (#1569 fix "+
+			"round 2 / D-4) and files its rows under their own source")
 }

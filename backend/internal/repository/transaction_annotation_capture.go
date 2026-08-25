@@ -39,13 +39,17 @@ import (
 //     the API returns success, and the other session's committed annotation is destroyed with no
 //     trail — #1579's own defect, surviving #1579's fix. Measured with two SetReviewed calls.
 //
-// THE FIX IS LOCK-FIRST, and it is NOT the SELECT-then-UPDATE the plan rejected. Each of the three
+// THE FIX IS LOCK-FIRST, and it is NOT the SELECT-then-UPDATE the plan rejected. Each of the four
 // statements now runs as:
 //
 //	BEGIN;
 //	SELECT id FROM transactions WHERE <the write's own predicate> ORDER BY id FOR UPDATE;
 //	<the capturing UPDATE>;
 //	COMMIT;
+//
+// The four are UpdateCategory, BulkUpdateCategory, SetReviewed and TombstoneByExternalID's
+// settlement move; the last joined them in fix round 2, when the allowlist reason excusing it
+// ("fill-only in every column") was re-derived from the SQL and found false.
 //
 // The difference from the rejected shape is the LOCK. A plain read-then-write holds nothing, so its
 // window is unbounded. Here the target rows are locked before the capture, and under READ COMMITTED
@@ -54,35 +58,49 @@ import (
 // statements, so `prior` is exact rather than merely recent, and both halves of every row come from
 // one snapshot.
 //
-// ORDER BY id is deadlock hygiene, not decoration: two concurrent bulk writers over overlapping id
-// sets would otherwise be free to take the same locks in opposite orders. It reduces the risk to
-// the ordinary single-order case; it does not make deadlock unrepresentable, since Postgres does
-// not contract to lock in sort order under every plan.
+// ORDER BY id is deadlock hygiene. WHAT IT ACTUALLY BUYS, scoped precisely rather than hedged: the
+// measured plan puts LockRows ABOVE Sort, so the bulk lock really is taken in id order, and two
+// concurrent CAPTURING statements over overlapping id sets therefore cannot invert against each
+// other. That covers all four capturing statements, TombstoneByExternalID included, since its lock
+// carries the same ORDER BY.
 //
-// The cost is one extra round trip and an explicit transaction on three methods. r.db.Begin works
-// whether r.db is a pool or an existing pgx.Tx (pgx opens a savepoint for the nested case), so a
-// caller that already has a transaction is unaffected.
+// ⚠ WHAT IT DOES NOT COVER is every OTHER statement that locks transactions rows. `Update` and
+// `CreateBatch` take their row locks in whatever order their plan produces, so a capturing
+// statement can still invert against one of those. Ordering those too would mean a lock discipline
+// across the whole repository, which is a larger decision than this task; the residual is
+// cross-statement, not capture-versus-capture.
+//
+// The cost is one extra round trip and an explicit transaction on the four capturing methods.
+// r.db.Begin works whether r.db is a pool or an existing pgx.Tx (pgx opens a savepoint for the
+// nested case), so a caller that already has a transaction is unaffected.
 //
 // MEASURED, on 200,000 transactions in the local Postgres 17 with fresh ANALYZE stats — not on an
 // empty database, because an EXPLAIN on an empty database is worthless and this plan already
-// shipped one headline number that was 5.4x backwards. EXPLAIN (ANALYZE, BUFFERS):
+// shipped one headline number that was 5.4x backwards.
 //
-//	                              plan                                     time     buffers
-//	bulk lock (50 ids)            LockRows -> Sort -> Bitmap Heap Scan     0.363 ms   250
+// ⚠ NO TIMINGS ARE QUOTED HERE, DELIBERATELY. An earlier version of this comment carried a
+// millisecond column and a "2.1x" ratio from one run on one machine. Review re-ran the same probe
+// and measured a 4.87 ms baseline against my 1.777 ms — same plans, same buffers, ratio 1.1x
+// instead of 2.1x. The wall-clock numbers are not a property of this code, and a second bogus
+// headline timing on this plan would be worse than none. What DOES reproduce, and is the part the
+// question was about, is the plan shape and the buffer counts:
+//
+//	                              plan                                        buffers
+//	bulk lock (50 ids)            LockRows -> Sort -> Bitmap Heap Scan          250
 //	                              (Bitmap Index Scan on transactions_pkey)
-//	bulk capturing UPDATE         Nested Loop: Bitmap Heap Scan on t       3.732 ms  3343
+//	bulk capturing UPDATE         Nested Loop: Bitmap Heap Scan on t           3343
 //	                              x Index Scan on prior (id = t.id)
-//	bulk baseline (pre-#1569,     Bitmap Heap Scan, no join, no capture    1.777 ms  3168
+//	bulk baseline (pre-#1569,     Bitmap Heap Scan, no join, no capture        3168
 //	  no self-join, no capture)
-//	single lock                   LockRows -> Index Scan on pkey           0.031 ms     5
-//	single capturing UPDATE       Nested Loop of two pkey Index Scans      0.291 ms    66
-//	single baseline               Index Scan on pkey                       0.669 ms     -
+//	single lock                   LockRows -> Index Scan on pkey                  5
+//	single capturing UPDATE       Nested Loop of two pkey Index Scans             66
 //
 // THE QUESTION THIS ANSWERS is whether `prior.id = t.id` degenerates into a seq scan on
 // transactions for the `id = ANY(...)` bulk form. It does not: the inner side is an Index Scan on
-// transactions_pkey with Index Cond `(id = t.id)` in every plan, and no plan contains a Seq Scan.
-// The self-join adds ~200 buffer hits (3168 -> 3343) on a 50-id batch; the rest of the delta is the
-// history INSERT and its user_id FK trigger, which is the feature, not the join.
+// transactions_pkey with Index Cond `(id = t.id)` in every plan, and NO plan contains a Seq Scan.
+// Independently reproduced by review, which measured the self-join delta at 175-260 buffers against
+// my 175 (3168 -> 3343) on a 50-id batch. The rest of the delta is the history INSERT and its
+// user_id FK trigger, which is the feature, not the join.
 //
 // WHAT COUNTS AS A CHANGE. The INSERT is filtered by a row-wise IS DISTINCT FROM over EVERY tracked
 // column, reviewed_at included. Consequences, both deliberate:
@@ -99,7 +117,7 @@ import (
 // The bulk statements take a client-supplied id array, and this is why a foreign id in that array
 // cannot produce a history row.
 //
-// TOMBSTONES. None of the three statements filters `deleted_at IS NULL` (each carries its own
+// TOMBSTONES. None of the capturing statements filters `deleted_at IS NULL` on its target (each carries its own
 // `tombstone-exempt:` note explaining that liveness is the service layer's gate), and this task does
 // not change that — narrowing a write predicate is a behaviour change far outside "record the prior
 // value". The capture therefore mirrors the write exactly: whatever the UPDATE touched is recorded.
@@ -128,18 +146,20 @@ var annotationCapturedColumns = []string{
 	"reviewed_at",
 }
 
-// annotationCaptureReturning is the RETURNING list every capturing UPDATE must expose. `prior.*` is
-// the pre-update tuple from the self-join; the target's own columns are the post-update ones.
-var annotationCaptureReturning = buildAnnotationCaptureReturning()
-
-func buildAnnotationCaptureReturning() string {
+// annotationCaptureReturning is the RETURNING list a capturing UPDATE must expose. `prior.*` is the
+// pre-update tuple from the self-join; the target alias's own columns are the post-update ones.
+//
+// The alias is a parameter because the four capturing statements do not agree on one: the three
+// user-facing ones update `transactions t`, while TombstoneByExternalID's settlement move updates
+// `transactions AS twin` and cannot be renamed without rewriting #1578's whole CTE.
+func annotationCaptureReturning(targetAlias string) string {
 	var b strings.Builder
-	b.WriteString("\n\t\t\tt.id      AS captured_transaction_id,\n\t\t\tt.user_id AS captured_user_id")
+	fmt.Fprintf(&b, "\n\t\t\t%[1]s.id      AS captured_transaction_id,\n\t\t\t%[1]s.user_id AS captured_user_id", targetAlias)
 	for _, col := range annotationCapturedColumns {
 		fmt.Fprintf(&b, ",\n\t\t\tprior.%s AS prior_%s", col, col)
 	}
 	for _, col := range annotationCapturedColumns {
-		fmt.Fprintf(&b, ",\n\t\t\tt.%s AS new_%s", col, col)
+		fmt.Fprintf(&b, ",\n\t\t\t%s.%s AS new_%s", targetAlias, col, col)
 	}
 	return b.String()
 }
@@ -154,16 +174,21 @@ func annotationCaptureColumnList(prefix, sep string) string {
 	return strings.Join(out, sep)
 }
 
-// annotationCaptureInsert returns the recording CTE plus the count projection that replaces the
-// UPDATE's own RowsAffected. changeSource is a compile-time constant from this package, never user
-// input — it is interpolated because a CTE body cannot take a parameter placeholder in a position
-// the caller's own $n numbering does not control, and the two call-site values are pinned against
+// annotationCaptureInsert returns the recording CTE: an INSERT that reads the capturing statement's
+// RETURNING output out of the named CTE and writes one history row per row that actually changed.
+//
+// It returns ONLY the CTE. The caller appends its own final SELECT, because the four callers do not
+// want the same one — the three user-facing statements project the affected-row count, while
+// TombstoneByExternalID projects the deleted_reason its signature returns.
+//
+// changeSource and sourceCTE are compile-time constants from this package, never user input. They
+// are interpolated because a CTE body cannot take a parameter placeholder in a position the
+// caller's own $n numbering does not control, and the three change_source values are pinned against
 // the live CHECK by TestAnnotationCaptureSourcesMatchTheCheckConstraint.
 //
-// The `recorded` CTE is never referenced by the final SELECT. That is correct and not a bug: a
-// data-modifying statement inside WITH is executed exactly once, to completion, whether or not the
-// primary query reads its output.
-func annotationCaptureInsert(changeSource string) string {
+// ⚠ The result must contain no `%` verb: two of the callers splice it into a fmt.Sprintf format
+// string. Pinned by TestAnnotationCaptureFragmentsCarryNoFormatVerb.
+func annotationCaptureInsert(changeSource, sourceCTE string) string {
 	priorCols := annotationCaptureColumnList("prior_", ", ")
 	newCols := annotationCaptureColumnList("new_", ", ")
 
@@ -178,10 +203,9 @@ func annotationCaptureInsert(changeSource string) string {
 				captured_user_id, captured_transaction_id, '%[1]s',
 				%[2]s,
 				%[3]s
-			FROM updated
+			FROM %[4]s
 			WHERE (%[2]s) IS DISTINCT FROM (%[3]s)
-		)
-		SELECT COUNT(*) FROM updated`, changeSource, priorCols, newCols)
+		)`, changeSource, priorCols, newCols, sourceCTE)
 }
 
 // annotationLockTargets takes the row locks the capture depends on, inside tx, using the SAME
@@ -205,12 +229,48 @@ func annotationLockTargets(ctx context.Context, tx pgx.Tx, where string, args ..
 	return nil
 }
 
-// runCapturingUpdate wraps the lock and the capturing UPDATE in one transaction and returns the
-// number of rows the UPDATE affected, read from its `updated` CTE rather than from the statement
-// tag — the tag now counts the recording INSERT, which is legitimately 0 when nothing changed.
+// runCapturingStatement wraps the row lock and a capturing statement in one transaction, then hands
+// the statement's single result row to scan.
 //
 // The transaction is what makes the lock mean anything: row locks are held until commit, so the
-// UPDATE's fresh snapshot cannot miss a write that landed while we were waiting.
+// capturing statement's fresh snapshot cannot miss a write that landed while we were waiting for
+// the lock. Every statement that carries the capture must come through here — a capture without the
+// lock has the two failure modes documented at the top of this file, and
+// TestAnnotationCaptureIsUsedByEveryAnnotationWritingStatement enforces the pairing.
+func runCapturingStatement(
+	ctx context.Context,
+	db DB,
+	lockWhere string,
+	lockArgs []any,
+	sql string,
+	args []any,
+	scan func(pgx.Row) error,
+) error {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin annotation capture transaction: %w", err)
+	}
+	// Rollback is a no-op once Commit has succeeded. context.Background(), not ctx: a cancelled
+	// request context must still release the row locks this transaction is holding.
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	if err := annotationLockTargets(ctx, tx, lockWhere, lockArgs...); err != nil {
+		return err
+	}
+	if err := scan(tx.QueryRow(ctx, sql, args...)); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit annotation capture transaction: %w", err)
+	}
+	return nil
+}
+
+// runCapturingUpdate is runCapturingStatement for the three user-facing statements, whose result
+// row is the number of rows the UPDATE affected.
+//
+// That count is read from the statement's own `updated` CTE, never from the statement tag: the tag
+// now reports the recording INSERT, which is legitimately 0 when nothing changed.
 func runCapturingUpdate(
 	ctx context.Context,
 	db DB,
@@ -219,25 +279,11 @@ func runCapturingUpdate(
 	updateSQL string,
 	updateArgs []any,
 ) (int64, error) {
-	tx, err := db.Begin(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("failed to begin annotation capture transaction: %w", err)
-	}
-	// Rollback is a no-op once Commit has succeeded. context.Background(), not ctx: a cancelled
-	// request context must still release the row locks this transaction is holding.
-	defer func() { _ = tx.Rollback(context.Background()) }()
-
-	if err := annotationLockTargets(ctx, tx, lockWhere, lockArgs...); err != nil {
-		return 0, err
-	}
-
 	var updatedRows int64
-	if err := tx.QueryRow(ctx, updateSQL, updateArgs...).Scan(&updatedRows); err != nil {
+	err := runCapturingStatement(ctx, db, lockWhere, lockArgs, updateSQL, updateArgs,
+		func(row pgx.Row) error { return row.Scan(&updatedRows) })
+	if err != nil {
 		return 0, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("failed to commit annotation capture transaction: %w", err)
 	}
 	return updatedRows, nil
 }

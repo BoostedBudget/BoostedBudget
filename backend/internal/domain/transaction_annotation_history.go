@@ -6,7 +6,7 @@ import "time"
 //
 // THE DEFECT. Recategorising a transaction, or flipping its review flag, replaced the user's
 // previous annotation with no record of what it had been. The provider's own categorisation was
-// never at risk (pfc_primary / pfc_detailed are untouched by all three statements, so clearing an
+// never at risk (pfc_primary / pfc_detailed are untouched by every capturing statement, so clearing an
 // override restores it) — what vanished was a PREVIOUS USER OVERRIDE, and, the fact #1579 missed,
 // the pre-existing `reviewed_at`, which BOTH category statements clobber unconditionally with
 // `reviewed = true, reviewed_at = now`.
@@ -27,6 +27,16 @@ const (
 
 	// TransactionAnnotationChangeReview marks a row written by SetReviewed (single or bulk).
 	TransactionAnnotationChangeReview = "review"
+
+	// TransactionAnnotationChangeSettlement marks a row written by TombstoneByExternalID's
+	// settlement move (#1578): a pending charge posted, and the sync carried the user's manual
+	// category from the pending row onto the posted twin, REPLACING whatever the twin had.
+	//
+	// It is its own source because the user asked for neither. Filing it under 'category' would
+	// claim they recategorised the twin. A reader needs this row specifically to explain why the
+	// twin no longer agrees with the rule_execution_history entry for the rule that categorised it
+	// moments earlier in the same sync.
+	TransactionAnnotationChangeSettlement = "settlement"
 )
 
 // TransactionAnnotation is the complete user-set annotation on a transaction at one moment: the

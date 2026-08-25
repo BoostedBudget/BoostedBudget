@@ -1,5 +1,5 @@
 // Package annotationguard is NOT compiled: it lives under testdata, which the go tool ignores.
-// It exists so TestAnnotationCaptureGuard_CatchesAnUnguardedWrite can construct the violation the
+// It exists so TestAnnotationCaptureGuard_CatchesEveryConstructedViolation can construct the violation the
 // real guard exists to catch and prove the guard fails on it, rather than asserting that the guard
 // currently passes — which it would do just as happily if it had stopped looking at anything.
 package annotationguard
