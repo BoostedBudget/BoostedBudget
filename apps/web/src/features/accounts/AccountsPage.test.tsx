@@ -579,16 +579,54 @@ describe('AccountsPage', () => {
     // in personal analytics and vanish from household-scoped spending, income, cash-flow and
     // savings-rate. That is semantically forced — a share cannot be resolved without the account
     // row — but the user has to be told, not left to discover it.
-    it('qualifies the transaction-survival promise for household scope', () => {
-      renderAccountsPage()
-
+    function openPurgeDialogText(): string {
       fireEvent.click(screen.getByRole('button', { name: /show closed accounts/i }))
       fireEvent.click(screen.getByText('Delete from history'))
+      return screen.getByTestId('dialog-description').textContent ?? ''
+    }
 
-      const text = screen.getByTestId('dialog-description').textContent ?? ''
-      expect(text).toMatch(/household/i)
+    it('qualifies the transaction-survival promise for household scope', () => {
+      mockUseHousehold.mockReturnValue({ isInHousehold: true })
+      renderAccountsPage()
+
+      const text = openPurgeDialogText()
+      expect(text).toMatch(/stop counting towards shared totals/i)
       // The survival claim must be scoped to the user's OWN views, never left absolute.
       expect(text).not.toMatch(/otherwise they remain visible with no linked account/i)
+    })
+
+    // The residual on minor 1: the qualification shipped UNCONDITIONAL, so a solo user — who has
+    // no shared totals for anything to drop out of — was shown a paragraph about household scope.
+    it('omits the household qualification for a user known to be solo', () => {
+      mockUseHousehold.mockReturnValue({ isInHousehold: false, isLoading: false, error: null })
+      renderAccountsPage()
+
+      const text = openPurgeDialogText()
+      expect(text).not.toMatch(/household/i)
+      // …while everything true of EVERY user stays put. Gating must not have taken the
+      // transaction-survival sentence with it.
+      expect(text).toMatch(/stay in your own spending and reports with no linked account/i)
+    })
+
+    // ⚠ The gate is `!knownSolo`, not `isInHousehold`, and this is the case that forces it:
+    // `useGetMyHousehold` reports `isInHousehold: false` while still in flight and on error, so
+    // gating on it directly would HIDE a true warning about an irreversible action from a
+    // household member whose household request is slow or failing. Showing an irrelevant
+    // sentence costs a line; suppressing a relevant one costs the user their shared reporting.
+    it('keeps the household qualification while household membership is still unknown', () => {
+      mockUseHousehold.mockReturnValue({ isInHousehold: false, isLoading: true, error: null })
+      renderAccountsPage()
+      expect(openPurgeDialogText()).toMatch(/stop counting towards shared totals/i)
+    })
+
+    it('keeps the household qualification when the household request failed', () => {
+      mockUseHousehold.mockReturnValue({
+        isInHousehold: false,
+        isLoading: false,
+        error: new Error('boom'),
+      })
+      renderAccountsPage()
+      expect(openPurgeDialogText()).toMatch(/stop counting towards shared totals/i)
     })
 
     it('states the purge is permanent, that transactions survive, and that a savings goal blocks it', () => {
