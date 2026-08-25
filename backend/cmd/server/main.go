@@ -2169,6 +2169,15 @@ func main() {
 			operations.NewRuleExecutionHandler(services.NewRuleExecutionHistoryService(ruleExecutionHistoryRepo)))
 		appLogger.Info("Huma rule execution history routes registered")
 
+		// Issue #1569 Task 6 (#1579): the annotation trail's read path. There is no writer to wire:
+		// the capture is a CTE inside the three UPDATE statements in transaction_repository.go, so
+		// it cannot be left unwired by a future call site the way a Go writer can.
+		operations.RegisterTransactionAnnotationHistoryRoutes(humaAPI,
+			operations.NewTransactionAnnotationHistoryHandler(
+				services.NewTransactionAnnotationHistoryService(
+					repository.NewTransactionAnnotationHistoryRepository(db))))
+		appLogger.Info("Huma transaction annotation history routes registered")
+
 		// Register Huma merchant routes (Issue #957: Merchant name handling)
 		merchantOverrideRepo := repository.NewMerchantOverrideRepository(db)
 		merchantService := services.NewMerchantService(merchantRepo, merchantOverrideRepo)

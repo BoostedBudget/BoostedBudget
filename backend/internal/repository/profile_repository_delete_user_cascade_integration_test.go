@@ -1557,6 +1557,10 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		{Table: "student_loan_liabilities", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "subscription_entitlements", Column: "payer_user_id", DeleteRule: "CASCADE"},
 		{Table: "subscription_entitlements", Column: "user_id", DeleteRule: "CASCADE"},
+		// #1569 Task 6 (#1579): the before/after record of every category or review-state overwrite.
+		// It carries NO FK to transactions (a purge of one transaction must not take the record of
+		// what was overwritten on it), so this users FK is its only route to erasure.
+		{Table: "transaction_annotation_history", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "transactions", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "transfer_suggestions", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "user_accounts", Column: "user_id", DeleteRule: "CASCADE"},
@@ -1725,6 +1729,14 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		VALUES ($1, 'Test Goal', 1000, $2, 'manual')`, target.ID, accountID)
 
 	execNoErr(t, ctx, pool, `INSERT INTO portfolio_snapshots (user_id, snapshot_date) VALUES ($1, CURRENT_DATE)`, target.ID)
+
+	// #1569 Task 6 (#1579): the annotation trail. transaction_id is deliberately FK-free, so a row
+	// naming a transaction that does not exist is a REAL production shape (purge the transaction,
+	// keep the record) and is what this fixture seeds.
+	execNoErr(t, ctx, pool, `
+		INSERT INTO transaction_annotation_history
+			(user_id, transaction_id, change_source, prior_reviewed, new_reviewed)
+		VALUES ($1, gen_random_uuid(), 'review', true, false)`, target.ID)
 
 	execNoErr(t, ctx, pool, `
 		INSERT INTO portfolio_snapshot_repairs

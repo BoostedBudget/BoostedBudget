@@ -1135,7 +1135,11 @@ func TestTransactionRepository_UpdateCategory_PFCOverride(t *testing.T) {
 	kind := "pfc"
 	primary := "FOOD_AND_DRINK"
 
-	mock.ExpectExec("UPDATE transactions").
+	// #1569 Task 6 (#1579): the statement is now a CTE that also records the prior annotation, so
+	// it is a QUERY returning the `updated` CTE's count rather than an Exec whose statement tag is
+	// read. The tag would now count the recording INSERT, which is 0 for a write that changed
+	// nothing — reading it would report ErrTransactionNotFound for a successful no-op re-save.
+	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(
 			&kind,
 			&primary,
@@ -1147,7 +1151,7 @@ func TestTransactionRepository_UpdateCategory_PFCOverride(t *testing.T) {
 			txID,
 			userID,
 		).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
 
 	err = repo.UpdateCategory(ctx, txID, userID, &kind, &primary, nil, nil, domain.CategorySourceManual)
 	assert.NoError(t, err)
@@ -1167,9 +1171,9 @@ func TestTransactionRepository_SetReviewed(t *testing.T) {
 	userID := "user-123"
 	ids := []string{"tx-1", "tx-2"}
 
-	mock.ExpectExec("UPDATE transactions").
+	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(true, pgxmock.AnyArg(), userID, ids).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(2)))
 
 	n, err := repo.SetReviewed(ctx, userID, ids, true)
 	require.NoError(t, err)
@@ -1188,9 +1192,9 @@ func TestTransactionRepository_SetReviewed_Unreview(t *testing.T) {
 	userID := "user-123"
 	ids := []string{"tx-1"}
 
-	mock.ExpectExec("UPDATE transactions").
+	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(false, (*time.Time)(nil), userID, ids).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
 
 	n, err := repo.SetReviewed(ctx, userID, ids, false)
 	require.NoError(t, err)
@@ -1223,7 +1227,7 @@ func TestTransactionRepository_UpdateCategory_ClearOverride(t *testing.T) {
 	txID := "tx-clear"
 	userID := "user-123"
 
-	mock.ExpectExec("UPDATE transactions").
+	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(
 			(*string)(nil), // category_override_kind
 			(*string)(nil), // pfc_primary_override
@@ -1235,7 +1239,7 @@ func TestTransactionRepository_UpdateCategory_ClearOverride(t *testing.T) {
 			txID,
 			userID,
 		).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
 
 	err = repo.UpdateCategory(ctx, txID, userID, nil, nil, nil, nil, domain.CategorySourceManual)
 	assert.NoError(t, err)
@@ -3636,9 +3640,9 @@ func TestBulkUpdateCategory_Success(t *testing.T) {
 	pfcPrimary := "FOOD_AND_DRINK"
 	ids := []string{uuid.New().String(), uuid.New().String()}
 
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE transactions")).
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE transactions")).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(2)))
 
 	n, err := repo.BulkUpdateCategory(ctx, userID, ids, ptrStr("pfc"), &pfcPrimary, nil, nil, domain.CategorySourceManual)
 	require.NoError(t, err)
@@ -3676,9 +3680,9 @@ func TestBulkUpdateCategory_PartialOwnership(t *testing.T) {
 	userID := "user-222"
 	ids := []string{uuid.New().String(), uuid.New().String(), uuid.New().String()} // 3 requested
 
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE transactions")).
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE transactions")).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1)) // only 1 owned
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1))) // only 1 owned
 
 	n, err := repo.BulkUpdateCategory(ctx, userID, ids, nil, nil, nil, nil, domain.CategorySourceManual)
 	require.NoError(t, err)

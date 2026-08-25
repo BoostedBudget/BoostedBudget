@@ -36,6 +36,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	categoryHandler := &CategoryHandler{}
 	categorizationRuleHandler := &CategorizationRuleHandler{}
 	ruleExecutionHandler := &RuleExecutionHandler{}
+	transactionAnnotationHistoryHandler := &TransactionAnnotationHistoryHandler{}
 	notificationHandler := &NotificationHandler{}
 	dashboardHandler := &DashboardHandler{}
 	analyticsHandler := &AnalyticsHandler{}
@@ -109,6 +110,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	RegisterCategorizationRuleRoutes(api, categorizationRuleHandler)
 	// Issue #1569 Task 5 (#1572): the automation audit trail's read endpoint.
 	RegisterRuleExecutionRoutes(api, ruleExecutionHandler)
+
+	// Issue #1569 Task 6 (#1579): the annotation trail's read endpoint.
+	RegisterTransactionAnnotationHistoryRoutes(api, transactionAnnotationHistoryHandler)
 	RegisterNotificationRoutes(api, notificationHandler)
 	RegisterDashboardRoutes(api, dashboardHandler)
 	RegisterAnalyticsRoutes(api, analyticsHandler)
