@@ -316,6 +316,13 @@ func (m *MockProfileRepositoryForDeletion) ExpireTrialIfNoOverride(ctx context.C
 // m.Called so individual tests can assert the claimed/not-claimed branch explicitly — unlike
 // the other narrow-interface CAS stubs above, ExecuteDeletion's own tests need to control this
 // return value directly.
+// CountRetentionDeletionsWithheld is Issue #1569 T1's withholding-count read. Never exercised by
+// this suite: it exists so MockProfileRepositoryForDeletion keeps satisfying
+// repository.ProfileRepository.
+func (m *MockProfileRepositoryForDeletion) CountRetentionDeletionsWithheld(ctx context.Context) (repository.RetentionWithholdingCounts, error) {
+	return repository.RetentionWithholdingCounts{}, nil
+}
+
 func (m *MockProfileRepositoryForDeletion) ClaimForDeletion(ctx context.Context, userID string, kind repository.DeletionClaimKind) (bool, error) {
 	m.LastClaimKind = kind
 	args := m.Called(ctx, userID)

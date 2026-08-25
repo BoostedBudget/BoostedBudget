@@ -144,10 +144,12 @@ type ProfileRepository interface {
 	//   - every consumer (30d notice, 7d notice, GetUsersWithExpiredRetentionPage, the occurrence CAS)
 	//     reads the row's OWN stored value, so an untouched row is internally consistent end to end —
 	//     no notice is skipped and nobody is deleted early;
-	//   - retention_notice_30d_sent_at / _7d_sent_at are SET-ONCE flags that gate re-send, and
-	//     GetUsersWithExpiredRetentionPage does not reference them at all, so shrinking a deadline after a
-	//     notice had fired would delete an account on a SHORTER window than the email promised, with
-	//     no new notice;
+	//   - retention_notice_30d_sent_at / _7d_sent_at are SET-ONCE flags that gate re-send. ⚠ Since
+	//     Issue #1569 T1 GetUsersWithExpiredRetentionPage DOES reference them
+	//     (retentionNoticesDeliveredPredicate) — this bullet previously said it did not, which was
+	//     accurate and was the C1 defect. The conclusion is unchanged and if anything stronger:
+	//     shrinking a deadline after a notice had fired would delete an account on a SHORTER window
+	//     than the email promised, with no new notice;
 	//   - migrations 000119-000122 set this codebase's precedent for retroactively correcting a
 	//     grace timestamp: only ever defer the harmful action, never hasten it (000120: "never a
 	//     premature disconnect"), and both have deliberately no-op down migrations for that reason.
@@ -450,6 +452,12 @@ type ProfileRepository interface {
 	// work would already be irreversibly done by the time a later guard could catch a comp
 	// granted in the race window.
 	ClaimForDeletion(ctx context.Context, userID string, kind DeletionClaimKind) (bool, error)
+
+	// CountRetentionDeletionsWithheld reports how many accounts the Issue #1569 T1 notice gate is
+	// holding back from hard deletion, split into notice-pending (healthy: the clock is still
+	// running) and withheld (the clock has run out, so no notice query can ever reach the user
+	// again). See the implementation for the full rationale.
+	CountRetentionDeletionsWithheld(ctx context.Context) (RetentionWithholdingCounts, error)
 
 	// UpdateUserEmailTx updates a user's email, blind index, and resets email_verified=false
 	// within an existing transaction. Returns ErrDuplicateEmail if the email is already in use.
@@ -2388,7 +2396,7 @@ const userRequestedDeletionClaimPredicate = `
 // Such a user is picked up by the user-requested path once their own window elapses.
 const retentionDeletionClaimPredicate = `
 	  AND deletion_requested_at IS NULL
-	` + expiredRetentionClockPredicate + noManualOverrideAtAllPredicate
+	` + expiredRetentionClockPredicate + retentionNoticesDeliveredPredicate + noManualOverrideAtAllPredicate
 
 // expiredRetentionClockPredicate is the "this account's retention clock has actually run out, and
 // the account is still unsubscribed" test — the pair of facts that makes a user a retention
@@ -2428,6 +2436,41 @@ const expiredRetentionClockPredicate = `
 	  AND retention_expires_at IS NOT NULL
 	  AND retention_expires_at <= NOW()
 	  AND subscription_status IN ('inactive', 'cancelled')
+`
+
+// retentionNoticesDeliveredPredicate is the Issue #1569 T1 gate: BOTH promised pre-deletion notices
+// must have actually been recorded before a retention hard-delete is a candidate or a claim.
+//
+// WHY IT EXISTS. apps/web/src/legal/PrivacyPolicy.tsx promises a cancelled user notice at 30 days
+// and again at 7 days before their data is destroyed. Nothing enforced that promise: this pair of
+// columns was referenced by the notice queries only, never by the destruction path, while
+// cmd/server/main.go passes no EmailService to RetentionCleanupCheckWorker in any environment — so
+// canSendRetentionNotice returned false before the work-claim was even taken and the markers stayed
+// NULL forever. The net effect was a hard delete at the end of the window with zero warnings sent.
+// The comment above userSelectQuery said outright that this query "does not reference them at all";
+// that was accurate, and it was the defect.
+//
+// BOTH, not either. The 7-day final warning is a separate promise from the 30-day one, so a user who
+// received only one has not received what the policy states. Each of the four marker combinations
+// is pinned by TestRetentionNoticeGate_Integration_UnwarnedUserIsNotADeletionCandidate, including
+// the both-recorded case that proves this is a gate and not a permanent halt.
+//
+// ⚠ THIS GATE CAN HOLD AN ACCOUNT INDEFINITELY, and that is deliberate but must never be silent.
+// With no email service wired the markers can never be stamped, so an expired account is retained
+// rather than deleted — the safe direction to fail, per the #1569 ruling, but one that trades a
+// silent destruction for a silent retention if nothing reports it. CountRetentionDeletionsWithheld
+// below, published by RetentionCleanupCheckWorker's Step 2b as
+// observability.RetentionDeletionsWithheld, is the other half of this fix and is not optional.
+//
+// SAFE TO RE-CHECK AT CLAIM TIME (retentionDeletionClaimPredicate splices this too, so the two can
+// never drift the way they did in #1440 T0-retention). The markers are not strictly monotonic —
+// ClearRetentionDates and admin_user_repository.go's re-arm both NULL them — but each of those
+// clears retention_expires_at in the SAME statement, which expiredRetentionClockPredicate already
+// refuses. So the re-check can only ever agree with a refusal the clock test has already made; it
+// can never turn a legitimate candidate into a false refusal.
+const retentionNoticesDeliveredPredicate = `
+	  AND retention_notice_30d_sent_at IS NOT NULL
+	  AND retention_notice_7d_sent_at IS NOT NULL
 `
 
 // deletionAuthorisationUnionPredicate is satisfied when a claim of EITHER kind would be authorised.
@@ -3396,7 +3439,7 @@ func (r *profileRepository) GetUsersWithExpiredRetentionPage(ctx context.Context
 	const predicate = `
 		WHERE is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
-	` + expiredRetentionClockPredicate
+	` + expiredRetentionClockPredicate + retentionNoticesDeliveredPredicate
 
 	var query string
 	var args []interface{}
@@ -4548,6 +4591,85 @@ func (r *profileRepository) GetOrphanedFKlessUserScopedRowCounts(ctx context.Con
 	`).Scan(&counts.DeadLetterJobs, &counts.IdempotencyKeys, &counts.MCPAuditLog)
 	if err != nil {
 		return OrphanedFKlessUserScopedRowCounts{}, fmt.Errorf("GetOrphanedFKlessUserScopedRowCounts: %w", err)
+	}
+	return counts, nil
+}
+
+// RetentionWithholdingCounts is the population Issue #1569 T1's gate is holding back, split into
+// the states an operator has to be able to tell apart. See CountRetentionDeletionsWithheld.
+type RetentionWithholdingCounts struct {
+	// WithheldNoticeMissing is the count of users the hard-delete sweep is REFUSING because at
+	// least one promised pre-deletion notice was never recorded: every condition of
+	// GetUsersWithExpiredRetentionPage's predicate holds EXCEPT
+	// retentionNoticesDeliveredPredicate. Every one of these accounts is held indefinitely, because
+	// the notice queries cannot reach a user whose clock has already run out (see below).
+	WithheldNoticeMissing int
+	// WithheldNoNoticeAddress is the SUBSET of WithheldNoticeMissing with no email address on file
+	// — unaddressable for a per-user reason rather than a deployment one. A subset, not a separate
+	// population: never add it to WithheldNoticeMissing.
+	WithheldNoNoticeAddress int
+	// NoticePending is the HEALTHY population and is deliberately disjoint from the two above: a
+	// user whose retention clock is still RUNNING with a notice marker still NULL. Reported so the
+	// alert on the withheld counts can be shown not to be firing on ordinary cancellations.
+	NoticePending int
+}
+
+// CountRetentionDeletionsWithheld reports how many accounts the Issue #1569 T1 notice gate is
+// holding back from hard deletion, and why. It is the observability half of that gate and it is not
+// optional: retentionNoticesDeliveredPredicate converts "deleted with no warning ever sent" into
+// "retained indefinitely", and a refusal nobody can see is how an account accumulates in silence.
+//
+// ⚠ WHY THE CLOCK SPLITS THE POPULATION, and why an alert that ignores it is worthless.
+// `retention_notice_30d_sent_at IS NULL` means two completely different things:
+//
+//   - retention_expires_at > NOW(): the notice sweep can still reach this user.
+//     GetUsersNeedingRetention30dNotice and GetUsersNeedingRetention7dNotice both bound their
+//     population by exactly that comparison, so the marker is simply not due yet. Healthy, and the
+//     ordinary state of every cancelled account. Counted as NoticePending, never alerted on.
+//   - retention_expires_at <= NOW(): those same two queries can NEVER select this user again, their
+//     bound being the opposite one. The missing notice will not arrive by any existing path, so the
+//     gate holds the row forever. Counted as WithheldNoticeMissing, and this is the alert.
+//
+// The process-level half of the reason (is an email service wired at all?) is not visible to SQL and
+// is applied by the caller — see RetentionCleanupCheckWorker.monitorRetentionDeletionsWithheld.
+//
+// One round trip, three FILTERed aggregates, no row loading: this runs on every scheduled pass and
+// the population it reports should normally be empty.
+//
+// ⚠ THE PREDICATE IS SPLICED, not restated, for the reason expiredRetentionClockPredicate's own doc
+// comment gives: a hand-copied twin of the sweep's conditions would drift, and this count would then
+// report a population that is not the one actually being withheld.
+func (r *profileRepository) CountRetentionDeletionsWithheld(ctx context.Context) (RetentionWithholdingCounts, error) {
+	var counts RetentionWithholdingCounts
+	// The shared base: everything the sweep requires EXCEPT the notice markers and the clock
+	// comparison, which are what the three aggregates below discriminate on.
+	err := r.db.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (
+				WHERE retention_expires_at <= NOW()
+				  AND (retention_notice_30d_sent_at IS NULL OR retention_notice_7d_sent_at IS NULL)
+			),
+			COUNT(*) FILTER (
+				WHERE retention_expires_at <= NOW()
+				  AND (retention_notice_30d_sent_at IS NULL OR retention_notice_7d_sent_at IS NULL)
+				  AND (email IS NULL OR email = '')
+			),
+			COUNT(*) FILTER (
+				WHERE retention_expires_at > NOW()
+				  AND (retention_notice_30d_sent_at IS NULL OR retention_notice_7d_sent_at IS NULL)
+			)
+		FROM users
+		WHERE is_deleted = FALSE
+		  AND deletion_requested_at IS NULL
+		  AND retention_expires_at IS NOT NULL
+		  AND subscription_status IN ('inactive', 'cancelled')
+	` + noManualOverrideAtAllPredicate).Scan(
+		&counts.WithheldNoticeMissing,
+		&counts.WithheldNoNoticeAddress,
+		&counts.NoticePending,
+	)
+	if err != nil {
+		return RetentionWithholdingCounts{}, fmt.Errorf("CountRetentionDeletionsWithheld: %w", err)
 	}
 	return counts, nil
 }

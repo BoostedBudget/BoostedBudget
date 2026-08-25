@@ -1952,6 +1952,13 @@ type mockProfileRepoForCursorTests struct {
 	mock.Mock
 }
 
+// CountRetentionDeletionsWithheld is Issue #1569 T1's withholding-count read. Never exercised by
+// this suite: it exists so mockProfileRepoForCursorTests keeps satisfying
+// repository.ProfileRepository.
+func (m *mockProfileRepoForCursorTests) CountRetentionDeletionsWithheld(ctx context.Context) (repository.RetentionWithholdingCounts, error) {
+	return repository.RetentionWithholdingCounts{}, nil
+}
+
 func (m *mockProfileRepoForCursorTests) GetUserByClerkID(ctx context.Context, clerkUserID string) (*domain.User, error) {
 	args := m.Called(ctx, clerkUserID)
 	if args.Get(0) == nil {

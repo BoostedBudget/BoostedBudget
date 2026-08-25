@@ -660,6 +660,47 @@ var (
 		Help: "Highest retry_attempt_count among UNRESOLVED plaid_orphaned_items rows — the worst single Plaid Item whose automated removal keeps failing after its owner's GDPR erasure. The maximum (not a sum or mean) because the signal is one Item retried into the ground; unresolved-only so a succeeded row's history cannot latch the alert. The daily sweep plus the 30-day credential retention caps any row near 30, so a reading above ~20 means a human should act at Plaid before the automated path expires. Absent until the daily pass has actually read the table, so alert on absence too.",
 	})
 
+	// RetentionDeletionsWithheld is Issue #1569 T1's gauge over accounts the retention hard-delete
+	// sweep is REFUSING to delete because a promised pre-deletion notice was never recorded.
+	//
+	// WHAT MADE IT NECESSARY. apps/web/src/legal/PrivacyPolicy.tsx promises a cancelled user notice
+	// at 30 days and again at 7 days before their data is destroyed. Until T1 nothing enforced that:
+	// GetUsersWithExpiredRetentionPage never referenced retention_notice_30d_sent_at /
+	// _7d_sent_at, and no EmailService is passed to RetentionCleanupCheckWorker in any environment,
+	// so the markers could never be stamped. Accounts were hard-deleted having been warned zero
+	// times. T1 gates the sweep on both markers — and a gate on a notice that cannot be sent turns a
+	// silent destruction into a silent retention, which is what this gauge exists to prevent.
+	//
+	// ⚠ THE REASON LABEL IS THE WHOLE VALUE, because a NULL marker means two different things and an
+	// alert on the undifferentiated count would fire on every ordinary cancellation:
+	//   * notice_pending — retention_expires_at is still in the FUTURE. Both
+	//     GetUsersNeedingRetention30dNotice and its 7d sibling bound their population by exactly
+	//     that, so the notice sweep can still reach this user. Healthy and transient. NOT an alert,
+	//     and normally the largest number here.
+	//   * notice_impossible_no_email_service — the clock has run out AND this process has no email
+	//     service wired, which is production today. Remedy: wire it. Reported for the whole withheld
+	//     population, because this cause dominates every per-user one.
+	//   * notice_impossible_no_address — the clock has run out and the user has no address on file.
+	//     Remedy is per-user, not a deployment change.
+	//   * notice_impossible_window_passed — the clock has run out with a service wired and an
+	//     address present. Nothing will send the missing notice anyway: the two notice queries
+	//     require retention_expires_at > NOW(), so this user is permanently outside their reach.
+	//     This is the backlog that accrued before the gate existed.
+	//
+	// ⚠ ALERT ON THE SUM OF THE THREE notice_impossible_* REASONS BEING SUSTAINED ABOVE ZERO, never
+	// on the total: notice_pending is the healthy state. Alert on absence too — see below. The rules
+	// live in prose because this repo has no alert-rule file to put them in.
+	//
+	// Deliberately GAUGES reset to 0 on a clean pass, for the reason PlaidOrphanedItemsByAdminState
+	// spells out: an operator who wires the email service and drains the backlog must see the alert
+	// CLEAR. Nothing is published at all on a failed read — "unknown" must not be reported as "zero",
+	// which for this metric would assert that no account is being withheld on the strength of a read
+	// that failed.
+	RetentionDeletionsWithheld = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "retention_deletions_withheld",
+		Help: "Accounts whose retention hard-deletion is being withheld because a promised pre-deletion notice was never recorded, by reason. notice_pending is HEALTHY (the retention clock is still running and the notice sweep can still reach the user) and must never be alerted on. The three notice_impossible_* reasons are accounts the gate will hold indefinitely because no existing path can send the missing notice: alert on their sum being sustained above zero. no_email_service means this process has no email service wired at all and dominates every per-user reason; no_address means the user has no address on file; window_passed is the backlog that accrued before the gate existed. Not published at all on a failed read, so alert on absence too.",
+	}, []string{"reason"})
+
 	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.
 	// Issue #659: Plaid Investments
 	InvestmentHoldingsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{
@@ -804,4 +845,26 @@ var (
 		Name: "accounts_replaced_filtered_total",
 		Help: "Number of query executions that excluded at least one replaced account or expanded a re-link chain",
 	}, []string{"family"})
+)
+
+// Reason labels for RetentionDeletionsWithheld (Issue #1569 T1). Declared as constants so the
+// publisher and every alert/test name the same strings — a GaugeVec label is a bare string and the
+// compiler cannot catch a typo, which would silently split the series in two.
+//
+// ⚠ EVERY ONE OF THESE MUST BE Set ON EVERY PASS, and nothing enforces it: a label value that is
+// never Set simply does not exist in the scrape, so an omitted reason does not fail loudly — its
+// accounts just vanish and the gauge quietly stops summing to the withheld population.
+const (
+	// RetentionWithheldNoticePending is the HEALTHY state: the retention clock is still running, so
+	// GetUsersNeedingRetention30dNotice / its 7d sibling can still select this user. Never alert.
+	RetentionWithheldNoticePending = "notice_pending"
+	// RetentionWithheldNoEmailService means the clock has run out and this process has no email
+	// service wired, so no notice can be sent at all. Reported for the whole withheld population
+	// because this process-wide cause dominates every per-user one.
+	RetentionWithheldNoEmailService = "notice_impossible_no_email_service"
+	// RetentionWithheldNoAddress means the clock has run out and the user has no address on file.
+	RetentionWithheldNoAddress = "notice_impossible_no_address"
+	// RetentionWithheldWindowPassed means the clock has run out with a service wired and an address
+	// present: the notice queries require retention_expires_at > NOW(), so nothing will ever send it.
+	RetentionWithheldWindowPassed = "notice_impossible_window_passed"
 )
