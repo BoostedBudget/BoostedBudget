@@ -70,6 +70,16 @@ package repository
 //     A blank line and a bare `)` carry no identity, so there is nothing to locate; guessing would
 //     produce a confident wrong number, which is worse than a stale one that reads as stale.
 //
+//     ⚠ AND THE STANDARD IS INTENT, NOT UNIQUENESS. A UNIQUE CANDIDATE IS NOT EVIDENCE OF INTENT.
+//     Two anchors here were STALE AT BIRTH -- `profile_repository.go:1225`/`:1287` never pointed at
+//     MarkForDeletion/CancelDeletion even on the day they were written -- and for a stale-at-birth
+//     anchor the construct method is actively misleading: it faithfully tracks the text that WAS at
+//     that line, finds exactly one landing spot for it, and hands you a confident number for a
+//     citation whose author meant something else entirely. Those two were fixed from the PROSE
+//     (it names the methods), not from the text. `analytics_repository.go:717` is the same shape
+//     and was NOT fixed: a plausible unique candidate exists 56 lines away, and nothing identifies
+//     what the citation meant, so it is left visibly stale rather than confidently wrong.
+//
 //     So an IN-RANGE check is enforced here too (TestExactCitationsAreInRange below) for exact
 //     `file.go:NNN` refs — cheap, zero false positives, and it catches precisely the class that
 //     actually occurred. Approximate `~:NNN` refs are exempt by the `~` convention: it means
