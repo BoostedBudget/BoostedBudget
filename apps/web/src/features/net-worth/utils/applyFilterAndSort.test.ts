@@ -2,7 +2,9 @@ import { describe, it, expect } from 'bun:test'
 import type { AccountBreakdownRow } from '../types'
 import type { NetWorthBreakdownFilters } from '../hooks/useNetWorthBreakdownFilters'
 
-const { applyFilterAndSort } = await import('./applyFilterAndSort')
+const { applyFilterAndSort, getNumericValue, getStringValue } = await import(
+  './applyFilterAndSort'
+)
 
 function makeRow(overrides: Partial<AccountBreakdownRow>): AccountBreakdownRow {
   return {
@@ -235,5 +237,35 @@ describe('applyFilterAndSort', () => {
       })
       expect(desc.map((r) => r.id)).toEqual(['r-f', 'r-nb'])
     })
+  })
+})
+
+// Issue #1569 whole-branch review, residual to I1. Both column accessors used to end in a
+// fallback (`default: return 0` / `default: return ''`). Unreachable today — the five members of
+// `SortColumn` are all handled — but the fallback IS the failure mode: add a sixth numeric column
+// and it sorts at 0, i.e. between the overdrawn rows and the funded ones, instead of grouping last
+// with "no balance". That is I1's bug arriving by a different route.
+//
+// ⚠ THE PRIMARY GUARD FOR THIS IS THE COMPILER, NOT THIS FILE, and that is not a cop-out — it is
+// forced. `apps/web/tsconfig.json` EXCLUDES `**/*.test.ts`, so a `@ts-expect-error` written here
+// is never evaluated by `bun run typecheck` and pins nothing at all; a first draft of these tests
+// used exactly that and was silently vacuous. The real pin is `assertNever(col)` in the source
+// file: adding a member to `SortColumn` without adding a case to the matching accessor is a
+// COMPILE error in `applyFilterAndSort.ts` itself, which typecheck does see. Verified by adding a
+// sixth column and watching `bun run typecheck` go red (TS2345), and green again once handled.
+//
+// What IS testable at runtime is below: the accessors throw rather than answering a plausible
+// wrong value when the type system has been bypassed by a cast.
+describe('column accessors have no silent fallback value', () => {
+  const row = makeRow({})
+
+  // A wrong sort order is invisible to the user; an exception is not. `0` and `''` were both
+  // plausible-looking answers that would have shipped a mis-sorted table.
+  it('throws rather than answering 0 for a numeric column it does not handle', () => {
+    expect(() => getNumericValue(row, 'institution' as never)).toThrow(/unhandled sort column/)
+  })
+
+  it("throws rather than answering '' for a text column it does not handle", () => {
+    expect(() => getStringValue(row, 'balance' as never)).toThrow(/unhandled sort column/)
   })
 })

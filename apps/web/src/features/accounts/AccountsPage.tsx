@@ -106,7 +106,22 @@ export function AccountsPage() {
   const accountsQueryKey = getGetAccountsQueryKey({ include_hidden: 'true', status: 'all_statuses' })
 
   const { loading: userLoading, refetch: refetchProfile } = useProfile()
-  const { isInHousehold } = useHousehold()
+  const {
+    isInHousehold,
+    isLoading: householdLoading,
+    error: householdError,
+  } = useHousehold()
+
+  // Issue #1569 whole-branch review, minor 1 residual. The purge dialog's household caveat was
+  // unconditional, so a solo user — who has no shared totals for anything to drop out of — read a
+  // paragraph about a scope they are not in. Gate it, but gate it in the SAFE direction: show it
+  // unless we positively know the user is solo.
+  //
+  // ⚠ The asymmetry is deliberate. `isInHousehold` is false while `useGetMyHousehold` is still in
+  // flight and false when it errors, so a plain `isInHousehold &&` would HIDE a true warning about
+  // an irreversible action from a household member on a slow or failing request. Suppressing a
+  // relevant caveat is the expensive mistake; showing an irrelevant one costs a sentence.
+  const knownSolo = !householdLoading && !householdError && !isInHousehold
 
   const loading = accountsLoading || userLoading
   const error = accountsError ? 'Failed to load accounts. Please try again.' : null
@@ -243,6 +258,11 @@ export function AccountsPage() {
   // the share cannot be resolved without the account row — but it is a real consequence of
   // pressing this button, so it is stated rather than discovered.
   //
+  // It is now scoped to `!knownSolo` (see that binding for why it is "not known solo" rather than
+  // "in a household") — the sentence shipped unconditional, which put a household paragraph in
+  // front of solo users. Everything else in this dialog stays unconditional, because everything
+  // else in it is true of every user.
+  //
   // ⚠ THE INVESTMENT SENTENCE IS UNCONDITIONAL, and that is a #1569 T8 correction, not sloppiness.
   // It used to be gated on `account.type === 'investment'`, while the thing it describes —
   // fk_inv_txn_account_id, ON DELETE CASCADE — does not consult type at all. `brokerage` is a
@@ -260,7 +280,9 @@ export function AccountsPage() {
         You are about to permanently delete <strong data-ph-mask>{displayName}{maskPart}</strong> and all of its balance history, holdings, liabilities, and any savings goal you have already deleted that was tracking it (including the contributions you logged by hand against it).
         <br /><strong>This cannot be undone.</strong>
         <br /><strong>Any investment transactions recorded against it (buys, sells, dividends) will also be permanently deleted</strong> — unlike bank transactions, they have no independent existence apart from the account.
-        <br />Your bank transactions will NOT be deleted — if another connection to this same account exists, they will continue to appear there; otherwise they stay in your own spending and reports with no linked account. <strong>In a household, they stop counting towards shared totals</strong> — household views resolve every transaction through its account, and this one no longer has one.
+        <br />Your bank transactions will NOT be deleted — if another connection to this same account exists, they will continue to appear there; otherwise they stay in your own spending and reports with no linked account.{!knownSolo && (
+          <> <strong>In a household, they stop counting towards shared totals</strong> — household views resolve every transaction through its account, and this one no longer has one.</>
+        )}
         <br />If a savings goal still tracks this account, the purge will be refused until you delete or re-link that goal. <strong>Deleting the goal first means it is destroyed here too</strong> — along with every contribution you logged by hand against it.
       </span>
     )

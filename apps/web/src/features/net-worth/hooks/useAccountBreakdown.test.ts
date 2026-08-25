@@ -301,6 +301,31 @@ describe('useAccountBreakdown', () => {
       expect(result.current.liabilities[0].currentBalance).toBeNull()
     })
 
+    // Issue #1569 whole-branch review flagged this intersection as a WIDER visible change than
+    // the motivating case: the null-balance check runs BEFORE the zero-total check, so a
+    // balance-less row reports null even on a side whose total is 0 — where the sibling
+    // zero-balance rows all report 0%. SETTLED AS CORRECT, and pinned here so it is a decision
+    // rather than an accident.
+    //
+    // The two rows are genuinely different and the surface already says so in the balance column:
+    // a $0 account holds nothing (renders "$0.00"), a balance-less account has not told us what
+    // it holds (renders "—"). Ordering the checks the other way would print "0.0%" against a "—"
+    // balance, which reads as "this account is 0% of the total" — a quantity claim about an
+    // unknown. An em dash in both columns is the honest pair, and it is what the Accounts page
+    // shows for the same account.
+    it('keeps the null percentage even when the side total is 0 (unknown is not 0%)', () => {
+      const accounts = [
+        makeAccount({ id: 'acc-nb', current_balance: undefined }),
+        makeAccount({ id: 'acc-zero', current_balance: 0 }),
+      ]
+      mockUseGetAccounts.mockReturnValue({ data: { accounts, total_count: 2 }, isLoading: false, error: null })
+      const { result } = renderHook(() => useAccountBreakdown())
+      expect(result.current.assetsTotal).toBe(0)
+      expect(result.current.assets.find((r) => r.id === 'acc-nb')!.percentOfSide).toBeNull()
+      // …while the account that really does hold zero keeps saying so.
+      expect(result.current.assets.find((r) => r.id === 'acc-zero')!.percentOfSide).toBe(0)
+    })
+
     it('keeps a real balance as a number (guards the null branch from swallowing everything)', () => {
       const accounts = [makeAccount({ id: 'acc-funded', current_balance: 400 })]
       mockUseGetAccounts.mockReturnValue({ data: { accounts, total_count: 1 }, isLoading: false, error: null })
