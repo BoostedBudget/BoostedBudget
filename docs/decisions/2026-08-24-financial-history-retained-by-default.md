@@ -170,8 +170,9 @@ rather than by position.
 
 **Corrected count (2026-08-25, T8), derived from the live schema rather than from a guard's
 hand-maintained list.** Walking `pg_constraint` for `contype='f' AND confdeltype='c'` on the
-`freshcheck` database (`schema_migrations` = 170, the only local database matching the newest
-migration file):
+`freshcheck` database (`schema_migrations` = 171, the only local database matching the newest
+migration file — it read 170 when this paragraph was written, and 000171 is the drop of an unusable
+partial index, which changes no constraint and so leaves every count below unaffected):
 
 - **44** CASCADE foreign keys reference `users` directly, across **42** distinct tables;
 - the **transitive** closure of tables destroyed by `DELETE FROM users` is **48** tables;

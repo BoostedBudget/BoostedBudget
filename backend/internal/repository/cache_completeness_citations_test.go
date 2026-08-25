@@ -1254,6 +1254,12 @@ var reSQLSyntaxFragment = regexp.MustCompile(
 // either `file.go:NNN…` or a bare `:NNN…`, with an optional `~` in any of the three places these
 // details write one (`~file.go:296`, `file.go~:296`, `file.go:~296`, and the bare `~:296`).
 //
+// ⚠ THE OTHER LINE-CITATION GUARD USED TO DISAGREE WITH THIS GRAMMAR. testsupport/citations'
+// citedFileLine accepted `file.go:~296` only: `~file.go:296` was read as an EXACT citation (a
+// false positive waiting to happen) and `file.go~:296` matched nothing at all. Reconciled in the
+// #1569 whole-branch review — that guard now treats all three tilde positions as approximate. The
+// bare forms stay this guard's business alone, since they name no file to resolve.
+//
 // WHY PUNCTUATION IS ALLOWED (#1537 T96). The original version permitted only whitespace and
 // `(`/`[`, which made the guard's coverage a function of how the author punctuated the sentence.
 // Measured: `WHERE user_id = $3 AND is_primary = true`, `user_identity_repository.go:328-334` —
