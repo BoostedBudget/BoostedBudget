@@ -527,6 +527,47 @@ func buildPlaceholders(count, startIndex int) []string {
 // else), and the caller's interval predicate bounds WHEN it applies, so admitting it cannot show a
 // stranger's data nor any day outside the window the household was legitimately shown.
 //
+// ── #1569 T3 (#1582): two measured performance properties this CTE now carries ───────────────────
+//
+// Measured on a seeded 200k-transaction / 50-account / 80-grant household (PG17, the same shape
+// the ticket guessed at): the retention rewrite cost 18.7ms -> 407ms on cash-flow aggregation,
+// a 21.8x regression, not the 3-12x #1582 asserted without a source. Two changes here take it
+// back to 132ms (3.1x recovered):
+//
+//  1. `fingerprint_contested` — a window-computed flag saying whether MORE THAN ONE user_account
+//     in this household holds this fingerprint. The predicate's inner joint-account tiebreak is a
+//     correlated NOT EXISTS whose only matching condition is `g2.user_account_id <> g.user_account_id`
+//     on the SAME fingerprint, so when exactly one user_account holds the fingerprint the subquery
+//     is PROVABLY VACUOUS and skipping it is an identity, not an approximation. That is always the
+//     case for mask-less accounts, whose fingerprint COALESCEs to their own unique `ua.id`. Measured:
+//     subplan executions 141,137 -> 34,628, 407ms -> 150ms.
+//
+//     ⚠ It MUST be computed over EVERY grant, closed ones included. Deciding contestedness from the
+//     open grants alone makes a joint account whose winning copy has been revoked look uncontested,
+//     skips the tiebreak, and counts that account TWICE. Pinned by
+//     TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountWithClosedGrantCountedOnce,
+//     which fails at $120-vs-$60 under exactly that mutation.
+//
+//  2. `share_started_at` / `share_ended_at` are emitted ALREADY converted to UTC wall time. The
+//     predicate compares them against `t.date` once per (transaction, grant) pair; converting here
+//     does it 68 times instead of ~320,000. Measured: 150ms -> 132ms. The comparison rule is
+//     unchanged — see householdSharedTransactionPredicate, whose two bounds are mutation-pinned.
+//
+// ⚠ What was TRIED and is measurably WRONG here, so nobody re-proposes it:
+//
+//   - `AS NOT MATERIALIZED` (the plan's first candidate, and #1582's suggestion) is 5.4x SLOWER:
+//     407ms -> 2,214ms, shared buffers 10,466 -> 433,877. household_grants is referenced twice, and
+//     inlining makes the correlated inner reference re-run the has-x-user_accounts join once per
+//     transaction row instead of scanning a materialized 68-row result.
+//   - Replacing the CTE with an inline derived table carrying per-grant rival ARRAYs (to get the
+//     reference count down to one and restore parallelism) is worse still: 6,537ms, because the
+//     ARRAY subqueries get pushed into the same per-row subplan.
+//
+// Materialization is what makes this query fast, and it is also what forbids parallelism (a CTE Scan
+// is parallel-restricted, which is why the `Gather` the pre-retention plan had does not come back).
+// That trade is real and settled in materialization's favour by the numbers above. The parallel
+// no-tiebreak ceiling is 37.7ms; nothing measured gets closer to it without losing the dedup.
+//
 // Pinned by TestAnalyticsRepository_GetSpendingByCategory_Household_DepartedMemberSharedPeriodRetained.
 func householdGrantsCTE() string {
 	// The unused `$1::uuid AS _requesting_user_id` column exists solely to pin $1's type.
@@ -539,8 +580,11 @@ func householdGrantsCTE() string {
 		SELECT
 			ua.id                                                 AS user_account_id,
 			COALESCE(has.physical_account_blind_idx, ua.id::text) AS fingerprint,
-			has.shared_at                                         AS share_started_at,
-			has.revoked_at                                        AS share_ended_at,
+			(has.shared_at AT TIME ZONE 'UTC')                    AS share_started_at,
+			(has.revoked_at AT TIME ZONE 'UTC')                   AS share_ended_at,
+			MIN(ua.id::text) OVER (PARTITION BY COALESCE(has.physical_account_blind_idx, ua.id::text))
+			  <> MAX(ua.id::text) OVER (PARTITION BY COALESCE(has.physical_account_blind_idx, ua.id::text))
+			                                                      AS fingerprint_contested,
 			$1::uuid                                              AS _requesting_user_id
 		FROM household_account_shares has
 		JOIN user_accounts ua ON ua.id = has.user_account_id
@@ -585,7 +629,7 @@ func householdGrantsCTE() string {
 // ANY instant of it was shared. Being strict at one end and generous at the other is the defect,
 // not the fix.
 //
-// The opening leg is exactly equivalent to the `t.date >= (share_started_at AT TIME ZONE 'UTC')::date`
+// The opening leg is exactly equivalent to the `t.date >= share_started_at::date`
 // this replaced -- for a grant made at 18:00, the whole of that date was already included -- so the
 // share-start behaviour is unchanged and stays pinned by
 // TestAnalyticsRepository_GetSpendingByCategory_Household_ClipsToSharedAt. The closing leg is new,
@@ -608,26 +652,34 @@ func householdGrantsCTE() string {
 // is still counted once, and a re-fingerprinted account never loses to itself
 // (`g2.user_account_id <> g.user_account_id`).
 //
+// ── #1569 T3: the tiebreak is SKIPPED when the fingerprint is held by one user_account ───────────
+//
+// `NOT g.fingerprint_contested OR NOT EXISTS (...)` is not a fast path with a different answer: when
+// only one user_account in household_grants holds g's fingerprint, the inner query's
+// `g2.user_account_id <> g.user_account_id` can never be satisfied, so NOT EXISTS is already true.
+// The short-circuit removes an evaluation, never a row. See householdGrantsCTE for the measurement
+// and for why `fingerprint_contested` has to count closed grants too.
+//
 // Pinned by TestAnalyticsRepository_GetSpendingByCategory_Household_JointAccountCountedOnce and
 // TestAnalyticsRepository_GetSpendingByCategory_Household_RefingerprintedClosedGrantsCountedOnce.
 func householdSharedTransactionPredicate(txAlias, accountAlias string) string {
 	covers := func(grantAlias string) string {
 		return fmt.Sprintf(
-			`(%[1]s.date + 1) > (%[2]s.share_started_at AT TIME ZONE 'UTC')
-			   AND (%[2]s.share_ended_at IS NULL OR %[1]s.date < (%[2]s.share_ended_at AT TIME ZONE 'UTC'))`,
+			`(%[1]s.date + 1) > %[2]s.share_started_at
+			   AND (%[2]s.share_ended_at IS NULL OR %[1]s.date < %[2]s.share_ended_at)`,
 			txAlias, grantAlias)
 	}
 	return fmt.Sprintf(`EXISTS (
 			SELECT 1 FROM household_grants g
 			WHERE g.user_account_id = %[1]s.user_account_id
 			  AND %[2]s
-			  AND NOT EXISTS (
+			  AND (NOT g.fingerprint_contested OR NOT EXISTS (
 			      SELECT 1 FROM household_grants g2
 			      WHERE g2.fingerprint = g.fingerprint
 			        AND g2.user_account_id <> g.user_account_id
 			        AND %[3]s
 			        AND (g2.share_started_at, g2.user_account_id) < (g.share_started_at, g.user_account_id)
-			  )
+			  ))
 		)`, accountAlias, covers("g"), covers("g2"))
 }
 
