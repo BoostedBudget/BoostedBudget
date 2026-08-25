@@ -12,6 +12,16 @@
 --   createdb t3bench && pg_dump -s <integration-db> | psql t3bench && psql t3bench -f this
 --   T3BENCH_URL=postgres://.../t3bench go test -tags t3bench -run TestT3Bench ./internal/repository/ -v
 --
+-- ⚠ THIS FILE WILL ROT, SILENTLY. Nothing compiles or executes it — not CI, not `go test` — and it
+-- names ~12 columns across 7 tables. The first migration that adds a NOT NULL column without a
+-- default, or tightens a CHECK, breaks these INSERTs, and the only person who finds out is whoever
+-- next tries to reproduce #1582's numbers. That is the accepted trade (a CI job for a benchmark
+-- fixture costs more than it saves). If it fails to load: the schema comes from the `pg_dump -s`
+-- step above and is therefore always current, so diff the failing INSERT's column list against
+-- `\d <table>` in the freshly dumped t3bench database and add whatever the migration introduced.
+-- Keep the SHAPE fixed when you do — 50 accounts / 80 grants / 200k transactions / 5 joint
+-- accounts — or the numbers stop being comparable to the ones recorded in analytics_repository.go.
+--
 -- T3 benchmark seed: one household, 4 members, 50 user_accounts, 80 grants, 200k transactions.
 SET client_min_messages = warning;
 
