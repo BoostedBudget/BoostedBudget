@@ -218,7 +218,7 @@ func annotationCaptureInsert(changeSource, sourceCTE string) string {
 func annotationLockTargets(ctx context.Context, tx pgx.Tx, where string, args ...any) error {
 	if _, err := tx.Exec(ctx,
 		`SELECT id FROM transactions
-		 -- tombstone-exempt: this predicate must be IDENTICAL to the UPDATE it precedes, and the
+		 -- tombstone-exempt(transactions): this predicate must be IDENTICAL to the UPDATE it precedes, and the
 		 -- UPDATE does not filter deleted_at (each statement documents why). Adding the filter here
 		 -- would lock a SMALLER set than the write touches, leaving the tombstoned rows unlocked and
 		 -- reintroducing exactly the race this lock exists to close, for precisely the rows whose

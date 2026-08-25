@@ -1664,7 +1664,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		UPDATE transactions
 		SET custom_category_override_id = NULL, category_override_kind = NULL, effective_category_name = pfc_primary
 		WHERE custom_category_override_id IN (
-			-- tombstone-exempt: GDPR ERASURE (#1569 Task 9). A tombstoned category is still a row
+			-- tombstone-exempt(custom_categories): GDPR ERASURE (#1569 Task 9). A tombstoned category is still a row
 			-- and is about to be hard-deleted by the DELETE FROM users below; a surviving user's
 			-- transaction pointing at it would trip fk_transactions_custom_category_override
 			-- exactly as it would for a live one. Filtering here would reintroduce the residual

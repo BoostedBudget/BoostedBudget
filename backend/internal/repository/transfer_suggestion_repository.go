@@ -661,7 +661,7 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 		LEFT JOIN user_accounts to_ua   ON to_ua.id    = ts.to_user_account_id  AND to_ua.user_id    = ts.user_id
 		LEFT JOIN accounts     from_acc ON from_acc.id = ts.from_account_id     AND from_acc.user_id = ts.user_id
 		LEFT JOIN user_accounts from_ua ON from_ua.id  = ts.from_user_account_id AND from_ua.user_id = ts.user_id
-		-- tombstone-exempt: boosts r is DELIBERATELY unfiltered, and this is a decision, not an
+		-- tombstone-exempt(boosts r): boosts r is DELIBERATELY unfiltered, and this is a decision, not an
 		-- omission. r contributes exactly one thing to this query -- r.name AS boost_name, the
 		-- provenance line "this suggestion was proposed by <boost>". A transfer suggestion is a
 		-- historical record; naming the automation that produced it stays true after the user

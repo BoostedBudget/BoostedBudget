@@ -31,7 +31,7 @@ import (
 // FROM excepted — that is a write), the enclosing statement must contain either:
 //
 //   - a predicate `<alias>.deleted_at IS NULL` qualified to THAT reference's alias, or
-//   - the token `tombstone-exempt:` followed by a written reason.
+//   - an exemption naming THAT reference: `tombstone-exempt(<table>[ <alias>]): <reason>`.
 //
 // Per-reference is load-bearing, and this is not hypothetical. The original form asked only whether
 // the statement contained the substring `deleted_at IS NULL` anywhere. That let
@@ -41,10 +41,9 @@ import (
 // the identical weakness, latent: a mutation that strips the transactions predicate while adding an
 // accounts one passes the old form and fails this one.
 //
-// Still syntactic, not semantic: it cannot tell a correct predicate from one in the wrong clause,
-// and `tombstone-exempt:` is statement-scoped, so one comment excuses every reference in that
-// statement (no statement today joins two audited tables). Its job is to make FORGETTING
-// impossible; getting it RIGHT is what the behavioural tests are for.
+// Still syntactic, not semantic: it cannot tell a correct predicate from one in the wrong clause.
+// It CAN tell which reference an exemption covers, because the token names it. Its job is to make
+// FORGETTING impossible; getting it RIGHT is what the behavioural tests are for.
 //
 // Mutation-checked: deleting `AND <alias>.deleted_at IS NULL` from any one of the audited queries
 // turns this test RED with that file, line and alias named.
@@ -72,7 +71,7 @@ var sqlKeywordsAfterTableName = map[string]bool{
 // DeleteContribution is exactly that shape).
 func tombstoneReadRefRegexp(tables []string) *regexp.Regexp {
 	return regexp.MustCompile(
-		`(?is)\b(?:FROM|JOIN|USING)\s+(` + strings.Join(tables, "|") +
+		`(?is)(?:\b(?:FROM|JOIN|USING)|(,))\s+(` + strings.Join(tables, "|") +
 			`)\b(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?`)
 }
 
@@ -80,6 +79,10 @@ func tombstoneReadRefRegexp(tables []string) *regexp.Regexp {
 // the form an unaliased single-table read uses. The leading `[^.\w]` guard is the entire point:
 // without it, `txn.deleted_at IS NULL` would satisfy a check meant for a different table.
 var tombstoneUnqualifiedPredicate = regexp.MustCompile(`(?is)(^|[^.\w])deleted_at\s+IS\s+NULL`)
+
+// tombstoneExemptToken matches an exemption and captures the references it covers:
+// `tombstone-exempt(<table>[ <alias>], ...): <reason>`.
+var tombstoneExemptToken = regexp.MustCompile(`tombstone-exempt\(([^)]*)\)\s*:`)
 
 // tombstoneReadOffenders returns, for one SQL statement, the read references to `tables` that carry
 // no tombstone predicate OF THEIR OWN.
@@ -92,33 +95,52 @@ var tombstoneUnqualifiedPredicate = regexp.MustCompile(`(?is)(^|[^.\w])deleted_a
 // guard exists to catch. It was not hypothetical: transfer_suggestion_repository.go's
 // GetByUserIDStatuses was live on this branch, green under the loose guard, and RED under this one.
 //
-// exemptToken (`tombstone-exempt:`) still short-circuits the whole statement, because the cases it
-// covers — a predicate supplied by a shared WHERE-clause builder, or a query that genuinely wants
-// to see tombstones — are statement-level facts, not per-reference ones.
+// THE EXEMPTION IS PER REFERENCE TOO (#1569 T8). It used to be a bare `tombstone-exempt:` token
+// that short-circuited the whole statement on the theory that the cases it covers are
+// statement-level facts. They are not: a statement grows. Injecting a second, wholly unfiltered
+// `transactions unguarded_probe` into UpdateCategory — whose token is about resolving a CATEGORY
+// name — left the transaction guard green. The token must now name what it excuses:
+// `tombstone-exempt(<table>[ <alias>], ...): <reason>`. See
+// TestTombstoneExemptionIsPerReference and TestEveryTombstoneExemptTokenNamesItsReference in
+// tombstone_exempt_scope_guard_test.go.
 func tombstoneReadOffenders(sql string, tables []string, deleteRef *regexp.Regexp) []string {
-	if strings.Contains(sql, "tombstone-exempt:") {
-		return nil
-	}
+	exempt := tombstoneExemptRefs(sql)
+	// Exemption tokens live in comments, so they are read from the raw text; EVERYTHING ELSE is
+	// read from the comment-stripped text. Prose is not SQL: `-- Adding prior.deleted_at IS NULL
+	// here would narrow the UPDATE` was satisfying this guard's predicate check on two live
+	// statements, so a comment explaining why a predicate is ABSENT was accepted as the predicate.
+	code := stripSQLComments(sql)
 	// A DELETE's own FROM is a write, not a read.
-	read := deleteRef.ReplaceAllString(sql, "")
+	read := deleteRef.ReplaceAllString(code, "")
 
 	var offenders []string
 	for _, m := range tombstoneReadRefRegexp(tables).FindAllStringSubmatch(read, -1) {
-		table, alias := m[1], m[2]
+		comma, table, alias := m[1] == ",", m[2], m[3]
 		if sqlKeywordsAfterTableName[strings.ToLower(alias)] {
 			alias = ""
 		}
+		// A comma-introduced reference is only trusted when it carries an alias. `FROM a, b p` is a
+		// real join list that FROM/JOIN/USING alone misses (DeleteBySourceAndExternalID's
+		// `FROM tombstoned s, transactions prior` was invisible for exactly this reason), but a bare
+		// `, transactions` also matches a qualified column (`EXCLUDED.x, transactions.y`) and plain
+		// English in an email template. Requiring the alias keeps the join list and drops both.
+		if comma && alias == "" {
+			continue
+		}
 		var ok bool
 		if alias != "" {
-			ok = regexp.MustCompile(`(?is)\b` + regexp.QuoteMeta(alias) + `\.deleted_at\s+IS\s+NULL`).MatchString(sql)
+			ok = regexp.MustCompile(`(?is)\b` + regexp.QuoteMeta(alias) + `\.deleted_at\s+IS\s+NULL`).MatchString(code)
 		} else {
-			ok = tombstoneUnqualifiedPredicate.MatchString(sql) ||
-				regexp.MustCompile(`(?is)\b`+regexp.QuoteMeta(table)+`\.deleted_at\s+IS\s+NULL`).MatchString(sql)
+			ok = tombstoneUnqualifiedPredicate.MatchString(code) ||
+				regexp.MustCompile(`(?is)\b`+regexp.QuoteMeta(table)+`\.deleted_at\s+IS\s+NULL`).MatchString(code)
 		}
 		if !ok {
 			ref := table
 			if alias != "" {
 				ref = table + " " + alias
+			}
+			if exempt[strings.ToLower(ref)] {
+				continue
 			}
 			offenders = append(offenders, ref)
 		}
@@ -198,4 +220,34 @@ func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 				"elsewhere, an SQL comment `-- tombstone-exempt: <why>` inside the literal:\n  %s",
 			len(offenders), configTombstoneTables, strings.Join(offenders, "\n  "))
 	}
+}
+
+// tombstoneExemptRefs returns the lowercased `table` / `table alias` keys that the statement's
+// `tombstone-exempt(...)` tokens excuse. A bare `tombstone-exempt:` yields nothing on purpose —
+// see TestEveryTombstoneExemptTokenNamesItsReference, which reports it rather than letting it
+// quietly blanket the statement.
+func tombstoneExemptRefs(sql string) map[string]bool {
+	refs := map[string]bool{}
+	for _, m := range tombstoneExemptToken.FindAllStringSubmatch(sql, -1) {
+		for _, ref := range strings.Split(m[1], ",") {
+			if key := strings.Join(strings.Fields(strings.ToLower(ref)), " "); key != "" {
+				refs[key] = true
+			}
+		}
+	}
+	return refs
+}
+
+// sqlLineComment and sqlBlockComment strip SQL comments so that PROSE ABOUT a predicate is never
+// mistaken for the predicate. Both live statements that motivated this contained the sentence
+// "Adding prior.deleted_at IS NULL here would narrow WHICH ROWS THE UPDATE AFFECTS" inside a
+// `--` comment, and that sentence was satisfying the check for the `transactions prior` reference
+// four lines below it.
+var (
+	sqlLineComment  = regexp.MustCompile(`--[^\n]*`)
+	sqlBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+)
+
+func stripSQLComments(sql string) string {
+	return sqlLineComment.ReplaceAllString(sqlBlockComment.ReplaceAllString(sql, " "), " ")
 }
