@@ -80,6 +80,10 @@ func TestGetUserRuleExecutions_ScopesToTheAuthenticatedUser(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// ⚠ AssertExpectations FIRST (D8). Without it the loop below asserts nothing at all when the
+	// service was never called — a vacuous pass, and the exact shape this project keeps finding.
+	svc.AssertExpectations(t)
+	require.NotEmpty(t, svc.Calls, "the handler must actually have reached the service")
 	for _, c := range svc.Calls {
 		assert.Equal(t, "user-owner", c.Arguments.String(1),
 			"the only tenancy filter is the authenticated user id")

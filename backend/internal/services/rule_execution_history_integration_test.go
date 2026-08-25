@@ -110,9 +110,7 @@ func (f *ruleHistoryFixture) runSyncPath(t *testing.T, txns []domain.Transaction
 	t.Helper()
 	ctx := context.Background()
 
-	enc, err := appcrypto.NewFieldEncryptor(plainPassthroughEncryptionServiceForRuleHistory{},
-		[]byte("12345678901234567890123456789012"))
-	require.NoError(t, err)
+	enc := ruleHistoryEncryptor(t)
 
 	svc := NewRuleApplicationService(repository.NewCategorizationRuleRepository(f.tx))
 	svc.SetRuleExecutionHistoryRepository(repository.NewRuleExecutionHistoryRepository(f.tx))
@@ -125,6 +123,18 @@ func (f *ruleHistoryFixture) runSyncPath(t *testing.T, txns []domain.Transaction
 
 	svc.EmitBatchSideEffects(ctx, f.userID, apps, insertedIDs)
 	return svc
+}
+
+// ruleHistoryEncryptor is the one encryptor every path in this file uses. It must be the same on
+// the write and the tombstone paths, because external_transaction_id_blind_idx is what
+// TombstoneByExternalID looks the row up by — a second encryptor with a different key would look
+// up nothing and the test would pass vacuously.
+func ruleHistoryEncryptor(t *testing.T) *appcrypto.FieldEncryptor {
+	t.Helper()
+	enc, err := appcrypto.NewFieldEncryptor(plainPassthroughEncryptionServiceForRuleHistory{},
+		[]byte("12345678901234567890123456789012"))
+	require.NoError(t, err)
+	return enc
 }
 
 func (f *ruleHistoryFixture) newTransaction(merchant string) domain.Transaction {
@@ -239,7 +249,7 @@ func TestRuleExecutionHistory_ConflictKeepsTheFirstSnapshot_Integration(t *testi
 	// what a DO UPDATE would happily install over the original.
 	ruleID, txnID := f.ruleID, txn.ID
 	later := "Renamed after the fact"
-	require.NoError(t, repo.Create(ctx, &domain.RuleExecution{
+	losing := &domain.RuleExecution{
 		RuleID:             &ruleID,
 		TransactionID:      &txnID,
 		UserID:             f.userID,
@@ -247,7 +257,15 @@ func TestRuleExecutionHistory_ConflictKeepsTheFirstSnapshot_Integration(t *testi
 		ActionType:         domain.RuleExecutionActionBoth,
 		Result:             domain.RuleExecutionResultApplied,
 		DefinitionSnapshot: json.RawMessage(`{"name":"Renamed after the fact"}`),
-	}), "a conflict is not an error — the first execution simply wins")
+	}
+	require.NoError(t, repo.Create(ctx, losing),
+		"a conflict is not an error — the first execution simply wins")
+
+	// D7 (review round 1): a conflicted Create must not hand back a UUID that names no row.
+	assert.Empty(t, losing.ID,
+		"an empty ID after a nil-error Create is how a caller tells 'kept the existing row' from 'wrote one'")
+	assert.True(t, losing.ExecutedAt.IsZero(),
+		"this call wrote no row, so it has no execution time to report")
 
 	var name, action string
 	require.NoError(t, f.tx.QueryRow(ctx, `
@@ -322,31 +340,128 @@ func TestRuleExecutionHistory_ReadIsTenancyScoped_Integration(t *testing.T) {
 	assert.Empty(t, theirs)
 }
 
-// TestRuleExecutionHistory_NoRowWhenTheRuleChangesNothing_Integration is the user's product ruling
-// against a live database: the rule matched, its match count moved, and the trail stayed silent.
-func TestRuleExecutionHistory_NoRowWhenTheRuleChangesNothing_Integration(t *testing.T) {
+// TestRuleExecutionHistory_TagNoOpRecordsNothingButStillCounts_Integration is what survives of the
+// product ruling after R73 (review round 1, D2), against a live database.
+//
+// ⚠ THIS TEST USED TO ASSERT ZERO ROWS AND IT WAS WRONG. Its fixture hand-built a transaction whose
+// category already matched the rule's target, and concluded that nothing changed. But the category
+// rule also flips `reviewed` false→true, permanently — so ONE row is correct, and asserting zero
+// pinned the D2 defect in place. The tag rule genuinely contributes nothing and still records
+// nothing, which is the distinction that remains.
+//
+// ⚠ THE FIXTURE IS NOT PRODUCTION-SHAPED, and that is now stated rather than implied: nothing on
+// the processAddedTransactions path sets CategoryOverrideKind, Tags or TagsSource before rules run
+// (services/plaid_mapper.go sets none of them). This constructs the state deliberately to reach the
+// no-op branch. See buildRuleExecutionRecords' doc comment.
+func TestRuleExecutionHistory_TagNoOpRecordsNothingButStillCounts_Integration(t *testing.T) {
 	f := seedRuleHistoryFixture(t)
 	ctx := context.Background()
 
-	// Already categorized exactly as the category rule would categorize it, and already carrying
-	// the tag rule's tag. Not manual, not reviewed, so the match loop still evaluates it.
 	txn := f.newTransaction("Blue Bottle Coffee")
 	txn.CategoryOverrideKind = strPtr("pfc")
 	txn.PFCPrimaryOverride = strPtr("FOOD_AND_DRINK")
+	// Already carrying the tag rule's tag, already attributed to THAT rule — the only shape that
+	// reaches the tagsBefore clause (Source:"manual" exits one clause earlier and tests nothing).
 	txn.Tags = []string{"caffeine"}
-	txn.TagsSource = []domain.TagSource{{Tag: "caffeine", Source: "manual"}}
+	txn.TagsSource = []domain.TagSource{{Tag: "caffeine", Source: "rule", RuleID: &f.tagRuleID}}
 
 	f.runSyncPath(t, []domain.Transaction{txn})
 
-	assert.Zero(t,
-		f.count(t, ctx, `SELECT COUNT(*) FROM rule_execution_history WHERE user_id = $1`, f.userID),
-		"both rules matched but neither changed anything, so the trail records nothing")
+	rows, total, err := repository.NewRuleExecutionHistoryRepository(f.tx).
+		GetByUserID(ctx, f.userID, 20, 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, total,
+		"the category rule flipped `reviewed` (R73), so it records; the tag rule changed nothing")
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].RuleID)
+	assert.Equal(t, f.ruleID, *rows[0].RuleID, "the row belongs to the category rule, not the tag rule")
+	assert.Equal(t, domain.RuleExecutionActionCategory, rows[0].ActionType)
 
-	var matchCount int64
+	for _, id := range []string{f.ruleID, f.tagRuleID} {
+		var matchCount int64
+		require.NoError(t, f.tx.QueryRow(ctx,
+			`SELECT match_count FROM categorization_rules WHERE id = $1`, id).Scan(&matchCount))
+		assert.EqualValues(t, 1, matchCount,
+			"a no-op match is still a match — this is what separates match_count from history")
+	}
+}
+
+// TestRuleExecutionHistory_SettlementDoesNotShowTheSameChargeTwice_Integration is review round 1's
+// D3 (ruling R74), and the duplicate it pins was live.
+//
+// Rules run before CreateBatch, so a pending transaction gets a trail row; when it settles, the
+// posted twin is a DIFFERENT id, gets its own trail row from the same rule, and the pending row is
+// tombstoned. unique_rule_transaction UNIQUE (rule_id, transaction_id) never fires, because the ids
+// differ. One charge, two "the automation ran" rows, one of them pointing at a transaction every
+// other read in the app hides.
+func TestRuleExecutionHistory_SettlementDoesNotShowTheSameChargeTwice_Integration(t *testing.T) {
+	f := seedRuleHistoryFixture(t)
+	ctx := context.Background()
+
+	pending := f.newTransaction("Blue Bottle Coffee")
+	f.runSyncPath(t, []domain.Transaction{pending})
+
+	// It settles: a new row with a new id, and the pending one is tombstoned. The tombstone goes
+	// through the PRODUCTION path (TombstoneByExternalID), not a hand-written UPDATE — a bare
+	// `SET deleted_at = NOW()` is rejected outright by the transactions_tombstone_consistency CHECK,
+	// which is the database saying a fixture must not invent a state production cannot produce.
+	posted := f.newTransaction("Blue Bottle Coffee")
+	f.runSyncPath(t, []domain.Transaction{posted})
+
+	reason, err := repository.NewTransactionRepository(f.tx, ruleHistoryEncryptor(t)).
+		TombstoneByExternalID(ctx, domain.SourcePlaid, *pending.ExternalTransactionID,
+			f.userID, domain.TxnDeletedByPlaidSync)
+	require.NoError(t, err)
+	require.NotEmpty(t, reason, "the pending row must actually have been tombstoned")
+
+	var tombstoned bool
 	require.NoError(t, f.tx.QueryRow(ctx,
-		`SELECT match_count FROM categorization_rules WHERE id = $1`, f.ruleID).Scan(&matchCount))
-	assert.EqualValues(t, 1, matchCount,
-		"a no-op match is still a match — this is what separates match_count from history")
+		`SELECT deleted_at IS NOT NULL FROM transactions WHERE id = $1`, pending.ID).Scan(&tombstoned))
+	require.True(t, tombstoned, "the fixture is only meaningful if the pending row is tombstoned")
+
+	// Both sets of rows are RETAINED — this is a visibility decision, not a deletion.
+	assert.Equal(t, 4, f.count(t, ctx,
+		`SELECT COUNT(*) FROM rule_execution_history WHERE user_id = $1`, f.userID),
+		"the pending row's history is retained; nothing is destroyed")
+
+	rows, total, err := repository.NewRuleExecutionHistoryRepository(f.tx).
+		GetByUserID(ctx, f.userID, 20, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 2, total,
+		"the default read shows ONE charge: two rules against the posted twin, none against the "+
+			"tombstoned pending row")
+	require.Len(t, rows, 2, "total and the page must agree — they share visibleRuleExecutions")
+
+	for _, r := range rows {
+		require.NotNil(t, r.TransactionID)
+		assert.Equal(t, posted.ID, *r.TransactionID,
+			"a row pointing at the tombstoned pending transaction leaked into the default read")
+	}
+}
+
+// TestRuleExecutionHistory_OrphanedTransactionPointerStaysVisible_Integration pins the leg of
+// visibleRuleExecutions that the LEFT JOIN's three-valued logic would otherwise supply by accident:
+// a hard-deleted transaction leaves transaction_id NULL, and that row is still the user's history.
+func TestRuleExecutionHistory_OrphanedTransactionPointerStaysVisible_Integration(t *testing.T) {
+	f := seedRuleHistoryFixture(t)
+	ctx := context.Background()
+
+	txn := f.newTransaction("Blue Bottle Coffee")
+	f.runSyncPath(t, []domain.Transaction{txn})
+
+	// A genuine hard delete, not a tombstone — the GDPR/purge shape. The FK is ON DELETE SET NULL.
+	_, err := f.tx.Exec(ctx, `DELETE FROM transactions WHERE id = $1`, txn.ID)
+	require.NoError(t, err)
+
+	rows, total, err := repository.NewRuleExecutionHistoryRepository(f.tx).
+		GetByUserID(ctx, f.userID, 20, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 2, total, "an orphaned execution is still the user's automation history")
+	require.Len(t, rows, 2)
+	for _, r := range rows {
+		assert.Nil(t, r.TransactionID, "the FK set it NULL; the row must not vanish with it")
+		require.NotNil(t, r.RuleName)
+	}
 }
 
 func (f *ruleHistoryFixture) count(t *testing.T, ctx context.Context, sql string, args ...any) int {

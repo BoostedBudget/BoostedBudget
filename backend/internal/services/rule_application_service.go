@@ -257,6 +257,7 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 		// Captured BEFORE any mutation. The audit trail records what a rule CHANGED, and the only
 		// way to know that is to compare before with after. Issue #1569 Task 5.
 		categoryBefore := categoryAssignment(tx)
+		reviewedBefore := tx.Reviewed
 		tagsBefore := make(map[string]bool, len(tx.Tags))
 		for _, tag := range tx.Tags {
 			tagsBefore[tag] = true
@@ -314,7 +315,7 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 				CategoryApplied: result.TargetKind != nil,
 				CategoryRuleID:  result.CategoryRuleID,
 				Executions: buildRuleExecutionRecords(
-					tx, result, rulesByID, categoryBefore, tagsBefore),
+					tx, result, rulesByID, categoryBefore, reviewedBefore, tagsBefore),
 			})
 		}
 	}
@@ -329,11 +330,15 @@ func (s *ruleApplicationService) ApplyRulesToBatch(ctx context.Context, txns []d
 // 'custom' without a custom_category_override_id. Comparing them one at a time would let a
 // half-change read as no change.
 //
-// DELIBERATELY EXCLUDES category_source and reviewed, and this is the load-bearing choice behind
-// "record only when a rule actually changes something". Both are set unconditionally whenever
-// result.TargetKind != nil, so including either would make EVERY category match look like a change
-// and collapse the distinction the user asked for. They are bookkeeping about the fact that a rule
-// ran; the category assignment is what the rule DID.
+// DELIBERATELY EXCLUDES category_source, which is bookkeeping about the fact that a rule ran rather
+// than a record of what the rule DID: it is set unconditionally whenever result.TargetKind != nil,
+// so folding it in would make every category match look like a category change.
+//
+// ⚠ `reviewed` USED TO BE EXCLUDED HERE TOO, and that was a defect — R73, review round 1 D2. It is
+// now handled OUTSIDE this function, in buildRuleExecutionRecords, as its own contribution test.
+// The reason it does not belong in this fingerprint is that it is not part of the category
+// assignment; the reason it must be tested somewhere is that flipping it is permanent and
+// user-visible. Read buildRuleExecutionRecords' `reviewedChanged` for the argument.
 //
 // Uses a rune Postgres forbids in an identifier as the separator so no combination of real values
 // can collide across field boundaries.
@@ -360,9 +365,16 @@ func categoryAssignment(tx *domain.Transaction) string {
 // Issue #1569 Task 5 (#1572), and this function is where three of that task's four hard questions
 // are answered:
 //
-//   - MATCHED vs CHANGED. A rule can match and do nothing: its target category is already the
-//     transaction's, or every tag it offers is already present. Those get no record, per the user's
-//     ruling, which is also why `result` is always 'applied' and never 'skipped_manual'.
+//   - MATCHED vs CHANGED. A rule can match and do nothing: every tag it offers is already present.
+//     Those get no record, per the user's ruling, which is also why `result` is always 'applied'
+//     and never 'skipped_manual'.
+//     ⚠ R73 NARROWED THIS, and the narrowing is worth stating rather than discovering. A category
+//     rule ALSO flips `reviewed` false→true, and that flip is permanent: the next batch hits the
+//     `tx.Reviewed → continue` guard and skips the row forever. So for category rules "matched" and
+//     "changed" now coincide on every transaction the loop does not skip, and the
+//     matched-but-changed-nothing case survives only for tag-only rules. That is deliberate — the
+//     alternative silently loses a durable, user-visible state change (a `target_kind='clear'` rule
+//     on a fresh Plaid transaction changes NOTHING ELSE) to keep a distinction tidy.
 //   - MULTI-RULE. result.MatchedRuleIDs can hold several rules while result.CategoryRuleID names
 //     one. The answer is one record per CONTRIBUTING rule, attributed to that rule — the category
 //     goes to result.CategoryRuleID, and each landed tag goes to the rule that supplied it (which
@@ -378,11 +390,23 @@ func categoryAssignment(tx *domain.Transaction) string {
 // drops rule-sourced tags that are not re-offered, and the removal belongs to no single rule. Such
 // a transaction produces no tag record. Recording removals needs an action_type the live
 // `valid_action_type` CHECK does not have.
+//
+// ⚠ THE `tagsBefore` CLAUSE IS DEFENSIVE-ONLY ON TODAY'S ONLY CALLER — do not read it as exercised.
+// The sole production path is transaction_sync_service.processAddedTransactions, and nothing on it
+// populates Tags, TagsSource, CategoryOverrideKind, CategorySourceField or Reviewed before
+// ApplyRulesToBatch runs: the rows come straight from the Plaid mapper (services/plaid_mapper.go),
+// which sets none of them. So in production `tagsBefore` is always EMPTY and `categoryBefore` is
+// always the all-nil tuple. Deleting `|| tagsBefore[ts.Tag]` used to leave the entire suite green
+// (review round 1, D1); it is now pinned by
+// TestApplyRulesToBatch_ARuleWhoseOwnTagIsAlreadyPresentContributesNothing, which constructs the
+// unreachable shape on purpose and says so. Any unit fixture that hand-builds a transaction with
+// pre-existing annotations is describing a state this caller cannot produce.
 func buildRuleExecutionRecords(
 	tx *domain.Transaction,
 	result *rules.RuleResult,
 	rulesByID map[string]*domain.CategorizationRule,
 	categoryBefore string,
+	reviewedBefore bool,
 	tagsBefore map[string]bool,
 ) []RuleExecutionRecord {
 	type contribution struct {
@@ -391,7 +415,11 @@ func buildRuleExecutionRecords(
 	}
 	changed := make(map[string]*contribution)
 
-	if result.CategoryRuleID != "" && categoryAssignment(tx) != categoryBefore {
+	categoryChanged := categoryAssignment(tx) != categoryBefore
+	// R73 (review round 1, D2): a reviewed false→true transition IS a change, and on the only
+	// production caller it is the ONLY change a `target_kind='clear'` rule makes.
+	reviewedChanged := !reviewedBefore && tx.Reviewed
+	if result.CategoryRuleID != "" && (categoryChanged || reviewedChanged) {
 		changed[result.CategoryRuleID] = &contribution{category: true}
 	}
 
@@ -468,6 +496,27 @@ func actionTypeFor(category, tags bool) string {
 //	                                           things they count
 //	created_at, updated_at                     properties of the definition, not of what it did
 //	user_id                                    already a first-class column on the row
+//
+// ⚠ `conditions` IS DELIBERATELY INCLUDED, THOUGH IT CARRIES USER-TYPED TEXT (merchant substrings,
+// amounts). Review round 1 asked whether it belongs with `description`, which is excluded above
+// partly as a PII surface. The decision is to keep it, on three grounds, recorded so it is a
+// decision rather than an oversight:
+//
+//  1. The exclusion of `description` rests FIRST on "no bearing on behaviour". `conditions` is the
+//     entire answer to "why did this fire" — the one question an orphaned row exists to answer.
+//     Dropping it leaves a snapshot that says what happened and cannot say why.
+//  2. It is NOT a new exposure. GET /api/v1/auto-categorization already returns every enabled rule
+//     to its owner with `conditions` populated (domain.CategorizationRule.Conditions is
+//     `json:"conditions"`), as does GET /api/v1/auto-categorization/{id}. The same user sees the
+//     same bytes today. GET /api/v1/rule-executions is tenancy-scoped to the row's own user_id, so
+//     no second party gains anything.
+//  3. What it DOES add is a copy that outlives the rule, which is the point — and which means a
+//     GDPR erasure must reach it. It does: rule_execution_history.user_id -> users(id) ON DELETE
+//     CASCADE (migration 000164), the row's own path, independent of the rule.
+//
+// ⚠ The obligation this creates is on any future UI: a rendered condition value is user-typed
+// financial text and needs `data-ph-mask` for session replay, exactly as a merchant name does.
+// There is no UI today; this is the note for whoever builds one.
 //
 // Marshalling cannot fail for these types in practice; if it somehow did, a nil snapshot is written
 // (SQL NULL) rather than failing the sync. Losing the explanation is bad; refusing to categorize

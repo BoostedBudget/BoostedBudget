@@ -13,9 +13,14 @@ import (
 // was permanently empty. This type is the Go side of both halves.
 //
 // ⚠ #1572's stated blocker — "`rules.Engine` is never constructed in production" — is FALSE. The
-// type is `rules.RuleEngine`, it is constructed in `NewRuleApplicationService`
-// (rule_application_service.go:67) and driven on the live Plaid sync path from
-// transaction_sync_service.go. The missing piece was the writer, not the engine.
+// type is `rules.RuleEngine`, it is constructed by `rules.NewRuleEngine()` inside
+// `NewRuleApplicationService` (services/rule_application_service.go) and driven on the live Plaid
+// sync path from `transactionSyncService.processAddedTransactions`. The missing piece was the
+// writer, not the engine.
+//
+// ⚠ CITED BY NAME, NOT BY LINE. The first version of this comment said ":67" and was already wrong
+// in the commit that wrote it — the call is 47 lines further down — because the line was read
+// before the same commit's own edits landed above it. Names do not drift.
 
 // Rule execution action types. Pinned by the live `valid_action_type` CHECK constraint:
 // action_type IN ('category','tags','both'). Any other value is rejected by Postgres.
