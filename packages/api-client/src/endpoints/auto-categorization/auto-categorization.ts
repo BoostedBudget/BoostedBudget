@@ -53,6 +53,8 @@ import type {
   CategorizationRule,
   CreateCategorizationRuleRequest,
   ErrorModel,
+  GetUserRuleExecutionsParams,
+  RuleExecutionsResponse,
   ToggleCategorizationRuleRequest,
   UpdateCategorizationRuleRequest
 } from '../../models';
@@ -553,3 +555,97 @@ export const useToggleRule = <TError = ErrorType<ErrorModel>,
       > => {
       return useMutation(getToggleRuleMutationOptions(options), queryClient);
     }
+    /**
+ * Retrieves every categorization-rule execution for the authenticated user, newest first. A row exists for each time a rule actually CHANGED a transaction's category or tags; a rule that matched but changed nothing is counted in the rule's match_count and is not recorded here. Executions whose rule has since been deleted are still returned, carrying rule_id = null plus rule_name and definition_snapshot captured at execution time.
+ * @summary Get automation rule execution history
+ */
+export const getUserRuleExecutions = (
+    params?: GetUserRuleExecutionsParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RuleExecutionsResponse>(
+      {url: `/api/v1/rule-executions`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetUserRuleExecutionsQueryKey = (params?: GetUserRuleExecutionsParams,) => {
+    return [
+    `/api/v1/rule-executions`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetUserRuleExecutionsQueryOptions = <TData = Awaited<ReturnType<typeof getUserRuleExecutions>>, TError = ErrorType<ErrorModel>>(params?: GetUserRuleExecutionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserRuleExecutions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetUserRuleExecutionsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getUserRuleExecutions>>> = ({ signal }) => getUserRuleExecutions(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getUserRuleExecutions>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetUserRuleExecutionsQueryResult = NonNullable<Awaited<ReturnType<typeof getUserRuleExecutions>>>
+export type GetUserRuleExecutionsQueryError = ErrorType<ErrorModel>
+
+
+export function useGetUserRuleExecutions<TData = Awaited<ReturnType<typeof getUserRuleExecutions>>, TError = ErrorType<ErrorModel>>(
+ params: undefined |  GetUserRuleExecutionsParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserRuleExecutions>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getUserRuleExecutions>>,
+          TError,
+          Awaited<ReturnType<typeof getUserRuleExecutions>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetUserRuleExecutions<TData = Awaited<ReturnType<typeof getUserRuleExecutions>>, TError = ErrorType<ErrorModel>>(
+ params?: GetUserRuleExecutionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserRuleExecutions>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getUserRuleExecutions>>,
+          TError,
+          Awaited<ReturnType<typeof getUserRuleExecutions>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetUserRuleExecutions<TData = Awaited<ReturnType<typeof getUserRuleExecutions>>, TError = ErrorType<ErrorModel>>(
+ params?: GetUserRuleExecutionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserRuleExecutions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get automation rule execution history
+ */
+
+export function useGetUserRuleExecutions<TData = Awaited<ReturnType<typeof getUserRuleExecutions>>, TError = ErrorType<ErrorModel>>(
+ params?: GetUserRuleExecutionsParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getUserRuleExecutions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetUserRuleExecutionsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
