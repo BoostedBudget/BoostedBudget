@@ -21,7 +21,7 @@ describe('TermsOfService', () => {
 
   it('renders "Last Updated" date', () => {
     renderWithRouter(<TermsOfService />)
-    expect(screen.getByText(/last updated: july 26, 2026/i)).toBeInTheDocument()
+    expect(screen.getByText(/last updated: august 25, 2026/i)).toBeInTheDocument()
   })
 
   it('renders all major sections', () => {
@@ -145,6 +145,43 @@ describe('TermsOfService', () => {
     renderWithRouter(<TermsOfService />)
     expect(screen.getAllByText(/6 months/i).length).toBeGreaterThan(0)
     expect(screen.queryByText(/preserved indefinitely/i)).not.toBeInTheDocument()
+  })
+
+  // Issue #1592 finding I2. § 7 was the second of three surfaces promising a post-retention
+  // deletion that does not happen in any environment: #1569 gated the retention sweep on both
+  // pre-deletion notices having been recorded (retentionNoticesDeliveredPredicate,
+  // profile_repository.go) and no EmailService implements jobs.RetentionEmailService
+  // (cmd/server/main.go), so the notices are never sent and expired accounts are retained
+  // indefinitely instead of deleted.
+  //
+  // Anchored to the § 7 heading and walked to the next <h2>, not queried against the whole
+  // ~600-line document — the words "delete" and "retention period" appear in a dozen other
+  // sections, so a document-wide matcher would prove nothing about this clause.
+  it('does not promise a post-retention deletion the retention sweep cannot perform (Section 7)', () => {
+    renderWithRouter(<TermsOfService />)
+    const h2 = Array.from(document.querySelectorAll('h2')).find((h) =>
+      /trial expiration and read-only access/i.test(h.textContent ?? '')
+    )
+    expect(h2).toBeDefined()
+    let text = ''
+    let node: Element | null = h2!.nextElementSibling
+    while (node && node.tagName !== 'H2') {
+      text += ' ' + (node.textContent ?? '')
+      node = node.nextElementSibling
+    }
+    text = text.replace(/\s+/g, ' ').trim()
+
+    // The superseded sentence, pinned in full.
+    expect(text).not.toMatch(
+      /After the retention period, we will delete or anonymize it unless a longer retention period is legally required/i
+    )
+    expect(text).toMatch(
+      /we do not automatically delete a cancelled account unless both .{0,40}notices have been sent/i
+    )
+    expect(text).toMatch(/not sending those notices yet/i)
+    // …and the user-requested path, which the sweep's own `deletion_requested_at IS NULL`
+    // predicate excludes, must stay available and unqualified.
+    expect(text).toMatch(/request deletion at any time/i)
   })
 
   it('renders 30-day data preservation for removed household members (Section 9.2)', () => {

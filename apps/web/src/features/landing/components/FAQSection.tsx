@@ -32,7 +32,7 @@ const faqs: FAQItem[] = [
   {
     question: 'What happens to my data if I cancel?',
     answer:
-      'When you cancel, your data is retained for 30 days in case you change your mind. After that, your data is permanently deleted from our servers in compliance with GDPR. You can request immediate deletion at any time.',
+      'Cancelling and deleting are two different things. When you cancel, your account switches to read-only: everything you have already recorded stays there, you can still view and export it, and we keep it that way for up to 6 months so you can pick up where you left off by resubscribing. We are not automatically deleting cancelled accounts today - see Section 8.4 of our Privacy Policy for exactly what an automatic deletion would destroy, and when we will start doing it. If you want your data gone, you can request deletion at any time: we hold it through a 30-day grace period in case you change your mind, then permanently delete it.',
   },
   {
     question: 'Is there a free trial?',
@@ -124,13 +124,22 @@ export function FAQSection() {
                   aria-hidden="true"
                 />
               </button>
+              {/*
+                A `grid-rows-[0fr] -> [1fr]` collapse rather than `max-h-0 -> max-h-96`: the
+                max-height version clips silently at 24rem, and the cancellation answer is long
+                enough to exceed that on a narrow viewport — with `overflow-hidden` the reader
+                simply loses the end of the sentence, with no scrollbar and no indication. The
+                grid row animates to the CONTENT's height, so it cannot truncate at any answer
+                length or viewport width. `min-h-0` on the inner element is what lets the grid
+                track shrink to zero.
+              */}
               <div
                 id={`faq-answer-${index}`}
-                className={`overflow-hidden transition-all duration-200 ${
-                  openIndex === index ? 'max-h-96 pb-6' : 'max-h-0'
+                className={`grid overflow-hidden transition-all duration-200 ${
+                  openIndex === index ? 'grid-rows-[1fr] pb-6' : 'grid-rows-[0fr]'
                 }`}
               >
-                <p className="px-6 leading-relaxed text-slate-600 dark:text-slate-400">
+                <p className="min-h-0 px-6 leading-relaxed text-slate-600 dark:text-slate-400">
                   {faq.answer}
                 </p>
               </div>

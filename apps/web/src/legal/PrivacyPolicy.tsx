@@ -18,7 +18,7 @@ export function PrivacyPolicy() {
         <h1 className="text-foreground text-4xl mb-2 border-b-[3px] border-primary pb-4 sm:text-[2rem] xs:text-[1.75rem]">
           Privacy Policy
         </h1>
-        <p className="text-muted-foreground italic mb-8 text-[0.95rem]">Last Updated: July 18, 2026</p>
+        <p className="text-muted-foreground italic mb-8 text-[0.95rem]">Last Updated: August 25, 2026</p>
 
         <section>
           <h2>1. Introduction</h2>
@@ -268,13 +268,26 @@ export function PrivacyPolicy() {
             During this period, you can reactivate your account. After 30 days:
           </p>
           <ul>
-            <li>All personal data is permanently deleted</li>
+            <li>
+              Everything in your BoostedBudget account is permanently deleted, except where the
+              law requires us to keep a record. Section 8.4 lists in full what this destroys
+            </li>
             <li>Financial institution connections are revoked</li>
             <li>Subscription is cancelled (no refunds for partial periods)</li>
-            <li>Automation rules and transaction history are erased</li>
+            <li>Your entries in our internal activity log are stripped, not erased — see below</li>
           </ul>
           <p>
-            Some data may be retained in anonymized form for analytics or as required by law (e.g., financial records).
+            Your entries in our internal activity log are <strong>stripped of their contents rather
+            than erased</strong>. We blank the details each entry recorded and unlink it from your
+            user account. What we keep is what the action was, what kind of record it touched, an
+            internal identifier for that record, the IP address and browser user agent the request
+            came from, the request identifier, and when it happened. We keep these as our security
+            and compliance record of what happened on the Service.
+          </p>
+          <p>
+            Some data may also be retained in anonymized form for analytics or as required by law
+            (e.g., financial records). Deleted data may persist in encrypted backups as described
+            in Section 8.3.
           </p>
 
           <h3>8.2a Removing a Linked Bank Account (Not Account Deletion)</h3>
@@ -298,11 +311,63 @@ export function PrivacyPolicy() {
           <p>
             If you cancel your subscription but do not request account deletion, we may retain your
             account data in read-only mode for up to <strong>6 months</strong> to allow reactivation.
-            We will notify you by email at 30 days and 7 days before your data is scheduled for
-            permanent deletion. After the retention period, we will automatically and permanently
-            delete your data — including your automation rules, transaction history, and balance
-            history — unless a longer retention period is legally required. You may request
-            deletion sooner at any time per Section 8.2.
+            You may request deletion sooner at any time per Section 8.2.
+          </p>
+          <p>
+            Before we automatically delete a cancelled account, we email you twice — 30 days
+            beforehand, and again 7 days beforehand. Both notices are a precondition, not a
+            courtesy: <strong>we do not automatically delete a cancelled account unless both of
+            those notices have been sent.</strong>
+          </p>
+          <p>
+            <strong>We are not sending those notices yet, so no cancelled account is being
+            automatically deleted today.</strong> Cancelled accounts are retained past the 6-month
+            window instead. We will begin automatic deletion only once the notices are in place, and
+            you will receive both of them before yours is deleted. None of this applies to a
+            deletion you request yourself under Section 8.2 — that is not conditioned on these
+            notices, and it proceeds on the 30-day grace period described there.
+          </p>
+          <p>
+            A deletion — whether it runs automatically at the end of this window, or because you
+            requested one under Section 8.2 — permanently destroys everything in your BoostedBudget
+            account, except where the law requires us to keep a record. In full, it deletes:
+          </p>
+          {/*
+            ⚠ THESE THIRTEEN ITEMS ARE `retentionDeletionItems`, VERBATIM
+            (backend/internal/queue/jobs/retention_cleanup_check.go). That list is the source of
+            truth: it is the enumeration the 30-day and 7-day pre-deletion emails are rendered
+            from, and it is the one covered by a guard that checks every table DeleteUserCascade
+            destroys is honestly named by some phrase
+            (TestRetentionNoticeEnumerationCoversEverythingDeleted). Nothing checks these list
+            items against it — the Go/TS boundary has no mechanical link — so the pairing is a
+            convention, held by this comment and by PrivacyPolicy.test.tsx's
+            RETENTION_DELETION_ITEMS, which quotes the same strings.
+
+            #1592 is the defect that convention exists to prevent: this clause named THREE
+            categories where the email named thirteen, describing the same deletion. If you
+            reword an item, reword it in the Go source and copy it back here in the same change.
+            Do not paraphrase — a paraphrase is how the two drifted apart the first time.
+          */}
+          <ul>
+            <li>your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed</li>
+            <li>your day-by-day balance history for every account</li>
+            <li>your transactions, together with every category, note, tag and merchant name you set on them, and the record of those edits</li>
+            <li>your investment holdings and their day-by-day snapshots, every buy and sell recorded against them, and your portfolio value history</li>
+            <li>your credit card, mortgage and student loan records, including their statements and APR schedules</li>
+            <li>your budgets, their categories, their period history and every rollover</li>
+            <li>your savings goals and every contribution you logged against them by hand</li>
+            <li>your boosts and the record of every boost that ran</li>
+            <li>your automation rules, the record of every rule that ran, and your transfer suggestions</li>
+            <li>your membership of a household, its invitations, its sharing consents, and the accounts shared into it (and the household itself, if you are its only member)</li>
+            <li>your subscription, billing and payment records, and your referrals</li>
+            <li>your profile and sign-in identities, notifications, dashboard layout, privacy settings and saved automation recipes</li>
+            <li>the internal job and activity records tied to your account — deleted, or stripped of their contents and disconnected from you where we are required to keep a record</li>
+          </ul>
+          <p>
+            This cannot be undone, and there is no way to restore it afterwards. The carve-outs
+            elsewhere in this section apply here too: the activity-log entries described in
+            Section 8.2, data retained in anonymized form, records we are required by law to keep,
+            and encrypted backups for up to 90 days (Section 8.3).
           </p>
 
           <h3>8.5 Removed Household Members</h3>
