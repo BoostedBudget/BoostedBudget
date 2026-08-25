@@ -69,6 +69,19 @@ func (m *mockSavingsContributionRepo) ListByGoal(ctx context.Context, userID, go
 	return args.Get(0).([]*domain.SavingsGoalContribution), args.Error(1)
 }
 
+func (m *mockSavingsContributionRepo) ListByDeletedGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error) {
+	args := m.Called(ctx, userID, goalID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.SavingsGoalContribution), args.Error(1)
+}
+
+func (m *mockSavingsContributionRepo) SumConfirmedByDeletedGoal(ctx context.Context, userID, goalID string) (float64, error) {
+	args := m.Called(ctx, userID, goalID)
+	return args.Get(0).(float64), args.Error(1)
+}
+
 func (m *mockSavingsContributionRepo) ConfirmContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error) {
 	args := m.Called(ctx, userID, id)
 	if args.Get(0) == nil {

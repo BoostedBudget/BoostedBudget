@@ -419,7 +419,7 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Method:        http.MethodDelete,
 		Path:          "/api/v1/savings-goals/{id}",
 		Summary:       "Delete savings goal",
-		Description:   "Removes a savings goal from the user's collection. Does NOT destroy any data — every contribution logged against the goal is retained. Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its contributions.",
+		Description:   "Removes a savings goal from the user's collection. Does NOT destroy any data — every contribution logged against the goal is retained and stays readable at GET /savings-goals/deleted/{goalID}/contributions (the live GET /savings-goals/{goalID}/contributions returns nothing once the goal is deleted). Use POST /savings-goals/{id}/purge to permanently erase a deleted goal and its contributions.",
 		Tags:          []string{"Savings Goals"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,

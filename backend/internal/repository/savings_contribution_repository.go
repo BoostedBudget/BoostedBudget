@@ -51,7 +51,38 @@ type SavingsContributionRepository interface {
 
 	// ListByGoal returns all contributions for a goal ordered by occurred_on DESC.
 	// userID is required to enforce ownership scoping (Codex C1 / M20 contribution API).
+	// Excludes TOMBSTONED goals: use ListByDeletedGoal to read a deleted goal's ledger.
 	ListByGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error)
+
+	// ListByDeletedGoal returns the contributions of a TOMBSTONED goal, ordered like ListByGoal.
+	// It is the deliberate inverse of ListByGoal and exists for the same reason
+	// SavingsGoalRepository.GetDeletedByUserID does: task 8 made DELETE /savings-goals/{id} a
+	// tombstone and told the user, in the endpoint's own description, that "every contribution
+	// logged against the goal is retained" — while ListByGoal's `g.deleted_at IS NULL` join made
+	// GET /savings-goals/{goalID}/contributions answer 200 with an empty array, indistinguishable
+	// from a goal that never had one. There is no restore path anywhere on this branch, so those
+	// itemised entries — dates, amounts, sources, and money the user typed in BY HAND, which no
+	// provider can supply again — could never be read back. Retention nobody can read is deletion
+	// with a longer receipt (#1569 Task 12's phrasing, and T2's defect).
+	//
+	// Scoped to the caller's own user_id: the TOMBSTONE predicate is inverted, the TENANCY
+	// predicate is not. Returns an empty slice for a live goal — this is a separate read, NOT a
+	// relaxed one, because widening ListByGoal/SumConfirmedByGoal would resurrect deleted goals
+	// into progress recomputation and budget "spent" totals.
+	//
+	// Both directions are pinned by TestSavingsContributions_DeletedGoal_Integration: it asserts
+	// that this read sees the tombstoned goal AND that ListByGoal, SumConfirmedByGoal and
+	// SumConfirmedByGoalInPeriod still do not. (The `tombstone-exempt:` reasons in the SQL below
+	// cite the same test, but those live in a raw string literal, which the cited-test-name guard
+	// in internal/testsupport/citations does not scan — only real Go comments like this one are
+	// checked, so this is the copy that cannot rot silently.)
+	ListByDeletedGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error)
+
+	// SumConfirmedByDeletedGoal is SumConfirmedByGoal for a TOMBSTONED goal: the confirmed total
+	// the user is owed a truthful figure for once the goal is gone. It feeds the deleted-goal
+	// contributions endpoint only; it is NOT wired into progress recomputation or budget sync, and
+	// must never be — see ListByDeletedGoal for why the live reads stay narrow.
+	SumConfirmedByDeletedGoal(ctx context.Context, userID, goalID string) (float64, error)
 
 	// ConfirmContribution promotes a proposed contribution to confirmed status.
 	// userID is required for ownership verification (Codex C1).
@@ -554,6 +585,67 @@ func (r *savingsContributionRepository) ListByGoal(ctx context.Context, userID, 
 		return []*domain.SavingsGoalContribution{}, nil
 	}
 	return contribs, nil
+}
+
+// ListByDeletedGoal returns a TOMBSTONED goal's contributions, newest-first.
+// See the interface doc for why this read exists and why it is separate from ListByGoal.
+func (r *savingsContributionRepository) ListByDeletedGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error) {
+	query := `SELECT ` + contributionSelectColsJoined + `
+		FROM savings_goal_contributions c
+		-- tombstone-exempt: THIS READ IS THE DELETED GOAL'S LEDGER ITSELF (#1569 T2). Inverting the
+		-- predicate is the entire purpose, exactly as in SavingsGoalRepository.GetDeletedByUserID:
+		-- the caller has deliberately named a goal it knows is deleted, from the deleted-goals
+		-- surface, and the endpoint's whole job is to prove the contributions were retained.
+		-- Widening ListByGoal instead would resurrect the goal into progress recomputation and
+		-- budget "spent" totals, so this is a SEPARATE read and the live ones are untouched.
+		-- Tenancy is unchanged (g.user_id = $2) and is asserted by
+		-- TestSavingsContributions_DeletedGoal_Integration, which deletes a SECOND user's goal
+		-- with its own contribution precisely so a read keyed on deleted_at alone would fail.
+		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NOT NULL
+		WHERE c.savings_goal_id = $1
+		  AND g.user_id = $2
+		ORDER BY c.occurred_on DESC, c.created_at DESC`
+
+	rows, err := r.db.Query(ctx, query, goalID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	contribs := []*domain.SavingsGoalContribution{}
+	for rows.Next() {
+		c, err := scanContribution(rows)
+		if err != nil {
+			return nil, err
+		}
+		contribs = append(contribs, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return contribs, nil
+}
+
+// SumConfirmedByDeletedGoal returns the confirmed contribution total of a TOMBSTONED goal.
+// See the interface doc: this feeds the deleted-goal ledger endpoint and nothing else.
+func (r *savingsContributionRepository) SumConfirmedByDeletedGoal(ctx context.Context, userID, goalID string) (float64, error) {
+	query := `
+		SELECT COALESCE(SUM(c.amount), 0)
+		FROM savings_goal_contributions c
+		-- tombstone-exempt: the companion sum for ListByDeletedGoal (#1569 T2) — same inverted
+		-- predicate, same reason, same unchanged tenancy scoping. Deliberately NOT called from
+		-- SavingsProgressService or BudgetSyncService: those must keep using SumConfirmedByGoal so
+		-- a deleted goal contributes nothing to progress or to a budget period's spend.
+		JOIN savings_goals g ON g.id = c.savings_goal_id AND g.deleted_at IS NOT NULL
+		WHERE c.savings_goal_id = $1
+		  AND g.user_id = $2
+		  AND c.status = 'confirmed'
+	`
+	var total float64
+	if err := r.db.QueryRow(ctx, query, goalID, userID).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // ConfirmContribution promotes a proposed contribution to confirmed status.

@@ -5,6 +5,8 @@ package operations
 // Provides four endpoints for managing savings goal contributions:
 //   - POST   /api/v1/savings-goals/{goalID}/contributions        — manually log a contribution
 //   - GET    /api/v1/savings-goals/{goalID}/contributions        — list all contributions for a goal
+//   - GET    /api/v1/savings-goals/deleted/{goalID}/contributions — the retained ledger of a
+//     goal the user has deleted (#1569 T2; the live listing above excludes tombstoned goals)
 //   - POST   /api/v1/savings-goals/{goalID}/contributions/{id}/confirm — confirm a proposed contribution
 //   - DELETE /api/v1/savings-goals/{goalID}/contributions/{id}   — remove a contribution
 
@@ -85,6 +87,27 @@ type ListContributionsInput struct {
 // ListContributionsOutput wraps the list of contributions.
 type ListContributionsOutput struct {
 	Body []*domain.SavingsGoalContribution
+}
+
+// ListDeletedGoalContributionsInput is the request for listing a TOMBSTONED goal's contributions.
+type ListDeletedGoalContributionsInput struct {
+	inputs.AuthenticatedInput
+	GoalID string `path:"goalID" doc:"ID of a savings goal the user has already deleted"`
+}
+
+// DeletedGoalContributionsBody is the payload of the deleted-goal ledger.
+//
+// It carries the total alongside the entries because the deleted-goal surface has nothing else to
+// derive it from: savings_goals.current_amount is frozen at whatever the last recompute wrote, and
+// no live read will ever touch a tombstoned goal again.
+type DeletedGoalContributionsBody struct {
+	Contributions  []*domain.SavingsGoalContribution `json:"contributions" doc:"Every contribution logged against the deleted goal, newest first"`
+	TotalConfirmed float64                           `json:"total_confirmed" doc:"Sum of the confirmed contributions; proposed and rejected rows are excluded"`
+}
+
+// ListDeletedGoalContributionsOutput wraps the deleted goal's retained ledger.
+type ListDeletedGoalContributionsOutput struct {
+	Body DeletedGoalContributionsBody
 }
 
 // ConfirmContributionInput is the request for confirming a proposed contribution.
@@ -226,6 +249,42 @@ func (h *ContributionHandler) ListContributions(ctx context.Context, input *List
 	return &ListContributionsOutput{Body: contribs}, nil
 }
 
+// ListDeletedGoalContributions handles
+// GET /api/v1/savings-goals/deleted/{goalID}/contributions (Issue #1569 T2).
+//
+// The DELETE endpoint promises that "every contribution logged against the goal is retained".
+// This is the read that makes that promise checkable: without it the rows survive in the table and
+// are visible to nobody, which is the "retention that reads as deletion" failure #1569 is named
+// for — and it lands on hand-logged amounts no provider can ever supply again.
+//
+// A DISTINCT ROUTE, not a flag on the live listing, on purpose:
+//   - deleted goals already have their own surface (GET /savings-goals/deleted, rendered by
+//     DeletedGoalsPanel, from which the purge verb is reached) and this belongs beside it;
+//   - the live path stays incapable of returning a tombstoned goal, so nothing can widen by
+//     accident later — a query flag would put that decision one boolean away in every caller;
+//   - the response shape differs (it carries the total), which a flag could not express cleanly.
+//
+// Tenancy is enforced in SQL by the repository, identically to the live listing.
+func (h *ContributionHandler) ListDeletedGoalContributions(ctx context.Context, input *ListDeletedGoalContributionsInput) (*ListDeletedGoalContributionsOutput, error) {
+	contribs, err := h.contribRepo.ListByDeletedGoal(ctx, input.UserID, input.GoalID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	total, err := h.contribRepo.SumConfirmedByDeletedGoal(ctx, input.UserID, input.GoalID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	if contribs == nil {
+		// A nil slice marshals as `null`, which the client cannot tell from a failed read — the
+		// same ambiguity this endpoint exists to remove.
+		contribs = []*domain.SavingsGoalContribution{}
+	}
+	return &ListDeletedGoalContributionsOutput{Body: DeletedGoalContributionsBody{
+		Contributions:  contribs,
+		TotalConfirmed: total,
+	}}, nil
+}
+
 // ConfirmContribution handles POST /api/v1/savings-goals/{goalID}/contributions/{id}/confirm.
 // Promotes a proposed contribution to confirmed status. Re-checks allocation capacity under lock.
 func (h *ContributionHandler) ConfirmContribution(ctx context.Context, input *ConfirmContributionInput) (*ConfirmContributionOutput, error) {
@@ -327,10 +386,29 @@ func RegisterContributionRoutes(api huma.API, handler *ContributionHandler) {
 		Method:      http.MethodGet,
 		Path:        "/api/v1/savings-goals/{goalID}/contributions",
 		Summary:     "List savings goal contributions",
-		Description: "Returns all confirmed and proposed contributions for a savings goal, newest first.",
+		Description: "Returns all confirmed and proposed contributions for a savings goal, newest first. " +
+			"Returns an empty list for a goal the user has DELETED — those contributions are retained " +
+			"but are read through GET /savings-goals/deleted/{goalID}/contributions instead (#1569).",
 		Tags:        []string{"Savings Goals", "Contributions"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.ListContributions)
+
+	// GET /api/v1/savings-goals/deleted/{goalID}/contributions — deleted goal's retained ledger
+	huma.Register(api, huma.Operation{
+		OperationID: "listDeletedSavingsGoalContributions",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/savings-goals/deleted/{goalID}/contributions",
+		Summary:     "List a deleted savings goal's retained contributions",
+		Description: "Returns the contributions retained under a goal the user has DELETED, newest first, " +
+			"with their confirmed total (Issue #1569). Deleting a goal tombstones it and keeps every " +
+			"contribution logged against it — including amounts the user entered by hand, which no " +
+			"provider can supply again — and this is the only endpoint that can read them back; the live " +
+			"GET /savings-goals/{goalID}/contributions deliberately returns nothing for a deleted goal. " +
+			"Returns an empty list for a goal that is not deleted. Pair it with " +
+			"GET /savings-goals/deleted, and with POST /savings-goals/{id}/purge to destroy them for good.",
+		Tags:     []string{"Savings Goals", "Contributions"},
+		Security: []map[string][]string{{"clerk": {}}},
+	}, handler.ListDeletedGoalContributions)
 
 	// POST /api/v1/savings-goals/{goalID}/contributions/{id}/confirm — confirm proposed
 	huma.Register(api, huma.Operation{
