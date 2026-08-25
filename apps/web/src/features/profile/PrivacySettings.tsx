@@ -7,6 +7,7 @@ import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import type { PrivacySettings as PrivacySettingsType, UpdatePrivacySettingsRequest } from './types'
 import { DeleteAccountSection } from '../deletion/components/DeleteAccountSection'
+import { DataExportSection } from './components/DataExportSection'
 import { ConfirmationDialog } from '../../components/ui/confirmation-dialog'
 import { Card } from '../../components/ui/card'
 
@@ -303,6 +304,11 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
           {submitting ? 'Saving...' : 'Save Privacy Settings'}
         </button>
       </div>
+
+      {/* Data Export Section - Issue #1587 (GDPR Article 20).
+          Placed immediately BEFORE deletion, deliberately: a user who has come here to erase their
+          account should be offered the copy of their history before the button that ends it. */}
+      <DataExportSection />
 
       {/* Account Deletion Section - Issue #18 */}
       <DeleteAccountSection />

@@ -95,6 +95,11 @@ export const ANALYTICS_EVENTS = {
 
   // Profile
   PRIVACY_SETTINGS_CHANGED: 'privacy_settings_changed',
+  // Issue #1587: the user exercising their GDPR Article 20 right to data portability. Fired on the
+  // DOWNLOAD, not on the click: an export the browser never handed the user is not a fulfilled
+  // request, and counting it as one would make the funnel say the opposite of the truth.
+  DATA_EXPORT_DOWNLOADED: 'data_export_downloaded',
+  DATA_EXPORT_FAILED: 'data_export_failed',
   PROFILE_UPDATED: 'profile_updated',
   THEME_CHANGED: 'theme_changed',
 
