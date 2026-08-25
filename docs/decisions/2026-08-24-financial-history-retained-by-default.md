@@ -110,25 +110,117 @@ sweep, unless the deletion is itself a published retention policy the user was t
 does **not** qualify and is permanently out of scope for #1569: a tombstone whose row is later
 collected is a delayed version of the defect this issue exists to fix.
 
+⚠ **THE SWEEP DOES NOT CURRENTLY RUN, AND THAT CHANGES THIS DECISION'S STANDING.** #1569 T1 added
+`retentionNoticesDeliveredPredicate` (`backend/internal/repository/profile_repository.go:2474-2477`):
+a retention hard-delete is neither a candidate nor a claim unless **both** promised pre-deletion
+notices have been recorded. `cmd/server/main.go` passes no `EmailService` to
+`RetentionCleanupCheckWorker` in any environment, so `canSendRetentionNotice` returns false, the
+markers are never stamped, and the gate holds every expired account indefinitely. **The one
+automatic destroyer this decision permits is, as of this branch, inert** — failing in the safe
+direction, per the #1569 ruling, but trading a silent destruction for a silent retention.
+`CountRetentionDeletionsWithheld`, published as `observability.RetentionDeletionsWithheld`, is the
+other half of that fix and is not optional. Read the rest of this section as describing what the
+sweep *would* destroy once an email service is wired, not what it destroys today.
+
 ⚠ **OPEN COMPLIANCE ITEM: the sweep's warning emails do not enumerate everything the sweep
 destroys, and this branch is part of why.** Both notices
 (`backend/internal/queue/jobs/retention_cleanup_check.go:742` and `:769`) name exactly *"your
 automation rules, transaction history, and balance history"*. The sweep runs `DeleteUserCascade` —
-a real `DELETE FROM users` cascading ~37 tables (that file's own count, `:129`). Tables it destroys
-that those three categories do not cover:
+a real `DELETE FROM users`.
+
+**Corrected count (2026-08-25, T8), derived from the live schema rather than from a guard's
+hand-maintained list.** Walking `pg_constraint` for `contype='f' AND confdeltype='c'` on the
+`freshcheck` database (`schema_migrations` = 170, the only local database matching the newest
+migration file):
+
+- **44** CASCADE foreign keys reference `users` directly, across **42** distinct tables;
+- the **transitive** closure of tables destroyed by `DELETE FROM users` is **48** tables;
+- plus **3** destroyed by explicit Go `DELETE`s in `DeleteUserCascade` that have no FK to `users`
+  at all — `dead_letter_jobs`, `idempotency_keys`, `mcp_audit_log` — and a **partial** delete of
+  `audit_logs` (deletion-residue rows only; the rest are redacted, not deleted).
+
+**51 tables in total.** The previously quoted *"~37"* was stale in both this document and
+`retention_cleanup_check.go`.
+
+The full closure, alphabetically, with the parent it cascades from:
+
+| Table | Cascades from |
+|---|---|
+| `account_status_history` | `accounts`, `users` |
+| `accounts` | `linked_items`, `users` |
+| `balance_snapshots` | `users` |
+| `boost_executions` | `users` |
+| `boosts` | `users` |
+| `budget_categories` | `budgets`, `custom_categories`, `savings_goals` |
+| `budget_period_events` | `budgets` |
+| `budgets` | `users` |
+| `categorization_rules` | `users` |
+| `credit_liabilities` | `accounts`, `users` |
+| `credit_liability_aprs` | `credit_liabilities` |
+| `custom_categories` | `users` |
+| `holding_snapshots` | `accounts`, `users` |
+| `holdings` | `accounts`, `users` |
+| `household_account_shares` | `households`, `user_accounts` |
+| `household_invites` | `households`, `users` |
+| `household_members` | `households`, `users` |
+| `household_share_consents` | `households`, `users` |
+| `households` | `users` |
+| `investment_transactions` | `accounts`, `users` |
+| `liability_statements` | `accounts`, `users` |
+| `linked_items` | `users` |
+| `mcp_recipes` | `users` |
+| `merchant_name_overrides` | `users` |
+| `mortgage_liabilities` | `accounts`, `users` |
+| `notifications` | `users` |
+| `paddle_transactions` | `users` |
+| `portfolio_snapshot_repairs` | `users` |
+| `portfolio_snapshots` | `users` |
+| `privacy_settings` | `users` |
+| `referral_codes` | `users` |
+| `referrals` | `users` |
+| `rollover_history` | `users` |
+| `rule_execution_history` | `users` |
+| `savings_goal_category_detach` | `savings_goals` |
+| `savings_goal_contributions` | `savings_goals` |
+| `savings_goals` | `users` |
+| `student_loan_liabilities` | `accounts`, `users` |
+| `subscription_entitlements` | `households`, `users` |
+| `transaction_annotation_history` | `users` |
+| `transactions` | `users` |
+| `transfer_suggestions` | `users` |
+| `user_accounts` | `users` |
+| `user_dashboard_preferences` | `users` |
+| `user_email_prefix_indices` | `users` |
+| `user_identities` | `users` |
+| `user_subscription_overrides` | `users` |
+| `user_tags` | `users` |
+
+Of those, the emails' three categories — automation rules, transaction history, balance history —
+cover at most `categorization_rules`, `transactions`, `transaction_annotation_history`,
+`balance_snapshots` and `account_status_history`. **The other ~43 are unenumerated**, most
+conspicuously `investment_transactions` (the entire buy/sell record), `savings_goals` and the
+hand-logged `savings_goal_contributions`, `budgets`, `boosts`, `custom_categories`,
+`merchant_name_overrides`, `holdings`/`holding_snapshots`, the three liability tables, and the whole
+household and billing set.
+
+Which of those are **newly** destroyed by this branch, as opposed to long-standing:
 
 | Table | Status |
 |---|---|
 | `holding_snapshots` | **new this branch** (migration `000160`) — before it, no per-day holdings record existed to lose |
 | `liability_statements`, `credit_liability_aprs` | **new this branch** (`000161`) — same |
+| `transaction_annotation_history` | **new this branch** (`000169`/`000170`) — same |
 | `savings_goal_contributions` | **newly reachable this branch**: now outlives a deleted goal (Decision 4), so the sweep is the first thing that destroys hand-logged money |
-| `boost_executions`, `rollover_history`, `budget_categories` | **newly reachable this branch** — same, they now outlive their tombstoned parent |
+| `boost_executions`, `rollover_history`, `budget_categories`, `savings_goal_category_detach` | **newly reachable this branch** — they now outlive their tombstoned parent |
 | `account_status_history`, and `balance_snapshots` under a disconnected account | **newly reachable this branch**: retained past a disconnect (Decision 1) rather than cascaded away at disconnect time |
-| `portfolio_snapshots`, `portfolio_snapshot_repairs`, `rule_execution_history`, `holdings`, the three liability tables | pre-existing gap, unchanged by this branch |
+| everything else in the closure above | pre-existing, unchanged by this branch |
 
-*Method:* the two email bodies read at the cited lines; the table list is `historyBearingTables`
-(`history_cascade_guard_test.go:75-95`) cross-checked against `allowedHistoryCascades`' `parent:
-"users"` block, which is this repo's own enumeration of what `DELETE FROM users` reaches directly.
+*Method, and why it changed.* The previous version of this table was derived from
+`historyBearingTables` cross-checked against `allowedHistoryCascades`' `parent: "users"` block —
+that is, from a hand-maintained guard list, so it inherited every hole in that list and omitted 32
+of the 48 tables. It is now derived by a recursive walk of `pg_constraint` on the live schema.
+**Re-derive it from the schema whenever it is quoted**, not from this table: migrations land, and a
+hand-edited copy of a schema fact goes stale exactly the way the "~37" did.
 
 **This branch narrowed the gap in the code and widened it in the copy.** It is recorded here rather
 than fixed here: rewriting a user-facing deletion warning is a compliance-adjacent change that

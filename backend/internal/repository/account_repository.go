@@ -1120,7 +1120,7 @@ func (r *accountRepository) PurgeAccount(ctx context.Context, accountID, userID 
 // (#1569 residual E2, review finding F1). This read's result is returned over the wire verbatim:
 // accountService.UpdateAccount fetches through it and PlaidHandler.UpdateAccount assigns the
 // account straight into the PATCH /api/v1/accounts/{id} response body. domain.Account's fields are
-// `json:",omitempty"`, and apps/web/src/features/accounts/utils.ts's getAccountBalanceAsOfDate
+// `json:",omitempty"`, and apps/web/src/features/accounts/utils.ts's getAccountClosedDate
 // reads `removed_at ?? replaced_at ?? updated_at` — so omitting replaced_at did not merely hide a
 // column, it made the client fall through to updated_at and label a REPLACED account's frozen
 // balance with the timestamp of the edit that had just been made. Any read whose rows reach that

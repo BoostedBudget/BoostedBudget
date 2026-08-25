@@ -18,7 +18,11 @@ import (
 // erasure path by 000164. Through all of that it had NO Go code at all: both those migrations say
 // in their own comments that `grep -rn 'rule_execution_history' backend --include='*.go'` matches
 // only migrations and test fixtures. That is no longer true as of this file, and the claim in
-// 000157's and 000164's headers should be read as "was true when written".
+// 000157's and 000164's headers should be read as "was true when written". Both migration files now
+// carry a dated SUPERSEDED note saying so (#1569 T8): applied migrations are not edited for SCHEMA,
+// but a comment-only amendment costs nothing and is the only way a reader who opens the migration
+// finds the correction — leaving it solely here means it is discoverable only from the side that
+// already knows.
 //
 // The consequence of having no repository was not merely that nothing wrote the table. Nothing READ
 // it either — no service, no endpoint, no UI — so even a writer on its own would have shipped

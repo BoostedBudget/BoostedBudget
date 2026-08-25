@@ -340,7 +340,7 @@ func TestAccountRepository_UpdateStatus_Integration_FirstDisconnectStillWritesHi
 // TestAccountRepository_Reads_Integration_ReturnRemovedAt is the falsifiability test for the
 // write-only-column bug: accounts.removed_at was STAMPED by UpdateStatus/MarkRemovedByLinkedItemID
 // but never SELECTed by any read, so domain.Account.RemovedAt was always nil, `omitempty` dropped
-// it from the API response, and the frontend's getAccountBalanceAsOfDate precedence
+// it from the API response, and the frontend's getAccountClosedDate precedence
 // (removed_at ?? replaced_at ?? updated_at) always fell through to updated_at — a column the
 // update_accounts_updated_at trigger bumps on ANY later write. The "as of <date>" label on a
 // frozen balance would then drift forward and claim a staler figure was fresher than it is.
