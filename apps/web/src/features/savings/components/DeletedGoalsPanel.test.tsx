@@ -36,6 +36,10 @@ const deletedGoal = {
   created_at: '2025-01-01T00:00:00Z',
   updated_at: '2025-06-01T00:00:00Z',
   deleted_at: '2025-06-01T00:00:00Z',
+  // Required on the wire (savingsGoal.ts: `progress_basis: string`). 'balance' is the case that
+  // makes the header's "saved" figure a frozen account balance rather than a sum of
+  // contributions — i.e. the case where it legitimately disagrees with the ledger total.
+  progress_basis: 'balance',
 }
 
 function withDeleted(goals: unknown[]) {
@@ -536,5 +540,43 @@ describe('DeletedGoalsPanel — retained contributions', () => {
         expect(attr.value).not.toContain('Japan Trip')
       }
     }
+  })
+
+  // Issue #1569 whole-branch review, minor 2. The component's own docblock claimed the ledger
+  // total is "deliberately NOT compared against current_amount" as the mitigation for two
+  // differently-derived numbers — but the row header renders `current_amount` in the SAME
+  // visual block, so the moment the ledger is expanded they sit side by side and read as a
+  // contradiction. Not comparing them was never the mitigation; saying what each one is, is.
+  describe('reconciling the header figure with the ledger total', () => {
+    it('says what the header figure is, so the two numbers do not read as a contradiction', () => {
+      openLedger()
+      expect(screen.getByText(/last recorded progress/i)).toBeTruthy()
+    })
+
+    it('names the basis the header figure was tracked from', () => {
+      openLedger()
+      expect(screen.getByText(/tracked from Account Balance/i)).toBeTruthy()
+    })
+
+    it('names a different basis when the goal used one', () => {
+      // Pins that the label comes from the goal's `progress_basis` rather than being hardcoded.
+      withDeleted([{ ...deletedGoal, progress_basis: 'contributions' }])
+      openLedger()
+      expect(screen.getByText(/tracked from Confirmed Contributions/i)).toBeTruthy()
+      expect(screen.queryByText(/tracked from Account Balance/i)).toBeNull()
+    })
+
+    it('still reconciles the two figures when the goal records no basis', () => {
+      withDeleted([{ ...deletedGoal, progress_basis: undefined }])
+      openLedger()
+      expect(screen.getByText(/last recorded progress/i)).toBeTruthy()
+      expect(screen.queryByText(/tracked from/i)).toBeNull()
+    })
+
+    it('does not show the reconciliation when there is no total to reconcile against', () => {
+      withLedger({ contributions: [], total_confirmed: 0 })
+      openLedger()
+      expect(screen.queryByText(/last recorded progress/i)).toBeNull()
+    })
   })
 })

@@ -19,9 +19,16 @@
  * and rejected rows are in the list (they are part of what was retained) but are excluded from
  * the total. The endpoint already computes the same figure the progress recompute would have.
  *
- * It is deliberately NOT compared against the goal's `current_amount`, which is frozen at the
- * last recompute before deletion and may be a balance-basis figure rather than a sum of
- * contributions. Two differently-derived numbers under one heading would read as a contradiction.
+ * ⚠ IT SITS NEXT TO THE GOAL'S `current_amount`, AND THAT IS UNAVOIDABLE. This block used to
+ * claim the total was "deliberately not compared against" the goal's frozen `current_amount` —
+ * but DeletedGoalsPanel renders that figure in the row header, in the same visual block, so
+ * expanding the ledger puts the two side by side whatever this component does. Declining to
+ * compare them was never a mitigation; it just left the user to notice the mismatch unaided.
+ *
+ * They can legitimately differ: `current_amount` is frozen at the last recompute before deletion
+ * and, on a `balance` or `account_percentage` goal, is an account figure rather than a sum of
+ * contributions at all. So the UI says which is which, and names the basis the header figure came
+ * from — the one field that explains the gap, and which was previously rendered nowhere.
  */
 
 import {
@@ -31,9 +38,17 @@ import type { SavingsGoalContribution } from '@boostedbudget/api-client/models'
 import { Badge } from '@/components/ui/badge'
 import { formatCurrencyFull } from '@/shared/charts/formatters'
 import { formatHistoryLabel } from '@/shared/dates/utils'
+import { PROGRESS_BASIS_LABELS } from '../types'
+import type { ProgressBasis } from '../types'
 
 interface DeletedGoalContributionsProps {
   goalId: string
+  /**
+   * How the goal's own "saved" figure — rendered in the row header just above — was derived.
+   * Optional because a legacy row may carry none; the reconciliation still renders, just without
+   * naming a basis it cannot vouch for.
+   */
+  progressBasis?: string
   /** Set on the wrapper so the row's disclosure button can point `aria-controls` at it. */
   regionId: string
   /** Ties the region back to the (already-masked) goal-name element for assistive tech. */
@@ -55,8 +70,14 @@ function contributionLabel(contribution: SavingsGoalContribution): string {
   return 'Detected transfer'
 }
 
+function basisLabel(basis: string | undefined): string | null {
+  if (!basis) return null
+  return PROGRESS_BASIS_LABELS[basis as ProgressBasis] ?? null
+}
+
 export function DeletedGoalContributions({
   goalId,
+  progressBasis,
   regionId,
   labelledBy,
 }: DeletedGoalContributionsProps) {
@@ -87,6 +108,7 @@ export function DeletedGoalContributions({
     )
   }
 
+  const basis = basisLabel(progressBasis)
   const contributions = data?.contributions ?? []
 
   if (contributions.length === 0) {
@@ -135,6 +157,17 @@ export function DeletedGoalContributions({
         <span className="font-semibold tabular-nums text-foreground" data-ph-mask>
           {formatCurrencyFull(data?.total_confirmed ?? 0)}
         </span>
+      </p>
+      {/*
+        The row header above shows the goal's own "saved" amount. It is a different figure,
+        derived a different way, and it is on screen at the same time — so it is named rather
+        than left to look like an arithmetic error. No amounts here: this is a statement about
+        where the numbers come from, not a third number.
+      */}
+      <p className="mt-1 text-[11px] leading-snug text-muted-foreground m-0">
+        The amount saved shown above is this goal&apos;s last recorded progress
+        {basis ? `, tracked from ${basis}` : ''}, frozen when you deleted it. It need not match
+        this total.
       </p>
     </div>
   )
