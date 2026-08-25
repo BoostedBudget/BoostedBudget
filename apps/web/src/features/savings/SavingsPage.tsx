@@ -154,6 +154,16 @@ export function SavingsPage() {
             </ReadOnlyGuard>
           }
         />
+        {/*
+          #1569 whole-branch review, C2. This branch is exactly where the disclosure matters most:
+          the user who just deleted their LAST goal was told, in the confirm dialog, that every
+          contribution is kept and that they can erase the goal for good later from "Deleted
+          goals". Returning the empty state before <DeletedGoalsPanel> made both halves of that
+          promise false for them, and left POST /savings-goals/{id}/purge with no reachable
+          caller. The panel self-hides on an empty listing, so a genuine first-run page is
+          unchanged.
+        */}
+        <DeletedGoalsPanel onPurged={() => void refetch()} />
         <CreateSavingsGoalDialog
           isOpen={activeDialog === 'create'}
           onCancel={() => setActiveDialog('none')}
