@@ -44,12 +44,31 @@ package repository
 //     ⚠ AND THE SEMANTIC HALF REMAINS OPEN, measured. Re-deriving every anchor in
 //     cache_completeness_repo_test.go by construct — taking the cited file AS OF the commit that
 //     last touched the citing line, reading the text at the cited line, and locating that text in
-//     the current file — found 55 anchors whose line no longer holds that text. 27 were
-//     unambiguous (one distinctive candidate line) and have been re-pointed; 12 are NOT
-//     re-derivable at all, because their anchor is a bare `}` or a blank line, or the old text now
-//     appears in several places, or nowhere. An in-range guard cannot see any of this: every one of
-//     the 55 was in range. The durable fix is to cite the METHOD, which
-//     TestMethodCitationsPointInsideTheirMethod already checks and which does not drift.
+//     the current file — found 55 anchors whose line no longer holds that text. An in-range guard
+//     cannot see any of this: every one of the 55 was in range. The durable fix is to cite the
+//     METHOD, which TestMethodCitationsPointInsideTheirMethod already checks and which does not
+//     drift.
+//
+//     ⚠ EIGHT REMAIN, AND THEY ARE ENUMERATED HERE — the first pass said "12 not re-derivable"
+//     without listing them, which made the claim unauditable and, on review, wrong. What the
+//     construct method cannot decide, INTENT sometimes can: eleven more were fixed by reading what
+//     the prose says the anchor is FOR (`cmd/server/main.go:2191` said RegisterBudgetRoutes and pointed at
+//     RegisterMerchantRoutes; `profile_repository.go:1225/1287` wanted the MarkForDeletion and
+//     CancelDeletion func declarations, which are the most distinctive anchor text there is, and
+//     were stale at birth). Four re-points from the first pass were text-faithful but landed in the
+//     wrong construct and are corrected. These eight are what is left:
+//
+//       repo_test.go:197 → analytics_repository.go:532  (`AND ua.user_id = ANY($3)`, now nowhere)
+//       repo_test.go:240 → account_service.go:576       (anchor was a blank line)
+//       repo_test.go:240 → account_repository.go:244    (anchor was a blank line)
+//       repo_test.go:297 → cmd/server/main.go:2080                 (anchor was a blank line)
+//       repo_test.go:300 → cmd/server/main.go:2080                 (anchor was a blank line)
+//       repo_test.go:330 → savings_goal_service.go:478  (anchor was a bare `)`)
+//       repo_test.go:355 → user_account_service.go:262  (anchor was `return nil`)
+//       repo_test.go:358 → backfill.go:143              (old text now appears twice)
+//
+//     A blank line and a bare `)` carry no identity, so there is nothing to locate; guessing would
+//     produce a confident wrong number, which is worse than a stale one that reads as stale.
 //
 //     So an IN-RANGE check is enforced here too (TestExactCitationsAreInRange below) for exact
 //     `file.go:NNN` refs — cheap, zero false positives, and it catches precisely the class that

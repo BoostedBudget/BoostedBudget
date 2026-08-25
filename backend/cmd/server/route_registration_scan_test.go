@@ -546,9 +546,23 @@ func main() {
 		// Pin the real anchor and the three new fail-closed lists: the fixes must not start
 		// failing on correct code, and a guard that reports problems against today's main.go is
 		// as broken as one that reports none against a mutated one.
-		if got, want := scan.anchor, 2094; got != want {
-			t.Errorf("anchor = %d (label %q), want %d — main.go's last UseMiddleware call is the "+
-				"admin middleware on line %d", got, scan.anchorLabel, want, want)
+		// ⚠ THIS USED TO PIN THE LINE NUMBER, AND THE LINE NUMBER IS NOT THE PROPERTY.
+		// It has been re-numbered seven times during #1569 alone — 2041, 2048, 2059, 2065, 2072,
+		// 2089, 2094 — and on the seventh a THREE-LINE COMMENT edit in main.go turned it red, so a
+		// substantive clause was deleted from main.go to restore a line count. That is the pin
+		// damaging the code it watches. What the assertion is for is that the anchor is the ADMIN
+		// middleware, the last link in the chain, and scan.anchorLabel says exactly that; it was
+		// already computed and already printed in the old failure message.
+		if scan.anchorLabel != "admin" {
+			t.Errorf("anchor label = %q at line %d, want \"admin\" — main.go's last UseMiddleware "+
+				"call is the admin middleware, and an anchor computed anywhere else declares the "+
+				"chain complete early", scan.anchorLabel, scan.anchor)
+		}
+		// The label alone would be satisfied by an anchor of 0, so keep a floor — a range, not a
+		// point, so ordinary edits cannot move it.
+		if scan.anchor < 1000 {
+			t.Errorf("anchor = %d, which is too early in a 2000+ line main.go to be the admin "+
+				"middleware; the scan is finding the wrong call", scan.anchor)
 		}
 		if len(scan.unrecognisedMiddleware) != 0 || len(scan.middlewareOtherReceiver) != 0 ||
 			len(scan.middlewareOutsideMain) != 0 {
