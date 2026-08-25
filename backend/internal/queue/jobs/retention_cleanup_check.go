@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -729,6 +730,116 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 	return err
 }
 
+// retentionDeletionItem is one line of the enumeration both retention notices carry: a phrase the
+// user reads, and the set of live tables that phrase claims to cover.
+//
+// Issue #1581. The notices exist to be the "published retention policy" that
+// docs/decisions/2026-08-24-financial-history-retained-by-default.md Decision 3 requires before an
+// AUTOMATIC destroyer is permitted at all. That justification is only as good as the enumeration:
+// #1569 newly RETAINS a large amount of financial history past a disconnect, a goal deletion and a
+// budget deletion, which means this sweep is newly the thing that DESTROYS it. Naming three
+// categories while destroying fifty-odd tables invalidated the branch's own argument.
+//
+// The `tables` field is not decoration. TestRetentionNoticeEnumerationCoversEverythingDeleted
+// re-derives what DeleteUserCascade actually destroys — the transitive ON DELETE CASCADE closure
+// from `users` in the LIVE schema, plus the explicit `DELETE FROM`s in DeleteUserCascade's own
+// source — and fails when any destroyed table is not claimed by some phrase here. A new migration
+// that hangs a cascading table off `users` therefore cannot land without someone deciding, in
+// words, whether the deletion email already tells the user about it.
+type retentionDeletionItem struct {
+	phrase string
+	tables []string
+}
+
+// retentionDeletionItems is the enumeration. Order is the order the user reads it in: the money
+// first, the settings last.
+//
+// Wording is deliberately CATEGORY-level rather than table-level — the user has never heard of
+// `holding_snapshots`. What the guard requires is that every destroyed table is honestly covered by
+// some phrase, not that each one gets its own bullet; a phrase may therefore claim several tables,
+// but it may not claim a table a reader would not recognise in it.
+//
+// `audit_logs` is the one partial case: DeleteUserCascade deletes only this user's
+// deletion-residue rows from it and redacts the rest, so "the internal records" understates what
+// survives rather than overstating what goes — the safe direction for a deletion warning.
+var retentionDeletionItems = []retentionDeletionItem{
+	{
+		phrase: "your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed",
+		tables: []string{"linked_items", "accounts", "user_accounts", "account_status_history"},
+	},
+	{
+		phrase: "your day-by-day balance history for every account",
+		tables: []string{"balance_snapshots"},
+	},
+	{
+		phrase: "your transactions, together with every category, note, tag and merchant name you set on them, and the record of those edits",
+		tables: []string{"transactions", "transaction_annotation_history", "user_tags", "merchant_name_overrides", "custom_categories"},
+	},
+	{
+		phrase: "your investment holdings and their day-by-day snapshots, every buy and sell recorded against them, and your portfolio value history",
+		tables: []string{"holdings", "holding_snapshots", "investment_transactions", "portfolio_snapshots", "portfolio_snapshot_repairs"},
+	},
+	{
+		phrase: "your credit card, mortgage and student loan records, including their statements and APR schedules",
+		tables: []string{"credit_liabilities", "credit_liability_aprs", "liability_statements", "mortgage_liabilities", "student_loan_liabilities"},
+	},
+	{
+		phrase: "your budgets, their categories, their period history and every rollover",
+		tables: []string{"budgets", "budget_categories", "budget_period_events", "rollover_history"},
+	},
+	{
+		phrase: "your savings goals and every contribution you logged against them by hand",
+		tables: []string{"savings_goals", "savings_goal_contributions", "savings_goal_category_detach"},
+	},
+	{
+		phrase: "your boosts and the record of every boost that ran",
+		tables: []string{"boosts", "boost_executions"},
+	},
+	{
+		phrase: "your automation rules, the record of every rule that ran, and your transfer suggestions",
+		tables: []string{"categorization_rules", "rule_execution_history", "transfer_suggestions"},
+	},
+	{
+		phrase: "your household — its members, invitations, sharing consents, and the accounts shared into it",
+		tables: []string{"households", "household_members", "household_invites", "household_share_consents", "household_account_shares"},
+	},
+	{
+		phrase: "your subscription, billing and payment records, and your referrals",
+		tables: []string{"subscription_entitlements", "paddle_transactions", "user_subscription_overrides", "referrals", "referral_codes"},
+	},
+	{
+		phrase: "your profile and sign-in identities, notifications, dashboard layout, privacy settings and saved recipes",
+		tables: []string{"users", "user_identities", "user_email_prefix_indices", "notifications", "user_dashboard_preferences", "privacy_settings", "mcp_recipes"},
+	},
+	{
+		phrase: "the internal job and activity records tied to your account",
+		tables: []string{"audit_logs", "dead_letter_jobs", "idempotency_keys", "mcp_audit_log"},
+	},
+}
+
+// retentionNoticeEnumeration renders retentionDeletionItems into the notice bodies. Rendering it
+// rather than hand-writing it twice is what keeps the 30-day and 7-day notices from drifting apart,
+// and what keeps either of them from drifting from the table coverage the guard checks.
+func retentionNoticeEnumeration() string {
+	phrases := make([]string, 0, len(retentionDeletionItems))
+	for _, item := range retentionDeletionItems {
+		phrases = append(phrases, item.phrase)
+	}
+	return "\n- " + strings.Join(phrases, "\n- ") + "\n"
+}
+
+// retentionNotice30dBody / retentionNotice7dBody are the notice bodies, exposed as package-level
+// values so a test can read the exact text that is sent rather than a paraphrase of it.
+var retentionNotice30dBody = "Your account data is preserved in read-only mode. In 30 days, unless you resubscribe, " +
+	"we will permanently delete everything in your BoostedBudget account. This cannot be undone, and there is no " +
+	"way to restore it afterwards. In full, we will delete:\n" + retentionNoticeEnumeration() +
+	"\nIf you want to keep any of this, resubscribe at boostedbudget.com/pricing to restore full access."
+
+var retentionNotice7dBody = "This is your final warning. In 7 days, we will permanently delete everything in your " +
+	"BoostedBudget account. This cannot be undone, and there is no way to restore it afterwards. In full, we will " +
+	"delete:\n" + retentionNoticeEnumeration() +
+	"\nIf you want to keep any of this, resubscribe at boostedbudget.com/pricing within the next 7 days."
+
 // retentionNoticeSpec parameterizes processRetentionNotices over the 30-day/7-day notice
 // variants, which differ only in: the work_claims action, the log/email copy, the eligibility
 // re-check, and which *_sent_at column gets stamped after a successful send.
@@ -761,10 +872,9 @@ func (w *RetentionCleanupCheckWorker) send30dNotices(ctx context.Context, jobID 
 		action:     repository.ActionRetentionNotice30d,
 		noticeName: "30d",
 		subject:    "Your BoostedBudget data will be deleted in 30 days",
-		// Issue #1569: names what gets deleted (automation rules, transaction history, balance
-		// history) instead of the vague "your data" — matching the privacy policy's Section 8.4
-		// disclosure, sharpened in the same issue.
-		body:       "Your account data is preserved in read-only mode. In 30 days, unless you resubscribe, we will permanently delete your data — including your automation rules, transaction history, and balance history. Visit boostedbudget.com/pricing to restore full access.",
+		// Issue #1569/#1581: names what gets deleted, item by item, instead of the vague "your
+		// data" — see retentionDeletionItems for why the list is derived rather than written here.
+		body:       retentionNotice30dBody,
 		isEligible: w.profileRepo.IsRetentionNotice30dEligibleForOccurrence,
 		markSent:   w.profileRepo.SetRetentionNotice30dSent,
 	})
@@ -790,8 +900,8 @@ func (w *RetentionCleanupCheckWorker) send7dNotices(ctx context.Context, jobID i
 		action:     repository.ActionRetentionNotice7d,
 		noticeName: "7d",
 		subject:    "Final notice: BoostedBudget data deletion in 7 days",
-		// Issue #1569: same disclosure sharpening as the 30-day notice above.
-		body:       "This is your final warning. In 7 days, we will permanently delete your BoostedBudget account data — including your automation rules, transaction history, and balance history. Resubscribe at boostedbudget.com/pricing to keep your data.",
+		// Issue #1569/#1581: same disclosure sharpening as the 30-day notice above.
+		body:       retentionNotice7dBody,
 		isEligible: w.profileRepo.IsRetentionNotice7dEligibleForOccurrence,
 		markSent:   w.profileRepo.SetRetentionNotice7dSent,
 	})
