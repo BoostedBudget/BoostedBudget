@@ -10,9 +10,10 @@ import (
 // Issue #1569 Task 6 (#1579) — the READ half of the annotation trail.
 //
 // There is deliberately no Create here. The writer is not a Go call at all: it is a CTE inside each
-// of the three UPDATE statements in transaction_repository.go
-// (UpdateCategory, BulkUpdateCategory, SetReviewed), because the value being recorded is the value
-// that same statement destroys. Codex's finding on this task was that a SELECT-then-UPDATE writer
+// of the FOUR statements in transaction_repository.go that can overwrite an annotation —
+// UpdateCategory, BulkUpdateCategory, SetReviewed, and (since fix round 2 / D-4)
+// TombstoneByExternalID's settlement move — because the value being recorded is the value that same
+// statement destroys. Codex's finding on this task was that a SELECT-then-UPDATE writer
 // records a WRONG prior value under concurrency; putting the INSERT in the same statement, behind a
 // lock taken with the write's own predicate, removes the window rather than narrowing it.
 //

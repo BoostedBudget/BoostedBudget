@@ -27,10 +27,19 @@ func TestTombstoneByExternalID_UpdatesRatherThanDeletes(t *testing.T) {
 
 	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 
+	// #1569 fix round 2 (D-4): this statement now carries the annotation capture, so it runs
+	// lock-first — Begin, the FOR UPDATE over both the pending row and its posted twin, the
+	// statement, Commit. A mock cannot prove the lock WORKS (that is the concurrency suite's job);
+	// it can prove the sequence is still issued.
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(string(domain.SourcePlaid), pgxmock.AnyArg(), "user-123", domain.TxnDeletedByPlaidSync).
 		WillReturnRows(pgxmock.NewRows([]string{"deleted_reason"}).
 			AddRow(string(domain.TxnDeletedProviderRemovedPosted)))
+	mock.ExpectCommit()
 
 	reason, err := repo.TombstoneByExternalID(
 		context.Background(), domain.SourcePlaid, "plaid_tx_123", "user-123", domain.TxnDeletedByPlaidSync)
@@ -50,6 +59,14 @@ func TestTombstoneByExternalID_AlreadyTombstonedIsNotFound(t *testing.T) {
 
 	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
 
+	// #1569 fix round 2 (D-4): this statement now carries the annotation capture, so it runs
+	// lock-first — Begin, the FOR UPDATE over both the pending row and its posted twin, the
+	// statement, Commit. A mock cannot prove the lock WORKS (that is the concurrency suite's job);
+	// it can prove the sequence is still issued.
+	mock.ExpectBegin()
+	mock.ExpectExec("FOR UPDATE").
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery("UPDATE transactions").
 		WithArgs(string(domain.SourcePlaid), pgxmock.AnyArg(), "user-123", domain.TxnDeletedByPlaidSync).
 		WillReturnRows(pgxmock.NewRows([]string{"deleted_reason"}))

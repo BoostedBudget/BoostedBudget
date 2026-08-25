@@ -445,3 +445,249 @@ func TestAnnotationHistory_SingleUpdateNeverTouchesAnotherUsersTransaction_Integ
 	require.NotNil(t, kind)
 	assert.Equal(t, "ENTERTAINMENT", *kind)
 }
+
+// TestAnnotationHistory_SettlementMoveRecordsTheCategoryItReplaced_Integration is review fix round
+// 2, finding D-4.
+//
+// THE ALLOWLIST REASON THIS REPLACES WAS FALSE. Fix round 1 excused TombstoneByExternalID from the
+// capture guard on the grounds that its settlement move is "fill-only in every column it touches".
+// Re-derived from the SQL, the category leg is gated by
+//
+//	settlementCategoryMoveCond = (s.category_source = 'manual' AND twin.category_source IS DISTINCT FROM 'manual')
+//
+// which is MANUAL-WINS, not fill-only: `IS DISTINCT FROM 'manual'` admits a twin whose category
+// came from a RULE, and rules run in place before the posted twin is inserted, so that is the
+// common case. All seven category columns on the twin were replaced with nothing recorded.
+//
+// This test drives the whole real path — rules applied to the twin, the twin inserted by
+// CreateBatch, then the pending row tombstoned by TombstoneByExternalID — and asserts the trail
+// records what the twin's category HAD been.
+func TestAnnotationHistory_SettlementMoveRecordsTheCategoryItReplaced_Integration(t *testing.T) {
+	f := seedAnnotationHistoryFixture(t)
+	ctx := context.Background()
+
+	// The pending charge, carrying the user's own MANUAL category.
+	pendingExt := "plaid-pending-" + uuid.New().String()
+	pending := domain.Transaction{
+		ID:                    uuid.New().String(),
+		UserID:                f.userID,
+		AccountID:             f.accountID,
+		LinkedItemID:          f.linkedItemID,
+		Source:                domain.SourcePlaid,
+		ExternalTransactionID: strPtr(pendingExt),
+		Amount:                7.25,
+		Date:                  time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+		Name:                  "Blue Bottle Coffee",
+		MerchantName:          strPtr("Blue Bottle Coffee"),
+		Pending:               true,
+		PFCPrimary:            strPtr("GENERAL_MERCHANDISE"),
+		CategoryOverrideKind:  strPtr("pfc"),
+		PFCPrimaryOverride:    strPtr("FOOD_AND_DRINK"),
+		CategorySourceField:   domain.CategorySourceManual,
+		Reviewed:              true,
+		ReviewedAt:            &marchReview,
+	}
+
+	// The posted twin, arriving already categorised BY A RULE — the state #1578's own comment says
+	// is routine, and the state the move replaces.
+	twin := domain.Transaction{
+		ID:                    uuid.New().String(),
+		UserID:                f.userID,
+		AccountID:             f.accountID,
+		LinkedItemID:          f.linkedItemID,
+		Source:                domain.SourcePlaid,
+		ExternalTransactionID: strPtr("plaid-posted-" + uuid.New().String()),
+		PendingTransactionID:  strPtr(pendingExt),
+		Amount:                7.25,
+		Date:                  time.Date(2026, 1, 16, 0, 0, 0, 0, time.UTC),
+		Name:                  "Blue Bottle Coffee",
+		MerchantName:          strPtr("Blue Bottle Coffee"),
+		PFCPrimary:            strPtr("GENERAL_MERCHANDISE"),
+		CategoryOverrideKind:  strPtr("pfc"),
+		PFCPrimaryOverride:    strPtr("ENTERTAINMENT"),
+		EffectiveCategoryName: strPtr("ENTERTAINMENT"),
+		CategorySourceField:   domain.CategorySourceRule,
+		Reviewed:              true,
+	}
+
+	_, err := f.txRepo.CreateBatch(ctx, []domain.Transaction{pending, twin})
+	require.NoError(t, err)
+
+	before := len(mustHistory(t, f))
+
+	reason, err := f.txRepo.TombstoneByExternalID(ctx, domain.SourcePlaid, pendingExt, f.userID, "plaid_sync")
+	require.NoError(t, err)
+	require.Equal(t, domain.TxnDeletedProviderRemovedPending, reason)
+
+	// The move really happened: the twin now carries the user's manual category.
+	var kind, override, source *string
+	require.NoError(t, f.tx.QueryRow(ctx,
+		`SELECT category_override_kind, pfc_primary_override, category_source
+		 FROM transactions WHERE id = $1`, twin.ID).Scan(&kind, &override, &source))
+	require.NotNil(t, override)
+	require.Equal(t, "FOOD_AND_DRINK", *override, "the settlement move must have replaced the rule's category")
+	require.NotNil(t, source)
+	require.Equal(t, "manual", *source)
+
+	rows := mustHistory(t, f)
+	require.Len(t, rows, before+1,
+		"the settlement move replaced a rule-assigned category on the twin and must record it; "+
+			"without this row the twin silently contradicts the rule_execution_history entry for "+
+			"the rule that categorised it moments earlier in the same sync")
+
+	rec := rows[0]
+	assert.Equal(t, domain.TransactionAnnotationChangeSettlement, rec.ChangeSource,
+		"neither 'category' nor 'review': the user asked for neither, the provider settled a charge")
+	assert.Equal(t, twin.ID, rec.TransactionID, "the row belongs to the twin, whose value was replaced")
+
+	require.NotNil(t, rec.Prior.PFCPrimaryOverride)
+	assert.Equal(t, "ENTERTAINMENT", *rec.Prior.PFCPrimaryOverride, "what the rule had put there")
+	require.NotNil(t, rec.Prior.CategorySource)
+	assert.Equal(t, "rule", *rec.Prior.CategorySource)
+
+	require.NotNil(t, rec.New.PFCPrimaryOverride)
+	assert.Equal(t, "FOOD_AND_DRINK", *rec.New.PFCPrimaryOverride)
+	require.NotNil(t, rec.New.CategorySource)
+	assert.Equal(t, "manual", *rec.New.CategorySource)
+}
+
+// TestAnnotationHistory_SettlementMoveOntoABlankTwinIsRecordedAsAFill_Integration pins a decision I
+// initially got backwards, and the correction is worth stating rather than quietly fixing.
+//
+// I first asserted that a move onto a twin with no override of its own must record NOTHING, on the
+// theory that a fill overwrites no user work. That was wrong on two counts. Mechanically, the
+// tracked tuple really does change (NULL -> the user's category, and category_source 'plaid' ->
+// 'manual'), so the capture records it. And it SHOULD: the three user-facing statements already
+// record a first-ever categorisation the same way, so suppressing it only here would make
+// 'settlement' the one source with different semantics. The row is also the only thing that
+// explains why the twin ends up carrying a category_override_date OLDER than the row itself.
+//
+// What was actually wrong with the allowlist reason this replaces is that the move can REPLACE, not
+// that it can fill — see the test above.
+func TestAnnotationHistory_SettlementMoveOntoABlankTwinIsRecordedAsAFill_Integration(t *testing.T) {
+	f := seedAnnotationHistoryFixture(t)
+	ctx := context.Background()
+
+	pendingExt := "plaid-pending-" + uuid.New().String()
+	pending := domain.Transaction{
+		ID:                    uuid.New().String(),
+		UserID:                f.userID,
+		AccountID:             f.accountID,
+		LinkedItemID:          f.linkedItemID,
+		Source:                domain.SourcePlaid,
+		ExternalTransactionID: strPtr(pendingExt),
+		Amount:                7.25,
+		Date:                  time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+		Name:                  "Blue Bottle Coffee",
+		Pending:               true,
+		PFCPrimary:            strPtr("GENERAL_MERCHANDISE"),
+		CategoryOverrideKind:  strPtr("pfc"),
+		PFCPrimaryOverride:    strPtr("FOOD_AND_DRINK"),
+		CategorySourceField:   domain.CategorySourceManual,
+	}
+	twin := domain.Transaction{
+		ID:                    uuid.New().String(),
+		UserID:                f.userID,
+		AccountID:             f.accountID,
+		LinkedItemID:          f.linkedItemID,
+		Source:                domain.SourcePlaid,
+		ExternalTransactionID: strPtr("plaid-posted-" + uuid.New().String()),
+		PendingTransactionID:  strPtr(pendingExt),
+		Amount:                7.25,
+		Date:                  time.Date(2026, 1, 16, 0, 0, 0, 0, time.UTC),
+		Name:                  "Blue Bottle Coffee",
+		PFCPrimary:            strPtr("GENERAL_MERCHANDISE"),
+		CategorySourceField:   domain.CategorySourcePlaid,
+	}
+
+	_, err := f.txRepo.CreateBatch(ctx, []domain.Transaction{pending, twin})
+	require.NoError(t, err)
+	before := len(mustHistory(t, f))
+
+	_, err = f.txRepo.TombstoneByExternalID(ctx, domain.SourcePlaid, pendingExt, f.userID, "plaid_sync")
+	require.NoError(t, err)
+
+	rows := mustHistory(t, f)
+	require.Len(t, rows, before+1)
+	rec := rows[0]
+	assert.Equal(t, domain.TransactionAnnotationChangeSettlement, rec.ChangeSource)
+	assert.Nil(t, rec.Prior.CategoryOverrideKind, "the twin had no override of its own: this is a fill")
+	require.NotNil(t, rec.New.PFCPrimaryOverride)
+	assert.Equal(t, "FOOD_AND_DRINK", *rec.New.PFCPrimaryOverride)
+}
+
+// TestAnnotationHistory_SettlementMoveThatChangesNothingRecordsNothing_Integration is the
+// discrimination test: it proves the settlement capture is subject to the same no-op suppression as
+// every other source, rather than logging one row per sync.
+//
+// The setup makes the moved CTE FIRE but change nothing. A twin that already carries a MANUAL
+// category makes settlementCategoryMoveCond false, so all seven category columns take their ELSE
+// branch; the pending row is unreviewed and untagged, so the reviewed, reviewed_at and tags legs
+// take theirs too. The outer gate still admits the row (s.category_source = 'manual'), so the
+// statement genuinely touches the twin — and records nothing, because nothing was overwritten.
+func TestAnnotationHistory_SettlementMoveThatChangesNothingRecordsNothing_Integration(t *testing.T) {
+	f := seedAnnotationHistoryFixture(t)
+	ctx := context.Background()
+
+	pendingExt := "plaid-pending-" + uuid.New().String()
+	pending := domain.Transaction{
+		ID:                    uuid.New().String(),
+		UserID:                f.userID,
+		AccountID:             f.accountID,
+		LinkedItemID:          f.linkedItemID,
+		Source:                domain.SourcePlaid,
+		ExternalTransactionID: strPtr(pendingExt),
+		Amount:                7.25,
+		Date:                  time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+		Name:                  "Blue Bottle Coffee",
+		Pending:               true,
+		PFCPrimary:            strPtr("GENERAL_MERCHANDISE"),
+		CategoryOverrideKind:  strPtr("pfc"),
+		PFCPrimaryOverride:    strPtr("FOOD_AND_DRINK"),
+		CategorySourceField:   domain.CategorySourceManual,
+	}
+	// The twin's own manual category is NEWER user work about the same charge and wins (#1578).
+	twin := domain.Transaction{
+		ID:                    uuid.New().String(),
+		UserID:                f.userID,
+		AccountID:             f.accountID,
+		LinkedItemID:          f.linkedItemID,
+		Source:                domain.SourcePlaid,
+		ExternalTransactionID: strPtr("plaid-posted-" + uuid.New().String()),
+		PendingTransactionID:  strPtr(pendingExt),
+		Amount:                7.25,
+		Date:                  time.Date(2026, 1, 16, 0, 0, 0, 0, time.UTC),
+		Name:                  "Blue Bottle Coffee",
+		PFCPrimary:            strPtr("GENERAL_MERCHANDISE"),
+		CategoryOverrideKind:  strPtr("pfc"),
+		PFCPrimaryOverride:    strPtr("ENTERTAINMENT"),
+		EffectiveCategoryName: strPtr("ENTERTAINMENT"),
+		CategorySourceField:   domain.CategorySourceManual,
+	}
+
+	_, err := f.txRepo.CreateBatch(ctx, []domain.Transaction{pending, twin})
+	require.NoError(t, err)
+	before := len(mustHistory(t, f))
+
+	_, err = f.txRepo.TombstoneByExternalID(ctx, domain.SourcePlaid, pendingExt, f.userID, "plaid_sync")
+	require.NoError(t, err)
+
+	// The twin kept its own category, so the statement really did decline the move.
+	var override *string
+	require.NoError(t, f.tx.QueryRow(ctx,
+		`SELECT pfc_primary_override FROM transactions WHERE id = $1`, twin.ID).Scan(&override))
+	require.NotNil(t, override)
+	require.Equal(t, "ENTERTAINMENT", *override, "the twin's own manual category must win")
+
+	assert.Len(t, mustHistory(t, f), before,
+		"the move touched the twin and changed nothing tracked, so the settlement capture must be "+
+			"subject to the same no-op suppression as every other source")
+}
+
+// mustHistory is the newest-first trail for the fixture's user.
+func mustHistory(t *testing.T, f *annotationHistoryFixture) []*domain.TransactionAnnotationChange {
+	t.Helper()
+	rows, _, err := f.histRepo.GetByUserID(context.Background(), f.userID, 100, 0)
+	require.NoError(t, err)
+	return rows
+}

@@ -33,15 +33,29 @@ import (
 // Both directions fail: an unguarded write is the dangerous one; an exemption that no longer
 // matches anything is allowlist rot, which is how the next person justifies adding one.
 //
-// SCOPE AND ITS LIMITS, stated rather than implied:
+// SCOPE AND ITS LIMITS, stated rather than implied. Two of these were holes until fix round 2 and
+// are now covered; the rest are real and remain:
 //   - Production files only (no _test.go). A fixture writing rows by hand is a different hazard
 //     with its own lesson in this repo; this guard is about production write paths.
 //   - internal/ only. cmd/ builds no SQL.
-//   - It is a SYNTACTIC check over Go string literals. SQL assembled from values the parser cannot
-//     see — a column name from a variable, a query read from a file — is invisible to it, exactly as
-//     it is to the tombstone guards it borrows its machinery from.
+//   - COVERED SINCE FIX ROUND 2 (D-1): SQL held in a package-level const or var. The walk used to
+//     enter function bodies only, and file-scope SQL constants are this package's own idiom
+//     (ruleExecutionColumns, settlementCategoryMoveCond, transactionAnnotationHistoryColumns), so
+//     an author copying local style escaped it entirely.
+//   - COVERED SINCE FIX ROUND 2 (D-3): a statement carrying the capture but not the lock. The
+//     guard used to accept the capture alone, which let a new write path reopen the concurrency
+//     failures fix round 1 closed.
+//   - ⚠ STILL OUT OF SCOPE: SQL ASSEMBLED ACROSS SEVERAL STATEMENTS. Each candidate node is
+//     rendered and matched on its own, so `q := "UPDATE transactions t "` followed by
+//     `q += "SET reviewed = ..."` matches neither half and is reported by nothing. This is not
+//     hypothetical in this file — GetReviewSummary builds its WHERE incrementally in exactly that
+//     style — it is simply not a shape any annotation write uses today. Widening to it means
+//     tracking a variable's accumulated value, which is dataflow analysis rather than a syntactic
+//     scan, and would be a different tool.
+//   - ⚠ STILL OUT OF SCOPE: SQL the parser cannot see at all — a column name from a variable, a
+//     query read from a file, a table name built at runtime. Same limit the tombstone guards have.
 //
-// Mutation-proven by TestAnnotationCaptureGuard_CatchesAnUnguardedWrite, which runs the same pure
+// Mutation-proven by TestAnnotationCaptureGuard_CatchesEveryConstructedViolation, which runs the same pure
 // function over testdata/annotation_guard: one file carrying the violation, one carrying the
 // capture, so the meta-test can tell "flags the violation" from "flags everything".
 
@@ -72,16 +86,19 @@ var annotationTrackedColumns = func() []string {
 // ⚠ Nothing checks that a reason is TRUE — the same hole the history-cascade allowlist documents.
 // Re-derive before relying on one.
 var annotationCaptureExemptions = map[string]string{
-	"repository/transaction_repository.go:TombstoneByExternalID": "" +
-		"the #1578 settlement move, and it is FILL-ONLY in every column it touches, so it never " +
-		"overwrites a user annotation and has nothing to record. Re-derived from the three gate " +
-		"constants above it: the category tuple moves only under settlementCategoryMoveCond " +
-		"(`s.category_source = 'manual' AND twin.category_source IS DISTINCT FROM 'manual'`), so " +
-		"the twin never has a manual annotation being replaced; `reviewed = twin.reviewed OR " +
-		"settlementReviewMoveCond` is monotonic true-ward and reviewed_at keeps the twin's value " +
-		"whenever twin.reviewed; tags move only onto a twin with none. If any of those three gates " +
-		"is ever loosened into an overwrite, this entry stops being true and the statement needs " +
-		"the capture.",
+	// ⚠ TombstoneByExternalID USED TO BE EXEMPT HERE, on the reason "it is FILL-ONLY in every column
+	// it touches, so it never overwrites a user annotation and has nothing to record". Review
+	// re-derived that from the SQL and it was FALSE — the third false allowlist reason this issue
+	// produced. settlementCategoryMoveCond is
+	// `(s.category_source = 'manual' AND twin.category_source IS DISTINCT FROM 'manual')`, which is
+	// MANUAL-WINS: a twin already carrying a RULE-assigned override — the common case, since rules
+	// run in place before the twin is inserted — had all seven category columns replaced with
+	// nothing recorded. The entry is gone because the statement now carries the capture (change
+	// source 'settlement', migration 000170), not because the reason was reworded.
+	//
+	// The lesson is the reason, not the entry: I wrote that reason AFTER reading the three gate
+	// constants, and still got it wrong, because I read "fill-only" off the reviewed/tags/notes legs
+	// and generalised. Re-derive every leg separately.
 
 	"repository/profile_repository.go:DeleteUserCascade": "" +
 		"GDPR erasure integrity, not a user annotation write. It clears " +
@@ -96,18 +113,27 @@ var annotationCaptureExemptions = map[string]string{
 		"flagged in this task's report rather than silently absorbed here.",
 }
 
-// annotationWriteFinding is one `UPDATE transactions` statement that assigns a tracked column.
+// annotationWriteFinding is one `UPDATE transactions` site that assigns a tracked column: either a
+// statement inside a function, or a package-level const/var holding the SQL.
 type annotationWriteFinding struct {
-	key      string // "<path suffix>:<enclosing function>"
+	key      string // "<path relative to scan root>:<enclosing function or decl name>"
 	file     string
 	line     int
 	columns  []string
-	captured bool
+	captured bool // the SQL carries annotationCaptureInsert
+	locked   bool // the site goes through the lock-first helper
 }
 
 func (f annotationWriteFinding) String() string {
-	return fmt.Sprintf("%s:%d (%s) assigns %s", f.file, f.line, f.key, strings.Join(f.columns, ", "))
+	return fmt.Sprintf("%s:%d (%s) assigns %s [capture=%v lock=%v]",
+		f.file, f.line, f.key, strings.Join(f.columns, ", "), f.captured, f.locked)
 }
+
+// annotationLockHelper is the prefix shared by runCapturingUpdate and runCapturingStatement — the
+// two entry points that take the row lock before running a capturing statement. It is a prefix
+// rather than an allowlist of names because they are one concept, and a third wrapper in the same
+// family should satisfy the guard without an edit here.
+const annotationLockHelper = "runCapturing"
 
 var annotationUpdateTargetRe = regexp.MustCompile(`(?is)\bUPDATE\s+transactions\b`)
 
@@ -143,44 +169,84 @@ func findAnnotationWrites(t *testing.T, root string) []annotationWriteFinding {
 			return fmt.Errorf("parse %s: %w", path, parseErr)
 		}
 
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
+		rel := relAnnotationPath(root, path)
+
+		// render prints any node, so one helper serves statements, whole functions and GenDecls.
+		render := func(n ast.Node) string {
+			var sb strings.Builder
+			if printErr := printer.Fprint(&sb, fset, n); printErr != nil {
+				return ""
 			}
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				switch n.(type) {
-				case *ast.AssignStmt, *ast.ExprStmt, *ast.DeclStmt, *ast.ReturnStmt:
-				default:
-					return true
+			return sb.String()
+		}
+
+		// consider records a site if its text is an UPDATE of transactions assigning a tracked
+		// column. lockScope is the text searched for the lock-first helper: for a statement that is
+		// the WHOLE enclosing function, because the query is built in one statement and executed in
+		// another, so searching the statement alone would never find the call.
+		consider := func(name string, n ast.Node, lockScope string) {
+			text := render(n)
+			if text == "" || !annotationUpdateTargetRe.MatchString(text) {
+				return
+			}
+			var cols []string
+			for _, col := range annotationTrackedColumns {
+				if annotationSetAssignmentRe(col).MatchString(text) {
+					cols = append(cols, col)
 				}
-				var sb strings.Builder
-				if printErr := printer.Fprint(&sb, fset, n); printErr != nil {
-					return true
-				}
-				text := sb.String()
-				if !annotationUpdateTargetRe.MatchString(text) {
-					return true
-				}
-				var cols []string
-				for _, col := range annotationTrackedColumns {
-					if annotationSetAssignmentRe(col).MatchString(text) {
-						cols = append(cols, col)
-					}
-				}
-				if len(cols) == 0 {
-					return true
-				}
-				rel := relAnnotationPath(root, path)
-				out = append(out, annotationWriteFinding{
-					key:      rel + ":" + fn.Name.Name,
-					file:     rel,
-					line:     fset.Position(n.Pos()).Line,
-					columns:  cols,
-					captured: strings.Contains(text, "annotationCaptureInsert"),
-				})
-				return true
+			}
+			if len(cols) == 0 {
+				return
+			}
+			out = append(out, annotationWriteFinding{
+				key:      rel + ":" + name,
+				file:     rel,
+				line:     fset.Position(n.Pos()).Line,
+				columns:  cols,
+				captured: strings.Contains(text, "annotationCaptureInsert"),
+				locked:   strings.Contains(lockScope, annotationLockHelper),
 			})
+		}
+
+		for _, decl := range file.Decls {
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Body == nil {
+					continue
+				}
+				fnText := render(d)
+				ast.Inspect(d.Body, func(n ast.Node) bool {
+					switch n.(type) {
+					case *ast.AssignStmt, *ast.ExprStmt, *ast.DeclStmt, *ast.ReturnStmt:
+					default:
+						return true
+					}
+					consider(d.Name.Name, n, fnText)
+					return true
+				})
+
+			case *ast.GenDecl:
+				// #1569 fix round 2, D-1: a package-level const or var holding the SQL was
+				// INVISIBLE to this guard, because ast.Inspect only ever ran over function bodies.
+				// That is not an exotic shape — it is this package's own idiom (ruleExecutionColumns,
+				// transactionAnnotationHistoryColumns, settlementCategoryMoveCond are all file-scope
+				// SQL constants), so an author copying local style would have escaped the guard.
+				//
+				// A file-scope decl has no enclosing function, so its lock scope is itself: a const
+				// cannot call runCapturingUpdate at all, and a var that carries the capture without
+				// it is reported. That is the safe direction — whoever executes the query is out of
+				// sight, so the guard cannot confirm the lock and must not assume it.
+				if d.Tok != token.CONST && d.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range d.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok || len(vs.Names) == 0 {
+						continue
+					}
+					consider(vs.Names[0].Name, vs, render(vs))
+				}
+			}
 		}
 		return nil
 	})
@@ -214,59 +280,97 @@ func TestAnnotationCaptureIsUsedByEveryAnnotationWritingStatement(t *testing.T) 
 			"at its corpus rather than that the corpus is clean")
 
 	matchedExemptions := map[string]bool{}
-	var unguarded []string
+	var uncaptured, unlocked []string
 	for _, f := range findings {
-		if f.captured {
-			assert.NotContains(t, annotationCaptureExemptions, f.key,
-				"%s carries the capture AND an exemption; drop the exemption", f.key)
-			continue
-		}
 		if _, exempt := annotationCaptureExemptions[f.key]; exempt {
+			assert.False(t, f.captured && f.locked,
+				"%s is fully guarded AND carries an exemption; drop the exemption", f.key)
 			matchedExemptions[f.key] = true
 			continue
 		}
-		unguarded = append(unguarded, f.String())
+		switch {
+		case !f.captured:
+			uncaptured = append(uncaptured, f.String())
+		case !f.locked:
+			// #1569 fix round 2, D-3: the capture and the lock are ONE requirement. A statement
+			// carrying the capture CTE but issued straight through db.Exec reopens the fabricated-
+			// transition and dropped-record failures that fix round 1 closed, and the first version
+			// of this guard was satisfied by the capture alone.
+			unlocked = append(unlocked, f.String())
+		}
 	}
 
-	assert.Empty(t, unguarded,
-		"annotation-writing statement(s) with no capture (#1569 Task 6 / #1579). Each of these "+
+	assert.Empty(t, uncaptured,
+		"annotation-writing site(s) with no capture (#1569 Task 6 / #1579). Each of these "+
 			"overwrites a user's category or review state and records nothing, which is the defect "+
-			"#1579 exists to close. Either wrap the statement in the capture CTE (see "+
-			"runCapturingUpdate) or add an entry to annotationCaptureExemptions saying why it is "+
-			"not an overwrite:\n  %s", strings.Join(unguarded, "\n  "))
+			"#1579 exists to close. Either route the statement through runCapturingUpdate /"+
+			"runCapturingStatement with the capture CTE, or add an entry to "+
+			"annotationCaptureExemptions saying why it is not an overwrite:\n  %s",
+		strings.Join(uncaptured, "\n  "))
+
+	assert.Empty(t, unlocked,
+		"annotation-writing site(s) that carry the capture but do NOT go through the lock-first "+
+			"helper (%s...). An unlocked capture records a prior value from a snapshot older than "+
+			"the write it describes: it can fabricate a transition no write performed, and it can "+
+			"suppress the record entirely when the write happens to restore the stale value. Both "+
+			"are measured in services/transaction_annotation_history_concurrency_test.go:\n  %s",
+		annotationLockHelper, strings.Join(unlocked, "\n  "))
 
 	for key := range annotationCaptureExemptions {
 		assert.True(t, matchedExemptions[key],
-			"exemption %q matches no annotation-writing statement any more. An allowlist entry with "+
+			"exemption %q matches no annotation-writing site any more. An allowlist entry with "+
 				"no edge reads as though a decision were still in force when the code has moved on; "+
 				"delete it.", key)
 	}
 }
 
-// TestAnnotationCaptureGuard_CatchesAnUnguardedWrite constructs the violation and proves the guard
-// fails on it. Without this, the guard above would pass just as happily if its regexps had stopped
-// matching anything — the failure mode this project has hit three times.
-func TestAnnotationCaptureGuard_CatchesAnUnguardedWrite(t *testing.T) {
+// TestAnnotationCaptureGuard_CatchesEveryConstructedViolation constructs each way the guard can be
+// defeated and proves it fails on all of them. Without this, the guard above would pass just as
+// happily if its regexps had stopped matching anything — the failure mode this project has hit
+// three times — and two of the three cases below were live holes that shipped in fix round 1.
+//
+// The corpus lives under testdata/, which the go tool does not compile, so the violations can be
+// written as ordinary Go without breaking the build.
+func TestAnnotationCaptureGuard_CatchesEveryConstructedViolation(t *testing.T) {
 	findings := findAnnotationWrites(t, filepath.Join("testdata", "annotation_guard"))
-	require.Len(t, findings, 2, "the corpus holds exactly one guarded and one unguarded write")
 
-	byFunc := map[string]annotationWriteFinding{}
+	byName := map[string]annotationWriteFinding{}
 	for _, f := range findings {
-		byFunc[f.key[strings.LastIndex(f.key, ":")+1:]] = f
+		byName[f.key[strings.LastIndex(f.key, ":")+1:]] = f
 	}
 
-	unguarded, ok := byFunc["UnguardedReviewWrite"]
-	require.True(t, ok, "the constructed violation was not seen at all")
-	assert.False(t, unguarded.captured,
-		"the guard did not notice that an UPDATE transactions SET reviewed in another file carries "+
-			"no capture — this is the exact violation R80 exists to catch")
-	assert.ElementsMatch(t, []string{"reviewed", "reviewed_at"}, unguarded.columns)
+	t.Run("no capture at all", func(t *testing.T) {
+		f, ok := byName["UnguardedReviewWrite"]
+		require.True(t, ok, "the constructed violation was not seen at all")
+		assert.False(t, f.captured,
+			"an UPDATE transactions SET reviewed in another file, with no capture, must be reported")
+		assert.ElementsMatch(t, []string{"reviewed", "reviewed_at"}, f.columns)
+	})
 
-	guarded, ok := byFunc["GuardedReviewWrite"]
-	require.True(t, ok)
-	assert.True(t, guarded.captured,
-		"the guard flags a statement that DOES carry the capture, so a red result would prove "+
-			"nothing about the violation")
+	t.Run("D-3: capture without the lock", func(t *testing.T) {
+		f, ok := byName["CapturedButUnlockedWrite"]
+		require.True(t, ok, "the constructed violation was not seen at all")
+		assert.True(t, f.captured, "it does carry the capture CTE — that is what made it pass before")
+		assert.False(t, f.locked,
+			"a capture issued straight through Exec has no row lock, so its prior value can come "+
+				"from a snapshot older than the write it describes")
+	})
+
+	t.Run("D-1: SQL in a package-level const", func(t *testing.T) {
+		f, ok := byName["zzPackageLevelUnguardedQuery"]
+		require.True(t, ok,
+			"a file-scope const holding the SQL was invisible: the walk only entered function bodies")
+		assert.False(t, f.captured)
+		assert.ElementsMatch(t, []string{"reviewed", "reviewed_at"}, f.columns)
+	})
+
+	t.Run("the compliant control is not flagged", func(t *testing.T) {
+		f, ok := byName["GuardedReviewWrite"]
+		require.True(t, ok)
+		assert.True(t, f.captured)
+		assert.True(t, f.locked,
+			"a red result would prove nothing about the violations if the guard flagged everything")
+	})
 }
 
 // TestAnnotationSetAssignmentRe_DoesNotMatchReadsOfATrackedColumn pins the refinement that took two

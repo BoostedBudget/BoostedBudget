@@ -804,8 +804,14 @@ func (r *transactionRepository) TombstoneByExternalID(
 			        WHEN %[6]s         THEN s.reviewed_at
 			        ELSE twin.reviewed_at
 			    END
-			FROM tombstoned s
-			WHERE twin.pending_transaction_id_blind_idx = $2
+			-- tombstone-exempt: the prior alias is the PRE-IMAGE of the twin this statement is
+			-- already updating (prior.id = twin.id), not an independent read. twin's own
+			-- deleted_at IS NULL predicate is right below and governs which rows are touched;
+			-- repeating it on prior would filter the capture differently from the write it
+			-- captures (#1569 Task 6, review fix round 2 / D-4).
+			FROM tombstoned s, transactions prior
+			WHERE prior.id = twin.id
+			  AND twin.pending_transaction_id_blind_idx = $2
 			  AND twin.user_id = s.user_id
 			  AND twin.id <> s.id
 			  AND twin.deleted_at IS NULL
@@ -814,7 +820,8 @@ func (r *transactionRepository) TombstoneByExternalID(
 			       OR s.category_source = '%[5]s'
 			       OR %[6]s
 			       OR COALESCE(jsonb_array_length(s.tags), 0) > 0)
-		)
+			RETURNING ` + annotationCaptureReturning("twin") + `
+		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeSettlement, "moved") + `
 		SELECT deleted_reason FROM tombstoned
 	`,
 		domain.TxnDeletedProviderRemovedPending,
@@ -825,8 +832,30 @@ func (r *transactionRepository) TombstoneByExternalID(
 		settlementReviewMoveCond,
 	)
 
+	// Lock-first (#1569 Task 6, review fix round 2 / D-4). This statement now carries the annotation
+	// capture, and a capture without the lock records a prior value from a snapshot older than the
+	// write it describes -- see transaction_annotation_capture.go for the two measured failures.
+	//
+	// BOTH rows are locked in one ORDER BY id statement: the pending row this call tombstones and
+	// the posted twin it may write onto. Locking only the twin would leave the two rows acquired in
+	// plan order by this statement and in id order by a concurrent bulk capture, which is the
+	// inversion ORDER BY id exists to remove.
+	//
+	// The lock predicate is the union of the two the statement itself uses. `user_id = $3` is what
+	// lets the twin leg be expressed without the tombstoned CTE: the CTE filters user_id = $3, and
+	// the moved CTE requires twin.user_id = s.user_id, so twin.user_id = $3 is equivalent.
+	lockWhere := `(
+		    (source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3)
+		 OR (pending_transaction_id_blind_idx = $2 AND user_id = $3)
+		) AND deleted_at IS NULL`
+
+	blindIdx := r.enc.BlindIndex(externalID)
+
 	var reason string
-	err := r.db.QueryRow(ctx, query, string(source), r.enc.BlindIndex(externalID), userID, deletedBy).Scan(&reason)
+	err := runCapturingStatement(ctx, r.db,
+		lockWhere, []any{string(source), blindIdx, userID},
+		query, []any{string(source), blindIdx, userID, deletedBy},
+		func(row pgx.Row) error { return row.Scan(&reason) })
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrTransactionNotFound
 	}
@@ -1561,8 +1590,9 @@ func (r *transactionRepository) UpdateCategory(ctx context.Context, id string, u
 		FROM transactions prior
 		WHERE prior.id = t.id
 		  AND t.id = $8 AND t.user_id = $9
-		RETURNING ` + annotationCaptureReturning + `
-		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeCategory)
+		RETURNING ` + annotationCaptureReturning("t") + `
+		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeCategory, "updated") + `
+		SELECT COUNT(*) FROM updated`
 
 	// Lock-first (#1569 Task 6, review fix R79): the row is locked with the write's own predicate
 	// before the capturing UPDATE runs, so `prior` cannot be read from a snapshot older than the
@@ -1611,8 +1641,9 @@ func (r *transactionRepository) SetReviewed(ctx context.Context, userID string, 
 		FROM transactions prior
 		WHERE prior.id = t.id
 		  AND t.user_id = $3 AND t.id = ANY($4::uuid[])
-		RETURNING ` + annotationCaptureReturning + `
-		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeReview)
+		RETURNING ` + annotationCaptureReturning("t") + `
+		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeReview, "updated") + `
+		SELECT COUNT(*) FROM updated`
 
 	// Lock-first (#1569 Task 6, review fix R79) — see transaction_annotation_capture.go. This path
 	// is where review measured the worse of the two races: two concurrent SetReviewed calls could
@@ -1691,8 +1722,9 @@ func (r *transactionRepository) BulkUpdateCategory(ctx context.Context, userID s
 		WHERE prior.id = t.id
 		  AND t.user_id = $8
 		  AND t.id = ANY($9::uuid[])
-		RETURNING ` + annotationCaptureReturning + `
-		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeCategory)
+		RETURNING ` + annotationCaptureReturning("t") + `
+		)` + annotationCaptureInsert(domain.TransactionAnnotationChangeCategory, "updated") + `
+		SELECT COUNT(*) FROM updated`
 
 	// Lock-first (#1569 Task 6, review fix R79) — see transaction_annotation_capture.go. The lock
 	// SELECT carries ORDER BY id so two concurrent bulk writers over overlapping id sets take their
