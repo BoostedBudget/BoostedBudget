@@ -41,9 +41,41 @@ func NewRuleExecutionHistoryRepository(db DB) RuleExecutionHistoryRepository {
 }
 
 // ruleExecutionColumns is the single column list both reads use, so a new column cannot be added to
-// one scan and forgotten in the other.
-const ruleExecutionColumns = `id, rule_id, transaction_id, user_id, rule_name,
-	definition_snapshot, action_type, result, executed_at`
+// one scan and forgotten in the other. Alias-qualified for the LEFT JOIN in visibleRuleExecutions.
+const ruleExecutionColumns = `h.id, h.rule_id, h.transaction_id, h.user_id, h.rule_name,
+	h.definition_snapshot, h.action_type, h.result, h.executed_at`
+
+// visibleRuleExecutions is the FROM + WHERE both the count and the page share, so the total can
+// never disagree with the rows it counts.
+//
+// ⚠ THE LEFT JOIN IS NOT DECORATION — it fixes a duplicate every settling pending transaction
+// produced (R74, review round 1 D3). Rules run BEFORE CreateBatch, and a posted twin routinely
+// arrives already carrying category_source='rule' (transaction_repository.go's
+// settlementCategoryMoveCond explains why at length). The pending row and its posted twin have
+// DIFFERENT ids, so unique_rule_transaction UNIQUE (rule_id, transaction_id) does not collide:
+// rule R legitimately gets one row for the pending id and another for the posted id, for ONE
+// charge. Both came back from this read, and the pending one pointed at a transaction that every
+// other read in the app hides via `deleted_at IS NULL`. The trail said the automation fired twice.
+//
+// THE ROW IS RETAINED, NOT DELETED. This is a default-visibility decision, exactly like the
+// tombstone itself: the history of what a rule did to the pending row is still there, still
+// GDPR-erasable through user_id, and still returned by any future read that asks for it. What it
+// is not is a second line item in the user's automation history for a single charge.
+//
+// THE `h.transaction_id IS NULL` LEG IS EXPLICIT, NOT LOAD-BEARING, and saying which is the point.
+// fk_rule_execution_history_transaction_id is ON DELETE SET NULL (migration 000157), so a
+// hard-deleted transaction leaves its execution row with a NULL pointer. Such a row must stay
+// visible — NULL means "the transaction is gone", never "no transaction" — and it WOULD stay
+// visible without this leg, because an unmatched LEFT JOIN yields a NULL `t.deleted_at` and
+// `NULL IS NULL` is TRUE. The leg is kept because that is a coincidence of three-valued logic, and
+// the day someone "simplifies" this to an INNER JOIN the coincidence stops holding and every
+// orphaned execution silently disappears. Pinned by
+// TestRuleExecutionHistory_OrphanedTransactionPointerStaysVisible_Integration.
+const visibleRuleExecutions = `
+		FROM rule_execution_history h
+		LEFT JOIN transactions t ON t.id = h.transaction_id
+		WHERE h.user_id = $1
+		  AND (h.transaction_id IS NULL OR t.deleted_at IS NULL)`
 
 // Create writes one execution row.
 //
@@ -61,11 +93,13 @@ const ruleExecutionColumns = `id, rule_id, transaction_id, user_id, rule_name,
 // prevent. Given the table can only keep one row, keeping the FIRST, with the definition as it was
 // the first time the automation fired, is the answer that does not silently falsify a row.
 //
-// A conflict is in any case near-unreachable on the only writer that exists: EmitBatchSideEffects
-// is gated on CreateBatch's insertedIDs, which is derived from `xmax::text::bigint = 0` — genuinely
-// new rows only. A second execution against the same transaction id would need that id to be
-// INSERTed twice, which the transactions primary key forbids. The clause is a guard against a
-// future second writer, not a hot path.
+// ⚠ AN EARLIER VERSION OF THIS COMMENT CALLED A CONFLICT "near-unreachable", on the grounds that
+// EmitBatchSideEffects is gated on insertedIDs and a transaction id cannot be INSERTed twice. That
+// is factually true and it was the wrong thing to say, because it reads as reassurance while
+// describing the exact mechanism behind a real duplicate: ids do not repeat, so a settling pending
+// transaction and its posted twin are two DIFFERENT ids, the constraint never fires, and one charge
+// got two trail rows. The uniqueness of transaction ids is what CAUSED D3, not what prevented it.
+// Read visibleRuleExecutions before trusting this clause to deduplicate anything.
 //
 // executed_at is clock_timestamp(), NOT the column's NOW() default. now() is transaction-start
 // time, so a whole batch written inside one transaction would share a single timestamp and the
@@ -104,6 +138,14 @@ func (r *ruleExecutionHistoryRepository) Create(ctx context.Context, execution *
 	if errors.Is(err, pgx.ErrNoRows) {
 		// DO NOTHING fired: this rule already has a row for this transaction, and that earlier row
 		// — with its earlier snapshot — is deliberately left untouched. Not an error.
+		//
+		// ⚠ CLEAR THE ID (D7, review round 1). RETURNING yields nothing on a conflict, so without
+		// this the caller is handed a freshly minted UUID that names no row in the database and an
+		// ExecutedAt of the zero time, and cannot tell that from a successful write. An empty ID
+		// after a nil-error Create means exactly one thing: a row for this (rule, transaction)
+		// already existed and was kept. ExecutedAt stays zero for the same reason — this call did
+		// not write a row, so it has no execution time to report.
+		execution.ID = ""
 		return nil
 	}
 	if err != nil {
@@ -122,6 +164,9 @@ func (r *ruleExecutionHistoryRepository) Create(ctx context.Context, execution *
 // Such a row still carries rule_name and definition_snapshot, so a client can say what the
 // automation was.
 //
+// EXCLUDES EXECUTIONS AGAINST A TOMBSTONED TRANSACTION by default — see visibleRuleExecutions for
+// why, which is the settlement duplicate, not tidiness.
+//
 // The id tiebreak is not decoration: clock_timestamp() has microsecond resolution and two rows
 // written for the same transaction in the same batch can land in the same microsecond.
 func (r *ruleExecutionHistoryRepository) GetByUserID(
@@ -131,16 +176,14 @@ func (r *ruleExecutionHistoryRepository) GetByUserID(
 ) ([]*domain.RuleExecution, int, error) {
 	var total int
 	if err := r.db.QueryRow(ctx,
-		`SELECT COUNT(*) FROM rule_execution_history WHERE user_id = $1`, userID,
+		`SELECT COUNT(*)`+visibleRuleExecutions, userID,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("failed to count rule executions: %w", err)
 	}
 
 	rows, err := r.db.Query(ctx, `
-		SELECT `+ruleExecutionColumns+`
-		FROM rule_execution_history
-		WHERE user_id = $1
-		ORDER BY executed_at DESC, id DESC
+		SELECT `+ruleExecutionColumns+visibleRuleExecutions+`
+		ORDER BY h.executed_at DESC, h.id DESC
 		LIMIT $2 OFFSET $3
 	`, userID, limit, offset)
 	if err != nil {

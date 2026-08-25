@@ -20,10 +20,13 @@ import (
 // test fixture. These tests pin the writer.
 //
 // #1572's stated blocker — "`rules.Engine` is never constructed in production" — is FALSE. The type
-// is `rules.RuleEngine`; it is constructed at rule_application_service.go:67
-// (`rules.NewRuleEngine()`), reached in production from cmd/server/main.go:774 and driven on the
-// live sync path from transaction_sync_service.go:1027 (ApplyRulesToBatch) and :1058
-// (EmitBatchSideEffects). Verified by grep, not by reading the ticket.
+// is `rules.RuleEngine`; `rules.NewRuleEngine()` is called inside `NewRuleApplicationService`,
+// which cmd/server/main.go constructs, and it is driven on the live sync path by
+// `transactionSyncService.processAddedTransactions` (ApplyRulesToBatch, then CreateBatch, then
+// EmitBatchSideEffects). Verified by grep, not by reading the ticket.
+//
+// ⚠ CITED BY NAME, NOT BY LINE — all four line numbers this comment originally carried were stale
+// on the day they were written, three of them displaced by the same commit's own insertions.
 
 // mockRuleExecutionHistoryRepository records the rows the writer would persist.
 type mockRuleExecutionHistoryRepository struct {
@@ -156,11 +159,26 @@ func TestApplyRulesToBatch_SnapshotSurvivesALaterRename(t *testing.T) {
 	assert.Equal(t, "FOOD_AND_DRINK", snap["target_pfc_primary"])
 }
 
-// TestApplyRulesToBatch_RecordsNothingWhenTheRuleChangesNothing is the user's product ruling and
-// trap 5 from the brief: "record only when a rule actually changes something". A rule whose target
-// category is ALREADY the transaction's category matched, but did nothing — so it writes no row,
-// and `result` never needs a value other than 'applied'.
-func TestApplyRulesToBatch_RecordsNothingWhenTheRuleChangesNothing(t *testing.T) {
+// TestApplyRulesToBatch_ReviewedFlipIsAContribution is review round 1's D2 (ruling R73), and it
+// REVERSES what this test asserted under its previous name (…_RecordsNothingWhenTheRuleChangesNothing
+// — deliberately written elided, because TestEveryCitedTestNameResolves is right that a comment
+// naming a test that no longer exists is worse than no comment).
+//
+// The old assertion was that a rule whose target category ALREADY matched the transaction's
+// category wrote nothing. That was wrong, and wrong on a production-reachable path. The rule also
+// flips `reviewed` false→true and stamps `reviewed_at`: the row leaves the user's review queue and
+// becomes PERMANENTLY immune to future auto-recategorization, because the very next batch will hit
+// the `tx.Reviewed → continue` guard and skip it. That is a durable, user-visible state change, and
+// it was vanishing from the trail.
+//
+// ⚠ THE CONSEQUENCE, stated plainly because it narrows the product ruling: for CATEGORY rules,
+// "matched" and "changed" now coincide on every transaction the loop does not skip. `reviewed`
+// flips on every non-skipped category match, so every one of them records. The matched-but-changed-
+// nothing case survives only for TAG-only rules (see
+// TestApplyRulesToBatch_AMatchedRuleThatContributedNothingGetsNoRow and
+// TestApplyRulesToBatch_ARuleWhoseOwnTagIsAlreadyPresentContributesNothing). That is the correct
+// trade: the alternative loses a permanent state change to keep a distinction tidy.
+func TestApplyRulesToBatch_ReviewedFlipIsAContribution(t *testing.T) {
 	mockRepo := new(mockRuleApplicationRepository)
 	service := NewRuleApplicationService(mockRepo)
 	ctx := context.Background()
@@ -176,14 +194,96 @@ func TestApplyRulesToBatch_RecordsNothingWhenTheRuleChangesNothing(t *testing.T)
 		MerchantName:         &merchant,
 		CategoryOverrideKind: strPtr("pfc"),
 		PFCPrimaryOverride:   strPtr("FOOD_AND_DRINK"),
+		Reviewed:             false,
 	}}
 
 	apps, err := service.ApplyRulesToBatch(ctx, txns, userID)
 	require.NoError(t, err)
-	require.Len(t, apps, 1, "the rule still MATCHED, so match counts and analytics are unaffected")
+	require.Len(t, apps, 1)
 	assert.Equal(t, []string{"rule-cat"}, apps[0].MatchedRuleIDs)
+
+	require.True(t, txns[0].Reviewed, "the fixture is only meaningful if reviewed actually flipped")
+	require.NotNil(t, txns[0].ReviewedAt)
+
+	require.Len(t, apps[0].Executions, 1,
+		"the category tuple was unchanged, but `reviewed` went false→true — that is a change")
+	assert.Equal(t, "rule-cat", apps[0].Executions[0].RuleID,
+		"a reviewed flip is attributed to the rule that set the category, per R73")
+	assert.Equal(t, domain.RuleExecutionActionCategory, apps[0].Executions[0].ActionType,
+		"`reviewed` is set inside the category branch, so it is part of the category action — "+
+			"the live valid_action_type CHECK has no fourth value to give it")
+}
+
+// TestApplyRulesToBatch_AlreadyReviewedTransactionIsSkippedEntirely is the other half of R73's
+// reasoning, and the reason including `reviewed` does not flood the trail: a reviewed transaction
+// never reaches the rule engine at all, so it can produce neither a match nor a history row.
+func TestApplyRulesToBatch_AlreadyReviewedTransactionIsSkippedEntirely(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-1572"
+
+	mockRepo.On("GetEnabledByUserID", ctx, userID).
+		Return([]*domain.CategorizationRule{categoryRule(userID)}, nil)
+
+	merchant := "Blue Bottle Coffee"
+	txns := []domain.Transaction{{
+		ID:           "tx-reviewed",
+		UserID:       userID,
+		MerchantName: &merchant,
+		Reviewed:     true,
+	}}
+
+	apps, err := service.ApplyRulesToBatch(ctx, txns, userID)
+	require.NoError(t, err)
+	assert.Empty(t, apps, "an already-reviewed transaction is skipped before EvaluateRules")
+}
+
+// TestApplyRulesToBatch_ARuleWhoseOwnTagIsAlreadyPresentContributesNothing is review round 1's D1.
+//
+// It exists because the `tagsBefore[ts.Tag]` clause in buildRuleExecutionRecords was DEAD:
+// deleting it left the whole suite green. The two tests that looked like they covered it did not.
+// TestApplyRulesToBatch_AMatchedRuleThatContributedNothingGetsNoRow cannot: the engine's own tagSet
+// (rules/engine.go) dedupes the second rule's tag before buildRuleExecutionRecords is ever called,
+// so the clause is never consulted. The integration fixture could not either: it used
+// Source:"manual", which exits the loop one clause earlier at `ts.Source != "rule"`.
+//
+// The only shape that reaches the clause is a tag that is ALREADY on the transaction, ALREADY
+// attributed to a rule, and offered again by that same rule.
+//
+// ⚠ AND THAT SHAPE IS UNREACHABLE ON TODAY'S ONLY CALLER. See buildRuleExecutionRecords' doc
+// comment: nothing on the processAddedTransactions path populates Tags/TagsSource before rules run,
+// so tagsBefore is always empty in production. This test therefore pins DEFENSIVE behaviour, not
+// observed behaviour, and it says so rather than implying coverage it does not have. It is still
+// worth having: the clause is one re-sync or one settlement-annotation change away from being live,
+// and an untested branch that silently double-records is exactly what D3 turned out to be.
+func TestApplyRulesToBatch_ARuleWhoseOwnTagIsAlreadyPresentContributesNothing(t *testing.T) {
+	mockRepo := new(mockRuleApplicationRepository)
+	service := NewRuleApplicationService(mockRepo)
+	ctx := context.Background()
+	userID := "user-1572"
+
+	mockRepo.On("GetEnabledByUserID", ctx, userID).
+		Return([]*domain.CategorizationRule{tagRule(userID)}, nil)
+
+	merchant := "Blue Bottle Coffee"
+	sameRule := "rule-tag"
+	txns := []domain.Transaction{{
+		ID:           "tx-tag-already-there",
+		UserID:       userID,
+		MerchantName: &merchant,
+		// Already carrying the very tag this rule offers, already attributed to this same rule —
+		// the state a re-application would find.
+		Tags:       []string{"caffeine"},
+		TagsSource: []domain.TagSource{{Tag: "caffeine", Source: "rule", RuleID: &sameRule}},
+	}}
+
+	apps, err := service.ApplyRulesToBatch(ctx, txns, userID)
+	require.NoError(t, err)
+	require.Len(t, apps, 1, "the rule still matched, so the match count still moves")
+	assert.Equal(t, []string{"rule-tag"}, apps[0].MatchedRuleIDs)
 	assert.Empty(t, apps[0].Executions,
-		"the category was already FOOD_AND_DRINK — the rule changed nothing, so history records nothing")
+		"the tag was already present and already this rule's — nothing changed, so nothing is recorded")
 }
 
 // TestApplyRulesToBatch_TagOnlyAndBothActionTypes pins the action_type derivation against the
@@ -374,10 +474,18 @@ func TestEmitBatchSideEffects_NilHistoryRepositoryIsSafe(t *testing.T) {
 	mockRepo.AssertCalled(t, "IncrementMatchCount", ctx, "rule-cat")
 }
 
-// TestEmitBatchSideEffects_HistoryWriteFailureDoesNotStopMatchCounts — losing an audit row is bad;
-// losing the user's match counts because the audit row failed is worse. Same reasoning as
-// buildBoostDefinitionSnapshot's "a nil snapshot is written rather than failing the execution".
-func TestEmitBatchSideEffects_HistoryWriteFailureDoesNotStopMatchCounts(t *testing.T) {
+// TestEmitBatchSideEffects_HistoryWriteFailureIsSwallowed pins that a failing audit write neither
+// panics nor propagates: losing an audit row is bad, and failing the user's sync because the
+// explanation of the sync would not save is worse. Same reasoning as buildBoostDefinitionSnapshot's
+// "a nil snapshot is written rather than failing the execution".
+//
+// ⚠ RENAMED IN REVIEW ROUND 1 (D6). It used to be called ...DoesNotStopMatchCounts and it CANNOT
+// fail that way: writeExecutionHistory is the last statement in the loop body, after
+// IncrementMatchCount has already run, so the ordering makes the old assertion true by construction
+// no matter what the writer does. The name promised a guarantee the test could not break on. The
+// IncrementMatchCount assertion is kept — it is a real ordering invariant — but it is now labelled
+// as such rather than presented as failure-handling coverage.
+func TestEmitBatchSideEffects_HistoryWriteFailureIsSwallowed(t *testing.T) {
 	mockRepo := new(mockRuleApplicationRepository)
 	mockHistory := new(mockRuleExecutionHistoryRepository)
 	service := NewRuleApplicationService(mockRepo)
@@ -387,14 +495,18 @@ func TestEmitBatchSideEffects_HistoryWriteFailureDoesNotStopMatchCounts(t *testi
 	mockHistory.On("Create", ctx, mock.Anything).Return(errors.New("boom"))
 	mockRepo.On("IncrementMatchCount", ctx, "rule-cat").Return(nil)
 
-	service.EmitBatchSideEffects(ctx, "user-1572", []BatchRuleApplication{{
-		TransactionID:  "tx-1",
-		MatchedRuleIDs: []string{"rule-cat"},
-		Executions: []RuleExecutionRecord{{
-			RuleID: "rule-cat", ActionType: domain.RuleExecutionActionCategory,
-		}},
-	}}, map[string]bool{"tx-1": true})
+	assert.NotPanics(t, func() {
+		service.EmitBatchSideEffects(ctx, "user-1572", []BatchRuleApplication{{
+			TransactionID:  "tx-1",
+			MatchedRuleIDs: []string{"rule-cat"},
+			Executions: []RuleExecutionRecord{{
+				RuleID: "rule-cat", ActionType: domain.RuleExecutionActionCategory,
+			}},
+		}}, map[string]bool{"tx-1": true})
+	}, "a repository error must not escape — EmitBatchSideEffects has no error channel")
 
+	mockHistory.AssertExpectations(t)
+	// True by ORDERING, not by error handling: the write is the last statement in the loop body.
 	mockRepo.AssertCalled(t, "IncrementMatchCount", ctx, "rule-cat")
 }
 
