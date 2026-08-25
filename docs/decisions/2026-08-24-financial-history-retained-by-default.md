@@ -132,19 +132,41 @@ sweep the first thing that destroys it. Since Decision 3 permits this one AUTOMA
 
 Both notices are now rendered from `retentionDeletionItems`
 (`backend/internal/queue/jobs/retention_cleanup_check.go`): a categorical sentence — *everything in
-your BoostedBudget account*, *there is no way to restore it* — followed by a thirteen-item list, each
+your BoostedBudget account, except where the law requires us to keep a record*, *there is no way to
+restore it* — followed by a thirteen-item list, each
 item carrying the set of tables it claims to cover.
 `TestRetentionNoticeEnumerationCoversEverythingDeleted` re-derives the destruction set from the LIVE
 schema (the recursive `pg_constraint` walk below) plus the `DELETE FROM`s parsed out of
 `DeleteUserCascade`'s own source, and fails when any destroyed table is unclaimed or any claim is
 stale. A new migration hanging a cascading table off `users` therefore cannot land without someone
-deciding, in words, whether the deletion email already tells the user about it — proven by creating
-such a table and watching the guard name it.
+TOUCHING that list — proven by creating such a table and watching the guard name it.
+
+⚠ **Touching it, and no more. The guard checks coverage and staleness, not truthfulness.** Appending
+the new table's name to an existing item's `tables`, with zero words of copy changed, turns the
+suite green — falsified deliberately by a reviewer with a probe table live. An earlier version of
+this paragraph and of #1581's commit message both claimed the guard forces a decision "in words";
+it does not, and no syntactic rule could. Whether a phrase honestly describes the rows it claims is
+a review judgement.
 
 Counting note, since three numbers are in play: the guard's destruction set is **53** — the 48
 cascade children tabulated below, plus `users` itself, plus the 3 explicit FK-less deletes, plus
-`audit_logs` (whose delete is partial; the guard includes it because understating what survives is
-the safe direction for a deletion warning). The **51** quoted below counts 48 + 3.
+`audit_logs`. The **51** quoted below counts 48 + 3.
+
+⚠ **`audit_logs` is included, but the notice must NOT claim it is destroyed, and an earlier draft
+did.** `audit_logs.user_id` is `ON DELETE SET NULL` — which is why it is absent from the closure —
+and `DeleteUserCascade` deletes only the deletion-residue rows and blanks `changes` on the rest.
+Every other audit row survives with `action`, `resource_type`, `resource_id` (still the user's
+UUID), `ip_address`, `user_agent`, `request_id`, `error_message` and `created_at` intact. The draft
+reasoned that understating what survives is the safe direction for a warning; that holds under the
+warning-about-loss reading only. Under the **erasure-promise** reading — the one a regulator applies
+to a deletion notice — over-claiming erasure is the unsafe direction. Both notices are therefore
+qualified: the categorical sentence says *except where the law requires us to keep a record*, and
+the item claiming `audit_logs` says those records are *deleted, or stripped of their contents and
+disconnected from you where we are required to keep a record*. The qualification also restores the
+privacy policy's own carve-outs (§ 8.2 anonymised retention, § 8.3 90-day encrypted backups, § 8.4
+legal retention), which an unqualified "everything" silently dropped. Both halves are pinned by
+`TestRetentionNoticeBodiesCarryTheWholeEnumeration`, the audit item found by the table it claims
+rather than by position.
 
 **Corrected count (2026-08-25, T8), derived from the live schema rather than from a guard's
 hand-maintained list.** Walking `pg_constraint` for `contype='f' AND confdeltype='c'` on the
@@ -250,8 +272,10 @@ direction.** `apps/web/src/legal/PrivacyPolicy.tsx` § 8.4 still promises deleti
 automation rules, transaction history, and balance history"*, and § 8.2 lists four bullets of which
 only *"Automation rules and transaction history are erased"* speaks to financial history. The
 emails are now broader and more accurate than the policy they were written to match. This is a
-disclosure gap, not a data gap — the policy understates what deletion destroys — and it is reported
-rather than fixed here because legal copy is not a backend change.
+disclosure gap, not a data gap — the policy understates what deletion destroys — and it is filed as
+**#1592** rather than fixed here because legal copy is not a backend change. #1592 is deliberately
+scoped to fix the enumeration AND the audit-log qualification together, so the policy and the email
+say the same qualified thing; widening § 8.4 alone would just move the over-claim into the policy.
 
 ---
 
