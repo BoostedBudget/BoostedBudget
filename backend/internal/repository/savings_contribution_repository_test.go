@@ -425,7 +425,12 @@ func TestSavingsContributionRepository_ListByGoal_Empty(t *testing.T) {
 }
 
 // TestSavingsContributionRepository_DeleteManagedForTransaction tests that only
-// managed_by_reconciliation rows are deleted (Codex C4 — user rows survive).
+// managed_by_reconciliation rows on a LIVE goal are deleted (Codex C4 — user rows survive;
+// #1569 C1 — a tombstoned goal's retained ledger survives too).
+//
+// pgxmock matches the SQL as text, so this pins the SHAPE of the statement and nothing about its
+// semantics. The behaviour lives in
+// TestDeleteManagedForTransaction_DeletedGoalLedgerSurvives_Integration.
 func TestSavingsContributionRepository_DeleteManagedForTransaction(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)
 	defer mock.Close()
@@ -433,7 +438,7 @@ func TestSavingsContributionRepository_DeleteManagedForTransaction(t *testing.T)
 	ctx := context.Background()
 	txnID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM savings_goal_contributions`)).
+	mock.ExpectExec(`DELETE FROM savings_goal_contributions c\s+USING savings_goals g[\s\S]*g\.deleted_at IS NULL`).
 		WithArgs(txnID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 2))
 
@@ -452,7 +457,7 @@ func TestSavingsContributionRepository_DeleteManagedForTransaction_NoRows(t *tes
 	ctx := context.Background()
 	txnID := uuid.New().String()
 
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM savings_goal_contributions`)).
+	mock.ExpectExec(`DELETE FROM savings_goal_contributions c\s+USING savings_goals g[\s\S]*g\.deleted_at IS NULL`).
 		WithArgs(txnID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 

@@ -702,13 +702,13 @@ const settlementTagsMoveCond = `(COALESCE(jsonb_array_length(twin.tags), 0) = 0 
 // amount/date/merchant similarity: a heuristic can attach one transaction's category to a different
 // transaction, which is an unrecoverable corruption of user data and strictly worse than the bug.
 //
-// WHY ONE STATEMENT AND NOT A TRANSACTION. The design note this implements asked for the move to
-// happen "inside its own transaction", and there was no transaction to join: this method is one bare
-// statement on r.db, and r.db is whatever the caller handed the repository. A CTE is strictly
-// better than introducing a pgx.Tx here. Both sub-statements are one statement, so they are atomic
-// against any isolation level without the repository having to own a transaction it does not own
-// today; and there is no window in which a crash could leave the annotations on both rows, i.e.
-// double-categorised, which is the failure the note was worried about.
+// WHY ONE STATEMENT. The move was asked for "inside its own transaction"; a CTE gives that and
+// more, since both sub-statements are one statement, atomic at any isolation level, with no window
+// in which a crash leaves the annotations on both rows. This note used to add "and there was no
+// transaction to join: this method is one bare statement on r.db". T4 wrote that and T6 falsified
+// it five commits later -- the statement now runs through runCapturingStatement, which calls
+// db.Begin (transaction_annotation_capture.go:~249) so the FOR UPDATE lock and this statement share
+// one transaction. The CTE is still right; "nothing here owns a transaction" is not.
 //
 // The CTE also gets the read-consistency right for free: `tombstoned` RETURNS the values it is
 // about to overwrite for deleted_*, and leaves the annotation columns untouched, so `moved` reads

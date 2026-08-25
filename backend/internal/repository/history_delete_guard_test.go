@@ -87,7 +87,30 @@ var allowedHistoryDeletes = map[string]string{
 
 	// Contributions.
 	"repository/savings_contribution_repository.go#DeleteContribution|savings_goal_contributions":          "the user deleting one contribution they entered — the narrowest possible explicit request",
-	"repository/savings_contribution_repository.go#DeleteManagedForTransaction|savings_goal_contributions": "reconciler-OWNED rows (managed_by_reconciliation = true) for a transaction being removed: derived, regenerable, and not a record of anything the user did. User-entered contributions do not match the predicate.",
+	// ⚠ RE-DERIVED in the #1569 whole-branch review (C1). The reason this entry USED to carry —
+	// "derived, regenerable, and not a record of anything the user did" — was FALSE, and false in
+	// the same way as four other reasons on this branch: true of MOST rows the predicate matches,
+	// asserted of ALL of them. UpsertFromTransaction INSERTS status='confirmed' with
+	// managed_by_reconciliation=true (source='boost_match', from
+	// transferCorrelationService.createBoostMatchContribution), and its ON CONFLICT DO UPDATE
+	// promotes a proposed row to confirmed without clearing the flag. Such a row IS a record of the
+	// user's money moving, and it is not regenerable once the boost that matched it is gone. Do not
+	// re-derive this reason from ConfirmContribution alone; enumerate all four writers of
+	// status='confirmed' (CreateContribution, UpsertFromTransaction, InsertManualFromTransaction,
+	// ConfirmContribution).
+	//
+	// What actually justifies the delete is the LIVE-goal scope the predicate now carries. A live
+	// contributions-basis goal recomputes progress from these rows, so a row derived from a
+	// transaction the bank has withdrawn would keep counting money that is no longer there —
+	// phantom progress, Codex C4. A TOMBSTONED goal recomputes nothing; its rows are only a ledger,
+	// and `g.deleted_at IS NULL` now excludes them (#1569 C1,
+	// TestDeleteManagedForTransaction_DeletedGoalLedgerSurvives_Integration). Hand-logged rows
+	// (managed_by_reconciliation = false) never matched and still do not.
+	//
+	// As with every entry here, the key is (function, TABLE) and carries NO predicate: dropping the
+	// liveness join or the managed flag would keep this blessing while widening the destruction.
+	// The scope is held by behaviour, in both directions, in that integration test.
+	"repository/savings_contribution_repository.go#DeleteManagedForTransaction|savings_goal_contributions": "reconciler-owned rows (managed_by_reconciliation = true) for a transaction being removed, scoped to a LIVE goal: leaving them would show phantom progress against money the bank withdrew. A tombstoned goal's ledger is excluded, and hand-logged rows never match. See the re-derivation above — the previous reason was false.",
 }
 
 // historyDeleteRefRegexp matches a hard delete of one of the named tables. Alternatives are sorted
