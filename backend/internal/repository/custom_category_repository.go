@@ -283,7 +283,8 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 
 	query := `
 		-- tombstone-exempt(custom_categories): liveness is the SERVICE layer's gate (#1569 T8
-		-- write-target audit). CustomCategoryService.Update resolves the id through the
+		-- write-target audit). CustomCategoryService.UpdateCategory (custom_category_service.go:166)
+		-- resolves the id through the
 		-- tombstone-filtered GetByID before calling this, so a tombstoned category cannot reach it.
 		-- Narrowing the predicate here would turn a refusal into a silent zero-row update, which is
 		-- the worse failure -- the caller could not tell "not yours" from "deleted".
@@ -542,7 +543,7 @@ func (r *customCategoryRepository) GetCategoryUsage(ctx context.Context, userID,
 //     Rules are active automation rather than history, which is why they are not simply left
 //     alone. Pinned by TestCategoryTombstone_RulesAreDisabledNotDeletedOrBlanked_Integration.
 //
-//  3. REPARENT children to top-level; do not tombstone them. A child category is LIVE
+//  3. REPARENT LIVE children to top-level; do not tombstone them. A child category is LIVE
 //     configuration the user did not ask to delete — tombstoning it would destroy strictly more
 //     than the behaviour it replaces. Leaving parent_id pointing at a tombstoned row is the other
 //     rejected option: every tree read would then render a node whose parent is invisible.
@@ -551,6 +552,27 @@ func (r *customCategoryRepository) GetCategoryUsage(ctx context.Context, userID,
 //     a cross-user parent_id unwritable, which is why the old statement could omit it without
 //     being a cross-user bug. Pinned by TestCategoryTombstone_ChildrenReparentedToTopLevel_
 //     Integration and _ParentIdCannotCrossUsers_Integration.
+//
+//     ⚠ AND `AND deleted_at IS NULL` IS NOT DEFENCE-IN-DEPTH — it is the ruling, added in #1569 T8
+//     fix round 2. Read the justification above literally: "every tree read would then render a
+//     node whose parent is invisible" is an argument about a LIVE child, because a live child is
+//     what a tree read renders. A TOMBSTONED child is rendered by no tree read at all, so the
+//     argument does not reach it, and clearing its parent_id buys nothing while destroying the one
+//     fact worth keeping about it — what it was filed under when the user deleted it. Delete the
+//     child, then its parent, and the unfiltered statement rewrote history for no reader.
+//
+//     ⚠ The exemption this replaces claimed the filter "would break the delete", because "the
+//     parent is being deleted in this same transaction". IT IS NOT: step 1 TOMBSTONES the parent,
+//     and there is no `DELETE FROM custom_categories` in this method at all, so
+//     fk_custom_categories_parent_id (ON DELETE RESTRICT, verified against the live schema) was
+//     never at risk. The reason was fabricated and the write-target rule was waved through on it.
+//
+//     What the filter DOES create is a self-referencing tombstoned pair, which RESTRICT could
+//     refuse during GDPR erasure — the one trade this branch may never make. That is why the
+//     change ships with two tests, not one:
+//     TestCategoryTombstone_TombstonedChildKeepsItsRecordedParent_Integration for the behaviour
+//     and TestCategoryTombstone_GDPRErasureDestroysASelfReferencingTombstonedPair_Integration for
+//     the risk.
 //
 //  4. TOMBSTONE the budget lines that referenced it, with deleted_reason = 'parent_deleted'.
 //     This reproduces what the ON DELETE CASCADE used to do from the user's point of view — the
@@ -592,13 +614,10 @@ func (r *customCategoryRepository) DeleteWithReassignment(ctx context.Context, u
 		return fmt.Errorf("failed to disable rules targeting the category: %w", err)
 	}
 
-	// 3. Reparent children to top-level.
+	// 3. Reparent LIVE children to top-level. A tombstoned child keeps its recorded parent.
 	if _, err := tx.Exec(ctx,
-		`-- tombstone-exempt(custom_categories): reparenting must reach TOMBSTONED children too
-		 -- (#1569 T8 write-target audit). The parent is being deleted in this same transaction and
-		 -- fk_custom_categories_parent_id would otherwise strand a tombstoned child pointing at a
-		 -- row that is about to be gone, so a filter here would break the delete, not protect it.
-		 UPDATE custom_categories SET parent_id = NULL, updated_at = NOW() WHERE parent_id = $2 AND user_id = $1`,
+		`UPDATE custom_categories SET parent_id = NULL, updated_at = NOW()
+		 WHERE parent_id = $2 AND user_id = $1 AND deleted_at IS NULL`,
 		userID, categoryID,
 	); err != nil {
 		return fmt.Errorf("failed to reparent children: %w", err)

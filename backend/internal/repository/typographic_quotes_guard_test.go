@@ -30,14 +30,29 @@ import (
 // silently corrupts the documented SQL. Do NOT fix an occurrence by running gofmt -- that is the tool
 // that produces it. Replace the character by hand with the ASCII '' or `` pair it came from.
 //
-// ⚠ THE OPERATIONAL RULE THIS IMPLIES: `gofmt -w` ON A DIRECTORY IS NOT SAFE IN THIS TREE.
-// `gofmt -w <one file you are editing>` is fine. `gofmt -w .` is not, and neither is `gofmt -w`
-// over a package: the tree is not gofmt-clean at HEAD, so a directory-wide run reformats files you
-// never touched and corrupts every '' pair it passes. Measured twice in a single #1569 task --
-// 19 lines across 15 files, both times, most of them in code the author had no business changing.
-// Both times this guard went red and named every line, which is the only reason neither run left
-// the working tree. Related: #1569 T9 was told not to run gofmt on a pre-existing dirty file for
-// the same reason, and the repo's own diffs carry unrelated realignment from earlier sweeps.
+// ⚠ THE OPERATIONAL RULE: `gofmt -w` IS UNSAFE ON ANY FILE WHOSE COMMENTS CONTAIN A '' PAIR, AND
+// CATASTROPHIC ON A DIRECTORY.
+//
+// A directory-wide run is the bigger blast radius: the tree is not gofmt-clean at HEAD, so
+// `gofmt -w .` reformats files you never touched and corrupts every '' pair it passes -- measured
+// twice in a single #1569 task, 19 lines across 15 files both times, most of them in code the
+// author had no business changing.
+//
+// ⚠ BUT "just gofmt the one file you are editing" IS NOT A SAFE RULE, and an earlier version of
+// this very paragraph said it was. `gofmt -w encrypted_column_literal_guard_test.go` -- a single
+// named file, freshly written by its author -- corrupted that file's OWN doc comment on the next
+// run, because the comment quotes `email = ''` while explaining a guard about empty strings. The
+// blast radius shrinks to one file; the hazard does not go away. The rule is about CONTENT, not
+// scope: if the file documents SQL, gofmt will eat its quotes.
+//
+// Every one of those three runs was caught here, named line by line, which is the only reason none
+// of them left the working tree. Related: #1569 T9 was told not to run gofmt on a pre-existing
+// dirty file for the same reason, and the repo's own diffs carry unrelated realignment from
+// earlier sweeps.
+//
+// ⚠ AND THIS FILE IS PERMANENTLY `gofmt -l`-DIRTY, BY DESIGN. It documents the corruption, so
+// gofmt wants to apply it. Do not "fix" that in a formatting cleanup -- running gofmt here
+// rewrites the examples into the very characters they warn about.
 //
 // SCOPE, deliberately identical to the shell guard: git-tracked .go files under backend/. Untracked
 // scratch files are out of scope (you may be mid-edit), and non-.go files legitimately contain

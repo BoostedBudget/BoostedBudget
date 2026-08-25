@@ -216,3 +216,88 @@ func TestNoEncryptedColumnComparedToALiteral(t *testing.T) {
 			len(offenders), strings.Join(offenders, "\n  "))
 	}
 }
+
+// TestEveryEncryptedLiteralExemptTokenNamesItsColumn is the symmetry with
+// TestEveryTombstoneExemptTokenNamesItsReference. Both directions of the exemption already fail
+// closed — a bare token excuses nothing and a wrong-column token excuses only what it names — so
+// nothing can hide behind a malformed one. What was missing is that a malformed one is never
+// REPORTED, so it sits in the source reading like protection while providing none.
+//
+// It also rejects a token naming a column that is not encrypted, which is the dead-exemption case:
+// `encrypted-literal-exempt(subscription_tier)` excuses nothing, because that column was never
+// audited.
+func TestEveryEncryptedLiteralExemptTokenNamesItsColumn(t *testing.T) {
+	backendRoot := filepath.Dir(repoInternalRoot(t))
+	roots := []string{
+		filepath.Join(backendRoot, "internal"),
+		filepath.Join(backendRoot, "cmd"),
+	}
+
+	var offenders []string
+	scanned := 0
+
+	walk := func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() && info.Name() == "testdata" {
+			return filepath.SkipDir
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, 0)
+		if parseErr != nil {
+			return parseErr
+		}
+		scanned++
+		rel, _ := filepath.Rel(backendRoot, path)
+		// Same self-exclusion as the corpus check above, and for the same reason: this file's
+		// fixtures are the malformed forms, deliberately.
+		if rel == "internal/repository/encrypted_column_literal_guard_test.go" {
+			return nil
+		}
+
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			text, unqErr := strconv.Unquote(lit.Value)
+			if unqErr != nil || !strings.Contains(text, "encrypted-literal-exempt") {
+				return true
+			}
+			at := rel + ":" + strconv.Itoa(fset.Position(lit.Pos()).Line)
+
+			if namedExemptIsBare(text, "encrypted-literal-exempt", encryptedLiteralExemptToken) {
+				offenders = append(offenders, at+" uses `encrypted-literal-exempt` in a form other "+
+					"than `encrypted-literal-exempt(<column>, ...):`, which excuses nothing")
+			}
+			for col := range namedExemptTargets(text, encryptedLiteralExemptToken) {
+				if _, isEncrypted := encryptedColumns[col]; !isEncrypted {
+					offenders = append(offenders, at+" exempts "+strconv.Quote(col)+
+						", which is not an encrypted column — the exemption is dead")
+				}
+			}
+			return true
+		})
+		return nil
+	}
+	for _, root := range roots {
+		if err := filepath.Walk(root, walk); err != nil {
+			t.Fatalf("walking %s: %v", root, err)
+		}
+	}
+	if scanned < 100 {
+		t.Fatalf("scanned only %d Go files; the walk is broken and a pass here would be vacuous", scanned)
+	}
+
+	if len(offenders) > 0 {
+		sort.Strings(offenders)
+		t.Fatalf("%d malformed or dead encrypted-literal exemption(s) (#1569 T8). The token must "+
+			"NAME the encrypted column it excuses:\n"+
+			"  -- encrypted-literal-exempt(<column>, ...): <why>\n  %s",
+			len(offenders), strings.Join(offenders, "\n  "))
+	}
+}
