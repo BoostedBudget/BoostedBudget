@@ -445,5 +445,7 @@ describe('AccountDetailPage — closed accounts (Issue #1569)', () => {
     expect(screen.queryByText(/as of/i)).toBeNull()
     expect(screen.queryByText('$0.00')).toBeNull()
     expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
+    // fix round 1, item 1: the closure date must still be reachable somewhere in the app.
+    expect(screen.getByText(/closed on/i)).toBeInTheDocument()
   })
 })

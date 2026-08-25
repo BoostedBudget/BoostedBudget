@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AccountSummaryHeader } from './components/AccountSummaryHeader'
 import type { Account } from './types'
-import { getAccountTypeLabel } from './utils'
+import { getAccountTypeLabel, getAccountClosedDate } from './utils'
 import { isInactive } from './hooks/useActiveAccounts'
 
 interface AccountCardProps {
@@ -106,6 +106,7 @@ export function AccountCard({ account, onDisconnect, onPurge, onEdit, isDragging
             customIcon={custom_icon}
             customColor={custom_color}
             isClosed={isClosed}
+            closedOn={getAccountClosedDate(account)}
             institutionRowTrailingSlot={
               (isDisconnected || is_hidden || isClosed) ? (
                 <>

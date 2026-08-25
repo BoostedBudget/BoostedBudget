@@ -172,6 +172,41 @@ describe('AccountTable', () => {
   })
 
   describe('Closed accounts (Issue #1569: retained but no longer active)', () => {
+    // fix round 1, item 1: T7 deleted the "as of <date>" caption because the BALANCE it labelled
+    // was never sent — but the date itself was real, and it was the only place in the app the
+    // closure date appeared (`grep -rn "removed_at\|replaced_at" src/` matched test files only).
+    // A user who closed an account in March and looks in August must still be told when.
+    it('says WHEN the account closed, not merely that it did', () => {
+      const accountsWithClosed = [
+        createMockAccount({
+          status: 'removed',
+          removed_at: '2026-03-01T00:00:00Z',
+          current_balance: undefined,
+          available_balance: undefined,
+        }),
+      ]
+
+      render(<AccountTable accounts={accountsWithClosed} />)
+
+      expect(screen.getByText('Closed Mar 1, 2026')).toBeInTheDocument()
+    })
+
+    it('uses replaced_at for a replaced account, not the edit timestamp', () => {
+      const accountsWithClosed = [
+        createMockAccount({
+          status: 'replaced',
+          replaced_at: '2026-02-01T00:00:00Z',
+          updated_at: '2026-07-14T00:00:00Z',
+          current_balance: undefined,
+        }),
+      ]
+
+      render(<AccountTable accounts={accountsWithClosed} />)
+
+      expect(screen.getByText('Closed Feb 1, 2026')).toBeInTheDocument()
+      expect(screen.queryByText(/Jul 14/)).toBeNull()
+    })
+
     it('shows a "Closed" badge for a removed account', () => {
       const accountsWithClosed = [
         createMockAccount({ status: 'removed', removed_at: '2026-03-01T00:00:00Z' }),
@@ -180,7 +215,8 @@ describe('AccountTable', () => {
 
       render(<AccountTable accounts={accountsWithClosed} />)
 
-      expect(screen.getByText('Closed')).toBeInTheDocument()
+      // The badge now carries the closure date (fix round 1, item 1), so match its prefix.
+      expect(screen.getByText(/^Closed /)).toBeInTheDocument()
     })
 
     // Issue #1580. The old assertion here read `getByText(/as of/i)` against a fixture where a

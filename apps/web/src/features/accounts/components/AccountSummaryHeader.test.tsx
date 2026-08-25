@@ -202,6 +202,30 @@ describe('AccountSummaryHeader', () => {
       expect(screen.getByText(/history is kept/i)).toBeInTheDocument()
     })
 
+    // fix round 1, item 1: the closure date was lost when the "as of" caption went.
+    it('says WHEN the account closed', () => {
+      render(
+        <AccountSummaryHeader
+          {...baseProps}
+          currentBalance={undefined}
+          isClosed
+          closedOn="2026-03-01T00:00:00Z"
+        />
+      )
+      expect(screen.getByText(/closed on mar 1, 2026/i)).toBeInTheDocument()
+    })
+
+    it('still explains the absent balance when no closure date is available', () => {
+      render(<AccountSummaryHeader {...baseProps} currentBalance={undefined} isClosed />)
+      expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
+      expect(screen.queryByText(/closed on/i)).toBeNull()
+    })
+
+    it('shows no closure date for a live account', () => {
+      render(<AccountSummaryHeader {...baseProps} closedOn="2026-03-01T00:00:00Z" />)
+      expect(screen.queryByText(/closed on/i)).toBeNull()
+    })
+
     it('refuses to render a balance even if one is somehow supplied for a closed account', () => {
       // Defence in depth: the ruling is "a closed account carries no current balance", and this
       // component must not restate a stale figure as a current one if a cached or hand-built
