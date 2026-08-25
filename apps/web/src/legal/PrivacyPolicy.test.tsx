@@ -13,6 +13,57 @@ import { PrivacyPolicy } from './PrivacyPolicy'
 const renderWithRouter = (component: React.ReactElement) =>
   render(<MemoryRouter>{component}</MemoryRouter>)
 
+/**
+ * The rendered text of one numbered subsection: the `<h3>` matching `heading`, plus every
+ * sibling element up to the next `<h3>`.
+ *
+ * ⚠ This exists because the policy is a ~600-line single document. A bare
+ * `screen.getByText(/…/)` on it is satisfied by ANY paragraph — including the one you are
+ * trying to prove was changed, in a different section. Anchoring to the subsection is what makes
+ * "§ 8.4 says X" a real assertion rather than "the page contains X somewhere".
+ */
+function subsectionText(heading: RegExp): string {
+  const h3 = Array.from(document.querySelectorAll('h3')).find((h) =>
+    heading.test(h.textContent ?? '')
+  )
+  if (!h3) throw new Error(`no <h3> matching ${heading}`)
+  let text = ''
+  let node: Element | null = h3.nextElementSibling
+  while (node && node.tagName !== 'H3') {
+    text += ' ' + (node.textContent ?? '')
+    node = node.nextElementSibling
+  }
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * The thirteen items `retentionDeletionItems`
+ * (backend/internal/queue/jobs/retention_cleanup_check.go) enumerates in the 30-day and 7-day
+ * pre-deletion notice emails, quoted verbatim.
+ *
+ * ⚠ Verbatim ON PURPOSE (#1592). The defect this fixes is that the policy and the email
+ * described the SAME deletion in different words and different scope — the policy named three
+ * categories where the email named thirteen. A paraphrase here would re-open exactly that gap
+ * one wording change later. There is no mechanical link across the Go/TS boundary; this list is
+ * the closest thing to one, and it is why the phrases in PrivacyPolicy.tsx § 8.4 must be edited
+ * in the same change as the Go source, never independently.
+ */
+const RETENTION_DELETION_ITEMS = [
+  'your bank connections and every account on them, including accounts you have already closed or disconnected, and the record of when each one was connected, disconnected or closed',
+  'your day-by-day balance history for every account',
+  'your transactions, together with every category, note, tag and merchant name you set on them, and the record of those edits',
+  'your investment holdings and their day-by-day snapshots, every buy and sell recorded against them, and your portfolio value history',
+  'your credit card, mortgage and student loan records, including their statements and APR schedules',
+  'your budgets, their categories, their period history and every rollover',
+  'your savings goals and every contribution you logged against them by hand',
+  'your boosts and the record of every boost that ran',
+  'your automation rules, the record of every rule that ran, and your transfer suggestions',
+  'your membership of a household, its invitations, its sharing consents, and the accounts shared into it (and the household itself, if you are its only member)',
+  'your subscription, billing and payment records, and your referrals',
+  'your profile and sign-in identities, notifications, dashboard layout, privacy settings and saved automation recipes',
+  'the internal job and activity records tied to your account — deleted, or stripped of their contents and disconnected from you where we are required to keep a record',
+]
+
 describe('PrivacyPolicy', () => {
   it('renders "Privacy Policy" heading', () => {
     renderWithRouter(<PrivacyPolicy />)
@@ -31,17 +82,89 @@ describe('PrivacyPolicy', () => {
 
   it('renders 6-month passive retention for cancelled accounts (Section 8.4)', () => {
     renderWithRouter(<PrivacyPolicy />)
-    expect(screen.getByText(/cancelled accounts/i)).toBeInTheDocument()
+    // Anchored to the HEADING, not to body text: § 8.4 now discusses cancelled accounts in its
+    // prose too, and a bare getByText(/cancelled accounts/i) would throw on multiple matches.
+    expect(screen.getByRole('heading', { name: /cancelled accounts/i })).toBeInTheDocument()
     expect(screen.getAllByText(/6 months/i).length).toBeGreaterThan(0)
   })
 
-  // Issue #1569: retention_cleanup_check.go auto-deletes a lapsed (cancelled, never explicitly
-  // deleted) user's data after the 6-month window — under "retain unless explicitly deleted"
-  // that must be disclosed plainly, including that it covers transaction/automation-rule
-  // history, not just an abstract "account data."
-  it('plainly discloses that a lapsed account\'s transaction history is deleted after the retention period (Section 8.4)', () => {
+  // Issue #1592 (split out of #1569 T9). The clause this replaces named THREE categories —
+  // "your automation rules, transaction history, and balance history" — of the thirteen the
+  // pre-deletion emails enumerate and the 53 tables DeleteUserCascade actually destroys. § 8.4
+  // is the clause the ADR's Decision 3 argument leans on (the retention sweep is the one
+  // automatic destroyer the ADR permits, and it is permitted BECAUSE the user was told what it
+  // destroys), so an under-stated § 8.4 undercuts the permission itself.
+  it('enumerates, item by item, everything the post-retention deletion destroys (Section 8.4)', () => {
     renderWithRouter(<PrivacyPolicy />)
-    expect(screen.getByText(/including your automation rules, transaction history, and balance history/i)).toBeInTheDocument()
+    const text = subsectionText(/8\.4/)
+    for (const item of RETENTION_DELETION_ITEMS) {
+      expect(text).toContain(item)
+    }
+  })
+
+  // Issue #1592, half 2. The emails' first draft over-claimed erasure and was corrected;
+  // § 8.4 must carry the SAME qualification or widening the enumeration just relocates the
+  // over-claim. audit_logs.user_id is ON DELETE SET NULL — every non-residue audit row survives
+  // deletion, keeping ip_address, user_agent, resource_id and created_at. Under the
+  // erasure-PROMISE reading a regulator applies to a deletion notice, over-claiming is the
+  // unsafe direction.
+  it('qualifies the deletion promise rather than claiming unconditional erasure (Section 8.4)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    const text = subsectionText(/8\.4/)
+    expect(text).toContain('except where the law requires us to keep a record')
+    // The superseded three-category clause, pinned in full. A short substring here would be
+    // satisfied by the (still present, still true) words "transaction" or "balance history".
+    expect(text).not.toMatch(
+      /including your automation rules, transaction history, and balance history/i
+    )
+  })
+
+  // Issue #1592 finding I2 — the OPPOSITE error, in the same paragraph. § 8.4 promised that
+  // "after the retention period, we will automatically and permanently delete your data". That
+  // deletion does not happen in ANY environment: #1569 gated the sweep on both pre-deletion
+  // notices having been recorded (retentionNoticesDeliveredPredicate, profile_repository.go),
+  // and no EmailService implements jobs.RetentionEmailService (cmd/server/main.go), so the
+  // notices are never sent, the markers are never stamped, and expired accounts are retained
+  // indefinitely. Retaining is the safe direction to fail; promising the deletion anyway is not.
+  it('does not promise an automatic deletion the retention sweep cannot perform (Section 8.4)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    const text = subsectionText(/8\.4/)
+    expect(text).not.toMatch(/we will automatically and permanently delete your data/i)
+    // Both notices are a precondition of the sweep, not a courtesy…
+    expect(text).toMatch(
+      /we do not automatically delete a cancelled account unless both .{0,40}notices have been sent/i
+    )
+    // …and the policy says plainly that they are not being sent today.
+    expect(text).toMatch(/not sending those notices yet/i)
+    expect(text).toMatch(/retained past the 6-month window/i)
+  })
+
+  // The distinction is the whole point of I2: the retention sweep's own WHERE clause is
+  // `deletion_requested_at IS NULL`, so a deletion the user REQUESTS never goes near the notice
+  // gate. § 8.4 must not let a reader conclude that nothing gets deleted ever.
+  it('keeps the user-requested deletion path exempt from the notice precondition (Section 8.4)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    const text = subsectionText(/8\.4/)
+    expect(text).toMatch(/deletion you request yourself/i)
+    expect(text).toMatch(/not conditioned on these notices/i)
+  })
+
+  // Issue #1592, half 2 applied to § 8.2 — "All personal data is permanently deleted" carried no
+  // qualification at all, and "Some data may be retained in anonymized form" does not cover a
+  // retained ip_address / user_agent, which is not anonymised.
+  it('says what survives in the activity log, and that it is stripped rather than erased (Section 8.2)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    const text = subsectionText(/8\.2 Account Deletion/)
+    expect(text).toContain('except where the law requires us to keep a record')
+    expect(text).toMatch(/stripped of their contents rather than erased/i)
+    // The specific fields that survive — the ones the old "anonymized form" sentence hid.
+    expect(text).toMatch(/IP address/i)
+    expect(text).toMatch(/browser user agent/i)
+    // The pre-#1592 unqualified promise, as a plain substring — an anchored /^…$/m regex here
+    // would be vacuous, because `subsectionText` collapses the subsection to a single line.
+    expect(text).not.toContain('All personal data is permanently deleted')
+    // The existing carve-out must stay visible, not be replaced by the new one.
+    expect(text).toMatch(/anonymized form/i)
   })
 
   // Issue #1569: DisconnectInstitution/DeleteAccount now soft-remove a linked bank account —
@@ -145,9 +268,12 @@ describe('PrivacyPolicy', () => {
     expect(screen.getAllByText(/cryptographically derived/i).length).toBeGreaterThan(0)
   })
 
-  it('renders correct Last Updated date (July 18, 2026)', () => {
+  // Bumped by #1592: § 8.2 and § 8.4 changed substantively (what deletion destroys, what
+  // survives it, and when the automatic deletion runs), and § 12 commits us to updating this
+  // date when the policy changes.
+  it('renders correct Last Updated date (August 25, 2026)', () => {
     renderWithRouter(<PrivacyPolicy />)
-    expect(screen.getByText(/july 18, 2026/i)).toBeInTheDocument()
+    expect(screen.getByText(/august 25, 2026/i)).toBeInTheDocument()
   })
 
   it('renders household data sharing as a consent-based lawful basis (Section 3.1)', () => {

@@ -15,7 +15,7 @@ export function TermsOfService() {
     <div className="privacy-policy">
       <div className="privacy-policy-container">
         <h1>Terms of Service</h1>
-        <p className="last-updated">Last Updated: July 26, 2026</p>
+        <p className="last-updated">Last Updated: August 25, 2026</p>
 
         <section>
           <h2>1. Acceptance of Terms</h2>
@@ -193,12 +193,25 @@ export function TermsOfService() {
           </ul>
           <p>
             Your data is preserved in read-only mode. If you do not request deletion, we may retain
-            your account data for up to <strong>6 months</strong> after cancellation. We will notify
-            you by email at 30 days and 7 days before your data is scheduled for permanent deletion.
-            After the retention period, we will delete or anonymize it unless a longer retention
-            period is legally required. You may request deletion at any time (see our{' '}
-            <Link to="/legal/privacy-policy">Privacy Policy</Link>). You can subscribe or resubscribe
-            at any time during this period to immediately restore full access to all features.
+            your account data for up to <strong>6 months</strong> after cancellation. You can
+            subscribe or resubscribe at any time during this period to immediately restore full
+            access to all features.
+          </p>
+          <p>
+            Before we automatically delete a cancelled account, we email you twice — 30 days
+            beforehand, and again 7 days beforehand. Both notices are a precondition, not a
+            courtesy: <strong>we do not automatically delete a cancelled account unless both of
+            those notices have been sent.</strong> We are not sending those notices yet, so no
+            cancelled account is being automatically deleted today; cancelled accounts are kept
+            past the 6-month window instead. Section 8.4 of our{' '}
+            <Link to="/legal/privacy-policy">Privacy Policy</Link> lists in full what that
+            deletion destroys when it does run, and what survives it.
+          </p>
+          <p>
+            You may request deletion at any time, whether or not you have cancelled. A deletion you
+            request is not conditioned on those notices: it proceeds on the 30-day grace period
+            described in our{' '}
+            <Link to="/legal/privacy-policy">Privacy Policy</Link>.
           </p>
         </section>
 
