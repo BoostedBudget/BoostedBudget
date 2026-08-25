@@ -44,6 +44,8 @@ export interface Account {
   id: string;
   institution_name?: string;
   is_hidden: boolean;
+  last_known_balance?: number;
+  last_known_balance_at?: string;
   linked_item_id: string;
   linked_item_status?: string;
   mask?: string;

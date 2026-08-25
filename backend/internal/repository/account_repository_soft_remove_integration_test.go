@@ -505,7 +505,7 @@ func TestAccountRepository_SoftRemove_Integration_RetainsEveryDerivedTable(t *te
 //	account.removed_at ?? account.replaced_at ?? account.updated_at
 //
 // GetByIDAndUser omitted both, and its result is returned over the wire —
-// accountService.UpdateAccount (account_service.go:1281) fetches through it and
+// accountService.UpdateAccount (account_service.go:1297) fetches through it and
 // PlaidHandler.UpdateAccount (huma/operations/plaid.go:283) assigns the returned account straight
 // into the response body. So a PATCH /api/v1/accounts/{id} response for a REPLACED account could
 // never carry replaced_at, the frontend fell through to updated_at, and the "last known balance,

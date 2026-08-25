@@ -25,6 +25,38 @@ type Account struct {
 	CurrentBalance   *float64   `json:"current_balance,omitempty" db:"current_balance"`
 	AvailableBalance *float64   `json:"available_balance,omitempty" db:"available_balance"`
 	CurrencyCode     string     `json:"currency_code" db:"currency_code"` // ISO 4217 currency code
+
+	// LastKnownBalance / LastKnownBalanceAt are the HISTORICAL half of the closed-account story
+	// (Issue #1591, on #1569's branch). They are NOT a current balance and must never be treated
+	// as one.
+	//
+	// THE TWO FIELDS ARE ONE FACT. A dated figure is the only kind of figure a closed account may
+	// carry, so the amount is meaningless without the instant: #1569 T7 deleted a caption that
+	// rendered "Last known balance: N/A … as of Jun 4, 2025" — a date label with nothing to label
+	// — and the mirror-image failure (a number with no date) is the same defect pointed the other
+	// way. They are populated together or not at all; see lastKnownBalanceLateral in
+	// repository/account_liveness_sql.go, whose single subquery reads both from the same
+	// balance_snapshots row.
+	//
+	// ⚠ NOT SUMMABLE, NOT RANGEABLE, NOT SORTABLE against CurrentBalance. CurrentBalance answers
+	// "what is in this account now"; these answer "what did we last see, and when". Mixing them in
+	// one total, one range filter or one sort order restates a frozen figure as a live one, which
+	// is exactly the orphaned balance the ruling in accountBalanceProjection forbids. The frontend
+	// keeps that separation in utils.ts (balanceMatchesRange / compareBalanceValues read
+	// current_balance and nothing else, pinned by a test).
+	//
+	// ⚠ POPULATED BY EXACTLY ONE READ: GetAccountsWithInstitutionFiltered, and only when its caller
+	// opts in with AccountFilterOptions.IncludeLastKnownBalance. Every other account read leaves
+	// both nil. That is deliberate — see the three-decision note on lastKnownBalanceLateral — and
+	// it is SAFE in the only direction that matters: nil renders as "no last-known balance on
+	// record", which is true of a read that did not ask for one.
+	//
+	// NULL, NOT ZERO, for the same reason CurrentBalance is: `omitempty` on a pointer drops the key
+	// from the JSON entirely, so a closed account with no snapshot on record has NO last-known
+	// balance rather than a $0.00 one. Zero here is a real recorded zero — an account that was
+	// genuinely emptied before it closed — and the two must stay distinguishable.
+	LastKnownBalance   *float64   `json:"last_known_balance,omitempty" db:"-"`
+	LastKnownBalanceAt *time.Time `json:"last_known_balance_at,omitempty" db:"-"`
 	InstitutionName  string     `json:"institution_name,omitempty" db:"institution_name"` // From linked_items JOIN (optional)
 
 	// Linked item status (Issue #679, #680: Shows 'disconnected' when subscription expires)

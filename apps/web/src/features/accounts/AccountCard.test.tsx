@@ -361,6 +361,29 @@ describe('AccountCard', () => {
       expect(screen.getByText(/closed on mar 1, 2026/i)).toBeInTheDocument()
     })
 
+    // Issue #1591 — the label comes back, but only when there is a figure AND an instant to
+    // attach it to. The fixture keeps current_balance/available_balance undefined, because that is
+    // the only shape production can produce for a terminal account.
+    it('shows the last known balance and its date when a snapshot is on record', () => {
+      const removedAccount: Account = {
+        ...mockAccount,
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+        current_balance: undefined,
+        available_balance: undefined,
+        last_known_balance: 4321,
+        last_known_balance_at: '2026-02-24T00:00:00Z',
+      }
+
+      renderWithRouter(<AccountCard account={removedAccount} />)
+
+      expect(screen.getByText('Last known balance')).toBeInTheDocument()
+      expect(screen.getByText('$4,321.00')).toBeInTheDocument()
+      expect(screen.getByText(/as of feb 24, 2026/i)).toBeInTheDocument()
+      // And the current-side ruling is untouched: no current balance is claimed.
+      expect(screen.getByText(/closed accounts do not carry a current balance/i)).toBeInTheDocument()
+    })
+
     // Issue #1569 task 21, item D. The user's ruling: "If account is closed, treat as empty
     // balance, we don't want orphaned balances." The API now OMITS current_balance and
     // available_balance for a terminal-status account, so the card receives `undefined` for both.

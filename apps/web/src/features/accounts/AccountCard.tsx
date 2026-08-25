@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AccountSummaryHeader } from './components/AccountSummaryHeader'
 import type { Account } from './types'
-import { getAccountTypeLabel, getAccountClosedDate } from './utils'
+import { getAccountTypeLabel, getAccountClosedDate, getAccountLastKnownBalance } from './utils'
 import { isInactive } from './hooks/useActiveAccounts'
 
 interface AccountCardProps {
@@ -54,6 +54,9 @@ export function AccountCard({ account, onDisconnect, onPurge, onEdit, isDragging
   // disconnected. Distinct from isDisconnected above: that's about the linked ITEM's
   // subscription state; this is about the ACCOUNT's own status.
   const isClosed = isInactive(account)
+  // Issue #1591: resolved through the helper that owns the "both or neither" rule, so the card
+  // never decides for itself whether a half-pair is renderable.
+  const lastKnown = getAccountLastKnownBalance(account)
 
   // Display name: nickname > official_name > name
   const displayName = nickname || official_name || name
@@ -107,6 +110,8 @@ export function AccountCard({ account, onDisconnect, onPurge, onEdit, isDragging
             customColor={custom_color}
             isClosed={isClosed}
             closedOn={getAccountClosedDate(account)}
+            lastKnownBalance={lastKnown?.amount}
+            lastKnownBalanceAt={lastKnown?.at}
             institutionRowTrailingSlot={
               (isDisconnected || is_hidden || isClosed) ? (
                 <>

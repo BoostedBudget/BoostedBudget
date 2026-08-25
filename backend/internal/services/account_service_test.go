@@ -2819,7 +2819,7 @@ func TestGetAccountsFiltered_ExcludeHidden(t *testing.T) {
 		{ID: uuid.New().String(), UserID: userID, Name: "Checking", IsHidden: false},
 		{ID: uuid.New().String(), UserID: userID, Name: "Savings", IsHidden: false},
 	}
-	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{IncludeHidden: false}).Return(visibleAccounts, nil)
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{IncludeHidden: false, IncludeLastKnownBalance: true}).Return(visibleAccounts, nil)
 
 	// Execute - don't include hidden
 	result, err := service.GetAccountsFiltered(ctx, userID, AccountFilterOptions{IncludeHidden: false})
@@ -2854,7 +2854,7 @@ func TestGetAccountsFiltered_IncludeHidden(t *testing.T) {
 		{ID: uuid.New().String(), UserID: userID, Name: "Savings", IsHidden: false},
 		{ID: uuid.New().String(), UserID: userID, Name: "Hidden Card", IsHidden: true},
 	}
-	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{IncludeHidden: true}).Return(allAccounts, nil)
+	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{IncludeHidden: true, IncludeLastKnownBalance: true}).Return(allAccounts, nil)
 
 	// Execute - include hidden
 	result, err := service.GetAccountsFiltered(ctx, userID, AccountFilterOptions{IncludeHidden: true})
@@ -2917,7 +2917,7 @@ func TestGetAccountsFiltered_AllStatuses(t *testing.T) {
 		{ID: uuid.New().String(), UserID: userID, Name: "Old Savings", Status: domain.AccountStatusExpired},
 	}
 	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
-		repository.AccountFilterOptions{AllStatuses: true}).Return(allAccounts, nil)
+		repository.AccountFilterOptions{AllStatuses: true, IncludeLastKnownBalance: true}).Return(allAccounts, nil)
 
 	result, err := service.GetAccountsFiltered(ctx, userID, AccountFilterOptions{StatusFilter: "all_statuses"})
 
@@ -2949,6 +2949,11 @@ func TestGetAccountsFiltered_AsOf(t *testing.T) {
 	liveAccounts := []domain.Account{
 		{ID: uuid.New().String(), UserID: userID, Name: "Checking"},
 	}
+	// IncludeLastKnownBalance is deliberately ABSENT (false) here, and that is an assertion, not an
+	// omission: testify matches the struct by equality, so this fails if the service ever asks for a
+	// last-known balance on an AS-OF read. It must not — "the newest snapshot on record" is not an
+	// answer to a question anchored at a past instant, and the repository refuses the combination
+	// with ErrAccountFilterLastKnownAsOfConflict (Issue #1591).
 	mockAccountRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID,
 		repository.AccountFilterOptions{AsOf: &asOf}).Return(liveAccounts, nil)
 

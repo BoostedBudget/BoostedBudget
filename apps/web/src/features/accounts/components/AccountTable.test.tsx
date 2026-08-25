@@ -335,6 +335,72 @@ describe('AccountTable', () => {
       expect(onPurge).toHaveBeenCalledWith(closedAccounts[0])
     })
 
+    // ── Issue #1591: the last-known balance in the Balance cell. ─────────────────────────────
+    //
+    // The cell's primary line stays an em dash — a closed account has no current balance and never
+    // will. What changes is the sub-line: "No current balance" is what we say when there is
+    // nothing else to say, and it is REPLACED by a dated figure when one exists. Fixtures keep
+    // current_balance undefined throughout, because that is the only shape production emits for a
+    // terminal account (an earlier version of this file asserted against a `removed` account still
+    // carrying 2500.50 — a row the backend cannot produce).
+    it('shows a dated last-known balance for a closed account that has one', () => {
+      const closed = [createMockAccount({
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+        current_balance: undefined,
+        available_balance: undefined,
+        last_known_balance: 4321,
+        last_known_balance_at: '2026-02-24T00:00:00Z',
+      })]
+      render(<AccountTable accounts={closed} />)
+
+      expect(screen.getByText(/last known \$4,321\.00/i)).toBeInTheDocument()
+      expect(screen.getByText(/as of feb 24, 2026/i)).toBeInTheDocument()
+      // The primary figure is still absent; the historical one does not take its place.
+      expect(screen.queryByText('$4,321.00')).toBeNull()
+      expect(screen.queryByText(/no current balance/i)).toBeNull()
+    })
+
+    it('renders a recorded ZERO as a figure, not as an absence', () => {
+      const closed = [createMockAccount({
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+        current_balance: undefined,
+        available_balance: undefined,
+        last_known_balance: 0,
+        last_known_balance_at: '2026-02-24T00:00:00Z',
+      })]
+      render(<AccountTable accounts={closed} />)
+
+      expect(screen.getByText(/last known \$0\.00/i)).toBeInTheDocument()
+      expect(screen.queryByText(/no current balance/i)).toBeNull()
+    })
+
+    it('falls back to "No current balance" when no snapshot is on record', () => {
+      const closed = [createMockAccount({
+        status: 'removed',
+        removed_at: '2026-03-01T00:00:00Z',
+        current_balance: undefined,
+        available_balance: undefined,
+      })]
+      render(<AccountTable accounts={closed} />)
+
+      expect(screen.getByText(/no current balance/i)).toBeInTheDocument()
+      expect(screen.queryByText(/last known/i)).toBeNull()
+      expect(screen.queryByText(/as of/i)).toBeNull()
+    })
+
+    it('shows no last-known balance on an ACTIVE account, whatever the payload carries', () => {
+      const live = [createMockAccount({
+        last_known_balance: 4321,
+        last_known_balance_at: '2026-02-24T00:00:00Z',
+      })]
+      render(<AccountTable accounts={live} />)
+
+      expect(screen.queryByText(/last known/i)).toBeNull()
+      expect(screen.getByText('$2,500.50')).toBeInTheDocument()
+    })
+
     it('should not render Edit or Disconnect for a closed account', () => {
       const closedAccounts = [createMockAccount({ status: 'removed', removed_at: '2026-03-01T00:00:00Z' })]
       render(
